@@ -433,6 +433,7 @@ Spend guard:
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
 - Only the owner raises a budget (an R-gov change of limits.toml).
+- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with its percent of `daily_usd`, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
 
 ## 10. Slack stream (Claude Tag)
 

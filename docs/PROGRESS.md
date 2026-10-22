@@ -37,6 +37,7 @@ orchestrator merges.
 - 2026-10-22 · Task 12a · S5b: `src/gates/adapters.rs` (rust adapters as pure text functions: test files, `#[ignore` markers with UC ids as pending, assertion counts without comments) · `cargo nextest run --locked` 48/48
 - 2026-10-22 · Task 12b · S5b done: `src/gates/integrity.rs`, `src/cli/test_integrity.rs` (`bosun test-integrity` and `bosun gate test-integrity`: deleted-test, new-skip, fewer-asserts, snapshot-change; renames are not deletions; PR body and allow list from `BOSUN_PR_BODY` and `BOSUN_INTEGRITY_ALLOW` until Task 13+) · `cargo nextest run --locked` 61/61
 - 2026-10-22 · Task 16a · S9a: `src/core/lessons.rs` (caps 40/8, `L-NNN` ids, hit, scope match), `bosun lesson add|hit` on `docs/lessons.toml` (exit 6 at a cap, `hit --issue` posts `lesson-hit`) · 4 unit + 5 integration tests, `cargo nextest run --locked` 162/162
+- 2026-10-22 · Task 16b · S9a done: `src/cli/status.rs` (`bosun status`: halt, main-red, process-red, live sessions, live leases, issues by state, spend today and budget %, integrity full/reduced) + `spend_total` in records · 3 integration tests, `cargo nextest run --locked` 165/165
 
 ## Blocked
 

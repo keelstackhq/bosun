@@ -23,6 +23,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Claim(a) => return cli::claim::run(dir, a),
         Command::Release(a) => return cli::release::run(dir, a),
         Command::Lesson(a) => return cli::lesson::run(dir, a),
+        Command::Status => return cli::status::run(dir),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),

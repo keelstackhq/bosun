@@ -9,6 +9,7 @@ pub mod join;
 pub mod lesson;
 pub mod reap;
 pub mod release;
+pub mod status;
 use std::path::PathBuf;
 
 pub mod gate;

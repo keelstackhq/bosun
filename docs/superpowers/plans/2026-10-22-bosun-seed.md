@@ -234,7 +234,7 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 Split into two PRs: **16a** `src/core/lessons.rs`, `lesson add|hit`; **16b** `status`.
 
 - [x] 16a: lessons store with caps, `lesson add`, `lesson hit`.
-- [ ] 16b: `status`.
+- [x] 16b: `status`.
 
 **Files:** `src/core/lessons.rs`, `src/cli/{lesson,status}.rs`, `tests/cli_lesson.rs`.
 
