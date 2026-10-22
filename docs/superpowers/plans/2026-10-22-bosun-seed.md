@@ -172,6 +172,11 @@ Split into three PRs: **11a** profile, **11b** runner, **11c** packages adapter.
 - `test-integrity [--base REF] [--pr N]` (also `gate test-integrity`): compares base and head per test file: deleted test file, new non-UC `#[ignore`, lower assertion count -> refusal (exit 1, data lists each finding with file and counts) unless the task metadata of the PR's linked issue has the matching `allow` (`delete-test`, `skip`, `fewer-asserts`). A changed `*.snap` needs `snapshot-change: <reason>` in the PR body (from `--pr N`, or `BOSUN_PR_BODY`).
 - [ ] Tests on temp git repos: each refusal; the allowed case; UC marker removal passes; snapshot rule.
 
+Split into two PRs: **12a** rust adapters; **12b** comparison and command.
+
+- [x] 12a: `src/gates/adapters.rs` and its unit tests.
+- [ ] 12b: `integrity.rs`, `bosun test-integrity` and `gate test-integrity`, `tests/cli_integrity.rs` (the box above).
+
 ### Task 13 (S6): risk-check from the base branch, ask
 
 **Files:** `src/core/risk.rs`, `src/cli/{risk_check,ask}.rs`, `.bosun/risk.toml` default text in `src/core/risk_default.toml`, `tests/cli_risk.rs`, spec D32.
