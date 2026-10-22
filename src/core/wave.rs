@@ -161,7 +161,11 @@ mod tests {
             comment_id: 1,
         };
         let tasks = [task(1, "A/T1", State::Ready, &[], &["a/x.rs"])];
-        assert!(plan(&tasks, &[], std::slice::from_ref(&lease), "me", 6).run.is_empty());
+        assert!(
+            plan(&tasks, &[], std::slice::from_ref(&lease), "me", 6)
+                .run
+                .is_empty()
+        );
         assert_eq!(plan(&tasks, &[], &[lease], "other", 6).run, vec![1]);
     }
 }
