@@ -8,6 +8,7 @@ pub mod heartbeat;
 pub mod join;
 pub mod reap;
 pub mod release;
+pub mod review_pack;
 pub mod verdict;
 use std::path::PathBuf;
 

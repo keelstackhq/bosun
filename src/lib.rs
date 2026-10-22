@@ -27,6 +27,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Gate(a) => return cli::gate::run(dir, a),
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
         Command::Verdict(a) => return cli::verdict::run(dir, a),
+        Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
         _ => {}
     }
     let task = seed_task(&cli.command);
