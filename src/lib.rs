@@ -6,7 +6,11 @@ pub mod cli;
 pub mod config;
 pub mod core;
 pub mod ctx;
+<<<<<<< HEAD
 pub mod github;
+=======
+pub mod gates;
+>>>>>>> claude/t12b-integrity
 pub mod output;
 pub mod registry;
 pub mod time;
@@ -16,6 +20,7 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
+<<<<<<< HEAD
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
@@ -24,6 +29,13 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         _ => {}
+=======
+    if let Command::Gate(args) = &cli.command {
+        return cli::gate::run(cli.dir.as_deref(), args);
+    }
+    if let Command::TestIntegrity(args) = &cli.command {
+        return cli::test_integrity::run(cli.dir.as_deref(), args);
+>>>>>>> claude/t12b-integrity
     }
     let task = seed_task(&cli.command);
     Err(BosunError::error(

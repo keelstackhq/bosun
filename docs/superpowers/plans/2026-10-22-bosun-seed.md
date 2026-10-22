@@ -177,7 +177,13 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 
 - Profile TOML: `[gates.<name>] cmd = [...]`, `each_package = ["-p", "{package}"]`, `all = ["--workspace"]`, `when_no_package = "skip"`, `budget_secs`; `[adapters] packages = "cargo-metadata"`, `pending = "rust-ignore"`, `assertions = "rust"`. Built-in profiles are embedded with `include_str!`; `.bosun/profiles/<name>.toml` overrides.
 - `gate <name> [--base REF] [--all]`: the stack from `.bosun/bosun.toml` (default `rust` at `.`), the changed files `git diff --name-only <base>...HEAD`, affected packages (cargo-metadata adapter: `cargo metadata --no-deps --format-version 1`, longest manifest-dir prefix; a change to the root `Cargo.toml`, `Cargo.lock` or a non-package path means all), runs the command with stdio to stderr, data `{gate, stack, command, packages, exit_status, secs, over_budget}`; a failing command is exit 1 with fix "fix the failures above, then rerun `bosun gate <name>`".
-- [ ] Tests with a fake `cargo` on `PATH` that records argv: change in one of two packages -> `nextest run -p a` only (S5 Done when); root change -> `--workspace`; no package change -> skipped; failing command -> exit 1.
+- [x] Tests with a fake `cargo` on `PATH` that records argv: change in one of two packages -> `nextest run -p a` only (S5 Done when); root change -> `--workspace`; no package change -> skipped; failing command -> exit 1.
+
+Split into three PRs: **11a** profile, **11b** runner, **11c** packages adapter.
+
+- [x] 11a: `profiles/rust.toml`, profile parsing, repo override, placeholder expansion, unit tests.
+- [x] 11b: runner, base and changed files, `bosun gate`, integration tests without the packages adapter.
+- [x] 11c: cargo-metadata packages adapter and its tests (the box above).
 
 **Done when (S5, with Task 12):** `bosun gate test` runs nextest on the affected packages only.
 
@@ -187,7 +193,12 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 
 - Rust adapters: test files are `tests/**/*.rs` and any `.rs` with `#[test]`; pending = `#[ignore` lines (a `#[ignore = "UC-…"]` marker counts as pending, not as a skip); assertions = count of `assert!`, `assert_eq!`, `assert_ne!`, `debug_assert*!`, `prop_assert*!`, `insta::assert_*!`.
 - `test-integrity [--base REF] [--pr N]` (also `gate test-integrity`): compares base and head per test file: deleted test file, new non-UC `#[ignore`, lower assertion count -> refusal (exit 1, data lists each finding with file and counts) unless the task metadata of the PR's linked issue has the matching `allow` (`delete-test`, `skip`, `fewer-asserts`). A changed `*.snap` needs `snapshot-change: <reason>` in the PR body (from `--pr N`, or `BOSUN_PR_BODY`).
-- [ ] Tests on temp git repos: each refusal; the allowed case; UC marker removal passes; snapshot rule.
+- [x] Tests on temp git repos: each refusal; the allowed case; UC marker removal passes; snapshot rule.
+
+Split into two PRs: **12a** rust adapters; **12b** comparison and command.
+
+- [x] 12a: `src/gates/adapters.rs` and its unit tests.
+- [x] 12b: `integrity.rs`, `bosun test-integrity` and `gate test-integrity`, `tests/cli_integrity.rs` (the box above).
 
 ### Task 13 (S6): risk-check from the base branch, ask
 

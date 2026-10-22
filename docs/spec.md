@@ -347,6 +347,8 @@ profile has three adapters:
   integrity" when a generic adapter is used.
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
+- Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
+- A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
 A gate over budget opens a lesson.
@@ -355,6 +357,7 @@ test-integrity:
 - Refuses a PR that deletes a test, adds a skip marker, or lowers the assertion count, unless the
   plan says so.
 - A snapshot change needs the line `snapshot-change: <reason>` in the PR body.
+- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker is pending, not a skip.
 - Mutants that survive fail the merge queue.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
