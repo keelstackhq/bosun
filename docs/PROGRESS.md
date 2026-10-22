@@ -12,6 +12,7 @@ orchestrator merges.
 - 2026-10-22 · Docs 2 · `docs/defaults.md`, `docs/plan-format.md`, CLAUDE.md, README, this file · PR #2
 - 2026-10-22 · Docs 3 · seed plan `docs/superpowers/plans/2026-10-22-bosun-seed.md`: S1-S10 as Tasks 1-19, one PR each · PR #3
 - 2026-10-22 · Task 1a · S1: package `keel-bosun`, envelope and exit codes (`src/output.rs`), `deny.toml` (rustls only), CI job `rust` (fmt, clippy, nextest, deny) under `ci-ok` · crates pinned: clap 4.6.7, serde 1.0.229, serde_json 1.0.154, thiserror 2.0.21, toml 1.1.8, assert_cmd 2.2.2, predicates 3.1.4, tempfile 3.27.0 · guard test `tests/workflows.rs` (ci-ok needs and checks every job) · `cargo nextest run` 6/6, `cargo deny check` ok
+- 2026-10-22 · Task 1b · S1: binary, `lib::run`, clap skeleton of join, claim, heartbeat, release, reap, status, hook, doctor; usage errors (also a missing subcommand) exit 2 with one envelope · `cargo nextest run` 12/12 (token canary absent)
 
 ## Blocked
 

@@ -16,6 +16,10 @@ include = ["/src/**", "/profiles/**", "/Cargo.toml", "/Cargo.lock", "/README.md"
 name = "bosun"
 path = "src/lib.rs"
 
+[[bin]]
+name = "bosun"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "=4.6.7", features = ["derive"] }
 serde = { version = "=1.0.229", features = ["derive"] }
