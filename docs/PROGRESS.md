@@ -28,6 +28,7 @@ orchestrator merges.
 - 2026-10-22 · Task 4c · S2b done, S2 done: contents with a small base64 decoder, failed jobs and job logs (the signed log URL is fetched once, https, without the token or GitHub headers) · tests/github_contents.rs 6/6 and 4 b64 unit tests, total 65/65
 - 2026-10-22 · Task 5a · S3a: `src/core/glob.rs` (touch globs: match and overlap, `*` `?` `**`, `dir/`), `src/core/state.rs` (states, labels, transitions), `tests/core_is_pure.rs` · glob table 20 overlap and 13 match cases, total 34/34
 - 2026-10-22 · Task 5b · S3a done: `src/core/records.rs` (comment records `{"bosun":"<type>"}`: lease, lease-end, join, leave, result, spend, ask, lesson-hit) and `src/core/lease.rs` (live leases, conflicts naming both globs, registry members; a bad glob blocks everything) · total 43/43
+- 2026-10-22 · Task 8 · S4a: `src/core/spawn.rs` (checks 1-6 of spec §5 in order; main-red exit 4, budget/depth/live/children exit 6, conflict exit 3; mainfix skips 1-2) and `src/core/wave.rs` (ready, deps merged, no overlap with live leases or the wave, max_parallel; a reason for every waiting task) · total 51/51
 
 ## Blocked
 

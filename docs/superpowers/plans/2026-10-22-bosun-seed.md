@@ -139,7 +139,7 @@ Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, 
 
 - `spawn.rs`: `SpawnInput {main_red, kind, spent_today_usd, daily_usd, parent_depth, max_depth, live_sessions, max_live, children, max_children, conflict: Option<Conflict>}`; `fn check(&SpawnInput) -> Result<(), Refusal {check: u8, name, exit, message, fix}>` in spec §5 order (1 main-red -> exit 4 like claim; 2-5 -> exit 6; 6 -> exit 3). Mainfix skips 1 and 2.
 - `wave.rs`: `fn plan(tasks: &[TaskInfo], leases, max_parallel) -> Wave {run: Vec<u64>, waiting: Vec<(u64, reason)>}`; a task runs when `ready`, all `depends` merged, no overlap with live leases or with tasks already picked; issue number order.
-- [ ] Unit tests: one refusal test per check with its exit code; mainfix exemption; wave with a dependency chain, an overlap pair and the parallel cap.
+- [x] Unit tests: one refusal test per check with its exit code; mainfix exemption; wave with a dependency chain, an overlap pair and the parallel cap.
 
 ### Task 9 (S4b): spawn and wave plan commands
 
