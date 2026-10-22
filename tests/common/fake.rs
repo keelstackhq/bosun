@@ -69,6 +69,18 @@ pub struct State {
     pub log: Vec<Logged>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
+    /// Scripted mutations; see `FakeGithub::after_requests`.
+    pub hooks: Vec<Hook>,
+}
+
+type Mutation = Box<dyn FnOnce(&mut State) + Send>;
+
+/// Runs once, before the request that follows `at` requests whose path ends with `suffix`.
+pub struct Hook {
+    suffix: String,
+    at: usize,
+    seen: usize,
+    run: Option<Mutation>,
 }
 
 #[derive(Debug, Clone)]
@@ -273,6 +285,22 @@ impl FakeGithub {
         self.state.lock().unwrap().fail = Some((status, times));
     }
 
+    /// Mutate the state once, after `n` requests to a path ending with `suffix` were served:
+    /// request `n + 1` already sees the change.
+    pub fn after_requests(
+        &self,
+        suffix: &str,
+        n: usize,
+        f: impl FnOnce(&mut State) + Send + 'static,
+    ) {
+        self.state.lock().unwrap().hooks.push(Hook {
+            suffix: suffix.into(),
+            at: n,
+            seen: 0,
+            run: Some(Box::new(f)),
+        });
+    }
+
     pub fn requests(&self) -> Vec<Logged> {
         self.state.lock().unwrap().log.clone()
     }
@@ -319,7 +347,7 @@ impl Drop for FakeGithub {
     }
 }
 
-fn add_comment(s: &mut State, issue: u64, body: &str) -> u64 {
+pub fn add_comment(s: &mut State, issue: u64, body: &str) -> u64 {
     let id = s.comments.iter().map(|c| c.id).max().unwrap_or(100) + 1;
     s.comments.push(FakeComment {
         id,
@@ -859,6 +887,17 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             s.fail = Some((code, left - 1));
             msg(code, "fake failure")
         } else {
+            let mut hooks = std::mem::take(&mut s.hooks);
+            for h in hooks.iter_mut().filter(|h| path.ends_with(&h.suffix)) {
+                if h.seen == h.at
+                    && let Some(f) = h.run.take()
+                {
+                    f(&mut s);
+                }
+                h.seen += 1;
+            }
+            hooks.append(&mut s.hooks);
+            s.hooks = hooks;
             route(&mut s, &method, path, raw_query, &body, &base)
         };
         drop(s);
