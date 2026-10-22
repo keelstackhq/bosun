@@ -3,6 +3,7 @@
 
 pub mod cli;
 pub mod output;
+pub mod time;
 
 pub use cli::{Cli, Command};
 pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};

@@ -54,6 +54,10 @@ Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny
 
 ### Task 2 (S1b): context, config, identity, time
 
+Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
+
+- [x] 2a: time.
+
 **Files:** `src/ctx.rs`, `src/config.rs`, `src/time.rs`, `tests/config.rs`.
 
 - `time.rs`: `Timestamp(i64 /* unix secs */)`, `parse_rfc3339`, `Display` as `YYYY-MM-DDTHH:MM:SSZ`, `now()` from `BOSUN_NOW` else system time, `day_start()` (00:00 UTC).
