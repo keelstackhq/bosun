@@ -13,6 +13,7 @@ use crate::output::{CmdResult, Outcome};
 
 pub mod cache;
 pub mod pre_tool_use;
+pub mod session_start;
 
 /// Run a hook with the process stdin; returns the text for stdout, if any.
 pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
@@ -33,7 +34,7 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
         .or_else(|| input.get("cwd").and_then(Value::as_str).map(PathBuf::from));
     match cmd {
         HookCmd::PreToolUse => pre_tool_use::run(cwd.as_deref(), &input),
-        HookCmd::SessionStart => None, // lands in Task 7c
+        HookCmd::SessionStart => Some(session_start::run(cwd.as_deref())),
     }
 }
 

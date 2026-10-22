@@ -132,7 +132,7 @@ Split into three PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** `hook
 
 - [x] 7a: guard rules.
 - [x] 7b: pre-tool-use hook and lease cache.
-- [ ] 7c: session-start hook.
+- [x] 7c: session-start hook.
 
 **Files:** `src/hooks/{mod,pre_tool_use,session_start,cache}.rs`, `tests/cli_hook.rs`, spec §4 note.
 
