@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
+use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
 use crate::core::lease::race_winner;
 use crate::core::meta::{TaskMeta, parse_task_meta};
@@ -89,6 +90,25 @@ pub fn set_state(gh: &dyn Github, number: u64, issue: &Issue, to: State) -> Resu
         gh.remove_label(number, &label)?;
     }
     gh.add_labels(number, &[&to.label()])
+}
+
+/// The limits that bind enforcing commands: `.bosun/limits.toml` on the default branch, or the
+/// spec defaults when it is absent there. The working tree copy is not trusted: an uncommitted
+/// edit must not raise a hard cap. A differing local file is mentioned on stderr.
+pub fn limits_from_default(gh: &dyn Github, ctx: &Ctx) -> Result<Limits> {
+    // No repo info (a bare fake or an odd token): the limits of `main` apply.
+    let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
+    let limits = match gh.file_at(LIMITS_FILE, &branch)? {
+        Some(text) => Limits::parse(&text, &format!("{LIMITS_FILE} on {branch}"))?,
+        None => Limits::default(),
+    };
+    if limits != ctx.limits {
+        eprintln!(
+            "bosun: warning: {LIMITS_FILE} in the working tree differs from the one on the default branch ({branch}); \
+             the default branch applies"
+        );
+    }
+    Ok(limits)
 }
 
 /// The comments of an issue, oldest first.

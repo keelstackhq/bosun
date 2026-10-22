@@ -26,14 +26,24 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             "check the number; `gh pr list` shows the open PRs",
         )
     })?;
-    // The newest verdict on an older head makes this a delta review.
-    let since = notes(gh, n)?
-        .iter()
-        .rev()
-        .find_map(|c| match parse_record(&c.body) {
-            Some(Record::Verdict { head_sha, .. }) if head_sha != pull.head_sha => Some(head_sha),
-            _ => None,
-        });
+    // The newest verdict on an older head makes this a delta review, but only when that head
+    // carries a successful `review-verdict` status: the record is a comment anyone with write
+    // access can post, the status is not.
+    let mut since = None;
+    for c in notes(gh, n)?.iter().rev() {
+        if let Some(Record::Verdict { head_sha, .. }) = parse_record(&c.body)
+            && head_sha != pull.head_sha
+        {
+            if gh
+                .statuses(&head_sha)?
+                .iter()
+                .any(|s| s.context == "review-verdict" && s.state == "success")
+            {
+                since = Some(head_sha);
+            }
+            break;
+        }
+    }
     let files = match &since {
         Some(s) => gh.compare_files(s, &pull.head_sha)?,
         None => gh.pull_files(n)?,
