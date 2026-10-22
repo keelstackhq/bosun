@@ -174,11 +174,11 @@ Split into 2 PRs: **9a** spawn and `spawn --record`, **9b** wave plan.
 
 - `wait (--pr N | --issue N | --child SESSION) [--timeout SECS]`: snapshot (PR: state, merged, head SHA, statuses and check conclusions; issue: state label, open/closed, comment count; child: newest `result` record of the session) then poll with backoff 5 s doubling to 60 s (`BOSUN_WAIT_BASE_MS` scales it in tests) until it differs or the timeout passes. data `{changed, before, after, polls}`; timeout is exit 0 with `changed: false`. No send_later, no send_message (D14).
 - `msg <session> <text> [--issue N]`: text over 500 characters is a usage error; returns `next: [{"tool":"send_message","args":{"session_id","message":"From #N: …"}}]`.
-- [ ] Tests: a fake that flips the PR state after 2 polls returns `changed: true, polls: 3`; timeout; child result; msg limits.
+- [x] Tests: a fake that flips the PR state after 2 polls returns `changed: true, polls: 3`; timeout; child result; msg limits.
 
 Split into 2 PRs: **10a** wait (with a request hook in the fake), **10b** msg.
 
-- [ ] 10a: `src/cli/wait.rs`, `tests/cli_wait.rs`, `FakeGithub::after_requests`.
+- [x] 10a: `src/cli/wait.rs`, `tests/cli_wait.rs`, `FakeGithub::after_requests`.
 - [ ] 10b: `src/cli/msg.rs` and its tests.
 
 ### Task 11 (S5a): gate runner and the rust profile
