@@ -14,7 +14,6 @@ pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
 pub mod verdict;
-pub mod verdict;
 pub mod wait;
 pub mod wave;
 use std::path::PathBuf;
