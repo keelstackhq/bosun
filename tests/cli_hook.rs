@@ -196,3 +196,50 @@ fn malformed_stdin_allows() {
     assert!(out.stdout.is_empty());
     assert!(String::from_utf8_lossy(&out.stderr).contains("warning"));
 }
+
+#[test]
+fn session_start_joins_and_prints_the_context() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    leased(&fake);
+    fake.variable("BOSUN_HALT", "0");
+    fake.issue(9, "red", &["bosun:main-red"], "x");
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    for needle in ["session_me", "local", "#5", "#9", "bosun status"] {
+        assert!(text.contains(needle), "{needle} missing: {text}");
+    }
+    assert!(!text.contains("#4"), "only own leases: {text}");
+    let s = fake.state.lock().unwrap();
+    let registry = s
+        .issues
+        .iter()
+        .find(|i| i.labels.iter().any(|l| l == "bosun:registry"))
+        .expect("registry issue");
+    let joined = s
+        .comments
+        .iter()
+        .any(|c| c.issue == registry.number && c.body.contains("session_me"));
+    assert!(joined, "join comment posted");
+    drop(s);
+    assert!(tmp.path().join(".git/bosun/leases.json").exists());
+}
+
+#[test]
+fn session_start_explains_when_github_is_unreachable() {
+    let tmp = repo();
+    let input = json!({"cwd": tmp.path().to_str().unwrap()});
+    let o = hook(None, tmp.path(), T0, "session-start", &input);
+    assert_eq!(o.code, 0);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("could not reach GitHub"), "{text}");
+    assert!(text.contains("GH_TOKEN"), "{text}");
+}

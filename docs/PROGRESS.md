@@ -48,6 +48,7 @@ orchestrator merges.
 - 2026-10-22 · Task 12a · S5b: `src/gates/adapters.rs` (rust adapters as pure text functions: test files, `#[ignore` markers with UC ids as pending, assertion counts without comments) · `cargo nextest run --locked` 48/48
 - 2026-10-22 · Task 12b · S5b done: `src/gates/integrity.rs`, `src/cli/test_integrity.rs` (`bosun test-integrity` and `bosun gate test-integrity`: deleted-test, new-skip, fewer-asserts, snapshot-change; renames are not deletions; PR body and allow list from `BOSUN_PR_BODY` and `BOSUN_INTEGRITY_ALLOW` until Task 13+) · `cargo nextest run --locked` 61/61
 - 2026-10-22 · Task 7b · S8: `src/hooks/{mod,pre_tool_use,cache}.rs`, `bosun hook pre-tool-use` (hook protocol on stdout, no envelope; label-lock, merge-lock, edit-lock from a `<git common dir>/bosun/leases.json` cache, fails open) · `cargo nextest run --locked` 160/160
+- 2026-10-22 · Task 7c · S8 done: `src/hooks/session_start.rs`, `bosun hook session-start` (registry join, cache refresh, one-paragraph context: session, origin, own leases, BOSUN_HALT, main-red; a context that says how to fix GitHub access when unreachable) · an Edit on another session's claimed path is denied; `cargo nextest run --locked` 162/162
 
 ## Blocked
 
