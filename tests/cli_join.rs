@@ -136,3 +136,38 @@ fn heartbeat_without_a_registry_reports_false() {
     assert_eq!(v["data"]["registry"], false);
     assert_eq!(v["data"]["leases"], serde_json::json!([]));
 }
+
+#[test]
+fn join_never_lowers_the_depth_or_changes_the_parent() {
+    let fake = FakeGithub::start();
+    run(
+        &fake,
+        "session_c",
+        T0,
+        &[
+            "join",
+            "--origin",
+            "spawned",
+            "--parent",
+            "session_a",
+            "--depth",
+            "2",
+        ],
+    );
+    let (code, v) = run(
+        &fake,
+        "session_c",
+        T1,
+        &["join", "--parent", "session_x", "--depth", "1"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["depth"], 2);
+    let reg = registry(&fake);
+    let body = &fake.comments_of(reg)[0].body;
+    assert!(
+        body.contains(r#""parent":"session_a""#) && body.contains(r#""depth":2"#),
+        "{body}"
+    );
+    let (_, v) = run(&fake, "session_c", T1, &["join", "--depth", "3"]);
+    assert_eq!(v["data"]["depth"], 3, "a join may raise the depth");
+}

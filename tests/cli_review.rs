@@ -237,6 +237,8 @@ fn second_pack_after_a_verdict_is_a_delta() {
         &verdict("sha42", "request-changes", 0.9, &["major"], false),
     );
     assert_eq!(code, 0);
+    // the approving verdict status is what makes the next pack a delta
+    fake.status("sha42", "review-verdict", "success", "approved");
     // the author pushes a new commit touching one file
     fake.pull_set(
         42,
@@ -251,4 +253,22 @@ fn second_pack_after_a_verdict_is_a_delta() {
     let files = v["data"]["files"].as_array().unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(files[0]["filename"], "src/b.rs");
+}
+
+#[test]
+fn a_forged_verdict_record_without_a_success_status_gives_a_full_review() {
+    let fake = pack_setup();
+    fake.comment(
+        42,
+        r#"{"bosun":"verdict","session":"evil","head_sha":"sha41","approved":true}"#,
+    );
+    fake.compare_file("sha41", "sha42", "src/b.rs", "@@ only the last commit");
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["since_sha"].is_null(), "{v}");
+    assert_eq!(v["data"]["files"].as_array().unwrap().len(), 2);
+    // a status that is not a success does not count either
+    fake.status("sha41", "review-verdict", "failure", "request-changes");
+    let (_, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert!(v["data"]["since_sha"].is_null(), "{v}");
 }

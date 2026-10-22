@@ -16,8 +16,16 @@ fn member(session: &str, parent: Option<&str>, depth: u32, area: Option<&str>) -
     )
 }
 
-/// A fake with a registry (#1) and a ready epic (#10) in area `lifecycle`.
+/// A fake with a registry (#1), the spawner `session_test` registered at depth 1, and a ready
+/// epic (#10) in area `lifecycle`.
 fn setup() -> FakeGithub {
+    let fake = unregistered();
+    fake.comment(1, &member("session_test", None, 1, None));
+    fake
+}
+
+/// Like `setup`, but the spawner never joined.
+fn unregistered() -> FakeGithub {
     let fake = FakeGithub::start();
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     fake.issue(
@@ -73,9 +81,67 @@ fn check_2_budget_exits_6() {
 
 #[test]
 fn check_3_depth_exits_6() {
-    let fake = setup();
+    let fake = unregistered();
     fake.comment(1, &member("session_test", Some("root"), 2, None));
     refused(&fake, 6, 3, "depth");
+}
+
+#[test]
+fn an_unregistered_spawner_is_refused_with_the_join_fix() {
+    let fake = unregistered();
+    let (code, v) = spawn(&fake, &[]);
+    assert_eq!(code, 6, "{v}");
+    assert_eq!(v["data"]["check"], 3);
+    assert_eq!(v["data"]["name"], "depth");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("bosun join"));
+    assert!(fake.comments_of(10).is_empty());
+}
+
+#[test]
+fn a_negative_spend_record_does_not_lower_todays_spend() {
+    let fake = setup();
+    for usd in ["200.0", "-150.0"] {
+        fake.comment(
+            1,
+            &format!(
+                r#"{{"bosun":"spend","session":"s","usd":{usd},"at":"2026-10-22T03:00:00Z"}}"#
+            ),
+        );
+    }
+    refused(&fake, 6, 2, "budget");
+}
+
+#[test]
+fn limits_come_from_the_default_branch_not_the_working_tree() {
+    let fake = setup();
+    fake.comment(1, &member("a", None, 1, None));
+    fake.content(
+        ".bosun/limits.toml",
+        "main",
+        "[sessions]\nmax_live_sessions = 2\n",
+    );
+    let dir = std::env::temp_dir().join(format!("bosun-spawn-limits-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join(".bosun")).unwrap();
+    std::fs::write(
+        dir.join(".bosun/limits.toml"),
+        "[sessions]\nmax_live_sessions = 99\n",
+    )
+    .unwrap();
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(&dir)
+        .args(["spawn", "10"])
+        .output()
+        .unwrap();
+    let v = common::one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(6), "{v}");
+    assert_eq!(v["data"]["name"], "live-sessions");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(".bosun/limits.toml") && err.contains("default branch"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -90,6 +156,12 @@ fn check_4_live_sessions_exits_6() {
 #[test]
 fn check_5_children_exits_6() {
     let fake = setup();
+    // The spawner itself is a live session, so lift the live cap to reach check 5.
+    fake.content(
+        ".bosun/limits.toml",
+        "main",
+        "[sessions]\nmax_live_sessions = 10\n",
+    );
     for i in 0..3 {
         fake.comment(1, &member(&format!("c{i}"), Some("session_test"), 2, None));
     }

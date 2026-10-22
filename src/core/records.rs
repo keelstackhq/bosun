@@ -127,12 +127,14 @@ impl Note {
 }
 
 /// Sum of the `spend` records in `notes` whose `at` is not before `since` (all when `None`).
-/// A record with an unreadable time counts only when `since` is `None`.
+/// A record with an unreadable time counts only when `since` is `None`. A negative or
+/// non-finite amount is ignored: records are trusted from any commenter, and a forged
+/// negative one must not lower the spend.
 pub fn spend_total(notes: &[Note], since: Option<crate::time::Timestamp>) -> f64 {
     notes
         .iter()
         .filter_map(|n| match parse_record(&n.body) {
-            Some(Record::Spend { usd, at, .. }) => {
+            Some(Record::Spend { usd, at, .. }) if usd.is_finite() && usd >= 0.0 => {
                 let ok =
                     since.is_none_or(|s| crate::time::parse_rfc3339(&at).is_some_and(|t| t >= s));
                 ok.then_some(usd)
