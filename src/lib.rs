@@ -19,36 +19,34 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
-    if let Command::Gate(args) = &cli.command {
-        return cli::gate::run(cli.dir.as_deref(), args);
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
         Command::Claim(a) => return cli::claim::run(dir, a),
+        Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Release(a) => return cli::release::run(dir, a),
         Command::Lesson(a) => return cli::lesson::run(dir, a),
         Command::Budget(a) => return cli::budget::run(dir, a),
         Command::Doctor => return cli::doctor::run(dir),
         Command::Status => return cli::status::run(dir),
+        Command::Reap => return cli::reap::run(dir),
         Command::Spawn(a) => return cli::spawn::run(dir, a),
         Command::Wave(a) => return cli::wave::run(dir, a),
         Command::Wait(a) => return cli::wait::run(dir, a),
         Command::Msg(a) => return cli::msg::run(dir, a),
-        Command::Reap => return cli::reap::run(dir),
-        Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
+        Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
+        Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
         Command::Verdict(a) => return cli::verdict::run(dir, a),
         Command::Pr(a) => return cli::pr::run(dir, a),
         Command::CiLog(a) => return cli::ci_log::run(dir, a),
-        Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
-        Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
+        Command::Status => return cli::status::run(dir),
         Command::Ask(a) => return cli::ask::run(dir, a),
-        Command::Hook(h) => return hooks::dispatch(dir, h),
+        Command::Lesson(a) => return cli::lesson::run(dir, a),
+        Command::Hook(a) => return hooks::dispatch(dir, a),
+        Command::Budget(a) => return cli::budget::run(dir, a),
         _ => {}
-    }
-    if let Command::TestIntegrity(args) = &cli.command {
-        return cli::test_integrity::run(cli.dir.as_deref(), args);
     }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
@@ -59,23 +57,10 @@ pub fn run(cli: Cli) -> CmdResult {
     ))
 }
 
-/// The seed plan task that implements a command.
+/// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::Join(_)
-        | Command::Claim(_)
-        | Command::Heartbeat
-        | Command::Release(_)
-        | Command::Reap => 6,
-        Command::Hook(_) => 7,
-        Command::Spawn(_) | Command::Wave(_) => 9,
-        Command::Wait(_) | Command::Msg(_) => 10,
-        Command::Gate(_) => 11,
-        Command::TestIntegrity(_) => 12,
-        Command::RiskCheck(_) | Command::Ask(_) => 13,
-        Command::ReviewPack(_) | Command::Verdict(_) => 14,
-        Command::Pr(_) | Command::CiLog(_) => 15,
-        Command::Lesson(_) | Command::Status => 16,
-        Command::Doctor | Command::Budget(_) => 17,
+        Command::Doctor => 17,
+        _ => 0,
     }
 }
