@@ -136,6 +136,36 @@ pub struct Review {
     pub commit_id: String,
 }
 
+/// One commit status as the combined-status endpoint lists it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Status {
+    pub context: String,
+    pub state: String,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CheckRun {
+    pub name: String,
+    pub status: String,
+    /// `None` until the run completes.
+    #[serde(default)]
+    pub conclusion: Option<String>,
+}
+
+/// A job of an Actions workflow run.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Job {
+    pub id: u64,
+    pub name: String,
+    pub run_id: u64,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub conclusion: String,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub html_url: String,
+}
+
 fn text_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }

@@ -28,6 +28,7 @@ pub struct Resp {
     pub status: u16,
     pub body: Vec<u8>,
     link_next: Option<String>,
+    location: Option<String>,
     retry_after: Option<u64>,
     rate_remaining_zero: bool,
 }
@@ -109,6 +110,16 @@ impl Http {
 
     /// GET every page of a list, following `Link: rel="next"`.
     pub fn get_all(&self, path: &str) -> Result<Vec<Value>> {
+        self.pages(path, None)
+    }
+
+    /// Like `get_all` for endpoints that wrap each page's array in an object under `key`
+    /// (`check_runs`, `workflow_runs`, `jobs`).
+    pub fn get_all_in(&self, path: &str, key: &str) -> Result<Vec<Value>> {
+        self.pages(path, Some(key))
+    }
+
+    fn pages(&self, path: &str, key: Option<&str>) -> Result<Vec<Value>> {
         let mut items = Vec::new();
         let mut next = Some(path.to_string());
         while let Some(path) = next {
@@ -116,7 +127,12 @@ impl Http {
             if !(200..=299).contains(&r.status) {
                 return Err(self.fail("GET", &path, &r));
             }
-            if let Value::Array(page) = r.json() {
+            let body = r.json();
+            let page = match key {
+                Some(k) => body[k].clone(),
+                None => body,
+            };
+            if let Value::Array(page) = page {
                 items.extend(page);
             }
             next = match &r.link_next {
@@ -138,6 +154,30 @@ impl Http {
             };
         }
         Ok(items)
+    }
+
+    /// GET a text body (a job log). One redirect is followed, and only when it stays on the
+    /// API host so the token is never sent elsewhere; otherwise the error names the URL.
+    pub fn get_text(&self, path: &str) -> Result<Option<String>> {
+        let mut r = self.request("GET", path, None)?;
+        if (300..400).contains(&r.status) {
+            let url = r.location.clone().unwrap_or_default();
+            let Some(local) = url.strip_prefix(&self.base).filter(|l| l.starts_with('/')) else {
+                return Err(BosunError::error(
+                    format!("GitHub GET {}: the content is at {url}", bare(path)),
+                    "open that URL (it is signed and expires), or read the log in the Actions tab",
+                ));
+            };
+            r = self.request("GET", local, None)?;
+            if (300..400).contains(&r.status) {
+                return Err(self.fail("GET", path, &r));
+            }
+        }
+        match r.status {
+            200..=299 => Ok(Some(String::from_utf8_lossy(&r.body).into_owned())),
+            404 => Ok(None),
+            _ => Err(self.fail("GET", path, &r)),
+        }
     }
 
     /// POST/PATCH/PUT/DELETE with a JSON body; 2xx is `Ok` (204 is `Null`).
@@ -239,6 +279,7 @@ impl Http {
                 .map(str::to_string)
         };
         let link_next = header("link").and_then(|v| parse_link_next(&v));
+        let location = header("location");
         let retry_after = header("retry-after").and_then(|v| v.trim().parse().ok());
         let rate_remaining_zero = header("x-ratelimit-remaining").is_some_and(|v| v.trim() == "0");
         let body = resp
@@ -256,6 +297,7 @@ impl Http {
             status,
             body,
             link_next,
+            location,
             retry_after,
             rate_remaining_zero,
         })

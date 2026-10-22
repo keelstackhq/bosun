@@ -87,7 +87,7 @@ Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github t
 - Trait additions: `get_pull(n) -> Pull {number, node_id, head_sha, head_ref, base_sha, base_ref, body, state, merged, draft, labels}`, `list_pulls(head: Option<&str>)`, `pull_files(n) -> Vec<PrFile {filename, status, additions, deletions, patch, previous_filename}>`, `create_pull`, `update_pull_body`, `list_reviews(n)`, `create_status(sha, context, state, description)`, `statuses(sha)` (combined), `check_runs(sha)`, `file_at(path, git_ref) -> Option<String>` (contents API, base64), `enable_auto_merge(node_id, method)` (GraphQL `enablePullRequestAutoMerge`, `POST /graphql`), `failed_jobs(sha)` and `job_log(job_id, tail)` (Actions API).
 - Split into two PRs: **4a** pulls, files, reviews; **4b** statuses, checks, contents, auto-merge, logs.
 - [x] 4a: `get_pull`, `list_pulls`, `pull_files`, `create_pull`, `update_pull_body`, `list_reviews` against the fake.
-- [ ] 4b: `create_status`, `statuses`, `check_runs`, `file_at` (base64), `enable_auto_merge` (GraphQL `errors` array becomes an error with its message), `failed_jobs`, `job_log`, each against the fake.
+- [x] 4b: `create_status`, `statuses`, `check_runs`, `file_at` (base64), `enable_auto_merge` (GraphQL `errors` array becomes an error with its message), `failed_jobs`, `job_log`, each against the fake.
 
 **Done when (S2):** integration tests against the recorded fake pass for labels, issues, comments, PRs and checks.
 
