@@ -1,0 +1,26 @@
+# Built-in rust profile (spec §7). Override per repo in .bosun/profiles/rust.toml.
+[adapters]
+packages = "cargo-metadata"
+pending = "rust-ignore"
+assertions = "rust"
+
+[gates.fmt]
+cmd = ["cargo", "fmt", "--check"]
+
+[gates.lint]
+cmd = ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]
+
+[gates.test]
+cmd = ["cargo", "nextest", "run", "--locked"]
+each_package = ["-p", "{package}"]
+all = ["--workspace"]
+when_no_package = "skip"
+
+[gates.deps]
+cmd = ["cargo", "deny", "check"]
+
+[gates.mutants]
+cmd = ["cargo", "mutants", "--in-diff", "{diff}"]
+
+[gates.snapshots]
+cmd = ["cargo", "insta", "test", "--check"]

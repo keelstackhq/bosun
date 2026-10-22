@@ -4,6 +4,7 @@
 pub mod cli;
 pub mod config;
 pub mod ctx;
+pub mod gates;
 pub mod output;
 pub mod time;
 
