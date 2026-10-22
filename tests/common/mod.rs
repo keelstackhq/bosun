@@ -11,6 +11,8 @@ pub const TOKEN_CANARY: &str = "fake-token-canary";
 /// The `bosun` binary with a scrubbed environment.
 pub fn bosun() -> Command {
     let mut cmd = Command::cargo_bin("bosun").expect("bosun binary");
+    // An empty directory, so no test reads this repo's own .bosun/ files.
+    cmd.current_dir(empty_dir());
     cmd.env_remove("GH_TOKEN")
         .env("GITHUB_TOKEN", TOKEN_CANARY)
         .env("BOSUN_GITHUB_API", "http://127.0.0.1:9")
@@ -65,3 +67,14 @@ pub fn lease_note(session: &str, expires: &str, touch: &str) -> String {
 }
 
 pub mod fake;
+
+/// One empty directory per test process (not a git repo, no .bosun/).
+pub fn empty_dir() -> std::path::PathBuf {
+    static DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("bosun-test-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create the empty test dir");
+        dir
+    })
+    .clone()
+}
