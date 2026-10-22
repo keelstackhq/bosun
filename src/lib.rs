@@ -28,6 +28,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
         Command::Verdict(a) => return cli::verdict::run(dir, a),
         Command::Pr(a) => return cli::pr::run(dir, a),
+        Command::CiLog(a) => return cli::ci_log::run(dir, a),
         Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
         _ => {}
     }

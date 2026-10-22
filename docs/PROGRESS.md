@@ -39,6 +39,7 @@ orchestrator merges.
 - 2026-10-22 · Task 14a · S7a: `src/core/verdict.rs` (shape, validation, 0.85 rule), `bosun verdict post` (stale head is exit 3, `review-verdict` status, `verdict` record comment, task to fixing or needs-human) · `cargo nextest run --locked` 164/164
 - 2026-10-22 · Task 14b · S7a done: `src/core/review.rs`, `bosun review-pack` (files with patches, task, UCs of the epic, lessons by scope plus global, REVIEW.md and lessons at the base SHA, delta from the newest `verdict` record via `compare_files`) · `cargo nextest run --locked` 170/170
 - 2026-10-22 · Task 15a · S7b: `bosun pr <issue> [--title] [--auto-merge]` (find or create the PR of the current branch, task to review; auto-merge only when `ci-ok`, `risk-check`, `review-verdict`, `main-open` are green, then GraphQL squash and task to queued; never a merge call) · `cargo nextest run --locked` 176/176
+- 2026-10-22 · Task 15b · S7b: `bosun ci-log <pr> [--tail N]` (failed jobs of the head SHA with the log tail; none failed is `jobs: []`) · `cargo nextest run --locked` 179/179 · S7 done
 
 ## Blocked
 
