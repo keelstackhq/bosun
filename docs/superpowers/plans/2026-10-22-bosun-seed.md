@@ -58,6 +58,7 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 - [x] 2a: time.
 - [x] 2b: config and limits.
+- [x] 2c: ctx and identity.
 
 **Files:** `src/ctx.rs`, `src/config.rs`, `src/time.rs`, `tests/config.rs`.
 
