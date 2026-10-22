@@ -8,6 +8,7 @@ pub mod core;
 pub mod ctx;
 pub mod github;
 pub mod output;
+pub mod registry;
 pub mod time;
 
 pub use cli::{Cli, Command};
@@ -15,6 +16,12 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
+    let dir = cli.dir.as_deref();
+    match &cli.command {
+        Command::Join(a) => return cli::join::run(dir, a),
+        Command::Heartbeat => return cli::heartbeat::run(dir),
+        _ => {}
+    }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
         format!("`bosun {}` is not implemented yet", cli.command.name()),

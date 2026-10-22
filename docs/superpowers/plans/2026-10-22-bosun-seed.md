@@ -108,7 +108,7 @@ Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, 
 Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join, heartbeat; **6c** claim; **6d** release and reap.
 
 - [x] 6a: app helpers, `core/meta.rs`.
-- [ ] 6b: registry, join, heartbeat.
+- [x] 6b: registry, join, heartbeat.
 - [ ] 6c: claim.
 - [ ] 6d: release, reap.
 
