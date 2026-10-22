@@ -22,6 +22,7 @@ orchestrator merges.
 - 2026-10-22 · Task 3c · S2a: trait for issues, labels, comments and variables, with LiveGithub and its own PatchState for updates · tests/github_issues.rs 5/5: every trait method against the fake, 404 on label removal and 422 on label create tolerated
 - 2026-10-22 · Task 4a · S2b: pulls on the `Github` trait (get, list by head and state, files with all pages, create, update body, reviews) with `Pull`, `PrFile`, `Review` types and fake routes · tests/github_pulls.rs 6/6, total 50/50
 - 2026-10-22 · Task 4b · S2b: commit statuses (newest per context, description cut to 140), check runs (all pages) and auto-merge via GraphQL (errors array becomes an error) with fake routes · tests/github_checks.rs 5/5, total 55/55
+- 2026-10-22 · Task 4c · S2b done, S2 done: contents with a small base64 decoder, failed jobs and job logs (the signed log URL is fetched once, https, without the token or GitHub headers) · tests/github_contents.rs 6/6 and 4 b64 unit tests, total 65/65
 
 ## Blocked
 
