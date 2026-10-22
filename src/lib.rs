@@ -20,6 +20,7 @@ pub fn run(cli: Cli) -> CmdResult {
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
+        Command::Claim(a) => return cli::claim::run(dir, a),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
         _ => {}
@@ -36,7 +37,6 @@ pub fn run(cli: Cli) -> CmdResult {
 /// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::Claim(_) => 6,
         Command::Release(_) => 6,
         Command::Reap => 6,
         Command::Spawn(_) => 9,

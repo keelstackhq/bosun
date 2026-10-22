@@ -35,6 +35,7 @@ orchestrator merges.
 - 2026-10-22 · Task 3c · S2a: trait for issues, labels, comments and variables, with LiveGithub and its own PatchState for updates · tests/github_issues.rs 5/5: every trait method against the fake, 404 on label removal and 422 on label create tolerated
 - 2026-10-22 · Task 6a · S3b: `src/app.rs` (App, kill switch, main-red, set_state, notes, active issues, end_lease, task meta), `src/core/meta.rs` (task marker and area label), `records::replace_record`, shared test helpers · unit tests pass, total 79/79
 - 2026-10-22 · Task 6b · S3b: `src/registry.rs`, `bosun join` (one registry issue, join record edited in place) and `bosun heartbeat` (leases and join edited in place, no new comment) · tests/cli_join.rs 5/5
+- 2026-10-22 · Task 6c · S3b: `bosun claim` (kill switch, main-red unless mainfix, ready only, idempotent re-claim, touch conflicts and area owner exit 3) · tests/cli_leases.rs claim cases pass
 
 ## Blocked
 
