@@ -19,8 +19,6 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
-    if let Command::Gate(args) = &cli.command {
-        return cli::gate::run(cli.dir.as_deref(), args);
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => cli::join::run(dir, a),
@@ -99,5 +97,6 @@ fn seed_task(command: &Command) -> u8 {
         Command::Pr(_) | Command::CiLog(_) => 15,
         Command::Lesson(_) | Command::Status => 16,
         Command::Doctor | Command::Budget(_) => 17,
+        Command::Hook(a) => hooks::dispatch(dir, a),
     }
 }
