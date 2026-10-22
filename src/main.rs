@@ -12,8 +12,12 @@ fn main() -> ExitCode {
         Err(err) => return usage_error(&err),
     };
     let command = cli.command.name();
+    // Hooks print their own protocol output; no envelope.
+    let is_hook = matches!(cli.command, bosun::Command::Hook(_));
     let result = bosun::run(cli);
-    print(command, &result);
+    if !is_hook {
+        print(command, &result);
+    }
     ExitCode::from(bosun::output::exit_of(&result).code())
 }
 

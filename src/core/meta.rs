@@ -31,6 +31,9 @@ pub struct TaskMeta {
     pub risk: String,
     #[serde(default)]
     pub allow: Vec<String>,
+    /// Capabilities the task may use, for example `prod-write` (spec section 8).
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 /// The task metadata of an issue body, if it has a valid marker.

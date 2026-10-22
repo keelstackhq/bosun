@@ -52,6 +52,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D29 | Session tools | bosun never calls the claude-code-remote tools itself; a binary cannot. A command that needs a tool call returns it in `next` (tool name and arguments). The session makes the call and passes the result back with `--from -` on stdin. |
 | D30 | Clock and tests | Time comes from `BOSUN_NOW` (RFC 3339) when set; the GitHub base URL from `BOSUN_GITHUB_API`. Tests use a fake GitHub server and never reach a real API. |
 | D31 | Identity | The repo comes from `BOSUN_REPO` (`owner/name`), else the `origin` remote. The session id comes from `BOSUN_SESSION`, else `CLAUDE_CODE_REMOTE_SESSION_ID` with its `cse_` prefix changed to `session_`, else `local-<host>`. The GitHub token comes from `GITHUB_TOKEN` or `GH_TOKEN`, never argv. |
+| D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. |
 
 ### 1.1 Exit codes
 
@@ -190,6 +191,9 @@ Conflict avoidance (three layers):
    parent of the claiming session does not block it, so spawned workers can claim in their
    orchestrator's area.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
+   The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
+   `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
+   TTL, else it allows with a stderr warning. Paths outside the repo are never blocked.
 
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists
 overlap when a path of one matches a glob of the other, or two globs can match a common path.
@@ -204,11 +208,13 @@ Only an epic gets a session (an area orchestrator). Leaf tasks run as wave agent
 session, each in its own workspace from `berth up <task>` (D18); `berth gc` removes the workspaces
 of merged tasks. `bosun wave plan <epic>` returns the next set of tasks that can run in parallel:
 no overlapping touch paths, all dependencies merged, at most `waves.max_parallel`.
+A task counts as merged when its state is `merged` or its issue is closed; tasks of other epics count too.
 
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
 and never uses send_later or send_message.
+`polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 
 `bosun spawn` checks, in this order:
 1. Main is not red.
@@ -223,6 +229,7 @@ A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in che
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
 and registers the child. Tags on the new session: `bosun:<project>`, `bosun:issue/<n>`,
 `bosun:parent/<id>`. bosun never passes a `[1m]` model.
+The epic lease written by spawn has no touch paths (`touch: []`); `--record` ends it with reason `spawned` and writes the same kind of lease for the child, plus the child's `join` (origin spawned, depth + 1, the epic's area).
 
 `.bosun/limits.toml` defaults (evidence in `docs/defaults.md`):
 
@@ -259,7 +266,7 @@ Janitor, resume, results:
   `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
   sees it with `bosun wait`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
-  "From #<issue>:" and refuses text over 500 characters. Nothing in bosun waits for a reply.
+  "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
 Bootstrap order: the root session runs `bosun plan import`, then the wave of plan tasks, then
 spawns one session per area, then coordinates with `bosun wait` and `bosun status`.
@@ -372,6 +379,9 @@ REVIEW.md). The reviewer returns:
 - `bosun verdict post` writes it as the review-verdict check on `head_sha`.
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
+- `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record (statuses are per SHA, so they cannot carry it).
+- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses `main`, `master` and a detached HEAD (exit 2).
+- `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
 
 Flakes: a test that fails and then passes on the same commit is a flake. bosun opens a kind/flake
@@ -392,13 +402,14 @@ Rule evaluation:
   the rules that judge it.
 - A rule only escalates; nothing de-escalates.
 - The bosun version pin (`.bosun/version`) is R-gov.
+- A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
 High-risk PRs:
 - A high PR needs a GitHub review on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
   check.
-- `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). There is no
+- `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
 - A risky task is small: the target is under 100 changed lines.
 
