@@ -44,6 +44,128 @@ pub struct Label {
     pub color: String,
 }
 
+/// A pull request. `merged` is only sent by the single-pull endpoint; lists leave it `false`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "RawPull")]
+pub struct Pull {
+    pub number: u64,
+    pub node_id: String,
+    pub title: String,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub base_sha: String,
+    pub base_ref: String,
+    pub body: String,
+    pub state: String,
+    pub merged: bool,
+    pub draft: bool,
+    pub labels: Vec<String>,
+    pub user: String,
+}
+
+#[derive(Deserialize)]
+struct RawRef {
+    sha: String,
+    #[serde(rename = "ref")]
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RawPull {
+    number: u64,
+    #[serde(default)]
+    node_id: String,
+    #[serde(default)]
+    title: String,
+    head: RawRef,
+    base: RawRef,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    body: String,
+    state: String,
+    #[serde(default)]
+    merged: bool,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default, deserialize_with = "label_names")]
+    labels: Vec<String>,
+    #[serde(default, deserialize_with = "login")]
+    user: String,
+}
+
+impl From<RawPull> for Pull {
+    fn from(r: RawPull) -> Pull {
+        Pull {
+            number: r.number,
+            node_id: r.node_id,
+            title: r.title,
+            head_sha: r.head.sha,
+            head_ref: r.head.name,
+            base_sha: r.base.sha,
+            base_ref: r.base.name,
+            body: r.body,
+            state: r.state,
+            merged: r.merged,
+            draft: r.draft,
+            labels: r.labels,
+            user: r.user,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PrFile {
+    pub filename: String,
+    pub status: String,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    /// Absent for binary and very large files.
+    #[serde(default)]
+    pub patch: Option<String>,
+    #[serde(default)]
+    pub previous_filename: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Review {
+    #[serde(default, deserialize_with = "login")]
+    pub user: String,
+    pub state: String,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub commit_id: String,
+}
+
+/// One commit status as the combined-status endpoint lists it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Status {
+    pub context: String,
+    pub state: String,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CheckRun {
+    pub name: String,
+    pub status: String,
+    /// `None` until the run completes.
+    #[serde(default)]
+    pub conclusion: Option<String>,
+}
+
+/// A job of an Actions workflow run.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Job {
+    pub id: u64,
+    pub name: String,
+    pub run_id: u64,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub conclusion: String,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub html_url: String,
+}
+
 fn text_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }
