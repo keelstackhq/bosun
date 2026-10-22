@@ -18,6 +18,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   docs:
     runs-on: ubuntu-latest
@@ -30,12 +33,64 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git diff --check "origin/${{ github.base_ref }}...HEAD"
 
-  rust:
+  # The gates run bosun built from the base commit, never from the change under test, so a bad
+  # change to bosun cannot pass its own gates (spec §11). After the first release they run the
+  # release pinned in .bosun/version instead.
+  bosun-bin:
     runs-on: ubuntu-latest
-    env:
-      CARGO_TERM_COLOR: always
+    steps:
+      - name: base commit
+        id: base
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          sha="${PR_BASE:-${QUEUE_BASE:-$PUSH_BEFORE}}"
+          case "$sha" in ""|0000000000000000000000000000000000000000) sha="$GITHUB_SHA";; esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.base.outputs.sha }}
+      # Bootstrap: a base without the self-gating CI (this job) has no `bosun gate` to trust yet,
+      # so the change builds itself, once, with a warning. Every later PR uses its base again.
+      - name: base has self-gating CI
+        id: boot
+        run: |
+          if grep -q "^  bosun-bin:" .github/workflows/ci.yml 2>/dev/null; then
+            echo "self=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "self=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::the base has no self-gating CI yet; bosun is built from this change (seed bootstrap)"
+          fi
+      - if: steps.boot.outputs.self == 'true'
+        uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bosun-bin
+      - run: cargo build --release --locked --bin bosun
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bosun-bin
+          path: target/release/bosun
+          retention-days: 1
+
+  gate:
+    name: gate-${{ matrix.gate }}
+    needs: bosun-bin
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [fmt, lint, test, deps, test-integrity]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97"
@@ -44,20 +99,33 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked -- -D warnings
-      - run: cargo nextest run --locked --no-fail-fast
-      - run: cargo deny check
+      - uses: actions/download-artifact@v4
+        with:
+          name: bosun-bin
+          path: ${{ runner.temp }}/bosun
+      - name: bosun gate ${{ matrix.gate }}
+        env:
+          GATE: ${{ matrix.gate }}
+          # test-integrity reads the snapshot-change line from the PR body.
+          BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          bosun="$RUNNER_TEMP/bosun/bosun"
+          chmod +x "$bosun"
+          # A PR runs the gate on what it changed; main and the queue run it on everything.
+          if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
+          "$bosun" gate "$GATE" $all
 
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).
   ci-ok:
-    needs: [docs, rust]
+    needs: [docs, bosun-bin, gate]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
         run: |
-          echo "docs: ${{ needs.docs.result }}, rust: ${{ needs.rust.result }}"
+          echo "docs: ${{ needs.docs.result }}, bosun-bin: ${{ needs.bosun-bin.result }}, gate: ${{ needs.gate.result }}"
           test "${{ needs.docs.result }}" = "success"
-          test "${{ needs.rust.result }}" = "success"
+          test "${{ needs.bosun-bin.result }}" = "success"
+          test "${{ needs.gate.result }}" = "success"

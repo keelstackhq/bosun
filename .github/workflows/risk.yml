@@ -1,0 +1,56 @@
+name: risk
+
+# Posts the required `risk-check` status (spec §8, D32). It runs again when an owner reviews,
+# so an approval on the head SHA turns the status green.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+concurrency:
+  group: risk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  risk:
+    runs-on: ubuntu-latest
+    steps:
+      # The judge is bosun from the base commit: a PR cannot change the code that judges it,
+      # and risk-check reads the rules from the base as well.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      # Bootstrap: a base without this workflow has no `bosun risk-check` yet; the change then
+      # judges itself once, with a warning (the owner reviews that PR: it is R-ci).
+      - name: base has risk-check
+        id: boot
+        run: |
+          if [ -f .github/workflows/risk.yml ]; then
+            echo "self=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "self=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::the base has no risk workflow yet; bosun is built from this change (seed bootstrap)"
+          fi
+      - if: steps.boot.outputs.self == 'true'
+        uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bosun-bin
+      - run: cargo build --release --locked --bin bosun
+      - name: bosun risk-check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        # Exit 5 (needs-human) is the verdict, carried by the status; only errors fail the job.
+        run: ./target/release/bosun risk-check "$PR" || test $? -eq 5
