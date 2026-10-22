@@ -30,9 +30,8 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Wait(a) => return cli::wait::run(dir, a),
         Command::Msg(a) => return cli::msg::run(dir, a),
         Command::Gate(a) => return cli::gate::run(dir, a),
-        Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
         Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
-        Command::Hook(h) => return hooks::dispatch(dir, h),
+        Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
         Command::Hook(a) => return hooks::dispatch(dir, a),
         _ => {}
     }
@@ -48,7 +47,6 @@ pub fn run(cli: Cli) -> CmdResult {
 /// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::RiskCheck(_) => 13,
         Command::ReviewPack(_) => 14,
         Command::Verdict(_) => 14,
         Command::Pr(_) => 15,
