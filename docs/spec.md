@@ -213,6 +213,7 @@ A task counts as merged when its state is `merged` or its issue is closed; tasks
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
 and never uses send_later or send_message.
+`polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 
 `bosun spawn` checks, in this order:
 1. Main is not red.
