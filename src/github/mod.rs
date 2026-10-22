@@ -74,6 +74,8 @@ pub trait Github {
     fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>>;
     /// Every changed file, all pages.
     fn pull_files(&self, number: u64) -> Result<Vec<PrFile>>;
+    /// The files changed between two commits (`base...head`).
+    fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>>;
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
@@ -274,6 +276,20 @@ impl Github for LiveGithub {
     fn pull_files(&self, number: u64) -> Result<Vec<PrFile>> {
         let path = self.path(&format!("/pulls/{number}/files?per_page=100"));
         self.parse_all("pull request file", self.http.get_all(&path)?)
+    }
+
+    fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>> {
+        let path = self.path(&format!("/compare/{}...{}", enc(base), enc(head)));
+        match self.http.get_json(&path)? {
+            Some(v) => self.parse_all(
+                "compared file",
+                v["files"].as_array().cloned().unwrap_or_default(),
+            ),
+            None => Err(BosunError::error(
+                format!("GitHub cannot compare {base}...{head}"),
+                "check that both commits exist; a force-push may have removed the old one",
+            )),
+        }
     }
 
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {

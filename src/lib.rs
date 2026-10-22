@@ -8,6 +8,7 @@ pub mod core;
 pub mod ctx;
 pub mod gates;
 pub mod github;
+pub mod hooks;
 pub mod output;
 pub mod registry;
 pub mod sessions;
@@ -18,6 +19,8 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
+    if let Command::Gate(args) = &cli.command {
+        return cli::gate::run(cli.dir.as_deref(), args);
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
@@ -26,11 +29,25 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Lesson(a) => return cli::lesson::run(dir, a),
         Command::Budget(a) => return cli::budget::run(dir, a),
         Command::Status => return cli::status::run(dir),
+        Command::Spawn(a) => return cli::spawn::run(dir, a),
+        Command::Wave(a) => return cli::wave::run(dir, a),
+        Command::Wait(a) => return cli::wait::run(dir, a),
+        Command::Msg(a) => return cli::msg::run(dir, a),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
+        Command::Verdict(a) => return cli::verdict::run(dir, a),
+        Command::Pr(a) => return cli::pr::run(dir, a),
+        Command::CiLog(a) => return cli::ci_log::run(dir, a),
+        Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
+        Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
+        Command::Ask(a) => return cli::ask::run(dir, a),
+        Command::Hook(h) => return hooks::dispatch(dir, h),
         _ => {}
+    }
+    if let Command::TestIntegrity(args) = &cli.command {
+        return cli::test_integrity::run(cli.dir.as_deref(), args);
     }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
