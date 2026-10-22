@@ -13,6 +13,9 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
+    if let Command::Gate(args) = &cli.command {
+        return cli::gate::run(cli.dir.as_deref(), args);
+    }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
         format!("`bosun {}` is not implemented yet", cli.command.name()),

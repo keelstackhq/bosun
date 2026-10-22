@@ -1,0 +1,71 @@
+//! `bosun gate <name> [--base REF] [--all]`. Works offline: it needs only git and the config, not
+//! a GitHub repo id.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::cli::GateArgs;
+use crate::config::Config;
+use crate::gates::{self, Request};
+use crate::output::{BosunError, CmdResult};
+
+/// `--base`, else `GITHUB_BASE_REF` as `origin/<ref>`, else `origin/main`.
+pub fn resolve_base(flag: Option<&str>, github_base_ref: Option<&str>) -> String {
+    let nonempty = |s: &&str| !s.trim().is_empty();
+    match (flag.filter(nonempty), github_base_ref.filter(nonempty)) {
+        (Some(b), _) => b.to_string(),
+        (None, Some(r)) => format!("origin/{}", r.trim()),
+        (None, None) => "origin/main".to_string(),
+    }
+}
+
+fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| {
+            BosunError::error(
+                format!("cannot run git: {e}"),
+                "install git and make sure it is on PATH",
+            )
+        })?;
+    if !out.status.success() {
+        return Err(BosunError::error(
+            format!("{} is not inside a git repository", dir.display()),
+            "run bosun inside the repo, or pass -C <repo>",
+        ));
+    }
+    Ok(PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()))
+}
+
+pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
+    let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
+    let root = repo_root(&dir)?;
+    let config = Config::load(&root)?;
+    let base = resolve_base(
+        args.base.as_deref(),
+        std::env::var("GITHUB_BASE_REF").ok().as_deref(),
+    );
+    gates::run(&Request {
+        root: &root,
+        stacks: &config.stack,
+        gate: &args.name,
+        base: &base,
+        all: args.all,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_resolution_order() {
+        assert_eq!(resolve_base(Some("v1"), Some("dev")), "v1");
+        assert_eq!(resolve_base(None, Some("dev")), "origin/dev");
+        assert_eq!(resolve_base(None, Some("")), "origin/main");
+        assert_eq!(resolve_base(None, None), "origin/main");
+    }
+}
