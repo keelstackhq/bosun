@@ -212,7 +212,7 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capabilities` in task metadata); **13b** `risk-check`; **13c** `ask`.
 
 - [x] 13a: `src/core/risk.rs`, `risk_default.toml`, `regex` pinned, spec D32.
-- [ ] 13b: `src/cli/risk_check.rs`, `tests/cli_risk.rs` (the box above, except ask).
+- [x] 13b: `src/cli/risk_check.rs`, `tests/cli_risk.rs` (the box above, except ask).
 - [ ] 13c: `src/cli/ask.rs` and its test.
 
 **Done when (S6):** a PR that edits risk.toml is high, evaluated with the base rules.

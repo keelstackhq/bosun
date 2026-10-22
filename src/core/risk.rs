@@ -247,6 +247,57 @@ pub fn parse_owners(text: &str) -> Result<Vec<Owner>, String> {
         .map_err(|e| format!("governance/owners.toml: {e}"))
 }
 
+const NOTE_OPEN: &str = "<!-- bosun:risk -->";
+const NOTE_CLOSE: &str = "<!-- /bosun:risk -->";
+
+/// The Risk note: the rules that matched, why, the evidence, and what the owner must check.
+pub fn risk_note(matches: &[Match], head_sha: &str) -> String {
+    let mut s = format!("{NOTE_OPEN}\n## Risk: high\n\n");
+    for m in matches {
+        s.push_str(&format!("- **{}**: {}\n", m.rule, m.why));
+        for e in &m.evidence {
+            s.push_str(&format!("  - {e}\n"));
+        }
+    }
+    s.push_str(&format!(
+        "\nOwner: review the head SHA {head_sha} and approve. An approval on an older commit does not count.\n{NOTE_CLOSE}"
+    ));
+    s
+}
+
+/// `body` with the Risk note replaced by `note` (or appended); `None` removes it.
+pub fn replace_note(body: &str, note: Option<&str>) -> String {
+    let (before, after) = match (body.find(NOTE_OPEN), body.find(NOTE_CLOSE)) {
+        (Some(a), Some(b)) if a < b => (&body[..a], &body[b + NOTE_CLOSE.len()..]),
+        _ => (body, ""),
+    };
+    let rest = format!("{}{}", before.trim_end(), after);
+    match note {
+        Some(n) if rest.trim().is_empty() => n.to_string(),
+        Some(n) => format!("{}\n\n{n}", rest.trim_end()),
+        None => rest,
+    }
+}
+
+/// The issue a PR body closes (`Closes #N`, also `Fixes` and `Resolves`).
+pub fn closing_issue(body: &str) -> Option<u64> {
+    let lower = body.to_lowercase();
+    ["closes", "fixes", "resolves"].iter().find_map(|kw| {
+        let rest = lower[lower.find(&format!("{kw} #"))? + kw.len() + 2..].to_string();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    })
+}
+
+/// Capabilities named by `bosun:capability/<c>` labels.
+pub fn capability_labels<S: AsRef<str>>(labels: &[S]) -> Vec<String> {
+    labels
+        .iter()
+        .filter_map(|l| l.as_ref().strip_prefix("bosun:capability/"))
+        .map(str::to_string)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,5 +423,28 @@ libc = "0"
         assert_eq!(o.len(), 2);
         assert_eq!(o[0].slack.as_deref(), Some("U1"));
         assert!(parse_owners("[[owner]]\nname = \"x\"").is_err());
+    }
+
+    #[test]
+    fn note_is_replaced_in_place() {
+        let m = eval(&[file(".github/workflows/x.yml", &[])]);
+        let note = risk_note(&m, "abc");
+        assert!(note.contains("R-ci") && note.contains("review the head SHA abc and approve"));
+        let once = replace_note("Closes #1", Some(&note));
+        let twice = replace_note(&once, Some(&risk_note(&m, "def")));
+        assert_eq!(twice.matches(NOTE_OPEN).count(), 1);
+        assert!(twice.starts_with("Closes #1") && twice.contains("SHA def"));
+        assert_eq!(replace_note(&twice, None), "Closes #1");
+    }
+
+    #[test]
+    fn closing_issue_and_capability_labels() {
+        assert_eq!(closing_issue("x\nCloses #12."), Some(12));
+        assert_eq!(closing_issue("fixes #3"), Some(3));
+        assert_eq!(closing_issue("no link"), None);
+        assert_eq!(
+            capability_labels(&["bug", "bosun:capability/prod-write"]),
+            ["prod-write"]
+        );
     }
 }
