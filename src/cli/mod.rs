@@ -12,6 +12,7 @@ pub mod reap;
 pub mod release;
 pub mod risk_check;
 pub mod spawn;
+pub mod verdict;
 pub mod wait;
 pub mod wave;
 use std::path::PathBuf;

@@ -9,4 +9,5 @@ pub mod records;
 pub mod risk;
 pub mod spawn;
 pub mod state;
+pub mod verdict;
 pub mod wave;
