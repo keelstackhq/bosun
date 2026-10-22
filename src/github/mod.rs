@@ -1,11 +1,12 @@
 //! GitHub as the shared store: the `Github` trait and its live implementation (spec §1, D28).
 
+pub mod b64;
 pub mod http;
 pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{Comment, Issue, Label};
+pub use types::{CheckRun, Comment, Issue, Job, Label, PrFile, Pull, Review, Status};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -68,7 +69,42 @@ pub trait Github {
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
     /// A repository Actions variable; `None` when it is not set.
     fn variable(&self, name: &str) -> Result<Option<String>>;
+    fn get_pull(&self, number: u64) -> Result<Option<Pull>>;
+    /// Pull requests in `state`; `head` is `owner:branch`.
+    fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>>;
+    /// Every changed file, all pages.
+    fn pull_files(&self, number: u64) -> Result<Vec<PrFile>>;
+    fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
+    fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
+    fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
+    /// `state` is `success`, `failure`, `pending` or `error`; the description is cut to 140
+    /// characters.
+    fn create_status(
+        &self,
+        sha: &str,
+        context: &str,
+        state: &str,
+        description: &str,
+        target_url: Option<&str>,
+    ) -> Result<()>;
+    /// The combined status of `sha`: the newest status per context.
+    fn statuses(&self, sha: &str) -> Result<Vec<Status>>;
+    fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>>;
+    /// A file at a ref; `None` when it is missing or is a directory.
+    fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>>;
+    /// `method` is `SQUASH`, `MERGE` or `REBASE`; `node_id` is the pull request's.
+    fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()>;
+    /// Jobs of the workflow runs of `sha` that failed, were cancelled or timed out.
+    fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>>;
+    /// The last `tail` lines of a job's log.
+    fn job_log(&self, job_id: u64, tail: usize) -> Result<String>;
 }
+
+const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
+const MERGE_METHODS: [&str; 3] = ["SQUASH", "MERGE", "REBASE"];
+const AUTO_MERGE: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!) { \
+    enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) \
+    { pullRequest { number } } }";
 
 pub struct LiveGithub {
     http: Http,
@@ -215,5 +251,167 @@ impl Github for LiveGithub {
             .http
             .get_json(&path)?
             .and_then(|v| v["value"].as_str().map(str::to_string)))
+    }
+
+    fn get_pull(&self, number: u64) -> Result<Option<Pull>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/pulls/{number}")))?
+        {
+            Some(v) => Ok(Some(self.parse("pull request", v)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>> {
+        let mut path = self.path(&format!("/pulls?state={}&per_page=100", state.as_str()));
+        if let Some(h) = head {
+            path.push_str(&format!("&head={}", enc(h)));
+        }
+        self.parse_all("pull request", self.http.get_all(&path)?)
+    }
+
+    fn pull_files(&self, number: u64) -> Result<Vec<PrFile>> {
+        let path = self.path(&format!("/pulls/{number}/files?per_page=100"));
+        self.parse_all("pull request file", self.http.get_all(&path)?)
+    }
+
+    fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {
+        let v = self.http.send_json(
+            "POST",
+            &self.path("/pulls"),
+            &json!({"title": title, "head": head, "base": base, "body": body}),
+        )?;
+        self.parse("pull request", v)
+    }
+
+    fn update_pull_body(&self, number: u64, body: &str) -> Result<()> {
+        let path = self.path(&format!("/pulls/{number}"));
+        self.http
+            .send_json("PATCH", &path, &json!({"body": body}))?;
+        Ok(())
+    }
+
+    fn list_reviews(&self, number: u64) -> Result<Vec<Review>> {
+        let path = self.path(&format!("/pulls/{number}/reviews?per_page=100"));
+        self.parse_all("review", self.http.get_all(&path)?)
+    }
+
+    fn create_status(
+        &self,
+        sha: &str,
+        context: &str,
+        state: &str,
+        description: &str,
+        target_url: Option<&str>,
+    ) -> Result<()> {
+        if !STATUS_STATES.contains(&state) {
+            return Err(BosunError::error(
+                format!("status state {state:?} is not one GitHub accepts"),
+                "use success, failure, pending or error",
+            ));
+        }
+        let description: String = description.chars().take(140).collect();
+        let mut body = json!({"state": state, "context": context, "description": description});
+        if let Some(u) = target_url {
+            body["target_url"] = json!(u);
+        }
+        let path = self.path(&format!("/statuses/{}", enc(sha)));
+        self.http.send_json("POST", &path, &body)?;
+        Ok(())
+    }
+
+    fn statuses(&self, sha: &str) -> Result<Vec<Status>> {
+        let path = self.path(&format!("/commits/{}/status?per_page=100", enc(sha)));
+        match self.http.get_json(&path)? {
+            Some(v) => self.parse_all(
+                "status",
+                v["statuses"].as_array().cloned().unwrap_or_default(),
+            ),
+            None => Ok(vec![]),
+        }
+    }
+
+    fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>> {
+        let path = self.path(&format!("/commits/{}/check-runs?per_page=100", enc(sha)));
+        self.parse_all("check run", self.http.get_all_in(&path, "check_runs")?)
+    }
+
+    fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>> {
+        let segments: Vec<String> = path.split('/').map(enc).collect();
+        let url = self.path(&format!(
+            "/contents/{}?ref={}",
+            segments.join("/"),
+            enc(git_ref)
+        ));
+        let Some(v) = self.http.get_json(&url)? else {
+            return Ok(None);
+        };
+        if v["type"] != "file" {
+            return Ok(None); // a directory (an array), symlink or submodule
+        }
+        let unusable = |why: String| {
+            BosunError::error(
+                format!("GitHub sent {path} at {git_ref} in a form bosun cannot read: {why}"),
+                "files over 1 MB are not served by the contents API; keep this file smaller",
+            )
+        };
+        if v["encoding"] != "base64" {
+            return Err(unusable(format!("encoding {}", v["encoding"])));
+        }
+        let bytes = b64::decode(v["content"].as_str().unwrap_or(""))
+            .ok_or_else(|| unusable("invalid base64".into()))?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| unusable("not UTF-8 text".into()))
+    }
+
+    fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()> {
+        if !MERGE_METHODS.contains(&method) {
+            return Err(BosunError::error(
+                format!("merge method {method:?} is not one GitHub accepts"),
+                "use SQUASH, MERGE or REBASE",
+            ));
+        }
+        let body = json!({"query": AUTO_MERGE, "variables": {"id": node_id, "method": method}});
+        let v = self.http.send_json("POST", "/graphql", &body)?;
+        match v["errors"].as_array().and_then(|e| e.first()) {
+            Some(first) => Err(BosunError::error(
+                format!(
+                    "GitHub refused auto-merge: {}",
+                    first["message"].as_str().unwrap_or("unknown GraphQL error")
+                ),
+                "enable 'Allow auto-merge' in the repository settings and require status checks on the base branch",
+            )),
+            None => Ok(()),
+        }
+    }
+
+    fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>> {
+        let path = self.path(&format!("/actions/runs?head_sha={}&per_page=100", enc(sha)));
+        let mut failed = Vec::new();
+        for run in self.http.get_all_in(&path, "workflow_runs")? {
+            let Some(id) = run["id"].as_u64() else {
+                continue;
+            };
+            let path = self.path(&format!("/actions/runs/{id}/jobs?per_page=100"));
+            let jobs: Vec<Job> = self.parse_all("job", self.http.get_all_in(&path, "jobs")?)?;
+            failed.extend(jobs.into_iter().filter(|j| {
+                ["failure", "cancelled", "timed_out"].contains(&j.conclusion.as_str())
+            }));
+        }
+        Ok(failed)
+    }
+
+    fn job_log(&self, job_id: u64, tail: usize) -> Result<String> {
+        let path = self.path(&format!("/actions/jobs/{job_id}/logs"));
+        let text = self.http.get_text(&path)?.ok_or_else(|| {
+            BosunError::error(
+                format!("GitHub has no log for job {job_id}"),
+                "logs expire after 90 days; check the job id",
+            )
+        })?;
+        let lines: Vec<&str> = text.lines().collect();
+        Ok(lines[lines.len().saturating_sub(tail)..].join("\n"))
     }
 }

@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod core;
 pub mod ctx;
+pub mod gates;
 pub mod github;
 pub mod output;
 pub mod registry;
@@ -23,6 +24,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Release(a) => return cli::release::run(dir, a),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
+        Command::Gate(a) => return cli::gate::run(dir, a),
         _ => {}
     }
     let task = seed_task(&cli.command);
@@ -34,23 +36,27 @@ pub fn run(cli: Cli) -> CmdResult {
     ))
 }
 
-/// The seed plan task that implements a command.
+/// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::Join(_)
-        | Command::Claim(_)
-        | Command::Heartbeat
-        | Command::Release(_)
-        | Command::Reap => 6,
-        Command::Hook(_) => 7,
-        Command::Spawn(_) | Command::Wave(_) => 9,
-        Command::Wait(_) | Command::Msg(_) => 10,
-        Command::Gate(_) => 11,
+        Command::Release(_) => 6,
+        Command::Reap => 6,
+        Command::Spawn(_) => 9,
+        Command::Wave(_) => 9,
+        Command::Wait(_) => 10,
+        Command::Msg(_) => 10,
+        Command::RiskCheck(_) => 13,
         Command::TestIntegrity(_) => 12,
-        Command::RiskCheck(_) | Command::Ask(_) => 13,
-        Command::ReviewPack(_) | Command::Verdict(_) => 14,
-        Command::Pr(_) | Command::CiLog(_) => 15,
-        Command::Lesson(_) | Command::Status => 16,
-        Command::Doctor | Command::Budget(_) => 17,
+        Command::ReviewPack(_) => 14,
+        Command::Verdict(_) => 14,
+        Command::Pr(_) => 15,
+        Command::CiLog(_) => 15,
+        Command::Status => 16,
+        Command::Ask(_) => 13,
+        Command::Lesson(_) => 16,
+        Command::Hook(_) => 7,
+        Command::Doctor => 17,
+        Command::Budget(_) => 17,
+        _ => 0,
     }
 }

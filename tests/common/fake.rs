@@ -33,7 +33,17 @@ pub struct FakeComment {
     pub updated_at: String,
 }
 
-/// Everything the fake knows. The Task 4 collections are placeholders until its routes land.
+/// How the fake serves a job log.
+#[derive(Debug, Clone, Default)]
+pub enum LogMode {
+    /// The text itself.
+    #[default]
+    Direct,
+    /// A 302 to this URL, as real GitHub does.
+    Redirect(String),
+}
+
+/// Everything the fake knows.
 #[derive(Default)]
 pub struct State {
     pub issues: Vec<FakeIssue>,
@@ -47,6 +57,13 @@ pub struct State {
     pub contents: HashMap<String, String>,
     pub reviews: HashMap<u64, Vec<Value>>,
     pub runs: Vec<Value>,
+    pub jobs: Vec<Value>,
+    pub logs: HashMap<u64, String>,
+    pub log_mode: LogMode,
+    /// Pull number -> merge method of its enabled auto-merge.
+    pub auto_merge: HashMap<u64, String>,
+    /// Answers every GraphQL call with this error.
+    pub graphql_error: Option<String>,
     pub log: Vec<Logged>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
@@ -112,6 +129,122 @@ impl FakeGithub {
 
     pub fn comment(&self, issue: u64, body: &str) -> u64 {
         add_comment(&mut self.state.lock().unwrap(), issue, body)
+    }
+
+    /// An open pull request from `head_ref` (head sha `sha<number>`) into `main`.
+    pub fn pull(&self, number: u64, title: &str, head_ref: &str, body: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.pulls
+            .push(pull_json(number, title, head_ref, "main", body));
+    }
+
+    /// Set a top-level field of a pull request (`draft`, `merged`, `state`, `labels`, ...).
+    pub fn pull_set(&self, number: u64, key: &str, value: Value) {
+        let mut s = self.state.lock().unwrap();
+        let p = s.pulls.iter_mut().find(|p| p["number"] == number);
+        p.unwrap_or_else(|| panic!("no pull {number}"))[key] = value;
+    }
+
+    pub fn pull_file(
+        &self,
+        number: u64,
+        filename: &str,
+        status: &str,
+        additions: u64,
+        deletions: u64,
+        patch: Option<&str>,
+    ) {
+        let mut f = json!({"sha": "abc", "filename": filename, "status": status,
+            "additions": additions, "deletions": deletions, "changes": additions + deletions});
+        if let Some(p) = patch {
+            f["patch"] = json!(p);
+        }
+        let mut s = self.state.lock().unwrap();
+        s.files.entry(number).or_default().push(f);
+    }
+
+    /// Set `previous_filename` on the last file added to `number`.
+    pub fn renamed_from(&self, number: u64, previous: &str) {
+        let mut s = self.state.lock().unwrap();
+        let last = s.files.get_mut(&number).unwrap().last_mut().unwrap();
+        last["previous_filename"] = json!(previous);
+    }
+
+    pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
+        let mut s = self.state.lock().unwrap();
+        let list = s.reviews.entry(number).or_default();
+        let id = list.len() + 1;
+        list.push(json!({"id": id, "user": {"login": user}, "state": state,
+            "commit_id": commit_id, "submitted_at": TS}));
+    }
+
+    pub fn pull_body(&self, number: u64) -> String {
+        let s = self.state.lock().unwrap();
+        let p = s.pulls.iter().find(|p| p["number"] == number);
+        p.unwrap_or_else(|| panic!("no pull {number}"))["body"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// A commit status as if posted earlier by CI.
+    pub fn status(&self, sha: &str, context: &str, state: &str, description: &str) {
+        add_status(
+            &mut self.state.lock().unwrap(),
+            sha,
+            context,
+            state,
+            description,
+        );
+    }
+
+    /// Every status ever posted to `sha`, oldest first.
+    pub fn statuses_of(&self, sha: &str) -> Vec<Value> {
+        let s = self.state.lock().unwrap();
+        s.statuses.get(sha).cloned().unwrap_or_default()
+    }
+
+    pub fn check_run(&self, sha: &str, name: &str, status: &str, conclusion: Option<&str>) {
+        let mut s = self.state.lock().unwrap();
+        let list = s.check_runs.entry(sha.into()).or_default();
+        let id = list.len() + 1;
+        list.push(
+            json!({"id": id, "name": name, "status": status, "conclusion": conclusion,
+            "head_sha": sha}),
+        );
+    }
+
+    /// A file at a ref; the contents API serves it base64-encoded.
+    pub fn content(&self, path: &str, git_ref: &str, text: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.contents.insert(format!("{git_ref}:{path}"), text.into());
+    }
+
+    /// A workflow run of `sha` with one job and its log.
+    pub fn run_with_job(&self, sha: &str, job_name: &str, conclusion: &str, log: &str) {
+        let mut s = self.state.lock().unwrap();
+        let n = s.runs.len() as u64 + 1;
+        let (run_id, job_id) = (1000 + n, 5000 + n);
+        s.runs
+            .push(json!({"id": run_id, "head_sha": sha, "status": "completed",
+            "conclusion": conclusion}));
+        s.jobs.push(json!({"id": job_id, "run_id": run_id, "name": job_name,
+            "status": "completed", "conclusion": conclusion,
+            "html_url": format!("https://github.test/acme/widget/actions/runs/{run_id}/job/{job_id}")}));
+        s.logs.insert(job_id, log.into());
+    }
+
+    pub fn log_mode(&self, mode: LogMode) {
+        self.state.lock().unwrap().log_mode = mode;
+    }
+
+    /// The merge method of the pull's enabled auto-merge, if any.
+    pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
+        self.state.lock().unwrap().auto_merge.get(&number).cloned()
+    }
+
+    pub fn graphql_error(&self, message: &str) {
+        self.state.lock().unwrap().graphql_error = Some(message.into());
     }
 
     pub fn variable(&self, name: &str, value: &str) {
@@ -200,6 +333,55 @@ fn issue_json(i: &FakeIssue) -> Value {
     v
 }
 
+fn pull_json(number: u64, title: &str, head_ref: &str, base_ref: &str, body: &str) -> Value {
+    json!({"number": number, "node_id": format!("PR_node{number}"), "title": title,
+        "body": body, "state": "open", "merged": false, "draft": false, "labels": [],
+        "user": {"login": "octocat"},
+        "head": {"sha": format!("sha{number}"), "ref": head_ref, "label": format!("acme:{head_ref}")},
+        "base": {"sha": "base0000", "ref": base_ref}})
+}
+
+fn add_status(s: &mut State, sha: &str, context: &str, state: &str, description: &str) -> Value {
+    let list = s.statuses.entry(sha.into()).or_default();
+    let v = json!({"id": list.len() + 1, "context": context, "state": state,
+        "description": description, "created_at": TS});
+    list.push(v.clone());
+    v
+}
+
+/// Wrap a page's array as GitHub does for run, job and check-run lists.
+fn wrapped(mut reply: Reply, key: &str, total: usize) -> Reply {
+    reply.1 = json!({"total_count": total, key: reply.1});
+    reply
+}
+
+fn b64_wrapped(text: &str) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut flat = String::new();
+    for c in text.as_bytes().chunks(3) {
+        let n = c
+            .iter()
+            .enumerate()
+            .fold(0u32, |a, (i, b)| a | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            flat.push(if i <= c.len() {
+                A[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+    }
+    flat.as_bytes()
+        .chunks(60)
+        .map(|l| format!("{}\n", std::str::from_utf8(l).unwrap()))
+        .collect()
+}
+
+fn pull_pos(s: &State, n: &str) -> Option<usize> {
+    let n: u64 = n.parse().ok()?;
+    s.pulls.iter().position(|p| p["number"] == n)
+}
+
 fn comment_json(c: &FakeComment) -> Value {
     json!({"id": c.id, "body": c.body, "user": {"login": c.user},
         "created_at": c.created_at, "updated_at": c.updated_at})
@@ -281,6 +463,9 @@ fn route(
         .collect();
     let seg: Vec<String> = path.trim_start_matches('/').split('/').map(dec).collect();
     let seg: Vec<&str> = seg.iter().map(String::as_str).collect();
+    if method == "POST" && seg == ["graphql"] {
+        return graphql(s, body);
+    }
     let ["repos", _, _, rest @ ..] = seg.as_slice() else {
         return msg(404, "Not Found");
     };
@@ -428,12 +613,193 @@ fn route(
                 None => msg(404, "Not Found"),
             }
         }
+        ("GET", ["pulls"]) => {
+            let state = query.get("state").map(String::as_str).unwrap_or("open");
+            let head = query.get("head").map(String::as_str);
+            let items = s
+                .pulls
+                .iter()
+                .filter(|p| {
+                    (state == "all" || p["state"] == state)
+                        && head.is_none_or(|h| p["head"]["label"] == h)
+                })
+                .map(|p| {
+                    // lists do not carry `merged`
+                    let mut p = p.clone();
+                    p.as_object_mut().unwrap().remove("merged");
+                    p
+                })
+                .collect();
+            page(items, &query, base, path, raw_query)
+        }
+        ("POST", ["pulls"]) => {
+            let number = s
+                .pulls
+                .iter()
+                .filter_map(|p| p["number"].as_u64())
+                .chain(s.issues.iter().map(|i| i.number))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let head = body["head"].as_str().unwrap_or("");
+            let branch = head.split_once(':').map_or(head, |h| h.1);
+            let p = pull_json(
+                number,
+                body["title"].as_str().unwrap_or(""),
+                branch,
+                body["base"].as_str().unwrap_or("main"),
+                body["body"].as_str().unwrap_or(""),
+            );
+            s.pulls.push(p.clone());
+            (201, p, vec![])
+        }
+        ("GET", ["pulls", n]) => match pull_pos(s, n) {
+            Some(p) => ok(s.pulls[p].clone()),
+            None => msg(404, "Not Found"),
+        },
+        ("PATCH", ["pulls", n]) => match pull_pos(s, n) {
+            Some(p) => {
+                if let Some(b) = body["body"].as_str() {
+                    s.pulls[p]["body"] = json!(b);
+                }
+                ok(s.pulls[p].clone())
+            }
+            None => msg(404, "Not Found"),
+        },
+        ("GET", ["pulls", n, "files"]) => {
+            let items = n.parse().ok().and_then(|n: u64| s.files.get(&n)).cloned();
+            page(items.unwrap_or_default(), &query, base, path, raw_query)
+        }
+        ("GET", ["pulls", n, "reviews"]) => {
+            let items = n.parse().ok().and_then(|n: u64| s.reviews.get(&n)).cloned();
+            page(items.unwrap_or_default(), &query, base, path, raw_query)
+        }
+        ("POST", ["statuses", sha]) => {
+            let f = |k: &str| body[k].as_str().unwrap_or("").to_string();
+            let mut v = add_status(s, sha, &f("context"), &f("state"), &f("description"));
+            v["target_url"] = body["target_url"].clone();
+            s.statuses.get_mut(*sha).unwrap().last_mut().unwrap()["target_url"] =
+                body["target_url"].clone();
+            (201, v, vec![])
+        }
+        ("GET", ["commits", sha, "status"]) => {
+            let mut seen = std::collections::HashSet::new();
+            let newest: Vec<Value> = s
+                .statuses
+                .get(*sha)
+                .into_iter()
+                .flatten()
+                .rev()
+                .filter(|v| seen.insert(v["context"].as_str().unwrap_or("").to_string()))
+                .cloned()
+                .collect();
+            ok(
+                json!({"sha": sha, "state": "pending", "total_count": newest.len(),
+                "statuses": newest}),
+            )
+        }
+        ("GET", ["commits", sha, "check-runs"]) => {
+            let items = s.check_runs.get(*sha).cloned().unwrap_or_default();
+            let total = items.len();
+            wrapped(
+                page(items, &query, base, path, raw_query),
+                "check_runs",
+                total,
+            )
+        }
+        ("GET", ["contents", file @ ..]) => {
+            let file = file.join("/");
+            let git_ref = query.get("ref").map(String::as_str).unwrap_or("main");
+            if let Some(text) = s.contents.get(&format!("{git_ref}:{file}")) {
+                return ok(json!({"type": "file", "encoding": "base64", "name": file,
+                    "path": file, "size": text.len(), "content": b64_wrapped(text)}));
+            }
+            let dir = format!("{git_ref}:{file}/");
+            let mut entries: Vec<Value> = s
+                .contents
+                .keys()
+                .filter(|k| k.starts_with(&dir))
+                .map(|k| json!({"type": "file", "path": &k[git_ref.len() + 1..]}))
+                .collect();
+            entries.sort_by_key(|e| e["path"].to_string());
+            if entries.is_empty() {
+                msg(404, "Not Found")
+            } else {
+                ok(Value::Array(entries))
+            }
+        }
+        ("GET", ["actions", "runs"]) => {
+            let sha = query.get("head_sha").map(String::as_str).unwrap_or("");
+            let items: Vec<Value> = s
+                .runs
+                .iter()
+                .filter(|r| r["head_sha"] == sha)
+                .cloned()
+                .collect();
+            let total = items.len();
+            wrapped(
+                page(items, &query, base, path, raw_query),
+                "workflow_runs",
+                total,
+            )
+        }
+        ("GET", ["actions", "runs", id, "jobs"]) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            let items: Vec<Value> = s
+                .jobs
+                .iter()
+                .filter(|j| j["run_id"] == id)
+                .cloned()
+                .collect();
+            let total = items.len();
+            wrapped(page(items, &query, base, path, raw_query), "jobs", total)
+        }
+        ("GET", ["actions", "jobs", id, "logs"]) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            let Some(text) = s.logs.get(&id) else {
+                return msg(404, "Not Found");
+            };
+            match &s.log_mode {
+                LogMode::Direct => ok(json!(text)),
+                LogMode::Redirect(url) => {
+                    (302, Value::Null, vec![("Location".into(), url.clone())])
+                }
+            }
+        }
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
         },
         _ => msg(404, "Not Found"),
     }
+}
+
+fn graphql(s: &mut State, body: &Value) -> Reply {
+    let error = |m: &str| ok(json!({"data": null, "errors": [{"message": m}]}));
+    if let Some(m) = s.graphql_error.clone() {
+        return error(&m);
+    }
+    if !body["query"]
+        .as_str()
+        .unwrap_or("")
+        .contains("enablePullRequestAutoMerge")
+    {
+        return error("unsupported query");
+    }
+    let id = body["variables"]["id"].as_str().unwrap_or("");
+    let method = body["variables"]["method"].as_str().unwrap_or("");
+    let Some(n) = s
+        .pulls
+        .iter()
+        .find(|p| p["node_id"] == id)
+        .and_then(|p| p["number"].as_u64())
+    else {
+        return error(&format!(
+            "Could not resolve to a node with the global id of '{id}'"
+        ));
+    };
+    s.auto_merge.insert(n, method.into());
+    ok(json!({"data": {"enablePullRequestAutoMerge": {"pullRequest": {"number": n}}}}))
 }
 
 fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, base: String) {
@@ -479,10 +845,12 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             route(&mut s, &method, path, raw_query, &body, &base)
         };
         drop(s);
-        let mut resp = tiny_http::Response::from_data(if status == 204 {
-            vec![]
-        } else {
-            value.to_string().into_bytes()
+        let text_body = value.as_str().map(str::to_string);
+        let mut resp = tiny_http::Response::from_data(match (&text_body, &value) {
+            _ if status == 204 => vec![],
+            (_, Value::Null) if status == 302 => vec![],
+            (Some(t), _) => t.clone().into_bytes(),
+            _ => value.to_string().into_bytes(),
         })
         .with_status_code(status);
         for (k, v) in std::iter::once(("Content-Type".to_string(), "application/json".to_string()))
@@ -491,5 +859,58 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             resp.add_header(tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap());
         }
         let _ = req.respond(resp);
+    }
+}
+
+/// The "other host" a log redirect points at: serves one log text and records the names of the
+/// headers each request carried (lowercase), so tests can assert the token never arrived.
+pub struct LogHost {
+    pub url: String,
+    pub seen: Arc<Mutex<Vec<Vec<String>>>>,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl LogHost {
+    pub fn start(text: &str) -> LogHost {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind log host");
+        let url = format!("http://{}", server.server_addr().to_ip().expect("ip"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (seen2, stop2, text) = (seen.clone(), stop.clone(), text.to_string());
+        let handle = std::thread::spawn(move || {
+            while !stop2.load(Ordering::SeqCst) {
+                let Ok(Some(req)) = server.recv_timeout(Duration::from_millis(25)) else {
+                    continue;
+                };
+                let names = req
+                    .headers()
+                    .iter()
+                    .map(|h| h.field.as_str().as_str().to_ascii_lowercase())
+                    .collect();
+                seen2.lock().unwrap().push(names);
+                let _ = req.respond(tiny_http::Response::from_string(text.clone()));
+            }
+        });
+        LogHost {
+            url,
+            seen,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    /// Header names of every request received.
+    pub fn headers_seen(&self) -> Vec<Vec<String>> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Drop for LogHost {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
 }

@@ -10,6 +10,8 @@ pub mod reap;
 pub mod release;
 use std::path::PathBuf;
 
+pub mod gate;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bosun",
