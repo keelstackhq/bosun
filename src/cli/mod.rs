@@ -3,8 +3,11 @@
 
 use clap::{Args, Parser, Subcommand};
 
+pub mod claim;
 pub mod heartbeat;
 pub mod join;
+pub mod reap;
+pub mod release;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]

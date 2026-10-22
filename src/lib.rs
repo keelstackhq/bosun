@@ -19,6 +19,9 @@ pub fn run(cli: Cli) -> CmdResult {
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
+        Command::Claim(a) => return cli::claim::run(dir, a),
+        Command::Release(a) => return cli::release::run(dir, a),
+        Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         _ => {}
     }

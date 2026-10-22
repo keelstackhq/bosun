@@ -1,30 +1,7 @@
 mod common;
 
 use common::fake::FakeGithub;
-use common::{TOKEN_CANARY, bosun, one_object};
-use serde_json::Value;
-
-/// Run `bosun <args>` as `session` at `now` against the fake; returns (exit code, envelope).
-fn run(fake: &FakeGithub, session: &str, now: &str, args: &[&str]) -> (i32, Value) {
-    let out = bosun()
-        .env("BOSUN_GITHUB_API", fake.url())
-        .env("BOSUN_SESSION", session)
-        .env("BOSUN_NOW", now)
-        .args(args)
-        .output()
-        .unwrap();
-    let all = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(!all.contains(TOKEN_CANARY), "token leaked");
-    let v = one_object(&out.stdout);
-    if v["ok"] == false {
-        assert!(!v["error"]["fix"].as_str().unwrap().trim().is_empty());
-    }
-    (out.status.code().unwrap(), v)
-}
+use common::{lease_note as lease, run};
 
 const T0: &str = "2026-10-22T10:00:00Z";
 const T1: &str = "2026-10-22T10:10:00Z";
@@ -111,12 +88,6 @@ fn bad_origin_is_an_error_with_a_fix() {
     let fake = FakeGithub::start();
     let (code, _) = run(&fake, "session_a", T0, &["join", "--origin", "mars"]);
     assert_eq!(code, 1);
-}
-
-fn lease(session: &str, expires: &str, touch: &str) -> String {
-    format!(
-        "Claimed.\n\n{{\"bosun\":\"lease\",\"session\":\"{session}\",\"origin\":\"local\",\"expires\":\"{expires}\",\"touch\":[\"{touch}\"]}}"
-    )
 }
 
 #[test]

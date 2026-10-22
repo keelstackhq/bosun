@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::core::meta::{TaskMeta, parse_task_meta};
-use crate::core::records::Note;
+use crate::core::records::{Note, Record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
 use crate::github::{Github, Issue, IssueState, LiveGithub};
@@ -105,4 +105,13 @@ pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
             Ok((i, n))
         })
         .collect()
+}
+
+/// Post the `lease-end` record of `session` on an issue.
+pub fn end_lease(gh: &dyn Github, number: u64, session: &str, reason: &str) -> Result<u64> {
+    let record = Record::LeaseEnd {
+        session: session.into(),
+        reason: reason.into(),
+    };
+    Ok(gh.add_comment(number, &record.to_line())?.id)
 }
