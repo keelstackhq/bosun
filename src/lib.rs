@@ -1,11 +1,15 @@
 #![forbid(unsafe_code)]
 //! bosun: orchestration helper for repos where agents write all the code. See `docs/spec.md`.
 
+pub mod app;
 pub mod cli;
 pub mod config;
+pub mod core;
 pub mod ctx;
 pub mod gates;
+pub mod github;
 pub mod output;
+pub mod registry;
 pub mod time;
 
 pub use cli::{Cli, Command};
@@ -15,6 +19,14 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 pub fn run(cli: Cli) -> CmdResult {
     if let Command::Gate(args) = &cli.command {
         return cli::gate::run(cli.dir.as_deref(), args);
+    let dir = cli.dir.as_deref();
+    match &cli.command {
+        Command::Join(a) => return cli::join::run(dir, a),
+        Command::Claim(a) => return cli::claim::run(dir, a),
+        Command::Release(a) => return cli::release::run(dir, a),
+        Command::Reap => return cli::reap::run(dir),
+        Command::Heartbeat => return cli::heartbeat::run(dir),
+        _ => {}
     }
     if let Command::TestIntegrity(args) = &cli.command {
         return cli::test_integrity::run(cli.dir.as_deref(), args);

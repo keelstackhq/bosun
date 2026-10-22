@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 use assert_cmd::Command;
+use fake::FakeGithub;
 use serde_json::Value;
 
 /// A token canary: tests assert it never reaches stdout or stderr.
@@ -17,6 +18,8 @@ pub fn bosun() -> Command {
         .env("BOSUN_SESSION", "session_test")
         .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
         .env_remove("BOSUN_HALT")
+        .env_remove("BOSUN_ORIGIN")
+        .env_remove("CLAUDE_CODE_CHILD_SESSION")
         .env_remove("CLAUDE_CODE_REMOTE_SESSION_ID");
     cmd
 }
@@ -30,3 +33,35 @@ pub fn one_object(stdout: &[u8]) -> Value {
     assert!(first.is_object(), "not an object: {text}");
     first
 }
+
+/// Run `bosun <args>` as `session` at `now` against the fake; returns (exit code, envelope).
+/// Asserts the token never leaks and every error has a fix.
+pub fn run(fake: &FakeGithub, session: &str, now: &str, args: &[&str]) -> (i32, Value) {
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", session)
+        .env("BOSUN_NOW", now)
+        .args(args)
+        .output()
+        .unwrap();
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!all.contains(TOKEN_CANARY), "token leaked");
+    let v = one_object(&out.stdout);
+    if v["ok"] == false {
+        assert!(!v["error"]["fix"].as_str().unwrap().trim().is_empty());
+    }
+    (out.status.code().unwrap(), v)
+}
+
+/// A lease comment body as `bosun claim` writes it.
+pub fn lease_note(session: &str, expires: &str, touch: &str) -> String {
+    format!(
+        "Claimed.\n\n{{\"bosun\":\"lease\",\"session\":\"{session}\",\"origin\":\"local\",\"expires\":\"{expires}\",\"touch\":[\"{touch}\"]}}"
+    )
+}
+
+pub mod fake;
