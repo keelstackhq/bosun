@@ -9,7 +9,8 @@ orchestrator merges.
 ## Done
 
 - 2026-10-22 · Docs 1 · `docs/spec.md` (forge spec renamed to bosun, adjustments A1-A14 as D13-D26, seed design decisions D27-D31) and minimal CI · PR #1
-- 2026-10-22 · Docs 2 · `docs/defaults.md`, `docs/plan-format.md`, CLAUDE.md, README, this file
+- 2026-10-22 · Docs 2 · `docs/defaults.md`, `docs/plan-format.md`, CLAUDE.md, README, this file · PR #2
+- 2026-10-22 · Docs 3 · seed plan `docs/superpowers/plans/2026-10-22-bosun-seed.md`: S1-S10 as Tasks 1-19, one PR each
 
 ## Blocked
 
