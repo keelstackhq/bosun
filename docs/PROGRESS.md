@@ -1,0 +1,37 @@
+# Progress
+
+## Status
+
+Seed in progress, plan `docs/superpowers/plans/2026-10-22-bosun-seed.md`. Order: docs, then S1,
+S2, S3, S8, then S4-S7, S9, S10. Each task is one PR of at most 400 changed lines; the
+orchestrator merges.
+
+## Done
+
+- 2026-10-22 · Docs 1 · `docs/spec.md` (forge spec renamed to bosun, adjustments A1-A14 as D13-D26, seed design decisions D27-D31) and minimal CI · PR #1
+- 2026-10-22 · Docs 2 · `docs/defaults.md`, `docs/plan-format.md`, CLAUDE.md, README, this file
+
+## Blocked
+
+Human-only items. Each has the exact action.
+
+1. **Repo settings (checklist steps 3 and 5).** After S10 adds `hoist.toml`, run from a checkout
+   of main with an admin token:
+   `hoist plan --area github && hoist apply --area github --yes`. It sets branch protection and
+   the merge queue on `main`, auto-merge, delete-branch-on-merge, and the required checks
+   `ci-ok`, `risk-check`, `review-verdict`, `main-open` (from `[github]` in `hoist.toml`). hoist
+   0.2 has no repo-variable resource (checked in its source on 2026-10-22), so set the kill switch
+   by hand: `gh variable set BOSUN_HALT --body 0 --repo keelstackhq/bosun`. Until S10, require
+   only `ci-ok`.
+2. **Cloud environment setup script (checklist step 6, D23).** Set it in claude.ai/code →
+   environment settings → setup script. The text is in `docs/setup-script.sh` (added by S10).
+3. **Routines (checklist step 11).** After S9, `bosun doctor` prints the three prompts: janitor
+   (every 15 min, Haiku), curator (daily, Sonnet), notify (every 15 min, Haiku).
+4. **First publish (D24).** Not part of the seed. When the owner decides on v0.1.0: in a local
+   checkout with npm and crates.io logins, `hoist release bootstrap --dry-run`, then
+   `hoist release bootstrap`; then run the release workflow within 2 days so the npm trusted
+   publishers do not expire.
+5. **Org decision D-006 (D26).** Propose in keelstackhq/decisions: "Agents never merge or tag;
+   merges happen via auto-merge after the gates." Agents do not edit that repo.
+6. **Org decisions channel (D-004).** `splice channel add gh:keelstackhq/decisions//channel
+   --track main --piece import-claude` in a checkout, then commit as `chore: sync org decisions`.
