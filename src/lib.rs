@@ -25,6 +25,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Release(a) => return cli::release::run(dir, a),
         Command::Lesson(a) => return cli::lesson::run(dir, a),
         Command::Budget(a) => return cli::budget::run(dir, a),
+        Command::Doctor => return cli::doctor::run(dir),
         Command::Status => return cli::status::run(dir),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),

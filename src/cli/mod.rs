@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 
 pub mod budget;
 pub mod claim;
+pub mod doctor;
 pub mod heartbeat;
 pub mod join;
 pub mod lesson;

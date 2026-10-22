@@ -98,6 +98,25 @@ pub trait Github {
     fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>>;
     /// The last `tail` lines of a job's log.
     fn job_log(&self, job_id: u64, tail: usize) -> Result<String>;
+    /// The repository itself; `None` when it is not readable (404).
+    fn repo_info(&self) -> Result<Option<RepoInfo>>;
+    /// The newest published release; `None` when there is none.
+    fn latest_release(&self) -> Result<Option<Release>>;
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct RepoInfo {
+    pub default_branch: String,
+    #[serde(default)]
+    pub allow_auto_merge: bool,
+    /// Present with an authenticated token: what the token may do.
+    #[serde(default)]
+    pub permissions: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Release {
+    pub tag_name: String,
 }
 
 const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
@@ -154,6 +173,20 @@ impl LiveGithub {
 }
 
 impl Github for LiveGithub {
+    fn repo_info(&self) -> Result<Option<RepoInfo>> {
+        match self.http.get_json(&self.path(""))? {
+            Some(v) => Ok(Some(self.parse("repository", v)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn latest_release(&self) -> Result<Option<Release>> {
+        match self.http.get_json(&self.path("/releases/latest"))? {
+            Some(v) => Ok(Some(self.parse("release", v)?)),
+            None => Ok(None),
+        }
+    }
+
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>> {
         let mut path = self.path(&format!("/issues?state={}&per_page=100", state.as_str()));
         if !labels.is_empty() {

@@ -65,6 +65,10 @@ pub struct State {
     /// Answers every GraphQL call with this error.
     pub graphql_error: Option<String>,
     pub log: Vec<Logged>,
+    /// Extra fields of `GET /repos/o/r` (default branch main, auto-merge off).
+    pub repo: serde_json::Map<String, Value>,
+    /// Tag of the latest release, if any.
+    pub release: Option<String>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
 }
@@ -245,6 +249,32 @@ impl FakeGithub {
 
     pub fn graphql_error(&self, message: &str) {
         self.state.lock().unwrap().graphql_error = Some(message.into());
+    }
+
+    /// Set a field of the repository document, for example `allow_auto_merge`.
+    pub fn repo_set(&self, key: &str, value: Value) {
+        self.state.lock().unwrap().repo.insert(key.into(), value);
+    }
+
+    pub fn release(&self, tag: &str) {
+        self.state.lock().unwrap().release = Some(tag.into());
+    }
+
+    /// The author of an issue or pull entry.
+    pub fn issue_by(&self, number: u64, user: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .user = user.into();
+    }
+
+    /// A comment written by `user`.
+    pub fn comment_by(&self, issue: u64, user: &str, body: &str) {
+        let mut s = self.state.lock().unwrap();
+        let id = add_comment(&mut s, issue, body);
+        s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
     }
 
     pub fn variable(&self, name: &str, value: &str) {
@@ -766,6 +796,17 @@ fn route(
                 }
             }
         }
+        ("GET", []) => {
+            let mut v = json!({"default_branch": "main", "allow_auto_merge": false});
+            for (k, x) in &s.repo {
+                v[k] = x.clone();
+            }
+            ok(v)
+        }
+        ("GET", ["releases", "latest"]) => match &s.release {
+            Some(t) => ok(json!({"tag_name": t})),
+            None => msg(404, "Not Found"),
+        },
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),

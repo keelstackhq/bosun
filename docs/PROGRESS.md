@@ -39,6 +39,7 @@ orchestrator merges.
 - 2026-10-22 · Task 16a · S9a: `src/core/lessons.rs` (caps 40/8, `L-NNN` ids, hit, scope match), `bosun lesson add|hit` on `docs/lessons.toml` (exit 6 at a cap, `hit --issue` posts `lesson-hit`) · 4 unit + 5 integration tests, `cargo nextest run --locked` 162/162
 - 2026-10-22 · Task 16b · S9a done: `src/cli/status.rs` (`bosun status`: halt, main-red, process-red, live sessions, live leases, issues by state, spend today and budget %, integrity full/reduced) + `spend_total` in records · 3 integration tests, `cargo nextest run --locked` 165/165
 - 2026-10-22 · Task 17a · S9b: `src/sessions/usage.rs` (claude-sessions and generic providers, built-in haiku/sonnet/opus prices from the claude-api skill table of 2026-10-06), `bosun budget record` (spend on task and registry, per-task cap blocks the task) · 2 unit + 5 integration tests, `cargo nextest run --locked` 172/172
+- 2026-10-22 · Task 17b · S9b done: `src/cli/doctor.rs` (`bosun doctor`: the 12 checklist steps as ok or missing with fixes, Routine prompts in `data.routines`, exit 5 when any is missing), `repo_info` and `latest_release` on the `Github` trait and the fake · 2 integration tests (empty repo, fully set-up fake plus temp checkout), `cargo nextest run --locked` 174/174 · S9 done
 
 ## Blocked
 
