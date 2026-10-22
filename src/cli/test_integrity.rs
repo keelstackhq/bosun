@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::cli::IntegrityArgs;
-use crate::cli::gate::{repo_root, resolve_base};
+use crate::cli::gate::{repo_root, resolve_base_in};
 use crate::gates::integrity::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
@@ -29,7 +29,11 @@ pub fn run(dir: Option<&Path>, args: &IntegrityArgs) -> CmdResult {
 pub fn check(dir: Option<&Path>, base: Option<&str>) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
-    let base = resolve_base(base, std::env::var("GITHUB_BASE_REF").ok().as_deref());
+    let base = resolve_base_in(
+        &root,
+        base,
+        std::env::var("GITHUB_BASE_REF").ok().as_deref(),
+    );
     // Task 13+ reads them from the PR and the task metadata.
     let body = std::env::var("BOSUN_PR_BODY").unwrap_or_default();
     let allow = parse_allow(&std::env::var("BOSUN_INTEGRITY_ALLOW").unwrap_or_default());

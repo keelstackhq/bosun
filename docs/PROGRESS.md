@@ -56,6 +56,7 @@ orchestrator merges.
 - 2026-10-22 · Task 18 · S10a: governance files (`.bosun/{bosun,limits,risk}.toml`, `.bosun/version` = unreleased, `governance/owners.toml`, CODEOWNERS for governance and CI paths), `.claude/settings.json` hooks, AGENTS.md, REVIEW.md, `hoist.toml` (four required checks, auto-merge, no merge queue yet), `docs/setup-script.sh` (D23); spec D19 note: hoard is a Turborepo cache, Rust jobs use rust-cache · `tests/governance.rs` 4/4; `bosun doctor` on this checkout: steps 1, 3, 4, 6, 9 ok
 - 2026-10-22 · Task 19a · S10: gate CI on itself: `bosun-bin` builds bosun from the base commit (PR base, queue base or the commit before a push), `gate-{fmt,lint,test,deps,test-integrity}` run `bosun gate` (PRs on the change, main on everything), `ci-ok` needs them all; `risk.yml` posts `risk-check` with bosun from the base and reruns on reviews; `main-open.yml`; `main-health.yml` opens/closes the `bosun:main-red` issue on ci results and nightly · YAML parses, `tests/workflows.rs` 1/1
 - 2026-10-22 · Task 19b · S10 done: `plans/bosun.md`, items M1-M8 in the plan format (areas, tasks with touch paths and sizes, UCs from spec §12) · S10 Done when is checked on the PR: CI green with the gates run by bosun
+- 2026-10-22 · Fix A · merge gate: escalated verdict is a failure status, `pr --auto-merge` needs the task in `review` before GraphQL, kill switch fails closed (404 = not halted) and covers plain `bosun pr`, default branch from `repo_info` (gate: `origin/HEAD`) · 7 new tests, nextest 270/270
 
 ## Blocked
 

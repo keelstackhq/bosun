@@ -176,7 +176,10 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         match &halt {
             Ok(Some(_)) => None,
             Ok(None) => Some("the repo variable BOSUN_HALT is not set".into()),
-            Err(e) => Some(e.message.clone()),
+            Err(e) => Some(format!(
+                "cannot read the BOSUN_HALT variable: {}",
+                e.message
+            )),
         },
         format!(
             "BOSUN_HALT={}",

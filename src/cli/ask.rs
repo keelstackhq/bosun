@@ -6,14 +6,11 @@ use std::path::Path;
 use serde_json::json;
 
 use super::AskArgs;
-use crate::app::{App, kill_switch, set_state};
+use crate::app::{App, default_branch, kill_switch, set_state};
 use crate::cli::risk_check::{OWNERS_PATH, owner_logins};
 use crate::core::records::Record;
 use crate::core::state::State;
 use crate::output::{BosunError, CmdResult, Outcome};
-
-/// The owners are read from the default branch.
-const DEFAULT_BRANCH: &str = "main";
 
 pub fn run(dir: Option<&Path>, args: &AskArgs) -> CmdResult {
     let app = App::load(dir)?;
@@ -25,10 +22,12 @@ pub fn run(dir: Option<&Path>, args: &AskArgs) -> CmdResult {
             "check the number; `bosun status` lists the tasks",
         )
     })?;
-    let owners = owner_logins(gh, DEFAULT_BRANCH)?;
+    // The owners are read from the default branch.
+    let branch = default_branch(gh)?;
+    let owners = owner_logins(gh, &branch)?;
     if owners.is_empty() {
         return Err(BosunError::error(
-            format!("no owners to ask: {OWNERS_PATH} is missing or empty on {DEFAULT_BRANCH}"),
+            format!("no owners to ask: {OWNERS_PATH} is missing or empty on {branch}"),
             format!(
                 "fill {OWNERS_PATH} with `[[owner]]` tables (`github = \"login\"`) and merge it"
             ),

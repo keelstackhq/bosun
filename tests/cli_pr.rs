@@ -164,3 +164,71 @@ fn auto_merge_respects_the_kill_switch() {
     let (code, _) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
     assert_eq!(code, 4);
 }
+
+fn graphql_calls(fake: &FakeGithub) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/graphql"))
+        .count()
+}
+
+#[test]
+fn auto_merge_is_refused_unless_the_task_is_in_review() {
+    for state in ["needs-human", "blocked", "queued"] {
+        let fake = FakeGithub::start();
+        task(&fake, &format!("bosun:state/{state}"));
+        fake.pull(20, "t", "claude/t7", "Closes #7");
+        for c in ["ci-ok", "risk-check", "review-verdict", "main-open"] {
+            fake.status("sha20", c, "success", "");
+        }
+        let dir = repo("claude/t7");
+        let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+        assert_eq!(code, 3, "{state}: {v}");
+        assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+        assert_eq!(graphql_calls(&fake), 0, "{state}");
+        assert_eq!(fake.auto_merge_enabled(20), None);
+    }
+}
+
+#[test]
+fn plain_pr_respects_the_kill_switch() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/building");
+    fake.variable("BOSUN_HALT", "1");
+    let dir = repo("claude/t7");
+    let (code, _) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 4);
+    assert!(
+        !fake
+            .requests()
+            .iter()
+            .any(|r| r.method == "POST" && r.path.ends_with("/pulls"))
+    );
+}
+
+#[test]
+fn the_pr_base_is_the_repos_default_branch() {
+    let fake = FakeGithub::start();
+    fake.repo_set("default_branch", serde_json::json!("trunk"));
+    task(&fake, "bosun:state/building");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    let body = fake
+        .requests()
+        .into_iter()
+        .find(|r| r.method == "POST" && r.path.ends_with("/pulls"))
+        .and_then(|r| r.body)
+        .unwrap();
+    assert!(body.contains(r#""base":"trunk""#), "{body}");
+}
+
+#[test]
+fn the_default_branch_is_refused_whatever_its_name() {
+    let fake = FakeGithub::start();
+    fake.repo_set("default_branch", serde_json::json!("trunk"));
+    task(&fake, "bosun:state/building");
+    let dir = repo("trunk");
+    let (code, _) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 2);
+}
