@@ -14,6 +14,7 @@ orchestrator merges.
 - 2026-10-22 · Task 1a · S1: package `keel-bosun`, envelope and exit codes (`src/output.rs`), `deny.toml` (rustls only), CI job `rust` (fmt, clippy, nextest, deny) under `ci-ok` · crates pinned: clap 4.6.7, serde 1.0.229, serde_json 1.0.154, thiserror 2.0.21, toml 1.1.8, assert_cmd 2.2.2, predicates 3.1.4, tempfile 3.27.0 · guard test `tests/workflows.rs` (ci-ok needs and checks every job) · `cargo nextest run` 6/6, `cargo deny check` ok
 - 2026-10-22 · Task 1b · S1: binary, `lib::run`, clap skeleton of join, claim, heartbeat, release, reap, status, hook, doctor; usage errors (also a missing subcommand) exit 2 with one envelope · `cargo nextest run` 12/12 (token canary absent)
 - 2026-10-22 · Task 1c · S1 done: the other 14 commands (spawn, wave plan, wait, msg, gate, risk-check, test-integrity, review-pack, verdict post, pr, ci-log, ask, lesson add|hit, budget record); `--help` lists all 22 and each of the 24 calls returns one envelope · `cargo nextest run` 12/12
+- 2026-10-22 · Task 2a · S1b: `src/time.rs` (`Timestamp`, RFC 3339 parse with offsets, display, `BOSUN_NOW`, `day_start`) · `cargo nextest run --test time` 3/3, total 17/17
 
 ## Blocked
 
