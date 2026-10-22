@@ -8,6 +8,7 @@ pub mod heartbeat;
 pub mod join;
 pub mod reap;
 pub mod release;
+pub mod spawn;
 use std::path::PathBuf;
 
 pub mod gate;
