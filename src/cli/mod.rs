@@ -9,7 +9,6 @@ pub mod claim;
 pub mod heartbeat;
 pub mod join;
 pub mod lesson;
-pub mod pr;
 pub mod msg;
 pub mod pr;
 pub mod reap;
