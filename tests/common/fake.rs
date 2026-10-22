@@ -56,6 +56,8 @@ pub struct State {
     pub check_runs: HashMap<String, Vec<Value>>,
     pub contents: HashMap<String, String>,
     pub reviews: HashMap<u64, Vec<Value>>,
+    /// `base...head` -> files of the comparison.
+    pub compares: HashMap<String, Vec<Value>>,
     pub runs: Vec<Value>,
     pub jobs: Vec<Value>,
     pub logs: HashMap<u64, String>,
@@ -180,6 +182,17 @@ impl FakeGithub {
         let mut s = self.state.lock().unwrap();
         let last = s.files.get_mut(&number).unwrap().last_mut().unwrap();
         last["previous_filename"] = json!(previous);
+    }
+
+    /// A file of the comparison `base...head`.
+    pub fn compare_file(&self, base: &str, head: &str, filename: &str, patch: &str) {
+        let f = json!({"filename": filename, "status": "modified", "additions": 1,
+            "deletions": 0, "patch": patch});
+        let mut s = self.state.lock().unwrap();
+        s.compares
+            .entry(format!("{base}...{head}"))
+            .or_default()
+            .push(f);
     }
 
     pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
@@ -698,6 +711,10 @@ fn route(
             let items = n.parse().ok().and_then(|n: u64| s.files.get(&n)).cloned();
             page(items.unwrap_or_default(), &query, base, path, raw_query)
         }
+        ("GET", ["compare", range]) => match s.compares.get(*range) {
+            Some(files) => ok(json!({"files": files})),
+            None => msg(404, "Not Found"),
+        },
         ("GET", ["pulls", n, "reviews"]) => {
             let items = n.parse().ok().and_then(|n: u64| s.reviews.get(&n)).cloned();
             page(items.unwrap_or_default(), &query, base, path, raw_query)

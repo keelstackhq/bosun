@@ -10,6 +10,7 @@ pub mod join;
 pub mod msg;
 pub mod reap;
 pub mod release;
+pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
 pub mod verdict;

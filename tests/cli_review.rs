@@ -131,3 +131,112 @@ fn halted_by_the_kill_switch() {
     );
     assert_eq!(code, 4);
 }
+
+const LESSONS: &str = r#"
+[[lesson]]
+id = "L-001"
+rule = "global"
+
+[[lesson]]
+id = "L-002"
+rule = "core only"
+scope = ["src/core/**"]
+
+[[lesson]]
+id = "L-003"
+rule = "web only"
+scope = ["web/**"]
+"#;
+
+fn pack_setup() -> FakeGithub {
+    let fake = FakeGithub::start();
+    fake.issue(
+        3,
+        "epic",
+        &[],
+        "Epic body\n- UC-M1-1: leases expire\n- UC-M1-2: x\nother",
+    );
+    fake.issue(
+        7,
+        "the task",
+        &["bosun:state/review"],
+        "Do it.\n<!-- bosun:task {\"item\":\"M1\",\"task\":\"T1\",\"epic\":3,\"touch\":[\"src/**\"]} -->",
+    );
+    fake.pull_as_issue(42, "the pr");
+    fake.pull(42, "the pr", "claude/x", "Closes #7");
+    fake.pull_file(42, "src/core/a.rs", "modified", 2, 1, Some("@@ a"));
+    fake.pull_file(42, "src/b.rs", "added", 5, 0, Some("@@ b"));
+    fake.content("docs/lessons.toml", "base0000", LESSONS);
+    fake.content("REVIEW.md", "base0000", "Review rules");
+    fake.content("REVIEW.md", "sha42", "head version, not used");
+    fake
+}
+
+#[test]
+fn review_pack_lists_matching_lessons_and_the_base_review_md() {
+    let fake = pack_setup();
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    let d = &v["data"];
+    assert_eq!(d["pr"], 42);
+    assert_eq!(d["head_sha"], "sha42");
+    assert_eq!(d["base_sha"], "base0000");
+    assert!(d["since_sha"].is_null());
+    assert_eq!(d["files"].as_array().unwrap().len(), 2);
+    assert_eq!(d["files"][0]["patch"], "@@ a");
+    assert_eq!(d["task"]["issue"], 7);
+    assert_eq!(d["task"]["meta"]["item"], "M1");
+    assert_eq!(
+        d["ucs"],
+        json!(["- UC-M1-1: leases expire", "- UC-M1-2: x"])
+    );
+    let ids: Vec<&str> = d["lessons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["L-001", "L-002"]);
+    assert_eq!(d["review_md"], "Review rules");
+    assert!(
+        d["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("bosun verdict post")
+    );
+}
+
+#[test]
+fn review_pack_tolerates_missing_files() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "p", "b", "no link");
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "5"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["lessons"], json!([]));
+    assert!(v["data"]["review_md"].is_null());
+    assert!(v["data"]["task"].is_null());
+}
+
+#[test]
+fn second_pack_after_a_verdict_is_a_delta() {
+    let fake = pack_setup();
+    let (code, _) = post(
+        &fake,
+        &verdict("sha42", "request-changes", 0.9, &["major"], false),
+    );
+    assert_eq!(code, 0);
+    // the author pushes a new commit touching one file
+    fake.pull_set(
+        42,
+        "head",
+        json!({"sha": "sha42b", "ref": "claude/x", "label": "acme:claude/x"}),
+    );
+    fake.compare_file("sha42", "sha42b", "src/b.rs", "@@ fix");
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["since_sha"], "sha42");
+    assert_eq!(v["data"]["head_sha"], "sha42b");
+    let files = v["data"]["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["filename"], "src/b.rs");
+}
