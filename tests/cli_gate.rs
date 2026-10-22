@@ -116,12 +116,45 @@ impl Repo {
 }
 
 #[test]
+fn change_in_one_package_tests_only_that_package() {
+    let r = repo();
+    r.change("b/src/lib.rs");
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["nextest run --locked -p b"]);
+    assert_eq!(v["data"]["packages"], serde_json::json!(["b"]));
+    assert_eq!(v["data"]["gate"], "test");
+    assert_eq!(v["data"]["exit_status"], 0);
+    assert_eq!(v["data"]["skipped"], false);
+    assert_eq!(v["data"]["over_budget"], false);
+}
+
+#[test]
+fn root_manifest_change_tests_the_workspace() {
+    let r = repo();
+    r.change("Cargo.toml");
+    let (code, _, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0);
+    assert_eq!(r.calls(), vec!["nextest run --locked --workspace"]);
+}
+
+#[test]
 fn all_flag_tests_the_workspace() {
     let r = repo();
     r.change("docs/x.md");
     let (code, _, _) = r.gate(&["test", "--base", "main", "--all"], "0");
     assert_eq!(code, 0);
     assert_eq!(r.calls(), vec!["nextest run --locked --workspace"]);
+}
+
+#[test]
+fn doc_only_change_skips_the_test_gate() {
+    let r = repo();
+    r.change("docs/x.md");
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0);
+    assert_eq!(v["data"]["skipped"], true);
+    assert!(r.calls().is_empty());
 }
 
 #[test]
