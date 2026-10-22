@@ -33,7 +33,7 @@ pub struct FakeComment {
     pub updated_at: String,
 }
 
-/// Everything the fake knows. The Task 4 collections are placeholders until its routes land.
+/// Everything the fake knows.
 #[derive(Default)]
 pub struct State {
     pub issues: Vec<FakeIssue>,
@@ -47,6 +47,10 @@ pub struct State {
     pub contents: HashMap<String, String>,
     pub reviews: HashMap<u64, Vec<Value>>,
     pub runs: Vec<Value>,
+    /// Pull number -> merge method of its enabled auto-merge.
+    pub auto_merge: HashMap<u64, String>,
+    /// Answers every GraphQL call with this error.
+    pub graphql_error: Option<String>,
     pub log: Vec<Logged>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
@@ -170,6 +174,42 @@ impl FakeGithub {
             .to_string()
     }
 
+    /// A commit status as if posted earlier by CI.
+    pub fn status(&self, sha: &str, context: &str, state: &str, description: &str) {
+        add_status(
+            &mut self.state.lock().unwrap(),
+            sha,
+            context,
+            state,
+            description,
+        );
+    }
+
+    /// Every status ever posted to `sha`, oldest first.
+    pub fn statuses_of(&self, sha: &str) -> Vec<Value> {
+        let s = self.state.lock().unwrap();
+        s.statuses.get(sha).cloned().unwrap_or_default()
+    }
+
+    pub fn check_run(&self, sha: &str, name: &str, status: &str, conclusion: Option<&str>) {
+        let mut s = self.state.lock().unwrap();
+        let list = s.check_runs.entry(sha.into()).or_default();
+        let id = list.len() + 1;
+        list.push(
+            json!({"id": id, "name": name, "status": status, "conclusion": conclusion,
+            "head_sha": sha}),
+        );
+    }
+
+    /// The merge method of the pull's enabled auto-merge, if any.
+    pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
+        self.state.lock().unwrap().auto_merge.get(&number).cloned()
+    }
+
+    pub fn graphql_error(&self, message: &str) {
+        self.state.lock().unwrap().graphql_error = Some(message.into());
+    }
+
     pub fn variable(&self, name: &str, value: &str) {
         self.state
             .lock()
@@ -264,6 +304,20 @@ fn pull_json(number: u64, title: &str, head_ref: &str, base_ref: &str, body: &st
         "base": {"sha": "base0000", "ref": base_ref}})
 }
 
+fn add_status(s: &mut State, sha: &str, context: &str, state: &str, description: &str) -> Value {
+    let list = s.statuses.entry(sha.into()).or_default();
+    let v = json!({"id": list.len() + 1, "context": context, "state": state,
+        "description": description, "created_at": TS});
+    list.push(v.clone());
+    v
+}
+
+/// Wrap a page's array as GitHub does for run, job and check-run lists.
+fn wrapped(mut reply: Reply, key: &str, total: usize) -> Reply {
+    reply.1 = json!({"total_count": total, key: reply.1});
+    reply
+}
+
 fn pull_pos(s: &State, n: &str) -> Option<usize> {
     let n: u64 = n.parse().ok()?;
     s.pulls.iter().position(|p| p["number"] == n)
@@ -350,6 +404,9 @@ fn route(
         .collect();
     let seg: Vec<String> = path.trim_start_matches('/').split('/').map(dec).collect();
     let seg: Vec<&str> = seg.iter().map(String::as_str).collect();
+    if method == "POST" && seg == ["graphql"] {
+        return graphql(s, body);
+    }
     let ["repos", _, _, rest @ ..] = seg.as_slice() else {
         return msg(404, "Not Found");
     };
@@ -558,12 +615,73 @@ fn route(
             let items = n.parse().ok().and_then(|n: u64| s.reviews.get(&n)).cloned();
             page(items.unwrap_or_default(), &query, base, path, raw_query)
         }
+        ("POST", ["statuses", sha]) => {
+            let f = |k: &str| body[k].as_str().unwrap_or("").to_string();
+            let mut v = add_status(s, sha, &f("context"), &f("state"), &f("description"));
+            v["target_url"] = body["target_url"].clone();
+            s.statuses.get_mut(*sha).unwrap().last_mut().unwrap()["target_url"] =
+                body["target_url"].clone();
+            (201, v, vec![])
+        }
+        ("GET", ["commits", sha, "status"]) => {
+            let mut seen = std::collections::HashSet::new();
+            let newest: Vec<Value> = s
+                .statuses
+                .get(*sha)
+                .into_iter()
+                .flatten()
+                .rev()
+                .filter(|v| seen.insert(v["context"].as_str().unwrap_or("").to_string()))
+                .cloned()
+                .collect();
+            ok(
+                json!({"sha": sha, "state": "pending", "total_count": newest.len(),
+                "statuses": newest}),
+            )
+        }
+        ("GET", ["commits", sha, "check-runs"]) => {
+            let items = s.check_runs.get(*sha).cloned().unwrap_or_default();
+            let total = items.len();
+            wrapped(
+                page(items, &query, base, path, raw_query),
+                "check_runs",
+                total,
+            )
+        }
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
         },
         _ => msg(404, "Not Found"),
     }
+}
+
+fn graphql(s: &mut State, body: &Value) -> Reply {
+    let error = |m: &str| ok(json!({"data": null, "errors": [{"message": m}]}));
+    if let Some(m) = s.graphql_error.clone() {
+        return error(&m);
+    }
+    if !body["query"]
+        .as_str()
+        .unwrap_or("")
+        .contains("enablePullRequestAutoMerge")
+    {
+        return error("unsupported query");
+    }
+    let id = body["variables"]["id"].as_str().unwrap_or("");
+    let method = body["variables"]["method"].as_str().unwrap_or("");
+    let Some(n) = s
+        .pulls
+        .iter()
+        .find(|p| p["node_id"] == id)
+        .and_then(|p| p["number"].as_u64())
+    else {
+        return error(&format!(
+            "Could not resolve to a node with the global id of '{id}'"
+        ));
+    };
+    s.auto_merge.insert(n, method.into());
+    ok(json!({"data": {"enablePullRequestAutoMerge": {"pullRequest": {"number": n}}}}))
 }
 
 fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, base: String) {
