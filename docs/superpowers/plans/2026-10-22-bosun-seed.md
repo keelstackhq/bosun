@@ -170,7 +170,7 @@ Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, 
 Split into three PRs: **11a** profile, **11b** runner, **11c** packages adapter.
 
 - [x] 11a: `profiles/rust.toml`, profile parsing, repo override, placeholder expansion, unit tests.
-- [ ] 11b: runner, base and changed files, `bosun gate`, integration tests without the packages adapter.
+- [x] 11b: runner, base and changed files, `bosun gate`, integration tests without the packages adapter.
 - [ ] 11c: cargo-metadata packages adapter and its tests (the box above).
 
 **Done when (S5, with Task 12):** `bosun gate test` runs nextest on the affected packages only.
