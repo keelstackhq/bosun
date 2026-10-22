@@ -265,7 +265,7 @@ Janitor, resume, results:
   `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
   sees it with `bosun wait`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
-  "From #<issue>:" and refuses text over 500 characters. Nothing in bosun waits for a reply.
+  "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
 Bootstrap order: the root session runs `bosun plan import`, then the wave of plan tasks, then
 spawns one session per area, then coordinates with `bosun wait` and `bosun status`.
