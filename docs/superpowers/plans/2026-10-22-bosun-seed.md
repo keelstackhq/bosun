@@ -231,6 +231,11 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 
 ### Task 16 (S9a): lessons and status
 
+Split into two PRs: **16a** `src/core/lessons.rs`, `lesson add|hit`; **16b** `status`.
+
+- [x] 16a: lessons store with caps, `lesson add`, `lesson hit`.
+- [ ] 16b: `status`.
+
 **Files:** `src/core/lessons.rs`, `src/cli/{lesson,status}.rs`, `tests/cli_lesson.rs`.
 
 - `lesson add <text> [--scope GLOB]... [--why W] [--evidence REF]...` writes `docs/lessons.toml` (next free `L-NNN`); at 40 entries or 8 globals -> exit 6 with fix "mechanize, merge or retire a lesson (spec §6)". `lesson hit <id> [--issue N]` increments `hits`, sets `last_hit`, and posts a `lesson-hit` record when `--issue`.

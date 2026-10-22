@@ -301,7 +301,7 @@ hits = 3
   global ones. AGENTS.md has no lessons.
 
 Prune:
-- `bosun lesson hit <id>` records a hit.
+- `bosun lesson hit <id>` records a hit. `lesson add` and `lesson hit` change the local file `docs/lessons.toml` and need no GitHub; only `lesson hit --issue N`, which posts a `lesson-hit` record, does (and obeys the kill switch).
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
 - A lesson that gets a hit after its mechanism merged reopens as blocking.
