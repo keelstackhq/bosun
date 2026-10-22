@@ -1,11 +1,12 @@
 //! GitHub as the shared store: the `Github` trait and its live implementation (spec §1, D28).
 
+pub mod b64;
 pub mod http;
 pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{CheckRun, Comment, Issue, Label, PrFile, Pull, Review, Status};
+pub use types::{CheckRun, Comment, Issue, Job, Label, PrFile, Pull, Review, Status};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -89,8 +90,14 @@ pub trait Github {
     /// The combined status of `sha`: the newest status per context.
     fn statuses(&self, sha: &str) -> Result<Vec<Status>>;
     fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>>;
+    /// A file at a ref; `None` when it is missing or is a directory.
+    fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>>;
     /// `method` is `SQUASH`, `MERGE` or `REBASE`; `node_id` is the pull request's.
     fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()>;
+    /// Jobs of the workflow runs of `sha` that failed, were cancelled or timed out.
+    fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>>;
+    /// The last `tail` lines of a job's log.
+    fn job_log(&self, job_id: u64, tail: usize) -> Result<String>;
 }
 
 const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
@@ -330,6 +337,35 @@ impl Github for LiveGithub {
         self.parse_all("check run", self.http.get_all_in(&path, "check_runs")?)
     }
 
+    fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>> {
+        let segments: Vec<String> = path.split('/').map(enc).collect();
+        let url = self.path(&format!(
+            "/contents/{}?ref={}",
+            segments.join("/"),
+            enc(git_ref)
+        ));
+        let Some(v) = self.http.get_json(&url)? else {
+            return Ok(None);
+        };
+        if v["type"] != "file" {
+            return Ok(None); // a directory (an array), symlink or submodule
+        }
+        let unusable = |why: String| {
+            BosunError::error(
+                format!("GitHub sent {path} at {git_ref} in a form bosun cannot read: {why}"),
+                "files over 1 MB are not served by the contents API; keep this file smaller",
+            )
+        };
+        if v["encoding"] != "base64" {
+            return Err(unusable(format!("encoding {}", v["encoding"])));
+        }
+        let bytes = b64::decode(v["content"].as_str().unwrap_or(""))
+            .ok_or_else(|| unusable("invalid base64".into()))?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| unusable("not UTF-8 text".into()))
+    }
+
     fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()> {
         if !MERGE_METHODS.contains(&method) {
             return Err(BosunError::error(
@@ -349,5 +385,33 @@ impl Github for LiveGithub {
             )),
             None => Ok(()),
         }
+    }
+
+    fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>> {
+        let path = self.path(&format!("/actions/runs?head_sha={}&per_page=100", enc(sha)));
+        let mut failed = Vec::new();
+        for run in self.http.get_all_in(&path, "workflow_runs")? {
+            let Some(id) = run["id"].as_u64() else {
+                continue;
+            };
+            let path = self.path(&format!("/actions/runs/{id}/jobs?per_page=100"));
+            let jobs: Vec<Job> = self.parse_all("job", self.http.get_all_in(&path, "jobs")?)?;
+            failed.extend(jobs.into_iter().filter(|j| {
+                ["failure", "cancelled", "timed_out"].contains(&j.conclusion.as_str())
+            }));
+        }
+        Ok(failed)
+    }
+
+    fn job_log(&self, job_id: u64, tail: usize) -> Result<String> {
+        let path = self.path(&format!("/actions/jobs/{job_id}/logs"));
+        let text = self.http.get_text(&path)?.ok_or_else(|| {
+            BosunError::error(
+                format!("GitHub has no log for job {job_id}"),
+                "logs expire after 90 days; check the job id",
+            )
+        })?;
+        let lines: Vec<&str> = text.lines().collect();
+        Ok(lines[lines.len().saturating_sub(tail)..].join("\n"))
     }
 }

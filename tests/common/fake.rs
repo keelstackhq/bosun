@@ -33,6 +33,16 @@ pub struct FakeComment {
     pub updated_at: String,
 }
 
+/// How the fake serves a job log.
+#[derive(Debug, Clone, Default)]
+pub enum LogMode {
+    /// The text itself.
+    #[default]
+    Direct,
+    /// A 302 to this URL, as real GitHub does.
+    Redirect(String),
+}
+
 /// Everything the fake knows.
 #[derive(Default)]
 pub struct State {
@@ -47,6 +57,9 @@ pub struct State {
     pub contents: HashMap<String, String>,
     pub reviews: HashMap<u64, Vec<Value>>,
     pub runs: Vec<Value>,
+    pub jobs: Vec<Value>,
+    pub logs: HashMap<u64, String>,
+    pub log_mode: LogMode,
     /// Pull number -> merge method of its enabled auto-merge.
     pub auto_merge: HashMap<u64, String>,
     /// Answers every GraphQL call with this error.
@@ -201,6 +214,30 @@ impl FakeGithub {
         );
     }
 
+    /// A file at a ref; the contents API serves it base64-encoded.
+    pub fn content(&self, path: &str, git_ref: &str, text: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.contents.insert(format!("{git_ref}:{path}"), text.into());
+    }
+
+    /// A workflow run of `sha` with one job and its log.
+    pub fn run_with_job(&self, sha: &str, job_name: &str, conclusion: &str, log: &str) {
+        let mut s = self.state.lock().unwrap();
+        let n = s.runs.len() as u64 + 1;
+        let (run_id, job_id) = (1000 + n, 5000 + n);
+        s.runs
+            .push(json!({"id": run_id, "head_sha": sha, "status": "completed",
+            "conclusion": conclusion}));
+        s.jobs.push(json!({"id": job_id, "run_id": run_id, "name": job_name,
+            "status": "completed", "conclusion": conclusion,
+            "html_url": format!("https://github.test/acme/widget/actions/runs/{run_id}/job/{job_id}")}));
+        s.logs.insert(job_id, log.into());
+    }
+
+    pub fn log_mode(&self, mode: LogMode) {
+        self.state.lock().unwrap().log_mode = mode;
+    }
+
     /// The merge method of the pull's enabled auto-merge, if any.
     pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
         self.state.lock().unwrap().auto_merge.get(&number).cloned()
@@ -316,6 +353,28 @@ fn add_status(s: &mut State, sha: &str, context: &str, state: &str, description:
 fn wrapped(mut reply: Reply, key: &str, total: usize) -> Reply {
     reply.1 = json!({"total_count": total, key: reply.1});
     reply
+}
+
+fn b64_wrapped(text: &str) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut flat = String::new();
+    for c in text.as_bytes().chunks(3) {
+        let n = c
+            .iter()
+            .enumerate()
+            .fold(0u32, |a, (i, b)| a | (*b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            flat.push(if i <= c.len() {
+                A[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
+        }
+    }
+    flat.as_bytes()
+        .chunks(60)
+        .map(|l| format!("{}\n", std::str::from_utf8(l).unwrap()))
+        .collect()
 }
 
 fn pull_pos(s: &State, n: &str) -> Option<usize> {
@@ -648,6 +707,65 @@ fn route(
                 total,
             )
         }
+        ("GET", ["contents", file @ ..]) => {
+            let file = file.join("/");
+            let git_ref = query.get("ref").map(String::as_str).unwrap_or("main");
+            if let Some(text) = s.contents.get(&format!("{git_ref}:{file}")) {
+                return ok(json!({"type": "file", "encoding": "base64", "name": file,
+                    "path": file, "size": text.len(), "content": b64_wrapped(text)}));
+            }
+            let dir = format!("{git_ref}:{file}/");
+            let mut entries: Vec<Value> = s
+                .contents
+                .keys()
+                .filter(|k| k.starts_with(&dir))
+                .map(|k| json!({"type": "file", "path": &k[git_ref.len() + 1..]}))
+                .collect();
+            entries.sort_by_key(|e| e["path"].to_string());
+            if entries.is_empty() {
+                msg(404, "Not Found")
+            } else {
+                ok(Value::Array(entries))
+            }
+        }
+        ("GET", ["actions", "runs"]) => {
+            let sha = query.get("head_sha").map(String::as_str).unwrap_or("");
+            let items: Vec<Value> = s
+                .runs
+                .iter()
+                .filter(|r| r["head_sha"] == sha)
+                .cloned()
+                .collect();
+            let total = items.len();
+            wrapped(
+                page(items, &query, base, path, raw_query),
+                "workflow_runs",
+                total,
+            )
+        }
+        ("GET", ["actions", "runs", id, "jobs"]) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            let items: Vec<Value> = s
+                .jobs
+                .iter()
+                .filter(|j| j["run_id"] == id)
+                .cloned()
+                .collect();
+            let total = items.len();
+            wrapped(page(items, &query, base, path, raw_query), "jobs", total)
+        }
+        ("GET", ["actions", "jobs", id, "logs"]) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            let Some(text) = s.logs.get(&id) else {
+                return msg(404, "Not Found");
+            };
+            match &s.log_mode {
+                LogMode::Direct => ok(json!(text)),
+                LogMode::Redirect(url) => {
+                    (302, Value::Null, vec![("Location".into(), url.clone())])
+                }
+            }
+        }
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
@@ -727,10 +845,12 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             route(&mut s, &method, path, raw_query, &body, &base)
         };
         drop(s);
-        let mut resp = tiny_http::Response::from_data(if status == 204 {
-            vec![]
-        } else {
-            value.to_string().into_bytes()
+        let text_body = value.as_str().map(str::to_string);
+        let mut resp = tiny_http::Response::from_data(match (&text_body, &value) {
+            _ if status == 204 => vec![],
+            (_, Value::Null) if status == 302 => vec![],
+            (Some(t), _) => t.clone().into_bytes(),
+            _ => value.to_string().into_bytes(),
         })
         .with_status_code(status);
         for (k, v) in std::iter::once(("Content-Type".to_string(), "application/json".to_string()))
@@ -739,5 +859,58 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             resp.add_header(tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap());
         }
         let _ = req.respond(resp);
+    }
+}
+
+/// The "other host" a log redirect points at: serves one log text and records the names of the
+/// headers each request carried (lowercase), so tests can assert the token never arrived.
+pub struct LogHost {
+    pub url: String,
+    pub seen: Arc<Mutex<Vec<Vec<String>>>>,
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl LogHost {
+    pub fn start(text: &str) -> LogHost {
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind log host");
+        let url = format!("http://{}", server.server_addr().to_ip().expect("ip"));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (seen2, stop2, text) = (seen.clone(), stop.clone(), text.to_string());
+        let handle = std::thread::spawn(move || {
+            while !stop2.load(Ordering::SeqCst) {
+                let Ok(Some(req)) = server.recv_timeout(Duration::from_millis(25)) else {
+                    continue;
+                };
+                let names = req
+                    .headers()
+                    .iter()
+                    .map(|h| h.field.as_str().as_str().to_ascii_lowercase())
+                    .collect();
+                seen2.lock().unwrap().push(names);
+                let _ = req.respond(tiny_http::Response::from_string(text.clone()));
+            }
+        });
+        LogHost {
+            url,
+            seen,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    /// Header names of every request received.
+    pub fn headers_seen(&self) -> Vec<Vec<String>> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Drop for LogHost {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
 }

@@ -154,6 +154,18 @@ pub struct CheckRun {
     pub conclusion: Option<String>,
 }
 
+/// A job of an Actions workflow run.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Job {
+    pub id: u64,
+    pub name: String,
+    pub run_id: u64,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub conclusion: String,
+    #[serde(default, deserialize_with = "text_or_empty")]
+    pub html_url: String,
+}
+
 fn text_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
 }

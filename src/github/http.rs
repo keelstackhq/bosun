@@ -28,6 +28,7 @@ pub struct Resp {
     pub status: u16,
     pub body: Vec<u8>,
     link_next: Option<String>,
+    location: Option<String>,
     retry_after: Option<u64>,
     rate_remaining_zero: bool,
 }
@@ -155,6 +156,52 @@ impl Http {
         Ok(items)
     }
 
+    /// GET a text body (a job log). GitHub answers with one redirect to a signed URL on another
+    /// host; that URL is fetched with a second GET that carries no token and no GitHub
+    /// headers, only `User-Agent`. The redirect must be https (or the API's own scheme, which
+    /// only differs in tests); a second redirect is an error.
+    pub fn get_text(&self, path: &str) -> Result<Option<String>> {
+        let r = self.request("GET", path, None)?;
+        if (300..400).contains(&r.status) {
+            let url = r.location.clone().unwrap_or_default();
+            return self.fetch_signed(path, &url).map(Some);
+        }
+        match r.status {
+            200..=299 => Ok(Some(String::from_utf8_lossy(&r.body).into_owned())),
+            404 => Ok(None),
+            _ => Err(self.fail("GET", path, &r)),
+        }
+    }
+
+    fn fetch_signed(&self, path: &str, url: &str) -> Result<String> {
+        let fail = |detail: &str| {
+            BosunError::error(
+                format!("GitHub GET {}: log download failed: {detail}", bare(path)),
+                "retry; the signed log URL expires after a minute",
+            )
+        };
+        let base_scheme = self.base.split("://").next().unwrap_or("https");
+        let scheme = url.split("://").next().unwrap_or("");
+        if url.is_empty() || (scheme != "https" && scheme != base_scheme) {
+            return Err(fail("the redirect is not an https URL"));
+        }
+        let mut resp = self
+            .agent
+            .get(url)
+            .header("User-Agent", concat!("bosun/", env!("CARGO_PKG_VERSION")))
+            .call()
+            .map_err(|e| fail(&e.to_string()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(fail(&format!("status {status}")));
+        }
+        let body = resp
+            .body_mut()
+            .read_to_vec()
+            .map_err(|e| fail(&e.to_string()))?;
+        Ok(String::from_utf8_lossy(&body).into_owned())
+    }
+
     /// POST/PATCH/PUT/DELETE with a JSON body; 2xx is `Ok` (204 is `Null`).
     pub fn send_json(&self, method: &str, path: &str, body: &Value) -> Result<Value> {
         let r = self.request(method, path, Some(body))?;
@@ -254,6 +301,7 @@ impl Http {
                 .map(str::to_string)
         };
         let link_next = header("link").and_then(|v| parse_link_next(&v));
+        let location = header("location");
         let retry_after = header("retry-after").and_then(|v| v.trim().parse().ok());
         let rate_remaining_zero = header("x-ratelimit-remaining").is_some_and(|v| v.trim() == "0");
         let body = resp
@@ -271,6 +319,7 @@ impl Http {
             status,
             body,
             link_next,
+            location,
             retry_after,
             rate_remaining_zero,
         })

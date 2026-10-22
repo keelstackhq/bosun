@@ -88,7 +88,7 @@ Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github t
 - Split into three PRs: **4a** pulls, files, reviews; **4b** statuses, checks, auto-merge; **4c** contents, jobs, logs.
 - [x] 4a: `get_pull`, `list_pulls`, `pull_files`, `create_pull`, `update_pull_body`, `list_reviews` against the fake.
 - [x] 4b: `create_status`, `statuses`, `check_runs`, `enable_auto_merge` (GraphQL `errors` array becomes an error with its message), each against the fake.
-- [ ] 4c: `file_at` (base64), `failed_jobs`, `job_log` (the signed log URL is fetched without GitHub headers), each against the fake.
+- [x] 4c: `file_at` (base64), `failed_jobs`, `job_log` (the signed log URL is fetched without GitHub headers), each against the fake.
 
 **Done when (S2):** integration tests against the recorded fake pass for labels, issues, comments, PRs and checks.
 
