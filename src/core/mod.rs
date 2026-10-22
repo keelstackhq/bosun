@@ -4,6 +4,7 @@
 pub mod glob;
 pub mod guard;
 pub mod lease;
+pub mod lessons;
 pub mod meta;
 pub mod records;
 pub mod risk;

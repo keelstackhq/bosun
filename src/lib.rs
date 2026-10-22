@@ -11,6 +11,7 @@ pub mod github;
 pub mod hooks;
 pub mod output;
 pub mod registry;
+pub mod sessions;
 pub mod time;
 
 pub use cli::{Cli, Command};
@@ -27,6 +28,10 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Wave(a) => return cli::wave::run(dir, a),
         Command::Wait(a) => return cli::wait::run(dir, a),
         Command::Msg(a) => return cli::msg::run(dir, a),
+        Command::Lesson(a) => return cli::lesson::run(dir, a),
+        Command::Budget(a) => return cli::budget::run(dir, a),
+        Command::Doctor => return cli::doctor::run(dir),
+        Command::Status => return cli::status::run(dir),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),

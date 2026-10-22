@@ -113,6 +113,22 @@ pub struct Note {
     pub body: String,
 }
 
+/// Sum of the `spend` records in `notes` whose `at` is not before `since` (all when `None`).
+/// A record with an unreadable time counts only when `since` is `None`.
+pub fn spend_total(notes: &[Note], since: Option<crate::time::Timestamp>) -> f64 {
+    notes
+        .iter()
+        .filter_map(|n| match parse_record(&n.body) {
+            Some(Record::Spend { usd, at, .. }) => {
+                let ok =
+                    since.is_none_or(|s| crate::time::parse_rfc3339(&at).is_some_and(|t| t >= s));
+                ok.then_some(usd)
+            }
+            _ => None,
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

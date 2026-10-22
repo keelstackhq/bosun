@@ -253,6 +253,11 @@ Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capab
 
 ### Task 16 (S9a): lessons and status
 
+Split into two PRs: **16a** `src/core/lessons.rs`, `lesson add|hit`; **16b** `status`.
+
+- [x] 16a: lessons store with caps, `lesson add`, `lesson hit`.
+- [x] 16b: `status`.
+
 **Files:** `src/core/lessons.rs`, `src/cli/{lesson,status}.rs`, `tests/cli_lesson.rs`.
 
 - `lesson add <text> [--scope GLOB]... [--why W] [--evidence REF]...` writes `docs/lessons.toml` (next free `L-NNN`); at 40 entries or 8 globals -> exit 6 with fix "mechanize, merge or retire a lesson (spec §6)". `lesson hit <id> [--issue N]` increments `hits`, sets `last_hit`, and posts a `lesson-hit` record when `--issue`.
@@ -260,6 +265,11 @@ Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capab
 - [ ] Tests: add, hit, cap at 40, global cap at 8, status with a seeded fake.
 
 ### Task 17 (S9b): doctor and usage providers
+
+Split into two PRs: **17a** usage providers, `budget record`, prices in `docs/defaults.md`; **17b** `doctor`.
+
+- [x] 17a: `src/sessions/usage.rs`, `budget record`.
+- [x] 17b: `doctor`, `repo_info` and `latest_release` on the `Github` trait; S9 Done when holds.
 
 **Files:** `src/cli/{doctor,budget}.rs`, `src/sessions/usage.rs`, `tests/cli_doctor.rs`, `docs/defaults.md` prices.
 

@@ -46,6 +46,18 @@ changes this file in the same PR.
 | Day boundary | 00:00 UTC | One clock for all sessions and Routines. |
 | `generic` provider prices | in `.bosun/bosun.toml [prices]` | The estimate needs per-model token prices. S9 fills the defaults from the published price list on the day it lands and records the date here. |
 
+`generic` provider estimates (`src/sessions/usage.rs`):
+
+| Value | Default | Evidence |
+| ----- | ------- | -------- |
+| Input tokens per turn | 20,000 | Estimate; replace with claude-sessions data after M4. |
+| Output tokens per turn | 1,500 | Estimate; replace with claude-sessions data after M4. |
+| Price haiku | $0.10 in / $0.50 out per MTok | Claude Haiku 5.5, prompts up to 100K tokens. Source: claude-api skill model table, cached 2026-10-06. |
+| Price sonnet | $2.00 in / $10.00 out per MTok | Claude Sonnet 5.5. Same source and date. |
+| Price opus | $4.00 in / $20.00 out per MTok | Claude Opus 5.5. Same source and date. |
+
+A model name matches a built-in price when it contains `haiku`, `sonnet` or `opus`; a `[prices]` entry with the exact model name wins.
+
 ## Verification
 
 | Value | Default | Evidence |

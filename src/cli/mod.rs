@@ -4,7 +4,9 @@
 use clap::{Args, Parser, Subcommand};
 
 pub mod ask;
+pub mod budget;
 pub mod claim;
+pub mod doctor;
 pub mod heartbeat;
 pub mod join;
 pub mod msg;
@@ -18,6 +20,8 @@ pub mod ci_log;
 pub mod pr;
 pub mod review_pack;
 pub mod verdict;
+pub mod lesson;
+pub mod status;
 use std::path::PathBuf;
 
 pub mod gate;

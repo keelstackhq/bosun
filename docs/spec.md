@@ -308,7 +308,7 @@ hits = 3
   global ones. AGENTS.md has no lessons.
 
 Prune:
-- `bosun lesson hit <id>` records a hit.
+- `bosun lesson hit <id>` records a hit. `lesson add` and `lesson hit` change the local file `docs/lessons.toml` and need no GitHub; only `lesson hit --issue N`, which posts a `lesson-hit` record, does (and obeys the kill switch).
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
 - A lesson that gets a hit after its mechanism merged reopens as blocking.
@@ -433,7 +433,7 @@ Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for
   in `next`, passed back on stdin) and reads `usage.cost_usd`; `generic` estimates from turns and
   model with the prices in `docs/defaults.md`.
-- `bosun budget record` writes the spend of a task to its issue as a `{"bosun":"spend",..}`
+- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
 
@@ -444,6 +444,7 @@ Spend guard:
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
 - Only the owner raises a budget (an R-gov change of limits.toml).
+- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with its percent of `daily_usd`, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
 
 ## 10. Slack stream (Claude Tag)
 
@@ -484,6 +485,8 @@ Rules:
 bosun pins its own release in `.bosun/version`. Its gates run the pinned release, never the binary
 built from main, so a bad change to bosun cannot approve itself. Until the first release exists,
 the gates run the binary built from the PR's base commit (seed only, see the seed plan S10).
+
+`bosun doctor` reports the 12 steps below as ok or missing (exit 5 with the count if any is missing). It cannot see Routines, so step 11 is missing unless the owner sets `BOSUN_ROUTINES_OK=1`; the three Routine prompts are in `data.routines`. Step 2 counts a login that starts with `claude` as the app; step 4 accepts any non-empty `owner`/`owners` key in `governance/owners.toml`.
 
 Human checklist (12 steps):
 1. Create the repo.
