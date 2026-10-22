@@ -90,6 +90,7 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, leases, registry members.
 
 - [x] 5a: globs and states.
+- [x] 5b: records, leases, members.
 
 **Files:** `src/core/{mod,glob,lease,state}.rs`, `tests/core_is_pure.rs`.
 
