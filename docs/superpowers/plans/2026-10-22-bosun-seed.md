@@ -221,6 +221,12 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 - `ask <issue> <question>`: comment mentioning the owners with an `ask` record, state `needs-human`; exit 0.
 - [ ] Tests: a PR that edits `.bosun/risk.toml` (and weakens it at head) is high, judged by the base rules (S6 Done when); new crate -> R-deps; secret pattern; owner approval on an older SHA does not count; ask.
 
+Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capabilities` in task metadata); **13b** `risk-check`; **13c** `ask`.
+
+- [x] 13a: `src/core/risk.rs`, `risk_default.toml`, `regex` pinned, spec D32.
+- [ ] 13b: `src/cli/risk_check.rs`, `tests/cli_risk.rs` (the box above, except ask).
+- [ ] 13c: `src/cli/ask.rs` and its test.
+
 **Done when (S6):** a PR that edits risk.toml is high, evaluated with the base rules.
 
 ### Task 14 (S7a): review-pack and verdict post
