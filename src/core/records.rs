@@ -77,6 +77,28 @@ pub fn parse_record(body: &str) -> Option<Record> {
         .and_then(|l| serde_json::from_str(l).ok())
 }
 
+/// `body` with its record line replaced by `record`; other lines stay. A body without a
+/// record line becomes just the record.
+pub fn replace_record(body: &str, record: &Record) -> String {
+    let mut done = false;
+    let lines: Vec<String> = body
+        .lines()
+        .map(|l| {
+            if !done && l.trim().starts_with(r#"{"bosun":"#) {
+                done = true;
+                record.to_line()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    if done {
+        lines.join("\n")
+    } else {
+        record.to_line()
+    }
+}
+
 /// A comment as core sees it: id and body, oldest first in any list.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
@@ -113,6 +135,24 @@ mod tests {
                 reason: "reaped".into()
             })
         );
+    }
+
+    #[test]
+    fn replace_keeps_human_text() {
+        let old = Record::Leave {
+            session: "s".into(),
+            reason: "a".into(),
+        };
+        let new = Record::Leave {
+            session: "s".into(),
+            reason: "b".into(),
+        };
+        let body = format!("hello\n{}\nbye", old.to_line());
+        assert_eq!(
+            replace_record(&body, &new),
+            format!("hello\n{}\nbye", new.to_line())
+        );
+        assert_eq!(replace_record("text only", &new), new.to_line());
     }
 
     #[test]
