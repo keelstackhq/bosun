@@ -153,6 +153,55 @@ pub fn evaluate(
     out
 }
 
+/// A file as listed by GitHub, for [`unseen_diff`].
+pub struct FileView {
+    pub path: String,
+    pub status: String,
+    pub has_patch: bool,
+    /// Added plus deleted lines; binary files and pure renames report 0.
+    pub changes: u64,
+}
+
+const BINARY_EXTENSIONS: [&str; 16] = [
+    "png", "jpg", "jpeg", "gif", "ico", "webp", "pdf", "zip", "gz", "tar", "woff", "woff2", "ttf",
+    "wasm", "so", "bin",
+];
+
+fn obviously_binary(f: &FileView) -> bool {
+    f.changes == 0
+        || f.path
+            .rsplit_once('.')
+            .is_some_and(|(_, e)| BINARY_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// `R-unseen` when bosun could not see the whole diff: GitHub listed fewer files than the PR
+/// changed (it lists at most 3000), or a text file it lists has no patch (large diffs).
+/// Built in, not a rule file: a PR must not be able to hide behind a missing diff.
+pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
+    let mut evidence = Vec::new();
+    if (files.len() as u64) < changed_files {
+        evidence.push(format!(
+            "GitHub listed {} of {changed_files} changed files",
+            files.len()
+        ));
+    }
+    for f in files {
+        if matches!(
+            f.status.as_str(),
+            "added" | "modified" | "renamed" | "changed"
+        ) && !f.has_patch
+            && !obviously_binary(f)
+        {
+            evidence.push(format!("no patch for {}", f.path));
+        }
+    }
+    (!evidence.is_empty()).then(|| Match {
+        rule: "R-unseen".into(),
+        why: "bosun could not see the whole diff".into(),
+        evidence,
+    })
+}
+
 /// `high` when any rule matched, else `normal`.
 pub fn level(matches: &[Match]) -> &'static str {
     if matches.is_empty() { "normal" } else { "high" }
@@ -277,16 +326,6 @@ pub fn replace_note(body: &str, note: Option<&str>) -> String {
         Some(n) => format!("{}\n\n{n}", rest.trim_end()),
         None => rest,
     }
-}
-
-/// The issue a PR body closes (`Closes #N`, also `Fixes` and `Resolves`).
-pub fn closing_issue(body: &str) -> Option<u64> {
-    let lower = body.to_lowercase();
-    ["closes", "fixes", "resolves"].iter().find_map(|kw| {
-        let rest = lower[lower.find(&format!("{kw} #"))? + kw.len() + 2..].to_string();
-        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        digits.parse().ok()
-    })
 }
 
 /// Capabilities named by `bosun:capability/<c>` labels.
@@ -438,10 +477,25 @@ libc = "0"
     }
 
     #[test]
-    fn closing_issue_and_capability_labels() {
-        assert_eq!(closing_issue("x\nCloses #12."), Some(12));
-        assert_eq!(closing_issue("fixes #3"), Some(3));
-        assert_eq!(closing_issue("no link"), None);
+    fn capability_labels_and_unseen_diffs() {
+        let f = |path: &str, status: &str, patch: bool, changes: u64| FileView {
+            path: path.into(),
+            status: status.into(),
+            has_patch: patch,
+            changes,
+        };
+        let ok = [
+            f("a.rs", "modified", true, 3),
+            f("logo.png", "added", false, 0),
+        ];
+        assert!(unseen_diff(&ok, 2).is_none());
+        assert!(unseen_diff(&ok, 0).is_none());
+        assert!(unseen_diff(&ok, 3).is_some());
+        let m = unseen_diff(&[f("big.rs", "modified", false, 900)], 1).unwrap();
+        assert_eq!(m.rule, "R-unseen");
+        assert!(m.evidence[0].contains("big.rs"));
+        assert!(unseen_diff(&[f("img.PNG", "added", false, 5)], 1).is_none());
+        assert!(unseen_diff(&[f("gone.rs", "removed", false, 5)], 1).is_none());
         assert_eq!(
             capability_labels(&["bug", "bosun:capability/prod-write"]),
             ["prod-write"]

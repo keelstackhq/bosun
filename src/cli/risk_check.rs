@@ -7,9 +7,10 @@ use serde_json::json;
 
 use super::PrArg;
 use crate::app::{App, Result, task_meta};
+use crate::core::meta::linked_issues;
 use crate::core::risk::{
-    self, ChangedFile, Rules, added_lines, capability_labels, closing_issue, evaluate,
-    new_dependencies, parse_owners, replace_note, risk_note,
+    self, ChangedFile, FileView, Rules, added_lines, capability_labels, evaluate, new_dependencies,
+    parse_owners, replace_note, risk_note, unseen_diff,
 };
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -86,14 +87,27 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let new_deps = new_dependencies(&manifests);
 
     let mut capabilities = capability_labels(&pull.labels);
-    if let Some(i) = closing_issue(&pull.body)
-        && let Some(issue) = gh.get_issue(i)?
-        && let Some(meta) = task_meta(&issue)
-    {
-        capabilities.extend(meta.capabilities);
+    // Every linked issue counts: the agent writes the PR body, so a decoy first link must not
+    // hide the real task's capabilities.
+    for i in linked_issues(&pull.body) {
+        if let Some(issue) = gh.get_issue(i)?
+            && let Some(meta) = task_meta(&issue)
+        {
+            capabilities.extend(meta.capabilities);
+        }
     }
 
-    let matches = evaluate(&rules, &files, &new_deps, &capabilities);
+    let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
+    let views: Vec<FileView> = pr_files
+        .iter()
+        .map(|f| FileView {
+            path: f.filename.clone(),
+            status: f.status.clone(),
+            has_patch: f.patch.is_some(),
+            changes: f.additions + f.deletions,
+        })
+        .collect();
+    matches.extend(unseen_diff(&views, pull.changed_files));
     let level = risk::level(&matches);
     let high = level == "high";
 

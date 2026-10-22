@@ -61,6 +61,8 @@ pub struct Pull {
     pub draft: bool,
     pub labels: Vec<String>,
     pub user: String,
+    /// Files the PR changes; 0 when GitHub did not say (lists omit it).
+    pub changed_files: u64,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +92,8 @@ struct RawPull {
     labels: Vec<String>,
     #[serde(default, deserialize_with = "login")]
     user: String,
+    #[serde(default)]
+    changed_files: u64,
 }
 
 impl From<RawPull> for Pull {
@@ -108,6 +112,7 @@ impl From<RawPull> for Pull {
             draft: r.draft,
             labels: r.labels,
             user: r.user,
+            changed_files: r.changed_files,
         }
     }
 }

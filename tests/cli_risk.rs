@@ -66,7 +66,14 @@ fn pr_that_weakens_the_rules_is_judged_by_the_base_rules() {
     );
     // At head the rule is deleted; the base copy is what counts.
     fake.content(".bosun/risk.toml", HEAD, "");
-    fake.pull_file(1, ".bosun/risk.toml", "modified", 0, 3, None);
+    fake.pull_file(
+        1,
+        ".bosun/risk.toml",
+        "modified",
+        0,
+        3,
+        Some("@@ -1,3 +0,0 @@\n-x"),
+    );
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["level"], "high");
@@ -89,7 +96,7 @@ fn bad_base_rules_are_an_error_naming_the_rule() {
         BASE,
         "[[rule]]\nid = \"R-bad\"\nwhy = \"w\"\ncontent = \"(\"\n",
     );
-    fake.pull_file(1, "src/a.rs", "modified", 1, 0, None);
+    fake.pull_file(1, "src/a.rs", "modified", 1, 0, Some(&plus("x")));
     let (code, v) = check(&fake);
     assert_eq!(code, 1, "{v}");
     assert!(v["error"]["message"].as_str().unwrap().contains("R-bad"));
@@ -98,7 +105,7 @@ fn bad_base_rules_are_an_error_naming_the_rule() {
 #[test]
 fn new_crate_matches_r_deps() {
     let fake = pr("");
-    fake.pull_file(1, "Cargo.toml", "modified", 1, 0, None);
+    fake.pull_file(1, "Cargo.toml", "modified", 1, 0, Some(&plus("x")));
     fake.content("Cargo.toml", BASE, "[dependencies]\nserde = \"1\"\n");
     fake.content(
         "Cargo.toml",
@@ -117,7 +124,14 @@ fn new_crate_matches_r_deps() {
 #[test]
 fn version_bump_of_an_existing_crate_is_normal() {
     let fake = pr("");
-    fake.pull_file(1, "Cargo.toml", "modified", 1, 1, None);
+    fake.pull_file(
+        1,
+        "Cargo.toml",
+        "modified",
+        1,
+        1,
+        Some("@@ -1 +1 @@\n-a\n+b"),
+    );
     fake.content("Cargo.toml", BASE, "[dependencies]\nserde = \"1\"\n");
     fake.content("Cargo.toml", HEAD, "[dependencies]\nserde = \"2\"\n");
     let (code, _) = check(&fake);
@@ -149,7 +163,7 @@ fn capability_from_the_linked_task_or_a_label() {
         &[],
         "<!-- bosun:task {\"capabilities\":[\"prod-write\"]} -->",
     );
-    fake.pull_file(1, "src/a.rs", "modified", 1, 0, None);
+    fake.pull_file(1, "src/a.rs", "modified", 1, 0, Some(&plus("x")));
     let (code, v) = check(&fake);
     assert_eq!((code, rule_ids(&v)), (5, vec!["R-prod-write".to_string()]));
 
@@ -159,7 +173,7 @@ fn capability_from_the_linked_task_or_a_label() {
         "labels",
         serde_json::json!([{"name": "bosun:capability/prod-write"}]),
     );
-    fake.pull_file(1, "src/a.rs", "modified", 1, 0, None);
+    fake.pull_file(1, "src/a.rs", "modified", 1, 0, Some(&plus("x")));
     let (code, v) = check(&fake);
     assert_eq!((code, rule_ids(&v)), (5, vec!["R-prod-write".to_string()]));
 }
@@ -167,7 +181,14 @@ fn capability_from_the_linked_task_or_a_label() {
 #[test]
 fn owner_approval_counts_only_on_the_head_sha() {
     let fake = pr("");
-    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, None);
+    fake.pull_file(
+        1,
+        ".github/workflows/ci.yml",
+        "modified",
+        1,
+        0,
+        Some(&plus("x")),
+    );
     fake.review(1, "ada", "APPROVED", "oldsha");
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
@@ -188,7 +209,14 @@ fn owner_approval_counts_only_on_the_head_sha() {
 #[test]
 fn a_comment_review_is_not_an_approval() {
     let fake = pr("");
-    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, None);
+    fake.pull_file(
+        1,
+        ".github/workflows/ci.yml",
+        "modified",
+        1,
+        0,
+        Some(&plus("x")),
+    );
     fake.review(1, "ada", "COMMENTED", HEAD);
     assert_eq!(check(&fake).0, 5);
 }
@@ -196,7 +224,14 @@ fn a_comment_review_is_not_an_approval() {
 #[test]
 fn risk_note_is_replaced_not_duplicated() {
     let fake = pr("Closes #7\n\nKeep this text.");
-    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, None);
+    fake.pull_file(
+        1,
+        ".github/workflows/ci.yml",
+        "modified",
+        1,
+        0,
+        Some(&plus("x")),
+    );
     check(&fake);
     check(&fake);
     let body = fake.pull_body(1);
@@ -213,4 +248,54 @@ fn missing_pull_is_an_error_with_a_fix() {
     let (code, v) = check(&fake);
     assert_eq!(code, 1);
     assert!(v["error"]["fix"].as_str().is_some());
+}
+
+const PROD_TASK: &str = "<!-- bosun:task {\"capabilities\":[\"prod-write\"]} -->";
+
+fn code_change(fake: &FakeGithub) {
+    fake.pull_file(1, "src/a.rs", "modified", 1, 0, Some(&plus("let x = 1;")));
+}
+
+#[test]
+fn decoy_closes_before_the_real_task_still_sees_prod_write() {
+    let fake = pr("Closes #8\nFixes #7");
+    fake.issue(8, "decoy", &[], "no metadata");
+    fake.issue(7, "task", &[], PROD_TASK);
+    code_change(&fake);
+    let (code, v) = check(&fake);
+    assert_eq!((code, rule_ids(&v)), (5, vec!["R-prod-write".to_string()]));
+}
+
+#[test]
+fn marker_only_task_link_counts() {
+    let fake = pr("work\n\n<!-- bosun:task-pr 7 -->");
+    fake.issue(7, "task", &[], PROD_TASK);
+    code_change(&fake);
+    let (code, v) = check(&fake);
+    assert_eq!((code, rule_ids(&v)), (5, vec!["R-prod-write".to_string()]));
+}
+
+#[test]
+fn more_changed_files_than_listed_is_high() {
+    let fake = pr("");
+    code_change(&fake);
+    fake.pull_set(1, "changed_files", serde_json::json!(3001));
+    let (code, v) = check(&fake);
+    assert_eq!((code, rule_ids(&v)), (5, vec!["R-unseen".to_string()]));
+    let first = v["data"]["matches"][0]["evidence"][0].as_str().unwrap();
+    assert!(first.contains("3001"), "{first}");
+}
+
+#[test]
+fn text_file_without_a_patch_is_high_but_binary_is_not() {
+    let fake = pr("");
+    fake.pull_file(1, "src/huge.rs", "modified", 5000, 10, None);
+    let (code, v) = check(&fake);
+    assert_eq!((code, rule_ids(&v)), (5, vec!["R-unseen".to_string()]));
+
+    let fake = pr("");
+    fake.pull_file(1, "logo.png", "added", 0, 0, None);
+    fake.pull_set(1, "changed_files", serde_json::json!(1));
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
 }

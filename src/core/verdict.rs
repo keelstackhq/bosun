@@ -1,5 +1,6 @@
 //! The reviewer's verdict (spec §7): shape, validation and the rule that decides approval.
 
+use crate::core::meta::linked_issues;
 use serde::{Deserialize, Serialize};
 
 /// A verdict approves only at or above this confidence.
@@ -116,21 +117,9 @@ pub fn effective(v: &Verdict) -> Effective {
     }
 }
 
-/// The issue named by `Closes #N` (also `Fixes`, `Resolves`) in a PR body.
+/// The first issue a PR body links (see [`linked_issues`]).
 pub fn closes_issue(body: &str) -> Option<u64> {
-    let lower = body.to_ascii_lowercase();
-    for kw in ["closes #", "fixes #", "resolves #"] {
-        if let Some(at) = lower.find(kw) {
-            let digits: String = lower[at + kw.len()..]
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect();
-            if let Ok(n) = digits.parse() {
-                return Some(n);
-            }
-        }
-    }
-    None
+    linked_issues(body).first().copied()
 }
 
 #[cfg(test)]

@@ -364,7 +364,7 @@ test-integrity:
 - Refuses a PR that deletes a test, adds a skip marker, or lowers the assertion count, unless the
   plan says so.
 - A snapshot change needs the line `snapshot-change: <reason>` in the PR body.
-- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker is pending, not a skip.
+- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker that the base file lacks (by id) is a new skip; removing one is fine. A lower count of `#[test]`, `#[tokio::test]` and `#[rstest]` attributes in a file is a `fewer-tests` finding, allowed by `delete-test`. Files are compared with the merge base, not the base tip.
 - Mutants that survive fail the merge queue.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
@@ -398,6 +398,8 @@ task and a lesson. A test is never skipped to get green.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.
 
 Rule evaluation:
+- risk-check unions the capabilities of every issue the PR body links (`Closes|Fixes|Resolves #N`, any case, and `<!-- bosun:task-pr N -->`), because the agent writes the body.
+- risk-check adds the built-in match `R-unseen` ("bosun could not see the whole diff", so high) when GitHub lists fewer files than the PR changed, or lists a changed text file without a patch.
 - risk-check evaluates the rules from the base branch, never from the PR head. A PR cannot change
   the rules that judge it.
 - A rule only escalates; nothing de-escalates.

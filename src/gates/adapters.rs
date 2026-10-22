@@ -48,6 +48,19 @@ pub fn pending_markers(text: &str) -> Vec<Marker> {
     out
 }
 
+/// The number of test attributes: `#[test]`, `#[tokio::test]` (with or without arguments) and
+/// `#[rstest]`. Attributes in `//` comments do not count.
+pub fn test_count(text: &str) -> usize {
+    text.lines()
+        .map(|l| code(l).trim_start())
+        .filter(|l| {
+            ["#[test]", "#[tokio::test", "#[rstest"]
+                .iter()
+                .any(|p| l.starts_with(p))
+        })
+        .count()
+}
+
 /// The number of assertion macros: `assert*!`, `debug_assert*!`, `prop_assert*!` (which also
 /// covers `insta::assert_snapshot!` and its siblings). Matches in `//` comments do not count.
 pub fn assertions(text: &str) -> usize {
@@ -113,6 +126,12 @@ mod tests {
                 Marker { line: 5, uc: None },
             ]
         );
+    }
+
+    #[test]
+    fn counts_test_attributes() {
+        let text = "#[test]\nfn a() {}\n  #[tokio::test(flavor = \"x\")]\nasync fn b() {}\n#[rstest]\n// #[test]\n#[testing]\n";
+        assert_eq!(test_count(text), 3);
     }
 
     #[test]
