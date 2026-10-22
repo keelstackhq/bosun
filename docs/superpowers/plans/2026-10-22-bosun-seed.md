@@ -59,7 +59,7 @@ Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny
 - `time.rs`: `Timestamp(i64 /* unix secs */)`, `parse_rfc3339`, `Display` as `YYYY-MM-DDTHH:MM:SSZ`, `now()` from `BOSUN_NOW` else system time, `day_start()` (00:00 UTC).
 - `config.rs`: `.bosun/bosun.toml` (`project`, `[[stack]] path/profile`, `[review] mode`, `[slack]`, `[prices]`), `.bosun/limits.toml` (spec §5 defaults when absent, missing keys take defaults), unknown keys are an error naming file and key (exit 1, fix names the key).
 - `ctx.rs`: `Ctx { dir, repo: RepoId {owner, name}, session: String, origin: Origin, now, config, limits }`, `Origin { Spawned, Slack, Local, Routine }` from `BOSUN_ORIGIN` (default `local`, or `spawned` when `CLAUDE_CODE_CHILD_SESSION=1`); repo from `BOSUN_REPO` else `git remote get-url origin` (https, scp, ssh forms); D31 session rules.
-- [ ] Tests: each origin form of the remote URL; `cse_` -> `session_`; limits defaults equal spec §5; unknown key error text; RFC 3339 round trip and `day_start`.
+- [x] Tests: each origin form of the remote URL; `cse_` -> `session_`; limits defaults equal spec §5; unknown key error text; RFC 3339 round trip and `day_start`.
 
 ### Task 3 (S2a): GitHub HTTP client, issues, labels, comments, fake GitHub
 

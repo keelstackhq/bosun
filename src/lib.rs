@@ -2,7 +2,10 @@
 //! bosun: orchestration helper for repos where agents write all the code. See `docs/spec.md`.
 
 pub mod cli;
+pub mod config;
+pub mod ctx;
 pub mod output;
+pub mod time;
 
 pub use cli::{Cli, Command};
 pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
