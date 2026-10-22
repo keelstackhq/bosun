@@ -94,6 +94,10 @@ Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github t
 
 ### Task 5 (S3a): leases and touch globs (pure)
 
+Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, leases, registry members.
+
+- [x] 5a: globs and states.
+
 **Files:** `src/core/{mod,glob,lease,state}.rs`, `tests/core_is_pure.rs`.
 
 - `glob.rs`: `Glob::parse` (`*` within a segment, `**` across, `?`; no braces), `matches(path)`, `fn overlaps(a: &[Glob], b: &[Glob]) -> Option<(String, String)>` (exact pair that overlaps; two globs overlap when some path matches both, decided segment by segment with `**` as a wildcard run).
