@@ -484,7 +484,9 @@ Rules:
 
 bosun pins its own release in `.bosun/version`. Its gates run the pinned release, never the binary
 built from main, so a bad change to bosun cannot approve itself. Until the first release exists,
-the gates run the binary built from the PR's base commit (seed only, see the seed plan S10).
+the gates run the binary built from the PR's base commit (seed only, see the seed plan S10). One
+bootstrap exception: when the base has no self-gating CI yet (the PR that adds it, and PRs stacked
+on it before it merges), the change builds bosun itself, and CI says so in a warning.
 
 `bosun doctor` reports the 12 steps below as ok or missing (exit 5 with the count if any is missing). It cannot see Routines, so step 11 is missing unless the owner sets `BOSUN_ROUTINES_OK=1`; the three Routine prompts are in `data.routines`. Step 2 counts a login that starts with `claude` as the app; step 4 accepts any non-empty `owner`/`owners` key in `governance/owners.toml`.
 
