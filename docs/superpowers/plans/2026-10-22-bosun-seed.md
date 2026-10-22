@@ -128,9 +128,11 @@ Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join
 
 ### Task 7 (S8): hooks: edit-lock, label-lock, merge-lock, session-start
 
-Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hook commands, lease cache and session-start.
+Split into three PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** `hook pre-tool-use` with the lease cache; **7c** `hook session-start`.
 
 - [x] 7a: guard rules.
+- [x] 7b: pre-tool-use hook and lease cache.
+- [x] 7c: session-start hook.
 
 **Files:** `src/hooks/{mod,pre_tool_use,session_start,cache}.rs`, `tests/cli_hook.rs`, spec §4 note.
 
@@ -159,7 +161,12 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 - `spawn <epic> [--model M] [--prompt-file F]`: gathers `SpawnInput` (registry joins, spend records of today on the registry issue, main-red, epic leases), runs the checks, claims the epic for this session, returns `next: [{"tool":"create_session","args":{"title","prompt","model","tags":["bosun:<project>","bosun:issue/<n>","bosun:parent/<session>"]}}]`. A model containing `[1m]` is a usage error.
 - `spawn --record <epic> --from -`: reads the `create_session` result (`{"id": "session_..."}` or `{"session_id": …}`), posts the child's `join` (origin spawned, parent, depth + 1, area of the epic) and moves the epic lease to the child.
 - `wave plan <epic>`: data `{run: [{issue, title, touch, workspace: "berth up <item>-<task>"}], waiting: [...]}` (D18).
-- [ ] Tests: each of the 7 checks refuses through the CLI with its exit (S4 Done when); success returns one `next` call with the 3 tags; `--record` registers the child.
+- [x] Tests: each of the 7 checks refuses through the CLI with its exit (S4 Done when); success returns one `next` call with the 3 tags; `--record` registers the child.
+
+Split into 2 PRs: **9a** spawn and `spawn --record`, **9b** wave plan.
+
+- [x] 9a: `src/cli/spawn.rs`, `registry::write`, `tests/cli_spawn.rs`.
+- [x] 9b: `src/cli/wave.rs`, `tests/cli_wave.rs`.
 
 **Done when (S4, with Task 10):** each check has a refusal test with exit 6 (exit 4 and 3 where spec §5 says so).
 
@@ -169,7 +176,12 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 
 - `wait (--pr N | --issue N | --child SESSION) [--timeout SECS]`: snapshot (PR: state, merged, head SHA, statuses and check conclusions; issue: state label, open/closed, comment count; child: newest `result` record of the session) then poll with backoff 5 s doubling to 60 s (`BOSUN_WAIT_BASE_MS` scales it in tests) until it differs or the timeout passes. data `{changed, before, after, polls}`; timeout is exit 0 with `changed: false`. No send_later, no send_message (D14).
 - `msg <session> <text> [--issue N]`: text over 500 characters is a usage error; returns `next: [{"tool":"send_message","args":{"session_id","message":"From #N: …"}}]`.
-- [ ] Tests: a fake that flips the PR state after 2 polls returns `changed: true, polls: 3`; timeout; child result; msg limits.
+- [x] Tests: a fake that flips the PR state after 2 polls returns `changed: true, polls: 3`; timeout; child result; msg limits (in `tests/cli_msg.rs`).
+
+Split into 2 PRs: **10a** wait (with a request hook in the fake), **10b** msg.
+
+- [x] 10a: `src/cli/wait.rs`, `tests/cli_wait.rs`, `FakeGithub::after_requests`.
+- [x] 10b: `src/cli/msg.rs` and its tests.
 
 ### Task 11 (S5a): gate runner and the rust profile
 
@@ -207,7 +219,13 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 - `core::risk`: rules `{id, why, paths, content, new_dependency, capability}`; `fn evaluate(rules, files: &[PrFile], new_deps: &[String], capabilities) -> Vec<Match>`; only escalates.
 - `risk-check <pr>`: rules from `.bosun/risk.toml` **at the PR's base SHA** (`file_at`), built-in defaults when absent; new dependencies from `Cargo.toml`/`package.json` dependency tables at base vs head; capabilities from the task metadata. High: writes the Risk note between `<!-- bosun:risk -->` markers in the PR body, and passes only with an `APPROVED` review on the head SHA by a login in `governance/owners.toml` (read at base). Posts status `risk-check` (success / failure with the matched rule ids). Exit 0 normal or approved, exit 5 high and not approved.
 - `ask <issue> <question>`: comment mentioning the owners with an `ask` record, state `needs-human`; exit 0.
-- [ ] Tests: a PR that edits `.bosun/risk.toml` (and weakens it at head) is high, judged by the base rules (S6 Done when); new crate -> R-deps; secret pattern; owner approval on an older SHA does not count; ask.
+- [x] Tests: a PR that edits `.bosun/risk.toml` (and weakens it at head) is high, judged by the base rules (S6 Done when); new crate -> R-deps; secret pattern; owner approval on an older SHA does not count; ask.
+
+Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capabilities` in task metadata); **13b** `risk-check`; **13c** `ask`.
+
+- [x] 13a: `src/core/risk.rs`, `risk_default.toml`, `regex` pinned, spec D32.
+- [x] 13b: `src/cli/risk_check.rs`, `tests/cli_risk.rs` (the box above, except ask).
+- [x] 13c: `src/cli/ask.rs`, `tests/cli_ask.rs` (mentions, `ask` record, needs-human, no owners, halt).
 
 **Done when (S6):** a PR that edits risk.toml is high, evaluated with the base rules.
 
@@ -217,7 +235,9 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 
 - `review-pack <pr>`: data `{pr, head_sha, base_sha, since_sha, files (with patches), task, ucs, lessons, review_md}`; `since_sha` is the SHA of the last `review-verdict` status, so a second review is a delta (only files changed since; spec §7).
 - `verdict post --from -`: validates the JSON (spec §7 shape); a stale `head_sha` (not the PR head) is exit 3; effective verdict is approve only with `verdict == "approve"`, `confidence >= 0.85` and no `blocker` finding; posts status `review-verdict` (success or failure, description with the confidence and the finding counts); `escalate_risk: true` sets the issue to `needs-human`. State label: approve -> `queued` is not set here (Task 15 does it after auto-merge), request-changes -> `fixing`.
-- [ ] Tests: 0.84 approve does not approve (S7 Done when); 0.85 approves; blocker blocks; stale SHA; delta `since_sha`.
+- Split into 2 PRs: **14a** `core/verdict.rs`, `verdict post`, the `verdict` record; **14b** `review-pack` with delta reviews and `compare_files`.
+- [x] 14a: 0.84 approve does not approve (S7 Done when); 0.85 approves; blocker blocks; stale SHA; escalate_risk.
+- [x] 14b: lessons by scope, REVIEW.md from the base; delta `since_sha`.
 
 **Done when (S7):** a verdict below 0.85 does not approve.
 
@@ -227,7 +247,9 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 
 - `pr <issue> [--title T] [--auto-merge]`: finds the open PR for the current branch or creates it (body: `Closes #<issue>`, task marker), state `review`. `--auto-merge`: required statuses and checks on the head (`ci-ok`, `risk-check`, `review-verdict`, `main-open`) all success, else exit 1 listing what is missing with fix `bosun wait --pr N`; then `enable_auto_merge` (squash) and state `queued`. bosun never merges (D13).
 - `ci-log <pr> [--tail N]`: failed jobs of the head SHA with the last N (default 80) log lines each.
-- [ ] Tests: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded); ci-log.
+- Split into 2 PRs: **15a** `pr` with `--auto-merge`; **15b** `ci-log`.
+- [x] 15a: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded, no merge call).
+- [x] 15b: ci-log returns the failed job's tail; no failed job is an empty list.
 
 ### Task 16 (S9a): lessons and status
 

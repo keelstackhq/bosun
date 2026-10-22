@@ -47,6 +47,12 @@ pub enum Record {
     Ask { session: String, question: String },
     /// A hit on a lesson.
     LessonHit { session: String, id: String },
+    /// A posted review verdict on a PR head (spec §7); the next review is a delta from it.
+    Verdict {
+        session: String,
+        head_sha: String,
+        approved: bool,
+    },
 }
 
 impl Record {
@@ -64,7 +70,8 @@ impl Record {
             | Record::Result { session, .. }
             | Record::Spend { session, .. }
             | Record::Ask { session, .. }
-            | Record::LessonHit { session, .. } => session,
+            | Record::LessonHit { session, .. }
+            | Record::Verdict { session, .. } => session,
         }
     }
 }
