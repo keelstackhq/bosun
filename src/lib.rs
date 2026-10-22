@@ -18,6 +18,8 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
+    if let Command::Gate(args) = &cli.command {
+        return cli::gate::run(cli.dir.as_deref(), args);
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
@@ -29,6 +31,9 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
         Command::Hook(h) => return hooks::dispatch(dir, h),
         _ => {}
+    }
+    if let Command::TestIntegrity(args) = &cli.command {
+        return cli::test_integrity::run(cli.dir.as_deref(), args);
     }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
