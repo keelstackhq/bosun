@@ -85,7 +85,10 @@ Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github t
 **Files:** `src/github/{pulls,checks,contents}.rs`, `tests/github_pulls.rs`, fake routes.
 
 - Trait additions: `get_pull(n) -> Pull {number, node_id, head_sha, head_ref, base_sha, base_ref, body, state, merged, draft, labels}`, `list_pulls(head: Option<&str>)`, `pull_files(n) -> Vec<PrFile {filename, status, additions, deletions, patch, previous_filename}>`, `create_pull`, `update_pull_body`, `list_reviews(n)`, `create_status(sha, context, state, description)`, `statuses(sha)` (combined), `check_runs(sha)`, `file_at(path, git_ref) -> Option<String>` (contents API, base64), `enable_auto_merge(node_id, method)` (GraphQL `enablePullRequestAutoMerge`, `POST /graphql`), `failed_jobs(sha)` and `job_log(job_id, tail)` (Actions API).
-- [ ] Tests against the fake for each; GraphQL `errors` array becomes an error with its message.
+- Split into three PRs: **4a** pulls, files, reviews; **4b** statuses, checks, auto-merge; **4c** contents, jobs, logs.
+- [x] 4a: `get_pull`, `list_pulls`, `pull_files`, `create_pull`, `update_pull_body`, `list_reviews` against the fake.
+- [x] 4b: `create_status`, `statuses`, `check_runs`, `enable_auto_merge` (GraphQL `errors` array becomes an error with its message), each against the fake.
+- [x] 4c: `file_at` (base64), `failed_jobs`, `job_log` (the signed log URL is fetched without GitHub headers), each against the fake.
 
 **Done when (S2):** integration tests against the recorded fake pass for labels, issues, comments, PRs and checks.
 
@@ -174,7 +177,13 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 
 - Profile TOML: `[gates.<name>] cmd = [...]`, `each_package = ["-p", "{package}"]`, `all = ["--workspace"]`, `when_no_package = "skip"`, `budget_secs`; `[adapters] packages = "cargo-metadata"`, `pending = "rust-ignore"`, `assertions = "rust"`. Built-in profiles are embedded with `include_str!`; `.bosun/profiles/<name>.toml` overrides.
 - `gate <name> [--base REF] [--all]`: the stack from `.bosun/bosun.toml` (default `rust` at `.`), the changed files `git diff --name-only <base>...HEAD`, affected packages (cargo-metadata adapter: `cargo metadata --no-deps --format-version 1`, longest manifest-dir prefix; a change to the root `Cargo.toml`, `Cargo.lock` or a non-package path means all), runs the command with stdio to stderr, data `{gate, stack, command, packages, exit_status, secs, over_budget}`; a failing command is exit 1 with fix "fix the failures above, then rerun `bosun gate <name>`".
-- [ ] Tests with a fake `cargo` on `PATH` that records argv: change in one of two packages -> `nextest run -p a` only (S5 Done when); root change -> `--workspace`; no package change -> skipped; failing command -> exit 1.
+- [x] Tests with a fake `cargo` on `PATH` that records argv: change in one of two packages -> `nextest run -p a` only (S5 Done when); root change -> `--workspace`; no package change -> skipped; failing command -> exit 1.
+
+Split into three PRs: **11a** profile, **11b** runner, **11c** packages adapter.
+
+- [x] 11a: `profiles/rust.toml`, profile parsing, repo override, placeholder expansion, unit tests.
+- [x] 11b: runner, base and changed files, `bosun gate`, integration tests without the packages adapter.
+- [x] 11c: cargo-metadata packages adapter and its tests (the box above).
 
 **Done when (S5, with Task 12):** `bosun gate test` runs nextest on the affected packages only.
 
