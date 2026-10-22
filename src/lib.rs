@@ -37,6 +37,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Pr(a) => return cli::pr::run(dir, a),
         Command::CiLog(a) => return cli::ci_log::run(dir, a),
         Command::Ask(a) => return cli::ask::run(dir, a),
+        Command::Lesson(a) => return cli::lesson::run(dir, a),
         Command::Hook(a) => return hooks::dispatch(dir, a),
         _ => {}
     }
@@ -53,7 +54,6 @@ pub fn run(cli: Cli) -> CmdResult {
 fn seed_task(command: &Command) -> u8 {
     match command {
         Command::Status => 16,
-        Command::Lesson(_) => 16,
         Command::Doctor => 17,
         Command::Budget(_) => 17,
         _ => 0,

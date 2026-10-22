@@ -8,6 +8,7 @@ pub mod ci_log;
 pub mod claim;
 pub mod heartbeat;
 pub mod join;
+pub mod lesson;
 pub mod msg;
 pub mod pr;
 pub mod reap;
