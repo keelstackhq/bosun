@@ -30,6 +30,9 @@ orchestrator merges.
 - 2026-10-22 · Task 5b · S3a done: `src/core/records.rs` (comment records `{"bosun":"<type>"}`: lease, lease-end, join, leave, result, spend, ask, lesson-hit) and `src/core/lease.rs` (live leases, conflicts naming both globs, registry members; a bad glob blocks everything) · total 43/43
 - 2026-10-22 · Task 8 · S4a: `src/core/spawn.rs` (checks 1-6 of spec §5 in order; main-red exit 4, budget/depth/live/children exit 6, conflict exit 3; mainfix skips 1-2) and `src/core/wave.rs` (ready, deps merged, no overlap with live leases or the wave, max_parallel; a reason for every waiting task) · total 51/51
 - 2026-10-22 · Task 7a · S8: `src/core/guard.rs`, the pure rules of the PreToolUse hook: edit-lock (a path in another session's live lease), label-lock (`bosun:state/` outside `bosun` commands, Bash and GitHub MCP), merge-lock (D13: `gh pr merge`, merge/ref/tag APIs, `gh release create`, force/tag/delete pushes, pushes to the default branch, `git tag`, merge/commit on the default branch, MCP merge and auto-merge) · total 55/55
+- 2026-10-22 · Task 3a · S2a: GitHub HTTP client (ureq 3 + rustls, retries, Link pagination, token-free errors) and issue/comment/label types · fixture parse tests and `enc`/Link unit tests pass, `cargo deny check` ok
+- 2026-10-22 · Task 3b · S2a: stateful tiny_http fake (issues, labels, comments, variables; 2-per-page Link paging; records requests; fail_next) · tests/github_http.rs 9/9 through Http: 3-page paging, 500 then 200, 3x500, POST not retried, 404/401/403 texts, token canary, headers, 401 without auth
+- 2026-10-22 · Task 3c · S2a: trait for issues, labels, comments and variables, with LiveGithub and its own PatchState for updates · tests/github_issues.rs 5/5: every trait method against the fake, 404 on label removal and 422 on label create tolerated
 
 ## Blocked
 
