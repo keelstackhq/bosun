@@ -6,9 +6,13 @@ use clap::{Args, Parser, Subcommand};
 pub mod claim;
 pub mod heartbeat;
 pub mod join;
+pub mod msg;
 pub mod reap;
 pub mod release;
 pub mod risk_check;
+pub mod spawn;
+pub mod wait;
+pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
