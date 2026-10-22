@@ -128,9 +128,11 @@ Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join
 
 ### Task 7 (S8): hooks: edit-lock, label-lock, merge-lock, session-start
 
-Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hook commands, lease cache and session-start.
+Split into three PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** `hook pre-tool-use` with the lease cache; **7c** `hook session-start`.
 
 - [x] 7a: guard rules.
+- [x] 7b: pre-tool-use hook and lease cache.
+- [x] 7c: session-start hook.
 
 **Files:** `src/hooks/{mod,pre_tool_use,session_start,cache}.rs`, `tests/cli_hook.rs`, spec §4 note.
 
@@ -159,7 +161,12 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 - `spawn <epic> [--model M] [--prompt-file F]`: gathers `SpawnInput` (registry joins, spend records of today on the registry issue, main-red, epic leases), runs the checks, claims the epic for this session, returns `next: [{"tool":"create_session","args":{"title","prompt","model","tags":["bosun:<project>","bosun:issue/<n>","bosun:parent/<session>"]}}]`. A model containing `[1m]` is a usage error.
 - `spawn --record <epic> --from -`: reads the `create_session` result (`{"id": "session_..."}` or `{"session_id": …}`), posts the child's `join` (origin spawned, parent, depth + 1, area of the epic) and moves the epic lease to the child.
 - `wave plan <epic>`: data `{run: [{issue, title, touch, workspace: "berth up <item>-<task>"}], waiting: [...]}` (D18).
-- [ ] Tests: each of the 7 checks refuses through the CLI with its exit (S4 Done when); success returns one `next` call with the 3 tags; `--record` registers the child.
+- [x] Tests: each of the 7 checks refuses through the CLI with its exit (S4 Done when); success returns one `next` call with the 3 tags; `--record` registers the child.
+
+Split into 2 PRs: **9a** spawn and `spawn --record`, **9b** wave plan.
+
+- [x] 9a: `src/cli/spawn.rs`, `registry::write`, `tests/cli_spawn.rs`.
+- [x] 9b: `src/cli/wave.rs`, `tests/cli_wave.rs`.
 
 **Done when (S4, with Task 10):** each check has a refusal test with exit 6 (exit 4 and 3 where spec §5 says so).
 
@@ -169,7 +176,12 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 
 - `wait (--pr N | --issue N | --child SESSION) [--timeout SECS]`: snapshot (PR: state, merged, head SHA, statuses and check conclusions; issue: state label, open/closed, comment count; child: newest `result` record of the session) then poll with backoff 5 s doubling to 60 s (`BOSUN_WAIT_BASE_MS` scales it in tests) until it differs or the timeout passes. data `{changed, before, after, polls}`; timeout is exit 0 with `changed: false`. No send_later, no send_message (D14).
 - `msg <session> <text> [--issue N]`: text over 500 characters is a usage error; returns `next: [{"tool":"send_message","args":{"session_id","message":"From #N: …"}}]`.
-- [ ] Tests: a fake that flips the PR state after 2 polls returns `changed: true, polls: 3`; timeout; child result; msg limits.
+- [x] Tests: a fake that flips the PR state after 2 polls returns `changed: true, polls: 3`; timeout; child result; msg limits (in `tests/cli_msg.rs`).
+
+Split into 2 PRs: **10a** wait (with a request hook in the fake), **10b** msg.
+
+- [x] 10a: `src/cli/wait.rs`, `tests/cli_wait.rs`, `FakeGithub::after_requests`.
+- [x] 10b: `src/cli/msg.rs` and its tests.
 
 ### Task 11 (S5a): gate runner and the rust profile
 
