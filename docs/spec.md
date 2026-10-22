@@ -223,6 +223,7 @@ A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in che
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
 and registers the child. Tags on the new session: `bosun:<project>`, `bosun:issue/<n>`,
 `bosun:parent/<id>`. bosun never passes a `[1m]` model.
+The epic lease written by spawn has no touch paths (`touch: []`); `--record` ends it with reason `spawned` and writes the same kind of lease for the child, plus the child's `join` (origin spawned, depth + 1, the epic's area).
 
 `.bosun/limits.toml` defaults (evidence in `docs/defaults.md`):
 

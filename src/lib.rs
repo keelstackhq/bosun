@@ -22,6 +22,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Join(a) => return cli::join::run(dir, a),
         Command::Claim(a) => return cli::claim::run(dir, a),
         Command::Release(a) => return cli::release::run(dir, a),
+        Command::Spawn(a) => return cli::spawn::run(dir, a),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
