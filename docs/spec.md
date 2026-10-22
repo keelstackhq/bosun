@@ -193,7 +193,8 @@ Conflict avoidance (three layers):
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
-   TTL, else it allows with a stderr warning. Paths outside the repo are never blocked.
+   TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.
+   The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`); branch protection stays the real guard, since a hook cannot see every shell trick.
 
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists
 overlap when a path of one matches a glob of the other, or two globs can match a common path.
