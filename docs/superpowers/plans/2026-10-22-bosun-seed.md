@@ -244,6 +244,11 @@ Split into two PRs: **16a** `src/core/lessons.rs`, `lesson add|hit`; **16b** `st
 
 ### Task 17 (S9b): doctor and usage providers
 
+Split into two PRs: **17a** usage providers, `budget record`, prices in `docs/defaults.md`; **17b** `doctor`.
+
+- [x] 17a: `src/sessions/usage.rs`, `budget record`.
+- [ ] 17b: `doctor`.
+
 **Files:** `src/cli/{doctor,budget}.rs`, `src/sessions/usage.rs`, `tests/cli_doctor.rs`, `docs/defaults.md` prices.
 
 - `doctor`: one item per checklist step (spec §11) with `ok` or `missing` and a fix: 1 repo readable; 2 Claude app (a PR or comment by `claude[bot]`/`claude` exists, else missing with the install link); 3 required checks named in `hoist.toml` and in workflows; 4 `governance/owners.toml` has an owner; 5 `BOSUN_HALT` variable exists; 6 setup script file present and the running binary matches `.bosun/version` (or no release yet); 7 `[slack] channel` set; 8 a registry issue exists; 9 auto-merge on in the repo settings; 10 a release exists; 11 the three Routine prompts (printed in data); 12 a `plans/*.md` and an open or merged plan PR. Exit 0 all ok, else exit 5 with the missing steps.

@@ -17,7 +17,7 @@ pub fn load(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
     }
 }
 
-fn ensure(gh: &dyn Github) -> Result<(u64, Vec<Note>)> {
+pub fn ensure(gh: &dyn Github) -> Result<(u64, Vec<Note>)> {
     if let Some(found) = load(gh)? {
         return Ok(found);
     }

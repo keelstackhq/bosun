@@ -422,7 +422,7 @@ Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for
   in `next`, passed back on stdin) and reads `usage.cost_usd`; `generic` estimates from turns and
   model with the prices in `docs/defaults.md`.
-- `bosun budget record` writes the spend of a task to its issue as a `{"bosun":"spend",..}`
+- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
 

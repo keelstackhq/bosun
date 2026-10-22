@@ -10,6 +10,7 @@ pub mod gates;
 pub mod github;
 pub mod output;
 pub mod registry;
+pub mod sessions;
 pub mod time;
 
 pub use cli::{Cli, Command};
@@ -23,6 +24,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Claim(a) => return cli::claim::run(dir, a),
         Command::Release(a) => return cli::release::run(dir, a),
         Command::Lesson(a) => return cli::lesson::run(dir, a),
+        Command::Budget(a) => return cli::budget::run(dir, a),
         Command::Status => return cli::status::run(dir),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
