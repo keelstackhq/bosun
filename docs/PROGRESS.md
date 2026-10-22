@@ -27,6 +27,7 @@ orchestrator merges.
 - 2026-10-22 · Task 4b · S2b: commit statuses (newest per context, description cut to 140), check runs (all pages) and auto-merge via GraphQL (errors array becomes an error) with fake routes · tests/github_checks.rs 5/5, total 55/55
 - 2026-10-22 · Task 4c · S2b done, S2 done: contents with a small base64 decoder, failed jobs and job logs (the signed log URL is fetched once, https, without the token or GitHub headers) · tests/github_contents.rs 6/6 and 4 b64 unit tests, total 65/65
 - 2026-10-22 · Task 5a · S3a: `src/core/glob.rs` (touch globs: match and overlap, `*` `?` `**`, `dir/`), `src/core/state.rs` (states, labels, transitions), `tests/core_is_pure.rs` · glob table 20 overlap and 13 match cases, total 34/34
+- 2026-10-22 · Task 5b · S3a done: `src/core/records.rs` (comment records `{"bosun":"<type>"}`: lease, lease-end, join, leave, result, spend, ask, lesson-hit) and `src/core/lease.rs` (live leases, conflicts naming both globs, registry members; a bad glob blocks everything) · total 43/43
 
 ## Blocked
 

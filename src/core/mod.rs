@@ -2,4 +2,6 @@
 //! `tests/core_is_pure.rs` enforces it.
 
 pub mod glob;
+pub mod lease;
+pub mod records;
 pub mod state;

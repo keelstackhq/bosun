@@ -97,6 +97,7 @@ Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github t
 Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, leases, registry members.
 
 - [x] 5a: globs and states.
+- [x] 5b: records, leases, members.
 
 **Files:** `src/core/{mod,glob,lease,state}.rs`, `tests/core_is_pure.rs`.
 
