@@ -32,6 +32,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Gate(a) => return cli::gate::run(dir, a),
         Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
+        Command::Ask(a) => return cli::ask::run(dir, a),
         Command::Hook(a) => return hooks::dispatch(dir, a),
         _ => {}
     }
@@ -52,7 +53,6 @@ fn seed_task(command: &Command) -> u8 {
         Command::Pr(_) => 15,
         Command::CiLog(_) => 15,
         Command::Status => 16,
-        Command::Ask(_) => 13,
         Command::Lesson(_) => 16,
         Command::Doctor => 17,
         Command::Budget(_) => 17,

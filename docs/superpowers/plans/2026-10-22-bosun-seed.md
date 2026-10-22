@@ -219,13 +219,13 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 - `core::risk`: rules `{id, why, paths, content, new_dependency, capability}`; `fn evaluate(rules, files: &[PrFile], new_deps: &[String], capabilities) -> Vec<Match>`; only escalates.
 - `risk-check <pr>`: rules from `.bosun/risk.toml` **at the PR's base SHA** (`file_at`), built-in defaults when absent; new dependencies from `Cargo.toml`/`package.json` dependency tables at base vs head; capabilities from the task metadata. High: writes the Risk note between `<!-- bosun:risk -->` markers in the PR body, and passes only with an `APPROVED` review on the head SHA by a login in `governance/owners.toml` (read at base). Posts status `risk-check` (success / failure with the matched rule ids). Exit 0 normal or approved, exit 5 high and not approved.
 - `ask <issue> <question>`: comment mentioning the owners with an `ask` record, state `needs-human`; exit 0.
-- [ ] Tests: a PR that edits `.bosun/risk.toml` (and weakens it at head) is high, judged by the base rules (S6 Done when); new crate -> R-deps; secret pattern; owner approval on an older SHA does not count; ask.
+- [x] Tests: a PR that edits `.bosun/risk.toml` (and weakens it at head) is high, judged by the base rules (S6 Done when); new crate -> R-deps; secret pattern; owner approval on an older SHA does not count; ask.
 
 Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capabilities` in task metadata); **13b** `risk-check`; **13c** `ask`.
 
 - [x] 13a: `src/core/risk.rs`, `risk_default.toml`, `regex` pinned, spec D32.
 - [x] 13b: `src/cli/risk_check.rs`, `tests/cli_risk.rs` (the box above, except ask).
-- [ ] 13c: `src/cli/ask.rs` and its test.
+- [x] 13c: `src/cli/ask.rs`, `tests/cli_ask.rs` (mentions, `ask` record, needs-human, no owners, halt).
 
 **Done when (S6):** a PR that edits risk.toml is high, evaluated with the base rules.
 
