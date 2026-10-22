@@ -21,9 +21,8 @@ pub fn run(cli: Cli) -> CmdResult {
     match &cli.command {
         Command::Join(a) => return cli::join::run(dir, a),
         Command::Heartbeat => return cli::heartbeat::run(dir),
+        Command::Gate(a) => return cli::gate::run(dir, a),
         _ => {}
-    if let Command::Gate(a) = &cli.command {
-        return cli::gate::run(dir, a);
     }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
@@ -37,9 +36,7 @@ pub fn run(cli: Cli) -> CmdResult {
 /// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::Join(_) => 6,
         Command::Claim(_) => 6,
-        Command::Heartbeat => 6,
         Command::Release(_) => 6,
         Command::Reap => 6,
         Command::Spawn(_) => 9,
