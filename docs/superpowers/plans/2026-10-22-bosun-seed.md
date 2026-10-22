@@ -57,6 +57,7 @@ Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny
 Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 - [x] 2a: time.
+- [x] 2b: config and limits.
 
 **Files:** `src/ctx.rs`, `src/config.rs`, `src/time.rs`, `tests/config.rs`.
 
