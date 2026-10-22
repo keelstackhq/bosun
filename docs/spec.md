@@ -399,6 +399,7 @@ Rule evaluation:
   the rules that judge it.
 - A rule only escalates; nothing de-escalates.
 - The bosun version pin (`.bosun/version`) is R-gov.
+- A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
 High-risk PRs:
 - A high PR needs a GitHub review on the head SHA by a user in `governance/owners.toml`, and
