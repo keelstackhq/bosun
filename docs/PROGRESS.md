@@ -38,6 +38,7 @@ orchestrator merges.
 - 2026-10-22 · Task 12b · S5b done: `src/gates/integrity.rs`, `src/cli/test_integrity.rs` (`bosun test-integrity` and `bosun gate test-integrity`: deleted-test, new-skip, fewer-asserts, snapshot-change; renames are not deletions; PR body and allow list from `BOSUN_PR_BODY` and `BOSUN_INTEGRITY_ALLOW` until Task 13+) · `cargo nextest run --locked` 61/61
 - 2026-10-22 · Task 13a · S6a: `src/core/risk.rs` (rules from TOML with compiled globs and regexes, `evaluate` over added lines and old or new paths, new-dependency diff of Cargo.toml and package.json, owners parse), `risk_default.toml` (the five spec rules), `capabilities` in task metadata, `regex` =1.13.1, spec D32 · `cargo nextest run --locked` 161/161
 - 2026-10-22 · Task 13b · S6b: `src/cli/risk_check.rs` (`bosun risk-check <pr>`: rules, owners and manifests read at the base SHA, Risk note between markers replaced in place, `risk-check` commit status, exit 5 until an owner approves the head SHA), note and closing-issue helpers in `core::risk` · `tests/cli_risk.rs` 11/11, total 174/174
+- 2026-10-22 · Task 13c · S6 done: `src/cli/ask.rs` (`bosun ask <issue> <question>`: kill switch, owners from `governance/owners.toml` on main, comment with `@owner` mentions and the `ask` record, state needs-human; no owners is exit 1 with fix) · `tests/cli_ask.rs` 4/4, `cargo nextest run --locked` 178/178 · S6 done
 
 ## Blocked
 

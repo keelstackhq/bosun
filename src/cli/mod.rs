@@ -3,6 +3,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+pub mod ask;
 pub mod claim;
 pub mod heartbeat;
 pub mod join;

@@ -400,7 +400,7 @@ High-risk PRs:
   CODEOWNERS.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
   check.
-- `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). There is no
+- `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
 - A risky task is small: the target is under 100 changed lines.
 
