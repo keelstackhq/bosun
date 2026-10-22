@@ -742,7 +742,13 @@ fn route(
             page(items.unwrap_or_default(), &query, base, path, raw_query)
         }
         ("GET", ["compare", range]) => match s.compares.get(*range) {
-            Some(files) => ok(json!({"files": files})),
+            Some(files) => {
+                let num =
+                    |k: &str, d: usize| query.get(k).and_then(|p| p.parse().ok()).unwrap_or(d);
+                let (n, per) = (num("page", 1), num("per_page", 300));
+                let chunk: Vec<&Value> = files.iter().skip((n - 1) * per).take(per).collect();
+                ok(json!({"files": chunk}))
+            }
             None => msg(404, "Not Found"),
         },
         ("GET", ["pulls", n, "reviews"]) => {

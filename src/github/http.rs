@@ -137,19 +137,15 @@ impl Http {
             }
             next = match &r.link_next {
                 // Only follow links that stay on the configured API host.
-                Some(url) => Some(
-                    url.strip_prefix(&self.base)
-                        .map(str::to_string)
-                        .ok_or_else(|| {
-                            BosunError::error(
-                                format!(
-                                    "GitHub GET {}: next page points to another host",
-                                    bare(&path)
-                                ),
-                                "retry; if it persists check https://www.githubstatus.com",
-                            )
-                        })?,
-                ),
+                Some(url) => Some(same_host_path(&self.base, url).ok_or_else(|| {
+                    BosunError::error(
+                        format!(
+                            "GitHub GET {}: next page points to another host",
+                            bare(&path)
+                        ),
+                        "retry; if it persists check https://www.githubstatus.com",
+                    )
+                })?),
                 None => None,
             };
         }
@@ -345,6 +341,16 @@ fn bare(path: &str) -> &str {
 }
 
 /// The `rel="next"` target of a `Link` header.
+/// `url` without `base`, when `base` ends at a path, query or the end of the URL (so
+/// `https://api.github.com.evil.com/x` is not on `https://api.github.com`).
+fn same_host_path(base: &str, url: &str) -> Option<String> {
+    let rest = url.strip_prefix(base)?;
+    rest.is_empty()
+        .then_some(rest)
+        .or_else(|| rest.starts_with(['/', '?']).then_some(rest))
+        .map(str::to_string)
+}
+
 fn parse_link_next(value: &str) -> Option<String> {
     value.split(',').find_map(|part| {
         let (target, params) = part.split_once(';')?;
@@ -364,6 +370,25 @@ mod tests {
     fn enc_escapes_label_characters() {
         assert_eq!(enc("bosun:state/ready"), "bosun%3Astate%2Fready");
         assert_eq!(enc("a b-c_d.e~"), "a%20b-c_d.e~");
+    }
+
+    #[test]
+    fn next_links_must_stay_on_the_api_host() {
+        let base = "https://api.github.com";
+        let ok = |u: &str| same_host_path(base, u);
+        assert_eq!(
+            ok("https://api.github.com/repos/o/r/x?page=2").as_deref(),
+            Some("/repos/o/r/x?page=2")
+        );
+        assert_eq!(ok("https://api.github.com").as_deref(), Some(""));
+        assert_eq!(
+            ok("https://api.github.com?page=2").as_deref(),
+            Some("?page=2")
+        );
+        assert_eq!(ok("https://api.github.com.evil.com/repos/o/r"), None);
+        assert_eq!(ok("https://api.github.com:444/repos"), None);
+        assert_eq!(ok("https://api.github.comx"), None);
+        assert_eq!(ok("https://elsewhere.test/repos"), None);
     }
 
     #[test]

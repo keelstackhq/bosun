@@ -60,6 +60,7 @@ orchestrator merges.
 - 2026-10-22 · Fix B · integrity/risk bypasses: UC `#[ignore]` added to a test is a new-skip, `fewer-tests` finding (`#[test]`/`#[tokio::test]`/`#[rstest]` count, allow `delete-test`), base text read at the merge base; risk-check unions capabilities of all linked issues (`core::meta::linked_issues`, shared with verdict) and adds built-in `R-unseen` for unlisted files or missing patches · full suite 274+ passed, fmt/clippy/deny clean
 - 2026-10-22 · Fix C-leases · leases conflict per issue (`lease::conflicts` takes the claimed issue, `S/x` ids, `wave plan` counts in-flight tasks), claim and spawn re-check after writing and post `lease-end` `lost-race` (`lease::race_winner`, `app::settle_race`, `Note.created_at`) · nextest 273/273
 - 2026-10-22 · Fix D-trust · limits read from the default branch (`app::limits_from_default`) by spawn and budget record, spawn refused for an unregistered spawner, join never lowers depth or changes parent, delta review needs a success review-verdict status, negative cost refused and negative spend ignored (one `spend_total`) · 271 tests pass, 8 new
+- 2026-10-22 · Fix E · merge-lock sees nested commands (`$(..)`, backticks, `sh -c`, groups, `eval`), GraphQL and REST API merge/ref/release writes and version-tag pushes; edit-lock matches literal paths with brackets; next-page links need a host boundary; `compare_files` pages; review-pack uses `core::lessons::Store` (`added` optional) · guard unit tests, `tests/cli_hook.rs` +2, `github_pulls` compare paging, `cli_review` +1
 
 ## Blocked
 

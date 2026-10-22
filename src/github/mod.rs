@@ -53,6 +53,9 @@ pub struct IssuePatch {
     pub state_reason: Option<String>,
 }
 
+/// Compare pages read at most (3000 files, GitHub's own cap).
+const MAX_COMPARE_PAGES: usize = 30;
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
@@ -312,17 +315,28 @@ impl Github for LiveGithub {
     }
 
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>> {
-        let path = self.path(&format!("/compare/{}...{}", enc(base), enc(head)));
-        match self.http.get_json(&path)? {
-            Some(v) => self.parse_all(
-                "compared file",
-                v["files"].as_array().cloned().unwrap_or_default(),
-            ),
-            None => Err(BosunError::error(
-                format!("GitHub cannot compare {base}...{head}"),
-                "check that both commits exist; a force-push may have removed the old one",
-            )),
+        // The endpoint pages its `files` array; read pages until one is short.
+        let mut all: Vec<Value> = Vec::new();
+        for page in 1..=MAX_COMPARE_PAGES {
+            let path = self.path(&format!(
+                "/compare/{}...{}?page={page}&per_page=100",
+                enc(base),
+                enc(head)
+            ));
+            let Some(v) = self.http.get_json(&path)? else {
+                return Err(BosunError::error(
+                    format!("GitHub cannot compare {base}...{head}"),
+                    "check that both commits exist; a force-push may have removed the old one",
+                ));
+            };
+            let files = v["files"].as_array().cloned().unwrap_or_default();
+            let short = files.len() < 100;
+            all.extend(files);
+            if short {
+                break;
+            }
         }
+        self.parse_all("compared file", all)
     }
 
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {

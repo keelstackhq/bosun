@@ -6,8 +6,9 @@ use serde_json::{Value, json};
 
 use super::PrArg;
 use crate::app::{App, notes, task_meta};
+use crate::core::lessons;
 use crate::core::records::{Record, parse_record};
-use crate::core::review::{lessons_for, parse_lessons, use_cases};
+use crate::core::review::use_cases;
 use crate::core::verdict::closes_issue;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -64,14 +65,14 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         task = json!({"issue": num, "title": issue.title, "body": issue.body_text(),
             "meta": meta});
     }
-    let lessons = parse_lessons(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
+    let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
     Ok(Outcome::data(json!({
         "pr": n, "title": pull.title, "head_sha": pull.head_sha, "base_sha": pull.base_sha,
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,
             "deletions": f.deletions, "patch": f.patch})).collect::<Vec<_>>(),
-        "task": task, "ucs": ucs, "lessons": lessons_for(lessons, &names),
+        "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
         "instructions": INSTRUCTIONS,
     })))
