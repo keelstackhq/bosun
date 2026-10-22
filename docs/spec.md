@@ -186,7 +186,9 @@ Conflict avoidance (three layers):
 1. Registry: `bosun join` registers each session with its origin (spawned, slack, local, routine)
    as a comment on the registry issue (label `bosun:registry`). All caps count all origins.
 2. Claim check: `bosun claim` refuses a task if its touch paths overlap a live lease, or if another
-   orchestrator owns its area. Exit 3 with a JSON reason.
+   orchestrator owns its area. Exit 3 with a JSON reason. An area owner that is the
+   parent of the claiming session does not block it, so spawned workers can claim in their
+   orchestrator's area.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
 
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists

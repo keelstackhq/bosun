@@ -109,7 +109,7 @@ Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join
 
 - [x] 6a: app helpers, `core/meta.rs`.
 - [x] 6b: registry, join, heartbeat.
-- [ ] 6c: claim.
+- [x] 6c: claim.
 - [ ] 6d: release, reap.
 
 **Files:** `src/cli/{join,claim,heartbeat,release,reap}.rs`, `src/registry.rs`, `tests/cli_leases.rs`.
