@@ -16,9 +16,8 @@ pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 /// Run one command. `main` prints the envelope and exits with its code.
 pub fn run(cli: Cli) -> CmdResult {
     let dir = cli.dir.as_deref();
-    match &cli.command {
-        Command::Gate(a) => return cli::gate::run(dir, a),
-        _ => {}
+    if let Command::Gate(a) = &cli.command {
+        return cli::gate::run(dir, a);
     }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
