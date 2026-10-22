@@ -30,7 +30,15 @@ impl Lease {
 /// The newest lease per session on one issue, ended leases removed. Expired ones are kept
 /// (reap needs them); filter with `is_live`.
 pub fn leases_of(issue: u64, notes: &[Note]) -> Vec<Lease> {
-    let mut by_session: BTreeMap<String, Lease> = BTreeMap::new();
+    timed_leases_of(issue, notes)
+        .into_iter()
+        .map(|(l, _)| l)
+        .collect()
+}
+
+/// `leases_of` with the creation time of each lease comment.
+fn timed_leases_of(issue: u64, notes: &[Note]) -> Vec<(Lease, Timestamp)> {
+    let mut by_session: BTreeMap<String, (Lease, Timestamp)> = BTreeMap::new();
     for note in notes {
         match parse_record(&note.body) {
             Some(Record::Lease {
@@ -43,14 +51,17 @@ pub fn leases_of(issue: u64, notes: &[Note]) -> Vec<Lease> {
                 let expires = parse_rfc3339(&expires).unwrap_or(Timestamp(0));
                 by_session.insert(
                     session.clone(),
-                    Lease {
-                        issue,
-                        session,
-                        origin,
-                        expires,
-                        touch,
-                        comment_id: note.id,
-                    },
+                    (
+                        Lease {
+                            issue,
+                            session,
+                            origin,
+                            expires,
+                            touch,
+                            comment_id: note.id,
+                        },
+                        note.created_at,
+                    ),
                 );
             }
             Some(Record::LeaseEnd { session, .. }) => {
@@ -90,12 +101,24 @@ impl Conflict {
     }
 }
 
-/// Overlaps of `touch` with the live leases of other sessions. A lease with a bad glob is
-/// treated as covering everything, so a broken record never lets work through.
-pub fn conflicts(touch: &[Glob], leases: &[Lease], me: &str) -> Vec<Conflict> {
+/// Overlaps of `touch` with live leases. `claiming` is the issue being claimed: a lease of
+/// `me` on that issue is the same claim and never conflicts, but every other lease conflicts,
+/// also one of the same session, because wave agents share their orchestrator's session id
+/// (spec §4). With `None` (the edit hook) the session rule applies: leases of `me` and of the
+/// orchestrator session `me` runs in (`S` for `S/task`) do not conflict. A lease with a bad
+/// glob is treated as covering everything, so a broken record never lets work through.
+pub fn conflicts(
+    touch: &[Glob],
+    leases: &[Lease],
+    me: &str,
+    claiming: Option<u64>,
+) -> Vec<Conflict> {
     leases
         .iter()
-        .filter(|l| l.session != me)
+        .filter(|l| match claiming {
+            Some(issue) => !(l.session == me && l.issue == issue),
+            None => l.session != me && l.session != orchestrator_of(me),
+        })
         .filter_map(|l| {
             let theirs = glob::parse_all(&l.touch).unwrap_or_else(|_| vec![everything()]);
             glob::first_overlap(touch, &theirs).map(|(mine, theirs)| Conflict {
@@ -107,6 +130,43 @@ pub fn conflicts(touch: &[Glob], leases: &[Lease], me: &str) -> Vec<Conflict> {
             })
         })
         .collect()
+}
+
+/// The orchestrator session of a per-task id `S/task` (`BOSUN_SESSION=<session>/<task>`);
+/// any other id is its own orchestrator.
+pub fn orchestrator_of(session: &str) -> &str {
+    session.split_once('/').map_or(session, |(s, _)| s)
+}
+
+/// The lease that beat a new lease in a claim race: a live lease, other than the new one, on
+/// the same issue or with overlapping touch paths, whose comment is earlier (creation time,
+/// then comment id). `issues` is the freshly read comments of the issues that may hold one.
+pub fn race_winner(
+    issue: u64,
+    comment_id: u64,
+    touch: &[Glob],
+    issues: &[(u64, Vec<Note>)],
+    now: Timestamp,
+) -> Option<Lease> {
+    let mine = issues
+        .iter()
+        .filter(|(n, _)| *n == issue)
+        .flat_map(|(n, notes)| timed_leases_of(*n, notes))
+        .find(|(l, _)| l.comment_id == comment_id)
+        .map(|(l, at)| (at, l.comment_id))?;
+    issues
+        .iter()
+        .flat_map(|(n, notes)| timed_leases_of(*n, notes))
+        .filter(|(l, _)| l.is_live(now) && l.comment_id != comment_id)
+        .filter(|(l, _)| {
+            l.issue == issue || {
+                let theirs = glob::parse_all(&l.touch).unwrap_or_else(|_| vec![everything()]);
+                glob::first_overlap(touch, &theirs).is_some()
+            }
+        })
+        .filter(|(l, at)| (*at, l.comment_id) < mine)
+        .min_by_key(|(l, at)| (*at, l.comment_id))
+        .map(|(l, _)| l)
 }
 
 fn everything() -> Glob {
@@ -169,10 +229,7 @@ mod tests {
     const NOW: Timestamp = Timestamp(1_792_663_200); // 2026-10-22T10:00:00Z
 
     fn note(id: u64, r: Record) -> Note {
-        Note {
-            id,
-            body: format!("bosun record\n{}", r.to_line()),
-        }
+        Note::new(id, format!("bosun record\n{}", r.to_line()))
     }
 
     fn lease(session: &str, expires: &str, touch: &[&str]) -> Record {
@@ -222,6 +279,62 @@ mod tests {
         assert_eq!(live.iter().map(|l| l.issue).collect::<Vec<_>>(), vec![3]);
     }
 
+    fn held(issue: u64, session: &str, touch: &[&str]) -> Lease {
+        Lease {
+            issue,
+            session: session.into(),
+            origin: "local".into(),
+            expires: Timestamp(i64::MAX),
+            touch: touch.iter().map(|s| s.to_string()).collect(),
+            comment_id: issue,
+        }
+    }
+
+    #[test]
+    fn the_same_session_conflicts_on_another_issue_but_not_on_its_own() {
+        let leases = [held(7, "S", &["src/**"])];
+        let touch = glob::parse_all(&["src/a.rs".into()]).unwrap();
+        assert_eq!(conflicts(&touch, &leases, "S", Some(8)).len(), 1);
+        assert!(conflicts(&touch, &leases, "S", Some(7)).is_empty());
+    }
+
+    #[test]
+    fn per_task_session_ids_conflict_with_each_other_only() {
+        let leases = [held(7, "S/x", &["src/**"])];
+        let touch = glob::parse_all(&["src/a.rs".into()]).unwrap();
+        assert_eq!(conflicts(&touch, &leases, "S/y", Some(8)).len(), 1);
+        assert!(conflicts(&touch, &leases, "S/x", Some(7)).is_empty());
+        // The edit hook: S/x conflicts with S/y, and S/y may edit what S leased.
+        assert_eq!(conflicts(&touch, &leases, "S/y", None).len(), 1);
+        assert!(conflicts(&touch, &leases, "S/x", None).is_empty());
+        let orchestrator = [held(7, "S", &["src/**"])];
+        assert!(conflicts(&touch, &orchestrator, "S/y", None).is_empty());
+        assert_eq!(conflicts(&touch, &orchestrator, "T/y", None).len(), 1);
+    }
+
+    #[test]
+    fn the_earlier_comment_wins_a_race() {
+        let at = |id, secs| {
+            let mut n = note(id, lease("a", "2026-10-22T10:30:00Z", &["src/**"]));
+            n.created_at = Timestamp(secs);
+            n
+        };
+        let mut rival = note(9, lease("b", "2026-10-22T10:30:00Z", &["src/x/**"]));
+        rival.created_at = Timestamp(100);
+        let touch = glob::parse_all(&["src/**".into()]).unwrap();
+        let issues = vec![(1, vec![at(5, 100)]), (2, vec![rival.clone()])];
+        // Same time: the lower comment id wins, so the rival (9) loses to 5.
+        assert_eq!(race_winner(1, 5, &touch, &issues, NOW), None);
+        let w = race_winner(2, 9, &touch, &issues, NOW).unwrap();
+        assert_eq!((w.issue, w.session.as_str()), (1, "a"));
+        // An earlier time beats a lower id; a disjoint lease never wins.
+        rival.created_at = Timestamp(99);
+        let issues = vec![(1, vec![at(5, 100)]), (2, vec![rival])];
+        assert_eq!(race_winner(1, 5, &touch, &issues, NOW).unwrap().issue, 2);
+        let docs = glob::parse_all(&["docs/**".into()]).unwrap();
+        assert_eq!(race_winner(1, 5, &docs, &issues, NOW), None);
+    }
+
     #[test]
     fn conflicts_skip_my_own_leases() {
         let issues = vec![
@@ -239,7 +352,7 @@ mod tests {
         ];
         let live = live_leases(&issues, NOW);
         let touch = glob::parse_all(&["src/core/lease.rs".into()]).unwrap();
-        let got = conflicts(&touch, &live, "me");
+        let got = conflicts(&touch, &live, "me", None);
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].issue, 2);
         assert_eq!(
@@ -247,7 +360,7 @@ mod tests {
             "`src/core/lease.rs` overlaps `src/core/*.rs` leased on #2 by other until 2026-10-22T10:30:00Z"
         );
         let elsewhere = glob::parse_all(&["docs/**".into()]).unwrap();
-        assert!(conflicts(&elsewhere, &live, "me").is_empty());
+        assert!(conflicts(&elsewhere, &live, "me", None).is_empty());
     }
 
     #[test]
@@ -257,7 +370,10 @@ mod tests {
             vec![note(1, lease("o", "2026-10-22T10:30:00Z", &["../x"]))],
         )];
         let touch = glob::parse_all(&["docs/a.md".into()]).unwrap();
-        assert_eq!(conflicts(&touch, &live_leases(&issues, NOW), "me").len(), 1);
+        assert_eq!(
+            conflicts(&touch, &live_leases(&issues, NOW), "me", None).len(),
+            1
+        );
     }
 
     #[test]

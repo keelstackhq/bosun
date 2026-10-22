@@ -253,3 +253,34 @@ fn the_kill_switch_halts_spawn() {
     let (code, _) = spawn(&fake, &[]);
     assert_eq!(code, 4);
 }
+
+#[test]
+fn losing_the_epic_lease_race_ends_the_lease_and_exits_3() {
+    let fake = setup();
+    fake.after_requests("/issues/10/comments", 2, |s| {
+        s.comments.push(common::fake::FakeComment {
+            id: 50,
+            issue: 10,
+            body: lease_note("session_w", LATER, "x"),
+            user: "octocat".into(),
+            created_at: "2026-10-22T09:59:59Z".into(),
+            updated_at: "2026-10-22T09:59:59Z".into(),
+        });
+    });
+    let (code, v) = spawn(&fake, &[]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("session_w")
+    );
+    assert!(v["next"].as_array().unwrap().is_empty());
+    let ends: Vec<_> = fake
+        .comments_of(10)
+        .into_iter()
+        .filter(|c| c.body.contains(r#""bosun":"lease-end""#) && c.body.contains("lost-race"))
+        .collect();
+    assert_eq!(ends.len(), 1);
+    assert!(fake.labels_of(10).contains(&"bosun:state/ready".into()));
+}

@@ -7,7 +7,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::SpawnArgs;
-use crate::app::{App, end_lease, kill_switch, main_red, notes, set_state, task_meta};
+use crate::app::{App, end_lease, kill_switch, main_red, notes, set_state, settle_race, task_meta};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members};
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record};
@@ -92,7 +92,8 @@ pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
             "Claimed by {me} to spawn an orchestrator.\n\n{}",
             record.to_line()
         );
-        app.gh.add_comment(n, &body)?;
+        let comment = app.gh.add_comment(n, &body)?;
+        settle_race(app.gh.as_ref(), me, n, comment.id, &[], &[], now)?;
     }
     if state_of(&epic.labels) == Some(State::Ready) {
         set_state(app.gh.as_ref(), n, &epic, State::Claimed)?;
@@ -162,7 +163,7 @@ fn default_prompt(epic: u64, title: &str, area: Option<&str>, me: &str, depth: u
     format!(
         "You orchestrate epic #{epic} ({title}).\n\
          1. Run `bosun join {area_flag}--parent {me} --depth {depth}`.\n\
-         2. Run `bosun wave plan {epic}` and work the tasks it returns as wave agents, each in its own workspace.\n\
+         2. Run `bosun wave plan {epic}` and work the tasks it returns as wave agents, each in its own workspace with `BOSUN_SESSION={me}/<task>` set.\n\
          3. When done, post a comment on #{epic} with this line (outcome is merged, blocked or needs-human):\n\
          {{\"bosun\":\"result\",\"session\":\"<your session id>\",\"outcome\":\"merged\"}}\n"
     )

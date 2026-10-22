@@ -19,10 +19,13 @@ pub fn edited_path(tool: &str, input: &Value) -> Option<String> {
     input.get(key)?.as_str().map(str::to_string)
 }
 
-/// Edit-lock: a path inside a live lease of another session.
+/// Edit-lock: a path inside a live lease of another session. An agent may edit the paths its
+/// own orchestrator leased (`S/task` runs inside `S`); see spec §4.
 pub fn edit_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
     let glob = Glob::parse(path).ok()?;
-    let hit = lease::conflicts(&[glob], leases, me).into_iter().next()?;
+    let hit = lease::conflicts(&[glob], leases, me, None)
+        .into_iter()
+        .next()?;
     Some(format!(
         "{path} is claimed: {}. Claim your own task with `bosun claim`, or wait for that lease \
          (`bosun wait --issue {}`)",
