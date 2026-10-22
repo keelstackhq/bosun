@@ -1,6 +1,7 @@
 //! The gate runner (spec §7): `bosun gate <name>` maps a gate to the stack profile's command, narrows
 //! it to the affected packages, runs it with its output on stderr, and reports one JSON object.
 
+pub mod packages;
 pub mod profile;
 
 use std::os::fd::AsFd;
@@ -12,7 +13,8 @@ use serde_json::{Value, json};
 
 use crate::config::Stack;
 use crate::output::{BosunError, CmdResult, Outcome};
-use profile::{Gate, Profile};
+use packages::Affected;
+use profile::{Gate, Profile, WhenNoPackage};
 
 pub struct Request<'a> {
     pub root: &'a Path,
@@ -131,9 +133,36 @@ fn execute(
     files: &[String],
 ) -> Result<Value, BosunError> {
     let dir: PathBuf = req.root.join(stack_rel(&stack.path));
-    // Until the packages adapter lands (next branch), a per-package gate runs on all packages.
-    let (names, extra): (Vec<String>, Vec<String>) = if gate.is_per_package() {
-        (Vec::new(), gate.all.clone())
+    let (names, extra) = if gate.is_per_package() {
+        let pkgs = packages::load(&dir)?;
+        let affected = if req.all {
+            Affected::All
+        } else {
+            packages::affected(&dir, files, &pkgs)
+        };
+        match affected {
+            Affected::None if gate.when_no_package == WhenNoPackage::Skip => {
+                return Ok(json!({
+                    "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
+                    "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+                }));
+            }
+            Affected::Some(names) => {
+                let args = names
+                    .iter()
+                    .flat_map(|n| {
+                        gate.each_package
+                            .iter()
+                            .map(move |a| a.replace("{package}", n))
+                    })
+                    .collect();
+                (names, args)
+            }
+            Affected::All | Affected::None => (
+                pkgs.iter().map(|p| p.name.clone()).collect(),
+                gate.all.clone(),
+            ),
+        }
     } else {
         (Vec::new(), Vec::new())
     };
