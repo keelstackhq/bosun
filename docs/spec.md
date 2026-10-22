@@ -207,11 +207,13 @@ Only an epic gets a session (an area orchestrator). Leaf tasks run as wave agent
 session, each in its own workspace from `berth up <task>` (D18); `berth gc` removes the workspaces
 of merged tasks. `bosun wave plan <epic>` returns the next set of tasks that can run in parallel:
 no overlapping touch paths, all dependencies merged, at most `waves.max_parallel`.
+A task counts as merged when its state is `merged` or its issue is closed; tasks of other epics count too.
 
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
 and never uses send_later or send_message.
+`polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 
 `bosun spawn` checks, in this order:
 1. Main is not red.
@@ -226,6 +228,7 @@ A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in che
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
 and registers the child. Tags on the new session: `bosun:<project>`, `bosun:issue/<n>`,
 `bosun:parent/<id>`. bosun never passes a `[1m]` model.
+The epic lease written by spawn has no touch paths (`touch: []`); `--record` ends it with reason `spawned` and writes the same kind of lease for the child, plus the child's `join` (origin spawned, depth + 1, the epic's area).
 
 `.bosun/limits.toml` defaults (evidence in `docs/defaults.md`):
 
@@ -262,7 +265,7 @@ Janitor, resume, results:
   `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
   sees it with `bosun wait`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
-  "From #<issue>:" and refuses text over 500 characters. Nothing in bosun waits for a reply.
+  "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
 Bootstrap order: the root session runs `bosun plan import`, then the wave of plan tasks, then
 spawns one session per area, then coordinates with `bosun wait` and `bosun status`.
