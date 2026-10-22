@@ -78,7 +78,7 @@ Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github t
 
 - [x] 3a: `http.rs` and `types.rs`; fixtures parse; `enc` and Link unit tests.
 - [x] 3b: fake GitHub; through `Http`: pagination across 3 pages, 500 then 200 retries, 3x500 gives up, POST not retried, 404 and 401 messages, documented headers, token canary never in an error.
-- [ ] 3c: `Github` trait and `LiveGithub`; each trait method against the fake.
+- [x] 3c: `Github` trait and `LiveGithub`; each trait method against the fake.
 
 ### Task 4 (S2b): PRs, files, statuses, checks, contents, reviews, auto-merge, logs
 
