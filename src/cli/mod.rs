@@ -16,8 +16,6 @@ pub mod pr;
 pub mod reap;
 pub mod release;
 pub mod review_pack;
-pub mod status;
-pub mod verdict;
 pub mod risk_check;
 pub mod spawn;
 pub mod status;
