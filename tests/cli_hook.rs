@@ -243,3 +243,21 @@ fn session_start_explains_when_github_is_unreachable() {
     assert!(text.contains("could not reach GitHub"), "{text}");
     assert!(text.contains("GH_TOKEN"), "{text}");
 }
+
+#[test]
+fn merge_lock_sees_a_merge_nested_in_a_bosun_command() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let bash = |c: &str| pre(&fake, tmp.path(), "Bash", json!({"command": c}));
+    denied(&bash("bosun status $(gh pr merge 1)"));
+    denied(&bash("sh -c \"gh pr merge 1\""));
+    allowed(&bash("bosun status $(git rev-parse HEAD)"));
+}
+
+#[test]
+fn edit_on_a_bracket_path_in_another_sessions_lease_is_denied() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    fake.issue(4, "other", &["bosun:state/claimed"], "x");
+    fake.comment(4, &lease_note("session_other", LIVE, "app/**"));
+    let input = json!({"file_path": "app/[id]/page.tsx"});
+    denied(&pre(&fake, tmp.path(), "Edit", input));
+}
