@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Whitespace errors in the change (trailing spaces, conflict markers).
+      - name: diff check
+        if: github.event_name == 'pull_request'
+        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
+
+  # One stable required check for branch protection, the same name as in the other keelstackhq
+  # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).
+  ci-ok:
+    needs: [docs]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All CI jobs succeeded
+        run: |
+          echo "docs: ${{ needs.docs.result }}"
+          test "${{ needs.docs.result }}" = "success"
