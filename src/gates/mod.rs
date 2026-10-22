@@ -2,6 +2,7 @@
 //! it to the affected packages, runs it with its output on stderr, and reports one JSON object.
 
 pub mod adapters;
+pub mod integrity;
 pub mod packages;
 pub mod profile;
 
@@ -25,7 +26,7 @@ pub struct Request<'a> {
 }
 
 /// Run `git <args>` in `root`; stdout on success.
-fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)

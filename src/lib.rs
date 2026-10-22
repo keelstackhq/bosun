@@ -25,6 +25,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Release(a) => return cli::release::run(dir, a),
         Command::Reap => return cli::reap::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
+        Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
         _ => {}
     }
     let task = seed_task(&cli.command);
@@ -44,7 +45,6 @@ fn seed_task(command: &Command) -> u8 {
         Command::Wait(_) => 10,
         Command::Msg(_) => 10,
         Command::RiskCheck(_) => 13,
-        Command::TestIntegrity(_) => 12,
         Command::ReviewPack(_) => 14,
         Command::Verdict(_) => 14,
         Command::Pr(_) => 15,

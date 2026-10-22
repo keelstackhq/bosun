@@ -19,7 +19,7 @@ pub fn resolve_base(flag: Option<&str>, github_base_ref: Option<&str>) -> String
     }
 }
 
-fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
+pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -41,6 +41,10 @@ fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
 }
 
 pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
+    // Built in, not in the profile: the same code as `bosun test-integrity`.
+    if args.name == "test-integrity" {
+        return crate::cli::test_integrity::check(dir, args.base.as_deref());
+    }
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
     let config = Config::load(&root)?;
