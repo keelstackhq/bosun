@@ -22,6 +22,8 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Join(a) => return cli::join::run(dir, a),
         Command::Claim(a) => return cli::claim::run(dir, a),
         Command::Heartbeat => return cli::heartbeat::run(dir),
+        Command::Release(a) => return cli::release::run(dir, a),
+        Command::Reap => return cli::reap::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
         _ => {}
     }
@@ -37,8 +39,6 @@ pub fn run(cli: Cli) -> CmdResult {
 /// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::Release(_) => 6,
-        Command::Reap => 6,
         Command::Spawn(_) => 9,
         Command::Wave(_) => 9,
         Command::Wait(_) => 10,

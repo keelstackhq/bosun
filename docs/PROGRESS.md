@@ -36,6 +36,7 @@ orchestrator merges.
 - 2026-10-22 · Task 6a · S3b: `src/app.rs` (App, kill switch, main-red, set_state, notes, active issues, end_lease, task meta), `src/core/meta.rs` (task marker and area label), `records::replace_record`, shared test helpers · unit tests pass, total 79/79
 - 2026-10-22 · Task 6b · S3b: `src/registry.rs`, `bosun join` (one registry issue, join record edited in place) and `bosun heartbeat` (leases and join edited in place, no new comment) · tests/cli_join.rs 5/5
 - 2026-10-22 · Task 6c · S3b: `bosun claim` (kill switch, main-red unless mainfix, ready only, idempotent re-claim, touch conflicts and area owner exit 3) · tests/cli_leases.rs claim cases pass
+- 2026-10-22 · Task 6d · S3b: `bosun release` (lease-end, new state) and `bosun reap` (expired leases and members) · tests/cli_leases.rs 10/10, total 95/95 · S3 done: a claim with overlapping touch returns exit 3
 
 ## Blocked
 

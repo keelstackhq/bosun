@@ -113,7 +113,7 @@ Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join
 - [x] 6a: app helpers, `core/meta.rs`.
 - [x] 6b: registry, join, heartbeat.
 - [x] 6c: claim.
-- [ ] 6d: release, reap.
+- [x] 6d: release, reap.
 
 **Files:** `src/cli/{join,claim,heartbeat,release,reap}.rs`, `src/registry.rs`, `tests/cli_leases.rs`.
 
@@ -122,7 +122,7 @@ Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join
 - `heartbeat`: PATCHes every live lease and the join record of this session to `now + TTL`.
 - `release <issue> [--to ready|blocked|review]`: `lease-end` (`released`), state change.
 - `reap`: every expired lease: `lease-end` (`reaped`), state back to `ready` if it was `claimed|building`; expired joins get `leave`. data lists what was reaped.
-- [ ] Tests: claim success; overlapping touch -> exit 3 (S3 Done when); same session re-claim is idempotent; expired lease does not conflict; area owner conflict; halt -> exit 4; main-red -> exit 4 unless mainfix; reap after `BOSUN_NOW` moves 31 min; heartbeat edits in place (comment count unchanged).
+- [x] Tests: claim success; overlapping touch -> exit 3 (S3 Done when); same session re-claim is idempotent; expired lease does not conflict; area owner conflict; halt -> exit 4; main-red -> exit 4 unless mainfix; reap after `BOSUN_NOW` moves 31 min; heartbeat edits in place (comment count unchanged).
 
 **Done when (S3):** a claim with overlapping touch returns exit 3.
 
