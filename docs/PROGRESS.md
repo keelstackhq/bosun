@@ -2,9 +2,16 @@
 
 ## Status
 
-Seed in progress, plan `docs/superpowers/plans/2026-10-22-bosun-seed.md`. Order: docs, then S1,
-S2, S3, S8, then S4-S7, S9, S10. Each task is one PR of at most 400 changed lines; the
-orchestrator merges.
+Seed complete: S1-S10 done, plan `docs/superpowers/plans/2026-10-22-bosun-seed.md` (Tasks 1-19,
+split into PRs of about 400 lines). The whole-branch review of the seed (2026-10-22) found 1
+blocker, 9 majors and 3 minors, tracked as issues #20-#32 (label `review-finding`); fixes A-E
+close all of them. bosun is unreleased (`.bosun/version` = `unreleased`); the gate CI builds
+bosun from each PR's base commit until the first release.
+
+Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
+prompt has children post the record by hand); `wave` and `status` still read the local
+limits; plan import (M2) must give plan tasks `allow = ["skip"]` so their pending UC tests pass
+test-integrity; the merge queue comes with M3.
 
 ## Done
 
@@ -85,27 +92,31 @@ orchestrator merges.
 - 2026-10-22 · Task 10b · S4c done, S4 done: `bosun msg <session> <text> [--issue N]` (one `send_message` in `next`, prefix `From #N:` or `From <session>:`, over 500 characters or empty is exit 2, no GitHub calls) · tests/cli_msg.rs 3/3, total 179/179; S4 Done when met: every spawn check has a refusal test (exit 4, 6, 6, 6, 6, 3)
 - 2026-10-22 · Task 7b · S8: `src/hooks/{mod,pre_tool_use,cache}.rs`, `bosun hook pre-tool-use` (hook protocol on stdout, no envelope; label-lock, merge-lock, edit-lock from a `<git common dir>/bosun/leases.json` cache, fails open) · `cargo nextest run --locked` 160/160
 - 2026-10-22 · Task 7c · S8 done: `src/hooks/session_start.rs`, `bosun hook session-start` (registry join, cache refresh, one-paragraph context: session, origin, own leases, BOSUN_HALT, main-red; a context that says how to fix GitHub access when unreachable) · an Edit on another session's claimed path is denied; `cargo nextest run --locked` 162/162
+- 2026-10-22 · Wrap-up · seed status, Blocked list with exact owner steps, all plan boxes ticked · review findings #20-#32 closed by fixes A-E
 
 ## Blocked
 
-Human-only items. Each has the exact action.
+Human-only items, in order. Each has the exact action.
 
-1. **Repo settings (checklist steps 3 and 5).** After S10 adds `hoist.toml`, run from a checkout
-   of main with an admin token:
-   `hoist plan --area github && hoist apply --area github --yes`. It sets branch protection and
-   the merge queue on `main`, auto-merge, delete-branch-on-merge, and the required checks
-   `ci-ok`, `risk-check`, `review-verdict`, `main-open` (from `[github]` in `hoist.toml`). hoist
-   0.2 has no repo-variable resource (checked in its source on 2026-10-22), so set the kill switch
-   by hand: `gh variable set BOSUN_HALT --body 0 --repo keelstackhq/bosun`. Until S10, require
-   only `ci-ok`.
-2. **Cloud environment setup script (checklist step 6, D23).** Set it in claude.ai/code →
-   environment settings → setup script: paste `docs/setup-script.sh`.
-3. **Routines (checklist step 11).** After S9, `bosun doctor` prints the three prompts: janitor
-   (every 15 min, Haiku), curator (daily, Sonnet), notify (every 15 min, Haiku).
-4. **First publish (D24).** Not part of the seed. When the owner decides on v0.1.0: in a local
-   checkout with npm and crates.io logins, `hoist release bootstrap --dry-run`, then
-   `hoist release bootstrap`; then run the release workflow within 2 days so the npm trusted
-   publishers do not expire.
+1. **Repo settings (checklist steps 3 and 5).** After the S10 PRs merge, from a checkout of main
+   with an admin token: `hoist plan --area github`, then `hoist apply --area github --yes`. It
+   sets auto-merge, delete-branch-on-merge and the required checks `ci-ok`, `risk-check`,
+   `review-verdict` and `main-open` from `hoist.toml` (no merge queue yet, see Status). From
+   then on every PR needs a `review-verdict` status: post it with `bosun verdict post`.
+   hoist 0.2 has no repo-variable resource (checked in its source on 2026-10-22), so set the
+   kill switch by hand: `gh variable set BOSUN_HALT --body 0 --repo keelstackhq/bosun`. The
+   token the sessions use needs "Variables: read": bosun refuses work (exit 4) when it cannot
+   read `BOSUN_HALT`.
+2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
+   settings → setup script: paste `docs/setup-script.sh`.
+3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
+   `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
+   15 min, Haiku). Create them in claude.ai → Routines.
+4. **First publish (D24).** Not part of the seed. When the owner decides on v0.1.0: add
+   `[publish]` to `hoist.toml` and a release workflow (as in hoist and berth), then in a local
+   checkout with npm and crates.io logins run `hoist release bootstrap --dry-run` and
+   `hoist release bootstrap`; run the release workflow within 2 days so the npm trusted
+   publishers do not expire. Then move `.bosun/version` to the release in an R-gov PR.
 5. **Org decision D-006 (D26).** Propose in keelstackhq/decisions: "Agents never merge or tag;
    merges happen via auto-merge after the gates." Agents do not edit that repo.
 6. **Org decisions channel (D-004).** `splice channel add gh:keelstackhq/decisions//channel
