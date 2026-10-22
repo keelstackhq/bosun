@@ -291,6 +291,10 @@ Split into two PRs: **17a** usage providers, `budget record`, prices in `docs/de
 
 - `ci.yml`: job `bosun-bin` builds bosun from the PR's **base** SHA (seed: no release yet, spec §11, Q5) and uploads it; jobs `gate-fmt`, `gate-lint`, `gate-test`, `gate-deps`, `gate-test-integrity` download it and run `bosun gate <name>`; Cargo caches through `keelstackhq/hoard@v0` (D19); `ci-ok` needs every `gate-*` job; jobs `risk-check` and `main-open` run `bosun risk-check` and `bosun gate main-open`; `merge_group` trigger.
 - `main-health.yml`: on push to main and nightly; opens or closes the `bosun:main-red` issue.
+Split into two PRs: **19a** workflows; **19b** `plans/bosun.md`.
+
+- [x] 19a: gate CI, risk, main-open, main-health workflows.
+- [x] 19b: plan file.
 - [ ] CI is green on this PR with the gates run by bosun (S10 Done when).
 
 **Done when (S10):** CI is green on the S10 PR with the gates run by bosun.
