@@ -154,13 +154,13 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 - Profile TOML: `[gates.<name>] cmd = [...]`, `each_package = ["-p", "{package}"]`, `all = ["--workspace"]`, `when_no_package = "skip"`, `budget_secs`; `[adapters] packages = "cargo-metadata"`, `pending = "rust-ignore"`, `assertions = "rust"`. Built-in profiles are embedded with `include_str!`; `.bosun/profiles/<name>.toml` overrides.
 - `gate <name> [--base REF] [--all]`: the stack from `.bosun/bosun.toml` (default `rust` at `.`), the changed files `git diff --name-only <base>...HEAD`, affected packages (cargo-metadata adapter: `cargo metadata --no-deps --format-version 1`, longest manifest-dir prefix; a change to the root `Cargo.toml`, `Cargo.lock` or a non-package path means all), runs the command with stdio to stderr, data `{gate, stack, command, packages, exit_status, secs, over_budget}`; a failing command is exit 1 with fix "fix the failures above, then rerun `bosun gate <name>`".
-- [ ] Tests with a fake `cargo` on `PATH` that records argv: change in one of two packages -> `nextest run -p a` only (S5 Done when); root change -> `--workspace`; no package change -> skipped; failing command -> exit 1.
+- [x] Tests with a fake `cargo` on `PATH` that records argv: change in one of two packages -> `nextest run -p a` only (S5 Done when); root change -> `--workspace`; no package change -> skipped; failing command -> exit 1.
 
 Split into three PRs: **11a** profile, **11b** runner, **11c** packages adapter.
 
 - [x] 11a: `profiles/rust.toml`, profile parsing, repo override, placeholder expansion, unit tests.
 - [x] 11b: runner, base and changed files, `bosun gate`, integration tests without the packages adapter.
-- [ ] 11c: cargo-metadata packages adapter and its tests (the box above).
+- [x] 11c: cargo-metadata packages adapter and its tests (the box above).
 
 **Done when (S5, with Task 12):** `bosun gate test` runs nextest on the affected packages only.
 

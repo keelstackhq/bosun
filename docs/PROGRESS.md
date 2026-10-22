@@ -19,6 +19,7 @@ orchestrator merges.
 - 2026-10-22 · Task 2c · S1b done: `src/ctx.rs` (`Ctx::load`: repo from `BOSUN_REPO` or the origin remote in https/scp/ssh form, session per D31 with `cse_` -> `session_`, origin from `BOSUN_ORIGIN` or `CLAUDE_CODE_CHILD_SESSION`, config from the git top level) · `cargo nextest run --test ctx` 4/4, total 25/25
 - 2026-10-22 · Task 11a · S5a: `profiles/rust.toml`, `src/gates/profile.rs` (embedded profile, `.bosun/profiles/<name>.toml` override, `{files}`/`{diff}`/`{package}` expansion, budgets) · `cargo nextest run --locked` 28/28
 - 2026-10-22 · Task 11b · S5a: `src/gates/mod.rs`, `src/cli/gate.rs` (`bosun gate <name> [--base] [--all]`: stacks from config, base from `--base`/`GITHUB_BASE_REF`/`origin/main`, git diff, command output on stderr, budget flag; works offline; per-package gates use `all` args until 11c) · `cargo nextest run --test cli_gate` 7/7, total 37/37
+- 2026-10-22 · Task 11c · S5a done: `src/gates/packages.rs` (cargo-metadata adapter: longest manifest-dir prefix, workspace inputs mean all, docs ignored, `when_no_package = "skip"`) · `bosun gate test` after a change in `b/` runs `nextest run --locked -p b` only; `cargo nextest run --locked` 44/44
 
 ## Blocked
 
