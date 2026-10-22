@@ -21,14 +21,34 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git diff --check "origin/${{ github.base_ref }}...HEAD"
 
+  rust:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo nextest run --locked --no-fail-fast
+      - run: cargo deny check
+
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).
   ci-ok:
-    needs: [docs]
+    needs: [docs, rust]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
         run: |
-          echo "docs: ${{ needs.docs.result }}"
+          echo "docs: ${{ needs.docs.result }}, rust: ${{ needs.rust.result }}"
           test "${{ needs.docs.result }}" = "success"
+          test "${{ needs.rust.result }}" = "success"

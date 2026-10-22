@@ -1,0 +1,5 @@
+/target
+/.superpowers/
+*.snap.new
+*.pending-snap
+/dist/

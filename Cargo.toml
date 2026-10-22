@@ -1,0 +1,33 @@
+[package]
+name = "keel-bosun"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Orchestration helper for repos where agents write all the code"
+license = "MIT"
+repository = "https://github.com/keelstackhq/bosun"
+readme = "README.md"
+keywords = ["ai-agents", "orchestration", "github", "cli", "developer-tools"]
+categories = ["command-line-utilities", "development-tools"]
+publish = false
+include = ["/src/**", "/profiles/**", "/Cargo.toml", "/Cargo.lock", "/README.md"]
+
+[lib]
+name = "bosun"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bosun"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.6.7", features = ["derive"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+thiserror = "=2.0.21"
+toml = "=1.1.8"
+
+[dev-dependencies]
+assert_cmd = "=2.2.2"
+predicates = "=3.1.4"
+tempfile = "=3.27.0"

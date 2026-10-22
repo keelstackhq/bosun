@@ -41,8 +41,8 @@ Docs (3 PRs) -> T1 -> T2 -> T3 -> T4 -> {T5 -> T6, T7 (S8)} -> {T8 -> T9 -> T10 
 - `cli/mod.rs`: `Cli { dir: Option<PathBuf> /* -C */, json: bool /* no-op */, verbose: bool, command: Command }`; `Command` has every v0.1 command (subcommand groups `wave plan`, `verdict post`, `lesson add|hit`, `hook pre-tool-use|session-start`, `budget record`); `Command::name()`.
 - `lib.rs`: `pub fn run(cli: Cli) -> Result<Outcome, BosunError>`; unimplemented commands return `BosunError::error("<cmd> is not implemented yet", "it lands in seed task <N>; see docs/superpowers/plans/2026-10-22-bosun-seed.md")`.
 
-- [ ] Test first (`cli_basics.rs`): `--help` lists all 22 command names; each command (with minimal valid args) prints exactly one JSON object with all 7 keys; a bad flag exits 2 with `error.kind == "usage"`; `--version` exits 0; envelope unit tests for each `Exit`.
-- [ ] Implement; fast checks; PR.
+- [x] Test first (`cli_basics.rs`): `--help` lists all 22 command names; each command (with minimal valid args) prints exactly one JSON object with all 7 keys; a bad flag exits 2 with `error.kind == "usage"`; `--version` exits 0; envelope unit tests for each `Exit`.
+- [x] Implement; fast checks; PR.
 
 **Done when:** `bosun --help` lists all v0.1 commands and each command returns JSON (S1).
 
