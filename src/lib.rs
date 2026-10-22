@@ -37,7 +37,6 @@ pub fn run(cli: Cli) -> CmdResult {
 /// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::Claim(_) => 6,
         Command::Release(_) => 6,
         Command::Reap => 6,
         Command::Spawn(_) => 9,
