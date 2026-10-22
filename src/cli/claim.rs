@@ -5,7 +5,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::ClaimArgs;
-use crate::app::{App, active_issues, kill_switch, main_red, notes, set_state, task_meta};
+use crate::app::{
+    App, active_issues, kill_switch, main_red, notes, set_state, settle_race, task_meta,
+};
 use crate::core::glob;
 use crate::core::lease::{TTL_SECS, conflicts, leases_of, members};
 use crate::core::meta::area_of;
@@ -83,7 +85,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         .flat_map(|(i, notes)| leases_of(i.number, notes))
         .filter(|l| l.is_live(now))
         .collect();
-    let found = conflicts(&touch, &live, session);
+    let found = conflicts(&touch, &live, session, Some(n));
     if !found.is_empty() {
         let list: Vec<String> = found.iter().map(|c| c.describe()).collect();
         let data: Vec<Value> = found
@@ -135,6 +137,8 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     };
     let body = format!("Claimed by {session}.\n\n{}", record.to_line());
     let comment = gh.add_comment(n, &body)?;
+    let others: Vec<u64> = active.iter().map(|(i, _)| i.number).collect();
+    settle_race(gh, session, n, comment.id, &touch, &others, now)?;
     set_state(gh, n, &issue, State::Claimed)?;
     Ok(Outcome::data(lease_data(
         n, session, &expires, &touch_raw, comment.id,

@@ -24,9 +24,12 @@ pub struct Wave {
     pub waiting: Vec<(u64, String)>,
 }
 
-/// Pick ready tasks whose dependencies are merged, whose touch paths overlap no live lease of
-/// another session and no task already picked, up to `max_parallel`. `merged` lists plan ids
-/// whose tasks merged (tasks of other epics included).
+/// Pick ready tasks whose dependencies are merged, whose touch paths overlap no live lease
+/// (of any issue but their own: wave agents share the orchestrator's session id) and no task
+/// already picked or in flight, up to `max_parallel`. A task of `tasks` that is active (spec
+/// §4) and holds a live lease is in flight: it counts against the cap and its touch paths
+/// block overlapping picks. `merged` lists plan ids whose tasks merged (tasks of other epics
+/// included).
 pub fn plan(
     tasks: &[TaskInfo],
     merged: &[String],
@@ -38,6 +41,13 @@ pub fn plan(
     sorted.sort_by_key(|t| t.issue);
     let mut wave = Wave::default();
     let mut picked: Vec<(u64, Vec<Glob>)> = Vec::new();
+    let mut in_flight: Vec<(u64, Vec<Glob>)> = Vec::new();
+    for t in tasks {
+        if t.state.is_some_and(State::is_active) && leases.iter().any(|l| l.issue == t.issue) {
+            // A bad glob in a task is already caught by its lease; skip it here.
+            in_flight.push((t.issue, glob::parse_all(&t.touch).unwrap_or_default()));
+        }
+    }
     for t in sorted {
         let wait = |why: String| (t.issue, why);
         if t.state != Some(State::Ready) {
@@ -63,7 +73,7 @@ pub fn plan(
                 continue;
             }
         };
-        if let Some(c) = lease::conflicts(&touch, leases, me).first() {
+        if let Some(c) = lease::conflicts(&touch, leases, me, Some(t.issue)).first() {
             wave.waiting.push(wait(c.describe()));
             continue;
         }
@@ -76,7 +86,15 @@ pub fn plan(
             )));
             continue;
         }
-        if picked.len() >= max_parallel {
+        if let Some((other, (a, b))) = in_flight
+            .iter()
+            .find_map(|(n, g)| glob::first_overlap(&touch, g).map(|p| (*n, p)))
+        {
+            wave.waiting
+                .push(wait(format!("`{a}` overlaps `{b}` of #{other} in flight")));
+            continue;
+        }
+        if in_flight.len() + picked.len() >= max_parallel {
             wave.waiting
                 .push(wait(format!("waves.max_parallel is {max_parallel}")));
             continue;
@@ -166,6 +184,35 @@ mod tests {
                 .run
                 .is_empty()
         );
-        assert_eq!(plan(&tasks, &[], &[lease], "other", 6).run, vec![1]);
+        // The same session does not excuse a lease on another issue.
+        assert!(plan(&tasks, &[], &[lease], "other", 6).run.is_empty());
+    }
+
+    #[test]
+    fn in_flight_tasks_count_against_the_cap_and_block_overlap() {
+        let lease = |issue: u64| Lease {
+            issue,
+            session: "me".into(),
+            origin: "local".into(),
+            expires: Timestamp(i64::MAX),
+            touch: vec![],
+            comment_id: issue,
+        };
+        let tasks = [
+            task(1, "A/T1", State::Building, &[], &["a/**"]),
+            task(2, "A/T2", State::Fixing, &[], &["b/**"]),
+            // Active without a live lease (expired): not in flight.
+            task(3, "A/T3", State::Claimed, &[], &["e/**"]),
+            task(4, "A/T4", State::Ready, &[], &["a/x.rs"]),
+            task(5, "A/T5", State::Ready, &[], &["c/**"]),
+            task(6, "A/T6", State::Ready, &[], &["d/**"]),
+        ];
+        let leases = [lease(1), lease(2)];
+        let w = plan(&tasks, &[], &leases, "me", 3);
+        assert_eq!(w.run, vec![5]);
+        let reasons: Vec<&str> = w.waiting.iter().map(|(_, r)| r.as_str()).collect();
+        assert!(reasons.contains(&"waves.max_parallel is 3"), "{reasons:?}");
+        // With a cap of 1 nothing starts while a task is in flight.
+        assert!(plan(&tasks, &[], &leases, "me", 2).run.is_empty());
     }
 }

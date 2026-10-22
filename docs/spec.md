@@ -195,6 +195,17 @@ Conflict avoidance (three layers):
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked.
 
+Leases conflict per issue, not per session: wave agents run inside their orchestrator's session, so a
+lease on another issue conflicts even when it has the same session id; only a lease of the same session
+on the issue being claimed is the same claim (a re-claim is idempotent). Give each wave agent
+`BOSUN_SESSION=<session>/<task>` in its berth workspace; `S/x` conflicts with `S/y`, not with `S/x`.
+`wave plan` counts the epic's active tasks that hold a live lease against `waves.max_parallel` and
+blocks picks that overlap their touch paths. The edit hook keeps the session rule (an agent may edit
+paths its orchestrator `S` leased), a known limit: without per-task ids it cannot tell wave agents apart.
+Claim and spawn re-check after writing: they re-read the comments of the claimed issue and the active
+issues, and when a live overlapping lease has an earlier comment (creation time, then comment id) they
+post `lease-end` with reason `lost-race`, leave the state alone and exit 3 naming the winner.
+
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists
 overlap when a path of one matches a glob of the other, or two globs can match a common path.
 

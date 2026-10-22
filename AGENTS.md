@@ -10,7 +10,8 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 1. `bosun status` — see sessions, leases, halt and main-red.
 2. `bosun claim <issue>` — exit 3 means another session holds an overlapping lease; pick
    another task (`bosun wave plan <epic>`).
-3. Work in your own workspace (`berth up <task>`). Run `bosun heartbeat` at least every
+3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so
+   your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.
 4. Test first. Before every push run the gates you touched: `bosun gate fmt`,
    `bosun gate lint`, `bosun gate test`, `bosun gate deps`, `bosun test-integrity`.

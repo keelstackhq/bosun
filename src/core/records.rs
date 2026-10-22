@@ -106,11 +106,24 @@ pub fn replace_record(body: &str, record: &Record) -> String {
     }
 }
 
-/// A comment as core sees it: id and body, oldest first in any list.
+/// A comment as core sees it: id, body and creation time, oldest first in any list.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     pub id: u64,
     pub body: String,
+    /// When GitHub created the comment; `Timestamp(0)` when unknown.
+    pub created_at: crate::time::Timestamp,
+}
+
+impl Note {
+    /// A note without a known creation time.
+    pub fn new(id: u64, body: impl Into<String>) -> Note {
+        Note {
+            id,
+            body: body.into(),
+            created_at: crate::time::Timestamp(0),
+        }
+    }
 }
 
 /// Sum of the `spend` records in `notes` whose `at` is not before `since` (all when `None`).

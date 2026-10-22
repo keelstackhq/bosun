@@ -135,3 +135,19 @@ fn a_missing_epic_is_exit_1() {
     let (code, v) = run(&fake, "session_test", NOW, &["wave", "plan", "99"]);
     assert_eq!(code, 1, "{v}");
 }
+
+#[test]
+fn own_in_flight_tasks_block_overlapping_picks() {
+    let fake = epic();
+    // Built by a wave agent that shares this session's id.
+    task(&fake, 11, "M1/T1", "building", 10, "", r#""src/a/**""#);
+    fake.comment(
+        11,
+        &lease_note("session_test", "2026-10-22T10:20:00Z", "src/a/**"),
+    );
+    task(&fake, 12, "M1/T2", "ready", 10, "", r#""src/a/x.rs""#);
+    task(&fake, 13, "M1/T3", "ready", 10, "", r#""docs/**""#);
+    let v = plan(&fake);
+    assert_eq!(issues(&v["data"]["run"], "issue"), vec![13]);
+    assert_eq!(issues(&v["data"]["waiting"], "issue"), vec![11, 12]);
+}

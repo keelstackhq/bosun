@@ -3,12 +3,16 @@
 
 use std::path::Path;
 
+use crate::core::glob::Glob;
+use crate::core::lease::race_winner;
 use crate::core::meta::{TaskMeta, parse_task_meta};
 use crate::core::records::{Note, Record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
 use crate::github::{Github, Issue, IssueState, LiveGithub};
 use crate::output::BosunError;
+use crate::time::{Timestamp, parse_rfc3339};
+use serde_json::json;
 
 pub type Result<T> = std::result::Result<T, BosunError>;
 
@@ -78,6 +82,7 @@ pub fn notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
         .map(|c| Note {
             id: c.id,
             body: c.body,
+            created_at: parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0)),
         })
         .collect())
 }
@@ -105,6 +110,38 @@ pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
             Ok((i, n))
         })
         .collect()
+}
+
+/// After posting a lease (comment `comment_id` on `issue`), re-read the comments of `issue` and
+/// of `others` (the active issues that could hold an overlapping lease). When a live lease of
+/// another claim, on `issue` or overlapping `touch`, has an earlier comment, post `lease-end`
+/// (reason `lost-race`) for the new lease and return exit 3 naming the winner (spec §4).
+pub fn settle_race(
+    gh: &dyn Github,
+    session: &str,
+    issue: u64,
+    comment_id: u64,
+    touch: &[Glob],
+    others: &[u64],
+    now: Timestamp,
+) -> Result<()> {
+    let mut fresh = vec![(issue, notes(gh, issue)?)];
+    for &n in others.iter().filter(|&&n| n != issue) {
+        fresh.push((n, notes(gh, n)?));
+    }
+    let Some(w) = race_winner(issue, comment_id, touch, &fresh, now) else {
+        return Ok(());
+    };
+    end_lease(gh, issue, session, "lost-race")?;
+    Err(BosunError::conflict(
+        format!(
+            "lost the claim race for #{issue} to {} (lease on #{} until {})",
+            w.session, w.issue, w.expires
+        ),
+        "the other lease was written first; pick another task with `bosun wave plan`, or wait for it",
+    )
+    .with_data(json!({"winner": {"issue": w.issue, "session": w.session,
+        "expires": w.expires.to_string()}})))
 }
 
 /// Post the `lease-end` record of `session` on an issue.

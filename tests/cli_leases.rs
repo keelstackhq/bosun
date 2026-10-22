@@ -300,3 +300,79 @@ fn reap_ends_expired_leases_and_members() {
     assert_eq!(v["data"]["reaped"], json!([]));
     assert_eq!(v["data"]["left"], json!([]));
 }
+
+/// A comment that GitHub created before the claimer's own, inserted by the fake mid-claim.
+fn rival_lease(s: &mut common::fake::State, issue: u64, session: &str, touch: &str) {
+    s.comments.push(common::fake::FakeComment {
+        id: 50,
+        issue,
+        body: lease_note(session, "2026-10-22T10:30:00Z", touch),
+        user: "octocat".into(),
+        created_at: "2026-10-22T09:59:59Z".into(),
+        updated_at: "2026-10-22T09:59:59Z".into(),
+    });
+}
+
+#[test]
+fn the_same_session_conflicts_across_issues() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/core/**");
+    fake.issue(11, "in flight", &["bosun:state/building"], "");
+    fake.comment(
+        11,
+        &lease_note("session_a", "2026-10-22T10:20:00Z", "src/core/x.rs"),
+    );
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("#11"));
+    // A per-task session id of the same orchestrator conflicts too, and re-claims its own.
+    let (code, _) = run(&fake, "session_a/y", T0, &["claim", "10"]);
+    assert_eq!(code, 3);
+    let (code, v) = run(
+        &fake,
+        "session_a/y",
+        T0,
+        &["claim", "10", "--touch", "docs/**"],
+    );
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = run(&fake, "session_a/y", T0, &["claim", "10"]);
+    assert_eq!(code, 0, "idempotent re-claim: {v}");
+}
+
+#[test]
+fn losing_a_claim_race_on_the_same_issue_ends_the_lease_and_exits_3() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/core/**");
+    // The winner's lease and state land right after the loser's POST.
+    fake.after_requests("/issues/10/comments", 1, |s| {
+        rival_lease(s, 10, "session_w", "src/core/**");
+        s.issues[0].labels = vec!["bosun:state/claimed".into()];
+    });
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("session_w")
+    );
+    let ends: Vec<String> = lease_ends(&fake, 10);
+    assert_eq!(ends.len(), 1);
+    assert!(ends[0].contains(r#""session":"session_a""#) && ends[0].contains("lost-race"));
+    assert_eq!(fake.labels_of(10), vec!["bosun:state/claimed".to_string()]);
+}
+
+#[test]
+fn losing_a_claim_race_against_an_overlapping_task_exits_3() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/core/**");
+    fake.issue(11, "other", &["bosun:state/claimed"], "");
+    fake.after_requests("/issues/11/comments", 1, |s| {
+        rival_lease(s, 11, "session_w", "src/core/lease.rs");
+    });
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("#11"));
+    assert_eq!(lease_ends(&fake, 10).len(), 1);
+    assert!(fake.labels_of(10).contains(&"bosun:state/ready".into()));
+}
