@@ -16,6 +16,7 @@ pub mod release;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
+pub mod status;
 pub mod verdict;
 pub mod wait;
 pub mod wave;
