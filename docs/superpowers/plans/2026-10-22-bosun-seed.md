@@ -65,7 +65,7 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 - `time.rs`: `Timestamp(i64 /* unix secs */)`, `parse_rfc3339`, `Display` as `YYYY-MM-DDTHH:MM:SSZ`, `now()` from `BOSUN_NOW` else system time, `day_start()` (00:00 UTC).
 - `config.rs`: `.bosun/bosun.toml` (`project`, `[[stack]] path/profile`, `[review] mode`, `[slack]`, `[prices]`), `.bosun/limits.toml` (spec §5 defaults when absent, missing keys take defaults), unknown keys are an error naming file and key (exit 1, fix names the key).
 - `ctx.rs`: `Ctx { dir, repo: RepoId {owner, name}, session: String, origin: Origin, now, config, limits }`, `Origin { Spawned, Slack, Local, Routine }` from `BOSUN_ORIGIN` (default `local`, or `spawned` when `CLAUDE_CODE_CHILD_SESSION=1`); repo from `BOSUN_REPO` else `git remote get-url origin` (https, scp, ssh forms); D31 session rules.
-- [ ] Tests: each origin form of the remote URL; `cse_` -> `session_`; limits defaults equal spec §5; unknown key error text; RFC 3339 round trip and `day_start`.
+- [x] Tests: each origin form of the remote URL; `cse_` -> `session_`; limits defaults equal spec §5; unknown key error text; RFC 3339 round trip and `day_start`.
 
 ### Task 3 (S2a): GitHub HTTP client, issues, labels, comments, fake GitHub
 
@@ -104,7 +104,7 @@ Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, 
 - `glob.rs`: `Glob::parse` (`*` within a segment, `**` across, `?`; no braces), `matches(path)`, `fn overlaps(a: &[Glob], b: &[Glob]) -> Option<(String, String)>` (exact pair that overlaps; two globs overlap when some path matches both, decided segment by segment with `**` as a wildcard run).
 - `lease.rs`: `Record` enum for the comment types; `parse_record(body) -> Option<Record>`; `Lease {issue, session, origin, expires, touch, comment_id}`; `fn live_leases(comments_by_issue, now) -> Vec<Lease>` (newest lease per session and issue with no later `lease-end`, not expired); `fn conflicts(touch, &[Lease], me) -> Vec<Conflict>`; `const TTL_SECS = 1800`.
 - `state.rs`: `enum State` (spec §4 list), label names, `fn transition_allowed(from, to)` per the spec table, `fn state_of(labels)`.
-- [ ] Unit tests: glob table (at least 20 cases incl. `src/**` vs `src/a/*.rs`, `a/*/c` vs `a/b/*`, disjoint); lease parsing ignores human text; expired and ended leases are not live; transitions.
+- [x] Unit tests: glob table (at least 20 cases incl. `src/**` vs `src/a/*.rs`, `a/*/c` vs `a/b/*`, disjoint); lease parsing ignores human text; expired and ended leases are not live; transitions.
 
 ### Task 6 (S3b): join, claim, heartbeat, release, reap
 
@@ -142,7 +142,7 @@ Split into three PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** `hook
   - merge-lock (D13): `gh pr merge`, `git merge` into the default branch, `git push --force`/`-f`/`--force-with-lease`, `git tag`, `git push --tags`, `mcp__github__merge_pull_request` -> deny with "merges happen through auto-merge: run `bosun pr --auto-merge`".
 - Lease cache: `<git common dir>/bosun/leases.json` with fetch time; refreshed when older than `BOSUN_LEASE_CACHE_SECS` (default 60). If GitHub is unreachable and the cache is older than the TTL, edit-lock allows and warns on stderr (fail open; label- and merge-lock need no network and always apply).
 - `hook session-start`: runs the join logic, refreshes the cache, prints `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"<session, origin, own leases, halt and main-red state, next step: bosun status>"}}`.
-- [ ] Tests: Edit on a claimed path of another session is denied (S8 Done when); own lease allowed; unrelated path allowed; label edit via Bash and MCP denied; `bosun release …` allowed; each merge-lock form denied; cache reuse (one GitHub read for two hook calls); stale cache with dead GitHub allows with a warning.
+- [x] Tests: Edit on a claimed path of another session is denied (S8 Done when); own lease allowed; unrelated path allowed; label edit via Bash and MCP denied; `bosun release …` allowed; each merge-lock form denied; cache reuse (one GitHub read for two hook calls); stale cache with dead GitHub allows with a warning.
 
 **Done when (S8):** an Edit on a claimed path is blocked.
 
@@ -262,7 +262,7 @@ Split into two PRs: **16a** `src/core/lessons.rs`, `lesson add|hit`; **16b** `st
 
 - `lesson add <text> [--scope GLOB]... [--why W] [--evidence REF]...` writes `docs/lessons.toml` (next free `L-NNN`); at 40 entries or 8 globals -> exit 6 with fix "mechanize, merge or retire a lesson (spec §6)". `lesson hit <id> [--issue N]` increments `hits`, sets `last_hit`, and posts a `lesson-hit` record when `--issue`.
 - `status`: data `{session, origin, halted, main_red, process_red, live_sessions, leases, issues_by_state, spend_today_usd, budget_pct, integrity: "full"|"reduced"}`.
-- [ ] Tests: add, hit, cap at 40, global cap at 8, status with a seeded fake.
+- [x] Tests: add, hit, cap at 40, global cap at 8, status with a seeded fake.
 
 ### Task 17 (S9b): doctor and usage providers
 
@@ -275,7 +275,7 @@ Split into two PRs: **17a** usage providers, `budget record`, prices in `docs/de
 
 - `doctor`: one item per checklist step (spec §11) with `ok` or `missing` and a fix: 1 repo readable; 2 Claude app (a PR or comment by `claude[bot]`/`claude` exists, else missing with the install link); 3 required checks named in `hoist.toml` and in workflows; 4 `governance/owners.toml` has an owner; 5 `BOSUN_HALT` variable exists; 6 setup script file present and the running binary matches `.bosun/version` (or no release yet); 7 `[slack] channel` set; 8 a registry issue exists; 9 auto-merge on in the repo settings; 10 a release exists; 11 the three Routine prompts (printed in data); 12 a `plans/*.md` and an open or merged plan PR. Exit 0 all ok, else exit 5 with the missing steps.
 - `budget record <issue> --provider claude-sessions --from -` reads a `get_session` result and its `usage.cost_usd` (D20); `--provider generic --turns N --model M` estimates from `[prices]`. Posts `spend` records on the task issue and the registry issue.
-- [ ] Tests: every step reported as ok or missing (S9 Done when); both providers; missing `usage.cost_usd` is exit 1 with the fix to use `generic`.
+- [x] Tests: every step reported as ok or missing (S9 Done when); both providers; missing `usage.cost_usd` is exit 1 with the fix to use `generic`.
 
 **Done when (S9):** `bosun doctor` reports each checklist step as ok or missing.
 
@@ -295,6 +295,6 @@ Split into two PRs: **19a** workflows; **19b** `plans/bosun.md`.
 
 - [x] 19a: gate CI, risk, main-open, main-health workflows.
 - [x] 19b: plan file.
-- [ ] CI is green on this PR with the gates run by bosun (S10 Done when).
+- [x] CI is green on the S10 PR with the gates run by bosun (S10 Done when).
 
 **Done when (S10):** CI is green on the S10 PR with the gates run by bosun.
