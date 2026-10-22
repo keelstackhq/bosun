@@ -204,6 +204,7 @@ Only an epic gets a session (an area orchestrator). Leaf tasks run as wave agent
 session, each in its own workspace from `berth up <task>` (D18); `berth gc` removes the workspaces
 of merged tasks. `bosun wave plan <epic>` returns the next set of tasks that can run in parallel:
 no overlapping touch paths, all dependencies merged, at most `waves.max_parallel`.
+A task counts as merged when its state is `merged` or its issue is closed; tasks of other epics count too.
 
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to

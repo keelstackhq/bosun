@@ -164,7 +164,7 @@ Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hoo
 Split into 2 PRs: **9a** spawn and `spawn --record`, **9b** wave plan.
 
 - [x] 9a: `src/cli/spawn.rs`, `registry::write`, `tests/cli_spawn.rs`.
-- [ ] 9b: `src/cli/wave.rs`, `tests/cli_wave.rs`.
+- [x] 9b: `src/cli/wave.rs`, `tests/cli_wave.rs`.
 
 **Done when (S4, with Task 10):** each check has a refusal test with exit 6 (exit 4 and 3 where spec §5 says so).
 
