@@ -24,6 +24,7 @@ orchestrator merges.
 - 2026-10-22 · Task 3a · S2a: GitHub HTTP client (ureq 3 + rustls, retries, Link pagination, token-free errors) and issue/comment/label types · fixture parse tests and `enc`/Link unit tests pass, `cargo deny check` ok
 - 2026-10-22 · Task 3b · S2a: stateful tiny_http fake (issues, labels, comments, variables; 2-per-page Link paging; records requests; fail_next) · tests/github_http.rs 9/9 through Http: 3-page paging, 500 then 200, 3x500, POST not retried, 404/401/403 texts, token canary, headers, 401 without auth
 - 2026-10-22 · Task 3c · S2a: trait for issues, labels, comments and variables, with LiveGithub and its own PatchState for updates · tests/github_issues.rs 5/5: every trait method against the fake, 404 on label removal and 422 on label create tolerated
+- 2026-10-22 · Task 6a · S3b: `src/app.rs` (App, kill switch, main-red, set_state, notes, active issues, end_lease, task meta), `src/core/meta.rs` (task marker and area label), `records::replace_record`, shared test helpers · unit tests pass, total 79/79
 
 ## Blocked
 
