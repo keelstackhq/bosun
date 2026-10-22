@@ -39,6 +39,7 @@ orchestrator merges.
 - 2026-10-22 · Task 9a · S4b: `bosun spawn` (kill switch, the checks 1-6 from registry, spend and lease facts, claims the epic with a touch-less lease, returns one `create_session` with the 3 tags; `[1m]` model is exit 2) and `spawn --record --from -` (child `join`, lease moved to the child) · tests/cli_spawn.rs 12/12, total 165/165, one refusal per check (exit 4, 6, 6, 6, 6, 3), mainfix passes 1-2
 - 2026-10-22 · Task 9b · S4b done: `bosun wave plan <epic>` (tasks of the epic from issue metadata, merged set from closed or merged tasks of any epic, live leases on active issues, `waves.max_parallel`; each run entry has issue, title, plan id, touch and the `berth up <item>-<task>` workspace) · tests/cli_wave.rs 4/4, total 169/169
 - 2026-10-22 · Task 10a · S4c: `bosun wait` (`--pr`, `--issue`, `--child`; snapshot then poll with backoff, base from `BOSUN_WAIT_BASE_MS`, cap 12x base; data changed, polls, before, after; timeout is exit 0; GET requests only) and `FakeGithub::after_requests` · tests/cli_wait.rs 7/7: PR merged after 2 polls gives changed true, polls 3; total 176/176
+- 2026-10-22 · Task 10b · S4c done, S4 done: `bosun msg <session> <text> [--issue N]` (one `send_message` in `next`, prefix `From #N:` or `From <session>:`, over 500 characters or empty is exit 2, no GitHub calls) · tests/cli_msg.rs 3/3, total 179/179; S4 Done when met: every spawn check has a refusal test (exit 4, 6, 6, 6, 6, 3)
 
 ## Blocked
 

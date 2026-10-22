@@ -25,6 +25,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Spawn(a) => return cli::spawn::run(dir, a),
         Command::Wave(a) => return cli::wave::run(dir, a),
         Command::Wait(a) => return cli::wait::run(dir, a),
+        Command::Msg(a) => return cli::msg::run(dir, a),
         Command::Reap => return cli::reap::run(dir),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
