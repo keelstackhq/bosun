@@ -1,0 +1,22 @@
+# cargo deny check: licenses, advisories, bans and sources of every dependency.
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+unused-allowed-license = "allow"
+allow = ["MIT", "Apache-2.0", "Unicode-3.0", "BSD-3-Clause", "ISC", "Zlib", "CDLA-Permissive-2.0", "MPL-2.0"]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# rustls only (spec CLAUDE.md rule): no OpenSSL anywhere in the tree.
+deny = [{ name = "openssl" }, { name = "openssl-sys" }, { name = "native-tls" }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

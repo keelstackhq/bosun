@@ -10,7 +10,8 @@ orchestrator merges.
 
 - 2026-10-22 · Docs 1 · `docs/spec.md` (forge spec renamed to bosun, adjustments A1-A14 as D13-D26, seed design decisions D27-D31) and minimal CI · PR #1
 - 2026-10-22 · Docs 2 · `docs/defaults.md`, `docs/plan-format.md`, CLAUDE.md, README, this file · PR #2
-- 2026-10-22 · Docs 3 · seed plan `docs/superpowers/plans/2026-10-22-bosun-seed.md`: S1-S10 as Tasks 1-19, one PR each
+- 2026-10-22 · Docs 3 · seed plan `docs/superpowers/plans/2026-10-22-bosun-seed.md`: S1-S10 as Tasks 1-19, one PR each · PR #3
+- 2026-10-22 · Task 1a · S1: package `keel-bosun`, envelope and exit codes (`src/output.rs`), `deny.toml` (rustls only), CI job `rust` (fmt, clippy, nextest, deny) under `ci-ok` · crates pinned: clap 4.6.7, serde 1.0.229, serde_json 1.0.154, thiserror 2.0.21, toml 1.1.8, assert_cmd 2.2.2, predicates 3.1.4, tempfile 3.27.0 · `cargo nextest run` 5/5, `cargo deny check` ok
 
 ## Blocked
 
