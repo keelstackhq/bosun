@@ -30,3 +30,4 @@ pub fn one_object(stdout: &[u8]) -> Value {
     assert!(first.is_object(), "not an object: {text}");
     first
 }
+pub mod fake;
