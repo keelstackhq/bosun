@@ -34,6 +34,10 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Hook(h) => return hooks::dispatch(dir, h),
         Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
         Command::Ask(a) => return cli::ask::run(dir, a),
+        Command::Verdict(a) => return cli::verdict::run(dir, a),
+        Command::Pr(a) => return cli::pr::run(dir, a),
+        Command::CiLog(a) => return cli::ci_log::run(dir, a),
+        Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
         _ => {}
     }
     let task = seed_task(&cli.command);

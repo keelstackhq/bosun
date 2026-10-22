@@ -14,6 +14,10 @@ pub mod risk_check;
 pub mod spawn;
 pub mod wait;
 pub mod wave;
+pub mod ci_log;
+pub mod pr;
+pub mod review_pack;
+pub mod verdict;
 use std::path::PathBuf;
 
 pub mod gate;

@@ -7,6 +7,8 @@ pub mod lease;
 pub mod meta;
 pub mod records;
 pub mod risk;
+pub mod review;
 pub mod spawn;
 pub mod state;
+pub mod verdict;
 pub mod wave;

@@ -235,7 +235,9 @@ Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capab
 
 - `review-pack <pr>`: data `{pr, head_sha, base_sha, since_sha, files (with patches), task, ucs, lessons, review_md}`; `since_sha` is the SHA of the last `review-verdict` status, so a second review is a delta (only files changed since; spec §7).
 - `verdict post --from -`: validates the JSON (spec §7 shape); a stale `head_sha` (not the PR head) is exit 3; effective verdict is approve only with `verdict == "approve"`, `confidence >= 0.85` and no `blocker` finding; posts status `review-verdict` (success or failure, description with the confidence and the finding counts); `escalate_risk: true` sets the issue to `needs-human`. State label: approve -> `queued` is not set here (Task 15 does it after auto-merge), request-changes -> `fixing`.
-- [ ] Tests: 0.84 approve does not approve (S7 Done when); 0.85 approves; blocker blocks; stale SHA; delta `since_sha`.
+- Split into 2 PRs: **14a** `core/verdict.rs`, `verdict post`, the `verdict` record; **14b** `review-pack` with delta reviews and `compare_files`.
+- [x] 14a: 0.84 approve does not approve (S7 Done when); 0.85 approves; blocker blocks; stale SHA; escalate_risk.
+- [x] 14b: lessons by scope, REVIEW.md from the base; delta `since_sha`.
 
 **Done when (S7):** a verdict below 0.85 does not approve.
 
@@ -245,7 +247,9 @@ Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capab
 
 - `pr <issue> [--title T] [--auto-merge]`: finds the open PR for the current branch or creates it (body: `Closes #<issue>`, task marker), state `review`. `--auto-merge`: required statuses and checks on the head (`ci-ok`, `risk-check`, `review-verdict`, `main-open`) all success, else exit 1 listing what is missing with fix `bosun wait --pr N`; then `enable_auto_merge` (squash) and state `queued`. bosun never merges (D13).
 - `ci-log <pr> [--tail N]`: failed jobs of the head SHA with the last N (default 80) log lines each.
-- [ ] Tests: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded); ci-log.
+- Split into 2 PRs: **15a** `pr` with `--auto-merge`; **15b** `ci-log`.
+- [x] 15a: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded, no merge call).
+- [x] 15b: ci-log returns the failed job's tail; no failed job is an empty list.
 
 ### Task 16 (S9a): lessons and status
 
