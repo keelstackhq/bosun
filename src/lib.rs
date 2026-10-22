@@ -25,9 +25,6 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Claim(a) => return cli::claim::run(dir, a),
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Release(a) => return cli::release::run(dir, a),
-        Command::Lesson(a) => return cli::lesson::run(dir, a),
-        Command::Budget(a) => return cli::budget::run(dir, a),
-        Command::Status => return cli::status::run(dir),
         Command::Reap => return cli::reap::run(dir),
         Command::Spawn(a) => return cli::spawn::run(dir, a),
         Command::Wave(a) => return cli::wave::run(dir, a),
@@ -44,6 +41,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Ask(a) => return cli::ask::run(dir, a),
         Command::Lesson(a) => return cli::lesson::run(dir, a),
         Command::Hook(a) => return hooks::dispatch(dir, a),
+        Command::Budget(a) => return cli::budget::run(dir, a),
         _ => {}
     }
     let task = seed_task(&cli.command);
@@ -59,7 +57,6 @@ pub fn run(cli: Cli) -> CmdResult {
 fn seed_task(command: &Command) -> u8 {
     match command {
         Command::Doctor => 17,
-        Command::Budget(_) => 17,
         _ => 0,
     }
 }
