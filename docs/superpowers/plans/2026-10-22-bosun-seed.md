@@ -217,7 +217,9 @@ Split into two PRs: **12a** rust adapters; **12b** comparison and command.
 
 - `review-pack <pr>`: data `{pr, head_sha, base_sha, since_sha, files (with patches), task, ucs, lessons, review_md}`; `since_sha` is the SHA of the last `review-verdict` status, so a second review is a delta (only files changed since; spec §7).
 - `verdict post --from -`: validates the JSON (spec §7 shape); a stale `head_sha` (not the PR head) is exit 3; effective verdict is approve only with `verdict == "approve"`, `confidence >= 0.85` and no `blocker` finding; posts status `review-verdict` (success or failure, description with the confidence and the finding counts); `escalate_risk: true` sets the issue to `needs-human`. State label: approve -> `queued` is not set here (Task 15 does it after auto-merge), request-changes -> `fixing`.
-- [ ] Tests: 0.84 approve does not approve (S7 Done when); 0.85 approves; blocker blocks; stale SHA; delta `since_sha`.
+- Split into 2 PRs: **14a** `core/verdict.rs`, `verdict post`, the `verdict` record; **14b** `review-pack` with delta reviews and `compare_files`.
+- [x] 14a: 0.84 approve does not approve (S7 Done when); 0.85 approves; blocker blocks; stale SHA; escalate_risk.
+- [ ] 14b: lessons by scope, REVIEW.md from the base; delta `since_sha`.
 
 **Done when (S7):** a verdict below 0.85 does not approve.
 

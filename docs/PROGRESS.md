@@ -36,6 +36,7 @@ orchestrator merges.
 - 2026-10-22 · Task 11c · S5a done: `src/gates/packages.rs` (cargo-metadata adapter: longest manifest-dir prefix, workspace inputs mean all, docs ignored, `when_no_package = "skip"`) · `bosun gate test` after a change in `b/` runs `nextest run --locked -p b` only; `cargo nextest run --locked` 44/44
 - 2026-10-22 · Task 12a · S5b: `src/gates/adapters.rs` (rust adapters as pure text functions: test files, `#[ignore` markers with UC ids as pending, assertion counts without comments) · `cargo nextest run --locked` 48/48
 - 2026-10-22 · Task 12b · S5b done: `src/gates/integrity.rs`, `src/cli/test_integrity.rs` (`bosun test-integrity` and `bosun gate test-integrity`: deleted-test, new-skip, fewer-asserts, snapshot-change; renames are not deletions; PR body and allow list from `BOSUN_PR_BODY` and `BOSUN_INTEGRITY_ALLOW` until Task 13+) · `cargo nextest run --locked` 61/61
+- 2026-10-22 · Task 14a · S7a: `src/core/verdict.rs` (shape, validation, 0.85 rule), `bosun verdict post` (stale head is exit 3, `review-verdict` status, `verdict` record comment, task to fixing or needs-human) · `cargo nextest run --locked` 164/164
 
 ## Blocked
 

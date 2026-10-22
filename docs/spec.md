@@ -372,6 +372,8 @@ REVIEW.md). The reviewer returns:
 - `bosun verdict post` writes it as the review-verdict check on `head_sha`.
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
+- `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record (statuses are per SHA, so they cannot carry it).
+- `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
 
 Flakes: a test that fails and then passes on the same commit is a flake. bosun opens a kind/flake
