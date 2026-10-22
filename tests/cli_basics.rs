@@ -48,6 +48,9 @@ fn every_command_prints_one_envelope() {
     // An empty directory, not this repo: `gate test` must not run this crate's own tests.
     let empty = tempfile::tempdir().unwrap();
     for call in CALLS {
+        if call[0] == "hook" {
+            continue; // hooks print the Claude Code hook protocol, not an envelope (cli_hook.rs)
+        }
         let out = bosun()
             .current_dir(empty.path())
             .args(call)

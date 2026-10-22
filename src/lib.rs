@@ -8,6 +8,7 @@ pub mod core;
 pub mod ctx;
 pub mod gates;
 pub mod github;
+pub mod hooks;
 pub mod output;
 pub mod registry;
 pub mod time;
@@ -26,6 +27,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Heartbeat => return cli::heartbeat::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
+        Command::Hook(h) => return hooks::dispatch(dir, h),
         _ => {}
     }
     let task = seed_task(&cli.command);
