@@ -56,19 +56,7 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
         expires,
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
-    let record = record_of(&member);
-    let comment_id = match prior {
-        Some(m) => {
-            let body = notes
-                .iter()
-                .find(|n| n.id == m.comment_id)
-                .map_or_else(String::new, |n| n.body.clone());
-            app.gh
-                .update_comment(m.comment_id, &replace_record(&body, &record))?
-                .id
-        }
-        None => app.gh.add_comment(issue, &record.to_line())?.id,
-    };
+    let comment_id = write(app.gh.as_ref(), issue, &notes, prior, &member)?;
     Ok((
         issue,
         Member {
@@ -76,6 +64,28 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             ..member
         },
     ))
+}
+
+/// Post a member's `join` record, or edit `prior` (its existing comment) in place.
+pub fn write(
+    gh: &dyn Github,
+    issue: u64,
+    notes: &[Note],
+    prior: Option<&Member>,
+    member: &Member,
+) -> Result<u64> {
+    let record = record_of(member);
+    Ok(match prior {
+        Some(m) => {
+            let body = notes
+                .iter()
+                .find(|n| n.id == m.comment_id)
+                .map_or_else(String::new, |n| n.body.clone());
+            gh.update_comment(m.comment_id, &replace_record(&body, &record))?
+                .id
+        }
+        None => gh.add_comment(issue, &record.to_line())?.id,
+    })
 }
 
 fn record_of(m: &Member) -> Record {
