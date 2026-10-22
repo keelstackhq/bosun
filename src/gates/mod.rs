@@ -1,6 +1,7 @@
 //! The gate runner (spec §7): `bosun gate <name>` maps a gate to the stack profile's command, narrows
 //! it to the affected packages, runs it with its output on stderr, and reports one JSON object.
 
+pub mod adapters;
 pub mod packages;
 pub mod profile;
 
