@@ -6,7 +6,9 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
-use super::adapters::{assertions, is_test_file, pending_markers};
+use std::collections::BTreeMap;
+
+use super::adapters::{assertions, is_test_file, pending_markers, test_count};
 use super::git;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -16,6 +18,7 @@ pub struct Request<'a> {
     /// The PR body, searched for `snapshot-change: <reason>`.
     pub body: &'a str,
     /// Finding kinds the task allows: `delete-test`, `skip`, `fewer-asserts`.
+    /// `delete-test` also allows `fewer-tests`.
     pub allow: &'a [String],
 }
 
@@ -90,8 +93,14 @@ fn finding(
 }
 
 pub fn run(req: &Request) -> CmdResult {
-    let range = format!("{}...HEAD", req.base);
-    let diff = git(req.root, &["diff", "--name-status", "-M", &range])?;
+    // Compare with the merge base: a branch behind its base must not look like it lost tests.
+    let merge_base = git(req.root, &["merge-base", req.base, "HEAD"])?
+        .trim()
+        .to_string();
+    let diff = git(
+        req.root,
+        &["diff", "--name-status", "-M", &merge_base, "HEAD"],
+    )?;
     let allows = |name: &str| req.allow.iter().any(|a| a == name);
     let mut findings: Vec<Value> = Vec::new();
     let mut files_checked = 0;
@@ -100,7 +109,7 @@ pub fn run(req: &Request) -> CmdResult {
         let old_text = change
             .old
             .as_deref()
-            .and_then(|p| base_text(req.root, req.base, p));
+            .and_then(|p| base_text(req.root, &merge_base, p));
         let new_text = change
             .new
             .as_deref()
@@ -137,15 +146,42 @@ pub fn run(req: &Request) -> CmdResult {
             ));
             continue;
         };
-        let skips = |t: &str| pending_markers(t).iter().filter(|m| m.uc.is_none()).count();
-        let (base_skips, head_skips) = (old_text.as_deref().map_or(0, skips), skips(head));
-        if head_skips > base_skips {
+        // Plain skips are counted; a UC marker in head that base lacks (by id, with
+        // multiplicity) is a skip too. Removing UC markers is fine.
+        let plain = |t: &str| pending_markers(t).iter().filter(|m| m.uc.is_none()).count();
+        let ucs = |t: &str| {
+            let mut m: BTreeMap<String, usize> = BTreeMap::new();
+            for id in pending_markers(t).into_iter().filter_map(|m| m.uc) {
+                *m.entry(id).or_default() += 1;
+            }
+            m
+        };
+        let base_ucs = old_text.as_deref().map(ucs).unwrap_or_default();
+        let new_ucs: usize = ucs(head)
+            .into_iter()
+            .map(|(id, n)| n.saturating_sub(base_ucs.get(&id).copied().unwrap_or(0)))
+            .sum();
+        let base_skips = old_text.as_deref().map_or(0, plain);
+        let head_skips = plain(head);
+        if head_skips > base_skips || new_ucs > 0 {
             let allowed = allows("skip");
             findings.push(finding(
                 "new-skip",
                 file,
                 Some(base_skips),
-                Some(head_skips),
+                Some(head_skips + new_ucs),
+                allowed,
+            ));
+        }
+        let base_tests = old_text.as_deref().map_or(0, test_count);
+        let head_tests = test_count(head);
+        if head_tests < base_tests {
+            let allowed = allows("delete-test");
+            findings.push(finding(
+                "fewer-tests",
+                file,
+                Some(base_tests),
+                Some(head_tests),
                 allowed,
             ));
         }

@@ -43,6 +43,30 @@ pub fn parse_task_meta(body: &str) -> Option<TaskMeta> {
     serde_json::from_str(json.trim()).ok()
 }
 
+/// Every issue a PR body links, in order of appearance and without repeats: `Closes|Fixes|Resolves #N`
+/// (any case, also the past tenses) and the `<!-- bosun:task-pr N -->` marker.
+pub fn linked_issues(body: &str) -> Vec<u64> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)|<!--\s*bosun:task-pr\s+(\d+)\s*-->",
+        )
+        .expect("static regex")
+    });
+    let mut out: Vec<u64> = Vec::new();
+    for c in RE.captures_iter(body) {
+        let n = c
+            .get(1)
+            .or_else(|| c.get(2))
+            .and_then(|m| m.as_str().parse().ok());
+        if let Some(n) = n
+            && !out.contains(&n)
+        {
+            out.push(n);
+        }
+    }
+    out
+}
+
 /// The area named by a `bosun:area/<a>` label.
 pub fn area_of<S: AsRef<str>>(labels: &[S]) -> Option<String> {
     labels
@@ -85,6 +109,14 @@ more"#;
         assert!(parse_task_meta("<!-- bosun:task {oops -->").is_none());
         assert!(parse_task_meta("<!-- bosun:task {} ").is_none());
         assert!(parse_task_meta(r#"<!-- bosun:epic {"item":"M1"} -->"#).is_none());
+    }
+
+    #[test]
+    fn linked_issues_lists_every_link_once() {
+        let body = "Closes #5, and fixes #6.\nRESOLVES #7\nCloses #5\n<!-- bosun:task-pr 9 -->";
+        assert_eq!(linked_issues(body), vec![5, 6, 7, 9]);
+        assert_eq!(linked_issues("<!--bosun:task-pr 3-->"), vec![3]);
+        assert!(linked_issues("prefixes #1, closes # 2, no link").is_empty());
     }
 
     #[test]
