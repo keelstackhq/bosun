@@ -247,7 +247,9 @@ Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capab
 
 - `pr <issue> [--title T] [--auto-merge]`: finds the open PR for the current branch or creates it (body: `Closes #<issue>`, task marker), state `review`. `--auto-merge`: required statuses and checks on the head (`ci-ok`, `risk-check`, `review-verdict`, `main-open`) all success, else exit 1 listing what is missing with fix `bosun wait --pr N`; then `enable_auto_merge` (squash) and state `queued`. bosun never merges (D13).
 - `ci-log <pr> [--tail N]`: failed jobs of the head SHA with the last N (default 80) log lines each.
-- [ ] Tests: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded); ci-log.
+- Split into 2 PRs: **15a** `pr` with `--auto-merge`; **15b** `ci-log`.
+- [x] 15a: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded, no merge call).
+- [ ] 15b: ci-log.
 
 ### Task 16 (S9a): lessons and status
 

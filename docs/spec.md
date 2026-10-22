@@ -380,6 +380,7 @@ REVIEW.md). The reviewer returns:
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record (statuses are per SHA, so they cannot carry it).
+- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses `main`, `master` and a detached HEAD (exit 2).
 - `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
 

@@ -8,6 +8,7 @@ pub mod claim;
 pub mod heartbeat;
 pub mod join;
 pub mod msg;
+pub mod pr;
 pub mod reap;
 pub mod release;
 pub mod review_pack;
