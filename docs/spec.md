@@ -190,6 +190,9 @@ Conflict avoidance (three layers):
    parent of the claiming session does not block it, so spawned workers can claim in their
    orchestrator's area.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
+   The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
+   `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
+   TTL, else it allows with a stderr warning. Paths outside the repo are never blocked.
 
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists
 overlap when a path of one matches a glob of the other, or two globs can match a common path.
