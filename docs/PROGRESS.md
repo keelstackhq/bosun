@@ -21,6 +21,7 @@ orchestrator merges.
 - 2026-10-22 · Task 3b · S2a: stateful tiny_http fake (issues, labels, comments, variables; 2-per-page Link paging; records requests; fail_next) · tests/github_http.rs 9/9 through Http: 3-page paging, 500 then 200, 3x500, POST not retried, 404/401/403 texts, token canary, headers, 401 without auth
 - 2026-10-22 · Task 3c · S2a: trait for issues, labels, comments and variables, with LiveGithub and its own PatchState for updates · tests/github_issues.rs 5/5: every trait method against the fake, 404 on label removal and 422 on label create tolerated
 - 2026-10-22 · Task 4a · S2b: pulls on the `Github` trait (get, list by head and state, files with all pages, create, update body, reviews) with `Pull`, `PrFile`, `Review` types and fake routes · tests/github_pulls.rs 6/6, total 50/50
+- 2026-10-22 · Task 5a · S3a: `src/core/glob.rs` (touch globs: match and overlap, `*` `?` `**`, `dir/`), `src/core/state.rs` (states, labels, transitions), `tests/core_is_pure.rs` · glob table 20 overlap and 13 match cases, total 34/34
 
 ## Blocked
 
