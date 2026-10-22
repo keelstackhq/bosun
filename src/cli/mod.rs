@@ -4,6 +4,8 @@
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+pub mod gate;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bosun",

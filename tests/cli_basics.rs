@@ -45,8 +45,15 @@ fn help_lists_every_command() {
 
 #[test]
 fn every_command_prints_one_envelope() {
+    // An empty directory, not this repo: `gate test` must not run this crate's own tests.
+    let empty = tempfile::tempdir().unwrap();
     for call in CALLS {
-        let out = bosun().args(call).write_stdin("").output().unwrap();
+        let out = bosun()
+            .current_dir(empty.path())
+            .args(call)
+            .write_stdin("")
+            .output()
+            .unwrap();
         let v = one_object(&out.stdout);
         for key in [
             "version",
