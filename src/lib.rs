@@ -27,7 +27,14 @@ fn seed_task(command: &Command) -> u8 {
         | Command::Release(_)
         | Command::Reap => 6,
         Command::Hook(_) => 7,
-        Command::Status => 16,
-        Command::Doctor => 17,
+        Command::Spawn(_) | Command::Wave(_) => 9,
+        Command::Wait(_) | Command::Msg(_) => 10,
+        Command::Gate(_) => 11,
+        Command::TestIntegrity(_) => 12,
+        Command::RiskCheck(_) | Command::Ask(_) => 13,
+        Command::ReviewPack(_) | Command::Verdict(_) => 14,
+        Command::Pr(_) | Command::CiLog(_) => 15,
+        Command::Lesson(_) | Command::Status => 16,
+        Command::Doctor | Command::Budget(_) => 17,
     }
 }

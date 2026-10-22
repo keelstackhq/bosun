@@ -38,6 +38,7 @@ Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny
 
 - [x] 1a: scaffold, envelope with unit tests, deny, CI.
 - [x] 1b: binary, usage envelope, 8 commands, `cli_basics.rs`.
+- [x] 1c: the other 14 commands; S1 Done when holds.
 
 **Files:** `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` (1.97, rustfmt, clippy), `deny.toml`, `.gitignore`, `src/main.rs`, `src/lib.rs`, `src/output.rs`, `src/cli/mod.rs`, `tests/common/mod.rs`, `tests/cli_basics.rs`, `.github/workflows/ci.yml` (job `rust`: fmt, clippy, nextest, deny; `ci-ok` needs `docs` and `rust`).
 
@@ -46,8 +47,8 @@ Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny
 - `cli/mod.rs`: `Cli { dir: Option<PathBuf> /* -C */, json: bool /* no-op */, verbose: bool, command: Command }`; `Command` has every v0.1 command (subcommand groups `wave plan`, `verdict post`, `lesson add|hit`, `hook pre-tool-use|session-start`, `budget record`); `Command::name()`.
 - `lib.rs`: `pub fn run(cli: Cli) -> Result<Outcome, BosunError>`; unimplemented commands return `BosunError::error("<cmd> is not implemented yet", "it lands in seed task <N>; see docs/superpowers/plans/2026-10-22-bosun-seed.md")`.
 
-- [ ] Test first (`cli_basics.rs`): `--help` lists all 22 command names; each command (with minimal valid args) prints exactly one JSON object with all 7 keys; a bad flag exits 2 with `error.kind == "usage"`; `--version` exits 0; envelope unit tests for each `Exit`.
-- [ ] Implement; fast checks; PR.
+- [x] Test first (`cli_basics.rs`): `--help` lists all 22 command names; each command (with minimal valid args) prints exactly one JSON object with all 7 keys; a bad flag exits 2 with `error.kind == "usage"`; `--version` exits 0; envelope unit tests for each `Exit`.
+- [x] Implement; fast checks; PR.
 
 **Done when:** `bosun --help` lists all v0.1 commands and each command returns JSON (S1).
 

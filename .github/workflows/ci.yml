@@ -4,6 +4,8 @@ on:
   # Only PRs into main: stacked PRs run once they target main, so they do not fill the queue.
   pull_request:
     branches: [main]
+    # `edited` covers a stacked PR being retargeted to main.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   merge_group:

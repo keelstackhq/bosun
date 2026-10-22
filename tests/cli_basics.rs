@@ -3,16 +3,31 @@ mod common;
 use common::{TOKEN_CANARY, bosun, one_object};
 
 /// Minimal valid arguments for every command (S1 Done when).
-const CALLS: [&[&str]; 9] = [
+const CALLS: [&[&str]; 24] = [
     &["join"],
     &["claim", "4"],
     &["heartbeat"],
     &["release", "4"],
     &["reap"],
+    &["spawn", "7"],
+    &["wave", "plan", "7"],
+    &["wait", "--pr", "3"],
+    &["msg", "session_x", "hello"],
+    &["gate", "test"],
+    &["risk-check", "3"],
+    &["test-integrity"],
+    &["review-pack", "3"],
+    &["verdict", "post"],
+    &["pr", "4"],
+    &["ci-log", "3"],
     &["status"],
+    &["ask", "4", "why?"],
+    &["lesson", "add", "text"],
+    &["lesson", "hit", "L-001"],
     &["hook", "pre-tool-use"],
     &["hook", "session-start"],
     &["doctor"],
+    &["budget", "record", "4", "--provider", "generic"],
 ];
 
 #[test]
@@ -105,7 +120,7 @@ fn json_flag_is_accepted() {
 
 #[test]
 fn no_command_is_usage_with_envelope() {
-    for args in [&[][..], &["hook"][..]] {
+    for args in [&[][..], &["wave"][..]] {
         let out = bosun().args(args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         let v = one_object(&out.stdout);

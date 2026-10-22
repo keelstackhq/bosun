@@ -39,25 +39,71 @@ pub enum Command {
     Release(ReleaseArgs),
     /// Release expired leases and set their tasks back to ready.
     Reap,
+    /// Run the 7 spawn checks, claim the epic, and return the create_session call.
+    Spawn(SpawnArgs),
+    /// Wave commands.
+    #[command(subcommand)]
+    Wave(WaveCmd),
+    /// Block until a PR, an issue or a child session changes state (polls GitHub).
+    Wait(WaitArgs),
+    /// Return a send_message call to steer another session (at most 500 characters).
+    Msg(MsgArgs),
+    /// Run one gate of the stack's profile (fmt, lint, test, deps, ...).
+    Gate(GateArgs),
+    /// Judge a PR with the risk rules of its base branch.
+    RiskCheck(PrArg),
+    /// Refuse deleted tests, new skips and fewer assertions.
+    TestIntegrity(IntegrityArgs),
+    /// Build the input of a review: diff, task, UCs, lessons, REVIEW.md.
+    ReviewPack(PrArg),
+    /// Verdict commands.
+    #[command(subcommand)]
+    Verdict(VerdictCmd),
+    /// Open or update the PR of a task; --auto-merge after all gates are green.
+    Pr(PrArgs),
+    /// Print the tail of the failed CI jobs of a PR.
+    CiLog(CiLogArgs),
     /// Show sessions, leases, tasks by state, halt, main-red and budget.
     Status,
+    /// Ask the owner a question on an issue (sets needs-human).
+    Ask(AskArgs),
+    /// Lesson commands.
+    #[command(subcommand)]
+    Lesson(LessonCmd),
     /// Claude Code hook entry points.
     #[command(subcommand)]
     Hook(HookCmd),
     /// Report each checklist step as ok or missing.
     Doctor,
+    /// Budget commands.
+    #[command(subcommand)]
+    Budget(BudgetCmd),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 8] = [
+pub const COMMANDS: [&str; 22] = [
     "join",
     "claim",
     "heartbeat",
     "release",
     "reap",
+    "spawn",
+    "wave",
+    "wait",
+    "msg",
+    "gate",
+    "risk-check",
+    "test-integrity",
+    "review-pack",
+    "verdict",
+    "pr",
+    "ci-log",
     "status",
+    "ask",
+    "lesson",
     "hook",
     "doctor",
+    "budget",
 ];
 
 impl Command {
@@ -69,10 +115,25 @@ impl Command {
             Command::Heartbeat => "heartbeat",
             Command::Release(_) => "release",
             Command::Reap => "reap",
+            Command::Spawn(_) => "spawn",
+            Command::Wave(WaveCmd::Plan(_)) => "wave plan",
+            Command::Wait(_) => "wait",
+            Command::Msg(_) => "msg",
+            Command::Gate(_) => "gate",
+            Command::RiskCheck(_) => "risk-check",
+            Command::TestIntegrity(_) => "test-integrity",
+            Command::ReviewPack(_) => "review-pack",
+            Command::Verdict(VerdictCmd::Post(_)) => "verdict post",
+            Command::Pr(_) => "pr",
+            Command::CiLog(_) => "ci-log",
             Command::Status => "status",
+            Command::Ask(_) => "ask",
+            Command::Lesson(LessonCmd::Add(_)) => "lesson add",
+            Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
+            Command::Budget(BudgetCmd::Record(_)) => "budget record",
         }
     }
 }
@@ -111,10 +172,170 @@ pub struct ReleaseArgs {
     pub to: String,
 }
 
+#[derive(Debug, Args)]
+pub struct SpawnArgs {
+    /// The epic issue number.
+    pub epic: u64,
+    /// Model of the new session (never a [1m] model).
+    #[arg(long)]
+    pub model: Option<String>,
+    /// File with the prompt of the new session.
+    #[arg(long)]
+    pub prompt_file: Option<PathBuf>,
+    /// Register the child from the create_session result (with --from -).
+    #[arg(long)]
+    pub record: bool,
+    /// Read a tool result from this file, or `-` for stdin.
+    #[arg(long)]
+    pub from: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WaveCmd {
+    /// The next set of tasks of an epic that can run in parallel.
+    Plan(EpicArg),
+}
+
+#[derive(Debug, Args)]
+pub struct EpicArg {
+    /// The epic issue number.
+    pub epic: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct WaitArgs {
+    #[arg(long, group = "target")]
+    pub pr: Option<u64>,
+    #[arg(long, group = "target")]
+    pub issue: Option<u64>,
+    #[arg(long, group = "target", value_name = "SESSION")]
+    pub child: Option<String>,
+    /// Give up after this many seconds (exit 0, changed: false).
+    #[arg(long, default_value_t = 1800)]
+    pub timeout: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct MsgArgs {
+    pub session: String,
+    pub text: String,
+    /// The issue the message is about.
+    #[arg(long)]
+    pub issue: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct GateArgs {
+    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, main-open, ...
+    pub name: String,
+    /// Base ref for the diff (default: the PR base or origin/main).
+    #[arg(long)]
+    pub base: Option<String>,
+    /// Run on all packages (merge queue).
+    #[arg(long)]
+    pub all: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PrArg {
+    /// The PR number.
+    pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct IntegrityArgs {
+    #[arg(long)]
+    pub base: Option<String>,
+    #[arg(long)]
+    pub pr: Option<u64>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VerdictCmd {
+    /// Post a reviewer verdict as the review-verdict status.
+    Post(FromArg),
+}
+
+#[derive(Debug, Args)]
+pub struct FromArg {
+    /// Read the JSON from this file, or `-` for stdin.
+    #[arg(long, default_value = "-")]
+    pub from: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PrArgs {
+    /// The task issue number.
+    pub issue: u64,
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Turn on auto-merge once every required check is green (bosun never merges).
+    #[arg(long)]
+    pub auto_merge: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct CiLogArgs {
+    pub pr: u64,
+    #[arg(long, default_value_t = 80)]
+    pub tail: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct AskArgs {
+    pub issue: u64,
+    pub question: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LessonCmd {
+    /// Add a lesson to docs/lessons.toml (exit 6 at the cap).
+    Add(LessonAddArgs),
+    /// Record a hit on a lesson.
+    Hit(LessonHitArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LessonAddArgs {
+    pub text: String,
+    #[arg(long = "scope", value_name = "GLOB")]
+    pub scope: Vec<String>,
+    #[arg(long)]
+    pub why: Option<String>,
+    #[arg(long = "evidence", value_name = "REF")]
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct LessonHitArgs {
+    pub id: String,
+    #[arg(long)]
+    pub issue: Option<u64>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum HookCmd {
     /// PreToolUse: edit-lock, label-lock, merge-lock.
     PreToolUse,
     /// SessionStart: join and print the session context.
     SessionStart,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BudgetCmd {
+    /// Record the spend of a task (claude-sessions or generic provider).
+    Record(BudgetRecordArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BudgetRecordArgs {
+    pub issue: u64,
+    #[arg(long, value_parser = ["claude-sessions", "generic"])]
+    pub provider: String,
+    #[arg(long)]
+    pub from: Option<String>,
+    #[arg(long)]
+    pub turns: Option<u64>,
+    #[arg(long)]
+    pub model: Option<String>,
 }
