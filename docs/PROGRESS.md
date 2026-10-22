@@ -19,6 +19,7 @@ orchestrator merges.
 - 2026-10-22 · Task 2c · S1b done: `src/ctx.rs` (`Ctx::load`: repo from `BOSUN_REPO` or the origin remote in https/scp/ssh form, session per D31 with `cse_` -> `session_`, origin from `BOSUN_ORIGIN` or `CLAUDE_CODE_CHILD_SESSION`, config from the git top level) · `cargo nextest run --test ctx` 4/4, total 25/25
 - 2026-10-22 · Task 5a · S3a: `src/core/glob.rs` (touch globs: match and overlap, `*` `?` `**`, `dir/`), `src/core/state.rs` (states, labels, transitions), `tests/core_is_pure.rs` · glob table 20 overlap and 13 match cases, total 34/34
 - 2026-10-22 · Task 5b · S3a done: `src/core/records.rs` (comment records `{"bosun":"<type>"}`: lease, lease-end, join, leave, result, spend, ask, lesson-hit) and `src/core/lease.rs` (live leases, conflicts naming both globs, registry members; a bad glob blocks everything) · total 43/43
+- 2026-10-22 · Task 8 · S4a: `src/core/spawn.rs` (checks 1-6 of spec §5 in order; main-red exit 4, budget/depth/live/children exit 6, conflict exit 3; mainfix skips 1-2) and `src/core/wave.rs` (ready, deps merged, no overlap with live leases or the wave, max_parallel; a reason for every waiting task) · total 51/51
 
 ## Blocked
 
