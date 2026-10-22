@@ -16,6 +16,7 @@ orchestrator merges.
 - 2026-10-22 · Task 1c · S1 done: the other 14 commands (spawn, wave plan, wait, msg, gate, risk-check, test-integrity, review-pack, verdict post, pr, ci-log, ask, lesson add|hit, budget record); `--help` lists all 22 and each of the 24 calls returns one envelope · `cargo nextest run` 12/12
 - 2026-10-22 · Task 2a · S1b: `src/time.rs` (`Timestamp`, RFC 3339 parse with offsets, display, `BOSUN_NOW`, `day_start`) · `cargo nextest run --test time` 3/3, total 17/17
 - 2026-10-22 · Task 2b · S1b: `src/config.rs` (`.bosun/bosun.toml`, `.bosun/limits.toml` with spec §5 defaults, unknown keys are exit 1 naming file, line and key) · `cargo nextest run --test config` 4/4, total 21/21
+- 2026-10-22 · Task 2c · S1b done: `src/ctx.rs` (`Ctx::load`: repo from `BOSUN_REPO` or the origin remote in https/scp/ssh form, session per D31 with `cse_` -> `session_`, origin from `BOSUN_ORIGIN` or `CLAUDE_CODE_CHILD_SESSION`, config from the git top level) · `cargo nextest run --test ctx` 4/4, total 25/25
 
 ## Blocked
 
