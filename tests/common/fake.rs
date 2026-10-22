@@ -114,6 +114,62 @@ impl FakeGithub {
         add_comment(&mut self.state.lock().unwrap(), issue, body)
     }
 
+    /// An open pull request from `head_ref` (head sha `sha<number>`) into `main`.
+    pub fn pull(&self, number: u64, title: &str, head_ref: &str, body: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.pulls
+            .push(pull_json(number, title, head_ref, "main", body));
+    }
+
+    /// Set a top-level field of a pull request (`draft`, `merged`, `state`, `labels`, ...).
+    pub fn pull_set(&self, number: u64, key: &str, value: Value) {
+        let mut s = self.state.lock().unwrap();
+        let p = s.pulls.iter_mut().find(|p| p["number"] == number);
+        p.unwrap_or_else(|| panic!("no pull {number}"))[key] = value;
+    }
+
+    pub fn pull_file(
+        &self,
+        number: u64,
+        filename: &str,
+        status: &str,
+        additions: u64,
+        deletions: u64,
+        patch: Option<&str>,
+    ) {
+        let mut f = json!({"sha": "abc", "filename": filename, "status": status,
+            "additions": additions, "deletions": deletions, "changes": additions + deletions});
+        if let Some(p) = patch {
+            f["patch"] = json!(p);
+        }
+        let mut s = self.state.lock().unwrap();
+        s.files.entry(number).or_default().push(f);
+    }
+
+    /// Set `previous_filename` on the last file added to `number`.
+    pub fn renamed_from(&self, number: u64, previous: &str) {
+        let mut s = self.state.lock().unwrap();
+        let last = s.files.get_mut(&number).unwrap().last_mut().unwrap();
+        last["previous_filename"] = json!(previous);
+    }
+
+    pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
+        let mut s = self.state.lock().unwrap();
+        let list = s.reviews.entry(number).or_default();
+        let id = list.len() + 1;
+        list.push(json!({"id": id, "user": {"login": user}, "state": state,
+            "commit_id": commit_id, "submitted_at": TS}));
+    }
+
+    pub fn pull_body(&self, number: u64) -> String {
+        let s = self.state.lock().unwrap();
+        let p = s.pulls.iter().find(|p| p["number"] == number);
+        p.unwrap_or_else(|| panic!("no pull {number}"))["body"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+
     pub fn variable(&self, name: &str, value: &str) {
         self.state
             .lock()
@@ -198,6 +254,19 @@ fn issue_json(i: &FakeIssue) -> Value {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
     v
+}
+
+fn pull_json(number: u64, title: &str, head_ref: &str, base_ref: &str, body: &str) -> Value {
+    json!({"number": number, "node_id": format!("PR_node{number}"), "title": title,
+        "body": body, "state": "open", "merged": false, "draft": false, "labels": [],
+        "user": {"login": "octocat"},
+        "head": {"sha": format!("sha{number}"), "ref": head_ref, "label": format!("acme:{head_ref}")},
+        "base": {"sha": "base0000", "ref": base_ref}})
+}
+
+fn pull_pos(s: &State, n: &str) -> Option<usize> {
+    let n: u64 = n.parse().ok()?;
+    s.pulls.iter().position(|p| p["number"] == n)
 }
 
 fn comment_json(c: &FakeComment) -> Value {
@@ -427,6 +496,67 @@ fn route(
                 }
                 None => msg(404, "Not Found"),
             }
+        }
+        ("GET", ["pulls"]) => {
+            let state = query.get("state").map(String::as_str).unwrap_or("open");
+            let head = query.get("head").map(String::as_str);
+            let items = s
+                .pulls
+                .iter()
+                .filter(|p| {
+                    (state == "all" || p["state"] == state)
+                        && head.is_none_or(|h| p["head"]["label"] == h)
+                })
+                .map(|p| {
+                    // lists do not carry `merged`
+                    let mut p = p.clone();
+                    p.as_object_mut().unwrap().remove("merged");
+                    p
+                })
+                .collect();
+            page(items, &query, base, path, raw_query)
+        }
+        ("POST", ["pulls"]) => {
+            let number = s
+                .pulls
+                .iter()
+                .filter_map(|p| p["number"].as_u64())
+                .chain(s.issues.iter().map(|i| i.number))
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let head = body["head"].as_str().unwrap_or("");
+            let branch = head.split_once(':').map_or(head, |h| h.1);
+            let p = pull_json(
+                number,
+                body["title"].as_str().unwrap_or(""),
+                branch,
+                body["base"].as_str().unwrap_or("main"),
+                body["body"].as_str().unwrap_or(""),
+            );
+            s.pulls.push(p.clone());
+            (201, p, vec![])
+        }
+        ("GET", ["pulls", n]) => match pull_pos(s, n) {
+            Some(p) => ok(s.pulls[p].clone()),
+            None => msg(404, "Not Found"),
+        },
+        ("PATCH", ["pulls", n]) => match pull_pos(s, n) {
+            Some(p) => {
+                if let Some(b) = body["body"].as_str() {
+                    s.pulls[p]["body"] = json!(b);
+                }
+                ok(s.pulls[p].clone())
+            }
+            None => msg(404, "Not Found"),
+        },
+        ("GET", ["pulls", n, "files"]) => {
+            let items = n.parse().ok().and_then(|n: u64| s.files.get(&n)).cloned();
+            page(items.unwrap_or_default(), &query, base, path, raw_query)
+        }
+        ("GET", ["pulls", n, "reviews"]) => {
+            let items = n.parse().ok().and_then(|n: u64| s.reviews.get(&n)).cloned();
+            page(items.unwrap_or_default(), &query, base, path, raw_query)
         }
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),

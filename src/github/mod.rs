@@ -5,7 +5,7 @@ pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{Comment, Issue, Label};
+pub use types::{Comment, Issue, Label, PrFile, Pull, Review};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -68,6 +68,14 @@ pub trait Github {
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
     /// A repository Actions variable; `None` when it is not set.
     fn variable(&self, name: &str) -> Result<Option<String>>;
+    fn get_pull(&self, number: u64) -> Result<Option<Pull>>;
+    /// Pull requests in `state`; `head` is `owner:branch`.
+    fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>>;
+    /// Every changed file, all pages.
+    fn pull_files(&self, number: u64) -> Result<Vec<PrFile>>;
+    fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
+    fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
+    fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
 }
 
 pub struct LiveGithub {
@@ -215,5 +223,49 @@ impl Github for LiveGithub {
             .http
             .get_json(&path)?
             .and_then(|v| v["value"].as_str().map(str::to_string)))
+    }
+
+    fn get_pull(&self, number: u64) -> Result<Option<Pull>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/pulls/{number}")))?
+        {
+            Some(v) => Ok(Some(self.parse("pull request", v)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>> {
+        let mut path = self.path(&format!("/pulls?state={}&per_page=100", state.as_str()));
+        if let Some(h) = head {
+            path.push_str(&format!("&head={}", enc(h)));
+        }
+        self.parse_all("pull request", self.http.get_all(&path)?)
+    }
+
+    fn pull_files(&self, number: u64) -> Result<Vec<PrFile>> {
+        let path = self.path(&format!("/pulls/{number}/files?per_page=100"));
+        self.parse_all("pull request file", self.http.get_all(&path)?)
+    }
+
+    fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {
+        let v = self.http.send_json(
+            "POST",
+            &self.path("/pulls"),
+            &json!({"title": title, "head": head, "base": base, "body": body}),
+        )?;
+        self.parse("pull request", v)
+    }
+
+    fn update_pull_body(&self, number: u64, body: &str) -> Result<()> {
+        let path = self.path(&format!("/pulls/{number}"));
+        self.http
+            .send_json("PATCH", &path, &json!({"body": body}))?;
+        Ok(())
+    }
+
+    fn list_reviews(&self, number: u64) -> Result<Vec<Review>> {
+        let path = self.path(&format!("/pulls/{number}/reviews?per_page=100"));
+        self.parse_all("review", self.http.get_all(&path)?)
     }
 }
