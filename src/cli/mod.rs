@@ -7,6 +7,8 @@ pub mod heartbeat;
 pub mod join;
 use std::path::PathBuf;
 
+pub mod gate;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "bosun",
