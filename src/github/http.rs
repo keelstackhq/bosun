@@ -109,6 +109,16 @@ impl Http {
 
     /// GET every page of a list, following `Link: rel="next"`.
     pub fn get_all(&self, path: &str) -> Result<Vec<Value>> {
+        self.pages(path, None)
+    }
+
+    /// Like `get_all` for endpoints that wrap each page's array in an object under `key`
+    /// (`check_runs`, `workflow_runs`, `jobs`).
+    pub fn get_all_in(&self, path: &str, key: &str) -> Result<Vec<Value>> {
+        self.pages(path, Some(key))
+    }
+
+    fn pages(&self, path: &str, key: Option<&str>) -> Result<Vec<Value>> {
         let mut items = Vec::new();
         let mut next = Some(path.to_string());
         while let Some(path) = next {
@@ -116,7 +126,12 @@ impl Http {
             if !(200..=299).contains(&r.status) {
                 return Err(self.fail("GET", &path, &r));
             }
-            if let Value::Array(page) = r.json() {
+            let body = r.json();
+            let page = match key {
+                Some(k) => body[k].clone(),
+                None => body,
+            };
+            if let Value::Array(page) = page {
                 items.extend(page);
             }
             next = match &r.link_next {

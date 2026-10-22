@@ -5,7 +5,7 @@ pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{Comment, Issue, Label, PrFile, Pull, Review};
+pub use types::{CheckRun, Comment, Issue, Label, PrFile, Pull, Review, Status};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -76,7 +76,28 @@ pub trait Github {
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
+    /// `state` is `success`, `failure`, `pending` or `error`; the description is cut to 140
+    /// characters.
+    fn create_status(
+        &self,
+        sha: &str,
+        context: &str,
+        state: &str,
+        description: &str,
+        target_url: Option<&str>,
+    ) -> Result<()>;
+    /// The combined status of `sha`: the newest status per context.
+    fn statuses(&self, sha: &str) -> Result<Vec<Status>>;
+    fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>>;
+    /// `method` is `SQUASH`, `MERGE` or `REBASE`; `node_id` is the pull request's.
+    fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()>;
 }
+
+const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
+const MERGE_METHODS: [&str; 3] = ["SQUASH", "MERGE", "REBASE"];
+const AUTO_MERGE: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!) { \
+    enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) \
+    { pullRequest { number } } }";
 
 pub struct LiveGithub {
     http: Http,
@@ -267,5 +288,66 @@ impl Github for LiveGithub {
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>> {
         let path = self.path(&format!("/pulls/{number}/reviews?per_page=100"));
         self.parse_all("review", self.http.get_all(&path)?)
+    }
+
+    fn create_status(
+        &self,
+        sha: &str,
+        context: &str,
+        state: &str,
+        description: &str,
+        target_url: Option<&str>,
+    ) -> Result<()> {
+        if !STATUS_STATES.contains(&state) {
+            return Err(BosunError::error(
+                format!("status state {state:?} is not one GitHub accepts"),
+                "use success, failure, pending or error",
+            ));
+        }
+        let description: String = description.chars().take(140).collect();
+        let mut body = json!({"state": state, "context": context, "description": description});
+        if let Some(u) = target_url {
+            body["target_url"] = json!(u);
+        }
+        let path = self.path(&format!("/statuses/{}", enc(sha)));
+        self.http.send_json("POST", &path, &body)?;
+        Ok(())
+    }
+
+    fn statuses(&self, sha: &str) -> Result<Vec<Status>> {
+        let path = self.path(&format!("/commits/{}/status?per_page=100", enc(sha)));
+        match self.http.get_json(&path)? {
+            Some(v) => self.parse_all(
+                "status",
+                v["statuses"].as_array().cloned().unwrap_or_default(),
+            ),
+            None => Ok(vec![]),
+        }
+    }
+
+    fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>> {
+        let path = self.path(&format!("/commits/{}/check-runs?per_page=100", enc(sha)));
+        self.parse_all("check run", self.http.get_all_in(&path, "check_runs")?)
+    }
+
+    fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()> {
+        if !MERGE_METHODS.contains(&method) {
+            return Err(BosunError::error(
+                format!("merge method {method:?} is not one GitHub accepts"),
+                "use SQUASH, MERGE or REBASE",
+            ));
+        }
+        let body = json!({"query": AUTO_MERGE, "variables": {"id": node_id, "method": method}});
+        let v = self.http.send_json("POST", "/graphql", &body)?;
+        match v["errors"].as_array().and_then(|e| e.first()) {
+            Some(first) => Err(BosunError::error(
+                format!(
+                    "GitHub refused auto-merge: {}",
+                    first["message"].as_str().unwrap_or("unknown GraphQL error")
+                ),
+                "enable 'Allow auto-merge' in the repository settings and require status checks on the base branch",
+            )),
+            None => Ok(()),
+        }
     }
 }
