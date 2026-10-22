@@ -2,6 +2,9 @@
 //! budget record). Each command module returns a `CmdResult`.
 
 use clap::{Args, Parser, Subcommand};
+
+pub mod heartbeat;
+pub mod join;
 use std::path::PathBuf;
 
 pub mod gate;
