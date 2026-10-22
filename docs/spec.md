@@ -52,6 +52,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D29 | Session tools | bosun never calls the claude-code-remote tools itself; a binary cannot. A command that needs a tool call returns it in `next` (tool name and arguments). The session makes the call and passes the result back with `--from -` on stdin. |
 | D30 | Clock and tests | Time comes from `BOSUN_NOW` (RFC 3339) when set; the GitHub base URL from `BOSUN_GITHUB_API`. Tests use a fake GitHub server and never reach a real API. |
 | D31 | Identity | The repo comes from `BOSUN_REPO` (`owner/name`), else the `origin` remote. The session id comes from `BOSUN_SESSION`, else `CLAUDE_CODE_REMOTE_SESSION_ID` with its `cse_` prefix changed to `session_`, else `local-<host>`. The GitHub token comes from `GITHUB_TOKEN` or `GH_TOKEN`, never argv. |
+| D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. |
 
 ### 1.1 Exit codes
 
@@ -398,13 +399,14 @@ Rule evaluation:
   the rules that judge it.
 - A rule only escalates; nothing de-escalates.
 - The bosun version pin (`.bosun/version`) is R-gov.
+- A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
 High-risk PRs:
 - A high PR needs a GitHub review on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
   check.
-- `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). There is no
+- `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
 - A risky task is small: the target is under 100 changed lines.
 
