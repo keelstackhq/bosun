@@ -1,0 +1,203 @@
+//! GitHub as the shared store: the `Github` trait and its live implementation (spec §1, D28).
+
+pub mod http;
+pub mod types;
+
+use http::{Http, enc};
+use serde_json::{Value, json};
+pub use types::{Comment, Issue, Label};
+
+pub use crate::output::BosunError;
+pub type Result<T> = std::result::Result<T, BosunError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueState {
+    Open,
+    Closed,
+    All,
+}
+
+impl IssueState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IssueState::Open => "open",
+            IssueState::Closed => "closed",
+            IssueState::All => "all",
+        }
+    }
+}
+
+/// Fields to change on an issue; `None` leaves a field alone.
+#[derive(Debug, Clone, Default)]
+pub struct IssuePatch {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub state: Option<IssueState>,
+    pub state_reason: Option<String>,
+}
+
+pub trait Github {
+    /// Issues (never pull requests) carrying all of `labels`.
+    fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
+    fn get_issue(&self, number: u64) -> Result<Option<Issue>>;
+    fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
+    fn update_issue(&self, number: u64, patch: IssuePatch) -> Result<Issue>;
+    fn add_labels(&self, number: u64, labels: &[&str]) -> Result<()>;
+    /// A label that is not on the issue is fine.
+    fn remove_label(&self, number: u64, label: &str) -> Result<()>;
+    /// Create the label; one that already exists is fine.
+    fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()>;
+    fn list_comments(&self, number: u64) -> Result<Vec<Comment>>;
+    fn add_comment(&self, number: u64, body: &str) -> Result<Comment>;
+    fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
+    /// A repository Actions variable; `None` when it is not set.
+    fn variable(&self, name: &str) -> Result<Option<String>>;
+}
+
+pub struct LiveGithub {
+    http: Http,
+    owner: String,
+    repo: String,
+}
+
+impl LiveGithub {
+    /// Base URL and token come from the environment (`BOSUN_GITHUB_API`, `GITHUB_TOKEN`).
+    pub fn new(owner: &str, repo: &str) -> Result<Self> {
+        Ok(LiveGithub {
+            http: Http::from_env()?,
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        })
+    }
+
+    /// Explicit settings, for tests.
+    pub fn with(base_url: &str, token: &str, owner: &str, repo: &str, max_sleep_ms: u64) -> Self {
+        LiveGithub {
+            http: Http::new(base_url, token, max_sleep_ms),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        }
+    }
+
+    fn path(&self, rest: &str) -> String {
+        format!("/repos/{}/{}{rest}", enc(&self.owner), enc(&self.repo))
+    }
+
+    fn parse<T: serde::de::DeserializeOwned>(&self, what: &str, v: Value) -> Result<T> {
+        serde_json::from_value(v).map_err(|e| {
+            BosunError::error(
+                format!("GitHub sent an unexpected {what}: {e}"),
+                "retry; if it persists check https://www.githubstatus.com",
+            )
+        })
+    }
+
+    fn parse_all<T: serde::de::DeserializeOwned>(
+        &self,
+        what: &str,
+        v: Vec<Value>,
+    ) -> Result<Vec<T>> {
+        v.into_iter().map(|i| self.parse(what, i)).collect()
+    }
+}
+
+impl Github for LiveGithub {
+    fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>> {
+        let mut path = self.path(&format!("/issues?state={}&per_page=100", state.as_str()));
+        if !labels.is_empty() {
+            let joined = labels.iter().map(|l| enc(l)).collect::<Vec<_>>().join(",");
+            path.push_str(&format!("&labels={joined}"));
+        }
+        let issues: Vec<Issue> = self.parse_all("issue", self.http.get_all(&path)?)?;
+        Ok(issues.into_iter().filter(|i| !i.pull_request).collect())
+    }
+
+    fn get_issue(&self, number: u64) -> Result<Option<Issue>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/issues/{number}")))?
+        {
+            Some(v) => Ok(Some(self.parse("issue", v)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue> {
+        let v = self.http.send_json(
+            "POST",
+            &self.path("/issues"),
+            &json!({"title": title, "body": body, "labels": labels}),
+        )?;
+        self.parse("issue", v)
+    }
+
+    fn update_issue(&self, number: u64, patch: IssuePatch) -> Result<Issue> {
+        let mut body = serde_json::Map::new();
+        if let Some(t) = patch.title {
+            body.insert("title".into(), json!(t));
+        }
+        if let Some(b) = patch.body {
+            body.insert("body".into(), json!(b));
+        }
+        if let Some(s) = patch.state {
+            body.insert("state".into(), json!(s.as_str()));
+        }
+        if let Some(r) = patch.state_reason {
+            body.insert("state_reason".into(), json!(r));
+        }
+        let v = self.http.send_json(
+            "PATCH",
+            &self.path(&format!("/issues/{number}")),
+            &Value::Object(body),
+        )?;
+        self.parse("issue", v)
+    }
+
+    fn add_labels(&self, number: u64, labels: &[&str]) -> Result<()> {
+        let path = self.path(&format!("/issues/{number}/labels"));
+        self.http
+            .send_json("POST", &path, &json!({"labels": labels}))?;
+        Ok(())
+    }
+
+    fn remove_label(&self, number: u64, label: &str) -> Result<()> {
+        let path = self.path(&format!("/issues/{number}/labels/{}", enc(label)));
+        self.http
+            .send_accepting("DELETE", &path, &Value::Null, &[404])?;
+        Ok(())
+    }
+
+    fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()> {
+        let body = json!({"name": name, "color": color, "description": description});
+        self.http
+            .send_accepting("POST", &self.path("/labels"), &body, &[422])?;
+        Ok(())
+    }
+
+    fn list_comments(&self, number: u64) -> Result<Vec<Comment>> {
+        let path = self.path(&format!("/issues/{number}/comments?per_page=100"));
+        self.parse_all("comment", self.http.get_all(&path)?)
+    }
+
+    fn add_comment(&self, number: u64, body: &str) -> Result<Comment> {
+        let path = self.path(&format!("/issues/{number}/comments"));
+        let v = self.http.send_json("POST", &path, &json!({"body": body}))?;
+        self.parse("comment", v)
+    }
+
+    fn update_comment(&self, id: u64, body: &str) -> Result<Comment> {
+        let path = self.path(&format!("/issues/comments/{id}"));
+        let v = self
+            .http
+            .send_json("PATCH", &path, &json!({"body": body}))?;
+        self.parse("comment", v)
+    }
+
+    fn variable(&self, name: &str) -> Result<Option<String>> {
+        let path = self.path(&format!("/actions/variables/{}", enc(name)));
+        Ok(self
+            .http
+            .get_json(&path)?
+            .and_then(|v| v["value"].as_str().map(str::to_string)))
+    }
+}

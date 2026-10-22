@@ -68,7 +68,7 @@ Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny
 - `http.rs`: ureq agent, base from `BOSUN_GITHUB_API` (default `https://api.github.com`), token from `GITHUB_TOKEN`/`GH_TOKEN` (missing -> exit 1, fix "export GITHUB_TOKEN"), `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, pagination through `Link: rel="next"`, retry 3 times on 5xx and secondary rate limits (sleep capped by `BOSUN_HTTP_MAX_SLEEP_MS` in tests), errors carry method, path, status and the API `message`, never headers or the token.
 - `mod.rs`: `trait Github` (issues: `list_issues(labels, state)`, `get_issue`, `create_issue`, `update_issue`, `add_labels`, `remove_label`, `ensure_label`; comments: `list_comments`, `add_comment`, `update_comment`; `variable(name) -> Option<String>`); `LiveGithub` implements it.
 - `fake.rs`: `FakeGithub::start()` serves the routes from in-memory state (`Arc<Mutex<State>>`: issues, labels, comments, pulls, files, statuses, checks, variables, contents by ref, reviews, actions runs), records every request (method, path, body), pages lists at 2 per page so pagination is tested. Seeds: `issue(n, title, labels, body)`, `variable(..)`, … State readable for asserts.
-- [ ] Tests: each trait method against the fake; pagination across 3 pages; 500 then 200 retries; 404 and 401 messages; the token canary is never in an error.
+- [x] Tests: each trait method against the fake; pagination across 3 pages; 500 then 200 retries; 404 and 401 messages; the token canary is never in an error.
 
 ### Task 4 (S2b): PRs, files, statuses, checks, contents, reviews, auto-merge, logs
 
