@@ -355,6 +355,7 @@ test-integrity:
 - Refuses a PR that deletes a test, adds a skip marker, or lowers the assertion count, unless the
   plan says so.
 - A snapshot change needs the line `snapshot-change: <reason>` in the PR body.
+- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker is pending, not a skip.
 - Mutants that survive fail the merge queue.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,

@@ -16,6 +16,9 @@ pub fn run(cli: Cli) -> CmdResult {
     if let Command::Gate(args) = &cli.command {
         return cli::gate::run(cli.dir.as_deref(), args);
     }
+    if let Command::TestIntegrity(args) = &cli.command {
+        return cli::test_integrity::run(cli.dir.as_deref(), args);
+    }
     let task = seed_task(&cli.command);
     Err(BosunError::error(
         format!("`bosun {}` is not implemented yet", cli.command.name()),
