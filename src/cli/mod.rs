@@ -3,21 +3,21 @@
 
 use clap::{Args, Parser, Subcommand};
 
-pub mod ci_log;
 pub mod ask;
+pub mod ci_log;
 pub mod claim;
 pub mod heartbeat;
 pub mod join;
 pub mod lesson;
-pub mod pr;
 pub mod msg;
+pub mod pr;
 pub mod reap;
 pub mod release;
 pub mod status;
 pub mod review_pack;
-pub mod verdict;
 pub mod risk_check;
 pub mod spawn;
+pub mod verdict;
 pub mod wait;
 pub mod wave;
 use std::path::PathBuf;
