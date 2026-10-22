@@ -5,6 +5,7 @@ use common::{lease_note, run};
 use serde_json::json;
 
 const T0: &str = "2026-10-22T10:00:00Z";
+const T31: &str = "2026-10-22T10:31:00Z";
 
 fn task(touch: &str, kind: &str) -> String {
     format!(
@@ -21,6 +22,14 @@ fn ready(fake: &FakeGithub, n: u64, touch: &str) {
         &["bosun:state/ready"],
         &task(&format!("\"{touch}\""), "feature"),
     );
+}
+
+fn lease_ends(fake: &FakeGithub, n: u64) -> Vec<String> {
+    fake.comments_of(n)
+        .into_iter()
+        .filter(|c| c.body.contains(r#""bosun":"lease-end""#))
+        .map(|c| c.body)
+        .collect()
 }
 
 #[test]
@@ -189,4 +198,105 @@ fn claim_refuses_bad_input() {
             .unwrap()
             .contains("#11 is building")
     );
+}
+
+#[test]
+fn release_ends_the_lease_and_moves_the_state() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    ready(&fake, 11, "src/b.rs");
+    run(&fake, "session_a", T0, &["claim", "10"]);
+    run(&fake, "session_a", T0, &["claim", "11"]);
+    let (code, v) = run(&fake, "session_a", T0, &["release", "10"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(lease_ends(&fake, 10).len(), 1);
+    assert!(lease_ends(&fake, 10)[0].contains(r#""reason":"released""#));
+    assert!(fake.labels_of(10).contains(&"bosun:state/ready".into()));
+    assert_eq!(fake.labels_of(10).len(), 1);
+    let (code, _) = run(
+        &fake,
+        "session_a",
+        T0,
+        &["release", "11", "--to", "blocked"],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(fake.labels_of(11), vec!["bosun:state/blocked"]);
+    // the lease is gone, so another session can take the paths and a second release fails
+    let (code, v) = run(&fake, "session_a", T0, &["release", "10"]);
+    assert_eq!(code, 3);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no lease of session_a on #10")
+    );
+    assert_eq!(run(&fake, "session_b", T0, &["claim", "10"]).0, 0);
+}
+
+#[test]
+fn release_is_not_halted() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    run(&fake, "session_a", T0, &["claim", "10"]);
+    fake.variable("BOSUN_HALT", "1");
+    assert_eq!(
+        run(&fake, "session_a", T0, &["release", "10", "--to", "review"]).0,
+        0
+    );
+    assert_eq!(run(&fake, "session_a", T0, &["reap"]).0, 0);
+}
+
+#[test]
+fn reap_ends_expired_leases_and_members() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.issue(12, "live", &["bosun:state/building"], "");
+    fake.comment(
+        12,
+        &lease_note("session_c", "2026-10-22T11:00:00Z", "docs/**"),
+    );
+    fake.issue(13, "late", &["bosun:state/review"], "");
+    fake.comment(
+        13,
+        &lease_note("session_d", "2026-10-22T10:10:00Z", "docs/x"),
+    );
+    run(&fake, "session_a", T0, &["join"]);
+    run(&fake, "session_a", T0, &["claim", "10"]);
+    run(&fake, "session_c", T31, &["join"]);
+
+    let (code, v) = run(&fake, "session_b", T31, &["reap"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["reaped"],
+        json!([{"issue": 10, "session": "session_a"}, {"issue": 13, "session": "session_d"}])
+    );
+    assert_eq!(v["data"]["left"], json!(["session_a"]));
+    assert!(lease_ends(&fake, 10)[0].contains(r#""reason":"reaped""#));
+    assert_eq!(fake.labels_of(10), vec!["bosun:state/ready"]);
+    assert_eq!(
+        fake.labels_of(13),
+        vec!["bosun:state/review"],
+        "review stays"
+    );
+    assert!(lease_ends(&fake, 12).is_empty());
+    let reg = fake
+        .state
+        .lock()
+        .unwrap()
+        .issues
+        .iter()
+        .find(|i| i.title == "bosun registry")
+        .unwrap()
+        .number;
+    let leaves: Vec<_> = fake
+        .comments_of(reg)
+        .into_iter()
+        .filter(|c| c.body.contains(r#""bosun":"leave""#) && c.body.contains("session_a"))
+        .collect();
+    assert_eq!(leaves.len(), 1);
+    assert!(leaves[0].body.contains(r#""reason":"reaped""#));
+    // nothing left to reap
+    let (_, v) = run(&fake, "session_b", T31, &["reap"]);
+    assert_eq!(v["data"]["reaped"], json!([]));
+    assert_eq!(v["data"]["left"], json!([]));
 }
