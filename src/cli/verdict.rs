@@ -57,9 +57,19 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
             format!("review the new head: run `bosun review-pack {n}` again"),
         ));
     }
-    let eff = effective(&verdict);
+    let mut eff = effective(&verdict);
+    if verdict.escalate_risk {
+        // An escalation is for the owner: never a green verdict.
+        eff.approve = false;
+        eff.reasons.push("escalated to the owner".into());
+    }
     let state = if eff.approve { "success" } else { "failure" };
-    gh.create_status(&verdict.head_sha, CONTEXT, state, &verdict.summary(), None)?;
+    let description = if verdict.escalate_risk {
+        format!("escalated to the owner; {}", verdict.summary())
+    } else {
+        verdict.summary()
+    };
+    gh.create_status(&verdict.head_sha, CONTEXT, state, &description, None)?;
     let record = Record::Verdict {
         session: app.ctx.session.clone(),
         head_sha: verdict.head_sha.clone(),

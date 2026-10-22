@@ -7,7 +7,7 @@ use std::process::Command;
 use serde_json::json;
 
 use super::PrArgs;
-use crate::app::{App, kill_switch, set_state};
+use crate::app::{App, default_branch, kill_switch, set_state};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -65,9 +65,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let n = args.issue;
-    if args.auto_merge {
-        kill_switch(gh)?;
-    }
+    kill_switch(gh)?;
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
             format!("issue #{n} does not exist"),
@@ -75,7 +73,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         )
     })?;
     let branch = current_branch(&app.ctx.dir)?;
-    if ["main", "master", "HEAD"].contains(&branch.as_str()) {
+    let base = default_branch(gh)?;
+    if branch == base || ["main", "master", "HEAD"].contains(&branch.as_str()) {
         return Err(BosunError::usage(
             format!("the current branch is {branch}; a PR needs a task branch"),
             "check out your task branch (for example `git switch -c claude/<task>`) and push it",
@@ -88,7 +87,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         None => {
             let title = args.title.clone().unwrap_or_else(|| issue.title.clone());
             let body = format!("Closes #{n}\n\n<!-- bosun:task-pr {n} -->");
-            (gh.create_pull(&title, &branch, "main", &body)?, true)
+            (gh.create_pull(&title, &branch, &base, &body)?, true)
         }
     };
     let mut state = state_of(&issue.labels);
@@ -100,6 +99,13 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         state = Some(State::Review);
     }
     if args.auto_merge {
+        if state != Some(State::Review) {
+            let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
+            return Err(BosunError::conflict(
+                format!("#{n} is {now}; auto-merge needs the task in review"),
+                "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
+            ));
+        }
         let bad = not_green(gh, &pull.head_sha)?;
         if !bad.is_empty() {
             let list: Vec<String> = bad.iter().map(|(c, s)| format!("{c}: {s}")).collect();

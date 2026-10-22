@@ -380,8 +380,8 @@ REVIEW.md). The reviewer returns:
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record (statuses are per SHA, so they cannot carry it).
-- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses `main`, `master` and a detached HEAD (exit 2).
-- `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
+- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses the repo's default branch (from GitHub), `main`, `master` and a detached HEAD (exit 2), opens the PR against the default branch, and `--auto-merge` is refused (exit 3) unless the task is in `review`, before any GraphQL call. `bosun gate` and `test-integrity` take their base from `origin/HEAD` when offline, else `origin/main`; `bosun ask` reads the owners from the default branch.
+- `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; an `escalate_risk` verdict is never green (status `failure`, "escalated to the owner"); approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
 
 Flakes: a test that fails and then passes on the same commit is a flake. bosun opens a kind/flake
@@ -414,7 +414,7 @@ High-risk PRs:
 - A risky task is small: the target is under 100 changed lines.
 
 Kill switch: the repo variable `BOSUN_HALT=1` stops all bosun commands that start or change work
-(exit 4). Only the owner sets it.
+(exit 4), including `bosun pr`. A variable that is not set (404) means not halted; any other read error is exit 4 too (fail closed), with the fix "give the token Variables: read, or set BOSUN_HALT=0". Only the owner sets it.
 
 Audit: `bosun progress --risk` lists the high PRs, who approved them, and the time to approval.
 

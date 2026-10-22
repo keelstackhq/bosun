@@ -107,6 +107,18 @@ fn escalate_risk_needs_human() {
 }
 
 #[test]
+fn an_escalated_approval_is_not_green() {
+    let fake = setup();
+    let (code, v) = post(&fake, &verdict("sha42", "approve", 0.95, &[], true));
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved"], false);
+    let st = fake.statuses_of("sha42");
+    assert_eq!(st[0]["state"], "failure");
+    let d = st[0]["description"].as_str().unwrap();
+    assert!(d.contains("escalated to the owner"), "{d}");
+}
+
+#[test]
 fn invalid_json_is_usage_and_names_the_field() {
     let fake = setup();
     let (code, v) = post(&fake, r#"{"pr":42,"head_sha":"sha42","verdict":"approve"}"#);

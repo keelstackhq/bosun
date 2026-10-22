@@ -2,6 +2,7 @@
 //! state changes and the issues that hold leases.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use crate::core::meta::{TaskMeta, parse_task_meta};
 use crate::core::records::{Note, Record};
@@ -28,8 +29,9 @@ impl App {
     }
 }
 
-/// Exit 4 when the repo variable `BOSUN_HALT` is `1`. A failed read only warns: the switch
-/// must not make bosun unusable when GitHub is slow.
+/// Exit 4 when the repo variable `BOSUN_HALT` is `1`. A variable that is not set (404) means
+/// not halted; any other read error halts too (fail closed): a token without "Variables: read"
+/// must not switch the kill switch off.
 pub fn kill_switch(gh: &dyn Github) -> Result<()> {
     match gh.variable("BOSUN_HALT") {
         Ok(Some(v)) if v.trim() == "1" => Err(BosunError::halted(
@@ -37,11 +39,26 @@ pub fn kill_switch(gh: &dyn Github) -> Result<()> {
             "wait for the owner to set BOSUN_HALT=0",
         )),
         Ok(_) => Ok(()),
-        Err(e) => {
-            eprintln!("bosun: warning: cannot read BOSUN_HALT: {}", e.message);
-            Ok(())
-        }
+        Err(e) => Err(BosunError::halted(
+            format!("cannot read the BOSUN_HALT variable: {}", e.message),
+            "give the token Variables: read, or set BOSUN_HALT=0",
+        )),
     }
+}
+
+/// The repo's default branch from GitHub, looked up once per process.
+pub fn default_branch(gh: &dyn Github) -> Result<String> {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    if let Some(b) = CACHE.get() {
+        return Ok(b.clone());
+    }
+    let info = gh.repo_info()?.ok_or_else(|| {
+        BosunError::error(
+            "cannot read the repository to find its default branch",
+            "give the GitHub token access to the repo",
+        )
+    })?;
+    Ok(CACHE.get_or_init(|| info.default_branch).clone())
 }
 
 /// The number of an open issue labelled `bosun:main-red`.

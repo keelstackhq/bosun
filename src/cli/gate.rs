@@ -19,6 +19,25 @@ pub fn resolve_base(flag: Option<&str>, github_base_ref: Option<&str>) -> String
     }
 }
 
+/// Like `resolve_base`, but without a flag or `GITHUB_BASE_REF` the base is what
+/// `origin/HEAD` points to (offline), else `origin/main`.
+pub fn resolve_base_in(root: &Path, flag: Option<&str>, github_base_ref: Option<&str>) -> String {
+    let nonempty = |s: &&str| !s.trim().is_empty();
+    if flag.filter(nonempty).is_some() || github_base_ref.filter(nonempty).is_some() {
+        return resolve_base(flag, github_base_ref);
+    }
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|b| b.starts_with("origin/") && b.len() > "origin/".len())
+        .unwrap_or_else(|| resolve_base(None, None))
+}
+
 pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
     let out = Command::new("git")
         .arg("-C")
@@ -48,7 +67,8 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
     let config = Config::load(&root)?;
-    let base = resolve_base(
+    let base = resolve_base_in(
+        &root,
         args.base.as_deref(),
         std::env::var("GITHUB_BASE_REF").ok().as_deref(),
     );

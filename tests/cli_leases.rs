@@ -180,6 +180,21 @@ fn halt_and_main_red_stop_claims_except_mainfix() {
 }
 
 #[test]
+fn an_unreadable_kill_switch_fails_closed_and_a_404_means_not_halted() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.fail_next(403, 1);
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 4, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("cannot read the BOSUN_HALT variable"), "{msg}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("Variables: read"), "{fix}");
+    // The variable is not set: the fake answers 404.
+    assert_eq!(run(&fake, "session_a", T0, &["claim", "10"]).0, 0);
+}
+
+#[test]
 fn claim_refuses_bad_input() {
     let fake = FakeGithub::start();
     let (code, _) = run(&fake, "session_a", T0, &["claim", "404", "--touch", "a"]);
