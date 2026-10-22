@@ -4,6 +4,7 @@
 use clap::{Args, Parser, Subcommand};
 
 pub mod ask;
+pub mod budget;
 pub mod ci_log;
 pub mod claim;
 pub mod heartbeat;
