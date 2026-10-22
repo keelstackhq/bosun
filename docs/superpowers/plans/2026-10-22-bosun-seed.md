@@ -105,6 +105,11 @@ Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, 
 
 ### Task 6 (S3b): join, claim, heartbeat, release, reap
 
+Split into two PRs: **6a** registry, join, heartbeat; **6b** claim, release, reap.
+
+- [x] 6a: app helpers, `core/meta.rs`, registry, join, heartbeat.
+- [ ] 6b: claim, release, reap.
+
 **Files:** `src/cli/{join,claim,heartbeat,release,reap}.rs`, `src/registry.rs`, `tests/cli_leases.rs`.
 
 - `join [--origin O] [--area A] [--parent S] [--depth N]`: posts or refreshes this session's `join` record on the registry issue; `leave` on `release --all`.

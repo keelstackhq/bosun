@@ -17,6 +17,8 @@ pub fn bosun() -> Command {
         .env("BOSUN_SESSION", "session_test")
         .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
         .env_remove("BOSUN_HALT")
+        .env_remove("BOSUN_ORIGIN")
+        .env_remove("CLAUDE_CODE_CHILD_SESSION")
         .env_remove("CLAUDE_CODE_REMOTE_SESSION_ID");
     cmd
 }
