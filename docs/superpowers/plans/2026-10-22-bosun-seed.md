@@ -249,7 +249,7 @@ Split into three PRs: **13a** rules and evaluation (`core::risk`, owners, `capab
 - `ci-log <pr> [--tail N]`: failed jobs of the head SHA with the last N (default 80) log lines each.
 - Split into 2 PRs: **15a** `pr` with `--auto-merge`; **15b** `ci-log`.
 - [x] 15a: create vs reuse; auto-merge refused while `review-verdict` is pending; enabled when all are green (GraphQL call recorded, no merge call).
-- [ ] 15b: ci-log.
+- [x] 15b: ci-log returns the failed job's tail; no failed job is an empty list.
 
 ### Task 16 (S9a): lessons and status
 
