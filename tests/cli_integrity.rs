@@ -145,11 +145,76 @@ fn added_ignore_is_refused() {
 }
 
 #[test]
-fn added_uc_ignore_is_pending_not_a_skip() {
+fn added_uc_ignore_is_a_skip_unless_allowed() {
     let r = repo();
     r.edit(
         "tests/t.rs",
         &format!("#[ignore = \"UC-M1-3\"]\n{TWO_ASSERTS}"),
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["new-skip"]);
+    let (code, _) = r.check(&[("BOSUN_INTEGRITY_ALLOW", "skip")]);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn existing_uc_marker_staying_put_is_fine() {
+    let r = repo();
+    r.edit(
+        "tests/u.rs",
+        "// moved\n#[test]\n#[ignore = \"UC-M1-2\"]\nfn u() {\n    assert!(true);\n}\n",
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn dropped_test_attribute_is_refused() {
+    let r = repo();
+    r.edit(
+        "tests/t.rs",
+        "fn t() {\n    assert!(true);\n    assert_eq!(1, 1);\n}\n",
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["fewer-tests"]);
+    let (code, _) = r.check(&[("BOSUN_INTEGRITY_ALLOW", "delete-test")]);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn deleting_a_test_without_asserts_is_refused() {
+    let r = repo();
+    // main gains a second test with no assertions; work starts from there and deletes it.
+    r.edit(
+        "tests/t.rs",
+        &format!("{TWO_ASSERTS}#[test]\nfn smoke() {{\n    run();\n}}\n"),
+    );
+    git(&r.root, &["checkout", "-q", "main"]);
+    git(&r.root, &["merge", "-q", "--ff-only", "work"]);
+    git(&r.root, &["checkout", "-q", "-b", "work2"]);
+    r.edit("tests/t.rs", TWO_ASSERTS);
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["fewer-tests"]);
+}
+
+#[test]
+fn branch_behind_main_gets_no_false_fewer_asserts() {
+    let r = repo();
+    // main moves on: t.rs now has five assertions.
+    git(&r.root, &["checkout", "-q", "main"]);
+    r.put(
+        "tests/t.rs",
+        "#[test]\nfn t() {\n    assert!(true);\n    assert!(true);\n    assert!(true);\n    assert!(true);\n    assert!(true);\n}\n",
+    );
+    r.commit();
+    git(&r.root, &["checkout", "-q", "work"]);
+    // work, cut before that, adds one assertion to its own copy (two -> three).
+    r.edit(
+        "tests/t.rs",
+        "#[test]\nfn t() {\n    assert!(true);\n    assert_eq!(1, 1);\n    assert_ne!(1, 2);\n}\n",
     );
     let (code, v) = r.check(&[]);
     assert_eq!(code, 0, "{v}");
