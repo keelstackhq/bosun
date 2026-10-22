@@ -27,6 +27,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
+      # Bootstrap: a base without this workflow has no `bosun risk-check` yet; the change then
+      # judges itself once, with a warning (the owner reviews that PR: it is R-ci).
+      - name: base has risk-check
+        id: boot
+        run: |
+          if [ -f .github/workflows/risk.yml ]; then
+            echo "self=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "self=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::the base has no risk workflow yet; bosun is built from this change (seed bootstrap)"
+          fi
+      - if: steps.boot.outputs.self == 'true'
+        uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97"
