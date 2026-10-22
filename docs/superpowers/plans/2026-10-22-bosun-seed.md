@@ -37,6 +37,7 @@ Docs (3 PRs) -> T1 -> T2 -> T3 -> T4 -> {T5 -> T6, T7 (S8)} -> {T8 -> T9 -> T10 
 Split into three PRs to stay near 400 lines: **1a** scaffold, `output.rs`, `deny.toml`, CI; **1b** `main.rs`, `lib::run`, the clap skeleton of the S3, S8 and S9 commands, `tests/cli_basics.rs`; **1c** the other commands.
 
 - [x] 1a: scaffold, envelope with unit tests, deny, CI.
+- [x] 1b: binary, usage envelope, 8 commands, `cli_basics.rs`.
 
 **Files:** `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` (1.97, rustfmt, clippy), `deny.toml`, `.gitignore`, `src/main.rs`, `src/lib.rs`, `src/output.rs`, `src/cli/mod.rs`, `tests/common/mod.rs`, `tests/cli_basics.rs`, `.github/workflows/ci.yml` (job `rust`: fmt, clippy, nextest, deny; `ci-ok` needs `docs` and `rust`).
 
