@@ -14,15 +14,19 @@ and acts on the one JSON object it prints. One static Rust binary. Part of the k
 ## Layout
 
 ```
-src/main.rs                parse (usage errors -> 2), run, print one JSON object, exit code
-src/cli/                   clap Cli and one module per command
-src/output.rs              Envelope {version, command, ok, exit_code, data, error, next}; Exit
-src/core/                  pure logic: leases, globs, limits, spawn checks, waves, risk, lessons
-src/github/                ureq client and the Github trait (LiveGithub)
-src/sessions/              next-call requests, get_session results, usage providers
-src/gates/ src/plan/ src/hooks/   per the seed plan
-tests/common/              fake GitHub (tiny_http, stateful), bosun() command builder
-.github/workflows/ci.yml   job ci + ci-ok (the one required check of this repo until S10)
+src/main.rs lib.rs          parse (usage errors -> 2), run, print one JSON object (hooks print the hook protocol)
+src/output.rs               Envelope {version, command, ok, exit_code, data, error, next}; Exit; BosunError
+src/ctx.rs config.rs time.rs   identity (D31), .bosun/*.toml, RFC 3339 and BOSUN_NOW
+src/app.rs registry.rs      App {ctx, gh}; kill switch, main-red, set_state, leases; the registry issue
+src/cli/                    one module per command
+src/core/                   pure logic: glob, state, records, lease, meta, spawn, wave, guard, risk, verdict, review, lessons
+src/github/                 ureq client, Github trait, LiveGithub, base64
+src/gates/                  profiles (profiles/rust.toml), runner, packages adapter, rust adapters, test-integrity
+src/hooks/                  PreToolUse (edit-, label-, merge-lock), SessionStart, lease cache
+src/sessions/               usage providers (claude-sessions, generic)
+tests/common/               fake GitHub (tiny_http, stateful), bosun() command builder
+.bosun/ governance/ .claude/ AGENTS.md REVIEW.md hoist.toml   bosun runs on itself
+.github/workflows/ci.yml    gate-* jobs + ci-ok; risk.yml, main-open.yml, main-health.yml (S10)
 ```
 
 ## Commands

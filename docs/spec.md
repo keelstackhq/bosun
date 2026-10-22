@@ -39,7 +39,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D16 | Init and upgrade (A4) | `bosun init` runs `splice channel add gh:keelstackhq/bosun//channel` (pieces `core`, `rust`, `ts-pnpm`). There is no `bosun upgrade`: the splice update bot (`keelstackhq/splice/action@v1`) keeps the channel fresh. |
 | D17 | Repo settings (A5) | Checklist steps 3 and 5 (branch protection, environments, secrets, variables) are done with `hoist apply`. `bosun doctor --remote` calls `hoist check`. |
 | D18 | Workspaces (A6) | Wave agents get isolated workspaces from `berth up` (worktree, env files, port block, database per agent). `berth gc` cleans up after merge. |
-| D19 | CI cache (A7) | Generated gate workflows cache through `keelstackhq/hoard@v0`. |
+| D19 | CI cache (A7) | Generated gate workflows cache through `keelstackhq/hoard@v0`. hoard is a Turborepo remote cache, so it applies to ts-pnpm stacks; Rust gate jobs (bosun's own CI included) cache with `Swatinem/rust-cache`, as berth and hoist do. |
 | D20 | Usage (A8) | The usage provider `claude-sessions` reads `usage.cost_usd` from the claude-code-remote `get_session` result. It ships in the seed with the `generic` estimate. |
 | D21 | Exit codes (A9) | Exit codes 0-6 as in §1.1; 2 is usage, as in splice and berth. Every error JSON has a `fix` field that says how to fix it. |
 | D22 | Seed shape (A10) | The seed is a sequence of PRs of at most 400 changed lines each, not one seed PR. |
@@ -491,7 +491,7 @@ the gates run the binary built from the PR's base commit (seed only, see the see
 Human checklist (12 steps):
 1. Create the repo.
 2. Install the Claude GitHub App on it.
-3. Run `hoist apply` for branch protection, the merge queue, auto-merge, and the required checks
+3. Run `hoist apply` for branch protection, auto-merge (the merge queue follows in M3: `risk-check` and `review-verdict` are statuses on the PR head, which a queue commit does not carry), and the required checks
    `ci-ok`, `risk-check`, `review-verdict` and `main-open` (D15, D17).
 4. Fill `governance/owners.toml`.
 5. Run `hoist apply` for the environments, secrets and the repo variable `BOSUN_HALT=0` (D17).

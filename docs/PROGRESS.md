@@ -53,6 +53,7 @@ orchestrator merges.
 - 2026-10-22 · Task 16b · S9a done: `src/cli/status.rs` (`bosun status`: halt, main-red, process-red, live sessions, live leases, issues by state, spend today and budget %, integrity full/reduced) + `spend_total` in records · 3 integration tests, `cargo nextest run --locked` 165/165
 - 2026-10-22 · Task 17a · S9b: `src/sessions/usage.rs` (claude-sessions and generic providers, built-in haiku/sonnet/opus prices from the claude-api skill table of 2026-10-06), `bosun budget record` (spend on task and registry, per-task cap blocks the task) · 2 unit + 5 integration tests, `cargo nextest run --locked` 172/172
 - 2026-10-22 · Task 17b · S9b done: `src/cli/doctor.rs` (`bosun doctor`: the 12 checklist steps as ok or missing with fixes, Routine prompts in `data.routines`, exit 5 when any is missing), `repo_info` and `latest_release` on the `Github` trait and the fake · 2 integration tests (empty repo, fully set-up fake plus temp checkout), `cargo nextest run --locked` 174/174 · S9 done
+- 2026-10-22 · Task 18 · S10a: governance files (`.bosun/{bosun,limits,risk}.toml`, `.bosun/version` = unreleased, `governance/owners.toml`, CODEOWNERS for governance and CI paths), `.claude/settings.json` hooks, AGENTS.md, REVIEW.md, `hoist.toml` (four required checks, auto-merge, no merge queue yet), `docs/setup-script.sh` (D23); spec D19 note: hoard is a Turborepo cache, Rust jobs use rust-cache · `tests/governance.rs` 4/4; `bosun doctor` on this checkout: steps 1, 3, 4, 6, 9 ok
 
 ## Blocked
 
@@ -67,7 +68,7 @@ Human-only items. Each has the exact action.
    by hand: `gh variable set BOSUN_HALT --body 0 --repo keelstackhq/bosun`. Until S10, require
    only `ci-ok`.
 2. **Cloud environment setup script (checklist step 6, D23).** Set it in claude.ai/code →
-   environment settings → setup script. The text is in `docs/setup-script.sh` (added by S10).
+   environment settings → setup script: paste `docs/setup-script.sh`.
 3. **Routines (checklist step 11).** After S9, `bosun doctor` prints the three prompts: janitor
    (every 15 min, Haiku), curator (daily, Sonnet), notify (every 15 min, Haiku).
 4. **First publish (D24).** Not part of the seed. When the owner decides on v0.1.0: in a local

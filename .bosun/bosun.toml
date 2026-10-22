@@ -1,0 +1,10 @@
+# bosun runs on itself (spec §3). Unknown keys are an error.
+project = "bosun"
+
+[[stack]]
+path = "."
+profile = "rust"
+
+[review]
+# "subagent" (mode a) until M8 adds the CI review (mode b).
+mode = "subagent"

@@ -283,7 +283,7 @@ Split into two PRs: **17a** usage providers, `budget record`, prices in `docs/de
 
 **Files:** `.bosun/{bosun.toml,limits.toml,risk.toml,version}`, `governance/owners.toml`, `.github/CODEOWNERS`, `.claude/settings.json` (PreToolUse and SessionStart hooks to `bosun hook …`), `AGENTS.md`, `REVIEW.md`, `hoist.toml` (`[github] required_checks`, `merge_queue = true`), `docs/setup-script.sh` (D23).
 
-- [ ] `bosun doctor` on the checkout reports steps 4, 6, 8 as expected; `.claude/settings.json` hook commands run against the fake in a test.
+- [x] `bosun doctor` on the checkout reports steps 4, 6, 8 as expected; `.claude/settings.json` hook commands run against the fake in a test.
 
 ### Task 19 (S10b): gate CI on itself and the plan
 
