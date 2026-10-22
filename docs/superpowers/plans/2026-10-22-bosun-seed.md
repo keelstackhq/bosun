@@ -121,6 +121,10 @@ Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, 
 
 ### Task 7 (S8): hooks: edit-lock, label-lock, merge-lock, session-start
 
+Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hook commands, lease cache and session-start.
+
+- [x] 7a: guard rules.
+
 **Files:** `src/hooks/{mod,pre_tool_use,session_start,cache}.rs`, `tests/cli_hook.rs`, spec §4 note.
 
 - `hook pre-tool-use` reads the Claude Code hook JSON on stdin (`session_id`, `tool_name`, `tool_input`, `cwd`). Deny = stdout `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"<why and fix>"}}`, exit 0; allow = no stdout, exit 0.
