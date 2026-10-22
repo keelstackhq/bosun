@@ -36,8 +36,6 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Verdict(a) => return cli::verdict::run(dir, a),
         Command::Pr(a) => return cli::pr::run(dir, a),
         Command::CiLog(a) => return cli::ci_log::run(dir, a),
-        Command::ReviewPack(a) => return cli::review_pack::run(dir, a),
-        Command::RiskCheck(a) => return cli::risk_check::run(dir, a),
         Command::Ask(a) => return cli::ask::run(dir, a),
         Command::Hook(a) => return hooks::dispatch(dir, a),
         _ => {}
@@ -54,7 +52,6 @@ pub fn run(cli: Cli) -> CmdResult {
 /// The seed plan task that implements a command not dispatched yet.
 fn seed_task(command: &Command) -> u8 {
     match command {
-        Command::CiLog(_) => 15,
         Command::Status => 16,
         Command::Lesson(_) => 16,
         Command::Doctor => 17,
