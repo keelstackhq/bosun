@@ -69,12 +69,16 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 ### Task 3 (S2a): GitHub HTTP client, issues, labels, comments, fake GitHub
 
-**Files:** `src/github/{mod,http,types,live}.rs`, `tests/common/fake.rs`, `tests/github_issues.rs`, `tests/fixtures/github/*.json` (recorded response shapes from the GitHub REST docs, trimmed).
+**Files:** `src/github/{mod,http,types}.rs` (`LiveGithub` lives in `mod.rs`), `tests/common/fake.rs`, `tests/github_issues.rs`, `tests/fixtures/github/*.json` (recorded response shapes from the GitHub REST docs, trimmed).
 
 - `http.rs`: ureq agent, base from `BOSUN_GITHUB_API` (default `https://api.github.com`), token from `GITHUB_TOKEN`/`GH_TOKEN` (missing -> exit 1, fix "export GITHUB_TOKEN"), `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, pagination through `Link: rel="next"`, retry 3 times on 5xx and secondary rate limits (sleep capped by `BOSUN_HTTP_MAX_SLEEP_MS` in tests), errors carry method, path, status and the API `message`, never headers or the token.
 - `mod.rs`: `trait Github` (issues: `list_issues(labels, state)`, `get_issue`, `create_issue`, `update_issue`, `add_labels`, `remove_label`, `ensure_label`; comments: `list_comments`, `add_comment`, `update_comment`; `variable(name) -> Option<String>`); `LiveGithub` implements it.
 - `fake.rs`: `FakeGithub::start()` serves the routes from in-memory state (`Arc<Mutex<State>>`: issues, labels, comments, pulls, files, statuses, checks, variables, contents by ref, reviews, actions runs), records every request (method, path, body), pages lists at 2 per page so pagination is tested. Seeds: `issue(n, title, labels, body)`, `variable(..)`, … State readable for asserts.
-- [ ] Tests: each trait method against the fake; pagination across 3 pages; 500 then 200 retries; 404 and 401 messages; the token canary is never in an error.
+Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github trait.
+
+- [x] 3a: `http.rs` and `types.rs`; fixtures parse; `enc` and Link unit tests.
+- [x] 3b: fake GitHub; through `Http`: pagination across 3 pages, 500 then 200 retries, 3x500 gives up, POST not retried, 404 and 401 messages, documented headers, token canary never in an error.
+- [x] 3c: `Github` trait and `LiveGithub`; each trait method against the fake.
 
 ### Task 4 (S2b): PRs, files, statuses, checks, contents, reviews, auto-merge, logs
 
@@ -87,6 +91,11 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 ### Task 5 (S3a): leases and touch globs (pure)
 
+Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, leases, registry members.
+
+- [x] 5a: globs and states.
+- [x] 5b: records, leases, members.
+
 **Files:** `src/core/{mod,glob,lease,state}.rs`, `tests/core_is_pure.rs`.
 
 - `glob.rs`: `Glob::parse` (`*` within a segment, `**` across, `?`; no braces), `matches(path)`, `fn overlaps(a: &[Glob], b: &[Glob]) -> Option<(String, String)>` (exact pair that overlaps; two globs overlap when some path matches both, decided segment by segment with `**` as a wildcard run).
@@ -96,6 +105,13 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 ### Task 6 (S3b): join, claim, heartbeat, release, reap
 
+Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join, heartbeat; **6c** claim; **6d** release and reap.
+
+- [x] 6a: app helpers, `core/meta.rs`.
+- [x] 6b: registry, join, heartbeat.
+- [x] 6c: claim.
+- [x] 6d: release, reap.
+
 **Files:** `src/cli/{join,claim,heartbeat,release,reap}.rs`, `src/registry.rs`, `tests/cli_leases.rs`.
 
 - `join [--origin O] [--area A] [--parent S] [--depth N]`: posts or refreshes this session's `join` record on the registry issue; `leave` on `release --all`.
@@ -103,11 +119,15 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 - `heartbeat`: PATCHes every live lease and the join record of this session to `now + TTL`.
 - `release <issue> [--to ready|blocked|review]`: `lease-end` (`released`), state change.
 - `reap`: every expired lease: `lease-end` (`reaped`), state back to `ready` if it was `claimed|building`; expired joins get `leave`. data lists what was reaped.
-- [ ] Tests: claim success; overlapping touch -> exit 3 (S3 Done when); same session re-claim is idempotent; expired lease does not conflict; area owner conflict; halt -> exit 4; main-red -> exit 4 unless mainfix; reap after `BOSUN_NOW` moves 31 min; heartbeat edits in place (comment count unchanged).
+- [x] Tests: claim success; overlapping touch -> exit 3 (S3 Done when); same session re-claim is idempotent; expired lease does not conflict; area owner conflict; halt -> exit 4; main-red -> exit 4 unless mainfix; reap after `BOSUN_NOW` moves 31 min; heartbeat edits in place (comment count unchanged).
 
 **Done when (S3):** a claim with overlapping touch returns exit 3.
 
 ### Task 7 (S8): hooks: edit-lock, label-lock, merge-lock, session-start
+
+Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hook commands, lease cache and session-start.
+
+- [x] 7a: guard rules.
 
 **Files:** `src/hooks/{mod,pre_tool_use,session_start,cache}.rs`, `tests/cli_hook.rs`, spec §4 note.
 
@@ -127,7 +147,7 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 - `spawn.rs`: `SpawnInput {main_red, kind, spent_today_usd, daily_usd, parent_depth, max_depth, live_sessions, max_live, children, max_children, conflict: Option<Conflict>}`; `fn check(&SpawnInput) -> Result<(), Refusal {check: u8, name, exit, message, fix}>` in spec §5 order (1 main-red -> exit 4 like claim; 2-5 -> exit 6; 6 -> exit 3). Mainfix skips 1 and 2.
 - `wave.rs`: `fn plan(tasks: &[TaskInfo], leases, max_parallel) -> Wave {run: Vec<u64>, waiting: Vec<(u64, reason)>}`; a task runs when `ready`, all `depends` merged, no overlap with live leases or with tasks already picked; issue number order.
-- [ ] Unit tests: one refusal test per check with its exit code; mainfix exemption; wave with a dependency chain, an overlap pair and the parallel cap.
+- [x] Unit tests: one refusal test per check with its exit code; mainfix exemption; wave with a dependency chain, an overlap pair and the parallel cap.
 
 ### Task 9 (S4b): spawn and wave plan commands
 
