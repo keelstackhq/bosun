@@ -69,23 +69,34 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 ### Task 3 (S2a): GitHub HTTP client, issues, labels, comments, fake GitHub
 
-**Files:** `src/github/{mod,http,types,live}.rs`, `tests/common/fake.rs`, `tests/github_issues.rs`, `tests/fixtures/github/*.json` (recorded response shapes from the GitHub REST docs, trimmed).
+**Files:** `src/github/{mod,http,types}.rs` (`LiveGithub` lives in `mod.rs`), `tests/common/fake.rs`, `tests/github_issues.rs`, `tests/fixtures/github/*.json` (recorded response shapes from the GitHub REST docs, trimmed).
 
 - `http.rs`: ureq agent, base from `BOSUN_GITHUB_API` (default `https://api.github.com`), token from `GITHUB_TOKEN`/`GH_TOKEN` (missing -> exit 1, fix "export GITHUB_TOKEN"), `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, pagination through `Link: rel="next"`, retry 3 times on 5xx and secondary rate limits (sleep capped by `BOSUN_HTTP_MAX_SLEEP_MS` in tests), errors carry method, path, status and the API `message`, never headers or the token.
 - `mod.rs`: `trait Github` (issues: `list_issues(labels, state)`, `get_issue`, `create_issue`, `update_issue`, `add_labels`, `remove_label`, `ensure_label`; comments: `list_comments`, `add_comment`, `update_comment`; `variable(name) -> Option<String>`); `LiveGithub` implements it.
 - `fake.rs`: `FakeGithub::start()` serves the routes from in-memory state (`Arc<Mutex<State>>`: issues, labels, comments, pulls, files, statuses, checks, variables, contents by ref, reviews, actions runs), records every request (method, path, body), pages lists at 2 per page so pagination is tested. Seeds: `issue(n, title, labels, body)`, `variable(..)`, … State readable for asserts.
-- [ ] Tests: each trait method against the fake; pagination across 3 pages; 500 then 200 retries; 404 and 401 messages; the token canary is never in an error.
+Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github trait.
+
+- [x] 3a: `http.rs` and `types.rs`; fixtures parse; `enc` and Link unit tests.
+- [x] 3b: fake GitHub; through `Http`: pagination across 3 pages, 500 then 200 retries, 3x500 gives up, POST not retried, 404 and 401 messages, documented headers, token canary never in an error.
+- [x] 3c: `Github` trait and `LiveGithub`; each trait method against the fake.
 
 ### Task 4 (S2b): PRs, files, statuses, checks, contents, reviews, auto-merge, logs
 
 **Files:** `src/github/{pulls,checks,contents}.rs`, `tests/github_pulls.rs`, fake routes.
 
 - Trait additions: `get_pull(n) -> Pull {number, node_id, head_sha, head_ref, base_sha, base_ref, body, state, merged, draft, labels}`, `list_pulls(head: Option<&str>)`, `pull_files(n) -> Vec<PrFile {filename, status, additions, deletions, patch, previous_filename}>`, `create_pull`, `update_pull_body`, `list_reviews(n)`, `create_status(sha, context, state, description)`, `statuses(sha)` (combined), `check_runs(sha)`, `file_at(path, git_ref) -> Option<String>` (contents API, base64), `enable_auto_merge(node_id, method)` (GraphQL `enablePullRequestAutoMerge`, `POST /graphql`), `failed_jobs(sha)` and `job_log(job_id, tail)` (Actions API).
-- [ ] Tests against the fake for each; GraphQL `errors` array becomes an error with its message.
+- Split into three PRs: **4a** pulls, files, reviews; **4b** statuses, checks, auto-merge; **4c** contents, jobs, logs.
+- [x] 4a: `get_pull`, `list_pulls`, `pull_files`, `create_pull`, `update_pull_body`, `list_reviews` against the fake.
+- [x] 4b: `create_status`, `statuses`, `check_runs`, `enable_auto_merge` (GraphQL `errors` array becomes an error with its message), each against the fake.
+- [x] 4c: `file_at` (base64), `failed_jobs`, `job_log` (the signed log URL is fetched without GitHub headers), each against the fake.
 
 **Done when (S2):** integration tests against the recorded fake pass for labels, issues, comments, PRs and checks.
 
 ### Task 5 (S3a): leases and touch globs (pure)
+
+Split into two PRs: **5a** globs, states, purity guard; **5b** comment records, leases, registry members.
+
+- [x] 5a: globs and states.
 
 **Files:** `src/core/{mod,glob,lease,state}.rs`, `tests/core_is_pure.rs`.
 
