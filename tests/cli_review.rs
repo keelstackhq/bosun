@@ -240,3 +240,13 @@ fn second_pack_after_a_verdict_is_a_delta() {
     assert_eq!(files.len(), 1);
     assert_eq!(files[0]["filename"], "src/b.rs");
 }
+
+#[test]
+fn review_pack_shares_the_lessons_store_format() {
+    let fake = pack_setup();
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    let first = &v["data"]["lessons"][0];
+    assert_eq!(first["added"], "");
+    assert!(first.get("last_hit").is_none(), "{first}");
+}

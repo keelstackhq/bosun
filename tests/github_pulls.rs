@@ -136,3 +136,21 @@ fn list_reviews_reads_every_page() {
     );
     assert!(gh.list_reviews(2).unwrap().is_empty());
 }
+
+#[test]
+fn compare_files_reads_every_page() {
+    let (fake, gh) = setup();
+    for i in 0..130 {
+        fake.compare_file("a1", "b2", &format!("src/f{i:03}.rs"), "@@");
+    }
+    let files = gh.compare_files("a1", "b2").unwrap();
+    assert_eq!(files.len(), 130);
+    assert_eq!(files[129].filename, "src/f129.rs");
+    let pages = fake
+        .requests()
+        .iter()
+        .filter(|r| r.path.contains("/compare/"))
+        .count();
+    assert_eq!(pages, 2);
+    assert!(gh.compare_files("a1", "nope").is_err());
+}
