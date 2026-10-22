@@ -51,19 +51,21 @@ pub fn pending_markers(text: &str) -> Vec<Marker> {
 /// The number of assertion macros: `assert*!`, `debug_assert*!`, `prop_assert*!` (which also
 /// covers `insta::assert_snapshot!` and its siblings). Matches in `//` comments do not count.
 pub fn assertions(text: &str) -> usize {
-    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    // Bytes, not chars: a non-ASCII byte is never part of an identifier, so a slice never ends
+    // inside a multi-byte character (`§`, `é`).
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     let mut count = 0;
     for raw in text.lines() {
         let l = code(raw);
         let bytes = l.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
-            if !is_ident(bytes[i] as char) {
+            if !is_ident(bytes[i]) {
                 i += 1;
                 continue;
             }
             let start = i;
-            while i < bytes.len() && is_ident(bytes[i] as char) {
+            while i < bytes.len() && is_ident(bytes[i]) {
                 i += 1;
             }
             let ident = &l[start..i];
@@ -128,5 +130,12 @@ mod tests {
     fn ignores_comments_and_lookalikes() {
         let text = "// assert!(a);\nlet x = 1; // assert_eq!(a, b)\nmy_assert!(a);\nassert_it(a);\nlet assert = 1;\nassert!(a);\n";
         assert_eq!(assertions(text), 1);
+    }
+
+    #[test]
+    fn assertions_survive_multibyte_text() {
+        // Found by the gate on its own repo: `§` next to an identifier made a slice panic.
+        let text = "// spec §7 says\nlet é§x = 1; assert!(ok, \"§\");\nassert_eq!(a§, b);\n";
+        assert_eq!(assertions(text), 2);
     }
 }
