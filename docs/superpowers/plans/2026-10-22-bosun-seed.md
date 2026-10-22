@@ -69,12 +69,16 @@ Split into three PRs: **2a** `time.rs`, **2b** `config.rs`, **2c** `ctx.rs`.
 
 ### Task 3 (S2a): GitHub HTTP client, issues, labels, comments, fake GitHub
 
-**Files:** `src/github/{mod,http,types,live}.rs`, `tests/common/fake.rs`, `tests/github_issues.rs`, `tests/fixtures/github/*.json` (recorded response shapes from the GitHub REST docs, trimmed).
+**Files:** `src/github/{mod,http,types}.rs` (`LiveGithub` lives in `mod.rs`), `tests/common/fake.rs`, `tests/github_issues.rs`, `tests/fixtures/github/*.json` (recorded response shapes from the GitHub REST docs, trimmed).
 
 - `http.rs`: ureq agent, base from `BOSUN_GITHUB_API` (default `https://api.github.com`), token from `GITHUB_TOKEN`/`GH_TOKEN` (missing -> exit 1, fix "export GITHUB_TOKEN"), `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, pagination through `Link: rel="next"`, retry 3 times on 5xx and secondary rate limits (sleep capped by `BOSUN_HTTP_MAX_SLEEP_MS` in tests), errors carry method, path, status and the API `message`, never headers or the token.
 - `mod.rs`: `trait Github` (issues: `list_issues(labels, state)`, `get_issue`, `create_issue`, `update_issue`, `add_labels`, `remove_label`, `ensure_label`; comments: `list_comments`, `add_comment`, `update_comment`; `variable(name) -> Option<String>`); `LiveGithub` implements it.
 - `fake.rs`: `FakeGithub::start()` serves the routes from in-memory state (`Arc<Mutex<State>>`: issues, labels, comments, pulls, files, statuses, checks, variables, contents by ref, reviews, actions runs), records every request (method, path, body), pages lists at 2 per page so pagination is tested. Seeds: `issue(n, title, labels, body)`, `variable(..)`, … State readable for asserts.
-- [ ] Tests: each trait method against the fake; pagination across 3 pages; 500 then 200 retries; 404 and 401 messages; the token canary is never in an error.
+Split into three PRs: **3a** http and types, **3b** fake GitHub, **3c** Github trait.
+
+- [x] 3a: `http.rs` and `types.rs`; fixtures parse; `enc` and Link unit tests.
+- [x] 3b: fake GitHub; through `Http`: pagination across 3 pages, 500 then 200 retries, 3x500 gives up, POST not retried, 404 and 401 messages, documented headers, token canary never in an error.
+- [x] 3c: `Github` trait and `LiveGithub`; each trait method against the fake.
 
 ### Task 4 (S2b): PRs, files, statuses, checks, contents, reviews, auto-merge, logs
 
