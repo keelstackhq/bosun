@@ -128,9 +128,11 @@ Split into four PRs: **6a** app helpers and task metadata; **6b** registry, join
 
 ### Task 7 (S8): hooks: edit-lock, label-lock, merge-lock, session-start
 
-Split into two PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** the hook commands, lease cache and session-start.
+Split into three PRs: **7a** the pure rules in `src/core/guard.rs`; **7b** `hook pre-tool-use` with the lease cache; **7c** `hook session-start`.
 
 - [x] 7a: guard rules.
+- [x] 7b: pre-tool-use hook and lease cache.
+- [ ] 7c: session-start hook.
 
 **Files:** `src/hooks/{mod,pre_tool_use,session_start,cache}.rs`, `tests/cli_hook.rs`, spec §4 note.
 

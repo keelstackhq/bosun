@@ -8,6 +8,7 @@ pub mod core;
 pub mod ctx;
 pub mod gates;
 pub mod github;
+pub mod hooks;
 pub mod output;
 pub mod registry;
 pub mod time;
@@ -26,6 +27,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Reap => return cli::reap::run(dir),
         Command::Gate(a) => return cli::gate::run(dir, a),
         Command::TestIntegrity(a) => return cli::test_integrity::run(dir, a),
+        Command::Hook(a) => return hooks::dispatch(dir, a),
         _ => {}
     }
     let task = seed_task(&cli.command);
@@ -52,7 +54,6 @@ fn seed_task(command: &Command) -> u8 {
         Command::Status => 16,
         Command::Ask(_) => 13,
         Command::Lesson(_) => 16,
-        Command::Hook(_) => 7,
         Command::Doctor => 17,
         Command::Budget(_) => 17,
         _ => 0,
