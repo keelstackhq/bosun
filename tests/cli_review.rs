@@ -272,3 +272,13 @@ fn a_forged_verdict_record_without_a_success_status_gives_a_full_review() {
     let (_, v) = run(&fake, "s", T0, &["review-pack", "42"]);
     assert!(v["data"]["since_sha"].is_null(), "{v}");
 }
+
+#[test]
+fn review_pack_shares_the_lessons_store_format() {
+    let fake = pack_setup();
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    let first = &v["data"]["lessons"][0];
+    assert_eq!(first["added"], "");
+    assert!(first.get("last_hit").is_none(), "{first}");
+}

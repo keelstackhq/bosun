@@ -19,6 +19,8 @@ pub struct Lesson {
     pub scope: Vec<String>,
     #[serde(default)]
     pub evidence: Vec<String>,
+    /// Hand-written entries may omit it.
+    #[serde(default)]
     pub added: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_hit: Option<String>,
@@ -42,6 +44,14 @@ pub struct CapError {
 impl Store {
     pub fn global_count(&self) -> usize {
         self.lesson.iter().filter(|l| l.scope.is_empty()).count()
+    }
+}
+
+/// The store of a `lessons.toml` text; no text means no lessons.
+pub fn parse(text: Option<&str>) -> Result<Store, String> {
+    match text {
+        None => Ok(Store::default()),
+        Some(t) => toml::from_str(t).map_err(|e| format!("docs/lessons.toml is not valid: {e}")),
     }
 }
 
@@ -125,6 +135,14 @@ mod tests {
             vec![],
             "2026-10-22",
         )
+    }
+
+    #[test]
+    fn hand_written_entries_without_added_load() {
+        let s = parse(Some("[[lesson]]\nid = \"L-001\"\nrule = \"r\"\n")).unwrap();
+        assert_eq!(s.lesson[0].added, "");
+        assert!(parse(None).unwrap().lesson.is_empty());
+        assert!(parse(Some("[[lesson]]\nid = 1")).is_err());
     }
 
     #[test]
