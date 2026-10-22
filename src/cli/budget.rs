@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{BudgetCmd, BudgetRecordArgs};
-use crate::app::{App, Result, kill_switch, notes, set_state};
+use crate::app::{App, Result, kill_switch, limits_from_default, notes, set_state};
 use crate::core::records::{Record, spend_total};
 use crate::core::state::State;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -67,6 +67,13 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
     let usd = usd_of(a, &ctx.config.prices)?;
+    if !usd.is_finite() || usd < 0.0 {
+        return Err(BosunError::error(
+            format!("the cost {usd} is negative or not a number"),
+            "pass the unchanged get_session result, or use --provider generic --turns N --model M",
+        ));
+    }
+    let limits = limits_from_default(gh, ctx)?;
     let n = a.issue;
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
@@ -85,7 +92,7 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     gh.add_comment(registry_issue, &spend.to_line())?;
 
     let total = spend_total(&notes(gh, n)?, None);
-    let over = total > ctx.limits.budget.per_task_usd;
+    let over = total > limits.budget.per_task_usd;
     let blocked = over && set_state(gh, n, &issue, State::Blocked).is_ok();
     // Lesson capture for a task over budget is M5; until then only the state changes.
     Ok(Outcome::data(json!({

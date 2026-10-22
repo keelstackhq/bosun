@@ -195,6 +195,8 @@ Conflict avoidance (three layers):
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked.
 
+Trust in records: a `{"bosun":…}` record in a comment is trusted from any commenter with write access to the repo; bosun does not check who wrote it. Checks that do not rely on records: commit statuses (`ci-ok`, `risk-check`, `review-verdict`, `main-open`), and the files read from the base or default branch (`docs/lessons.toml`, `REVIEW.md`, `.bosun/limits.toml`). A `spend` record with a negative or non-finite amount is ignored. A delta review (`since_sha` of `review-pack`) needs the `verdict` record and a successful `review-verdict` status on that sha; otherwise the review is full.
+
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists
 overlap when a path of one matches a glob of the other, or two globs can match a common path.
 
@@ -224,6 +226,8 @@ and never uses send_later or send_message.
 5. The children of the parent are fewer than max_children.
 6. There is no conflict with a live lease or area owner.
 7. Claim the epic, then return the `create_session` call in `next` (D29).
+
+`spawn` and `budget record` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
 
 A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in check 6 is exit 3.
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
@@ -379,7 +383,7 @@ REVIEW.md). The reviewer returns:
 - `bosun verdict post` writes it as the review-verdict check on `head_sha`.
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
-- `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record (statuses are per SHA, so they cannot carry it).
+- `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record when that sha has a successful `review-verdict` status, else it is a full review (statuses are per SHA, so they cannot carry it).
 - `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses `main`, `master` and a detached HEAD (exit 2).
 - `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.

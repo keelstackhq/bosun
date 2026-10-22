@@ -134,3 +134,39 @@ fn kill_switch_applies() {
     let (code, _) = budget(&fake, "", &args);
     assert_eq!(code, 4);
 }
+
+#[test]
+fn a_negative_cost_is_refused_and_records_nothing() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &["bosun:state/building"], "");
+    let (code, v) = budget(
+        &fake,
+        r#"{"usage":{"cost_usd":-5.0}}"#,
+        &["5", "--provider", "claude-sessions", "--from", "-"],
+    );
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(spends(&fake, 5), 0);
+}
+
+#[test]
+fn the_task_cap_comes_from_the_default_branch_and_ignores_negative_records() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &["bosun:state/building"], "");
+    fake.content(
+        ".bosun/limits.toml",
+        "main",
+        "[budget]\nper_task_usd = 10.0\n",
+    );
+    fake.comment(
+        5,
+        r#"{"bosun":"spend","session":"s","usd":-100.0,"at":"2026-10-22T03:00:00Z"}"#,
+    );
+    let (code, v) = budget(
+        &fake,
+        r#"{"usage":{"cost_usd":12.0}}"#,
+        &["5", "--provider", "claude-sessions", "--from", "-"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["task_total_usd"], 12.0);
+    assert_eq!(v["data"]["over_task_cap"], true);
+}

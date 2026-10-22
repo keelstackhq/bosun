@@ -51,8 +51,10 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
         session: session.clone(),
         origin: spec.origin.unwrap_or(app.ctx.origin).as_str().to_string(),
         area: spec.area.or_else(|| prior.and_then(|m| m.area.clone())),
-        parent: spec.parent.or_else(|| prior.and_then(|m| m.parent.clone())),
-        depth: spec.depth.or(prior.map(|m| m.depth)).unwrap_or(1),
+        // The parent and the depth are fixed at the first join (`spawn --record` writes them):
+        // a later join may raise the depth but never lowers it nor changes the parent.
+        parent: prior.and_then(|m| m.parent.clone()).or(spec.parent),
+        depth: spec.depth.unwrap_or(1).max(prior.map_or(0, |m| m.depth)),
         expires,
         comment_id: prior.map_or(0, |m| m.comment_id),
     };

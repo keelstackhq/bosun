@@ -7,16 +7,18 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::SpawnArgs;
-use crate::app::{App, end_lease, kill_switch, main_red, notes, set_state, task_meta};
+use crate::app::{
+    App, end_lease, kill_switch, limits_from_default, main_red, notes, set_state, task_meta,
+};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members};
 use crate::core::meta::area_of;
-use crate::core::records::{Note, Record, parse_record};
+use crate::core::records::{Note, Record, spend_total};
 use crate::core::spawn::{SpawnInput, check};
 use crate::core::state::{State, state_of};
 use crate::github::Issue;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
-use crate::time::{Timestamp, parse_rfc3339};
+use crate::time::Timestamp;
 
 pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
     let app = App::load(dir)?;
@@ -31,10 +33,11 @@ pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
     if args.record {
         return record(&app, &epic, args);
     }
+    let limits = limits_from_default(app.gh.as_ref(), &app.ctx)?;
     let model = args
         .model
         .clone()
-        .unwrap_or_else(|| app.ctx.limits.models.build.clone());
+        .unwrap_or_else(|| limits.models.build.clone());
     if model.contains("[1m]") {
         return Err(BosunError::usage(
             format!("model {model:?} is a [1m] model"),
@@ -46,6 +49,12 @@ pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
     let reg_notes: &[Note] = reg.as_ref().map_or(&[], |r| &r.1);
     let all = members(reg_notes);
     let live: Vec<&Member> = all.iter().filter(|m| m.expires > now).collect();
+    // The depth is the registry's, never the spawner's own word: no live record, no spawn.
+    let parent_depth = live
+        .iter()
+        .find(|m| &m.session == me)
+        .map(|m| m.depth)
+        .ok_or_else(unregistered)?;
     let meta = task_meta(&epic);
     let area = area_of(&epic.labels);
     let leases = leases_of(n, &notes(app.gh.as_ref(), n)?);
@@ -53,17 +62,17 @@ pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
         main_red: main_red(app.gh.as_ref())?.is_some(),
         mainfix: meta.as_ref().is_some_and(|m| m.kind == "mainfix")
             || epic.labels.iter().any(|l| l == "bosun:kind/mainfix"),
-        spent_today_usd: spent_today(reg_notes, now.day_start().0),
-        daily_usd: app.ctx.limits.budget.daily_usd,
-        parent_depth: all.iter().find(|m| &m.session == me).map_or(1, |m| m.depth),
-        max_depth: app.ctx.limits.sessions.max_depth,
+        spent_today_usd: spend_total(reg_notes, Some(now.day_start())),
+        daily_usd: limits.budget.daily_usd,
+        parent_depth,
+        max_depth: limits.sessions.max_depth,
         live_sessions: live.len() as u32,
-        max_live_sessions: app.ctx.limits.sessions.max_live_sessions,
+        max_live_sessions: limits.sessions.max_live_sessions,
         children: live
             .iter()
             .filter(|m| m.parent.as_deref() == Some(me))
             .count() as u32,
-        max_children: app.ctx.limits.sessions.max_children,
+        max_children: limits.sessions.max_children,
         conflict: conflict(&leases, &live, me, area.as_deref(), now),
     };
     check(&input).map_err(|r| {
@@ -116,18 +125,13 @@ pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
     )
 }
 
-/// Spend records of today on the registry issue.
-fn spent_today(reg: &[Note], day_start: i64) -> f64 {
-    reg.iter()
-        .filter_map(|n| match parse_record(&n.body) {
-            Some(Record::Spend { usd, at, .. })
-                if parse_rfc3339(&at).is_some_and(|t| t.0 >= day_start) =>
-            {
-                Some(usd)
-            }
-            _ => None,
-        })
-        .sum()
+/// Refusal of a spawner without a live registry record (check 3, depth).
+fn unregistered() -> BosunError {
+    BosunError::limit(
+        "this session has no live record in the registry, so its spawn depth is unknown",
+        "run `bosun join` first",
+    )
+    .with_data(json!({"check": 3, "name": "depth"}))
 }
 
 /// Another session's live lease on the epic, or another live member owning its area (the
@@ -210,7 +214,12 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
     let (gh, me, now, n) = (app.gh.as_ref(), &app.ctx.session, app.ctx.now, epic.number);
     let (reg, reg_notes) = registry::ensure(gh)?;
     let all = members(&reg_notes);
-    let depth = all.iter().find(|m| &m.session == me).map_or(1, |m| m.depth) + 1;
+    let depth = all
+        .iter()
+        .find(|m| &m.session == me && m.expires > now)
+        .map(|m| m.depth)
+        .ok_or_else(unregistered)?
+        + 1;
     let expires = now.plus_secs(TTL_SECS);
     let prior = all.iter().find(|m| m.session == child);
     let member = Member {
