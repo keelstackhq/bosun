@@ -24,7 +24,12 @@ jobs:
 
   report:
     needs: nightly
-    if: always()
+    # `branches: [main]` matches the head branch name, so a fork PR from a branch called main
+    # also triggers workflow_run: only a push to this repository's main counts.
+    if: >-
+      always() && (github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     steps:
       - name: open or close the main-red issue

@@ -159,9 +159,95 @@ fn ci_ok_needs_every_job() {
     let ci_ok = &body[body.find("\n  ci-ok:").unwrap()..];
     assert!(ci_ok.contains("needs: [bosun-bin, gate, pin]"));
     assert!(ci_ok.contains("if: always()"));
-    for id in ["bosun-bin", "gate", "pin"] {
-        assert!(ci_ok.contains(&format!(
-            "test \"${{{{ needs.{id}.result }}}}\" = \"success\""
-        )));
+    for (var, id) in [("BIN", "bosun-bin"), ("GATE", "gate"), ("PIN", "pin")] {
+        assert!(ci_ok.contains(&format!("{var}: ${{{{ needs.{id}.result }}}}")));
+        assert!(ci_ok.contains(&format!("test \"${var}\" = success")));
     }
+}
+
+/// The `run:` scripts of a workflow: the `run:` line and its indented block.
+fn run_scripts(yaml: &str) -> Vec<String> {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("run:").or_else(|| t.strip_prefix("- run:")) else {
+            continue;
+        };
+        let indent = line.len() - t.len();
+        let mut script = rest.to_string();
+        for next in &lines[i + 1..] {
+            if !next.trim().is_empty() && next.len() - next.trim_start().len() <= indent {
+                break;
+            }
+            script.push('\n');
+            script.push_str(next);
+        }
+        out.push(script);
+    }
+    out
+}
+
+/// The text from `start` up to `end` (exclusive).
+fn block<'a>(yaml: &'a str, start: &str, end: &str) -> &'a str {
+    let i = yaml.find(start).unwrap_or_else(|| panic!("no {start:?}"));
+    let j = yaml[i..].find(end).unwrap_or_else(|| panic!("no {end:?}")) + i;
+    &yaml[i..j]
+}
+
+/// The consumer copies keep bosun's own triggers and permissions (tests/workflows.rs pins
+/// those), check out at most the base once, and never put an expression in a script.
+#[test]
+fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
+    let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
+    let wf = channel().join("pieces/core/files/.github/workflows");
+    for f in [
+        "risk.yml",
+        "verdict.yml",
+        "main-open.yml",
+        "main-health.yml",
+    ] {
+        let theirs = fs::read_to_string(wf.join(f)).unwrap();
+        let mine = fs::read_to_string(ours.join(f)).unwrap();
+        for (a, b) in [
+            ("\non:\n", "\npermissions:"),
+            ("\npermissions:\n", "\njobs:"),
+        ] {
+            assert_eq!(
+                block(&theirs, a, b),
+                block(&mine, a, b),
+                "{f}: {a:?} differs"
+            );
+        }
+        assert_eq!(
+            theirs.matches("permissions:").count(),
+            1,
+            "{f}: job-level permissions"
+        );
+    }
+    for f in ["risk.yml", "verdict.yml"] {
+        let y = fs::read_to_string(wf.join(f)).unwrap();
+        assert_eq!(y.matches("actions/checkout@").count(), 1, "{f}");
+        assert!(y.contains("persist-credentials: false"), "{f}");
+    }
+    let mut all = Vec::new();
+    files_under(&wf, &mut all);
+    for path in all {
+        let y = fs::read_to_string(&path).unwrap();
+        let scripts = run_scripts(&y);
+        for s in scripts {
+            assert!(
+                !s.contains("${{"),
+                "{}: expression in a script: {s}",
+                path.display()
+            );
+        }
+    }
+    // A fork PR from a branch called main also fires workflow_run on [main].
+    let health = fs::read_to_string(wf.join("main-health.yml")).unwrap();
+    assert!(health.contains("github.event.workflow_run.event == 'push'"));
+    assert!(health.contains("workflow_run.head_repository.full_name == github.repository"));
+    // The update bot can write: its splice is pinned.
+    let bot = fs::read_to_string(wf.join("splice.yml")).unwrap();
+    assert!(bot.contains("version: 0.2.0"));
 }

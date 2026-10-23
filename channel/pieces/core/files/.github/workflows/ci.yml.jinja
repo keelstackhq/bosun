@@ -23,8 +23,8 @@ permissions:
   contents: read
 
 jobs:
-  # The gates run the bosun release pinned in the base commit's .bosun/version, never one the
-  # change under test picks, so a change cannot loosen the tool that judges it.
+  # The gates run the bosun release pinned in the base commit's .bosun/version, so a change to
+  # the pin takes effect only after it merges. (A change to this file runs at once: R-ci.)
   bosun-bin:
     runs-on: ubuntu-latest
     steps:
@@ -84,9 +84,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-{% endraw %}{% if "rust" in pieces %}      # rust stack: rust-toolchain.toml picks the toolchain; the cache is Swatinem/rust-cache.
+{% endraw %}{% if "rust" in pieces %}      # rust stack: the toolchain of rust-toolchain.toml (rustup switches if the repo changed it).
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.97"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
@@ -155,9 +156,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
+        env:
+          BIN: ${{ needs.bosun-bin.result }}
+          GATE: ${{ needs.gate.result }}
+          PIN: ${{ needs.pin.result }}
         run: |
-          echo "bosun-bin: ${{ needs.bosun-bin.result }}, gate: ${{ needs.gate.result }}, pin: ${{ needs.pin.result }}"
-          test "${{ needs.bosun-bin.result }}" = "success"
-          test "${{ needs.gate.result }}" = "success"
-          test "${{ needs.pin.result }}" = "success"
+          echo "bosun-bin: $BIN, gate: $GATE, pin: $PIN"
+          test "$BIN" = success
+          test "$GATE" = success
+          test "$PIN" = success
 {% endraw %}

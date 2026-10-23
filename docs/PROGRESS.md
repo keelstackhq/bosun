@@ -104,7 +104,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · M1 T5 · `tests/smoke_reap.rs`: UC-M1-3 smoke test with clock jumps (claim at 10:00, heartbeat at 10:20, janitor reaps at 10:31/10:49:59 nothing, at 10:50 the lease ends `reaped`, task ready, another session claims it, the old heartbeat extends nothing) · `cargo test --test smoke_reap` 1/1
 - 2026-10-23 · M1 T2 · `bosun fail` (src/cli/stop.rs, src/core/stop.rs), `failure` and `escalate` records, spec §4 · tests/cli_stop.rs 6/6, core::stop 5/5, cargo test all green
 - 2026-10-23 · M7 T1 (1/2) · splice channel `channel/` (pieces core, rust, ts-pnpm): governance seeds, AGENTS/REVIEW/CLAUDE sections; `.bosun/version` follows the channel version (a release tag) · `cargo test --test channel` 4/4, real splice 0.2.0 renders rust, ts-pnpm and mixed repos, a new version updates as one change
-- 2026-10-23 · M7 T1 (2/2) · channel workflows: ci.yml (gates via `bosun gate`, rust and ts-pnpm toolchains by piece, hoard for ts-pnpm, `ci-ok`), risk, verdict, main-open, main-health (nightly reuses ci.yml) and the splice update bot; all install the pinned release from npm, never PR code · `cargo test --test channel` 6/6, real splice renders valid YAML for rust, ts-pnpm and mixed
+- 2026-10-23 · M7 T1 (2/2) · channel workflows: ci.yml (gates via `bosun gate`, rust and ts-pnpm toolchains by piece, hoard for ts-pnpm, `ci-ok`), risk, verdict, main-open, main-health (nightly reuses ci.yml) and the splice update bot; all install the pinned release from npm, never PR code · `cargo test --test channel` 7/7 (triggers and permissions equal bosun's, no expression in a script, main-health ignores fork runs, pinned splice), real splice renders valid YAML for rust, ts-pnpm and mixed
 
 ## Blocked
 
