@@ -48,7 +48,8 @@ pub struct RegexKeys {
 }
 
 /// The adapter names bosun knows (closed set): a typo such as `regexp` must not pass as full.
-pub const PACKAGES_ADAPTERS: [&str; 3] = ["cargo-metadata", "none", "generic"];
+// pnpm-workspace is the ts-pnpm profile's adapter (#122); listed here so the two PRs compose in either order.
+pub const PACKAGES_ADAPTERS: [&str; 4] = ["cargo-metadata", "pnpm-workspace", "none", "generic"];
 pub const PENDING_ADAPTERS: [&str; 3] = ["rust-ignore", "ts-skip", "regex"];
 pub const ASSERTIONS_ADAPTERS: [&str; 3] = ["rust", "ts", "regex"];
 
