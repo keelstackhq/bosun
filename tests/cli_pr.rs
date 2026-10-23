@@ -143,6 +143,74 @@ fn auto_merge_is_enabled_when_all_four_are_green() {
     assert_eq!(merge_calls(&fake), 0, "bosun must never merge");
 }
 
+const CCR_MSG: &str = "GitHub GraphQL is not available from Claude Code sessions; use the REST API (gh api repos/{owner}/{repo}/...).";
+
+fn green_pr(fake: &FakeGithub) {
+    task(fake, "bosun:state/review");
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.status("sha20", "risk-check", "success", "");
+    fake.status("sha20", "main-open", "success", "");
+    fake.status("sha20", "review-verdict", "success", "approve 0.9");
+    fake.check_run("sha20", "ci-ok", "completed", Some("success"));
+}
+
+fn ccr_puts(fake: &FakeGithub) -> Vec<common::fake::Logged> {
+    fake.requests()
+        .into_iter()
+        .filter(|r| r.method == "PUT" && r.path.ends_with("/pulls/20/ccr/auto_merge"))
+        .collect()
+}
+
+fn merge_paths(fake: &FakeGithub) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/merge"))
+        .count()
+}
+
+#[test]
+fn graphql_is_the_default_auto_merge_route() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["auto_merge_route"], "graphql");
+    assert!(ccr_puts(&fake).is_empty());
+    assert_eq!(merge_paths(&fake), 0);
+}
+
+#[test]
+fn a_cloud_session_falls_back_to_the_ccr_route() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_status(403, CCR_MSG);
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["auto_merge_route"], "ccr");
+    assert_eq!(v["data"]["task_state"], "queued");
+    let puts = ccr_puts(&fake);
+    assert_eq!(puts.len(), 1);
+    let body: Value = serde_json::from_str(puts[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["merge_method"], "squash");
+    assert!(fake.labels_of(7).contains(&"bosun:state/queued".into()));
+    assert_eq!(merge_paths(&fake), 0);
+}
+
+#[test]
+fn another_graphql_403_is_not_retried_on_the_ccr_route() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_status(403, "Resource not accessible by integration");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(ccr_puts(&fake).is_empty());
+    assert!(fake.labels_of(7).contains(&"bosun:state/review".into()));
+    assert_eq!(merge_paths(&fake), 0);
+}
+
 #[test]
 fn a_missing_check_is_listed() {
     let fake = FakeGithub::start();
