@@ -118,3 +118,8 @@ Human-only items, in order. Each has the exact action.
    checkout with npm and crates.io logins run `hoist release bootstrap --dry-run` and
    `hoist release bootstrap`; run the release workflow within 2 days so the npm trusted
    publishers do not expire. Then move `.bosun/version` to the release in an R-gov PR.
+5. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
+   `splice/update` PR with `GITHUB_TOKEN` unless the secret `SPLICE_BOT_TOKEN` is set, and a PR
+   opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
+   token (keelstackhq/bosun, Contents and Pull requests: write), then
+   `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
