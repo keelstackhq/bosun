@@ -233,12 +233,19 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
         yaml.contains("\npermissions:\n  contents: read\n\n"),
         "{yaml}"
     );
+    let jobs = &yaml[yaml.find("\njobs:\n").unwrap()..];
     let mut job = String::new();
-    for line in yaml.lines() {
-        if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':') {
+    for line in jobs.lines() {
+        let line = line.split(" #").next().unwrap_or(line).trim_end();
+        if line.starts_with("  ") && !line.starts_with("   ") && line.ends_with(':') {
             job = line.trim().trim_end_matches(':').to_string();
         }
-        if line.trim_end().ends_with(": write") {
+        // `contents: write`, `permissions: write-all` and `{ contents: write }` all grant.
+        let grants = line.ends_with(": write")
+            || line.contains("write-all")
+            || line.contains(": write,")
+            || line.contains(": write }");
+        if grants {
             assert!(
                 job == "publish" || job == "prepare",
                 "job `{job}` grants {}",
