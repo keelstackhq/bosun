@@ -341,7 +341,7 @@ fn read_request(args: &SpawnArgs) -> Result<String, BosunError> {
 }
 
 /// `^[0-9]+\.[0-9]+$`
-fn valid_ts(s: &str) -> bool {
+pub(crate) fn valid_ts(s: &str) -> bool {
     let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
     s.split_once('.')
         .is_some_and(|(a, b)| digits(a) && digits(b))

@@ -134,3 +134,64 @@ fn uc_m6_3() {
     assert_eq!(v["data"]["epic"], n, "spawn took the plan task");
     assert_eq!(v["next"][0]["tool"], "create_session");
 }
+
+/// UC-M6-4: a child result produces exactly one thread reply, also when the thread ended.
+#[test]
+fn uc_m6_4() {
+    const TS: &str = "1700000000.000200";
+    let good =
+        r#"{"id":"C1","is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":0}"#;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
+    std::fs::write(
+        dir.path().join(".bosun/bosun.toml"),
+        "[slack]\nchannel = \"C1\"\n",
+    )
+    .unwrap();
+    let gh = FakeGithub::start();
+    gh.issue(1, "bosun registry", &["bosun:registry"], "");
+    let lease = json!({"bosun": "lease", "session": "s", "origin": "slack",
+        "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": TS});
+    // Epic 10: the thread is live. Epic 11: the thread ended without acking.
+    for n in [10, 11] {
+        gh.issue(n, "epic", &["bosun:state/merged"], "");
+        gh.comment(n, &lease.to_string());
+        gh.comment(
+            n,
+            &json!({"bosun": "result", "session": "s", "outcome": "merged", "pr": n}).to_string(),
+        );
+    }
+    gh.comment(
+        11,
+        &json!({"bosun": "lease-end", "session": "s", "reason": "result"}).to_string(),
+    );
+    let run = |args: &[&str]| {
+        let out = bosun()
+            .current_dir(dir.path())
+            .env("BOSUN_GITHUB_API", gh.url())
+            .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
+            .arg("notify")
+            .args(args)
+            .write_stdin(good)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap(), one_object(&out.stdout))
+    };
+    let first = run(&["--channel-info", "-"]).1;
+    let posts = first["next"].as_array().unwrap();
+    assert_eq!(posts.len(), 2, "one reply per result: {first}");
+    assert!(posts.iter().all(|p| p["args"]["thread_ts"] == TS));
+    for p in first["data"]["pending"].as_array().unwrap() {
+        let (code, v) = run(&["--ack", p["key"].as_str().unwrap()]);
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(v["data"]["already"], false);
+    }
+    let again = run(&["--channel-info", "-", "--thread", TS]).1;
+    assert_eq!(again["next"], json!([]), "exactly once: {again}");
+    let acks = gh
+        .requests()
+        .iter()
+        .filter(|r| r.method == "POST" && r.path.ends_with("/issues/1/comments"))
+        .count();
+    assert_eq!(acks, 2, "one ack each");
+}
