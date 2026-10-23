@@ -39,4 +39,19 @@ fn uc_m6_1() {
         assert_eq!(v["data"]["reason"], reason);
         assert_eq!(v["next"], json!([]), "nothing to post");
     }
+
+    // The contrast: a private channel without guests gets its post.
+    let good =
+        json!({"id":"C1","is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":0});
+    let out = bosun()
+        .current_dir(dir.path())
+        .env("BOSUN_GITHUB_API", gh.url())
+        .args(["notify", "--channel-info", "-"])
+        .write_stdin(good.to_string())
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["next"][0]["args"]["channel"], "C1");
 }

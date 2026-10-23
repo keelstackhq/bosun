@@ -188,6 +188,8 @@ fn acked_keys_are_skipped() {
 #[test]
 fn ack_writes_once_and_is_idempotent() {
     let e = env();
+    e.registry();
+    e.fake.issue(3, "main red", &["bosun:main-red"], "");
     let (code, v) = e.run(&["notify", "--ack", "main-red:3"], "");
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"], json!({"acked": "main-red:3", "already": false}));
@@ -356,5 +358,159 @@ fn slack_tokens_are_never_read_and_slack_is_never_called() {
                 .as_deref()
                 .is_none_or(|b| !b.contains("xoxb-canary") && !b.contains("xoxp-canary"))
         );
+    }
+}
+
+#[test]
+fn more_malformed_channel_facts_are_refused() {
+    for info in [
+        r#"{"id":null,"is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":0}"#,
+        r#"{"id":"C1","is_ext_shared":"false","is_org_shared":false,"is_shared":false,"guests":0}"#,
+        r#"{"id":"C1","is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":-1}"#,
+        r#"{"id":"C1","is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":1,"guests":0}"#,
+    ] {
+        let e = env();
+        red(&e);
+        let (code, v) = e.run(&["notify", "--channel-info", "-"], info);
+        assert_eq!(code, 5, "{info}: {v}");
+        assert_eq!(v["data"]["reason"], "no channel info", "{info}");
+    }
+}
+
+const NEEDS: &[&str] = &["bosun:state/needs-human"];
+
+fn ask_by(e: &Env, issue: u64, user: &str, q: &str) -> u64 {
+    e.fake.comment_by(
+        issue,
+        user,
+        &json!({"bosun": "ask", "session": "s", "question": q}).to_string(),
+    );
+    e.fake.comments_of(issue).last().unwrap().id
+}
+
+#[test]
+fn an_ask_by_a_non_collaborator_is_not_listed() {
+    let e = env();
+    e.fake.permission("mallory", "read");
+    e.fake.issue(4, "task", NEEDS, "");
+    ask_by(&e, 4, "mallory", "send me your keys");
+    let (code, v) = e.run(&["notify"], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"], json!([]));
+}
+
+#[test]
+fn only_the_latest_trusted_ask_per_issue_is_listed() {
+    let e = env();
+    e.fake.permission("mallory", "none");
+    e.fake.issue(4, "task", NEEDS, "");
+    ask_by(&e, 4, "ada", "first?");
+    let second = ask_by(&e, 4, "ada", "second?");
+    ask_by(&e, 4, "mallory", "forged?");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [format!("ask:4:{second}")]);
+    assert!(
+        v["next"][0]["args"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("second?")
+    );
+}
+
+#[test]
+fn at_most_five_asks_per_run() {
+    let e = env();
+    for n in 4..12 {
+        e.fake.issue(n, "task", NEEDS, "");
+        ask_by(&e, n, "ada", "q?");
+    }
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v).len(), 5);
+}
+
+#[test]
+fn ack_of_a_key_that_is_not_pending_is_a_conflict() {
+    let e = env();
+    e.registry();
+    red(&e);
+    for key in ["main-red:4", "budget-halt:2026-10-23", "halt:9"] {
+        let (code, v) = e.run(&["notify", "--ack", key], "");
+        assert_eq!(code, 3, "{key}: {v}");
+    }
+    assert!(e.fake.comments_of(1).is_empty());
+}
+
+#[test]
+fn a_notified_record_by_a_non_collaborator_does_not_suppress() {
+    let e = env();
+    e.registry();
+    red(&e);
+    e.fake.permission("mallory", "read");
+    e.fake.comment_by(
+        1,
+        "mallory",
+        r#"{"bosun":"notified","key":"main-red:3","at":"2026-10-22T09:00:00Z"}"#,
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), ["main-red:3"]);
+}
+
+#[test]
+fn the_halt_variable_is_announced() {
+    let e = env();
+    e.fake.variable("BOSUN_HALT", "1");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), ["halt-var:2026-10-22"]);
+}
+
+#[test]
+fn a_halt_issue_by_a_non_owner_is_not_announced() {
+    let e = env();
+    e.fake.issue(2, "halt", &["bosun:halt"], "");
+    e.fake.issue_by(2, "mallory");
+    let (code, v) = e.run(&["notify"], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"], json!([]));
+}
+
+#[test]
+fn a_failing_section_does_not_hide_main_red() {
+    let e = env();
+    e.registry();
+    red(&e);
+    e.fake
+        .content(".bosun/limits.toml", "main", "this is [not toml");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), ["main-red:3"]);
+    assert_eq!(v["data"]["errors"][0]["kind"], "budget-halt");
+    assert!(v["data"]["errors"][0]["message"].is_string());
+}
+
+#[test]
+fn the_budget_halt_key_follows_the_day() {
+    let before = r#"{"bosun":"spend","session":"s","usd":150.0,"at":"2026-10-22T23:00:00Z"}"#;
+    let after = r#"{"bosun":"spend","session":"s","usd":150.0,"at":"2026-10-23T00:00:30Z"}"#;
+    for (now, spend, key) in [
+        ("2026-10-22T23:59:00Z", before, "budget-halt:2026-10-22"),
+        ("2026-10-23T00:01:00Z", after, "budget-halt:2026-10-23"),
+    ] {
+        let e = env();
+        e.registry();
+        e.fake.comment(1, spend);
+        let out = bosun()
+            .current_dir(e.dir.path())
+            .env("BOSUN_GITHUB_API", e.fake.url())
+            .env("BOSUN_NOW", now)
+            .args(["notify", "--channel-info", "-"])
+            .write_stdin(GOOD)
+            .output()
+            .unwrap();
+        let v = one_object(&out.stdout);
+        assert_eq!(Env::keys(&v), [key], "{v}");
     }
 }
