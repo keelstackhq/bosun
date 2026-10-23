@@ -12,7 +12,7 @@ use crate::core::review::use_cases;
 use crate::core::verdict::closes_issue;
 use crate::output::{BosunError, CmdResult, Outcome};
 
-const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post`: {\"pr\":N,\"head_sha\":\"<head_sha>\",\
+const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
 \"verdict\":\"approve\"|\"request-changes\",\"confidence\":0..1,\"findings\":[{\"severity\":\
 \"blocker\"|\"major\"|\"minor\"|\"nit\",\"file\":\"\",\"line\":N,\"claim\":\"\",\"evidence\":\"\"}],\
 \"lessons_hit\":[\"L-NNN\"],\"escalate_risk\":false}. Approve needs confidence >= 0.85 and no blocker.";

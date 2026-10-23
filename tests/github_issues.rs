@@ -2,7 +2,7 @@
 
 mod common;
 
-use bosun::github::{Github, IssuePatch, IssueState, LiveGithub, PatchState};
+use bosun::github::{Github, IssuePatch, IssueState, LiveGithub, PatchState, Variable};
 use common::TOKEN_CANARY;
 use common::fake::FakeGithub;
 
@@ -105,6 +105,11 @@ fn comments_add_update_list() {
 fn variable_found_and_missing() {
     let (fake, gh) = setup();
     fake.variable("BOSUN_HALT", "1");
-    assert_eq!(gh.variable("BOSUN_HALT").unwrap().as_deref(), Some("1"));
-    assert_eq!(gh.variable("NOPE").unwrap(), None);
+    assert_eq!(
+        gh.variable("BOSUN_HALT").unwrap(),
+        Variable::Set("1".into())
+    );
+    assert_eq!(gh.variable("NOPE").unwrap(), Variable::Unset);
+    fake.fail_path("/actions/variables/HIDDEN", 403);
+    assert_eq!(gh.variable("HIDDEN").unwrap(), Variable::Forbidden);
 }

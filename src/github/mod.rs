@@ -65,13 +65,20 @@ pub trait Github {
     fn add_labels(&self, number: u64, labels: &[&str]) -> Result<()>;
     /// A label that is not on the issue is fine.
     fn remove_label(&self, number: u64, label: &str) -> Result<()>;
+    /// Whether the repository has the label.
+    fn label_exists(&self, name: &str) -> Result<bool>;
     /// Create the label; one that already exists is fine.
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()>;
     fn list_comments(&self, number: u64) -> Result<Vec<Comment>>;
     fn add_comment(&self, number: u64, body: &str) -> Result<Comment>;
+    /// A user's permission on the repository (`admin`, `write`, `read` or `none`; maintain
+    /// reads as `write`); `None` when GitHub does not know the user.
+    fn permission(&self, user: &str) -> Result<Option<String>>;
+    /// One issue or PR comment by id; `None` when it does not exist.
+    fn get_comment(&self, id: u64) -> Result<Option<Comment>>;
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
-    /// A repository Actions variable; `None` when it is not set.
-    fn variable(&self, name: &str) -> Result<Option<String>>;
+    /// A repository Actions variable.
+    fn variable(&self, name: &str) -> Result<Variable>;
     fn get_pull(&self, number: u64) -> Result<Option<Pull>>;
     /// Pull requests in `state`; `head` is `owner:branch`.
     fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>>;
@@ -107,6 +114,16 @@ pub trait Github {
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
+}
+
+/// A repository Actions variable as the token sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Variable {
+    Set(String),
+    /// 404: the variable does not exist.
+    Unset,
+    /// 403 (not a rate limit): the token may not read variables.
+    Forbidden,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -257,6 +274,11 @@ impl Github for LiveGithub {
         Ok(())
     }
 
+    fn label_exists(&self, name: &str) -> Result<bool> {
+        let path = self.path(&format!("/labels/{}", enc(name)));
+        Ok(self.http.get_json(&path)?.is_some())
+    }
+
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()> {
         let body = json!({"name": name, "color": color, "description": description});
         self.http
@@ -275,6 +297,24 @@ impl Github for LiveGithub {
         self.parse("comment", v)
     }
 
+    fn permission(&self, user: &str) -> Result<Option<String>> {
+        let path = self.path(&format!("/collaborators/{}/permission", enc(user)));
+        Ok(self
+            .http
+            .get_json(&path)?
+            .and_then(|v| v["permission"].as_str().map(str::to_string)))
+    }
+
+    fn get_comment(&self, id: u64) -> Result<Option<Comment>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/issues/comments/{id}")))?
+        {
+            Some(v) => Ok(Some(self.parse("comment", v)?)),
+            None => Ok(None),
+        }
+    }
+
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment> {
         let path = self.path(&format!("/issues/comments/{id}"));
         let v = self
@@ -283,12 +323,13 @@ impl Github for LiveGithub {
         self.parse("comment", v)
     }
 
-    fn variable(&self, name: &str) -> Result<Option<String>> {
+    fn variable(&self, name: &str) -> Result<Variable> {
         let path = self.path(&format!("/actions/variables/{}", enc(name)));
-        Ok(self
-            .http
-            .get_json(&path)?
-            .and_then(|v| v["value"].as_str().map(str::to_string)))
+        Ok(match self.http.get_json_or_forbidden(&path)? {
+            Ok(Some(v)) => Variable::Set(v["value"].as_str().unwrap_or("").to_string()),
+            Ok(None) => Variable::Unset,
+            Err(()) => Variable::Forbidden,
+        })
     }
 
     fn get_pull(&self, number: u64) -> Result<Option<Pull>> {

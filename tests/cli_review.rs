@@ -282,3 +282,177 @@ fn review_pack_shares_the_lessons_store_format() {
     assert_eq!(first["added"], "");
     assert!(first.get("last_hit").is_none(), "{first}");
 }
+
+fn verdict_cmd(fake: &FakeGithub, sub: &str, input: &str) -> (i32, Value) {
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["verdict", sub])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), one_object(&out.stdout))
+}
+
+fn apply(fake: &FakeGithub, id: u64) -> (i32, Value) {
+    run(
+        fake,
+        "session_ci",
+        T0,
+        &["verdict", "apply", &id.to_string()],
+    )
+}
+
+#[test]
+fn verdict_comment_posts_the_verdict_without_a_status() {
+    let fake = setup();
+    let (code, v) = verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    assert_eq!(code, 0, "{v}");
+    assert!(fake.statuses_of("sha42").is_empty(), "no status write");
+    let c = &fake.comments_of(42)[0];
+    assert_eq!(v["data"]["comment_id"], c.id);
+    assert!(c.body.contains("<!-- bosun:verdict -->"), "{}", c.body);
+    let (code, _) = verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("old", "approve", 0.9, &[], false),
+    );
+    assert_eq!(code, 3, "a stale head is refused before posting");
+    assert_eq!(fake.comments_of(42).len(), 1);
+}
+
+#[test]
+fn verdict_apply_posts_the_status_of_a_valid_comment() {
+    let fake = setup();
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    let id = fake.comments_of(42)[0].id;
+    // The reviewer session writes through the agent app; that is allowed for verdicts.
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    let st = fake.statuses_of("sha42");
+    assert_eq!(st[0]["context"], "review-verdict");
+    assert_eq!(st[0]["state"], "success");
+    let rec = &fake.comments_of(42)[1].body;
+    assert!(rec.contains(r#""bosun":"verdict""#));
+    assert!(
+        rec.contains(r#""session":"session_test""#),
+        "the reviewer, not the workflow: {rec}"
+    );
+}
+
+#[test]
+fn a_newer_verdict_comment_for_the_same_head_replaces_an_older_one() {
+    let fake = setup();
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "request-changes", 0.9, &["major"], false),
+    );
+    let ids: Vec<u64> = fake.comments_of(42).iter().map(|c| c.id).collect();
+    let (code, v) = apply(&fake, ids[0]);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("newer"));
+    let (code, v) = apply(&fake, ids[1]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "failure");
+}
+
+#[test]
+fn verdict_apply_refuses_edited_foreign_misplaced_and_stale_comments() {
+    let fake = setup();
+    let body = verdict("sha42", "approve", 0.9, &[], false);
+    let comment = |fake: &FakeGithub| {
+        verdict_cmd(fake, "comment", &body);
+        fake.comments_of(42).last().unwrap().id
+    };
+    let id = comment(&fake);
+    fake.last_comment(|c| c.updated_at = "2026-10-22T11:00:00Z".into());
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("edited"));
+
+    let id = comment(&fake);
+    fake.last_comment(|c| c.user = "mallory".into());
+    fake.state
+        .lock()
+        .unwrap()
+        .permissions
+        .insert("mallory".into(), "read".into());
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("read access")
+    );
+
+    let id = comment(&fake);
+    fake.last_comment(|c| c.issue = 7);
+    assert_eq!(apply(&fake, id).0, 1, "a verdict for #42 posted on #7");
+
+    let id = comment(&fake);
+    fake.pull_set(42, "head", json!({"sha": "sha43", "ref": "claude/x"}));
+    assert_eq!(apply(&fake, id).0, 3, "the head moved on");
+
+    let id = comment(&fake);
+    fake.last_comment(|c| c.body = c.body.replace("\"pr\":42", "\"pr\":42,\"x\":1"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(
+        code, 1,
+        "invalid JSON in a comment is a refusal, not a usage error: {v}"
+    );
+
+    let plain = fake.comment(42, "just a comment");
+    assert_eq!(apply(&fake, plain).0, 1);
+    assert_eq!(apply(&fake, 99999).0, 1);
+    assert!(fake.statuses_of("sha42").is_empty());
+}
+
+#[test]
+fn verdict_apply_trusts_the_permission_not_the_association() {
+    // A workflow token sees an org member as CONTRIBUTOR; write permission decides.
+    let fake = setup();
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    fake.last_comment(|c| c.association = "CONTRIBUTOR".into());
+    let id = fake.comments_of(42)[0].id;
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
+}
+
+#[test]
+fn verdict_apply_ignores_a_footer_after_the_json_block() {
+    // The agent proxy appends an attribution footer to every comment a session posts.
+    let fake = setup();
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    fake.last_comment(|c| {
+        c.body
+            .push_str("\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_\n")
+    });
+    let id = fake.comments_of(42)[0].id;
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
+}
