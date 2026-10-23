@@ -1,6 +1,7 @@
 //! The 7 spawn checks of spec §5, in order. Check 7 (claim, then create_session) is the
 //! command's own work; this module decides checks 1-6.
 
+use super::budget::{BUDGET_STOP, no_new_work};
 use crate::output::Exit;
 
 /// Everything the checks need, gathered by the command.
@@ -36,9 +37,6 @@ pub struct Refusal {
     pub fix: String,
 }
 
-/// Share of the daily budget at which new work stops (spec §9).
-pub const BUDGET_STOP: f64 = 0.8;
-
 /// Run checks 1-6 in order; the first failure is the refusal.
 pub fn check(i: &SpawnInput) -> Result<(), Refusal> {
     let refuse = |check, name, exit, message: String, fix: &str| {
@@ -68,7 +66,7 @@ pub fn check(i: &SpawnInput) -> Result<(), Refusal> {
             "close the process-red issue by merging its process-fix, or work on a process-fix task",
         );
     }
-    if !i.mainfix && i.daily_usd > 0.0 && i.spent_today_usd >= BUDGET_STOP * i.daily_usd {
+    if !i.mainfix && no_new_work(i.spent_today_usd, i.daily_usd) {
         return refuse(
             2,
             "budget",
