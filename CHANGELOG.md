@@ -19,6 +19,8 @@ bosun is unreleased, so every entry is under Unreleased.
 
 ### Fixed
 
+- `bosun verdict apply` reads only the ```json block of a verdict comment: the agent proxy
+  appends a footer to every comment, which made the second verdict comment on #73 invalid.
 - `bosun verdict apply` checks the author's repository permission (write or admin) instead of
   `author_association`: the workflow token sees an org member as `CONTRIBUTOR`, so the first
   verdict comment (#73) was refused.
