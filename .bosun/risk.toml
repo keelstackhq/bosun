@@ -9,7 +9,8 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml"]
+# channel/ is the CI and governance that `bosun init` ships to other repos.
+paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "channel/**"]
 
 [[rule]]
 id = "R-secrets"

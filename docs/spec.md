@@ -165,6 +165,8 @@ State machine:
 
 Only bosun commands change the state label. A hook refuses a direct label edit.
 
+`bosun pr` sets claimed -> building -> review (a PR exists only after the first push). `bosun pr` or `bosun reap` sets queued -> merged once GitHub merged the PR, and ends the leases on the issue with reason `merged`; `reap` also looks at queued tasks whose issue is closed.
+
 Stop rules:
 - The same failure signature 3 times in a row: the task goes to blocked.
 - A fix round with 0 changed lines: the task goes to blocked.
@@ -174,6 +176,9 @@ Stop rules:
   applies these rules. A stop sets `blocked` and posts an `escalate` record (`from`, `to`,
   `reason`); an escalation restarts the count. With opus used up it sets `needs-human` (exit 5).
   The signature is in `data` for the lessons.
+- Each stop (both paths) also captures a lesson of kind `stop-rule` from the rule and the
+  signature; the same stop on another task hits the same lesson. `data.lesson` is `{issue,
+  created, hits}`, or null with `lesson_error` when capture fails (the stop still stands).
 - Each stop rule opens or hits a lesson.
 - When main is red, feature work pauses; only mainfix tasks continue.
 
@@ -451,7 +456,7 @@ task and a lesson. A test is never skipped to get green.
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`.
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**`.
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Content `(?i)(api[_-]?key|secret|token)\s*=`.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.
