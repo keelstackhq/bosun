@@ -95,38 +95,55 @@ fn a_live_lease_of_another_session_blocks_a_task() {
     assert_eq!(v["data"]["waiting"][1]["reason"], "state is building");
 }
 
-#[test]
-fn max_parallel_comes_from_limits() {
+/// Three ready tasks; the working tree says `local`, the default branch `main` (if any).
+fn plan_with_limits(local: &str, main: Option<&str>) -> Value {
     let fake = epic();
     for n in 11..14 {
-        task(
-            &fake,
-            n,
-            &format!("M1/T{}", n - 10),
-            "ready",
-            10,
-            "",
-            &format!(r#""d{n}/**""#),
-        );
+        let (id, touch) = (format!("M1/T{}", n - 10), format!(r#""d{n}/**""#));
+        task(&fake, n, &id, "ready", 10, "", &touch);
     }
-    let dir = std::env::temp_dir().join(format!("bosun-wave-{}", std::process::id()));
+    if let Some(text) = main {
+        fake.content(".bosun/limits.toml", "main", text);
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
     std::fs::create_dir_all(dir.join(".bosun")).unwrap();
-    std::fs::write(
-        dir.join(".bosun/limits.toml"),
-        "[waves]\nmax_parallel = 2\n",
-    )
-    .unwrap();
+    std::fs::write(dir.join(".bosun/limits.toml"), local).unwrap();
     let out = common::bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .arg("-C")
-        .arg(&dir)
+        .arg(dir)
         .args(["wave", "plan", "10"])
         .output()
         .unwrap();
     let v = one_object(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{v}");
+    v
+}
+
+#[test]
+fn max_parallel_comes_from_the_default_branch() {
+    let v = plan_with_limits(
+        "[waves]\nmax_parallel = 6\n",
+        Some("[waves]\nmax_parallel = 1\n"),
+    );
+    assert_eq!(issues(&v["data"]["run"], "issue"), vec![11]);
+    assert_eq!(v["data"]["waiting"][0]["reason"], "waves.max_parallel is 1");
+}
+
+#[test]
+fn a_local_limits_file_never_raises_the_default_branch_value() {
+    let v = plan_with_limits(
+        "[waves]\nmax_parallel = 3\n",
+        Some("[waves]\nmax_parallel = 2\n"),
+    );
     assert_eq!(issues(&v["data"]["run"], "issue"), vec![11, 12]);
-    assert_eq!(v["data"]["waiting"][0]["reason"], "waves.max_parallel is 2");
+}
+
+#[test]
+fn spec_defaults_apply_when_the_default_branch_has_no_limits_file() {
+    let v = plan_with_limits("[waves]\nmax_parallel = 1\n", None);
+    assert_eq!(issues(&v["data"]["run"], "issue"), vec![11, 12, 13]);
 }
 
 #[test]

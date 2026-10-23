@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::{EpicArg, WaveCmd};
-use crate::app::{App, active_issues, main_red, task_meta};
+use crate::app::{App, active_issues, limits_from_default, main_red, task_meta};
 use crate::cli::status::process_red;
 use crate::core::lease::live_leases;
 use crate::core::state::{State, state_of};
@@ -90,7 +90,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         leased.push((i.number, n));
     }
     let leases = live_leases(&leased, now);
-    let max = app.ctx.limits.waves.max_parallel as usize;
+    let max = limits_from_default(gh, &app.ctx)?.waves.max_parallel as usize;
     let wave = plan(&infos, &merged, &leases, &app.ctx.session, max);
     let find = |n: u64| tasks.iter().find(|t| t.0.issue == n).expect("planned task");
     let run: Vec<_> = wave
