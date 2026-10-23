@@ -15,6 +15,9 @@ bosun is unreleased, so every entry is under Unreleased.
 
 ### Changed
 
+- The `risk` workflow runs on `pull_request_target` instead of `pull_request`: the judging job
+  comes from the base branch, never checks out PR-head code, passes event data through `env`
+  only, and has least permissions. `tests/workflows.rs` asserts it.
 - The repo variable `BOSUN_HALT` is now a second, optional kill-switch source: 404 (unset) and 403
   (not readable from this token) are no signal; any other read error still halts. Before, a 403
   halted every session behind the agent proxy.

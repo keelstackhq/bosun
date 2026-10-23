@@ -59,19 +59,88 @@ fn ci_ok_needs_every_job() {
     }
 }
 
+/// The `run:` scripts of a workflow: the `run:` line and its indented block.
+fn run_scripts(yaml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = yaml.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        let Some(rest) = t.strip_prefix("run:").or_else(|| t.strip_prefix("- run:")) else {
+            continue;
+        };
+        let indent = line.len() - t.len();
+        let mut script = rest.to_string();
+        for next in &lines[i + 1..] {
+            let ni = next.len() - next.trim_start().len();
+            if !next.trim().is_empty() && ni <= indent {
+                break;
+            }
+            script.push('\n');
+            script.push_str(next);
+        }
+        out.push(script);
+    }
+    out
+}
+
 #[test]
-fn risk_runs_on_approval_comments_without_checking_out_the_pr() {
+fn risk_judges_from_the_base_and_never_runs_pr_code() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/risk.yml");
     let yaml = fs::read_to_string(path).unwrap();
+    assert!(yaml.contains("\n  pull_request_target:\n"), "{yaml}");
+    assert!(
+        !yaml.contains("\n  pull_request:\n"),
+        "pull_request runs the PR's workflow copy"
+    );
     assert!(
         yaml.contains("  issue_comment:\n    types: [created]"),
         "{yaml}"
     );
     assert!(yaml.contains("contains(github.event.comment.body, '/bosun approve')"));
-    assert!(yaml.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"));
-    assert!(
-        !yaml.contains("head.sha") && !yaml.contains("head.ref"),
-        "never the PR's code"
+    // Every checkout is the base commit (or the default branch on a comment).
+    let refs: Vec<&str> = yaml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("ref:"))
+        .collect();
+    assert_eq!(
+        refs,
+        ["          ref: ${{ github.event.pull_request.base.sha || github.sha }}"],
+        "{yaml}"
+    );
+    assert_eq!(
+        yaml.matches("actions/checkout@").count(),
+        1,
+        "one checkout only"
+    );
+    for bad in [
+        "head.sha",
+        "head.ref",
+        "head_ref",
+        "refs/pull",
+        "merge_commit_sha",
+    ] {
+        assert!(!yaml.contains(bad), "risk.yml mentions {bad}");
+    }
+    // No expression in a script: event data goes through env.
+    let scripts = run_scripts(&yaml);
+    assert!(!scripts.is_empty());
+    for s in &scripts {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: read",
+            "  pull-requests: write",
+            "  statuses: write"
+        ]
     );
     assert!(
         yaml.contains("PR: ${{ github.event.pull_request.number || github.event.issue.number }}")

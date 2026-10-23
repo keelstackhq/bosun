@@ -432,10 +432,17 @@ High-risk PRs:
   edited comment does not count (users with write access can edit other users' comments). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
-- The `risk` workflow runs on pull request events, on reviews, and on PR comments (`issue_comment`
-  created) that contain `/bosun approve`, so a comment re-evaluates `risk-check` without a push.
-  On a comment the workflow file and the judging bosun come from the default branch; risk-check
-  still reads the owners and the rules from the PR's base SHA, never from the head.
+- The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
+  reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
+  comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
+  the workflow file from the base branch, so a PR cannot rewrite the job that judges it. The job
+  never checks out or runs PR-head code: it builds bosun from the PR's base SHA (on a comment,
+  the default branch) and reads the PR through the API. Event data reaches scripts through `env`
+  only. Permissions: `contents: read`, `issues: read`, `statuses: write`, and
+  `pull-requests: write` for the Risk note in the PR body. `tests/workflows.rs` asserts all of
+  this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
+  copy of the file; and a same-repo PR can add a workflow of its own that requests
+  `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
   check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
