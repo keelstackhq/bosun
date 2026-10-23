@@ -177,6 +177,49 @@ fn unknown_profile_fix_lists_ts_pnpm() {
 }
 
 #[test]
+fn deleting_the_lockfile_still_runs_the_deps_gate() {
+    let r = repo();
+    write(&r.root, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "lock"]);
+    git(&r.root, &["branch", "-f", "main", "work"]);
+    git(&r.root, &["rm", "-q", "pnpm-lock.yaml"]);
+    git(&r.root, &["commit", "-q", "-m", "delete lock"]);
+    for args in [
+        &["deps", "--base", "main"][..],
+        &["deps", "--base", "main", "--all"],
+    ] {
+        let (code, v) = r.gate(args);
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(v["data"]["skipped"], false);
+    }
+    assert_eq!(
+        r.calls(),
+        vec![
+            "audit --prod --audit-level high",
+            "audit --prod --audit-level high"
+        ]
+    );
+}
+
+#[test]
+fn a_package_directory_named_build_is_tested() {
+    let r = repo();
+    write(
+        &r.root,
+        "packages/build/package.json",
+        "{\"name\":\"build\"}",
+    );
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "build pkg"]);
+    git(&r.root, &["branch", "-f", "main", "work"]);
+    r.change("packages/build/src/x.ts");
+    let (code, v) = r.gate(&["test", "--base", "main"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["--filter ...build run test"]);
+}
+
+#[test]
 fn deps_gate_is_skipped_without_a_lockfile() {
     let r = repo();
     r.change("packages/b/src/x.ts");

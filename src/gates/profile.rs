@@ -55,7 +55,8 @@ pub struct Gate {
     #[serde(default)]
     pub when_no_package: WhenNoPackage,
     pub budget_secs: Option<u64>,
-    /// A file in the stack directory the gate needs; without it the gate is skipped.
+    /// A file in the stack directory the gate needs; the gate is skipped when it is missing at
+    /// the head and at the base.
     #[serde(default)]
     pub requires: Option<String>,
 }
@@ -222,13 +223,27 @@ mod tests {
     }
 
     #[test]
-    fn packages_placeholder_defaults_to_append() {
+    fn packages_placeholder_replaces_the_item_or_appends() {
         let p = Profile::load(Path::new("/nonexistent"), "rust").unwrap();
         let t = &p.gates["test"];
         assert_eq!(
             t.expand_packages(t.expand_cmd(&[], None), vec!["-p".into(), "x".into()]),
             ["cargo", "nextest", "run", "--locked", "-p", "x"]
         );
+        let argv: Vec<String> = ["tool", "{packages}", "run"].map(String::from).to_vec();
+        assert_eq!(
+            t.expand_packages(argv, vec!["--filter".into(), "x".into()]),
+            ["tool", "--filter", "x", "run"]
+        );
+    }
+
+    #[test]
+    fn requires_is_an_optional_gate_key() {
+        let t = "[adapters]\npackages = \"cargo-metadata\"\npending = \"p\"\nassertions = \"a\"\n\
+                 [gates.deps]\ncmd = [\"x\"]\nrequires = \"Cargo.lock\"\n[gates.fmt]\ncmd = [\"y\"]\n";
+        let p: Profile = toml::from_str(t).unwrap();
+        assert_eq!(p.gates["deps"].requires.as_deref(), Some("Cargo.lock"));
+        assert_eq!(p.gates["fmt"].requires, None);
     }
 
     #[test]

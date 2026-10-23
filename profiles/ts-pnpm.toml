@@ -21,6 +21,8 @@ cmd = ["pnpm", "run", "typecheck"]
 
 # test: `--filter` must precede `run test` (later args go to the script), hence {packages};
 # `...pkg` selects pkg and its dependents; all -> every package plus the root project's own script.
+# --include-workspace-root runs the ROOT `test` script too, so it must not be a recursive
+# `pnpm -r run test` (every package would run twice); keep it to the root project's own tests.
 [gates.test]
 cmd = ["pnpm", "{packages}", "run", "test"]
 each_package = ["--filter", "...{package}"]

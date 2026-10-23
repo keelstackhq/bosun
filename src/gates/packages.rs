@@ -216,11 +216,13 @@ pub fn parse_workspace_globs(yaml: &str) -> Result<Vec<String>, BosunError> {
     Ok(out)
 }
 
-/// Keep the directories (relative, `/`-separated) that match an include glob and no `!` glob.
-/// A glob that does not parse (braces, classes) is an error, not a dropped entry.
-pub fn select_dirs(dirs: &[String], globs: &[String]) -> Result<Vec<String>, BosunError> {
+type Glob = crate::core::glob::Glob;
+
+/// The include and the `!` exclude globs of a `packages:` list. A glob that does not parse
+/// (braces, classes) is an error, not a dropped entry.
+fn compile_globs(globs: &[String]) -> Result<(Vec<Glob>, Vec<Glob>), BosunError> {
     let parse = |g: &str| {
-        crate::core::glob::Glob::parse(g.trim_end_matches('/')).map_err(|e| {
+        Glob::parse(g.trim_end_matches('/')).map_err(|e| {
             workspace_error(
                 format!("pnpm-workspace.yaml: {e}"),
                 "use only `*`, `?` and `**` in `packages:` globs, one glob per line",
@@ -235,6 +237,12 @@ pub fn select_dirs(dirs: &[String], globs: &[String]) -> Result<Vec<String>, Bos
             None => inc.push(parse(g)?),
         }
     }
+    Ok((inc, exc))
+}
+
+/// Keep the directories (relative, `/`-separated) that match an include glob and no `!` glob.
+pub fn select_dirs(dirs: &[String], globs: &[String]) -> Result<Vec<String>, BosunError> {
+    let (inc, exc) = compile_globs(globs)?;
     Ok(dirs
         .iter()
         .filter(|d| inc.iter().any(|g| g.matches(d)) && !exc.iter().any(|g| g.matches(d)))
@@ -242,12 +250,14 @@ pub fn select_dirs(dirs: &[String], globs: &[String]) -> Result<Vec<String>, Bos
         .collect())
 }
 
-/// Directories that are never workspace packages and can be huge or cyclic.
-const SKIP_DIRS: [&str; 5] = ["node_modules", "target", "dist", "build", "coverage"];
+/// Directories that are not searched for packages (they can be huge or cyclic) unless a
+/// `packages:` glob matches the directory itself. `node_modules` and dot directories never are.
+const SKIP_DIRS: [&str; 4] = ["target", "dist", "build", "coverage"];
 
 /// Relative paths of every directory under `dir` that holds a `package.json` (the root itself is
-/// not listed). Dot directories, `SKIP_DIRS` and symlinks are not entered.
-fn package_dirs(dir: &Path, rel: &str, out: &mut Vec<String>) {
+/// not listed). `node_modules`, dot directories and symlinks are not entered; `SKIP_DIRS` only
+/// when no include glob in `inc` matches that directory.
+fn package_dirs(dir: &Path, rel: &str, inc: &[Glob], out: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -259,18 +269,21 @@ fn package_dirs(dir: &Path, rel: &str, out: &mut Vec<String>) {
     subs.sort_by_key(|e| e.file_name());
     for e in subs {
         let name = e.file_name().to_string_lossy().into_owned();
-        if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
+        if name == "node_modules" || name.starts_with('.') {
             continue;
         }
         let sub = if rel.is_empty() {
-            name
+            name.clone()
         } else {
             format!("{rel}/{name}")
         };
+        if SKIP_DIRS.contains(&name.as_str()) && !inc.iter().any(|g| g.matches(&sub)) {
+            continue;
+        }
         if e.path().join("package.json").is_file() {
             out.push(sub.clone());
         }
-        package_dirs(&e.path(), &sub, out);
+        package_dirs(&e.path(), &sub, inc, out);
     }
 }
 
@@ -284,10 +297,12 @@ fn load_pnpm(stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
             "add a pnpm-workspace.yaml with a `packages:` list at the stack path",
         )
     })?;
+    let globs = parse_workspace_globs(&yaml)?;
+    let (inc, _) = compile_globs(&globs)?;
     let mut dirs = Vec::new();
-    package_dirs(stack_dir, "", &mut dirs);
+    package_dirs(stack_dir, "", &inc, &mut dirs);
     let mut out = Vec::new();
-    for rel in select_dirs(&dirs, &parse_workspace_globs(&yaml)?)? {
+    for rel in select_dirs(&dirs, &globs)? {
         let manifest = stack_dir.join(&rel).join("package.json");
         let name = std::fs::read_to_string(&manifest)
             .ok()
@@ -432,6 +447,13 @@ mod tests {
     }
 
     #[test]
+    fn unknown_adapter_is_an_error_with_a_fix() {
+        let e = load("nope", Path::new("/r")).unwrap_err();
+        assert!(e.message.contains("nope"), "{}", e.message);
+        assert!(!e.fix.is_empty());
+    }
+
+    #[test]
     fn workspace_globs_parse() {
         let y = "# c\npackages:\n  - 'packages/*'\n  - \"apps/**\" # x\n  - '!**/test/**'\ncatalog:\n  - nope\n";
         assert_eq!(
@@ -550,5 +572,22 @@ mod tests {
         let got = load_pnpm(r).unwrap();
         let names: Vec<_> = got.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["@w/a", "y"]);
+    }
+
+    #[test]
+    fn a_package_named_build_is_found_when_a_glob_matches_it() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        write(r, "pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n");
+        write(r, "packages/build/package.json", "{\"name\":\"build\"}");
+        write(r, "packages/dist/package.json", "{\"name\":\"dist\"}");
+        write(r, "packages/a/package.json", "{\"name\":\"a\"}");
+        // Not matched by a glob: still skipped, as are node_modules and dot dirs.
+        write(r, "packages/a/build/package.json", "{\"name\":\"nested\"}");
+        write(r, "packages/node_modules/package.json", "{\"name\":\"nm\"}");
+        write(r, "packages/.hid/package.json", "{\"name\":\"hid\"}");
+        let got = load_pnpm(r).unwrap();
+        let names: Vec<_> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["a", "build", "dist"]);
     }
 }
