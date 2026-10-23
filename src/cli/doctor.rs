@@ -24,9 +24,9 @@ fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &
 fn routines() -> Value {
     json!([
         {"name": "janitor", "schedule": "every 15 minutes", "model": "haiku",
-         "prompt": "Run `bosun reap`. List stale sessions with `bosun status` and report any session whose lease expired. Check the budget in `bosun status` (budget_pct); at 100 % stop the live sessions, at 80 % post a warning. Then run `bosun notify`."},
+         "prompt": "Run `bosun reap` (it ends expired leases and members and moves merged tasks to merged) and report its data.reaped, data.left and data.merged. Run `bosun budget check`: make only the interrupt_session calls in its `next`, with the claude-code-remote tools (one per live session at 100 % of the daily budget), and report data.level. Then run `bosun notify` if this bosun has it."},
         {"name": "curator", "schedule": "daily", "model": "sonnet",
-         "prompt": "Triage the open lesson issues as in docs/spec.md section 6: a blocking lesson sets process-red; a mechanizable one opens a kind/process-fix task; advice only goes into docs/lessons.toml with `bosun lesson add`. Retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has merged."},
+         "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add`; at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
         {"name": "notify", "schedule": "every 15 minutes", "model": "haiku",
          "prompt": "Run `bosun notify` and post what it prints to the Slack channel from .bosun/bosun.toml."},
     ])
