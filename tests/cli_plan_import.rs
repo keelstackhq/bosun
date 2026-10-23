@@ -1,0 +1,312 @@
+mod common;
+
+use common::fake::FakeGithub;
+use serde_json::{Value, json};
+use std::path::Path;
+
+const T0: &str = "2026-10-23T10:00:00Z";
+
+const PLAN: &str = "# Plan: widget
+
+project: widget
+
+## M1: Lifecycle
+
+area: lifecycle
+
+The state machine.
+
+### Tasks
+
+- T1: State machine
+  touch: src/core/state.rs
+- T2: Stop rules
+  touch: src/core/stop.rs
+  depends: T1
+  risk: high
+
+### Done when
+
+- UC-M1-1: a task moves planned -> merged.
+
+## M2: Intake
+
+area: intake
+depends: M1
+
+### Tasks
+
+- T1: Import
+  touch: src/cli/plan.rs
+  depends: M1/T2
+  kind: bookkeeping
+
+### Done when
+
+- UC-M2-1: importing twice creates no duplicates.
+";
+
+fn write_plan(dir: &Path, text: &str) -> String {
+    let p = dir.join("plan.md");
+    std::fs::write(&p, text).unwrap();
+    p.to_str().unwrap().to_string()
+}
+
+fn plan(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
+    let mut a = vec!["-C", dir.to_str().unwrap(), "plan"];
+    a.extend_from_slice(args);
+    common::run(fake, "session_test", T0, &a)
+}
+
+fn posts(fake: &FakeGithub) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|r| r.method == "POST" && r.path.ends_with("/issues"))
+        .count()
+}
+
+fn writes(fake: &FakeGithub) -> usize {
+    fake.requests().iter().filter(|r| r.method != "GET").count()
+}
+
+fn find(fake: &FakeGithub, marker: &str) -> u64 {
+    let s = fake.state.lock().unwrap();
+    s.issues
+        .iter()
+        .find(|i| i.body.starts_with(marker))
+        .unwrap_or_else(|| panic!("no issue with {marker}"))
+        .number
+}
+
+#[test]
+fn import_creates_epics_plan_tasks_and_tasks() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    // 2 epics + 2 plan tasks + 3 tasks
+    assert_eq!(posts(&fake), 7);
+    assert_eq!(v["data"]["dry_run"], false);
+    let epics = v["data"]["epics"].as_array().unwrap();
+    assert_eq!(epics.len(), 2);
+    assert!(epics.iter().all(|e| e["action"] == "created"));
+    let tasks = v["data"]["tasks"].as_array().unwrap();
+    let ids: Vec<&str> = tasks.iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["M1/P", "M1/T1", "M1/T2", "M2/P", "M2/T1"]);
+    assert_eq!(tasks[0]["state"], "ready");
+    assert_eq!(tasks[1]["state"], "planned");
+
+    let epic = find(&fake, "<!-- bosun:plan M1 -->");
+    assert_eq!(epics[0]["issue"], epic);
+    let e = fake.issue_state(epic);
+    assert_eq!(e.title, "M1: Lifecycle");
+    for l in [
+        "bosun:kind/feature",
+        "bosun:area/lifecycle",
+        "bosun:source/plan",
+        "bosun:state/planned",
+    ] {
+        assert!(e.labels.contains(&l.to_string()), "{l} in {:?}", e.labels);
+    }
+    assert!(e.body.contains("The state machine."));
+    assert!(e.body.contains("- [ ] M1/T1: State machine"));
+    assert!(e.body.contains("UC-M1-1"));
+    let epic_json = e
+        .body
+        .split("<!-- bosun:epic ")
+        .nth(1)
+        .unwrap()
+        .split(" -->")
+        .next()
+        .unwrap();
+    let em: Value = serde_json::from_str(epic_json).unwrap();
+    assert_eq!(em["item"], "M1");
+    assert_eq!(em["area"], "lifecycle");
+    assert_eq!(em["plan"], file.as_str());
+    assert_eq!(em["ucs"], json!(["UC-M1-1"]));
+    let m2 = fake.issue_state(find(&fake, "<!-- bosun:plan M2 -->"));
+    assert!(m2.body.contains(r#""depends":["M1"]"#));
+
+    let p = fake.issue_state(find(&fake, "<!-- bosun:plan M1/P -->"));
+    assert_eq!(p.title, "M1/P: pending UC tests");
+    assert!(p.labels.contains(&"bosun:kind/plan".to_string()));
+    assert!(p.labels.contains(&"bosun:state/ready".to_string()));
+    assert!(p.body.contains("#[ignore = \"UC-..\"]"));
+    assert!(p.body.contains("UC-M1-1"));
+    let meta = bosun::core::meta::parse_task_meta(&p.body).unwrap();
+    assert_eq!(meta.epic, Some(epic));
+    assert_eq!(meta.touch, ["tests/uc_m1.rs"]);
+    assert_eq!(
+        (meta.kind.as_str(), meta.allow),
+        ("plan", vec!["skip".to_string()])
+    );
+
+    let t = fake.issue_state(find(&fake, "<!-- bosun:plan M1/T2 -->"));
+    assert_eq!(t.title, "M1/T2: Stop rules");
+    assert!(t.labels.contains(&"bosun:kind/feature".to_string()));
+    assert!(t.labels.contains(&"bosun:state/planned".to_string()));
+    let meta = bosun::core::meta::parse_task_meta(&t.body).unwrap();
+    assert_eq!(meta.epic, Some(epic));
+    assert_eq!(meta.depends, ["M1/T1"]);
+    assert_eq!((meta.risk.as_str(), meta.allow.len()), ("high", 0));
+    let t = fake.issue_state(find(&fake, "<!-- bosun:plan M2/T1 -->"));
+    assert!(t.labels.contains(&"bosun:kind/bookkeeping".to_string()));
+    assert_eq!(
+        bosun::core::meta::parse_task_meta(&t.body).unwrap().depends,
+        ["M1/T2"]
+    );
+    assert!(
+        fake.label_names()
+            .contains(&"bosun:state/ready".to_string())
+    );
+
+    let before = posts(&fake);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), before);
+    assert!(
+        v["data"]["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["action"] == "existing")
+    );
+    assert!(v["data"]["epics"][0]["action"] == "existing");
+    assert_eq!(v["data"]["tasks"][0]["state"], "ready");
+}
+
+#[test]
+fn a_hand_made_task_issue_is_adopted_unchanged() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let body = r#"Hand made.
+
+<!-- bosun:task {"item":"M1","task":"T1","touch":["src/core/state.rs"]} -->"#;
+    fake.issue(5, "M1/T1: by hand", &["bosun:state/claimed"], body);
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    let t = &v["data"]["tasks"][1];
+    assert_eq!(
+        (t["id"].as_str(), t["issue"].as_u64(), t["action"].as_str()),
+        (Some("M1/T1"), Some(5), Some("adopted"))
+    );
+    assert_eq!(t["state"], "claimed");
+    let i = fake.issue_state(5);
+    assert_eq!(i.body, body);
+    assert_eq!(i.labels, ["bosun:state/claimed"]);
+    // 2 epics + 2 plan tasks + 2 tasks; T1 of M1 is not duplicated
+    assert_eq!(posts(&fake), 6);
+    assert!(
+        fake.requests()
+            .iter()
+            .all(|r| !r.path.ends_with("/issues/5") || r.method == "GET")
+    );
+}
+
+#[test]
+fn an_epic_is_adopted_by_its_epic_marker() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    fake.issue(
+        9,
+        "M1: old epic",
+        &["bosun:state/planned"],
+        r#"<!-- bosun:epic {"item":"M1","area":"lifecycle"} -->"#,
+    );
+    let file = write_plan(tmp.path(), PLAN);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(v["data"]["epics"][0]["issue"], 9);
+    assert_eq!(v["data"]["epics"][0]["action"], "adopted");
+    let meta = bosun::core::meta::parse_task_meta(
+        &fake
+            .issue_state(find(&fake, "<!-- bosun:plan M1/T1 -->"))
+            .body,
+    )
+    .unwrap();
+    assert_eq!(meta.epic, Some(9));
+}
+
+#[test]
+fn dry_run_writes_nothing() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(writes(&fake), 0);
+    assert_eq!(v["data"]["dry_run"], true);
+    assert_eq!(v["data"]["epics"][0]["action"], "would-create");
+    assert_eq!(v["data"]["epics"][0]["issue"], Value::Null);
+    assert_eq!(v["data"]["tasks"].as_array().unwrap().len(), 5);
+    assert_eq!(v["data"]["tasks"][0]["state"], "ready");
+}
+
+#[test]
+fn item_filters_and_unknown_item_is_usage() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--item", "M2"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), 3);
+    assert_eq!(v["data"]["epics"].as_array().unwrap().len(), 1);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--item", "M9"]);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(posts(&fake), 3);
+}
+
+#[test]
+fn parse_errors_exit_1_with_all_errors_and_write_nothing() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let bad = "# Plan\n\n## m1: Bad\n\n## M2: Also bad\n";
+    let file = write_plan(tmp.path(), bad);
+    for cmd in ["import", "check"] {
+        let (code, v) = plan(&fake, tmp.path(), &[cmd, &file]);
+        assert_eq!(code, 1, "{v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("errors in")
+        );
+        assert!(v["data"]["errors"].as_array().unwrap().len() >= 2, "{v}");
+    }
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn project_mismatch_exits_1() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(
+        tmp.path(),
+        &PLAN.replace("project: widget", "project: other"),
+    );
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(posts(&fake), 0);
+}
+
+#[test]
+fn halted_import_exits_4_but_dry_run_does_not() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    fake.variable("BOSUN_HALT", "1");
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, _) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 4);
+    let (code, _) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    assert_eq!(code, 0);
+    assert_eq!(posts(&fake), 0);
+}
+
+#[test]
+fn check_summarises_a_good_plan_without_github() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["check", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert!(fake.requests().is_empty());
+    assert_eq!(v["data"]["title"], "Plan: widget");
+    assert_eq!(v["data"]["project"], "widget");
+    assert_eq!(
+        v["data"]["items"][0],
+        json!({"id":"M1","title":"Lifecycle","area":"lifecycle","tasks":2,"ucs":1})
+    );
+    assert_eq!(v["data"]["warnings"], json!([]));
+}
