@@ -7,9 +7,9 @@ use std::sync::OnceLock;
 use crate::cli::risk_check::owner_logins;
 use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
-use crate::core::lease::race_winner;
+use crate::core::lease::{Lease, race_winner};
 use crate::core::meta::{TaskMeta, parse_task_meta};
-use crate::core::records::{Note, Record};
+use crate::core::records::{Note, Record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
 use crate::github::{Github, Issue, IssueState, LiveGithub, Variable};
@@ -237,4 +237,26 @@ pub fn end_lease(gh: &dyn Github, number: u64, session: &str, reason: &str) -> R
         reason: reason.into(),
     };
     Ok(gh.add_comment(number, &record.to_line())?.id)
+}
+
+/// Edit a lease comment in place so the lease expires at `expires` (`notes` are the comments of
+/// its issue). No comment is added.
+pub fn renew_lease(
+    gh: &dyn Github,
+    lease: &Lease,
+    notes: &[Note],
+    expires: Timestamp,
+) -> Result<()> {
+    let record = Record::Lease {
+        session: lease.session.clone(),
+        origin: lease.origin.clone(),
+        expires: expires.to_string(),
+        touch: lease.touch.clone(),
+    };
+    let body = notes
+        .iter()
+        .find(|n| n.id == lease.comment_id)
+        .map_or("", |n| n.body.as_str());
+    gh.update_comment(lease.comment_id, &replace_record(body, &record))?;
+    Ok(())
 }

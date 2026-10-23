@@ -5,7 +5,8 @@ use std::path::Path;
 use serde_json::json;
 
 use super::{EpicArg, WaveCmd};
-use crate::app::{App, active_issues, limits_from_default, task_meta};
+use crate::app::{App, active_issues, limits_from_default, main_red, task_meta};
+use crate::cli::status::process_red;
 use crate::core::lease::live_leases;
 use crate::core::state::{State, state_of};
 use crate::core::wave::{TaskInfo, plan};
@@ -16,12 +17,27 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     let WaveCmd::Plan(EpicArg { epic }) = cmd;
     let app = App::load(dir)?;
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
-    if gh.get_issue(*epic)?.is_none() {
+    let Some(epic_issue) = gh.get_issue(*epic)? else {
         return Err(BosunError::error(
             format!("issue #{epic} does not exist"),
             "check the epic number; `bosun status` lists the epics",
         ));
+    };
+    let fixing = |kind: &str| epic_issue.labels.iter().any(|l| l == kind);
+    if let Some(red) = main_red(gh)?
+        && !fixing("bosun:kind/mainfix")
+    {
+        return Err(BosunError::halted(
+            format!("waves pause while main is red (#{red})"),
+            format!("wait for #{red} to close, or plan a mainfix epic"),
+        ));
     }
+    // Process-red under a feature epic: only its process-fix tasks may run.
+    let only_fix = process_red(gh)?
+        .filter(|_| !fixing("bosun:kind/mainfix") && !fixing("bosun:kind/process-fix"));
+    // Ready process-fix tasks; active tasks stay in the plan so they count against the cap.
+    let mut fix_tasks: Vec<u64> = Vec::new();
+    let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -33,6 +49,9 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         if issue.state == "closed" || state == Some(State::Merged) {
             merged.push(plan_id);
         } else if meta.epic == Some(*epic) {
+            if meta.kind == "process-fix" && state == Some(State::Ready) {
+                fix_tasks.push(issue.number);
+            }
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {
@@ -47,7 +66,19 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             ));
         }
     }
-    let infos: Vec<TaskInfo> = tasks.iter().map(|t| t.0.clone()).collect();
+    if let Some(red) = only_fix
+        && fix_tasks.is_empty()
+    {
+        return Err(BosunError::halted(
+            format!("waves pause while process is red (#{red})"),
+            format!("close #{red} by merging its process-fix, or plan a process-fix epic"),
+        ));
+    }
+    let infos: Vec<TaskInfo> = tasks
+        .iter()
+        .filter(|t| only_fix.is_none() || fix_tasks.contains(&t.0.issue) || active(t))
+        .map(|t| t.0.clone())
+        .collect();
     let mut leased = Vec::new();
     for (i, n) in active_issues(gh)? {
         leased.push((i.number, n));
@@ -65,11 +96,20 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
                 "touch": info.touch, "workspace": workspace})
         })
         .collect();
-    let waiting: Vec<_> = wave
+    let mut waiting: Vec<_> = wave
         .waiting
         .iter()
         .map(|(n, reason)| json!({"issue": n, "reason": reason}))
         .collect();
+    if let Some(red) = only_fix {
+        for (info, _, _) in tasks
+            .iter()
+            .filter(|t| !fix_tasks.contains(&t.0.issue) && !active(t))
+        {
+            let reason = format!("process is red (#{red}): only process-fix tasks run");
+            waiting.push(json!({"issue": info.issue, "reason": reason}));
+        }
+    }
     Ok(Outcome::data(
         json!({"epic": epic, "run": run, "waiting": waiting}),
     ))
