@@ -33,7 +33,7 @@ function binaryPath(platform, arch, resolve = require.resolve) {
  * Commands with a subcommand; their envelope names both words ("verdict post"). The same list
  * as the `Name(NameCmd)` variants in src/cli/mod.rs; the launcher tests check that.
  */
-const GROUPS = new Set(["wave", "verdict", "lesson", "hook", "budget"]);
+const GROUPS = new Set(["wave", "verdict", "lesson", "hook", "budget", "plan"]);
 
 /** The envelope's `command` for `args`, as bosun names it; "" when there is none. */
 function commandName(args) {
