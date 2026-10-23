@@ -14,6 +14,7 @@ pub mod lesson;
 pub mod msg;
 pub mod plan;
 pub mod pr;
+pub mod progress;
 pub mod reap;
 pub mod release;
 pub mod resume;
@@ -111,6 +112,8 @@ pub enum Command {
     Fail(FailArgs),
     /// After a container restart: renew this session's leases and list the PRs to continue.
     Resume,
+    /// Cost per merged task over the last N days (read-only).
+    Progress(ProgressArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -140,6 +143,7 @@ pub const COMMANDS: [&str; 25] = [
     "plan",
     "fail",
     "resume",
+    "progress",
 ];
 
 impl Command {
@@ -177,6 +181,7 @@ impl Command {
             Command::Plan(PlanCmd::Import(_)) => "plan import",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
+            Command::Progress(_) => "progress",
         }
     }
 }
@@ -277,6 +282,9 @@ pub struct GateArgs {
     /// Run on all packages (merge queue).
     #[arg(long)]
     pub all: bool,
+    /// The PR number, for `main-open` (default: env `BOSUN_PR`).
+    #[arg(long)]
+    pub pr: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -396,6 +404,13 @@ pub enum HookCmd {
 pub enum BudgetCmd {
     /// Record the spend of a task (claude-sessions or generic provider).
     Record(BudgetRecordArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProgressArgs {
+    /// Length of the window in days, ending now.
+    #[arg(long, default_value_t = 7)]
+    pub days: u32,
 }
 
 #[derive(Debug, Args)]

@@ -20,6 +20,12 @@ pub struct Issue {
     pub pull_request: bool,
     #[serde(default, deserialize_with = "login")]
     pub user: String,
+    /// RFC 3339 time the issue was closed; `None` while open.
+    #[serde(default)]
+    pub closed_at: Option<String>,
+    /// Why a closed issue was closed: `completed`, `not_planned` or `duplicate`.
+    #[serde(default)]
+    pub state_reason: Option<String>,
 }
 
 impl Issue {
