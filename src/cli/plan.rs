@@ -764,33 +764,6 @@ fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
     Ok(issues)
 }
 
-/// Every issue, including ones the list does not show yet: GitHub's list lags seconds behind
-/// creation, while GET by number is consistent. Probe the numbers after the highest listed one.
-fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
-    let mut issues = gh.list_issues(&[], IssueState::All)?;
-    let first = issues.iter().map(|i| i.number).max().unwrap_or(0) + 1;
-    let (mut found, mut probes) = (0, 0);
-    // Stop at the first number that does not exist. Pull requests and deleted or transferred
-    // numbers are skipped; only issues the list lacked count toward the cap of 50.
-    for next in first.. {
-        probes += 1;
-        if found >= 50 || probes > 1000 {
-            break;
-        }
-        match gh.probe_issue(next)? {
-            Probe::Issue(i) => {
-                if !i.pull_request && !issues.iter().any(|x| x.number == i.number) {
-                    issues.push(i);
-                    found += 1;
-                }
-            }
-            Probe::Gone => {}
-            Probe::Missing => break,
-        }
-    }
-    Ok(issues)
-}
-
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     let mut imported = false;
     let plan_path = imp.plan_path.clone();
