@@ -318,6 +318,124 @@ fn refusals_run_no_splice() {
     assert!(e.argv().is_empty());
 }
 
+/// A plain repo: the claude-md piece is added, there is no own_ci, and the seeded hoist.toml
+/// (written by splice) is left alone.
+#[test]
+fn a_plain_repo_gets_claude_md_and_no_own_ci() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    let argv = e.argv();
+    assert!(argv.contains("--piece rust --piece claude-md"), "{argv}");
+    assert!(!argv.contains("own_ci"), "{argv}");
+    assert!(!argv.contains("--exclude"), "{argv}");
+    assert_eq!(v["data"]["own_ci"], false);
+    assert_eq!(v["data"]["hoist_checks_added"].as_array().unwrap().len(), 0);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
+}
+
+fn commit_file(e: &Env, path: &str, body: &str) {
+    let p = e.repo.path().join(path);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, body).unwrap();
+}
+
+const HOIST: &str = "# keep me\n[github]\n# the gates\nrequired_checks = [\"ci-ok\"] # trailing\nauto_merge = true\n";
+
+/// A hull template-rust repo: it owns ci.yml, CLAUDE.md and settings.json, and has a hoist.toml.
+#[test]
+fn a_hull_repo_gets_own_ci_excludes_and_hoist_checks() {
+    let e = Env::new();
+    commit_file(&e, ".github/workflows/ci.yml", "name: ci\n");
+    commit_file(&e, ".claude/settings.json", "{}");
+    commit_file(&e, "CLAUDE.md", "# x\n");
+    commit_file(&e, "hoist.toml", HOIST);
+    commit_file(
+        &e,
+        ".splice/lock.toml",
+        "[files]\n\"CLAUDE.md\" = \"a\"\n\".claude/settings.json\" = \"b\"\n\".github/workflows/ci.yml\" = \"c\"\n",
+    );
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "hull"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust"]);
+    assert_eq!(code, 0, "{v}");
+    let argv = e.argv();
+    assert!(argv.contains("--data own_ci=1"), "{argv}");
+    assert!(!argv.contains("claude-md"), "{argv}");
+    assert!(argv.contains("--exclude hoist.toml"), "{argv}");
+    assert!(argv.contains("--exclude .claude/settings.json"), "{argv}");
+    let hoist = std::fs::read_to_string(e.repo.path().join("hoist.toml")).unwrap();
+    assert_eq!(
+        hoist,
+        HOIST.replace(
+            "[\"ci-ok\"]",
+            "[\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\", \"bosun-ok\"]"
+        )
+    );
+    let d = &v["data"];
+    assert_eq!(d["own_ci"], true);
+    assert_eq!(
+        d["hoist_checks_added"],
+        serde_json::json!(["risk-check", "review-verdict", "main-open", "bosun-ok"])
+    );
+    let steps = d["owner_steps"].as_array().unwrap();
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.as_str().unwrap().contains("bosun hook pre-tool-use"))
+    );
+    let posts: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.path.ends_with("/pulls"))
+        .collect();
+    assert!(
+        posts[0]
+            .body
+            .as_deref()
+            .unwrap()
+            .contains("bosun hook session-start")
+    );
+}
+
+/// A settings.json that already runs both bosun hooks needs no owner step.
+#[test]
+fn settings_with_the_hooks_need_no_owner_step() {
+    let e = Env::new();
+    commit_file(
+        &e,
+        ".claude/settings.json",
+        "{\"cmd\":[\"bosun hook pre-tool-use\",\"bosun hook session-start\"]}",
+    );
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "hooks"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(e.argv().contains("--exclude .claude/settings.json"));
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
+}
+
+/// An invalid hoist.toml fails after splice and rolls back.
+#[test]
+fn an_invalid_hoist_toml_rolls_back() {
+    let e = Env::new();
+    commit_file(&e, "hoist.toml", "[github\n");
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "bad"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("rolled back"));
+    assert_eq!(git_out(e.repo.path(), &["status", "--porcelain"]), "");
+}
+
 /// The push worked but the PR did not: the fix names a command that opens it.
 #[test]
 fn a_failed_pr_after_the_push_names_the_command() {
