@@ -404,6 +404,7 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
 }
 
 #[cfg(test)]
+#[rustfmt::skip]
 mod tests {
     use super::*;
 
@@ -413,135 +414,80 @@ mod tests {
         "- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n\n",
         "### Done when\n\n- UC-M1-1: it works.\n"
     );
+    const H: &str = "not `## <ID>: <title>`";
 
     /// OK with the first `from` replaced by `to`.
     fn w(from: &str, to: &str) -> String {
         assert!(OK.contains(from), "{from}");
         OK.replacen(from, to, 1)
     }
-    /// Every case must report an error on `line` that contains `msg`, and every error needs a fix.
-    fn check(cases: &[(String, usize, &str)]) {
-        for (text, line, msg) in cases {
-            let e = parse(text).unwrap_err();
-            let hit = e.iter().any(|e| e.line == *line && e.message.contains(msg));
-            assert!(hit, "{msg} @{line}: {e:?}\n{text}");
-            assert!(e.iter().all(|e| !e.fix.is_empty()));
-        }
+    /// `text` must report an error on `line` containing `msg`; every error needs a fix.
+    fn at(text: &str, line: usize, msg: &str) {
+        let e = parse(text).unwrap_err();
+        let hit = e.iter().any(|e| e.line == line && e.message.contains(msg));
+        assert!(hit, "{msg} @{line}: {e:?}\n{text}");
+        assert!(e.iter().all(|e| !e.fix.is_empty()));
+    }
+    /// Same, for OK with `from` replaced by `to`.
+    fn chk(from: &str, to: &str, line: usize, msg: &str) {
+        at(&w(from, to), line, msg);
     }
 
     #[test]
     fn valid_plan() {
         let p = parse(OK).unwrap();
-        assert_eq!(
-            (p.title.as_str(), p.project.as_deref()),
-            ("Plan: x", Some("x"))
-        );
+        assert_eq!((p.title.as_str(), p.project.as_deref()), ("Plan: x", Some("x")));
         let (i, t) = (&p.items[0], &p.items[0].tasks);
-        assert_eq!(
-            (i.area.as_str(), i.description.as_str(), i.line),
-            ("core", "Words here.", 5)
-        );
+        assert_eq!((i.area.as_str(), i.description.as_str(), i.line), ("core", "Words here.", 5));
         assert_eq!(i.depends, ["seed"]);
         assert_eq!(t[0].touch, ["src/a.rs", "tests/a.rs"]);
-        assert_eq!(
-            (t[0].kind.as_str(), t[0].risk.as_str(), t[0].size),
-            ("feature", "normal", Some(100))
-        );
-        assert_eq!(
-            (
-                &t[1].depends[0][..],
-                t[1].plan_id("M1").as_str(),
-                &i.ucs[0].id[..]
-            ),
-            ("M1/T1", "M1/T2", "UC-M1-1")
-        );
-        assert_eq!(
-            parse(&format!("```\n## bad\n```\n~~~\n## bad\n~~~\n{OK}"))
-                .unwrap()
-                .items
-                .len(),
-            1
-        );
+        assert_eq!((t[0].kind.as_str(), t[0].risk.as_str(), t[0].size), ("feature", "normal", Some(100)));
+        assert_eq!((&t[1].depends[0][..], t[1].plan_id("M1").as_str(), &i.ucs[0].id[..]), ("M1/T1", "M1/T2", "UC-M1-1"));
+        assert_eq!(parse(&format!("```\n## bad\n```\n~~~\n## bad\n~~~\n{OK}")).unwrap().items.len(), 1);
     }
 
     #[test]
     fn rules_1_to_3() {
-        check(&[
-            (OK.replace("# Plan: x\n", ""), 1, "no `# ` title"),
-            ("# P\n".into(), 1, "no items"),
-            (w("## M1: One", "## MILESTONE1: One"), 5, "item id"),
-            (w("## M1: One", "## M1:"), 5, "not `## <ID>: <title>`"),
-            (w("## M1: One", "## m1: One"), 5, "not `## <ID>: <title>`"),
-            (w("## M1: One", "## M2 Two"), 5, "not `## <ID>: <title>`"),
-            (w("## M1: One", "## M-2: One"), 5, "not `## <ID>: <title>`"),
-            (format!("{OK}\n## M1: Again\n"), 26, "used twice"),
-            (w("area: core\n", ""), 5, "no `area:`"),
-            (w("area: core", "area: Core!"), 7, "area"),
-            (w("depends: seed", "depends: M9"), 5, "not an item"),
-            (
-                w("depends: seed", "depends: seed\narea: b"),
-                9,
-                "`area:` is given twice",
-            ),
-            (
-                w("area: core", "area: core\ndepends: seed"),
-                9,
-                "`depends:` is given twice",
-            ),
-        ]);
+        at(&OK.replace("# Plan: x\n", ""), 1, "no `# ` title");
+        at("# P\n", 1, "no items");
+        chk("## M1: One", "## MILESTONE1: One", 5, "item id");
+        for h in ["## M1:", "## m1: One", "## M2 Two", "## M-2: One"] {
+            chk("## M1: One", h, 5, H);
+        }
+        at(&format!("{OK}\n## M1: Again\n"), 26, "used twice");
+        chk("area: core\n", "", 5, "no `area:`");
+        chk("area: core", "area: Core!", 7, "area");
+        chk("depends: seed", "depends: M9", 5, "not an item");
+        chk("depends: seed", "depends: seed\narea: b", 9, "`area:` is given twice");
+        chk("area: core", "area: core\ndepends: seed", 9, "`depends:` is given twice");
     }
 
     #[test]
     fn prose_headings_are_ignored() {
         for h in ["## Notes", "## Open questions", "## Milestone one"] {
-            let p = parse(&format!("{OK}\n{h}\n\n- not a task\n")).unwrap();
-            assert_eq!(p.items.len(), 1, "{h}");
+            assert_eq!(parse(&format!("{OK}\n{h}\n\n- not a task\n")).unwrap().items.len(), 1, "{h}");
         }
     }
 
     #[test]
     fn rule5_tasks() {
-        let bullets = ["* T2: x", "+ T2: x", "1. T2: x", "plain text"];
-        let bullets = bullets.map(|b| {
-            (
-                w("- T2: Second", b),
-                17,
-                "expected a `- T<n>: title` bullet",
-            )
-        });
-        check(&bullets);
-        check(&[
-            (w("- T2:", "- T1:"), 17, "used twice"),
-            (w("- T2:", "- X2:"), 17, "task bullet"),
-            (w("touch: src/b.rs", "touch: "), 17, "no `touch:`"),
-            (w("size: 100", "size: 401"), 16, "over 400"),
-            (w("size: 100", "size: ten"), 16, "not an integer"),
-            (w("kind: flake", "kind: odd"), 20, "kind"),
-            (w("kind: flake", "risk: low"), 20, "risk"),
-            (w("kind: flake", "colour: red"), 20, "unknown task key"),
-            (w("depends: T1", "depends: T9"), 17, "not a task"),
-            (w("depends: T1", "depends: M3/T1"), 17, "not a task"),
-            (
-                w("size: 100", "size: 100\n  touch: b"),
-                17,
-                "`touch:` is given twice",
-            ),
-            (
-                w("  touch: src/a.rs, tests/a.rs\n", "  just text\n"),
-                15,
-                "`key: value`",
-            ),
-            (
-                w("- T1: First\n", "  touch: a\n- T1: First\n"),
-                14,
-                "before any task",
-            ),
-            (
-                w("- T2: Second\n", "```\n- T2: Second\n```\n"),
-                17,
-                "code fence inside",
-            ),
-        ]);
+        for b in ["* T2: x", "+ T2: x", "1. T2: x", "plain text"] {
+            chk("- T2: Second", b, 17, "expected a `- T<n>: title` bullet");
+        }
+        chk("- T2:", "- T1:", 17, "used twice");
+        chk("- T2:", "- X2:", 17, "task bullet");
+        chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
+        chk("size: 100", "size: 401", 16, "over 400");
+        chk("size: 100", "size: ten", 16, "not an integer");
+        chk("kind: flake", "kind: odd", 20, "kind");
+        chk("kind: flake", "risk: low", 20, "risk");
+        chk("kind: flake", "colour: red", 20, "unknown task key");
+        chk("depends: T1", "depends: T9", 17, "not a task");
+        chk("depends: T1", "depends: M3/T1", 17, "not a task");
+        chk("size: 100", "size: 100\n  touch: b", 17, "`touch:` is given twice");
+        chk("  touch: src/a.rs, tests/a.rs\n", "  just text\n", 15, "`key: value`");
+        chk("- T1: First\n", "  touch: a\n- T1: First\n", 14, "before any task");
+        chk("- T2: Second\n", "```\n- T2: Second\n```\n", 17, "code fence inside");
         let hi = parse(&w("size: 100", "size: 101\n  risk: high")).unwrap();
         assert!(hi.warnings[0].message.contains("risk high") && !hi.warnings[0].fix.is_empty());
         assert_eq!(hi.items[0].tasks[0].risk, "high");
@@ -549,19 +495,13 @@ mod tests {
 
     #[test]
     fn rule7_ucs_and_sections() {
-        check(&[
-            (w("UC-M1-1", "UC-M2-1"), 24, "belongs to item M2"),
-            (w("UC-M1-1", "UC-M1-2"), 24, "expected `UC-M1-1`"),
-            (w("UC-M1-1", "UC-M1-01"), 24, "expected `UC-M1-1`"),
-            (
-                format!("{OK}- UC-M1-1: again\n"),
-                25,
-                "`UC-M1-1` is used twice",
-            ),
-            (format!("{OK}~~~\n"), 25, "code fence inside"),
-            (w("### Done when\n\n- UC-M1-1: it works.\n", ""), 5, "no UC"),
-            (w("### Tasks", "### Other"), 5, "no `### Tasks`"),
-        ]);
+        chk("UC-M1-1", "UC-M2-1", 24, "belongs to item M2");
+        chk("UC-M1-1", "UC-M1-2", 24, "expected `UC-M1-1`");
+        chk("UC-M1-1", "UC-M1-01", 24, "expected `UC-M1-1`");
+        at(&format!("{OK}- UC-M1-1: again\n"), 25, "`UC-M1-1` is used twice");
+        at(&format!("{OK}~~~\n"), 25, "code fence inside");
+        chk("### Done when\n\n- UC-M1-1: it works.\n", "", 5, "no UC");
+        chk("### Tasks", "### Other", 5, "no `### Tasks`");
     }
 
     #[test]
@@ -570,10 +510,8 @@ mod tests {
         let p = parse(&w("Words here.", body)).unwrap();
         assert_eq!(p.items[0].description, body);
         assert_eq!((p.items[0].depends.len(), p.items[0].tasks.len()), (1, 2));
-        check(&[
-            (w("Words here.", "```\nopen"), 10, "unclosed code fence"),
-            (w("Words here.", "~~~\n```\n"), 10, "unclosed"),
-        ]);
+        chk("Words here.", "```\nopen", 10, "unclosed code fence");
+        chk("Words here.", "~~~\n```\n", 10, "unclosed");
     }
 
     #[test]
@@ -582,24 +520,15 @@ mod tests {
         assert_eq!(parse(&OK.replace('\n', "\r\n")).unwrap(), want);
         assert_eq!(parse(&format!("\u{feff}{OK}")).unwrap(), want);
         assert_eq!(parse(&OK.replace("\n  ", "\n\t")).unwrap(), want);
-        assert_eq!(
-            parse(&OK.replace('\n', "  \n")).unwrap().items[0].tasks,
-            want.items[0].tasks
-        );
-        let dup =
-            w("depends: T1", "depends: T1, T1").replace("depends: seed", "depends: seed, seed");
+        assert_eq!(parse(&OK.replace('\n', "  \n")).unwrap().items[0].tasks, want.items[0].tasks);
+        let dup = w("depends: T1", "depends: T1, T1").replace("depends: seed", "depends: seed, seed");
         let p = parse(&dup).unwrap();
-        assert_eq!(
-            (p.items[0].depends.len(), p.items[0].tasks[1].depends.len()),
-            (1, 1)
-        );
+        assert_eq!((p.items[0].depends.len(), p.items[0].tasks[1].depends.len()), (1, 1));
     }
 
     #[test]
     fn all_errors_are_collected_with_describe() {
-        let bad = w("area: core\n", "")
-            .replace("UC-M1-1", "UC-M1-3")
-            .replace("touch: src/b.rs", "touch:");
+        let bad = w("area: core\n", "").replace("UC-M1-1", "UC-M1-3").replace("touch: src/b.rs", "touch:");
         let e = parse(&bad).unwrap_err();
         assert!(e.len() >= 3 && e.windows(2).all(|w| w[0].line <= w[1].line));
         assert!(e[0].describe("plans/x.md").starts_with("plans/x.md:5: "));
