@@ -241,10 +241,11 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
             job = line.trim().trim_end_matches(':').to_string();
         }
         // `contents: write`, `permissions: write-all` and `{ contents: write }` all grant.
-        let grants = line.ends_with(": write")
-            || line.contains("write-all")
-            || line.contains(": write,")
-            || line.contains(": write }");
+        let tight: String = line.split_whitespace().collect();
+        let grants = tight.ends_with(":write")
+            || tight.contains("write-all")
+            || tight.contains(":write,")
+            || tight.contains(":write}");
         if grants {
             assert!(
                 job == "publish" || job == "prepare",
