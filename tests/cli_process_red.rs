@@ -150,6 +150,8 @@ fn process_fix_tasks_respect_max_parallel_of_in_flight_work() {
     in_flight_feature(&fake);
     let body = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/b.rs"],"kind":"process-fix"} -->"#;
     fake.issue(12, "process fix", &["bosun:state/ready"], body);
+    // wave plan reads the limits from the default branch (spec §5).
+    fake.content(".bosun/limits.toml", "main", "[waves]\nmax_parallel = 1\n");
     let dir = std::env::temp_dir().join(format!("bosun-pr-wave-{}", std::process::id()));
     std::fs::create_dir_all(dir.join(".bosun")).unwrap();
     std::fs::write(
