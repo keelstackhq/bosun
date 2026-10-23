@@ -210,6 +210,10 @@ fn block<'a>(yaml: &'a str, start: &str, end: &str) -> &'a str {
     &yaml[i..j]
 }
 
+/// main-health's own_ci parts, as written in the template.
+const WATCH: &str = "{% endraw %}    workflows: [bosun{% if own_ci %}, ci{% endif %}]\n{% raw %}";
+const ACTIONS_READ: &str = "{% endraw %}{% if own_ci %}  actions: read\n{% endif %}{% raw %}";
+
 /// The consumer copies keep bosun's own triggers and permissions (tests/workflows.rs pins
 /// those), check out at most the base once, and never put an expression in a script.
 #[test]
@@ -224,16 +228,15 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     ] {
         let theirs = fs::read_to_string(wf.join(theirs_name)).unwrap();
         let mine = fs::read_to_string(ours.join(f)).unwrap();
-        // main-health watches bosun.yml (and the repo's ci), so only its permissions match.
-        let blocks: &[(&str, &str)] = if f == "main-health.yml" {
-            &[("\npermissions:\n", "\njobs:")]
-        } else {
-            &[
-                ("\non:\n", "\npermissions:"),
-                ("\npermissions:\n", "\njobs:"),
-            ]
-        };
-        for &(a, b) in blocks {
+        // main-health watches bosun (and the repo's ci) where bosun's own watches ci, and with
+        // the repo's ci it also reads the runs of both: the rest of `on:` and `permissions:` match.
+        let theirs = theirs
+            .replace(WATCH, "    workflows: [ci]\n")
+            .replace(ACTIONS_READ, "");
+        for (a, b) in [
+            ("\non:\n", "\npermissions:"),
+            ("\npermissions:\n", "\njobs:"),
+        ] {
             assert_eq!(
                 block(&theirs, a, b),
                 block(&mine, a, b),
@@ -267,7 +270,12 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     // A fork PR from a branch called main also fires workflow_run on [main].
     let health = fs::read_to_string(wf.join("main-health.yml.jinja")).unwrap();
     assert!(health.contains("uses: ./.github/workflows/bosun.yml"));
-    assert!(health.contains("workflows: [bosun{% if own_ci %}, ci{% endif %}]"));
+    assert!(health.contains(WATCH) && health.contains(ACTIONS_READ));
+    // With the repo's ci, a green run of one workflow alone never closes main-red.
+    let both = "for wf in bosun.yml ci.yml; do";
+    let gate = health.find(both).expect("own_ci checks both workflows");
+    assert!(gate < health.find("gh issue close").unwrap());
+    assert!(health[..gate].rfind("{% if own_ci %}") > health[..gate].rfind("{% endif %}"));
     assert!(health.contains("github.event.workflow_run.event == 'push'"));
     assert!(health.contains("workflow_run.head_repository.full_name == github.repository"));
     // The update bot can write: its splice is pinned.
