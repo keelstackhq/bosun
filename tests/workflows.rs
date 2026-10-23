@@ -207,7 +207,7 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
         [
             "  contents: read",
             "  issues: write",
-            "  pull-requests: read",
+            "  pull-requests: write",
             "  statuses: write"
         ]
     );

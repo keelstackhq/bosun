@@ -21,12 +21,13 @@ concurrency:
     !contains(github.event.comment.body, '<!-- bosun:verdict -->') && github.run_id || 'apply' }}
   cancel-in-progress: false
 
-# Least privilege: statuses for the verdict; issues: write for the verdict record comment and the
-# task's state labels; read for the PR.
+# Least privilege: statuses for the verdict; pull-requests: write for the verdict record comment
+# (a workflow token needs it to comment on a PR; issues: write is not enough); issues: write for
+# the linked task's state labels.
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
   statuses: write
 
 jobs:
