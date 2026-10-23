@@ -161,7 +161,7 @@ pub fn lesson_marker(sig: &str, kind: &str) -> String {
     format!("{MARKER_OPEN}{json}{MARKER_CLOSE}")
 }
 
-/// The `(signature, kind)` of the first lesson marker in an issue body.
+/// The `(signature, kind)` of the last lesson marker in an issue body.
 pub fn parse_lesson_marker(body: &str) -> Option<(String, String)> {
     let start = body.rfind(MARKER_OPEN)? + MARKER_OPEN.len();
     let len = body[start..].find(MARKER_CLOSE)?;
