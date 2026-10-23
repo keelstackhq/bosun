@@ -170,6 +170,10 @@ Stop rules:
 - A fix round with 0 changed lines: the task goes to blocked.
 - On blocked, bosun escalates one model tier (haiku -> sonnet -> opus). When opus is used up, the
   task goes to needs-human.
+- `bosun fail <issue> --signature S [--changed-lines N] [--model M]` posts a `failure` record and
+  applies these rules. A stop sets `blocked` and posts an `escalate` record (`from`, `to`,
+  `reason`); an escalation restarts the count. With opus used up it sets `needs-human` (exit 5).
+  The signature is in `data` for the lessons.
 - Each stop rule opens or hits a lesson.
 - When main is red, feature work pauses; only mainfix tasks continue.
 
@@ -195,7 +199,7 @@ Conflict avoidance (three layers):
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.
-   The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`); branch protection stays the real guard, since a hook cannot see every shell trick.
+   The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`). Its default-branch rules (commit, merge, rebase, reset, cherry-pick, plain push) read the branch where git acts: the hook's directory moved by a `cd dir` joined with `&&`, `;` or a newline, and by `git -C dir`, `--git-dir` and `--work-tree`; a `cd` counts only when the shell surely runs it here (after the start, `;`, a newline, or in an `&&` chain that reaches the git command; never in a pipeline or a `( .. )` group); a directory it cannot read literally (`$VAR`, `~`, `cd -`), a moved target git cannot read (a failed `cd`), or `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` count as the default branch. Branch protection stays the real guard, since a hook cannot see every shell trick.
 
 Leases conflict per issue, not per session: wave agents run inside their orchestrator's session, so a
 lease on another issue conflicts even when it has the same session id; only a lease of the same session
@@ -232,13 +236,15 @@ and never uses send_later or send_message.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 
 `bosun spawn` checks, in this order:
-1. Main is not red.
+1. Main is not red, and process is not red (a mainfix or process-fix epic is exempt from process-red).
 2. The daily budget is below 80 %.
 3. The depth of the new session is at most max_depth.
 4. The live sessions (all origins) are fewer than max_live_sessions.
 5. The children of the parent are fewer than max_children.
 6. There is no conflict with a live lease or area owner.
 7. Claim the epic, then return the `create_session` call in `next` (D29).
+
+`bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
 `spawn` and `budget record` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
 
@@ -279,6 +285,10 @@ Janitor, resume, results:
   `bosun notify`.
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
+  It renews the join record of the session (joining again if the registry has none) and every
+  lease of the session in place. An expired lease is renewed only when no live lease overlaps
+  its touch paths, else it is listed under `lost`. For each held task it returns the state,
+  the linked open PR, its branch and a short `action`.
 - Results (D14): a child posts its result as an issue comment on its epic,
   `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
   sees it with `bosun wait`.
@@ -299,9 +309,18 @@ Capture:
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
+- Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
+  `<!-- bosun:lesson {"signature":"<hex>","kind":"<kind>"} -->` in the body. The signature is
+  FNV-1a 64 of the kind and the normalised failure text (hex ids, times, numbers and temp paths
+  replaced; first 20 lines). `bosun lesson capture --kind <k> [--issue N] --from -` opens the
+  issue, or posts a `Seen again` comment with a `lesson-seen` record on the open one with the same
+  signature; that record is the hit.
 
 Triage (curator Routine, daily, Sonnet):
-- blocking: sets process-red, so waves pause as on main-red.
+- blocking: sets process-red, so waves pause as on main-red. Process-red is an open issue labelled
+  `bosun:process-red` (a blocking lesson carries it). While one is open, `claim` and `spawn` refuse
+  work other than `mainfix` and `process-fix` with exit 4, and `wave plan` returns exit 4, except
+  for a mainfix or process-fix epic.
 - mechanizable: opens a kind/process-fix task, which runs before the features of the same area.
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
