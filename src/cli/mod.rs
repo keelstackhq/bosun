@@ -15,6 +15,7 @@ pub mod msg;
 pub mod pr;
 pub mod reap;
 pub mod release;
+pub mod resume;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -101,10 +102,12 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// After a container restart: renew this session's leases and list the PRs to continue.
+    Resume,
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 22] = [
+pub const COMMANDS: [&str; 23] = [
     "join",
     "claim",
     "heartbeat",
@@ -127,6 +130,7 @@ pub const COMMANDS: [&str; 22] = [
     "hook",
     "doctor",
     "budget",
+    "resume",
 ];
 
 impl Command {
@@ -159,6 +163,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Resume => "resume",
         }
     }
 }

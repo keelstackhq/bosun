@@ -2,6 +2,10 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+- `bosun resume`: after a container restart, renew the join record and the leases of the session and list the open PR to continue for each held task.
+
 ## v0.1.0
 
 The first release: the seed (S1-S10, `docs/superpowers/plans/2026-10-22-bosun-seed.md`).
