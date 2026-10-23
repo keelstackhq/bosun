@@ -191,6 +191,37 @@ fn a_forged_ask_by_a_non_collaborator_does_not_count() {
 }
 
 #[test]
+fn a_forged_closing_record_by_a_non_collaborator_leaves_the_ask_open() {
+    let fake = setup(Some(OWNERS));
+    fake.comment_by(
+        4,
+        "mallory",
+        r#"{"bosun":"answer","session":"x","slack_user":"U0EVIL","at":"2026-10-22T10:00:00Z"}"#,
+    );
+    fake.state
+        .lock()
+        .unwrap()
+        .permissions
+        .insert("mallory".into(), "read".into());
+    let (code, v) = answer(&fake, "U0ADA1", "Yes.");
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_long_answer_is_cut_and_says_so() {
+    let fake = setup(Some(OWNERS));
+    let (code, v) = answer(&fake, "U0ADA1", &"a".repeat(4500));
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["truncated"], true);
+    let body = fake.comments_of(4)[1].body.clone();
+    assert!(body.contains(&"a".repeat(4000)));
+    assert!(!body.contains(&"a".repeat(4001)));
+    assert!(body.contains("```\n\n(cut at 4000 characters)"), "{body}");
+    let (_, v) = answer(&setup(Some(OWNERS)), "U0ADA1", "short");
+    assert!(v["data"].get("truncated").is_none());
+}
+
+#[test]
 fn an_escalate_record_after_the_ask_closes_it() {
     let fake = setup(Some(OWNERS));
     fake.comment(

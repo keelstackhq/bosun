@@ -3,6 +3,7 @@
 //! becomes a flag, a label or a command. The answer is recorded only: it never changes the
 //! task's state, the owner moves the task on GitHub.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -46,24 +47,41 @@ fn read_text(from: &str) -> Result<String, BosunError> {
 /// `failure` record follows it. A forged ask by anyone else never counts.
 fn ask_is_open(gh: &dyn Github, n: u64) -> Result<bool, BosunError> {
     let comments = gh.list_comments(n)?;
+    let mut cache: HashMap<String, bool> = HashMap::new();
     let mut newest_ask = None;
+    let mut closed_at = None;
     for (i, c) in comments.iter().enumerate() {
-        if matches!(parse_record(&c.body), Some(Record::Ask { .. })) {
-            let perm = gh.permission(&c.user)?.unwrap_or_default();
-            if matches!(perm.as_str(), "admin" | "write") {
-                newest_ask = Some(i);
+        let Some(record) = parse_record(&c.body) else {
+            continue;
+        };
+        let is_ask = matches!(record, Record::Ask { .. });
+        let closes = matches!(
+            record,
+            Record::Answer { .. } | Record::Escalate { .. } | Record::Failure { .. }
+        );
+        if !is_ask && !closes {
+            continue;
+        }
+        // Asks and closers count only from a collaborator with write access.
+        let trusted = match cache.get(&c.user) {
+            Some(t) => *t,
+            None => {
+                let perm = gh.permission(&c.user)?.unwrap_or_default();
+                let t = matches!(perm.as_str(), "admin" | "write");
+                cache.insert(c.user.clone(), t);
+                t
             }
+        };
+        if !trusted {
+            continue;
+        }
+        if is_ask {
+            newest_ask = Some(i);
+        } else {
+            closed_at = Some(i);
         }
     }
-    let Some(ask) = newest_ask else {
-        return Ok(false);
-    };
-    Ok(!comments[ask + 1..].iter().any(|c| {
-        matches!(
-            parse_record(&c.body),
-            Some(Record::Answer { .. } | Record::Escalate { .. } | Record::Failure { .. })
-        )
-    }))
+    Ok(matches!((newest_ask, closed_at), (Some(a), c) if c.is_none_or(|c| c < a)))
 }
 
 pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
@@ -128,14 +146,22 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         slack_user: args.slack_user.clone(),
         at: app.ctx.now.to_string(),
     };
+    let truncated = text.trim_end().chars().count() > 4000;
+    let cut = if truncated {
+        "(cut at 4000 characters)\n\n"
+    } else {
+        ""
+    };
     let body = format!(
-        "Answer from the owner via Slack (sender id not verified by bosun)\n\n```text\n{}\n```\n\n{}",
+        "Answer from the owner via Slack (sender id not verified by bosun)\n\n```text\n{}\n```\n\n{cut}{}",
         fence_text(text.trim_end()),
         record.to_line()
     );
     let comment = gh.add_comment(n, &body)?;
     // The answer is data: the owner moves the task on GitHub.
-    Ok(Outcome::data(
-        json!({"issue": n, "comment_id": comment.id, "state": "needs-human"}),
-    ))
+    let mut data = json!({"issue": n, "comment_id": comment.id, "state": "needs-human"});
+    if truncated {
+        data["truncated"] = json!(true);
+    }
+    Ok(Outcome::data(data))
 }
