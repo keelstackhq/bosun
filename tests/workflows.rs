@@ -270,6 +270,92 @@ fn assert_pinned_install_with_fallback(yaml: &str) {
     assert!(yaml.contains("test \"$got\" = \"bosun ${VERSION}\""));
     assert!(yaml.contains("steps.has.outputs.supported != 'true'"));
     assert!(!yaml.contains("cargo build"), "no build from main");
+    // A failed install must still reach the fallback.
+    assert!(yaml.contains("id: install\n        continue-on-error: true"));
+    assert!(yaml.contains("INSTALL: ${{ steps.install.outcome }}"));
+    assert!(yaml.contains("[ \"$INSTALL\" = success ] && [ -x target/release/bosun ]"));
+    assert!(
+        !yaml.contains("exit 4"),
+        "the fallback exits 0; the status carries the verdict"
+    );
+    for line in yaml.lines().filter(|l| l.contains("::warning::")) {
+        assert!(!line.contains('`'), "backtick in a shell string: {line}");
+    }
+    assert_eq!(
+        pin_script(yaml),
+        pin_script(&ci_yaml()),
+        "pin step differs from ci.yml"
+    );
+}
+
+fn ci_yaml() -> String {
+    fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/workflows/ci.yml"
+    ))
+    .unwrap()
+}
+
+/// The dedented `run:` script of the step with `id: pin`.
+fn pin_script(yaml: &str) -> String {
+    let at = yaml
+        .find("        id: pin\n        run: |\n")
+        .expect("a step with id: pin");
+    let body = &yaml[at..];
+    let body = &body[body.find("run: |\n").unwrap() + "run: |\n".len()..];
+    let mut out = String::new();
+    for line in body.lines() {
+        if !line.is_empty() && !line.starts_with("          ") {
+            break;
+        }
+        out.push_str(line.get(10..).unwrap_or(""));
+        out.push('\n');
+    }
+    out
+}
+
+/// Run the pin script of each workflow under bash with a fake `.bosun/version`.
+#[test]
+fn pin_step_accepts_exact_versions_only() {
+    if std::process::Command::new("bash")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("bash is missing: skipped");
+        return;
+    }
+    let ci = ci_yaml();
+    let mut scripts = vec![pin_script(&ci)];
+    for f in ["main-open.yml", "main-health.yml"] {
+        let path = format!("{}/.github/workflows/{f}", env!("CARGO_MANIFEST_DIR"));
+        scripts.push(pin_script(&fs::read_to_string(path).unwrap()));
+    }
+    for script in &scripts {
+        for (version, ok, want) in [
+            ("1.2.3\n", true, "version=1.2.3"),
+            ("unreleased\n", true, "version="),
+            ("1.2\n", false, ""),
+            ("latest\n", false, ""),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir(dir.path().join(".bosun")).unwrap();
+            fs::write(dir.path().join(".bosun/version"), version).unwrap();
+            let out_file = dir.path().join("out");
+            let status = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(script)
+                .current_dir(dir.path())
+                .env("GITHUB_OUTPUT", &out_file)
+                .output()
+                .unwrap();
+            assert_eq!(status.status.success(), ok, "{version:?}: {status:?}");
+            if ok {
+                let out = fs::read_to_string(&out_file).unwrap();
+                assert_eq!(out.trim(), want, "{version:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -292,15 +378,19 @@ fn main_open_judges_from_the_base_and_never_runs_pr_code() {
     );
     assert_eq!(yaml.matches("actions/checkout@").count(), 1);
     assert!(yaml.contains("persist-credentials: false"));
-    for bad in [
-        "head.sha",
-        "head.ref",
-        "head_ref",
-        "refs/pull",
-        "merge_commit_sha",
-    ] {
+    for bad in ["head.ref", "head_ref", "refs/pull", "merge_commit_sha"] {
         assert!(!yaml.contains(bad), "main-open.yml mentions {bad}");
     }
+    // The head sha appears once, read through the API, and is used only as the status target.
+    let heads: Vec<&str> = yaml.lines().filter(|l| l.contains("head.sha")).collect();
+    assert_eq!(heads.len(), 1, "{heads:?}");
+    assert!(heads[0].contains("sha=$(gh api \"repos/$GITHUB_REPOSITORY/pulls/$PR\""));
+    let uses: Vec<&str> = yaml.lines().filter(|l| l.contains("$sha")).collect();
+    assert_eq!(uses.len(), 1, "{uses:?}");
+    assert!(
+        uses[0].contains("repos/$GITHUB_REPOSITORY/statuses/$sha"),
+        "{uses:?}"
+    );
     assert!(job_ids(&yaml) == ["judge"], "{:?}", job_ids(&yaml));
     assert_pinned_install_with_fallback(&yaml);
     let scripts = run_scripts(&yaml);

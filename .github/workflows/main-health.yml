@@ -61,13 +61,16 @@ jobs:
           v="$(tr -d '[:space:]' < .bosun/version 2>/dev/null || true)"
           case "$v" in ""|unreleased) v="";; esac
           # An exact x.y.z only: never a dist-tag, range, URL or path.
-          if [ -n "$v" ] && ! printf '{'cmd': '`main-health`', 'probe': 'target/release/bosun --help 2>&1 | grep -q main-health'}' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+          if [ -n "$v" ] && ! printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
             echo "::error::.bosun/version must be 'unreleased' or an exact x.y.z, not '$v'"
             exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      # If npm or the pin fails, the job still reaches the shell fallback.
       - if: steps.pin.outputs.version != ''
         name: install the pinned release
+        id: install
+        continue-on-error: true
         env:
           VERSION: ${{ steps.pin.outputs.version }}
         run: |
@@ -80,12 +83,14 @@ jobs:
           test "$got" = "bosun ${VERSION}"
       - name: release has `main-health`
         id: has
+        env:
+          INSTALL: ${{ steps.install.outcome }}
         run: |
-          if [ -x target/release/bosun ] && target/release/bosun --help 2>&1 | grep -q main-health; then
+          if [ "$INSTALL" = success ] && [ -x target/release/bosun ] && target/release/bosun --help 2>&1 | grep -q main-health; then
             echo "supported=true" >> "$GITHUB_OUTPUT"
           else
             echo "supported=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::the pinned bosun has no `main-health` yet; running the shell fallback"
+            echo "::warning::the pinned bosun has no main-health command yet; running the shell fallback"
           fi
       - if: steps.has.outputs.supported == 'true'
         name: bosun main-health

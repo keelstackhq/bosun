@@ -40,13 +40,16 @@ jobs:
           v="$(tr -d '[:space:]' < .bosun/version 2>/dev/null || true)"
           case "$v" in ""|unreleased) v="";; esac
           # An exact x.y.z only: never a dist-tag, range, URL or path.
-          if [ -n "$v" ] && ! printf '{'cmd': '`gate main-open`', 'probe': "target/release/bosun gate --help 2>&1 | grep -q -- '--pr'"}' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+          if [ -n "$v" ] && ! printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
             echo "::error::.bosun/version must be 'unreleased' or an exact x.y.z, not '$v'"
             exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
+      # If npm or the pin fails, the job still reaches the shell fallback.
       - if: steps.pin.outputs.version != ''
         name: install the pinned release
+        id: install
+        continue-on-error: true
         env:
           VERSION: ${{ steps.pin.outputs.version }}
         run: |
@@ -59,12 +62,14 @@ jobs:
           test "$got" = "bosun ${VERSION}"
       - name: release has `gate main-open`
         id: has
+        env:
+          INSTALL: ${{ steps.install.outcome }}
         run: |
-          if [ -x target/release/bosun ] && target/release/bosun gate --help 2>&1 | grep -q -- '--pr'; then
+          if [ "$INSTALL" = success ] && [ -x target/release/bosun ] && target/release/bosun gate --help 2>&1 | grep -q -- '--pr'; then
             echo "supported=true" >> "$GITHUB_OUTPUT"
           else
             echo "supported=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::the pinned bosun has no `gate main-open` yet; running the shell fallback"
+            echo "::warning::the pinned bosun has no gate main-open command yet; running the shell fallback"
           fi
       - if: steps.has.outputs.supported == 'true'
         name: bosun gate main-open
@@ -76,6 +81,7 @@ jobs:
         run: ./target/release/bosun gate main-open --pr "$PR" || test $? -eq 4
       # Fallback: the same decision in shell, posted as the same `main-open` status. The head sha
       # comes from the API and is only a status target; PR code is never fetched.
+      # The status carries the verdict, so the fallback exits 0 like the bosun path.
       - if: steps.has.outputs.supported != 'true'
         name: main is open, or this is a mainfix (shell)
         env:
@@ -83,7 +89,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.head | .sha')
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.head.sha')
           red=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=bosun:main-red&state=open" --jq 'map(.number) | join(" ")')
           state=success; desc="main is open"
           if [ -n "$red" ]; then
@@ -94,4 +100,3 @@ jobs:
           fi
           echo "$state: $desc"
           gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state="$state" -f context=main-open -f description="$desc" >/dev/null
-          test "$state" = success || exit 4
