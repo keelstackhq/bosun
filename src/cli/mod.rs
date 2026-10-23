@@ -26,6 +26,7 @@ pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
+pub mod stop;
 pub mod test_integrity;
 
 #[derive(Debug, Parser)]
@@ -102,8 +103,13 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+<<<<<<< HEAD
     /// After a container restart: renew this session's leases and list the PRs to continue.
     Resume,
+=======
+    /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
+    Fail(FailArgs),
+>>>>>>> origin/main
 }
 
 /// Top-level command names, in `--help` order.
@@ -130,7 +136,11 @@ pub const COMMANDS: [&str; 23] = [
     "hook",
     "doctor",
     "budget",
+<<<<<<< HEAD
     "resume",
+=======
+    "fail",
+>>>>>>> origin/main
 ];
 
 impl Command {
@@ -163,7 +173,11 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+<<<<<<< HEAD
             Command::Resume => "resume",
+=======
+            Command::Fail(_) => "fail",
+>>>>>>> origin/main
         }
     }
 }
@@ -376,6 +390,21 @@ pub struct BudgetRecordArgs {
     pub from: Option<String>,
     #[arg(long)]
     pub turns: Option<u64>,
+    #[arg(long)]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct FailArgs {
+    /// The task issue number.
+    pub issue: u64,
+    /// A short stable text for the failure, for example `E0308 in src/x.rs`.
+    #[arg(long)]
+    pub signature: String,
+    /// Lines the fix round changed; 0 blocks the task at once.
+    #[arg(long)]
+    pub changed_lines: Option<u64>,
+    /// The model tier in use (default: the newest escalation, else the build model).
     #[arg(long)]
     pub model: Option<String>,
 }
