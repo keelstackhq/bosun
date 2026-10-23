@@ -5,6 +5,11 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 ## Unreleased
 
 - `bosun fail`: stop rules (3 equal failures or 0 changed lines block the task) and tier escalation, with `failure` and `escalate` records.
+- `bosun claim` refuses new work with exit 6 at 80 % of the daily budget, like `spawn` check 2; mainfix tasks and a re-claim of your own lease are exempt (UC-M4-1).
+- `bosun budget check`: the level (normal, guard, stop) of today's spend; at 100 % one `interrupt_session` per live remote session in `next`, for the janitor (UC-M4-2).
+- `bosun budget record`: the record that blocks a task over `per_task_usd` opens a `budget` lesson, or adds a hit to it (UC-M4-3).
+- `bosun progress [--days N]`: cost per merged task over the last N days, read-only (UC-M4-4).
+- `wave plan` and `status` read `.bosun/limits.toml` from the default branch, like `spawn`, `claim` and `budget record`; `status` reports `daily_usd`.
 
 ## v0.1.0
 
