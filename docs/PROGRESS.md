@@ -97,6 +97,8 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Fix F · owner approval and kill switch: risk-check accepts an owner's unedited PR comment `/bosun approve <head sha>` and the `risk` workflow runs on it (`issue_comment`, from the default branch); the kill switch is an owner's open `bosun:halt` issue (read errors halt), `BOSUN_HALT` stays a second source with 404/403 as no signal; doctor step 5 checks the label · spec §8, README, CHANGELOG
 - 2026-10-23 · Fix G · approvals by plain user token only (`performed_via_github_app` null; missing fails closed); `bosun verdict comment` and `verdict apply` with the `verdict` workflow post `review-verdict` for cloud sessions · spec §7 §8, README, CHANGELOG, workflow tests
 - 2026-10-23 · Release 1/3 · npm launcher `npm/bosun` (`@keelstackhq/bosun`, five platform packages as optionalDependencies, as in berth); a launcher failure prints one error envelope with a fix (spec §1.2) · `node --test npm/bosun/test/*.test.js` 12/12
+- 2026-10-23 · Release 2/3 · crate `keel-bosun` 0.1.0 publishable (LICENSE, include), `hoist.toml [publish]` (crates.io, GitHub Release for five targets), the five platform packages, pnpm workspace; `tests/release_config.rs` keeps them in step · `cargo test --test release_config` 6/6, `cargo package` builds
+- 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
 
 ## Blocked
 
@@ -115,11 +117,13 @@ Human-only items, in order. Each has the exact action.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
    15 min, Haiku). Create them in claude.ai → Routines.
-4. **First publish (D24).** Not part of the seed. When the owner decides on v0.1.0: add
-   `[publish]` to `hoist.toml` and a release workflow (as in hoist and berth), then in a local
-   checkout with npm and crates.io logins run `hoist release bootstrap --dry-run` and
-   `hoist release bootstrap`; run the release workflow within 2 days so the npm trusted
-   publishers do not expire. Then move `.bosun/version` to the release in an R-gov PR.
+4. **First publish (D24).** Everything is in place; nothing publishes until the variable is
+   set. Follow `docs/releasing.md` → One-time setup, in order: create the environment
+   `release` (branch `main`, owner as reviewer), optionally the secret `HOIST_RELEASE_TOKEN`,
+   then `gh variable set BOSUN_RELEASE --body enabled --repo keelstackhq/bosun`. After the
+   workflow tags v0.1.0: `hoist release bootstrap` locally, the crates.io trusted publisher
+   for `keel-bosun`, and the re-run of the failed `publish` job within 2 days. Then an agent
+   opens the R-gov PR that pins `.bosun/version` to 0.1.0.
 5. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
    `splice/update` PR with `GITHUB_TOKEN` unless the secret `SPLICE_BOT_TOKEN` is set, and a PR
    opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
