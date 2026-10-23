@@ -71,7 +71,6 @@ fn re(p: &str) -> regex::Regex {
 static ITEM_ID: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Z][A-Z0-9]{0,7}$"));
 static TASK_ID: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^T[0-9]{1,3}$"));
 static AREA: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[a-z0-9-]+$"));
-static ITEM_LIKE: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^## [A-Z][A-Z0-9]*:"));
 static HEADING: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^## ([A-Z][A-Z0-9]*):\s*(\S.*)$"));
 static BULLET: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^- ([^:\s]+):\s*(\S.*)$"));
 static UC: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^UC-([A-Z0-9]+)-([0-9]+)$"));
@@ -86,6 +85,16 @@ enum Sec {
     Tasks,
     Done,
     Other,
+}
+
+/// A `## ` heading is prose (ignored, and it ends the current item) only when its first word has
+/// no colon, no digit and a lowercase letter after the first character (`## Notes`). Anything
+/// else (`## m1: x`, `## M2 Two`, `## FAQ`) must be a valid `## <ID>: <title>` item heading.
+fn is_prose(line: &str) -> bool {
+    let w = line[3..].split_whitespace().next().unwrap_or("");
+    !w.contains(':')
+        && !w.contains(|c: char| c.is_ascii_digit())
+        && w.chars().skip(1).any(char::is_lowercase)
 }
 
 fn csv(v: &str) -> Vec<String> {
@@ -166,24 +175,32 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
     let (mut title, mut project) = (None, None);
     let mut items: Vec<Item> = Vec::new();
     let mut has_tasks: Vec<bool> = Vec::new();
-    let (mut sec, mut open, mut fenced, mut seen_item) = (Sec::Other, false, false, false);
+    let (mut sec, mut open, mut seen_item) = (Sec::Other, false, false);
+    let mut fence: Option<(&str, usize)> = None;
     let mut desc: Vec<&str> = Vec::new();
-    let (mut fence_line, mut ifields, mut tkeys) = (0, Vec::<String>::new(), Vec::<String>::new());
+    let (mut ifields, mut tkeys) = (Vec::<String>::new(), Vec::<String>::new());
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
 
     for (i, raw) in text.lines().enumerate() {
         let n = i + 1;
         let line = raw.trim_end();
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            fence_line = n;
+        let marker = ["```", "~~~"]
+            .into_iter()
+            .find(|m| line.trim_start().starts_with(m));
+        if let Some(m) = marker.filter(|m| fence.is_none_or(|f| f.0 == *m)) {
+            if fence.take().is_none() {
+                fence = Some((m, n));
+                if open && matches!(sec, Sec::Tasks | Sec::Done) {
+                    bad!(errs, n; "move the code block into the description" => "code fence inside `### Tasks` or `### Done when`");
+                }
+            }
             if open && matches!(sec, Sec::Fields | Sec::Desc) {
                 sec = Sec::Desc;
                 desc.push(line);
             }
             continue;
         }
-        if fenced {
+        if fence.is_some() {
             if open && sec == Sec::Desc {
                 desc.push(line);
             }
@@ -196,7 +213,7 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
         if line.starts_with("## ") {
             flush(&mut items, &mut desc, open);
             (seen_item, open, sec) = (true, false, Sec::Other);
-            if !ITEM_LIKE.is_match(line) {
+            if is_prose(line) {
                 continue;
             }
             let Some(c) = HEADING.captures(line) else {
@@ -359,8 +376,11 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
         }
     }
     flush(&mut items, &mut desc, open);
-    if fenced {
-        bad!(errs, fence_line; "close the code fence with ```" => "unclosed code fence");
+    if let Some((m, l)) = fence {
+        bad!(errs, l; "close the code fence" => "unclosed code fence `{m}`");
+    }
+    if items.is_empty() && errs.is_empty() {
+        bad!(errs, 1; "add `## M1: Title` items" => "the plan has no items");
     }
     if title.is_none() {
         bad!(errs, 1; "start the file with `# Plan: <name>`" => "the plan has no `# ` title");
@@ -474,6 +494,7 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
 }
 
 #[cfg(test)]
+#[rustfmt::skip]
 mod tests {
     use super::*;
 
@@ -483,184 +504,117 @@ mod tests {
         "- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n\n",
         "### Done when\n\n- UC-M1-1: it works.\n"
     );
+    const H: &str = "not `## <ID>: <title>`";
 
-    fn has(t: &str, line: usize, msg: &str) {
-        let e = parse(t).unwrap_err();
-        assert!(
-            e.iter().any(|e| e.line == line && e.message.contains(msg)),
-            "{msg} @{line}: {e:?}"
-        );
-        assert!(e.iter().all(|e| !e.fix.is_empty()));
-    }
-    fn with(from: &str, to: &str) -> String {
+    /// OK with the first `from` replaced by `to`.
+    fn w(from: &str, to: &str) -> String {
         assert!(OK.contains(from), "{from}");
         OK.replacen(from, to, 1)
+    }
+    /// `text` must report an error on `line` containing `msg`; every error needs a fix.
+    fn at(text: &str, line: usize, msg: &str) {
+        let e = parse(text).unwrap_err();
+        let hit = e.iter().any(|e| e.line == line && e.message.contains(msg));
+        assert!(hit, "{msg} @{line}: {e:?}\n{text}");
+        assert!(e.iter().all(|e| !e.fix.is_empty()));
+    }
+    /// Same, for OK with `from` replaced by `to`.
+    fn chk(from: &str, to: &str, line: usize, msg: &str) {
+        at(&w(from, to), line, msg);
     }
 
     #[test]
     fn valid_plan() {
         let p = parse(OK).unwrap();
-        assert_eq!(
-            (p.title.as_str(), p.project.as_deref()),
-            ("Plan: x", Some("x"))
-        );
+        assert_eq!((p.title.as_str(), p.project.as_deref()), ("Plan: x", Some("x")));
         let (i, t) = (&p.items[0], &p.items[0].tasks);
-        assert_eq!(
-            (i.area.as_str(), i.description.as_str(), i.line),
-            ("core", "Words here.", 5)
-        );
+        assert_eq!((i.area.as_str(), i.description.as_str(), i.line), ("core", "Words here.", 5));
         assert_eq!(i.depends, ["seed"]);
         assert_eq!(t[0].touch, ["src/a.rs", "tests/a.rs"]);
-        let (kind, risk) = (t[0].kind.as_str(), t[0].risk.as_str());
-        assert_eq!((kind, risk, t[0].size), ("feature", "normal", Some(100)));
-        assert_eq!(t[1].depends, ["M1/T1"]);
-        assert_eq!(t[1].plan_id("M1"), "M1/T2");
-        assert_eq!(i.ucs[0].id, "UC-M1-1");
-        assert_eq!(
-            parse(&format!("```\n## bad\n```\n{OK}"))
-                .unwrap()
-                .items
-                .len(),
-            1
-        );
+        assert_eq!((t[0].kind.as_str(), t[0].risk.as_str(), t[0].size), ("feature", "normal", Some(100)));
+        assert_eq!((&t[1].depends[0][..], t[1].plan_id("M1").as_str(), &i.ucs[0].id[..]), ("M1/T1", "M1/T2", "UC-M1-1"));
+        assert_eq!(parse(&format!("```\n## bad\n```\n~~~\n## bad\n~~~\n{OK}")).unwrap().items.len(), 1);
     }
 
     #[test]
     fn rules_1_to_3() {
-        has(&OK.replace("# Plan: x\n", ""), 1, "no `# ` title");
-        has(&with("## M1: One", "## MILESTONE1: One"), 5, "item id");
-        has(&with("## M1: One", "## M1:"), 5, "not `## <ID>: <title>`");
-        has(&format!("{OK}\n## M1: Again\n"), 26, "used twice");
-        has(&with("area: core\n", ""), 5, "no `area:`");
-        has(&with("area: core", "area: Core!"), 7, "area");
-        has(&with("depends: seed", "depends: M9"), 5, "not an item");
-        has(
-            &with("depends: seed", "depends: seed\narea: b"),
-            9,
-            "`area:` is given twice",
-        );
-        has(
-            &with("area: core", "area: core\ndepends: seed"),
-            9,
-            "`depends:` is given twice",
-        );
+        at(&OK.replace("# Plan: x\n", ""), 1, "no `# ` title");
+        at("# P\n", 1, "no items");
+        chk("## M1: One", "## MILESTONE1: One", 5, "item id");
+        for h in ["## M1:", "## m1: One", "## M2 Two", "## M-2: One"] {
+            chk("## M1: One", h, 5, H);
+        }
+        at(&format!("{OK}\n## M1: Again\n"), 26, "used twice");
+        chk("area: core\n", "", 5, "no `area:`");
+        chk("area: core", "area: Core!", 7, "area");
+        chk("depends: seed", "depends: M9", 5, "not an item");
+        chk("depends: seed", "depends: seed\narea: b", 9, "`area:` is given twice");
+        chk("area: core", "area: core\ndepends: seed", 9, "`depends:` is given twice");
     }
 
     #[test]
-    fn other_headings_and_text_are_ignored() {
-        let p = parse(&format!("{OK}\n## Notes\n\n- not a task\n")).unwrap();
-        assert_eq!(p.items.len(), 1);
+    fn prose_headings_are_ignored() {
+        for h in ["## Notes", "## Open questions", "## Milestone one"] {
+            assert_eq!(parse(&format!("{OK}\n{h}\n\n- not a task\n")).unwrap().items.len(), 1, "{h}");
+        }
     }
 
     #[test]
     fn rule5_tasks() {
-        has(&with("- T2:", "- T1:"), 17, "used twice");
-        has(&with("- T2:", "- X2:"), 17, "task bullet");
-        has(&with("touch: src/b.rs", "touch: "), 17, "no `touch:`");
-        has(&with("size: 100", "size: 401"), 16, "over 400");
-        has(&with("size: 100", "size: ten"), 16, "not an integer");
-        has(&with("kind: flake", "kind: odd"), 20, "kind");
-        has(&with("kind: flake", "risk: low"), 20, "risk");
-        has(&with("kind: flake", "colour: red"), 20, "unknown task key");
-        has(&with("depends: T1", "depends: T9"), 17, "not a task");
-        has(&with("depends: T1", "depends: M3/T1"), 17, "not a task");
-        let hi = parse(&with("size: 100", "size: 101\n  risk: high")).unwrap();
+        for b in ["* T2: x", "+ T2: x", "1. T2: x", "plain text"] {
+            chk("- T2: Second", b, 17, "expected a `- T<n>: title` bullet");
+        }
+        chk("- T2:", "- T1:", 17, "used twice");
+        chk("- T2:", "- X2:", 17, "task bullet");
+        chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
+        chk("size: 100", "size: 401", 16, "over 400");
+        chk("size: 100", "size: ten", 16, "not an integer");
+        chk("kind: flake", "kind: odd", 20, "kind");
+        chk("kind: flake", "risk: low", 20, "risk");
+        chk("kind: flake", "colour: red", 20, "unknown task key");
+        chk("depends: T1", "depends: T9", 17, "not a task");
+        chk("depends: T1", "depends: M3/T1", 17, "not a task");
+        chk("size: 100", "size: 100\n  touch: b", 17, "`touch:` is given twice");
+        chk("  touch: src/a.rs, tests/a.rs\n", "  just text\n", 15, "`key: value`");
+        chk("- T1: First\n", "  touch: a\n- T1: First\n", 14, "before any task");
+        chk("- T2: Second\n", "```\n- T2: Second\n```\n", 17, "code fence inside");
+        let hi = parse(&w("size: 100", "size: 101\n  risk: high")).unwrap();
         assert!(hi.warnings[0].message.contains("risk high") && !hi.warnings[0].fix.is_empty());
         assert_eq!(hi.items[0].tasks[0].risk, "high");
     }
 
     #[test]
-    fn tasks_section_is_strict() {
-        for bad in ["* T2: x", "+ T2: x", "1. T2: x", "plain text"] {
-            has(
-                &with("- T2: Second", bad),
-                17,
-                "expected a `- T<n>: title` bullet",
-            );
-        }
-        has(
-            &with("size: 100", "size: 100\n  touch: b"),
-            17,
-            "`touch:` is given twice",
-        );
-        has(
-            &with("  touch: src/a.rs, tests/a.rs\n", "  just text\n"),
-            15,
-            "`key: value`",
-        );
-        has(
-            &with("- T1: First\n", "  touch: a\n- T1: First\n"),
-            14,
-            "before any task",
-        );
-    }
-
-    #[test]
     fn cycles_and_critical_path() {
-        let m2 = OK
-            .replace("M1", "M2")
-            .replace("depends: seed", "depends: M1")
-            .replace("# Plan: x\n\nproject: x\n", "");
-        has(
-            &format!("{}\n{m2}", with("depends: seed", "depends: M2")),
-            5,
-            "cycle: M1 -> M2 -> M1",
-        );
-        has(
-            &with("size: 100", "size: 100\n  depends: T2"),
-            14,
-            "cycle in M1: T1 -> T2 -> T1",
-        );
+        let m2 = OK.replace("M1", "M2").replace("depends: seed", "depends: M1").replace("# Plan: x\n\nproject: x\n", "");
+        at(&format!("{}\n{m2}", w("depends: seed", "depends: M2")), 5, "cycle: M1 -> M2 -> M1");
+        chk("size: 100", "size: 100\n  depends: T2", 14, "cycle in M1: T1 -> T2 -> T1");
         let chain = |n: usize| {
-            let tasks: String = (1..=n)
-                .map(|k| {
-                    format!(
-                        "- T{k}: t\n  touch: a\n{}",
-                        if k > 1 {
-                            format!("  depends: T{}\n", k - 1)
-                        } else {
-                            String::new()
-                        }
-                    )
-                })
-                .collect();
+            let tasks: String = (1..=n).map(|k| format!("- T{k}: t\n  touch: a\n{}", if k > 1 { format!("  depends: T{}\n", k - 1) } else { String::new() })).collect();
             format!("# P\n## M1: One\narea: a\n### Tasks\n{tasks}### Done when\n- UC-M1-1: ok\n")
         };
         assert!(parse(&chain(4)).is_ok());
-        has(&chain(5), 16, "critical path of M1 is 5");
+        at(&chain(5), 16, "critical path of M1 is 5");
     }
 
     #[test]
     fn rule7_ucs_and_sections() {
-        has(&with("UC-M1-1", "UC-M2-1"), 24, "belongs to item M2");
-        has(&with("UC-M1-1", "UC-M1-2"), 24, "expected `UC-M1-1`");
-        has(&with("UC-M1-1", "UC-M1-01"), 24, "expected `UC-M1-1`");
-        has(
-            &format!("{OK}- UC-M1-1: again\n"),
-            25,
-            "`UC-M1-1` is used twice",
-        );
-        has(
-            &with("### Done when\n\n- UC-M1-1: it works.\n", ""),
-            5,
-            "no UC",
-        );
-        has(&with("### Tasks", "### Other"), 5, "no `### Tasks`");
+        chk("UC-M1-1", "UC-M2-1", 24, "belongs to item M2");
+        chk("UC-M1-1", "UC-M1-2", 24, "expected `UC-M1-1`");
+        chk("UC-M1-1", "UC-M1-01", 24, "expected `UC-M1-1`");
+        at(&format!("{OK}- UC-M1-1: again\n"), 25, "`UC-M1-1` is used twice");
+        at(&format!("{OK}~~~\n"), 25, "code fence inside");
+        chk("### Done when\n\n- UC-M1-1: it works.\n", "", 5, "no UC");
+        chk("### Tasks", "### Other", 5, "no `### Tasks`");
     }
 
     #[test]
     fn descriptions_keep_fences_and_late_keys() {
-        let p = parse(&with(
-            "Words here.",
-            "Words here.\ndepends: on review\n```\n## X: y\n- T9: z\n```",
-        ))
-        .unwrap();
-        assert_eq!(
-            p.items[0].description,
-            "Words here.\ndepends: on review\n```\n## X: y\n- T9: z\n```"
-        );
+        let body = "Words here.\ndepends: on review\n```\n## X: y\n- T9: z\n```";
+        let p = parse(&w("Words here.", body)).unwrap();
+        assert_eq!(p.items[0].description, body);
         assert_eq!((p.items[0].depends.len(), p.items[0].tasks.len()), (1, 2));
-        has(&with("Words here.", "```\nopen"), 10, "unclosed code fence");
+        chk("Words here.", "```\nopen", 10, "unclosed code fence");
+        chk("Words here.", "~~~\n```\n", 10, "unclosed");
     }
 
     #[test]
@@ -669,24 +623,15 @@ mod tests {
         assert_eq!(parse(&OK.replace('\n', "\r\n")).unwrap(), want);
         assert_eq!(parse(&format!("\u{feff}{OK}")).unwrap(), want);
         assert_eq!(parse(&OK.replace("\n  ", "\n\t")).unwrap(), want);
-        assert_eq!(
-            parse(&OK.replace('\n', "  \n")).unwrap().items[0].tasks,
-            want.items[0].tasks
-        );
-        let dup =
-            with("depends: T1", "depends: T1, T1").replace("depends: seed", "depends: seed, seed");
+        assert_eq!(parse(&OK.replace('\n', "  \n")).unwrap().items[0].tasks, want.items[0].tasks);
+        let dup = w("depends: T1", "depends: T1, T1").replace("depends: seed", "depends: seed, seed");
         let p = parse(&dup).unwrap();
-        assert_eq!(
-            (p.items[0].depends.len(), p.items[0].tasks[1].depends.len()),
-            (1, 1)
-        );
+        assert_eq!((p.items[0].depends.len(), p.items[0].tasks[1].depends.len()), (1, 1));
     }
 
     #[test]
     fn all_errors_are_collected_with_describe() {
-        let bad = with("area: core\n", "")
-            .replace("UC-M1-1", "UC-M1-3")
-            .replace("touch: src/b.rs", "touch:");
+        let bad = w("area: core\n", "").replace("UC-M1-1", "UC-M1-3").replace("touch: src/b.rs", "touch:");
         let e = parse(&bad).unwrap_err();
         assert!(e.len() >= 3 && e.windows(2).all(|w| w[0].line <= w[1].line));
         assert!(e[0].describe("plans/x.md").starts_with("plans/x.md:5: "));
