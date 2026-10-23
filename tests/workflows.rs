@@ -156,6 +156,29 @@ fn risk_judges_from_the_base_and_never_runs_pr_code() {
     );
     // Other comments must not cancel the run that judges a new head.
     assert!(yaml.contains("&& github.run_id || 'judge'"), "{yaml}");
+    runs_the_pinned_release(&yaml);
+}
+
+/// risk.yml and verdict.yml run the release pinned in the checkout's `.bosun/version` (as
+/// ci.yml's bosun-bin) and build bosun only while the pin says `unreleased`, so a main that
+/// does not compile cannot block its own mainfix.
+fn runs_the_pinned_release(yaml: &str) {
+    assert!(
+        yaml.contains("npm install -g --ignore-scripts \"@keelstackhq/bosun@${VERSION}\""),
+        "{yaml}"
+    );
+    assert!(
+        yaml.contains("test \"$got\" = \"bosun ${VERSION}\""),
+        "{yaml}"
+    );
+    let builds: Vec<&str> = yaml.lines().filter(|l| l.contains("cargo build")).collect();
+    assert_eq!(builds.len(), 1, "{yaml}");
+    let at = yaml.find(builds[0]).unwrap();
+    let step = &yaml[yaml[..at].rfind("      - ").unwrap()..at];
+    assert!(
+        step.contains("if: steps.pin.outputs.version == ''"),
+        "cargo build must only run without a pin: {step}"
+    );
 }
 
 #[test]
@@ -174,6 +197,7 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
         );
     }
     assert!(yaml.contains("contains(github.event.comment.body, '<!-- bosun:verdict -->')"));
+    runs_the_pinned_release(&yaml);
     let refs: Vec<&str> = yaml
         .lines()
         .filter(|l| l.trim_start().starts_with("ref:"))
