@@ -2,6 +2,7 @@
 //! `tests/core_is_pure.rs` enforces it.
 
 pub mod bisect;
+pub mod budget;
 pub mod cost;
 pub mod glob;
 pub mod guard;

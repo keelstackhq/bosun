@@ -286,7 +286,7 @@ per_task_usd = 25
 With `max_live_sessions = 1` the same code path runs: the root session does all the work in waves.
 
 Janitor, resume, results:
-- Janitor (Routine, every 15 min, Haiku): `bosun reap`, a stale-session check, a budget check,
+- Janitor (Routine, every 15 min, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
   `bosun notify`.
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
@@ -294,9 +294,11 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
-- Results (D14): a child posts its result as an issue comment on its epic,
-  `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
-  sees it with `bosun wait`.
+- Results (D14): a child runs `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`.
+  It posts an issue comment on the epic with the record
+  `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
+  (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
+  parent sees the result with `bosun wait --child`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
@@ -536,7 +538,7 @@ Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for
   in `next`, passed back on stdin) and reads `usage.cost_usd`; `generic` estimates from turns and
   model with the prices in `docs/defaults.md`.
-- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
+- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd`. The record that blocks the task also opens a lesson of kind `budget` through the lesson capture of §6 (one lesson for all tasks; each further task over its cap adds a hit). A failed capture does not fail the record: it exits 0 with `lesson: {error, fix}`, and the spend must not be recorded again. The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
 - `bosun progress [--days N]` (default 7, read-only) reports it for the window of N days ending now: `merged` counts task issues closed with `closed_at` in the window (closed as `not_planned` or `duplicate` does not count), `spend_usd` sums the registry spend records with `at` in the window (unmerged work counts), and `cost_per_merged_task_usd` is `spend_usd / merged` (`null` when none merged); `task_cost_avg_usd` is the mean of the merged tasks' own spend (all time), and `tasks` lists `{issue, title, closed_at, usd}` by issue.
@@ -545,6 +547,7 @@ Spend guard:
 - Below 80 % of the daily budget: normal.
 - At 80 % or more: no new work; mainfix is exempt. `claim` checks it like spawn check 2 (exit 6).
 - At 100 %: the janitor stops the sessions.
+  The janitor runs `bosun budget check`, which returns one `interrupt_session` per live remote session in `next` (a wave agent `S/task` counts as `S`; never the caller's own session). It writes nothing, also works while halted, and a `daily_usd` of 0 turns it off. An interrupted session that resumes is still refused new work by spawn and claim.
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
 - Only the owner raises a budget (an R-gov change of limits.toml).
