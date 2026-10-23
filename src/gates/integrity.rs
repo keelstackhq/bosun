@@ -18,7 +18,7 @@ pub struct Request<'a> {
     pub base: &'a str,
     /// The PR body, searched for `snapshot-change: <reason>`.
     pub body: &'a str,
-    /// Finding kinds the task allows: `delete-test`, `skip`, `fewer-asserts`.
+    /// Finding kinds the task allows: `delete-test`, `skip`, `only`, `fewer-asserts`.
     /// `delete-test` also allows `fewer-tests`.
     pub allow: &'a [String],
 }
@@ -75,40 +75,62 @@ fn base_text(root: &Path, base: &str, path: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// A path is read by the ts adapters when it is TypeScript, else by the rust ones.
-fn is_ts(path: &str) -> bool {
-    path.ends_with(".ts") || path.ends_with(".tsx")
+/// The adapters for a path: ts for TypeScript and JavaScript files, rust for `.rs`; any other
+/// file is not a test file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Rust,
+    Ts,
+    Other,
+}
+
+fn kind(path: &str) -> Kind {
+    if path.ends_with(".rs") {
+        Kind::Rust
+    } else if ts::handles(path) {
+        Kind::Ts
+    } else {
+        Kind::Other
+    }
 }
 
 fn is_test_file(path: &str, text: &str) -> bool {
-    if is_ts(path) {
-        ts::is_test_file(path)
-    } else {
-        rs::is_test_file(path, text)
+    match kind(path) {
+        Kind::Rust => rs::is_test_file(path, text),
+        Kind::Ts => ts::is_test_file(path),
+        Kind::Other => false,
     }
 }
 
 fn pending_markers(path: &str, text: &str) -> Vec<Marker> {
-    if is_ts(path) {
-        ts::pending_markers(text)
-    } else {
-        rs::pending_markers(text)
+    match kind(path) {
+        Kind::Rust => rs::pending_markers(text),
+        Kind::Ts => ts::pending_markers(text),
+        Kind::Other => Vec::new(),
     }
 }
 
 fn test_count(path: &str, text: &str) -> usize {
-    if is_ts(path) {
-        ts::test_count(text)
-    } else {
-        rs::test_count(text)
+    match kind(path) {
+        Kind::Rust => rs::test_count(text),
+        Kind::Ts => ts::test_count(text),
+        Kind::Other => 0,
     }
 }
 
 fn assertions(path: &str, text: &str) -> usize {
-    if is_ts(path) {
-        ts::assertions(text)
-    } else {
-        rs::assertions(text)
+    match kind(path) {
+        Kind::Rust => rs::assertions(text),
+        Kind::Ts => ts::assertions(text),
+        Kind::Other => 0,
+    }
+}
+
+/// Focused tests (`it.only`): only the ts adapters know them.
+fn only_count(path: &str, text: &str) -> usize {
+    match kind(path) {
+        Kind::Ts => ts::only_count(text),
+        _ => 0,
     }
 }
 
@@ -160,6 +182,8 @@ pub fn run(req: &Request) -> CmdResult {
             findings.push(finding("snapshot-change", new, None, None, false));
         }
 
+        // Each side is read with the adapter for its own path: a rename out of the test file
+        // pattern (`a.test.ts` -> `a.test.ts.disabled`) must not hide what the base had.
         let was_test = matches!((&change.old, &old_text), (Some(p), Some(t)) if is_test_file(p, t));
         let is_test = matches!((&change.new, &new_text), (Some(p), Some(t)) if is_test_file(p, t));
         if !was_test && !is_test {
@@ -171,41 +195,50 @@ pub fn run(req: &Request) -> CmdResult {
             .as_deref()
             .or(change.old.as_deref())
             .unwrap_or("");
-        let base_asserts = old_text.as_deref().map_or(0, |t| assertions(file, t));
+        let (old_path, new_path) = (
+            change.old.as_deref().unwrap_or(file),
+            change.new.as_deref().unwrap_or(file),
+        );
+        let base_text = old_text.as_deref().filter(|_| was_test);
+        let base_asserts = base_text.map_or(0, |t| assertions(old_path, t));
 
-        let Some(head) = &new_text else {
-            let allowed = allows("delete-test");
-            findings.push(finding(
-                "deleted-test",
-                file,
-                Some(base_asserts),
-                None,
-                allowed,
-            ));
-            continue;
+        let head = match &new_text {
+            Some(h) if is_test => h,
+            _ => {
+                // Deleted, or no longer a test file: the base tests are gone.
+                let allowed = allows("delete-test");
+                findings.push(finding(
+                    "deleted-test",
+                    file,
+                    Some(base_asserts),
+                    None,
+                    allowed,
+                ));
+                continue;
+            }
         };
         // Plain skips are counted; a UC marker in head that base lacks (by id, with
         // multiplicity) is a skip too. Removing UC markers is fine.
-        let plain = |t: &str| {
-            pending_markers(file, t)
+        let plain = |p: &str, t: &str| {
+            pending_markers(p, t)
                 .iter()
                 .filter(|m| m.uc.is_none())
                 .count()
         };
-        let ucs = |t: &str| {
+        let ucs = |p: &str, t: &str| {
             let mut m: BTreeMap<String, usize> = BTreeMap::new();
-            for id in pending_markers(file, t).into_iter().filter_map(|m| m.uc) {
+            for id in pending_markers(p, t).into_iter().filter_map(|m| m.uc) {
                 *m.entry(id).or_default() += 1;
             }
             m
         };
-        let base_ucs = old_text.as_deref().map(ucs).unwrap_or_default();
-        let new_ucs: usize = ucs(head)
+        let base_ucs = base_text.map(|t| ucs(old_path, t)).unwrap_or_default();
+        let new_ucs: usize = ucs(new_path, head)
             .into_iter()
             .map(|(id, n)| n.saturating_sub(base_ucs.get(&id).copied().unwrap_or(0)))
             .sum();
-        let base_skips = old_text.as_deref().map_or(0, plain);
-        let head_skips = plain(head);
+        let base_skips = base_text.map_or(0, |t| plain(old_path, t));
+        let head_skips = plain(new_path, head);
         if head_skips > base_skips || new_ucs > 0 {
             let allowed = allows("skip");
             findings.push(finding(
@@ -216,8 +249,20 @@ pub fn run(req: &Request) -> CmdResult {
                 allowed,
             ));
         }
-        let base_tests = old_text.as_deref().map_or(0, |t| test_count(file, t));
-        let head_tests = test_count(file, head);
+        let base_only = base_text.map_or(0, |t| only_count(old_path, t));
+        let head_only = only_count(new_path, head);
+        if head_only > base_only {
+            let allowed = allows("only");
+            findings.push(finding(
+                "new-only",
+                file,
+                Some(base_only),
+                Some(head_only),
+                allowed,
+            ));
+        }
+        let base_tests = base_text.map_or(0, |t| test_count(old_path, t));
+        let head_tests = test_count(new_path, head);
         if head_tests < base_tests {
             let allowed = allows("delete-test");
             findings.push(finding(
@@ -228,7 +273,7 @@ pub fn run(req: &Request) -> CmdResult {
                 allowed,
             ));
         }
-        let head_asserts = assertions(file, head);
+        let head_asserts = assertions(new_path, head);
         if head_asserts < base_asserts {
             let allowed = allows("fewer-asserts");
             findings.push(finding(

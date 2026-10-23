@@ -96,6 +96,101 @@ fn removed_expect_in_a_ts_test_is_refused() {
     assert_eq!(v["data"]["findings"][0]["kind"], "fewer-asserts");
 }
 
+fn kinds(v: &Value) -> Vec<String> {
+    v["data"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn renaming_a_test_file_out_of_the_pattern_is_a_deletion() {
+    for to in ["src/a.test.ts.disabled", "src/a.txt"] {
+        let r = repo();
+        git(&r.root, &["mv", "src/a.test.ts", to]);
+        r.commit();
+        let (code, v) = r.check(&[]);
+        assert_eq!(code, 1, "{to}: {v}");
+        assert_eq!(kinds(&v), vec!["deleted-test"], "{to}");
+        let (code, _) = r.check(&[("BOSUN_INTEGRITY_ALLOW", "delete-test")]);
+        assert_eq!(code, 0);
+    }
+}
+
+#[test]
+fn renaming_between_test_extensions_is_fine() {
+    let r = repo();
+    git(&r.root, &["mv", "src/a.test.ts", "src/a.test.tsx"]);
+    r.commit();
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn js_test_files_are_checked_too() {
+    let r = repo();
+    r.edit("src/b.test.js", TEST_TS);
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 0, "{v}");
+    r.edit("src/b.test.js", &TEST_TS.replace("it('a'", "it.skip('a'"));
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["new-skip"]);
+    assert_eq!(v["data"]["findings"][0]["file"], "src/b.test.js");
+}
+
+#[test]
+fn describe_level_skips_are_refused() {
+    for wrap in [
+        "describe.skipIf(true)('x', ",
+        "describe.skip.each([1])('x', ",
+        "describe.todo(",
+    ] {
+        let r = repo();
+        r.edit("src/a.test.ts", &TEST_TS.replace("describe('x', ", wrap));
+        let (code, v) = r.check(&[]);
+        assert_eq!(code, 1, "{wrap}: {v}");
+        assert_eq!(kinds(&v), vec!["new-skip"], "{wrap}");
+    }
+}
+
+#[test]
+fn commented_out_assertion_is_a_lost_assertion() {
+    let r = repo();
+    r.edit(
+        "src/a.test.ts",
+        &TEST_TS.replace("expect(1).toBe(1);", "/* expect(1).toBe(1); */"),
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["fewer-asserts"]);
+}
+
+#[test]
+fn skip_text_in_a_string_is_not_a_skip() {
+    let r = repo();
+    r.edit(
+        "src/a.test.ts",
+        &TEST_TS.replace("expect(1)", "expect('it.skip(')"),
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn added_only_is_refused_unless_allowed() {
+    let r = repo();
+    r.edit("src/a.test.ts", &TEST_TS.replace("it('a'", "it.only('a'"));
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["new-only"]);
+    let (code, v) = r.check(&[("BOSUN_INTEGRITY_ALLOW", "only")]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["findings"][0]["allowed"], true);
+}
+
 #[test]
 fn unchanged_ts_tests_pass() {
     let r = repo();
