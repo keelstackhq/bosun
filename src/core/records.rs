@@ -53,6 +53,20 @@ pub enum Record {
         head_sha: String,
         approved: bool,
     },
+    /// A failed fix round: the failure signature and the lines it changed (spec §4 stop rules).
+    Failure {
+        session: String,
+        signature: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        changed_lines: Option<u64>,
+    },
+    /// A model tier escalation after a stop rule; it restarts the failure count.
+    Escalate {
+        session: String,
+        from: String,
+        to: String,
+        reason: String,
+    },
     /// The same failure signature seen again; `issue` is the task where it was seen (spec §6).
     LessonSeen {
         session: String,
@@ -79,6 +93,8 @@ impl Record {
             | Record::Ask { session, .. }
             | Record::LessonHit { session, .. }
             | Record::Verdict { session, .. }
+            | Record::Failure { session, .. }
+            | Record::Escalate { session, .. }
             | Record::LessonSeen { session, .. } => session,
         }
     }

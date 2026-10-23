@@ -12,5 +12,6 @@ pub mod risk;
 pub mod signature;
 pub mod spawn;
 pub mod state;
+pub mod stop;
 pub mod verdict;
 pub mod wave;
