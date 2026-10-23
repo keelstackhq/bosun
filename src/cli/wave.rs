@@ -46,6 +46,12 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         };
         let plan_id = format!("{}/{}", meta.item, meta.task);
         let state = state_of(&issue.labels);
+        // Closed as not planned (an amendment dropped it) is neither merged nor pending.
+        let dropped =
+            issue.state == "closed" && issue.state_reason.as_deref() == Some("not_planned");
+        if dropped && state != Some(State::Merged) {
+            continue;
+        }
         if issue.state == "closed" || state == Some(State::Merged) {
             merged.push(plan_id);
         } else if meta.epic == Some(*epic) {

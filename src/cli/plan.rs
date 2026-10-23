@@ -7,18 +7,19 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{PlanCheckArgs, PlanCmd, PlanImportArgs};
+use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, kill_switch, set_state, task_meta};
 use crate::core::meta::TaskMeta;
 use crate::core::plan::{self, Item, Plan, PlanError, Task, Uc};
 use crate::core::state::{State, state_of};
-use crate::github::{Github, Issue, IssueState, Probe};
+use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
     match cmd {
         PlanCmd::Check(a) => check(dir, a),
-        PlanCmd::Import(a) => import(dir, a),
+        PlanCmd::Import(a) => run_import(dir, a, false),
+        PlanCmd::Amend(a) => amend(dir, a),
     }
 }
 
@@ -385,7 +386,17 @@ fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>) -> TaskMeta {
     }
 }
 
-fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
+/// `plan import` of every item, then the reconcile (UC-M2-4).
+fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
+    let args = PlanImportArgs {
+        file: a.file.clone(),
+        dry_run: a.dry_run,
+        item: vec![],
+    };
+    run_import(dir, &args, true)
+}
+
+fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult {
     let p = read_plan(dir, &a.file)?;
     let app = App::load(dir)?;
     if let Some(project) = &p.project
@@ -428,10 +439,131 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
         promoted: vec![],
         stubs: vec![],
     };
-    match import_items(&mut imp, &p, a) {
-        Ok(()) => Ok(Outcome::data(imp.data(&a.file))),
-        Err(e) => Err(e.with_data(imp.data(&a.file))),
+    let mut data = match import_items(&mut imp, &p, a) {
+        Ok(()) => imp.data(&a.file),
+        Err(e) => return Err(e.with_data(imp.data(&a.file))),
+    };
+    if amend {
+        match reconcile(&mut imp, &p, &a.file) {
+            Ok((closed, updated)) => {
+                let (c, u) = if a.dry_run {
+                    ("would_close", "would_update")
+                } else {
+                    ("closed", "updated")
+                };
+                data[c] = json!(closed);
+                data[u] = json!(updated);
+            }
+            Err(e) => return Err(e.with_data(data)),
+        }
     }
+    Ok(Outcome::data(data))
+}
+
+/// The `plan` file named in the metadata of an epic body.
+fn epic_plan(body: &str) -> Option<String> {
+    let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
+    let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
+    v["plan"].as_str().map(str::to_string)
+}
+
+/// Replace the task metadata comment of `body`, keeping every other byte.
+fn replace_task_meta(body: &str, meta: &TaskMeta) -> Option<String> {
+    let start = body.find("<!-- bosun:task")?;
+    let end = start + body[start..].find("-->")? + "-->".len();
+    let json = serde_json::to_string(meta).expect("meta serializes");
+    Some(format!(
+        "{}<!-- bosun:task {json} -->{}",
+        &body[..start],
+        &body[end..]
+    ))
+}
+
+/// Close what the plan file dropped and update tasks whose definition changed. Only issues with
+/// the plan marker whose epic names this file are touched. Returns (closed, updated) plan ids.
+fn reconcile(imp: &mut Importer, p: &Plan, file: &str) -> Result<(Vec<String>, Vec<String>)> {
+    let issues: Vec<Issue> = imp.issues.clone();
+    let ours = |i: &Issue| i.state_reason.as_deref() != Some("duplicate");
+    // Epic issues of this plan file.
+    let epics: HashSet<u64> = issues
+        .iter()
+        .filter(|i| {
+            ours(i)
+                && i.body_text().starts_with("<!-- bosun:plan ")
+                && epic_plan(i.body_text()).as_deref() == Some(file)
+        })
+        .map(|i| i.number)
+        .collect();
+    let (mut closed, mut updated) = (vec![], vec![]);
+    let reason = format!("Removed from {file} by an amendment.");
+    let close = |imp: &Importer, i: &Issue| -> Result<()> {
+        if !imp.dry {
+            imp.gh.add_comment(i.number, &reason)?;
+            imp.gh.update_issue(
+                i.number,
+                IssuePatch {
+                    state: Some(PatchState::Closed),
+                    state_reason: Some("not_planned".into()),
+                    ..IssuePatch::default()
+                },
+            )?;
+        }
+        Ok(())
+    };
+    for i in issues.iter().filter(|i| i.state == "open" && ours(i)) {
+        let body = i.body_text();
+        if epics.contains(&i.number) {
+            let item = epic_item(body).unwrap_or_default();
+            if !p.items.iter().any(|x| x.id == item) {
+                close(imp, i)?;
+                closed.push(item);
+            }
+            continue;
+        }
+        let Some(meta) = task_meta(i) else { continue };
+        let id = format!("{}/{}", meta.item, meta.task);
+        if !body.contains(&marker(&id)) || !meta.epic.is_some_and(|e| epics.contains(&e)) {
+            continue;
+        }
+        let item = p.items.iter().find(|x| x.id == meta.item);
+        let task = item.and_then(|x| x.tasks.iter().find(|t| t.id == meta.task));
+        if meta.task == "P" && item.is_some() {
+            continue;
+        }
+        let Some(t) = task else {
+            close(imp, i)?;
+            closed.push(id);
+            continue;
+        };
+        let title = format!("{id}: {}", t.title);
+        let mut new = meta.clone();
+        (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
+        (new.kind, new.risk) = (t.kind.clone(), t.risk.clone());
+        if new == meta && title == i.title {
+            continue;
+        }
+        if !imp.dry {
+            let body = replace_task_meta(body, &new).expect("meta was parsed from this body");
+            imp.gh.update_issue(
+                i.number,
+                IssuePatch {
+                    title: Some(title),
+                    body: Some(body),
+                    ..IssuePatch::default()
+                },
+            )?;
+            if new.kind != meta.kind {
+                let label = format!("bosun:kind/{}", new.kind);
+                imp.gh.ensure_label(&label, "5319e7", "bosun plan label")?;
+                for old in i.labels.iter().filter(|l| l.starts_with("bosun:kind/")) {
+                    imp.gh.remove_label(i.number, old)?;
+                }
+                imp.gh.add_labels(i.number, &[&label])?;
+            }
+        }
+        updated.push(id);
+    }
+    Ok((closed, updated))
 }
 
 /// Every issue, including ones the list does not show yet: GitHub's list lags seconds behind

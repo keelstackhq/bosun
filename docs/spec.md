@@ -219,7 +219,7 @@ overlap when a path of one matches a glob of the other, or two globs can match a
 
 Intake: intake is the only way that new work enters. `bosun intake` (from Slack, a lesson, a flake
 or a human) writes a plan amendment as a kind/plan task. Only a merged plan task makes its tasks
-ready.
+ready. After an amendment merges, `bosun plan amend` imports the new work and closes what the plan dropped.
 
 ## 5. Spawning, waves and limits
 

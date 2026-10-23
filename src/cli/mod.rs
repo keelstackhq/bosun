@@ -179,6 +179,7 @@ impl Command {
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
+            Command::Plan(PlanCmd::Amend(_)) => "plan amend",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
             Command::Progress(_) => "progress",
@@ -432,6 +433,17 @@ pub enum PlanCmd {
     Check(PlanCheckArgs),
     /// Create the epics, plan tasks and tasks of a plan that do not exist yet.
     Import(PlanImportArgs),
+    /// Import, then close what the plan dropped and update changed tasks (after an amendment merged).
+    Amend(PlanAmendArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanAmendArgs {
+    /// The plan file, for example plans/bosun.md.
+    pub file: String,
+    /// Show what would be created, closed and updated; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
