@@ -32,7 +32,6 @@ fn uc_m1_4_resume_continues_the_open_pr_after_a_restart() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["command"], "resume");
     assert_eq!(v["data"]["session"], "session_a");
-    assert_eq!(v["data"]["registered"], true);
     assert_eq!(v["data"]["joined"], false);
     let t = &v["data"]["tasks"][0];
     assert_eq!(t["issue"], 10);
@@ -118,7 +117,6 @@ fn a_session_without_a_join_record_is_joined() {
     let fake = FakeGithub::start();
     let (code, v) = run(&fake, "session_a", NOW, &["resume"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["registered"], true);
     assert_eq!(v["data"]["joined"], true);
     assert_eq!(v["data"]["tasks"].as_array().unwrap().len(), 0);
     let s = fake.state.lock().unwrap();
@@ -127,4 +125,33 @@ fn a_session_without_a_join_record_is_joined() {
         .iter()
         .find(|i| i.labels.iter().any(|l| l == "bosun:registry"));
     assert!(reg.is_some());
+}
+
+#[test]
+fn resume_is_halted_by_the_kill_switch_and_writes_nothing() {
+    let fake = FakeGithub::start();
+    fake.variable("BOSUN_HALT", "1");
+    fake.issue(10, "mine", &["bosun:state/building"], "");
+    let body = lease_note("session_a", EXPIRED, "src/core/**");
+    fake.comment(10, &body);
+    let (code, v) = run(&fake, "session_a", NOW, &["resume"]);
+    assert_eq!(code, 4, "{v}");
+    assert_eq!(v["error"]["kind"], "halted");
+    assert_eq!(fake.comments_of(10)[0].body, body);
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
+}
+
+#[test]
+fn an_expired_lease_with_a_bad_glob_is_lost_not_renewed() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.issue(10, "mine", &["bosun:state/building"], "");
+    let body = lease_note("session_a", EXPIRED, "src/[core");
+    fake.comment(10, &body);
+    let (code, v) = run(&fake, "session_a", NOW, &["resume"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["tasks"].as_array().unwrap().len(), 0);
+    assert_eq!(v["data"]["lost"][0]["issue"], 10);
+    assert!(!v["data"]["lost"][0]["fix"].as_str().unwrap().is_empty());
+    assert_eq!(fake.comments_of(10)[0].body, body);
 }

@@ -57,7 +57,13 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
                 continue;
             }
             if !lease.is_live(now) {
-                let found = overlaps(&lease, &live);
+                let Ok(touch) = glob::parse_all(&lease.touch) else {
+                    // A bad glob covers everything (as in `conflicts`): fail closed.
+                    lost.push(json!({"issue": issue.number, "conflicts": [],
+                        "fix": "the touch paths of this lease do not parse; release the task and claim it again"}));
+                    continue;
+                };
+                let found = overlaps(&touch, &lease, &live);
                 if !found.is_empty() {
                     lost.push(json!({"issue": issue.number, "conflicts": found,
                         "fix": "another session leased these paths; pick another task with `bosun wave plan`"}));
@@ -77,15 +83,14 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         }
     }
     Ok(Outcome::data(json!({
-        "session": session, "registered": true, "joined": joined,
+        "session": session, "joined": joined,
         "tasks": tasks, "lost": lost,
     })))
 }
 
-/// Live leases that overlap the touch paths of an expired lease. A bad glob covers everything.
-fn overlaps(lease: &Lease, live: &[Lease]) -> Vec<Value> {
-    let touch = glob::parse_all(&lease.touch).unwrap_or_default();
-    conflicts(&touch, live, &lease.session, Some(lease.issue))
+/// Live leases that overlap the touch paths of an expired lease.
+fn overlaps(touch: &[glob::Glob], lease: &Lease, live: &[Lease]) -> Vec<Value> {
+    conflicts(touch, live, &lease.session, Some(lease.issue))
         .iter()
         .map(|c| {
             json!({"issue": c.issue, "session": c.session, "mine": c.mine,
