@@ -4,7 +4,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
-- `bosun main-triage` bisects merged PRs between a good and a bad rev and names the first bad one.
+- `bosun fail`: stop rules (3 equal failures or 0 changed lines block the task) and tier escalation, with `failure` and `escalate` records.
 
 ## v0.1.0
 

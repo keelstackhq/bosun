@@ -12,5 +12,6 @@ pub mod review;
 pub mod risk;
 pub mod spawn;
 pub mod state;
+pub mod stop;
 pub mod verdict;
 pub mod wave;
