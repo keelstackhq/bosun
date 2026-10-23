@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const CONFIG: &str = "[[stack]]\npath = \"crates/\"\nprofile = \"rust\"\n[[stack]]\npath = \"py/\"\nprofile = \"py\"\n";
+const CONFIG: &str = "[[stack]]\npath = \"crates/\"\nprofile = \"rust\"\n[[stack]]\npath = \"py/\"\nprofile = \"python\"\n";
 
 const PY_PROFILE: &str = r#"
 [adapters]
@@ -29,7 +29,7 @@ all = ["--everything"]
 when_no_package = "skip"
 "#;
 
-const REASON: &str = "stack py uses regex adapters";
+const REASON: &str = "stack py/ uses regex adapters";
 
 struct Repo {
     _tmp: tempfile::TempDir,
@@ -68,7 +68,7 @@ fn repo() -> Repo {
     git(&root, &["config", "user.name", "t"]);
     git(&root, &["config", "user.email", "t@example.com"]);
     write(&root, ".bosun/bosun.toml", CONFIG);
-    write(&root, ".bosun/profiles/py.toml", PY_PROFILE);
+    write(&root, ".bosun/profiles/python.toml", PY_PROFILE);
     write(
         &root,
         "crates/Cargo.toml",
@@ -237,7 +237,7 @@ fn uc_m7_3_a_gate_without_package_args_runs_in_the_stack_dir() {
 fn status_dir() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path(), ".bosun/bosun.toml", CONFIG);
-    write(tmp.path(), ".bosun/profiles/py.toml", PY_PROFILE);
+    write(tmp.path(), ".bosun/profiles/python.toml", PY_PROFILE);
     tmp
 }
 
@@ -262,8 +262,9 @@ fn uc_m7_5_status_stays_full_when_a_custom_profile_uses_built_in_adapters() {
     let tmp = status_dir();
     let builtin = PY_PROFILE
         .replace("\"none\"", "\"cargo-metadata\"")
-        .replace("\"regex\"", "\"rust\"");
-    write(tmp.path(), ".bosun/profiles/py.toml", &builtin);
+        .replace("pending = \"regex\"", "pending = \"rust-ignore\"")
+        .replace("assertions = \"regex\"", "assertions = \"rust\"");
+    write(tmp.path(), ".bosun/profiles/python.toml", &builtin);
     let v = status(tmp.path());
     assert_eq!(v["data"]["integrity"], "full");
     assert!(v["data"].get("integrity_reason").is_none());
@@ -299,4 +300,106 @@ fn uc_m7_5_test_integrity_passes_an_unchanged_regex_stack() {
     let (code, v) = r.integrity();
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["integrity"], "reduced");
+}
+
+/// A repo with a regex stack at the repo root and `inner` (path, profile, profile text) below it,
+/// with `files` committed on `main`. Returns the repo on a fresh branch.
+fn nested(inner: (&str, &str, &str), files: &[(&str, &str)]) -> Repo {
+    let r = repo();
+    git(&r.root, &["checkout", "-q", "main"]);
+    let (path, profile, profile_text) = inner;
+    let config = format!(
+        "[[stack]]\npath = \".\"\nprofile = \"python\"\n[[stack]]\npath = \"{path}\"\nprofile = \"{profile}\"\n"
+    );
+    write(&r.root, ".bosun/bosun.toml", &config);
+    write(&r.root, ".bosun/profiles/python.toml", ROOT_PY);
+    write(
+        &r.root,
+        &format!(".bosun/profiles/{profile}.toml"),
+        profile_text,
+    );
+    for (rel, text) in files {
+        write(&r.root, rel, text);
+    }
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "nested"]);
+    git(&r.root, &["checkout", "-q", "-b", "work2"]);
+    r
+}
+
+const ROOT_PY: &str = "[adapters]\npackages = \"none\"\npending = \"regex\"\nassertions = \"regex\"\n\
+                       [adapters.regex]\ntest_files = [\"**/test_*.py\"]\nassertions = ['\\bassert\\b']\n\
+                       [gates.lint]\ncmd = [\"fakepy\", \"lint\"]\n";
+
+fn kinds(v: &Value) -> Vec<String> {
+    v["data"]["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn commit_all(r: &Repo) {
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "change"]);
+}
+
+#[test]
+fn uc_m7_5_a_regex_stack_at_the_root_does_not_claim_a_rust_stack_below() {
+    let rust = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"cargo\", \"fmt\"]\n";
+    let test = "#[test]\nfn t() {\n    assert!(true);\n    assert_eq!(1, 1);\n}\n";
+    let r = nested(("crates/", "rust", rust), &[("crates/a/tests/it.rs", test)]);
+    let weak = "#[test]\nfn t() {\n    assert!(true);\n}\n";
+    write(&r.root, "crates/a/tests/it.rs", weak);
+    commit_all(&r);
+    let (code, v) = r.integrity();
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), ["fewer-asserts"]);
+}
+
+#[test]
+fn uc_m7_5_a_regex_stack_at_the_root_does_not_claim_a_ts_stack_below() {
+    let ts = "[adapters]\npackages = \"none\"\npending = \"ts-skip\"\nassertions = \"ts\"\n[gates.fmt]\ncmd = [\"x\"]\n";
+    let spec = "it('a', () => {\n  expect(1).toBe(1);\n});\n";
+    let r = nested(("web/", "ts", ts), &[("web/a.test.ts", spec)]);
+    write(
+        &r.root,
+        "web/a.test.ts",
+        "it.skip('a', () => {\n  expect(1).toBe(1);\n});\n",
+    );
+    commit_all(&r);
+    let (code, v) = r.integrity();
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), ["new-skip"]);
+}
+
+#[test]
+fn uc_m7_5_an_unknown_adapter_name_is_never_full() {
+    let typo = PY_PROFILE.replace("pending = \"regex\"", "pending = \"regexp\"");
+    // status shows reduced, with the reason.
+    let tmp = status_dir();
+    write(tmp.path(), ".bosun/profiles/python.toml", &typo);
+    let v = status(tmp.path());
+    assert_eq!(v["data"]["integrity"], "reduced");
+    let why = v["data"]["integrity_reason"].as_str().unwrap();
+    assert!(why.contains("stack py/") && why.contains("regexp"), "{why}");
+    // test-integrity and the gate refuse, with a fix that lists the valid names.
+    let r = repo();
+    write(&r.root, ".bosun/profiles/python.toml", &typo);
+    r.change(&["py/app.py"]);
+    let (code, v) = r.integrity();
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("rust-ignore, ts-skip, regex"), "{fix}");
+    let out = bosun()
+        .env_remove("GITHUB_BASE_REF")
+        .arg("-C")
+        .arg(&r.root)
+        .args(["gate", "lint", "--base", "main"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("regexp"));
 }

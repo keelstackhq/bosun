@@ -58,7 +58,6 @@ pub fn affected(
 ) -> Affected {
     match adapter {
         "cargo-metadata" => affected_cargo(stack_dir, changed, packages),
-        "none" | "generic" => Affected::All,
         _ => Affected::All,
     }
 }

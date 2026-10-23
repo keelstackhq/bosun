@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 
 use std::collections::BTreeMap;
 
-use super::adapters::{Kit, RegexKit};
+use super::adapters::{self as rs, Marker, RegexKit};
 use super::profile::Profile;
+use super::ts;
 use super::{git, stack_rel};
 use crate::config::Stack;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -20,7 +21,7 @@ pub struct Request<'a> {
     pub base: &'a str,
     /// The PR body, searched for `snapshot-change: <reason>`.
     pub body: &'a str,
-    /// Finding kinds the task allows: `delete-test`, `skip`, `fewer-asserts`.
+    /// Finding kinds the task allows: `delete-test`, `skip`, `only`, `fewer-asserts`.
     /// `delete-test` also allows `fewer-tests`.
     pub allow: &'a [String],
 }
@@ -77,58 +78,137 @@ fn base_text(root: &Path, base: &str, path: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The adapters of each stack, keyed by the stack's repo-relative prefix (`py/`, or empty).
-/// A profile whose pending or assertions adapter is `regex` gets the regex kit.
+/// The adapters of one stack: the built-in ones (chosen by file extension: rust for `.rs`, ts for
+/// TypeScript and JavaScript, anything else is not a test) or the profile's generic regex ones.
+#[derive(Debug)]
+enum Kit {
+    Builtin,
+    Regex(RegexKit),
+}
+
+/// The built-in adapter family of a path.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Rust,
+    Ts,
+    Other,
+}
+
+fn kind(path: &str) -> Kind {
+    if path.ends_with(".rs") {
+        Kind::Rust
+    } else if ts::handles(path) {
+        Kind::Ts
+    } else {
+        Kind::Other
+    }
+}
+
+impl Kit {
+    fn is_test_file(&self, path: &str, text: &str) -> bool {
+        match (self, kind(path)) {
+            (Kit::Regex(k), _) => k.is_test_file(path),
+            (_, Kind::Rust) => rs::is_test_file(path, text),
+            (_, Kind::Ts) => ts::is_test_file(path),
+            _ => false,
+        }
+    }
+
+    fn pending_markers(&self, path: &str, text: &str) -> Vec<Marker> {
+        match (self, kind(path)) {
+            (Kit::Regex(k), _) => k.pending_markers(text),
+            (_, Kind::Rust) => rs::pending_markers(text),
+            (_, Kind::Ts) => ts::pending_markers(text),
+            _ => Vec::new(),
+        }
+    }
+
+    fn test_count(&self, path: &str, text: &str) -> usize {
+        match (self, kind(path)) {
+            (Kit::Regex(_), _) => 0,
+            (_, Kind::Rust) => rs::test_count(text),
+            (_, Kind::Ts) => ts::test_count(text),
+            _ => 0,
+        }
+    }
+
+    fn assertions(&self, path: &str, text: &str) -> usize {
+        match (self, kind(path)) {
+            (Kit::Regex(k), _) => k.assertions(text),
+            (_, Kind::Rust) => rs::assertions(text),
+            (_, Kind::Ts) => ts::assertions(text),
+            _ => 0,
+        }
+    }
+
+    /// Focused tests (`it.only`): only the ts adapters know them.
+    fn only_count(&self, path: &str, text: &str) -> usize {
+        match (self, kind(path)) {
+            (Kit::Builtin, Kind::Ts) => ts::only_count(text),
+            _ => 0,
+        }
+    }
+}
+
+/// One kit per stack, keyed by the stack's repo-relative prefix (`py/`, or empty for the root).
+/// Every stack gets one, so the innermost stack wins: a regex stack at the root does not claim
+/// the files of a rust or ts stack below it.
 fn kits(root: &Path, stacks: &[Stack]) -> Result<Vec<(String, Kit)>, BosunError> {
     let mut out = Vec::new();
     for stack in stacks {
         let profile = Profile::load(root, &stack.profile)?;
-        if !profile.adapters.uses_regex() {
-            continue;
-        }
-        let kit = RegexKit::new(&profile.adapters.regex, &stack.path).map_err(|e| {
-            BosunError::error(
-                format!("profile {}: {e}", stack.profile),
-                format!(
-                    "fix [adapters.regex] in .bosun/profiles/{}.toml",
-                    stack.profile
-                ),
-            )
-        })?;
         let rel = stack_rel(&stack.path);
         let prefix = if rel.is_empty() {
             String::new()
         } else {
             format!("{rel}/")
         };
-        out.push((prefix, Kit::Regex(kit)));
+        let kit = if profile.adapters.uses_regex() {
+            Kit::Regex(
+                RegexKit::new(&profile.adapters.regex, &stack.path).map_err(|e| {
+                    BosunError::error(
+                        format!("profile {}: {e}", stack.profile),
+                        format!(
+                            "fix [adapters.regex] in .bosun/profiles/{}.toml",
+                            stack.profile
+                        ),
+                    )
+                })?,
+            )
+        } else {
+            Kit::Builtin
+        };
+        out.push((prefix, kit));
     }
     Ok(out)
 }
 
-/// The kit for a path: the regex kit of the innermost stack that holds it, else the rust adapters.
+/// The kit of the innermost stack that holds the path; files in no stack use the built-in ones.
 fn kit_for<'a>(kits: &'a [(String, Kit)], path: &str) -> &'a Kit {
-    static RUST: Kit = Kit::Rust;
+    static BUILTIN: Kit = Kit::Builtin;
     kits.iter()
         .filter(|(prefix, _)| path.starts_with(prefix.as_str()))
         .max_by_key(|(prefix, _)| prefix.len())
-        .map_or(&RUST, |(_, kit)| kit)
+        .map_or(&BUILTIN, |(_, kit)| kit)
 }
 
-/// Why integrity is reduced, if it is: each stack whose profile uses a generic adapter (or whose
-/// profile bosun cannot load) is named, for example "stack py uses regex adapters". Shown by
-/// `bosun status` and in the test-integrity data.
+/// Why integrity is reduced, if it is. Each stack (by path, once) whose profile uses a generic
+/// adapter, or whose profile cannot be loaded (a typo in an adapter name, say), is named, for
+/// example "stack py/ uses regex adapters". Shown by `bosun status` and in the test-integrity data.
 pub fn reduced_reason(root: &Path, stacks: &[Stack]) -> Option<String> {
-    let reasons: Vec<String> = stacks
-        .iter()
-        .filter_map(|s| match Profile::load(root, &s.profile) {
-            Ok(p) => p
-                .adapters
-                .generic_kind()
-                .map(|k| format!("stack {} uses {k} adapters", s.profile)),
-            Err(_) => Some(format!("stack {} has no loadable profile", s.profile)),
-        })
-        .collect();
+    let mut reasons: Vec<String> = Vec::new();
+    for s in stacks {
+        let why = match Profile::load(root, &s.profile) {
+            Ok(p) => match p.adapters.generic_kind() {
+                Some(k) => format!("stack {} uses {k} adapters", s.path),
+                None => continue,
+            },
+            Err(e) => format!("stack {} has an unusable profile: {}", s.path, e.message),
+        };
+        if !reasons.contains(&why) {
+            reasons.push(why);
+        }
+    }
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
@@ -160,6 +240,12 @@ pub fn run(req: &Request) -> CmdResult {
         &["diff", "--name-status", "-M", &merge_base, "HEAD"],
     )?;
     let kits = kits(req.root, req.stacks)?;
+    // Each side is read with the kit of the innermost stack holding its own path.
+    let is_test_file = |p: &str, t: &str| kit_for(&kits, p).is_test_file(p, t);
+    let pending_markers = |p: &str, t: &str| kit_for(&kits, p).pending_markers(p, t);
+    let test_count = |p: &str, t: &str| kit_for(&kits, p).test_count(p, t);
+    let assertions = |p: &str, t: &str| kit_for(&kits, p).assertions(p, t);
+    let only_count = |p: &str, t: &str| kit_for(&kits, p).only_count(p, t);
     let allows = |name: &str| req.allow.iter().any(|a| a == name);
     let mut findings: Vec<Value> = Vec::new();
     let mut files_checked = 0;
@@ -181,12 +267,10 @@ pub fn run(req: &Request) -> CmdResult {
             findings.push(finding("snapshot-change", new, None, None, false));
         }
 
-        let old_kit = kit_for(&kits, change.old.as_deref().unwrap_or(""));
-        let new_kit = kit_for(&kits, change.new.as_deref().unwrap_or(""));
-        let was_test =
-            matches!((&change.old, &old_text), (Some(p), Some(t)) if old_kit.is_test_file(p, t));
-        let is_test =
-            matches!((&change.new, &new_text), (Some(p), Some(t)) if new_kit.is_test_file(p, t));
+        // Each side is read with the adapter for its own path: a rename out of the test file
+        // pattern (`a.test.ts` -> `a.test.ts.disabled`) must not hide what the base had.
+        let was_test = matches!((&change.old, &old_text), (Some(p), Some(t)) if is_test_file(p, t));
+        let is_test = matches!((&change.new, &new_text), (Some(p), Some(t)) if is_test_file(p, t));
         if !was_test && !is_test {
             continue;
         }
@@ -196,44 +280,50 @@ pub fn run(req: &Request) -> CmdResult {
             .as_deref()
             .or(change.old.as_deref())
             .unwrap_or("");
-        let base_asserts = old_text.as_deref().map_or(0, |t| old_kit.assertions(t));
+        let (old_path, new_path) = (
+            change.old.as_deref().unwrap_or(file),
+            change.new.as_deref().unwrap_or(file),
+        );
+        let base_text = old_text.as_deref().filter(|_| was_test);
+        let base_asserts = base_text.map_or(0, |t| assertions(old_path, t));
 
-        let Some(head) = &new_text else {
-            let allowed = allows("delete-test");
-            findings.push(finding(
-                "deleted-test",
-                file,
-                Some(base_asserts),
-                None,
-                allowed,
-            ));
-            continue;
+        let head = match &new_text {
+            Some(h) if is_test => h,
+            _ => {
+                // Deleted, or no longer a test file: the base tests are gone.
+                let allowed = allows("delete-test");
+                findings.push(finding(
+                    "deleted-test",
+                    file,
+                    Some(base_asserts),
+                    None,
+                    allowed,
+                ));
+                continue;
+            }
         };
         // Plain skips are counted; a UC marker in head that base lacks (by id, with
         // multiplicity) is a skip too. Removing UC markers is fine.
-        let plain = |k: &Kit, t: &str| {
-            k.pending_markers(t)
+        let plain = |p: &str, t: &str| {
+            pending_markers(p, t)
                 .iter()
                 .filter(|m| m.uc.is_none())
                 .count()
         };
-        let ucs = |k: &Kit, t: &str| {
+        let ucs = |p: &str, t: &str| {
             let mut m: BTreeMap<String, usize> = BTreeMap::new();
-            for id in k.pending_markers(t).into_iter().filter_map(|m| m.uc) {
+            for id in pending_markers(p, t).into_iter().filter_map(|m| m.uc) {
                 *m.entry(id).or_default() += 1;
             }
             m
         };
-        let base_ucs = old_text
-            .as_deref()
-            .map(|t| ucs(old_kit, t))
-            .unwrap_or_default();
-        let new_ucs: usize = ucs(new_kit, head)
+        let base_ucs = base_text.map(|t| ucs(old_path, t)).unwrap_or_default();
+        let new_ucs: usize = ucs(new_path, head)
             .into_iter()
             .map(|(id, n)| n.saturating_sub(base_ucs.get(&id).copied().unwrap_or(0)))
             .sum();
-        let base_skips = old_text.as_deref().map_or(0, |t| plain(old_kit, t));
-        let head_skips = plain(new_kit, head);
+        let base_skips = base_text.map_or(0, |t| plain(old_path, t));
+        let head_skips = plain(new_path, head);
         if head_skips > base_skips || new_ucs > 0 {
             let allowed = allows("skip");
             findings.push(finding(
@@ -244,8 +334,20 @@ pub fn run(req: &Request) -> CmdResult {
                 allowed,
             ));
         }
-        let base_tests = old_text.as_deref().map_or(0, |t| old_kit.test_count(t));
-        let head_tests = new_kit.test_count(head);
+        let base_only = base_text.map_or(0, |t| only_count(old_path, t));
+        let head_only = only_count(new_path, head);
+        if head_only > base_only {
+            let allowed = allows("only");
+            findings.push(finding(
+                "new-only",
+                file,
+                Some(base_only),
+                Some(head_only),
+                allowed,
+            ));
+        }
+        let base_tests = base_text.map_or(0, |t| test_count(old_path, t));
+        let head_tests = test_count(new_path, head);
         if head_tests < base_tests {
             let allowed = allows("delete-test");
             findings.push(finding(
@@ -256,7 +358,7 @@ pub fn run(req: &Request) -> CmdResult {
                 allowed,
             ));
         }
-        let head_asserts = new_kit.assertions(head);
+        let head_asserts = assertions(new_path, head);
         if head_asserts < base_asserts {
             let allowed = allows("fewer-asserts");
             findings.push(finding(

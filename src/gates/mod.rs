@@ -6,6 +6,7 @@ pub mod integrity;
 pub mod main_open;
 pub mod packages;
 pub mod profile;
+pub mod ts;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

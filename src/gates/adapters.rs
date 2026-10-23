@@ -171,43 +171,6 @@ impl RegexKit {
     }
 }
 
-/// The adapters one stack uses: the built-in rust ones or the profile's regex ones.
-#[derive(Debug)]
-pub enum Kit {
-    Rust,
-    Regex(RegexKit),
-}
-
-impl Kit {
-    pub fn is_test_file(&self, path: &str, text: &str) -> bool {
-        match self {
-            Kit::Rust => is_test_file(path, text),
-            Kit::Regex(k) => k.is_test_file(path),
-        }
-    }
-
-    pub fn pending_markers(&self, text: &str) -> Vec<Marker> {
-        match self {
-            Kit::Rust => pending_markers(text),
-            Kit::Regex(k) => k.pending_markers(text),
-        }
-    }
-
-    pub fn test_count(&self, text: &str) -> usize {
-        match self {
-            Kit::Rust => test_count(text),
-            Kit::Regex(_) => 0,
-        }
-    }
-
-    pub fn assertions(&self, text: &str) -> usize {
-        match self {
-            Kit::Rust => assertions(text),
-            Kit::Regex(k) => k.assertions(text),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,12 +225,6 @@ mod tests {
         assert!(RegexKit::new(&keys, "").is_err());
         keys.test_files.clear();
         assert!(RegexKit::new(&keys, "").unwrap_err().contains("test_files"));
-    }
-
-    #[test]
-    fn the_regex_kit_has_no_test_counter() {
-        assert_eq!(Kit::Regex(py_kit("py")).test_count("def test_a(): pass"), 0);
-        assert_eq!(Kit::Rust.test_count("#[test]\nfn a() {}"), 1);
     }
 
     #[test]

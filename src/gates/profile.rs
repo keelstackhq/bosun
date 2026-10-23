@@ -47,7 +47,30 @@ pub struct RegexKeys {
     pub assertions: Vec<String>,
 }
 
+/// The adapter names bosun knows (closed set): a typo such as `regexp` must not pass as full.
+pub const PACKAGES_ADAPTERS: [&str; 3] = ["cargo-metadata", "none", "generic"];
+pub const PENDING_ADAPTERS: [&str; 3] = ["rust-ignore", "ts-skip", "regex"];
+pub const ASSERTIONS_ADAPTERS: [&str; 3] = ["rust", "ts", "regex"];
+
 impl Adapters {
+    /// Err(message, fix) for the first adapter name outside the closed sets.
+    pub fn validate(&self) -> Result<(), (String, String)> {
+        let sets: [(&str, &String, &[&str]); 3] = [
+            ("packages", &self.packages, &PACKAGES_ADAPTERS),
+            ("pending", &self.pending, &PENDING_ADAPTERS),
+            ("assertions", &self.assertions, &ASSERTIONS_ADAPTERS),
+        ];
+        for (key, name, valid) in sets {
+            if !valid.contains(&name.as_str()) {
+                return Err((
+                    format!("unknown {key} adapter `{name}`"),
+                    format!("set `{key}` in [adapters] to one of: {}", valid.join(", ")),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Does test-integrity use the generic regex adapters for this profile?
     pub fn uses_regex(&self) -> bool {
         self.pending == "regex" || self.assertions == "regex"
@@ -171,12 +194,17 @@ impl Profile {
                 ));
             }
         };
-        toml::from_str(&text).map_err(|e| {
+        let profile: Profile = toml::from_str(&text).map_err(|e| {
             BosunError::error(
                 format!("{label}: {}", e.message()),
                 format!("fix {label}: gates need `cmd`; see docs/spec.md section 7"),
             )
-        })
+        })?;
+        profile
+            .adapters
+            .validate()
+            .map_err(|(msg, fix)| BosunError::error(format!("{label}: {msg}"), fix))?;
+        Ok(profile)
     }
 
     pub fn gate(&self, name: &str) -> Result<&Gate, BosunError> {
@@ -248,7 +276,7 @@ mod tests {
 
     #[test]
     fn requires_is_an_optional_gate_key() {
-        let t = "[adapters]\npackages = \"cargo-metadata\"\npending = \"p\"\nassertions = \"a\"\n\
+        let t = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n\
                  [gates.deps]\ncmd = [\"x\"]\nrequires = \"Cargo.lock\"\n[gates.fmt]\ncmd = [\"y\"]\n";
         let p: Profile = toml::from_str(t).unwrap();
         assert_eq!(p.gates["deps"].requires.as_deref(), Some("Cargo.lock"));
@@ -279,13 +307,30 @@ mod tests {
     }
 
     #[test]
+    fn adapter_names_are_a_closed_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let prof = dir.path().join(".bosun/profiles");
+        std::fs::create_dir_all(&prof).unwrap();
+        let text = "[adapters]\npackages = \"none\"\npending = \"regexp\"\nassertions = \"regex\"\n\
+                    [gates.x]\ncmd = [\"x\"]\n";
+        std::fs::write(prof.join("p.toml"), text).unwrap();
+        let e = Profile::load(dir.path(), "p").unwrap_err();
+        assert!(
+            e.message.contains("pending adapter `regexp`"),
+            "{}",
+            e.message
+        );
+        assert!(e.fix.contains("rust-ignore, ts-skip, regex"), "{}", e.fix);
+    }
+
+    #[test]
     fn override_and_errors() {
         let dir = tempfile::tempdir().unwrap();
         let prof = dir.path().join(".bosun/profiles");
         std::fs::create_dir_all(&prof).unwrap();
         std::fs::write(
             prof.join("rust.toml"),
-            "[adapters]\npackages=\"p\"\npending=\"p\"\nassertions=\"a\"\n[gates.x]\ncmd=[\"x\"]\n",
+            "[adapters]\npackages=\"none\"\npending=\"ts-skip\"\nassertions=\"ts\"\n[gates.x]\ncmd=[\"x\"]\n",
         )
         .unwrap();
         let p = Profile::load(dir.path(), "rust").unwrap();
