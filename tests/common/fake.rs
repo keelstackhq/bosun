@@ -412,6 +412,15 @@ impl FakeGithub {
         f(self.state.lock().unwrap().comments.last_mut().unwrap());
     }
 
+    /// The repository permission `login` has (default `write`).
+    pub fn permission(&self, login: &str, permission: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .permissions
+            .insert(login.into(), permission.into());
+    }
+
     pub fn variable(&self, name: &str, value: &str) {
         self.state
             .lock()

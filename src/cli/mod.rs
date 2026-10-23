@@ -17,6 +17,7 @@ pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
 pub mod msg;
+pub mod notify;
 pub mod plan;
 pub mod pr;
 pub mod progress;
@@ -139,6 +140,8 @@ pub enum Command {
     MainHealth(MainHealthArgs),
     /// Review mode b: ask the Anthropic API for the verdict of a PR and record it (no session).
     ReviewCi(ReviewCiArgs),
+    /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
+    Notify(NotifyArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -176,6 +179,7 @@ pub const COMMANDS: &[&str] = &[
     "intake",
     "main-health",
     "review-ci",
+    "notify",
     "answer",
 ];
 
@@ -226,6 +230,7 @@ impl Command {
             Command::Intake(_) => "intake",
             Command::MainHealth(_) => "main-health",
             Command::ReviewCi(_) => "review-ci",
+            Command::Notify(_) => "notify",
         }
     }
 }
@@ -665,4 +670,17 @@ pub struct MainHealthArgs {
     /// The URL of the run, for the issue and the comment.
     #[arg(long)]
     pub run_url: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct NotifyArgs {
+    /// The channel facts read with the Slack tool, as JSON: `-` for stdin or a file.
+    #[arg(long, value_name = "FILE")]
+    pub channel_info: Option<String>,
+    /// Record that the post with this key was made.
+    #[arg(long, value_name = "KEY")]
+    pub ack: Option<String>,
+    /// Accepted for symmetry; the output is always JSON.
+    #[arg(long)]
+    pub json: bool,
 }

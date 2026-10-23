@@ -74,6 +74,8 @@ pub enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         issue: Option<u64>,
     },
+    /// A Slack post for `key` was made (spec §10, `bosun notify --ack`).
+    Notified { key: String, at: String },
     /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
     Answer {
         session: String,
@@ -88,8 +90,10 @@ impl Record {
         serde_json::to_string(self).expect("records serialize")
     }
 
+    /// The session that wrote the record; `""` for a `notified` record, which has none.
     pub fn session(&self) -> &str {
         match self {
+            Record::Notified { .. } => "",
             Record::Lease { session, .. }
             | Record::LeaseEnd { session, .. }
             | Record::Join { session, .. }
