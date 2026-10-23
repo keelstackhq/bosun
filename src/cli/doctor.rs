@@ -28,7 +28,7 @@ fn routines() -> Value {
         {"name": "curator", "schedule": "daily", "model": "sonnet",
          "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add`; at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
         {"name": "notify", "schedule": "every 15 minutes", "model": "haiku",
-         "prompt": "Run `bosun notify` and post what it prints to the Slack channel from .bosun/bosun.toml."},
+         "prompt": "Run `bosun notify --channel-info -` with the channel facts read by your Slack tool (conversations.info and the guest count) as JSON on stdin: {\"id\", \"is_ext_shared\", \"is_org_shared\", \"is_shared\", \"guests\"}. Post each `slack_post` in `next`, then run `bosun notify --ack <key>` for each one posted. On exit 5, post nothing and report data.reason."},
     ])
 }
 

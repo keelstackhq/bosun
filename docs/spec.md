@@ -605,6 +605,7 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
 - A Claude Tag thread is a bosun session with origin slack. The environment setup script installs
   the pinned bosun (D23).
 - `bosun notify` refuses a channel that is externally shared or has guests.
+- `bosun notify [--channel-info -|FILE] [--ack KEY]` lists the posts that are due (halt, main-red, budget-halt, owner-question; `[slack] notify` filters, empty means all). bosun never calls Slack and holds no Slack token (S1): each post comes back in `next` as `{"tool":"slack_post","args":{"channel","text"}}` (D29) and the caller posts it. It works while halted, to announce the halt. Keys are stable (`halt:<issue>`, `main-red:<issue>`, `budget-halt:<date>`, `ask:<issue>:<comment>`); `--ack KEY` writes one `notified` record on the registry issue (idempotent; a key must match `^[a-z-]+:[0-9a-z:-]+$`, else exit 2), and a key with a record is never listed again, so a post is made once (S4). With posts due, `--channel-info` must carry `{"id","is_ext_shared","is_org_shared","is_shared","guests"}`; bosun exits 5 (nothing to post) when it is missing or malformed, the id is not `[slack] channel`, a shared flag is true, or `guests > 0` (S2). Residual risk: these facts are the caller's, bosun cannot prove them; the owner keeps the channel private, not shared and without guests. Text from GitHub (ask questions) is escaped (`& < >`, `@`) before it enters a post (S8).
 
 Intents:
 - ask: `bosun status`, explain, `bosun progress`.

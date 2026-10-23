@@ -13,6 +13,7 @@ pub mod hooks;
 pub mod output;
 pub mod registry;
 pub mod sessions;
+pub mod slack;
 pub mod time;
 
 pub use cli::{Cli, Command};
@@ -55,5 +56,6 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Intake(a) => cli::intake::run(dir, a),
         Command::MainHealth(a) => cli::main_health::run(dir, a),
         Command::ReviewCi(a) => cli::review_ci::run(dir, a),
+        Command::Notify(a) => cli::notify::run(dir, a),
     }
 }
