@@ -261,3 +261,135 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
         }
     }
 }
+
+/// The install step has the shape of ci.yml's `bosun-bin` job; the job builds nothing.
+fn assert_pinned_install_with_fallback(yaml: &str) {
+    assert!(yaml.contains("@keelstackhq/bosun@${VERSION}"), "{yaml}");
+    assert!(yaml.contains("npm install -g --ignore-scripts"));
+    assert!(yaml.contains("grep -Eqx '[0-9]+\\.[0-9]+\\.[0-9]+'"));
+    assert!(yaml.contains("test \"$got\" = \"bosun ${VERSION}\""));
+    assert!(yaml.contains("steps.has.outputs.supported != 'true'"));
+    assert!(!yaml.contains("cargo build"), "no build from main");
+}
+
+#[test]
+fn main_open_judges_from_the_base_and_never_runs_pr_code() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/workflows/main-open.yml"
+    );
+    let yaml = fs::read_to_string(path).unwrap();
+    assert!(yaml.contains("\n  pull_request_target:\n"), "{yaml}");
+    assert!(!yaml.contains("\n  pull_request:\n"));
+    let refs: Vec<&str> = yaml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("ref:"))
+        .collect();
+    assert_eq!(
+        refs,
+        ["          ref: ${{ github.event.pull_request.base.sha }}"],
+        "{yaml}"
+    );
+    assert_eq!(yaml.matches("actions/checkout@").count(), 1);
+    assert!(yaml.contains("persist-credentials: false"));
+    for bad in [
+        "head.sha",
+        "head.ref",
+        "head_ref",
+        "refs/pull",
+        "merge_commit_sha",
+    ] {
+        assert!(!yaml.contains(bad), "main-open.yml mentions {bad}");
+    }
+    assert!(job_ids(&yaml) == ["judge"], "{:?}", job_ids(&yaml));
+    assert_pinned_install_with_fallback(&yaml);
+    let scripts = run_scripts(&yaml);
+    assert!(
+        scripts
+            .iter()
+            .any(|s| s.contains("bosun gate main-open --pr \"$PR\"")),
+        "{scripts:?}"
+    );
+    assert!(
+        scripts.iter().any(|s| s.contains("context=main-open")),
+        "the fallback must post the main-open status"
+    );
+    for s in &scripts {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    assert_eq!(yaml.matches("permissions:").count(), 1);
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: read",
+            "  pull-requests: read",
+            "  statuses: write"
+        ]
+    );
+    assert!(yaml.contains("cancel-in-progress: true"));
+}
+
+#[test]
+fn main_health_reports_with_bosun_built_from_the_default_branch() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/workflows/main-health.yml"
+    );
+    let yaml = fs::read_to_string(path).unwrap();
+    let report = &yaml[yaml.find("\n  report:\n").unwrap()..];
+    assert!(report.contains("always()"));
+    assert!(report.contains("github.event.workflow_run.event == 'push'"));
+    assert!(
+        report.contains("github.event.workflow_run.head_repository.full_name == github.repository")
+    );
+    assert!(report.contains("persist-credentials: false"));
+    assert!(report.contains("ref: ${{ github.sha }}"));
+    assert_pinned_install_with_fallback(report);
+    assert!(
+        run_scripts(report)
+            .iter()
+            .any(|s| s.contains("gh issue create"))
+    );
+    let scripts = run_scripts(report);
+    assert!(
+        scripts
+            .iter()
+            .any(|s| s.contains("bosun main-health --result \"$RESULT\" --run-url \"$RUN_URL\"")),
+        "{scripts:?}"
+    );
+    for s in run_scripts(&yaml) {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    for bad in ["head.sha", "head.ref", "head_ref", "refs/pull"] {
+        assert!(!yaml.contains(bad), "main-health.yml mentions {bad}");
+    }
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: write",
+            "  pull-requests: read",
+            "  statuses: write"
+        ]
+    );
+}
+
+#[test]
+fn splice_pins_its_version() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/splice.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    assert!(yaml.contains("          version: \"0.2.0\"\n"), "{yaml}");
+}

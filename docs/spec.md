@@ -518,6 +518,7 @@ Main-health:
 - The main-health workflow runs on each push to main and nightly. It opens one main-red issue on
   failure and closes it on recovery.
 - The required check main-open fails every non-mainfix PR while main is red.
+- Both workflows run the bosun release pinned in `.bosun/version` of the base commit (main-open, `pull_request_target`) or the default branch head (main-health), never PR code; while the pin lacks the command they run an equivalent shell fallback that posts the same status or issue. The main-open job is named `judge`; `bosun gate main-open` posts the `main-open` status. main-health ignores `workflow_run` events that are not pushes of this repo.
 - `bosun gate main-open --pr N` posts the `main-open` status on the PR head: success while main is open or for a mainfix PR; else failure and exit 4. Only the label `bosun:kind/mainfix` makes a mainfix: on the PR, or on a linked issue that is open and not a pull request. A task marker in a body is never trusted (labels need triage rights, bodies do not).
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
