@@ -34,7 +34,12 @@ const GROUPS = new Set(["wave", "verdict", "lesson", "hook", "budget"]);
 
 /** The envelope's `command` for `args`, as bosun names it; "" when there is none. */
 function commandName(args) {
-  const words = args.filter((a) => !a.startsWith("-"));
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    // `-C <DIR>` is bosun's one global option that takes a value (also `-C=DIR`, `-CDIR`).
+    if (args[i] === "-C") i++;
+    else if (!args[i].startsWith("-")) words.push(args[i]);
+  }
   if (words.length === 0) return "";
   return GROUPS.has(words[0]) && words.length > 1 ? `${words[0]} ${words[1]}` : words[0];
 }
