@@ -303,6 +303,12 @@ Capture:
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
+- Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
+  `<!-- bosun:lesson {"signature":"<hex>","kind":"<kind>"} -->` in the body. The signature is
+  FNV-1a 64 of the kind and the normalised failure text (hex ids, times, numbers and temp paths
+  replaced; first 20 lines). `bosun lesson capture --kind <k> [--issue N] --from -` opens the
+  issue, or posts a `Seen again` comment with a `lesson-seen` record on the open one with the same
+  signature; that record is the hit.
 
 Triage (curator Routine, daily, Sonnet):
 - blocking: sets process-red, so waves pause as on main-red.
