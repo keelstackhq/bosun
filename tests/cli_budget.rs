@@ -42,7 +42,8 @@ fn claude_sessions_records_on_task_and_registry() {
     assert_eq!(
         v["data"],
         json!({"issue": 5, "usd": 3.25, "provider": "claude-sessions",
-               "task_total_usd": 3.25, "over_task_cap": false, "blocked": false})
+               "task_total_usd": 3.25, "over_task_cap": false, "blocked": false,
+               "lesson": null})
     );
     assert_eq!(spends(&fake, 5), 1);
     let reg = fake
@@ -169,4 +170,117 @@ fn the_task_cap_comes_from_the_default_branch_and_ignores_negative_records() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["task_total_usd"], 12.0);
     assert_eq!(v["data"]["over_task_cap"], true);
+}
+
+const BUILDING: &str = "bosun:state/building";
+
+fn spend(fake: &FakeGithub, issue: u64, usd: &str) -> (i32, Value) {
+    let json = format!(r#"{{"usage":{{"cost_usd":{usd}}}}}"#);
+    let n = issue.to_string();
+    let args = [n.as_str(), "--provider", "claude-sessions", "--from", "-"];
+    budget(fake, &json, &args)
+}
+
+fn lessons(fake: &FakeGithub) -> Vec<u64> {
+    let s = fake.state.lock().unwrap();
+    s.issues
+        .iter()
+        .filter(|i| i.labels.contains(&"bosun:lesson".to_string()))
+        .map(|i| i.number)
+        .collect()
+}
+
+fn seen(fake: &FakeGithub, lesson: u64) -> usize {
+    fake.comments_of(lesson)
+        .iter()
+        .filter(|c| c.body.contains(r#""bosun":"lesson-seen""#))
+        .count()
+}
+
+#[test]
+fn uc_m4_3_going_over_per_task_usd_blocks_and_opens_one_lesson() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &[BUILDING], "");
+    let (_, v) = spend(&fake, 5, "20.0");
+    assert_eq!(v["data"]["lesson"], Value::Null);
+    assert!(lessons(&fake).is_empty());
+    let (code, v) = spend(&fake, 5, "6.0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["blocked"], true);
+    assert!(fake.labels_of(5).contains(&"bosun:state/blocked".into()));
+    let ls = lessons(&fake);
+    assert_eq!(ls.len(), 1, "{ls:?}");
+    assert_eq!(
+        v["data"]["lesson"],
+        json!({"issue": ls[0], "created": true, "hits": 0})
+    );
+    let body = fake.issue_state(ls[0]).body;
+    assert!(body.contains("`budget`") && body.contains("#5"), "{body}");
+}
+
+#[test]
+fn uc_m4_3_a_second_record_on_a_blocked_task_adds_no_lesson_and_no_hit() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &[BUILDING], "");
+    spend(&fake, 5, "30.0");
+    let (code, v) = spend(&fake, 5, "1.0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["over_task_cap"], true);
+    assert_eq!(v["data"]["lesson"], Value::Null);
+    let ls = lessons(&fake);
+    assert_eq!(ls.len(), 1);
+    assert_eq!(seen(&fake, ls[0]), 0);
+}
+
+#[test]
+fn uc_m4_3_a_second_task_over_the_cap_adds_a_hit_to_the_same_lesson() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &[BUILDING], "");
+    fake.issue(9, "other", &[BUILDING], "");
+    spend(&fake, 5, "30.0");
+    let (_, v) = spend(&fake, 9, "40.0");
+    let ls = lessons(&fake);
+    assert_eq!(ls.len(), 1, "{ls:?}");
+    assert_eq!(
+        v["data"]["lesson"],
+        json!({"issue": ls[0], "created": false, "hits": 1})
+    );
+    assert_eq!(seen(&fake, ls[0]), 1);
+}
+
+#[test]
+fn uc_m4_3_under_the_cap_opens_no_lesson() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &[BUILDING], "");
+    let (_, v) = spend(&fake, 5, "3.0");
+    assert_eq!(v["data"]["lesson"], Value::Null);
+    assert!(lessons(&fake).is_empty());
+}
+
+#[test]
+fn uc_m4_3_a_failed_lesson_capture_keeps_the_spend_and_exits_0() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &[BUILDING], "");
+    let (_, _) = spend(&fake, 5, "20.0");
+    // In the next record the first label write (the blocked state) succeeds; from the lesson's
+    // label writes on, every write to /labels fails, so the capture fails after the block.
+    fake.after_requests("/labels", 1, |s| {
+        s.fail_paths.push(("/labels".into(), 500));
+    });
+    let (code, v) = spend(&fake, 5, "6.0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["blocked"], true);
+    assert_eq!(v["data"]["task_total_usd"], 26.0);
+    let lesson = &v["data"]["lesson"];
+    assert!(
+        lesson["error"].as_str().is_some_and(|e| !e.is_empty()),
+        "{v}"
+    );
+    let fix = lesson["fix"].as_str().unwrap_or("");
+    assert!(
+        fix.contains("bosun lesson capture --kind budget --issue 5"),
+        "{fix}"
+    );
+    assert!(lessons(&fake).is_empty());
+    assert_eq!(spends(&fake, 5), 2);
 }
