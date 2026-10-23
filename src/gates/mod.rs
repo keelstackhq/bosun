@@ -5,6 +5,7 @@ pub mod adapters;
 pub mod integrity;
 pub mod packages;
 pub mod profile;
+pub mod ts;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

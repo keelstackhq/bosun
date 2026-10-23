@@ -401,6 +401,7 @@ test-integrity:
   plan says so.
 - A snapshot change needs the line `snapshot-change: <reason>` in the PR body.
 - Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker that the base file lacks (by id) is a new skip; removing one is fine. A lower count of `#[test]`, `#[tokio::test]` and `#[rstest]` attributes in a file is a `fewer-tests` finding, allowed by `delete-test`. Files are compared with the merge base, not the base tip.
+- ts adapters: `ts-skip` finds `it.skip(`, `test.skip(`, `describe.skip(`, `it.todo(`, `test.todo(`, `xit(`, `xtest(` and `xdescribe(` (`.only(` is not a skip); `ts` counts `expect(`, `assert(` and `assert.`. They read `*.test.ts`, `*.spec.ts`, their `.tsx` forms and `__tests__/`; test-integrity picks them for `.ts` and `.tsx` files and the rust adapters for the rest.
 - Mutants that survive fail the merge queue.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,

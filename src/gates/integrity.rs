@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 
 use std::collections::BTreeMap;
 
-use super::adapters::{assertions, is_test_file, pending_markers, test_count};
+use super::adapters::{self as rs, Marker};
 use super::git;
+use super::ts;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub struct Request<'a> {
@@ -74,6 +75,43 @@ fn base_text(root: &Path, base: &str, path: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// A path is read by the ts adapters when it is TypeScript, else by the rust ones.
+fn is_ts(path: &str) -> bool {
+    path.ends_with(".ts") || path.ends_with(".tsx")
+}
+
+fn is_test_file(path: &str, text: &str) -> bool {
+    if is_ts(path) {
+        ts::is_test_file(path)
+    } else {
+        rs::is_test_file(path, text)
+    }
+}
+
+fn pending_markers(path: &str, text: &str) -> Vec<Marker> {
+    if is_ts(path) {
+        ts::pending_markers(text)
+    } else {
+        rs::pending_markers(text)
+    }
+}
+
+fn test_count(path: &str, text: &str) -> usize {
+    if is_ts(path) {
+        ts::test_count(text)
+    } else {
+        rs::test_count(text)
+    }
+}
+
+fn assertions(path: &str, text: &str) -> usize {
+    if is_ts(path) {
+        ts::assertions(text)
+    } else {
+        rs::assertions(text)
+    }
+}
+
 fn has_reason(body: &str) -> bool {
     body.lines().any(|l| {
         l.trim()
@@ -133,7 +171,7 @@ pub fn run(req: &Request) -> CmdResult {
             .as_deref()
             .or(change.old.as_deref())
             .unwrap_or("");
-        let base_asserts = old_text.as_deref().map_or(0, assertions);
+        let base_asserts = old_text.as_deref().map_or(0, |t| assertions(file, t));
 
         let Some(head) = &new_text else {
             let allowed = allows("delete-test");
@@ -148,10 +186,15 @@ pub fn run(req: &Request) -> CmdResult {
         };
         // Plain skips are counted; a UC marker in head that base lacks (by id, with
         // multiplicity) is a skip too. Removing UC markers is fine.
-        let plain = |t: &str| pending_markers(t).iter().filter(|m| m.uc.is_none()).count();
+        let plain = |t: &str| {
+            pending_markers(file, t)
+                .iter()
+                .filter(|m| m.uc.is_none())
+                .count()
+        };
         let ucs = |t: &str| {
             let mut m: BTreeMap<String, usize> = BTreeMap::new();
-            for id in pending_markers(t).into_iter().filter_map(|m| m.uc) {
+            for id in pending_markers(file, t).into_iter().filter_map(|m| m.uc) {
                 *m.entry(id).or_default() += 1;
             }
             m
@@ -173,8 +216,8 @@ pub fn run(req: &Request) -> CmdResult {
                 allowed,
             ));
         }
-        let base_tests = old_text.as_deref().map_or(0, test_count);
-        let head_tests = test_count(head);
+        let base_tests = old_text.as_deref().map_or(0, |t| test_count(file, t));
+        let head_tests = test_count(file, head);
         if head_tests < base_tests {
             let allowed = allows("delete-test");
             findings.push(finding(
@@ -185,7 +228,7 @@ pub fn run(req: &Request) -> CmdResult {
                 allowed,
             ));
         }
-        let head_asserts = assertions(head);
+        let head_asserts = assertions(file, head);
         if head_asserts < base_asserts {
             let allowed = allows("fewer-asserts");
             findings.push(finding(
