@@ -96,6 +96,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Org decisions · D-004 channel `gh:keelstackhq/decisions//channel` (piece `import-claude`): `.splice/channels/decisions.toml`, `docs/agents/org-decisions.md` (D-001 to D-006) imported by CLAUDE.md; update bot `.github/workflows/splice.yml` · `splice check --json` exit 0
 - 2026-10-23 · Fix F · owner approval and kill switch: risk-check accepts an owner's unedited PR comment `/bosun approve <head sha>` and the `risk` workflow runs on it (`issue_comment`, from the default branch); the kill switch is an owner's open `bosun:halt` issue (read errors halt), `BOSUN_HALT` stays a second source with 404/403 as no signal; doctor step 5 checks the label · spec §8, README, CHANGELOG
 - 2026-10-23 · Fix G · approvals by plain user token only (`performed_via_github_app` null; missing fails closed); `bosun verdict comment` and `verdict apply` with the `verdict` workflow post `review-verdict` for cloud sessions · spec §7 §8, README, CHANGELOG, workflow tests
+- 2026-10-23 · Release 1/3 · npm launcher `npm/bosun` (`@keelstackhq/bosun`, five platform packages as optionalDependencies, as in berth); a launcher failure prints one error envelope with a fix (spec §1.2) · `node --test npm/bosun/test/*.test.js` 12/12
 
 ## Blocked
 

@@ -1,0 +1,30 @@
+{
+  "name": "@keelstackhq/bosun",
+  "version": "0.1.0",
+  "description": "Orchestration helper for repos where agents write all the code (npm launcher for the bosun binary)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keelstackhq/bosun.git",
+    "directory": "npm/bosun"
+  },
+  "bin": {
+    "bosun": "bin/bosun.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "@keelstackhq/bosun-linux-x64": "0.1.0",
+    "@keelstackhq/bosun-linux-arm64": "0.1.0",
+    "@keelstackhq/bosun-darwin-x64": "0.1.0",
+    "@keelstackhq/bosun-darwin-arm64": "0.1.0",
+    "@keelstackhq/bosun-win32-x64": "0.1.0"
+  }
+}

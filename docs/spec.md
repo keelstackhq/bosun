@@ -86,6 +86,7 @@ commands are the one exception: their stdout follows the Claude Code hook protoc
 - `data` is the command's result. Its shape is per command and documented in `--help`.
 - `error` is `null` when `ok` is true. `kind` is the exit-code name of §1.1. `fix` is never empty.
 - `next` lists the tool calls the session must make (D29): `{"tool":"create_session","args":{..}}`.
+- The npm launcher (`@keelstackhq/bosun`, `npm/bosun`) keeps this contract when it cannot start the binary: it prints one envelope with `exit_code` 1 and a `fix`, and the message on stderr. That holds for `hook` commands too; Claude Code treats a hook's exit 1 as a non-blocking error.
 
 ## 2. Scope and sub-projects
 
