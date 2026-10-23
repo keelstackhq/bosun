@@ -103,17 +103,14 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
-<<<<<<< HEAD
-    /// After a container restart: renew this session's leases and list the PRs to continue.
-    Resume,
-=======
     /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
     Fail(FailArgs),
->>>>>>> origin/main
+    /// After a container restart: renew this session's leases and list the PRs to continue.
+    Resume,
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 23] = [
+pub const COMMANDS: [&str; 24] = [
     "join",
     "claim",
     "heartbeat",
@@ -136,11 +133,8 @@ pub const COMMANDS: [&str; 23] = [
     "hook",
     "doctor",
     "budget",
-<<<<<<< HEAD
-    "resume",
-=======
     "fail",
->>>>>>> origin/main
+    "resume",
 ];
 
 impl Command {
@@ -173,11 +167,8 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
-<<<<<<< HEAD
-            Command::Resume => "resume",
-=======
             Command::Fail(_) => "fail",
->>>>>>> origin/main
+            Command::Resume => "resume",
         }
     }
 }

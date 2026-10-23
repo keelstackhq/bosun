@@ -43,10 +43,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Hook(a) => hooks::dispatch(dir, a),
         Command::Doctor => cli::doctor::run(dir),
         Command::Budget(a) => cli::budget::run(dir, a),
-<<<<<<< HEAD
-        Command::Resume => cli::resume::run(dir),
-=======
         Command::Fail(a) => cli::stop::run(dir, a),
->>>>>>> origin/main
+        Command::Resume => cli::resume::run(dir),
     }
 }
