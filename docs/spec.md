@@ -152,7 +152,7 @@ State machine:
 
 | From | To | When |
 | ---- | -- | ---- |
-| planned | ready | only when its plan task merged (`bosun plan import` moves it) |
+| planned | ready | only when its plan task merged |
 | ready | claimed | `bosun claim`; lease written |
 | claimed | building | first commit pushed |
 | building | review | `bosun pr`; gates green |
@@ -358,9 +358,20 @@ Prune:
 - `bosun lesson hit <id>` records a hit. `lesson add` and `lesson hit` change the local file `docs/lessons.toml` and need no GitHub; only `lesson hit --issue N`, which posts a `lesson-hit` record, does (and obeys the kill switch).
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
-- A lesson that gets a hit after its mechanism merged reopens as blocking.
-- `bosun lesson --upstream` sends a lesson about bosun itself to keelstackhq/bosun.
-- Metrics: `bosun progress --lessons` (open, mechanized, hits per week).
+- A lesson that gets a hit after its mechanism merged reopens as blocking. A lesson is mechanized
+  when its issue is labelled `bosun:lesson/mechanizable` and closed as `completed`. When
+  `lesson capture` finds no open issue with the signature but a mechanized one, it reopens that
+  issue, makes it `bosun:lesson/blocking` (the other triage labels go), adds `bosun:process-red`, and comments "The mechanism did not
+  hold: seen again. Reopened as blocking" with the `lesson-seen` record; the output has
+  `reopened: true`. Issues closed as `not_planned` or `duplicate`, advice lessons and untriaged
+  lessons are ignored: a new lesson opens.
+- `bosun lesson add --upstream "<text>" [--why ...]` sends a lesson about bosun itself to
+  keelstackhq/bosun as an issue (`bosun:lesson`, `bosun:source/lesson`; title cut to 120
+  characters), not to the local store.
+  It obeys the kill switch; data `{upstream: true, issue}`.
+- Metrics: `bosun progress --lessons` (open, mechanized, hits per week). data `lessons: {open,
+  blocking, mechanized, advice, hits_last_7_days, hits_by_week: [{week_start, hits}]}` (4 weeks,
+  oldest first), counted from `lesson-seen` and `lesson-hit` records.
 
 ## 7. Verification and the gate contract
 
@@ -415,7 +426,8 @@ test-integrity:
 - Refuses a PR that deletes a test, adds a skip marker, or lowers the assertion count, unless the
   plan says so.
 - A snapshot change needs the line `snapshot-change: <reason>` in the PR body.
-- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker that the base file lacks (by id) is a new skip; removing one is fine. A lower count of `#[test]`, `#[tokio::test]` and `#[rstest]` attributes in a file is a `fewer-tests` finding, allowed by `delete-test`. Files are compared with the merge base, not the base tip.
+- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `only`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker that the base file lacks (by id) is a new skip; removing one is fine. A lower count of `#[test]`, `#[tokio::test]` and `#[rstest]` attributes in a file is a `fewer-tests` finding, allowed by `delete-test`. Files are compared with the merge base, not the base tip.
+- ts adapters: test-integrity reads `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs` files with them, `.rs` files with the rust adapters, and no other file is a test file. Test files are `*.test.<ext>`, `*.spec.<ext>` and files under `__tests__/`. Comments (`//`, `/* */`), regex literals and the inside of string and template literals are ignored; `fit` and `fdescribe` count only when called with a string or template literal title, and a name after `function` or `.` is not a declaration. `ts-skip` finds `it`, `test` and `describe` (also `suite`) declarations with a `.skip`, `.todo`, `.skipIf`, `.runIf` or `.fixme` modifier anywhere in the chain (`describe.skip.each`, `test.concurrent.skip`), and `xit`, `xtest` and `xdescribe`; a new one is a `new-skip` finding. A new `.only` (`it.only`, `test.only`, `describe.only`, `fit`, `fdescribe`) is a `new-only` finding, allowed by `only`. `ts` counts `expect(`, `assert(` and `assert.`, and `it`/`test` declarations (skipped ones too) for `fewer-tests`. Each side of a change is read with the adapter for its own path; a file that was a test file and no longer is one (renamed to `a.test.ts.disabled`) is a `deleted-test` finding.
 - Mutants that survive fail the merge queue.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
@@ -728,7 +740,7 @@ profile and adapters; generic regex adapters; mixed stacks; bosun doctor --remot
 - UC-M7-4: a new channel version reaches a consumer as one R-gov PR from the splice update bot.
 - UC-M7-5: a generic adapter shows "reduced integrity" in bosun status.
 
-`bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--source SRC] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]` runs `splice channel add` for the bosun channel on branch `bosun/init` (ref `v<bosun version>` by default; a non-release ref also passes `bosun_version`), keeps an existing `.claude/settings.json` or `splice.yml` (`--exclude`), commits, pushes and opens one R-gov setup PR whose body lists the owner steps. It skips the kill switch (a fresh repo has no labels); `--no-pr` stops after the commit and needs no token.
+`bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--source SRC] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]` runs `splice channel add` for the bosun channel on branch `bosun/init` (ref `v<bosun version>` by default; a non-release ref also passes `bosun_version`), keeps an existing `.claude/settings.json` or `splice.yml` (`--exclude`), commits, pushes and opens one R-gov setup PR whose body lists the owner steps. It skips the kill switch (a fresh repo has no labels); `--no-pr` stops after the commit and needs no token. Beside a hull template it passes `own_ci=1` when a workflow already defines a `ci-ok` job, adds the `claude-md` piece unless a splice lock lists `CLAUDE.md`, excludes every existing seed path and `.claude/settings.json` (if that file lacks the bosun hooks, an owner step says to take them from the template that owns it, not to edit it), and appends the missing required checks to an existing `hoist.toml` (`bosun-ok` too with `own_ci`), checked before splice runs and refused when the edit cannot be made safely.
 
 M8 Review mode (b). Tasks: review as a CI check; delta review; comparison of mode (a) and mode (b)
 verdicts on the same PRs. Done when:
