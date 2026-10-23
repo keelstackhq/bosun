@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use crate::cli::risk_check::owner_logins;
 use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
-use crate::core::lease::{Lease, race_winner};
+use crate::core::lease::{Lease, leases_of, race_winner};
 use crate::core::meta::{TaskMeta, parse_task_meta};
 use crate::core::records::{Note, Record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
@@ -259,4 +259,25 @@ pub fn renew_lease(
         .map_or("", |n| n.body.as_str());
     gh.update_comment(lease.comment_id, &replace_record(body, &record))?;
     Ok(())
+}
+
+/// GitHub merged the PR of `number`: move a `queued` task to `merged` and end the leases on the
+/// issue (only the one of `only_session` when given) with reason `merged`. Any other state is
+/// left alone. Returns whether the state moved. GitHub merges, never an agent (spec D13).
+pub fn sync_merged(
+    gh: &dyn Github,
+    number: u64,
+    issue: &Issue,
+    only_session: Option<&str>,
+) -> Result<bool> {
+    if state_of(&issue.labels) != Some(State::Queued) {
+        return Ok(false);
+    }
+    set_state(gh, number, issue, State::Merged)?;
+    for lease in leases_of(number, &notes(gh, number)?) {
+        if only_session.is_none_or(|s| s == lease.session) {
+            end_lease(gh, number, &lease.session, "merged")?;
+        }
+    }
+    Ok(true)
 }
