@@ -33,6 +33,10 @@ impl Timestamp {
         Timestamp(self.0.div_euclid(86_400) * 86_400)
     }
 
+    pub fn minus_secs(self, secs: i64) -> Timestamp {
+        Timestamp(self.0 - secs)
+    }
+
     pub fn plus_secs(self, secs: i64) -> Timestamp {
         Timestamp(self.0 + secs)
     }
@@ -148,6 +152,12 @@ mod tests {
         assert_eq!(days_from_civil(2026, 10, 16), 20_742);
         assert_eq!(civil_from_days(20_742), (2026, 10, 16));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn minus_secs_goes_back() {
+        let t = parse_rfc3339("2026-10-22T10:00:00Z").unwrap();
+        assert_eq!(t.minus_secs(7 * 86_400).to_string(), "2026-10-15T10:00:00Z");
     }
 
     #[test]
