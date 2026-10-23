@@ -22,6 +22,7 @@ pub fn run(dir: Option<&Path>, cmd: &LessonCmd) -> CmdResult {
         LessonCmd::Add(a) => add(dir, a),
         LessonCmd::Hit(a) => hit(dir, a),
         LessonCmd::Capture(a) => capture(dir, a),
+        LessonCmd::Triage(a) => super::lesson_triage::run(dir, a),
     }
 }
 
@@ -43,7 +44,7 @@ pub fn load(root: &Path) -> Result<Store, BosunError> {
 }
 
 /// Write the store atomically (temp file, then rename).
-fn save(root: &Path, store: &Store) -> Result<(), BosunError> {
+pub(super) fn save(root: &Path, store: &Store) -> Result<(), BosunError> {
     let fail = |e: std::io::Error| {
         BosunError::error(
             format!("cannot write {FILE}: {e}"),
@@ -61,7 +62,7 @@ fn save(root: &Path, store: &Store) -> Result<(), BosunError> {
     std::fs::rename(&tmp, &path).map_err(fail)
 }
 
-fn today(ctx: &Ctx) -> String {
+pub(super) fn today(ctx: &Ctx) -> String {
     ctx.now.to_string()[..10].to_string()
 }
 
@@ -76,21 +77,24 @@ fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
         a.evidence.clone(),
         &today(&ctx),
     )
-    .map_err(|cap| {
-        let (n, what) = if cap.global {
-            (lessons::MAX_GLOBAL, "global lessons")
-        } else {
-            (lessons::MAX, "lessons")
-        };
-        BosunError::limit(
-            format!("{FILE} already has {n} {what}"),
-            "mechanize, merge or retire a lesson (spec §6)",
-        )
-    })?;
+    .map_err(cap_error)?;
     save(&ctx.dir, &store)?;
     Ok(Outcome::data(
         json!({"id": id, "count": store.lesson.len(), "global_count": store.global_count()}),
     ))
+}
+
+/// The exit-6 error of a store at a cap.
+pub(super) fn cap_error(cap: lessons::CapError) -> BosunError {
+    let (n, what) = if cap.global {
+        (lessons::MAX_GLOBAL, "global lessons")
+    } else {
+        (lessons::MAX, "lessons")
+    };
+    BosunError::limit(
+        format!("{FILE} already has {n} {what}"),
+        "mechanize, merge or retire a lesson (spec §6)",
+    )
 }
 
 fn hit(dir: Option<&Path>, a: &LessonHitArgs) -> CmdResult {
