@@ -39,6 +39,7 @@ const CALLS: &[&[&str]] = &[
     &["main-health", "--result", "cancelled"],
     &["review-ci", "3"],
     &["notify"],
+    &["answer", "4", "--slack-user", "U1"],
 ];
 
 #[test]

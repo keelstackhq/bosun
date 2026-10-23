@@ -606,6 +606,15 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
   the pinned bosun (D23).
 - `bosun notify` refuses a channel that is externally shared or has guests.
 - `bosun notify [--channel-info -|FILE] [--ack KEY]` lists the posts that are due (halt, main-red, budget-halt, owner-question; `[slack] notify` filters, empty means all). bosun never calls Slack and holds no Slack token (S1): each post comes back in `next` as `{"tool":"slack_post","args":{"channel","text"}}` (D29) and the caller posts it. It works while halted, to announce the halt. Keys are stable (`halt:<issue>`, `main-red:<issue>`, `budget-halt:<date>`, `ask:<issue>:<comment>`); `--ack KEY` writes one `notified` record on the registry issue (idempotent; a key must match `^[a-z-]+:[0-9a-z:-]+$`, else exit 2), and a key with a record is never listed again, so each key is posted at most once per ack; a caller that dies before `--ack`, or two notifiers racing, can repeat one post (S4). `--ack` refuses (exit 3) a key that is not pending now, and a `notified` or `ask` record counts only from a user with write access; the halt variable `BOSUN_HALT=1` is announced as `halt-var:<date>` (it repeats once per UTC day while halted); `--ack` exits 5 when the author of the `notified` record it just wrote lacks write access, as the record would be ignored; when the `notified` records cannot be read, only halt and main-red are listed; a failing section is reported in `data.errors` and does not hide halt and main-red. With posts due, `--channel-info` must carry `{"id","is_ext_shared","is_org_shared","is_shared","guests"}`; bosun exits 5 (nothing to post) when it is missing or malformed, the id is not `[slack] channel`, a shared flag is true, or `guests > 0` (S2). Residual risk: these facts are the caller's, bosun cannot prove them; the owner keeps the channel private, not shared and without guests. Text from GitHub (ask questions) is escaped (`& < >`, `@`) before it enters a post (S8).
+- `bosun answer <issue> --slack-user U… [--from -|FILE]`: on a needs-human task with an `ask`
+  record, an owner Slack ID (`slack` in `governance/owners.toml` on the default branch) adds a
+  fenced comment and an `answer` record. The answer is recorded as data and never changes the
+  task's state: the owner moves the task on GitHub. The ask counts as open only when a
+  collaborator with write access wrote the newest `ask` and no `answer`, `escalate` or `failure`
+  record follows it (else exit 3, "no open ask on #N"). Any other ID, or no owner Slack ID, is
+  exit 5 and nothing is written. `bosun doctor` warns when a channel is set and no owner has a
+  Slack ID. bosun cannot verify `--slack-user`: the Claude Tag thread passes it from the Slack
+  event, and any session holding the token could claim it.
 
 Intents:
 - ask: `bosun status`, explain, `bosun progress`.

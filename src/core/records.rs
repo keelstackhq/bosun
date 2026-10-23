@@ -76,6 +76,12 @@ pub enum Record {
     },
     /// A Slack post for `key` was made (spec §10, `bosun notify --ack`).
     Notified { key: String, at: String },
+    /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
+    Answer {
+        session: String,
+        slack_user: String,
+        at: String,
+    },
 }
 
 impl Record {
@@ -99,7 +105,8 @@ impl Record {
             | Record::Verdict { session, .. }
             | Record::Failure { session, .. }
             | Record::Escalate { session, .. }
-            | Record::LessonSeen { session, .. } => session,
+            | Record::LessonSeen { session, .. }
+            | Record::Answer { session, .. } => session,
         }
     }
 }
