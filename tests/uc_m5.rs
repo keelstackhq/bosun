@@ -57,3 +57,51 @@ fn uc_m5_2() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["process_red"], 20);
 }
+
+/// UC-M5-3: a pack includes only lessons whose scope matches the task paths, plus global ones.
+#[test]
+fn uc_m5_3() {
+    let fake = FakeGithub::start();
+    fake.issue(7, "task", &[], "Do it.");
+    fake.pull_as_issue(42, "the pr");
+    fake.pull(42, "the pr", "claude/x", "Closes #7");
+    fake.pull_file(42, "src/core/a.rs", "modified", 2, 1, Some("@@ a"));
+    fake.content(
+        "docs/lessons.toml",
+        "base0000",
+        "[[lesson]]\nid = \"L-001\"\nrule = \"global\"\n\n[[lesson]]\nid = \"L-002\"\nrule = \"core\"\nscope = [\"src/core/**\"]\n\n[[lesson]]\nid = \"L-003\"\nrule = \"web\"\nscope = [\"web/**\"]\n",
+    );
+    let (code, v) = run(&fake, "s", "2026-10-23T10:00:00Z", &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    let ids: Vec<&str> = v["data"]["lessons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["L-001", "L-002"]);
+}
+
+/// UC-M5-4: at 40 entries, bosun lesson add refuses with exit 6.
+#[test]
+fn uc_m5_4() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+    let mut text = String::new();
+    for i in 1..=40 {
+        text.push_str(&format!(
+            "[[lesson]]\nid = \"L-{i:03}\"\nrule = \"r{i}\"\nscope = [\"a/**\"]\n\n"
+        ));
+    }
+    let file = tmp.path().join("docs/lessons.toml");
+    std::fs::write(&file, &text).unwrap();
+    let out = bosun()
+        .arg("-C")
+        .arg(tmp.path())
+        .args(["lesson", "add", "x", "--scope", "a/**"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(6));
+    assert_eq!(one_object(&out.stdout)["exit_code"], 6);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+}

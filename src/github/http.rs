@@ -108,6 +108,18 @@ impl Http {
         }
     }
 
+    /// Like `get_json`, but 301 (transferred) and 410 (deleted) are `Ok(Err(()))`: the number is
+    /// gone, not an error.
+    pub fn get_json_or_gone(&self, path: &str) -> Result<std::result::Result<Option<Value>, ()>> {
+        let r = self.request("GET", path, None)?;
+        match r.status {
+            200..=299 => Ok(Ok(Some(r.json()))),
+            404 => Ok(Ok(None)),
+            301 | 410 => Ok(Err(())),
+            _ => Err(self.fail("GET", path, &r)),
+        }
+    }
+
     /// Like `get_json`, but a 403 that is not a rate limit is `Ok(Err(()))`: the token may not
     /// read this path.
     pub fn get_json_or_forbidden(
