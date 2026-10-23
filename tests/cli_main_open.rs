@@ -28,12 +28,7 @@ fn uc_m3_2_feature_pr_fails_and_mainfix_pr_passes_while_main_is_red() {
     fake.pull(10, "feature", "feat", "No link.");
     fake.pull(11, "fix main", "fix", "No link.");
     fake.pull_set(11, "labels", json!([{"name": "bosun:kind/mainfix"}]));
-    fake.issue(
-        7,
-        "revert",
-        &[],
-        r#"<!-- bosun:task {"item":"M3","task":"T9","kind":"mainfix"} -->"#,
-    );
+    fake.issue(7, "revert", &["bosun:kind/mainfix"], "Revert the bad PR.");
     fake.pull(12, "revert", "rev", "Closes #7");
 
     let (code, v) = main_open(&fake, "10");
@@ -95,4 +90,45 @@ fn unknown_pr_is_exit_1() {
     let fake = FakeGithub::start();
     let (code, v) = main_open(&fake, "99");
     assert_eq!(code, 1, "{v}");
+}
+
+/// Red main, a feature PR 10 whose body links `body`; the verdict must be a failure.
+fn assert_blocked(fake: &FakeGithub, body: &str) {
+    fake.pull(10, "feature", "feat", body);
+    let (code, v) = main_open(fake, "10");
+    assert_eq!(code, 4, "{v}");
+    assert_eq!(v["data"]["mainfix"], false);
+    assert_eq!(status_of(fake, "sha10")["state"], "failure");
+}
+
+const MARKER: &str = r#"<!-- bosun:task {"item":"M3","task":"T9","kind":"mainfix"} -->"#;
+
+#[test]
+fn uc_m3_2_body_marker_alone_is_not_a_mainfix() {
+    let fake = FakeGithub::start();
+    red(&fake);
+    fake.issue(7, "decoy", &[], MARKER);
+    assert_blocked(&fake, "Closes #7");
+}
+
+#[test]
+fn uc_m3_2_closed_labelled_issue_is_not_a_mainfix() {
+    let fake = FakeGithub::start();
+    red(&fake);
+    fake.issue(7, "old fix", &["bosun:kind/mainfix"], "old");
+    fake.state.lock().unwrap().issues[1].state = "closed".into();
+    assert_blocked(&fake, "Closes #7");
+}
+
+#[test]
+fn uc_m3_2_linked_pull_requests_are_not_a_mainfix() {
+    let fake = FakeGithub::start();
+    red(&fake);
+    // Its own number, with the marker in its own body.
+    fake.pull_as_issue(10, "feature");
+    fake.pull_as_issue(13, "other fix");
+    fake.state.lock().unwrap().issues[1]
+        .labels
+        .push("bosun:kind/mainfix".into());
+    assert_blocked(&fake, &format!("{MARKER} Closes #10 Closes #13"));
 }

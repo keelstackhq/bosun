@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, Result, main_red, task_meta};
+use crate::app::{App, Result, main_red};
 use crate::core::meta::linked_issues;
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -33,16 +33,18 @@ pub fn judge(main_red: Option<u64>, mainfix: bool) -> Verdict {
     Verdict { pass, description }
 }
 
-/// A mainfix PR: the label on the PR, or a linked task issue with kind `mainfix` (metadata or
-/// label).
+/// A mainfix PR: the label on the PR, or the label on a linked issue that is open and is not a
+/// pull request. Only labels count (they need triage rights); the task marker in a body is
+/// written by its author, so it is never trusted here.
 pub fn is_mainfix(gh: &dyn Github, pull: &Pull) -> Result<bool> {
     if pull.labels.iter().any(|l| l == MAINFIX_LABEL) {
         return Ok(true);
     }
     for n in linked_issues(&pull.body) {
         if let Some(issue) = gh.get_issue(n)?
-            && (issue.labels.iter().any(|l| l == MAINFIX_LABEL)
-                || task_meta(&issue).is_some_and(|m| m.kind == "mainfix"))
+            && issue.state == "open"
+            && !issue.pull_request
+            && issue.labels.iter().any(|l| l == MAINFIX_LABEL)
         {
             return Ok(true);
         }
