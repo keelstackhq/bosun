@@ -17,6 +17,18 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun pr --auto-merge` works in Claude Code cloud sessions: it falls back to the CCR auto-merge route when GraphQL is refused; the merge-lock also blocks `gh api` auto-merge calls.
 - The janitor Routine prompt (`bosun doctor`) runs `bosun budget check` and makes its `interrupt_session` calls.
 
+- `bosun plan check <file>` and `bosun plan import <file>`: epics, tasks and one plan task per item from a plan file; a second import creates nothing (UC-M2-1).
+- `bosun plan import` moves an item's tasks to ready once its plan task merged and writes stubs for missing UC tests (UC-M2-2, UC-M2-3).
+- `bosun plan amend <file>`: items and tasks gone from the plan close as not planned; changed ones update in place (UC-M2-4).
+- `bosun intake "<text>" --source ..`: opens a kind/plan issue that asks for a plan amendment.
+- `bosun lesson capture`: a failure opens a lesson issue, or adds a hit to the open lesson with the same signature (UC-M5-1).
+- Process-red: an open `bosun:process-red` issue pauses `claim`, `spawn` and `wave plan` for all but mainfix and process-fix work (UC-M5-2).
+- `bosun lesson triage <issue> --as blocking|mechanizable|advice`, called by the curator Routine prompt.
+- A hit on a mechanized lesson reopens it as blocking (UC-M5-5); `lesson add --upstream`; `bosun progress --lessons`.
+- The merge-lock follows `cd`, `git -C`, `--git-dir` and `--work-tree`; the label-lock reads label fields only.
+- Paging works through the Claude Code cloud proxy.
+- `risk.yml` and `verdict.yml` run the pinned bosun release instead of building main.
+
 ## v0.1.0
 
 The first release: the seed (S1-S10, `docs/superpowers/plans/2026-10-22-bosun-seed.md`).
