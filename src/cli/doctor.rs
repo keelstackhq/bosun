@@ -32,6 +32,26 @@ fn routines() -> Value {
     ])
 }
 
+/// Top-level job names (two-space-indented `name:` lines) of every `.github/workflows/*.yml`.
+fn workflow_jobs(root: &Path) -> Vec<String> {
+    let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "yml"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .flat_map(|t| {
+            t.lines()
+                .filter_map(|l| {
+                    let l = l.trim_end().strip_prefix("  ")?;
+                    let name = l.strip_suffix(':')?;
+                    (!name.starts_with(' ') && !name.contains(' ')).then(|| name.to_string())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 fn read(root: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(root.join(rel)).ok()
 }
@@ -133,12 +153,18 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
                 .collect()
         })
         .unwrap_or_default();
-    let absent: Vec<_> = REQUIRED_CHECKS
-        .iter()
-        .filter(|c| !listed.iter().any(|l| l == *c))
-        .collect();
-    let ci_ok_job = read(root, ".github/workflows/ci.yml")
-        .is_some_and(|t| t.lines().any(|l| l.trim_end() == "  ci-ok:"));
+    let jobs = workflow_jobs(root);
+    let has_job = |j: &str| jobs.iter().any(|x| x == j);
+    let mut absent: Vec<&str> = REQUIRED_CHECKS.to_vec();
+    if has_job("bosun-ok") {
+        absent.push("bosun-ok");
+    }
+    absent.retain(|c| !listed.iter().any(|l| l == c));
+    let step3_fix = if absent.is_empty() {
+        HOIST_FIX.to_string()
+    } else {
+        format!("add {absent:?} to hoist.toml [github] required_checks, then {HOIST_FIX}")
+    };
     items.push(item(
         3,
         "required checks",
@@ -148,13 +174,13 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             Some(format!(
                 "hoist.toml [github] required_checks lacks {absent:?}"
             ))
-        } else if !ci_ok_job {
-            Some(".github/workflows/ci.yml has no `ci-ok` job".into())
+        } else if !has_job("ci-ok") {
+            Some("no .github/workflows/*.yml has a `ci-ok` job".into())
         } else {
             None
         },
-        "hoist.toml lists the four checks and ci.yml has the ci-ok job".into(),
-        HOIST_FIX,
+        "hoist.toml lists the required checks and a workflow has the ci-ok job".into(),
+        &step3_fix,
     ));
 
     let owners = read(root, "governance/owners.toml")

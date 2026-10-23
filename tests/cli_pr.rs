@@ -232,3 +232,66 @@ fn the_default_branch_is_refused_whatever_its_name() {
     let (code, _) = bosun_in(&fake, dir.path(), &["pr", "7"]);
     assert_eq!(code, 2);
 }
+
+fn green_four(fake: &FakeGithub) {
+    for c in ["ci-ok", "risk-check", "main-open", "review-verdict"] {
+        fake.status("sha20", c, "success", "");
+    }
+}
+
+fn pr_setup(hoist: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/review");
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    green_four(&fake);
+    let dir = repo("claude/t7");
+    if let Some(h) = hoist {
+        std::fs::write(dir.path().join("hoist.toml"), h).unwrap();
+    }
+    (fake, dir)
+}
+
+const HULL: &str = "[github]\nrequired_checks = [\"ci-ok\", \"bosun-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]\n";
+
+#[test]
+fn hoist_toml_required_checks_are_enforced() {
+    let (fake, dir) = pr_setup(Some(HULL));
+    fake.status("sha20", "bosun-ok", "pending", "");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bosun-ok: pending"),
+        "{v}"
+    );
+    assert_eq!(fake.auto_merge_enabled(20), None);
+}
+
+#[test]
+fn the_env_overrides_hoist_toml() {
+    let (fake, dir) = pr_setup(Some(HULL));
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_REQUIRED_CHECKS", "ci-ok")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["pr", "7", "--auto-merge"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", one_object(&out.stdout));
+}
+
+#[test]
+fn a_missing_or_invalid_hoist_toml_gives_the_defaults() {
+    for hoist in [
+        None,
+        Some("not = [toml"),
+        Some("[github]\nrequired_checks = []\n"),
+    ] {
+        let (fake, dir) = pr_setup(hoist);
+        let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+        assert_eq!(code, 0, "{hoist:?} {v}");
+    }
+}

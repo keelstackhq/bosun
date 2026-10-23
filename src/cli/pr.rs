@@ -8,19 +8,21 @@ use serde_json::json;
 
 use super::PrArgs;
 use crate::app::{App, default_branch, kill_switch, set_state};
+use crate::core::checks;
 use crate::core::state::{State, state_of};
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
-/// The checks that must be green before auto-merge (spec D15, D32); `BOSUN_REQUIRED_CHECKS`
-/// (comma-separated) overrides them.
-pub const REQUIRED: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
+/// The default checks that must be green before auto-merge (spec D15, D32). `required` lets
+/// `BOSUN_REQUIRED_CHECKS`, then `hoist.toml` `[github] required_checks`, override them.
+pub const REQUIRED: [&str; 4] = checks::DEFAULT_REQUIRED;
 
-fn required() -> Vec<String> {
-    match std::env::var("BOSUN_REQUIRED_CHECKS") {
-        Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).collect(),
-        _ => REQUIRED.iter().map(|s| s.to_string()).collect(),
-    }
+fn required(root: &Path) -> Vec<String> {
+    let hoist = std::fs::read_to_string(root.join("hoist.toml")).ok();
+    checks::required_checks(
+        std::env::var("BOSUN_REQUIRED_CHECKS").ok().as_deref(),
+        hoist.as_deref(),
+    )
 }
 
 fn current_branch(dir: &Path) -> Result<String, BosunError> {
@@ -41,11 +43,11 @@ fn current_branch(dir: &Path) -> Result<String, BosunError> {
 }
 
 /// `(context, state)` of every required check that is not green on `sha`.
-fn not_green(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+fn not_green(gh: &dyn Github, root: &Path, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
     let mut bad = Vec::new();
-    for ctx in required() {
+    for ctx in required(root) {
         let status = statuses.iter().find(|s| s.context == ctx);
         let run = runs.iter().find(|r| r.name == ctx);
         let green = status.is_some_and(|s| s.state == "success")
@@ -106,7 +108,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
             ));
         }
-        let bad = not_green(gh, &pull.head_sha)?;
+        let bad = not_green(gh, &app.ctx.dir, &pull.head_sha)?;
         if !bad.is_empty() {
             let list: Vec<String> = bad.iter().map(|(c, s)| format!("{c}: {s}")).collect();
             return Err(BosunError::error(
