@@ -10,9 +10,8 @@ packages, crates.io `keel-bosun`, GitHub Release) and pinned in `.bosun/version`
 installs the release pinned in each PR's base commit, and job `pin` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
-prompt has children post the record by hand); `wave` and `status` still read the local
-limits; plan import (M2) must give plan tasks `allow = ["skip"]` so their pending UC tests pass
-test-integrity; the merge queue comes with M3.
+prompt has children post the record by hand); plan import (M2) must give plan tasks
+`allow = ["skip"]` so their pending UC tests pass test-integrity; the merge queue comes with M3.
 
 ## Done
 
@@ -104,6 +103,18 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · M1 T5 · `tests/smoke_reap.rs`: UC-M1-3 smoke test with clock jumps (claim at 10:00, heartbeat at 10:20, janitor reaps at 10:31/10:49:59 nothing, at 10:50 the lease ends `reaped`, task ready, another session claims it, the old heartbeat extends nothing) · `cargo test --test smoke_reap` 1/1
 - 2026-10-23 · M1 T2 · `bosun fail` (src/cli/stop.rs, src/core/stop.rs), `failure` and `escalate` records, spec §4 · tests/cli_stop.rs 6/6, core::stop 5/5, cargo test all green
 - 2026-10-23 · M7 (UC-M7-1) · profiles may name a `manifest` (rust: `Cargo.toml`); a gate skips a stack whose manifest is missing at the head and at the base (also with `--all`), so the setup PR of an empty repo is green · `cargo test --test cli_gate` 13/13
+- 2026-10-23 · M4 T1 · spend guard in `bosun claim`: exit 6 at 80 % of `daily_usd` (registry spend since 00:00 UTC, limits from the default branch), mainfix and a re-claim of the own lease exempt, data `{check: 2, name: "budget", ..}` like spawn · UC-M4-1 · `tests/cli_spend_guard.rs` 7/7 · PR #126
+- 2026-10-23 · M4 T4 · `bosun progress [--days N]`: merged tasks (closed as completed in the window), registry spend in `[since, now]`, `cost_per_merged_task_usd`, `task_cost_avg_usd`; `src/core/cost.rs`, `Issue.closed_at`/`state_reason`, `Timestamp::minus_secs`, fake `close_issue(_as)` · UC-M4-4 · `tests/cli_progress.rs` 5/5, `core::cost` 3/3 · PR #127
+- 2026-10-23 · M4 T2 · `bosun budget check`: level normal/guard/stop, at stop one `interrupt_session` per live remote session in `next` (wave agents fold into their session, never the caller's, `local-*` skipped), no writes, works while halted; `src/core/budget.rs` · UC-M4-2 · `tests/cli_budget_check.rs` 7/7, `core::budget` 3/3 · PR #169
+- 2026-10-23 · Follow-up · `wave plan` and `status` read `.bosun/limits.toml` from the default branch; `status` reports `daily_usd` · `tests/cli_wave.rs` +2, `tests/cli_status.rs` +1 · PR #170
+- 2026-10-23 · M4 T3 · `budget record` opens (or hits) one `budget` lesson through `capture_lesson` when its record blocks a task over `per_task_usd`; a failed capture exits 0 with `lesson: {error, fix}` so the spend is not recorded twice · UC-M4-3 · `tests/cli_budget.rs` +5 · PR #171 · M4 done
+- 2026-10-23 · M1 T3 · `bosun resume`: renews the join record (joins again if missing) and this session's leases in place, an expired unreaped lease only when no live lease overlaps it (else `lost`, also for a bad glob); lists per held task the state, the linked open PR, its branch and the next action; `app::renew_lease` shared with heartbeat · UC-M1-4 · `tests/cli_resume.rs` 8/8 · PR #105
+- 2026-10-23 · M1 T1 · `bosun pr` sets claimed -> building -> review; queued -> merged once GitHub merged the task's PR: `bosun pr` (closed PR linking the issue) and `bosun reap` (no open linked PR, merged PR on the default branch), `app::sync_merged` ends leases with reason `merged` · UC-M1-1 (from ready; planned -> ready is M2) and the label-edit refusal · `tests/cli_lifecycle.rs` 6/6 · PR #115
+- 2026-10-23 · M1 T2b · a stop of `bosun fail` opens or hits a `stop-rule` lesson (`capture_lesson`; title capped, text holds rule and signature only); a capture error never hides the stop · `tests/cli_stop.rs` 12/12 · PR #149
+- 2026-10-23 · Follow-up · `CALLS` in `tests/cli_basics.rs` is a slice and command names stay unique (after #150: two PRs each counted 25 commands) · PR #160
+- 2026-10-23 · Follow-up · `bosun pr --auto-merge` falls back to `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` only on the cloud proxy's GraphQL 403 (`auto_merge_route`); the merge-lock also blocks `gh api` to auto-merge routes · `tests/cli_pr.rs` +3 · PR #164
+- 2026-10-23 · M1 T4 · `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`: result record on the epic, lease-end `result`, registry leave `done`, works while halted; the spawn prompt uses it · D14 · `tests/cli_result.rs` 5/5 · PR #116
+- 2026-10-23 · M1 janitor · the janitor Routine prompt runs `bosun reap` (reports reaped, left, merged) and `bosun budget check` with only its `interrupt_session` calls · UC-M4-2 wiring · `tests/cli_doctor.rs` · PR #174 · M1 done: UC-M1-1..4 pass (`uc_m1_1_*`, `uc_m1_2_*`, `uc_m1_3_*`, `uc_m1_4_*`)
 
 ## Blocked
 

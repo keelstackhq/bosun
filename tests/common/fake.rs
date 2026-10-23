@@ -18,6 +18,8 @@ pub struct FakeIssue {
     pub title: String,
     pub body: String,
     pub state: String,
+    /// Left out of the issue list (GET by number still works): GitHub's list lags.
+    pub hidden: bool,
     pub labels: Vec<String>,
     pub is_pr: bool,
     pub user: String,
@@ -53,6 +55,8 @@ pub enum LogMode {
 /// Everything the fake knows.
 #[derive(Default)]
 pub struct State {
+    /// Issue numbers that GET answers with 410 (deleted).
+    pub gone: Vec<u64>,
     pub issues: Vec<FakeIssue>,
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
@@ -73,6 +77,8 @@ pub struct State {
     pub auto_merge: HashMap<u64, String>,
     /// Answers every GraphQL call with this error.
     pub graphql_error: Option<String>,
+    /// Answers every GraphQL call with this HTTP status and message.
+    pub graphql_status: Option<(u16, String)>,
     pub log: Vec<Logged>,
     /// Extra fields of `GET /repos/o/r` (default branch main, auto-merge off).
     pub repo: serde_json::Map<String, Value>,
@@ -144,6 +150,7 @@ impl FakeGithub {
             title: title.into(),
             body: body.into(),
             state: "open".into(),
+            hidden: false,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             is_pr: false,
             user: "octocat".into(),
@@ -170,6 +177,33 @@ impl FakeGithub {
         i.state_reason = Some(reason.into());
     }
 
+    /// Put a label on an issue.
+    pub fn label(&self, number: u64, label: &str) {
+        let mut s = self.state.lock().unwrap();
+        let i = s
+            .issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .expect("issue");
+        i.labels.push(label.into());
+    }
+
+    /// Make `number` a deleted issue: out of the list, GET answers 410.
+    pub fn gone(&self, number: u64) {
+        self.hide_from_list(number);
+        self.state.lock().unwrap().gone.push(number);
+    }
+
+    /// Leave an issue out of the list while GET by number still returns it.
+    pub fn hide_from_list(&self, number: u64) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .hidden = true;
+    }
+
     /// An entry in the issues list that is a pull request.
     pub fn pull_as_issue(&self, number: u64, title: &str) {
         self.issue(number, title, &[], "");
@@ -192,6 +226,24 @@ impl FakeGithub {
         let mut s = self.state.lock().unwrap();
         let p = s.pulls.iter_mut().find(|p| p["number"] == number);
         p.unwrap_or_else(|| panic!("no pull {number}"))[key] = value;
+    }
+
+    /// What GitHub does on an auto-merge: the pull closes as merged and the issue it closes
+    /// (`Closes #N`) closes too.
+    pub fn merge_pull(&self, number: u64, closes_issue: u64) {
+        self.pull_set(number, "state", json!("closed"));
+        self.pull_set(number, "merged", json!(true));
+        let mut s = self.state.lock().unwrap();
+        if let Some(i) = s.issues.iter_mut().find(|i| i.number == closes_issue) {
+            i.state = "closed".into();
+        }
+    }
+
+    /// Mark a pull request merged, with the sha of its merge commit.
+    pub fn pull_merged(&self, number: u64, merge_commit_sha: &str) {
+        self.pull_set(number, "merged", json!(true));
+        self.pull_set(number, "state", json!("closed"));
+        self.pull_set(number, "merge_commit_sha", json!(merge_commit_sha));
     }
 
     pub fn pull_file(
@@ -301,6 +353,10 @@ impl FakeGithub {
     /// The merge method of the pull's enabled auto-merge, if any.
     pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
         self.state.lock().unwrap().auto_merge.get(&number).cloned()
+    }
+
+    pub fn graphql_status(&self, status: u16, message: &str) {
+        self.state.lock().unwrap().graphql_status = Some((status, message.into()));
     }
 
     pub fn graphql_error(&self, message: &str) {
@@ -590,6 +646,9 @@ fn route(
     let seg: Vec<String> = path.trim_start_matches('/').split('/').map(dec).collect();
     let seg: Vec<&str> = seg.iter().map(String::as_str).collect();
     if method == "POST" && seg == ["graphql"] {
+        if let Some((code, m)) = s.graphql_status.clone() {
+            return msg(code, &m);
+        }
         return graphql(s, body);
     }
     let ["repos", _, _, rest @ ..] = seg.as_slice() else {
@@ -611,7 +670,8 @@ fn route(
                 .issues
                 .iter()
                 .filter(|i| {
-                    (state == "all" || i.state == state)
+                    !i.hidden
+                        && (state == "all" || i.state == state)
                         && want.iter().all(|w| i.labels.iter().any(|l| l == w))
                 })
                 .map(issue_json)
@@ -633,6 +693,7 @@ fn route(
                 title: body["title"].as_str().unwrap_or("").into(),
                 body: body["body"].as_str().unwrap_or("").into(),
                 state: "open".into(),
+                hidden: false,
                 labels,
                 is_pr: false,
                 user: "octocat".into(),
@@ -643,6 +704,7 @@ fn route(
             s.issues.push(issue);
             (201, v, vec![])
         }
+        ("GET", ["issues", n]) if n.parse().is_ok_and(|n| s.gone.contains(&n)) => msg(410, "Gone"),
         ("GET", ["issues", n]) => find(s, n)
             .map(|p| ok(issue_json(&s.issues[p])))
             .unwrap_or_else(|| msg(404, "Not Found")),
@@ -667,11 +729,25 @@ fn route(
                         .to_string()
                 });
             }
+            if let Some(r) = body["state_reason"].as_str() {
+                i.state_reason = Some(r.into());
+            }
             ok(issue_json(i))
         }
         ("POST", ["issues", n, "labels"]) => {
             let Some(p) = find(s, n) else {
-                return msg(404, "Not Found");
+                // A pull request is an issue on GitHub: label it in the pulls list.
+                let Some(q) = pull_pos(s, n) else {
+                    return msg(404, "Not Found");
+                };
+                for l in body["labels"].as_array().into_iter().flatten() {
+                    let want = l.as_str().unwrap_or("");
+                    let list = s.pulls[q]["labels"].as_array_mut().unwrap();
+                    if !list.iter().any(|x| x["name"] == want) {
+                        list.push(json!({"name": want}));
+                    }
+                }
+                return ok(s.pulls[q]["labels"].clone());
             };
             for l in body["labels"]
                 .as_array()
@@ -690,6 +766,21 @@ fn route(
                     .map(|n| json!({"name": n}))
                     .collect(),
             ))
+        }
+        ("PUT", ["pulls", n, "ccr", "auto_merge"]) => {
+            let method = body["merge_method"].as_str().unwrap_or("");
+            if !["merge", "squash", "rebase"].contains(&method) {
+                return msg(400, "merge_method must be one of merge, squash, rebase.");
+            }
+            let Some(n) = n
+                .parse::<u64>()
+                .ok()
+                .filter(|n| s.pulls.iter().any(|p| p["number"].as_u64() == Some(*n)))
+            else {
+                return msg(404, "Not Found");
+            };
+            s.auto_merge.insert(n, method.to_uppercase());
+            ok(json!({}))
         }
         ("DELETE", ["issues", n, "labels", name]) => {
             let Some(p) = find(s, n) else {

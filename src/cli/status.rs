@@ -5,10 +5,11 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, Result, active_issues, halt_reason, main_red};
+use crate::app::{App, Result, active_issues, halt_reason, limits_from_default, main_red};
 use crate::core::lease::{live_leases, members};
 use crate::core::records::spend_total;
 use crate::core::state::State;
+use crate::gates::integrity::reduced_reason;
 use crate::github::{Github, IssueState};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
@@ -22,8 +23,6 @@ pub fn process_red(gh: &dyn Github) -> Result<Option<u64>> {
         .first()
         .map(|i| i.number))
 }
-/// Stack profiles that ship inside bosun; any other profile is the owner's own file.
-pub const BUILTIN_PROFILES: [&str; 1] = ["rust"];
 
 pub fn run(dir: Option<&Path>) -> CmdResult {
     let app = App::load(dir)?;
@@ -65,18 +64,15 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         }
     }
 
-    let daily = ctx.limits.budget.daily_usd;
+    let daily = limits_from_default(gh, ctx)?.budget.daily_usd;
     let pct = if daily > 0.0 {
         spend / daily * 100.0
     } else {
         0.0
     };
-    let reduced = ctx
-        .config
-        .stack
-        .iter()
-        .any(|s| !BUILTIN_PROFILES.contains(&s.profile.as_str()));
-    Ok(Outcome::data(json!({
+    // Reduced when a stack's profile uses a generic adapter (spec §7), read from the local files.
+    let reduced = reduced_reason(&ctx.dir, &ctx.config.stack);
+    let mut data = json!({
         "session": ctx.session,
         "origin": ctx.origin.as_str(),
         "repo": ctx.repo.to_string(),
@@ -87,7 +83,12 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         "leases": leases,
         "issues_by_state": by_state,
         "spend_today_usd": spend,
+        "daily_usd": daily,
         "budget_pct": pct,
-        "integrity": if reduced { "reduced" } else { "full" },
-    })))
+        "integrity": if reduced.is_some() { "reduced" } else { "full" },
+    });
+    if let Some(why) = reduced {
+        data["integrity_reason"] = json!(why);
+    }
+    Ok(Outcome::data(data))
 }

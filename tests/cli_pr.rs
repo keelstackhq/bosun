@@ -143,6 +143,74 @@ fn auto_merge_is_enabled_when_all_four_are_green() {
     assert_eq!(merge_calls(&fake), 0, "bosun must never merge");
 }
 
+const CCR_MSG: &str = "GitHub GraphQL is not available from Claude Code sessions; use the REST API (gh api repos/{owner}/{repo}/...).";
+
+fn green_pr(fake: &FakeGithub) {
+    task(fake, "bosun:state/review");
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.status("sha20", "risk-check", "success", "");
+    fake.status("sha20", "main-open", "success", "");
+    fake.status("sha20", "review-verdict", "success", "approve 0.9");
+    fake.check_run("sha20", "ci-ok", "completed", Some("success"));
+}
+
+fn ccr_puts(fake: &FakeGithub) -> Vec<common::fake::Logged> {
+    fake.requests()
+        .into_iter()
+        .filter(|r| r.method == "PUT" && r.path.ends_with("/pulls/20/ccr/auto_merge"))
+        .collect()
+}
+
+fn merge_paths(fake: &FakeGithub) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/merge"))
+        .count()
+}
+
+#[test]
+fn graphql_is_the_default_auto_merge_route() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["auto_merge_route"], "graphql");
+    assert!(ccr_puts(&fake).is_empty());
+    assert_eq!(merge_paths(&fake), 0);
+}
+
+#[test]
+fn a_cloud_session_falls_back_to_the_ccr_route() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_status(403, CCR_MSG);
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["auto_merge_route"], "ccr");
+    assert_eq!(v["data"]["task_state"], "queued");
+    let puts = ccr_puts(&fake);
+    assert_eq!(puts.len(), 1);
+    let body: Value = serde_json::from_str(puts[0].body.as_deref().unwrap()).unwrap();
+    assert_eq!(body["merge_method"], "squash");
+    assert!(fake.labels_of(7).contains(&"bosun:state/queued".into()));
+    assert_eq!(merge_paths(&fake), 0);
+}
+
+#[test]
+fn another_graphql_403_is_not_retried_on_the_ccr_route() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_status(403, "Resource not accessible by integration");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(ccr_puts(&fake).is_empty());
+    assert!(fake.labels_of(7).contains(&"bosun:state/review".into()));
+    assert_eq!(merge_paths(&fake), 0);
+}
+
 #[test]
 fn a_missing_check_is_listed() {
     let fake = FakeGithub::start();
@@ -231,4 +299,78 @@ fn the_default_branch_is_refused_whatever_its_name() {
     let dir = repo("trunk");
     let (code, _) = bosun_in(&fake, dir.path(), &["pr", "7"]);
     assert_eq!(code, 2);
+}
+
+fn green_four(fake: &FakeGithub) {
+    for c in ["ci-ok", "risk-check", "main-open", "review-verdict"] {
+        fake.status("sha20", c, "success", "");
+    }
+}
+
+fn pr_setup(hoist: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/review");
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    green_four(&fake);
+    let dir = repo("claude/t7");
+    if let Some(h) = hoist {
+        fake.content("hoist.toml", "main", h);
+    }
+    (fake, dir)
+}
+
+const HULL: &str = "[github]\nrequired_checks = [\"ci-ok\", \"bosun-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]\n";
+
+#[test]
+fn hoist_toml_required_checks_are_enforced() {
+    let (fake, dir) = pr_setup(Some(HULL));
+    fake.status("sha20", "bosun-ok", "pending", "");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bosun-ok: pending"),
+        "{v}"
+    );
+    assert_eq!(fake.auto_merge_enabled(20), None);
+}
+
+#[test]
+fn the_env_overrides_hoist_toml() {
+    let (fake, dir) = pr_setup(Some(HULL));
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_REQUIRED_CHECKS", "ci-ok")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["pr", "7", "--auto-merge"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", one_object(&out.stdout));
+}
+
+#[test]
+fn a_missing_or_invalid_hoist_toml_gives_the_defaults() {
+    for hoist in [
+        None,
+        Some("not = [toml"),
+        Some("[github]\nrequired_checks = []\n"),
+        Some("[github]\nrequired_checks = [\"ci-ok\"]\n"),
+    ] {
+        let (fake, dir) = pr_setup(hoist);
+        let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+        assert_eq!(code, 0, "{hoist:?} {v}");
+    }
+}
+
+#[test]
+fn a_pr_cannot_change_the_checks_that_judge_it() {
+    // The PR branch's working tree lists bosun-ok (pending); the default branch does not.
+    let (fake, dir) = pr_setup(None);
+    fake.status("sha20", "bosun-ok", "pending", "");
+    std::fs::write(dir.path().join("hoist.toml"), HULL).unwrap();
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
 }

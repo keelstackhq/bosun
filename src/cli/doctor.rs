@@ -5,11 +5,11 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
+use crate::core::checks;
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
-const REQUIRED_CHECKS: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
 const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token (docs/PROGRESS.md Blocked)";
 
 fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &str) -> Value {
@@ -24,12 +24,28 @@ fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &
 fn routines() -> Value {
     json!([
         {"name": "janitor", "schedule": "every 15 minutes", "model": "haiku",
-         "prompt": "Run `bosun reap`. List stale sessions with `bosun status` and report any session whose lease expired. Check the budget in `bosun status` (budget_pct); at 100 % stop the live sessions, at 80 % post a warning. Then run `bosun notify`."},
+         "prompt": "Run `bosun reap` (it ends expired leases and members and moves merged tasks to merged) and report its data.reaped, data.left and data.merged. Run `bosun budget check`: make only the interrupt_session calls in its `next`, with the claude-code-remote tools (one per live session at 100 % of the daily budget), and report data.level. Then run `bosun notify` if this bosun has it."},
         {"name": "curator", "schedule": "daily", "model": "sonnet",
-         "prompt": "Triage the open lesson issues as in docs/spec.md section 6: a blocking lesson sets process-red; a mechanizable one opens a kind/process-fix task; advice only goes into docs/lessons.toml with `bosun lesson add`. Retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has merged."},
+         "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add`; at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
         {"name": "notify", "schedule": "every 15 minutes", "model": "haiku",
          "prompt": "Run `bosun notify` and post what it prints to the Slack channel from .bosun/bosun.toml."},
     ])
+}
+
+/// Check contexts of every `.github/workflows/*.yml` and `*.yaml` (see `checks::workflow_checks`).
+fn workflow_jobs(root: &Path) -> Vec<String> {
+    let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x == "yml" || x == "yaml")
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .flat_map(|t| checks::workflow_checks(&t))
+        .collect()
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -82,7 +98,214 @@ fn claude_app_seen(gh: &dyn Github) -> Result<bool, BosunError> {
     Ok(false)
 }
 
-pub fn run(dir: Option<&Path>) -> CmdResult {
+const HOIST_INSTALL_FIX: &str =
+    "install hoist (`npm install -g @keelstackhq/hoist`) or set BOSUN_HOIST";
+const HOIST_RERUN_FIX: &str = "run `hoist check` by hand and fix what it reports";
+const HOIST_TIMEOUT_SECS: u64 = 120;
+
+/// The step and `hoist apply` area for a `hoist check` item (D17): 3 = repo settings, rulesets,
+/// required checks; 5 = environments, secrets, variables; 10 = first publish of npm/crates.
+fn hoist_step(area: &str, kind: &str) -> (usize, String) {
+    match (area, kind) {
+        ("npm" | "crates", _) => (10, area.into()),
+        ("release", _) => (5, "release".into()),
+        (_, "environment" | "secret" | "variable") => (5, "github".into()),
+        _ => (3, "github".into()),
+    }
+}
+
+fn describe(it: &Value) -> String {
+    let s = |k: &str| it[k].as_str().unwrap_or("");
+    format!(
+        "{}/{}/{}: {} ({})",
+        s("area"),
+        s("kind"),
+        s("key"),
+        s("action"),
+        s("reason")
+    )
+}
+
+/// Add hoist's finding to a step, keeping the step's own problem and fix.
+fn append_problem(it: &mut Value, problem: &str, fix: &str) {
+    let (detail, fix) = if it["status"] == "missing" {
+        (
+            format!("{}; {problem}", it["detail"].as_str().unwrap_or("")),
+            format!("{}; then {fix}", it["fix"].as_str().unwrap_or("")),
+        )
+    } else {
+        (problem.to_string(), fix.to_string())
+    };
+    it["status"] = json!("missing");
+    it["detail"] = json!(detail);
+    it["fix"] = json!(fix);
+}
+
+fn hoist_failed(items: &mut [Value], detail: &str, fix: &str, exit_code: Value) -> Value {
+    for step in [3, 5] {
+        append_problem(&mut items[step - 1], detail, fix);
+    }
+    json!({"exit_code": exit_code, "drift": [], "unknown": [], "notes": [], "error": detail})
+}
+
+type HoistRun = Result<(Option<i32>, Vec<u8>), Option<std::io::Error>>;
+
+/// Kill hoist and everything it started (its pgid is its pid; see `process_group(0)`).
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
+/// Run hoist with stdout captured and a deadline; `Err(None)` means it timed out.
+fn run_hoist(bin: &str, root: &Path, secs: u64) -> HoistRun {
+    use std::io::Read;
+    // The token reaches hoist through the inherited environment, never argv.
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["check", "--json", "-C"])
+        .arg(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit());
+    // Own process group, so a timeout can kill the node shim's native child too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().map_err(Some)?;
+    let mut pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = pipe.as_mut() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait().map_err(Some)? {
+            Some(s) => break s,
+            None if std::time::Instant::now() >= deadline => {
+                kill_group(&mut child);
+                let _ = child.wait();
+                return Err(None);
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+    Ok((status.code(), reader.join().unwrap_or_default()))
+}
+
+#[derive(Default)]
+struct StepFindings {
+    drift: Vec<String>,
+    unknown: Vec<String>,
+    areas: Vec<String>,
+}
+
+/// Run `hoist check --json` and fold its items into steps 3, 5 and 10. Returns `data.hoist`.
+fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
+    let bin = std::env::var("BOSUN_HOIST")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "hoist".into());
+    let secs = std::env::var("BOSUN_HOIST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(HOIST_TIMEOUT_SECS);
+    let (code, stdout) = match run_hoist(&bin, root, secs) {
+        Ok(r) => r,
+        Err(None) => {
+            let detail = format!("hoist check timed out after {secs}s");
+            return hoist_failed(items, &detail, HOIST_RERUN_FIX, Value::Null);
+        }
+        Err(Some(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            let d = "hoist is not installed";
+            return hoist_failed(items, d, HOIST_INSTALL_FIX, Value::Null);
+        }
+        Err(Some(e)) => {
+            let detail = format!("cannot run {bin}: {e}");
+            return hoist_failed(items, &detail, HOIST_INSTALL_FIX, Value::Null);
+        }
+    };
+    let exit_json = code.map_or(Value::Null, |c| json!(c));
+    let report = serde_json::from_slice::<Value>(&stdout)
+        .ok()
+        .filter(|v| v["items"].is_array());
+    let Some(report) = report else {
+        let detail = format!("hoist check failed (exit {exit_json}): no JSON report on stdout");
+        return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
+    };
+    if !code.is_some_and(|c| c <= 1) {
+        let detail = format!("hoist check exited with {exit_json} (expected 0 or 1)");
+        return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
+    }
+    let (mut drift, mut unknown, mut notes) = (Vec::new(), Vec::new(), Vec::new());
+    let mut per_step: std::collections::BTreeMap<usize, StepFindings> = [3, 5, 10]
+        .into_iter()
+        .map(|s| (s, StepFindings::default()))
+        .collect();
+    for it in report["items"].as_array().into_iter().flatten() {
+        let s = |k: &str| it[k].as_str().unwrap_or("").to_string();
+        let (step, area) = hoist_step(&s("area"), &s("kind"));
+        let entry = per_step.entry(step).or_default();
+        let action = s("action");
+        // A failed verify is a note, never drift: hoist's job-name check cannot see commit
+        // statuses such as risk-check, so it would fail forever on a correct repo.
+        if action == "ok" && it["verify"]["ok"] == false {
+            notes.push(format!(
+                "{}/{}/{}: {}",
+                s("area"),
+                s("kind"),
+                s("key"),
+                it["verify"]["detail"].as_str().unwrap_or("verify failed")
+            ));
+        }
+        if action == "unknown" {
+            unknown.push(describe(it));
+            entry.unknown.push(format!("{}/{}", s("kind"), s("key")));
+        } else if action != "ok" {
+            let line = describe(it);
+            if !entry.areas.contains(&area) {
+                entry.areas.push(area);
+            }
+            entry.drift.push(line.clone());
+            drift.push(line);
+        }
+    }
+    for (step, f) in per_step {
+        let it = &mut items[step - 1];
+        if !f.drift.is_empty() {
+            let fix = f
+                .areas
+                .iter()
+                .map(|a| format!("`hoist apply --area {a} --yes`"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            let problem = format!("hoist check drift: {}", f.drift.join("; "));
+            append_problem(it, &problem, &format!("run {fix}"));
+        } else if it["status"] == "ok" {
+            let note = if f.unknown.is_empty() {
+                "hoist check: no drift".to_string()
+            } else {
+                format!(
+                    "hoist could not read {} item(s): {}",
+                    f.unknown.len(),
+                    f.unknown.join(", ")
+                )
+            };
+            it["detail"] = json!(format!("{}; {note}", it["detail"].as_str().unwrap_or("")));
+        }
+    }
+    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes})
+}
+
+pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let root = ctx.dir.as_path();
@@ -133,12 +356,18 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
                 .collect()
         })
         .unwrap_or_default();
-    let absent: Vec<_> = REQUIRED_CHECKS
-        .iter()
-        .filter(|c| !listed.iter().any(|l| l == *c))
-        .collect();
-    let ci_ok_job = read(root, ".github/workflows/ci.yml")
-        .is_some_and(|t| t.lines().any(|l| l.trim_end() == "  ci-ok:"));
+    let jobs = workflow_jobs(root);
+    let has_job = |j: &str| jobs.iter().any(|x| x == j);
+    let mut absent: Vec<&str> = checks::DEFAULT_REQUIRED.to_vec();
+    if has_job("bosun-ok") {
+        absent.push("bosun-ok");
+    }
+    absent.retain(|c| !listed.iter().any(|l| l == c));
+    let step3_fix = if absent.is_empty() {
+        HOIST_FIX.to_string()
+    } else {
+        format!("add {absent:?} to hoist.toml [github] required_checks, then {HOIST_FIX}")
+    };
     items.push(item(
         3,
         "required checks",
@@ -148,13 +377,13 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             Some(format!(
                 "hoist.toml [github] required_checks lacks {absent:?}"
             ))
-        } else if !ci_ok_job {
-            Some(".github/workflows/ci.yml has no `ci-ok` job".into())
+        } else if !has_job("ci-ok") {
+            Some("no .github/workflows/*.yml has a `ci-ok` job".into())
         } else {
             None
         },
-        "hoist.toml lists the four checks and ci.yml has the ci-ok job".into(),
-        HOIST_FIX,
+        "hoist.toml lists the required checks and a workflow has the ci-ok job".into(),
+        &step3_fix,
     ));
 
     let owners = read(root, "governance/owners.toml")
@@ -292,8 +521,12 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
     ));
 
+    let hoist_data = remote.then(|| apply_hoist(&mut items, root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
-    let data = json!({"items": items, "missing": missing, "routines": routines()});
+    let mut data = json!({"items": items, "missing": missing, "routines": routines()});
+    if let Some(h) = hoist_data {
+        data["hoist"] = h;
+    }
     if missing > 0 {
         return Err(BosunError::needs_human(
             format!("{missing} checklist steps missing"),

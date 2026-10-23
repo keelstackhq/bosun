@@ -136,6 +136,10 @@ REVIEW.md                 review rules for the verdict
 .splice/channels/bosun.toml   the channel record, kept fresh by the splice update bot
 ```
 
+A channel version is a bosun release tag (`v<x.y.z>`), and the channel writes that version into
+`.bosun/version`, so the update bot moves the channel files and the pinned binary in one R-gov PR.
+A branch or sha ref has no release version; such a consumer sets the template var `bosun_version`.
+
 ## 4. Work lifecycle and conflict avoidance
 
 Units: a plan has items. Each item becomes one epic issue. An item has tasks. A task is at most
@@ -165,6 +169,8 @@ State machine:
 
 Only bosun commands change the state label. A hook refuses a direct label edit.
 
+`bosun pr` sets claimed -> building -> review (a PR exists only after the first push). `bosun pr` or `bosun reap` sets queued -> merged once GitHub merged the PR, and ends the leases on the issue with reason `merged`; `reap` also looks at queued tasks whose issue is closed.
+
 Stop rules:
 - The same failure signature 3 times in a row: the task goes to blocked.
 - A fix round with 0 changed lines: the task goes to blocked.
@@ -174,6 +180,9 @@ Stop rules:
   applies these rules. A stop sets `blocked` and posts an `escalate` record (`from`, `to`,
   `reason`); an escalation restarts the count. With opus used up it sets `needs-human` (exit 5).
   The signature is in `data` for the lessons.
+- Each stop (both paths) also captures a lesson of kind `stop-rule` from the rule and the
+  signature; the same stop on another task hits the same lesson. `data.lesson` is `{issue,
+  created, hits}`, or null with `lesson_error` when capture fails (the stop still stands).
 - Each stop rule opens or hits a lesson.
 - When main is red, feature work pauses; only mainfix tasks continue.
 
@@ -219,7 +228,7 @@ overlap when a path of one matches a glob of the other, or two globs can match a
 
 Intake: intake is the only way that new work enters. `bosun intake` (from Slack, a lesson, a flake
 or a human) writes a plan amendment as a kind/plan task. Only a merged plan task makes its tasks
-ready.
+ready. After an amendment merges, `bosun plan amend` imports the new work and closes what the plan dropped.
 
 ## 5. Spawning, waves and limits
 
@@ -246,7 +255,7 @@ and never uses send_later or send_message.
 
 `bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
-`spawn` and `budget record` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
+`spawn`, `claim`, `budget record`, `wave plan` and `status` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
 
 A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in check 6 is exit 3.
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
@@ -281,7 +290,7 @@ per_task_usd = 25
 With `max_live_sessions = 1` the same code path runs: the root session does all the work in waves.
 
 Janitor, resume, results:
-- Janitor (Routine, every 15 min, Haiku): `bosun reap`, a stale-session check, a budget check,
+- Janitor (Routine, every 15 min, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
   `bosun notify`.
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
@@ -289,9 +298,11 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
-- Results (D14): a child posts its result as an issue comment on its epic,
-  `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
-  sees it with `bosun wait`.
+- Results (D14): a child runs `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`.
+  It posts an issue comment on the epic with the record
+  `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
+  (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
+  parent sees the result with `bosun wait --child`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
@@ -321,7 +332,11 @@ Triage (curator Routine, daily, Sonnet):
   `bosun:process-red` (a blocking lesson carries it). While one is open, `claim` and `spawn` refuse
   work other than `mainfix` and `process-fix` with exit 4, and `wave plan` returns exit 4, except
   for a mainfix or process-fix epic.
-- mechanizable: opens a kind/process-fix task, which runs before the features of the same area.
+- `bosun lesson triage <issue> --as blocking|mechanizable|advice` applies one of the labels
+  `bosun:lesson/blocking`, `bosun:lesson/mechanizable`, `bosun:lesson/advice`; a re-triage removes
+  the other two.
+- mechanizable: opens a kind/process-fix task (`bosun:kind/process-fix` + `bosun:state/ready`),
+  which runs before the features of the same area.
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
 
@@ -347,9 +362,20 @@ Prune:
 - `bosun lesson hit <id>` records a hit. `lesson add` and `lesson hit` change the local file `docs/lessons.toml` and need no GitHub; only `lesson hit --issue N`, which posts a `lesson-hit` record, does (and obeys the kill switch).
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
-- A lesson that gets a hit after its mechanism merged reopens as blocking.
-- `bosun lesson --upstream` sends a lesson about bosun itself to keelstackhq/bosun.
-- Metrics: `bosun progress --lessons` (open, mechanized, hits per week).
+- A lesson that gets a hit after its mechanism merged reopens as blocking. A lesson is mechanized
+  when its issue is labelled `bosun:lesson/mechanizable` and closed as `completed`. When
+  `lesson capture` finds no open issue with the signature but a mechanized one, it reopens that
+  issue, makes it `bosun:lesson/blocking` (the other triage labels go), adds `bosun:process-red`, and comments "The mechanism did not
+  hold: seen again. Reopened as blocking" with the `lesson-seen` record; the output has
+  `reopened: true`. Issues closed as `not_planned` or `duplicate`, advice lessons and untriaged
+  lessons are ignored: a new lesson opens.
+- `bosun lesson add --upstream "<text>" [--why ...]` sends a lesson about bosun itself to
+  keelstackhq/bosun as an issue (`bosun:lesson`, `bosun:source/lesson`; title cut to 120
+  characters), not to the local store.
+  It obeys the kill switch; data `{upstream: true, issue}`.
+- Metrics: `bosun progress --lessons` (open, mechanized, hits per week). data `lessons: {open,
+  blocking, mechanized, advice, hits_last_7_days, hits_by_week: [{week_start, hits}]}` (4 weeks,
+  oldest first), counted from `lesson-seen` and `lesson-hit` records.
 
 ## 7. Verification and the gate contract
 
@@ -388,10 +414,14 @@ profile has three adapters:
 
 - Custom profiles and generic regex adapters are allowed; `bosun status` shows "reduced
   integrity" when a generic adapter is used.
+- Generic adapters, for stacks bosun has no built-in adapters for (a repo profile `.bosun/profiles/<name>.toml`): `packages = "none"` (or `"generic"`) means the stack has no packages, so a per-package gate runs once over the whole stack with its `all` arguments; `pending = "regex"` and `assertions = "regex"` read `[adapters.regex]`: `test_files` (globs relative to the stack directory, required), `pending` (regexes; a matching line is a skip marker, and a `UC-…` id on it makes it a plan marker) and `assertions` (regexes; each match is one assertion). Both `pending` and `assertions` are `regex`, or neither, and each has at least one pattern. Profiles without `[adapters.regex]` are unchanged. There is no test counter, so `fewer-tests` does not fire for a regex stack. When any stack's profile uses a generic adapter, test-integrity still runs, and its data and `bosun status` say `"integrity": "reduced"` with `integrity_reason` (for example "stack py/ uses regex adapters", naming the stack path); otherwise `"integrity": "full"`. Adapter names are a closed set (packages: `cargo-metadata`, `pnpm-workspace`, `none`, `generic`; pending: `rust-ignore`, `ts-skip`, `regex`; assertions: `rust`, `ts`, `regex`): any other name is an error with a fix listing them, and `bosun status` shows such a stack as reduced. Every stack gets a kit, and the innermost stack holding a file decides which adapters read it.
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
 - A profile may name its stack `manifest` (rust: `Cargo.toml`); a stack whose manifest is missing at the head and at the base skips each gate (exit 0, `skipped: true`, with a `reason`), so an empty repo after `bosun init` stays green.
+- A gate may name `requires = "<file>"` (a path in the stack directory); the gate is skipped (`skipped: true`, `reason: "no <file>"`) only when that file is missing at the head and at the base, also with `--all`, like `manifest`: a branch that deletes the file still runs the gate.
+- In a gate's `cmd`, an item that is exactly `{packages}` marks where the `each_package` (or `all`) arguments go, for tools whose filters must come first; without it they are appended. The profile's `packages` adapter (see the closed set above) loads the packages and says which a diff affects; an unknown adapter name is an error with a fix.
+- ts-pnpm profile: the gates call the workspace's root `package.json` scripts, so a repo chooses its tools: fmt runs `pnpm run format:check`, lint `pnpm run lint`, types `pnpm run typecheck`; test runs `pnpm --filter ...<pkg> run test` for each affected package (`...pkg` selects the package and its dependents, so `data.packages` lists the changed packages and the run covers their dependents too) and `pnpm -r --include-workspace-root run test` for all; deps runs `pnpm audit --prod --audit-level high` and `requires` `pnpm-lock.yaml`. With `--include-workspace-root` the gate runs the root project's own `test` script too, so the root `test` script must not be a recursive `pnpm -r run test` (it would run every package twice). Packages adapter `pnpm-workspace` reads the `packages:` globs of `pnpm-workspace.yaml` (a block list or a one-line list `[a, 'b']`; any other value, or a glob with braces, is an error with a fix) and the directories with a `package.json` that has a `name`. It does not enter dot directories, symlinks or `node_modules`; it skips directories named `target`, `dist`, `build` or `coverage` unless a `packages:` glob matches that directory (`packages/build` is a package when `packages/*` is listed). A changed file inside a package affects that package, whatever its extension. A root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc` or `.nvmrc`, or a file with extension ts, tsx, mts, cts, js, jsx, mjs, cjs, json, yaml or yml in no package, means all packages; other files outside every package (docs) affect none.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
@@ -401,7 +431,8 @@ test-integrity:
 - Refuses a PR that deletes a test, adds a skip marker, or lowers the assertion count, unless the
   plan says so.
 - A snapshot change needs the line `snapshot-change: <reason>` in the PR body.
-- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker that the base file lacks (by id) is a new skip; removing one is fine. A lower count of `#[test]`, `#[tokio::test]` and `#[rstest]` attributes in a file is a `fewer-tests` finding, allowed by `delete-test`. Files are compared with the merge base, not the base tip.
+- Until `--pr` reads the PR and the task metadata, the PR body comes from env `BOSUN_PR_BODY` and the allowed kinds (`delete-test`, `skip`, `only`, `fewer-asserts`) from env `BOSUN_INTEGRITY_ALLOW` (comma-separated). Findings the task allows are reported with `allowed: true` and do not fail. A `#[ignore = "UC-…"]` marker that the base file lacks (by id) is a new skip; removing one is fine. A lower count of `#[test]`, `#[tokio::test]` and `#[rstest]` attributes in a file is a `fewer-tests` finding, allowed by `delete-test`. Files are compared with the merge base, not the base tip.
+- ts adapters: test-integrity reads `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs` files with them, `.rs` files with the rust adapters, and no other file is a test file. Test files are `*.test.<ext>`, `*.spec.<ext>` and files under `__tests__/`. Comments (`//`, `/* */`), regex literals and the inside of string and template literals are ignored; `fit` and `fdescribe` count only when called with a string or template literal title, and a name after `function` or `.` is not a declaration. `ts-skip` finds `it`, `test` and `describe` (also `suite`) declarations with a `.skip`, `.todo`, `.skipIf`, `.runIf` or `.fixme` modifier anywhere in the chain (`describe.skip.each`, `test.concurrent.skip`), and `xit`, `xtest` and `xdescribe`; a new one is a `new-skip` finding. A new `.only` (`it.only`, `test.only`, `describe.only`, `fit`, `fdescribe`) is a `new-only` finding, allowed by `only`. `ts` counts `expect(`, `assert(` and `assert.`, and `it`/`test` declarations (skipped ones too) for `fewer-tests`. Each side of a change is read with the adapter for its own path; a file that was a test file and no longer is one (renamed to `a.test.ts.disabled`) is a `deleted-test` finding.
 - Mutants that survive fail the merge queue.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
@@ -418,7 +449,7 @@ REVIEW.md). The reviewer returns:
   runs `bosun verdict comment --from -`. It validates the JSON, refuses a stale `head_sha`
   (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
-  `bosun verdict apply <comment-id>` built from the default branch, never PR code. `apply`
+  `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or
   admin) permission on the repo (`GET collaborators/{user}/permission`; `author_association` is no
   proof, since a workflow token sees an org member as `CONTRIBUTOR`), it sits on the PR its JSON names, and the JSON is valid; a
@@ -435,7 +466,7 @@ REVIEW.md). The reviewer returns:
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record when that sha has a successful `review-verdict` status, else it is a full review (statuses are per SHA, so they cannot carry it).
-- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses the repo's default branch (from GitHub), `main`, `master` and a detached HEAD (exit 2), opens the PR against the default branch, and `--auto-merge` is refused (exit 3) unless the task is in `review`, before any GraphQL call. `bosun gate` and `test-integrity` take their base from `origin/HEAD` when offline, else `origin/main`; `bosun ask` reads the owners from the default branch.
+- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated, replaces all), else the defaults `ci-ok,risk-check,review-verdict,main-open` plus any extra entries of `hoist.toml` `[github] required_checks` read from the default branch via the API; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses the repo's default branch (from GitHub), `main`, `master` and a detached HEAD (exit 2), opens the PR against the default branch, and `--auto-merge` is refused (exit 3) unless the task is in `review`, before any GraphQL call. Auto-merge goes through GraphQL; when a Claude Code cloud session's proxy refuses it (403, "GraphQL is not available from Claude Code sessions"), bosun uses `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` with `merge_method: squash` and reports `auto_merge_route` (`graphql` or `ccr`); any other error stops as before. The merge-lock hook still blocks agents from calling these routes themselves. `bosun gate` and `test-integrity` take their base from `origin/HEAD` when offline, else `origin/main`; `bosun ask` reads the owners from the default branch.
 - `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; an `escalate_risk` verdict is never green (status `failure`, "escalated to the owner"); approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
 
@@ -447,7 +478,7 @@ task and a lesson. A test is never skipped to get green.
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`.
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**`.
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Content `(?i)(api[_-]?key|secret|token)\s*=`.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.
@@ -479,8 +510,9 @@ High-risk PRs:
   reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
   comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
   the workflow file from the base branch, so a PR cannot rewrite the job that judges it. The job
-  never checks out or runs PR-head code: it builds bosun from the PR's base SHA (on a comment,
-  the default branch) and reads the PR through the API. Event data reaches scripts through `env`
+  never checks out or runs PR-head code: it runs the release pinned in `.bosun/version` of the
+  PR's base SHA (on a comment, the default branch; built from it only while the pin says
+  `unreleased`), so a base that does not compile cannot block its own mainfix, and reads the PR through the API. Event data reaches scripts through `env`
   only. Permissions: `contents: read`, `issues: read`, `statuses: write`, and
   `pull-requests: write` for the Risk note in the PR body. `tests/workflows.rs` asserts all of
   this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
@@ -521,15 +553,25 @@ Main-health:
 - Both workflows run the bosun release pinned in `.bosun/version` of the base commit (main-open, `pull_request_target`) or the default branch head (main-health), never PR code; while the pin lacks the command they run a shell fallback that posts the same status or issue. The main-open fallback is stricter than `bosun gate main-open`: it reads only the PR's own labels from the event, not linked issues. The main-open job is named `judge`; `bosun gate main-open` posts the `main-open` status. main-health ignores `workflow_run` events that are not pushes of this repo.
 - `bosun gate main-open --pr N` posts the `main-open` status on the PR head: success while main is open or for a mainfix PR; else failure and exit 4. Only the label `bosun:kind/mainfix` makes a mainfix: on the PR, or on a linked issue that is open and not a pull request. A task marker in a body is never trusted (labels need triage rights, bodies do not).
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
+  `bosun main-triage --good REV [--bad REV] [--run CMD]` bisects the first-parent commits between
+  good and bad (bad defaults to HEAD) in temporary worktrees. `--run` is a shell command, non-zero
+  is bad; the default is `bosun gate test --all`. It prints the first bad sha, subject and PR.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
+- `bosun revert <pr>` needs a merged PR (else exit 3). It reverts the merge commit (`-m 1` for a
+  merge) on the new branch `bosun/revert-<pr>` from the default branch, pushes that branch (never
+  the default branch, never with force), opens a PR "Revert #<pr>: <title>" with the body marker
+  `<!-- bosun:revert <pr> -->` and the main-red issue, and labels it `bosun:kind/mainfix`. Main-red
+  does not block it. It works in a temporary worktree, so the caller's checkout is never touched. A revert
+  conflict is exit 1: revert by hand or make a forward fix. `data.warning` flags a PR with more than
+  one commit whose merge commit has one parent (a possible rebase merge: only the last commit is reverted).
 - Each main-red opens a lesson.
 
 Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for
   in `next`, passed back on stdin) and reads `usage.cost_usd`; `generic` estimates from turns and
   model with the prices in `docs/defaults.md`.
-- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
+- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd`. The record that blocks the task also opens a lesson of kind `budget` through the lesson capture of §6 (one lesson for all tasks; each further task over its cap adds a hit). A failed capture does not fail the record: it exits 0 with `lesson: {error, fix}`, and the spend must not be recorded again. The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
 - `bosun progress [--days N]` (default 7, read-only) reports it for the window of N days ending now: `merged` counts task issues closed with `closed_at` in the window (closed as `not_planned` or `duplicate` does not count), `spend_usd` sums the registry spend records with `at` in the window (unmerged work counts), and `cost_per_merged_task_usd` is `spend_usd / merged` (`null` when none merged); `task_cost_avg_usd` is the mean of the merged tasks' own spend (all time), and `tasks` lists `{issue, title, closed_at, usd}` by issue.
@@ -538,10 +580,11 @@ Spend guard:
 - Below 80 % of the daily budget: normal.
 - At 80 % or more: no new work; mainfix is exempt. `claim` checks it like spawn check 2 (exit 6).
 - At 100 %: the janitor stops the sessions.
+  The janitor runs `bosun budget check`, which returns one `interrupt_session` per live remote session in `next` (a wave agent `S/task` counts as `S`; never the caller's own session). It writes nothing, also works while halted, and a `daily_usd` of 0 turns it off. An interrupted session that resumes is still refused new work by spawn and claim.
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
 - Only the owner raises a budget (an R-gov change of limits.toml).
-- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with its percent of `daily_usd`, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
+- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with `daily_usd` (from the default branch, as in §5) and its percent of it, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
 
 ## 10. Slack stream (Claude Tag)
 
@@ -587,7 +630,7 @@ commit instead. Job `pin` checks the pin a PR sets: that release must install an
 bootstrap exception: when the base has no self-gating CI yet (the PR that adds it, and PRs stacked
 on it before it merges), the change builds bosun itself, and CI says so in a warning.
 
-`bosun doctor` reports the 12 steps below as ok or missing (exit 5 with the count if any is missing). It cannot see Routines, so step 11 is missing unless the owner sets `BOSUN_ROUTINES_OK=1`; the three Routine prompts are in `data.routines`. Step 2 counts a login that starts with `claude` as the app; step 4 accepts any non-empty `owner`/`owners` key in `governance/owners.toml`.
+`bosun doctor` reports the 12 steps below as ok or missing (exit 5 with the count if any is missing). It cannot see Routines, so step 11 is missing unless the owner sets `BOSUN_ROUTINES_OK=1`; the three Routine prompts are in `data.routines`. Step 2 counts a login that starts with `claude` as the app; step 4 accepts any non-empty `owner`/`owners` key in `governance/owners.toml`. `bosun doctor --remote` also runs `hoist check --json` (binary from `BOSUN_HOIST`, killed with its process group after 120 s, or `BOSUN_HOIST_TIMEOUT_SECS`) and maps its items to steps: 3 for github settings, rulesets and checks, 5 for release and environments (and github environments, secrets, variables), 10 for npm and crates first publish and trusted publishers. Drift makes a step missing and keeps its local problem and fix. `data.hoist` lists `drift`, `unknown` (items hoist could not read, which fail no step) and `notes` (failed verifies, which fail no step) (D17).
 
 Human checklist (12 steps):
 1. Create the repo.
@@ -703,6 +746,8 @@ profile and adapters; generic regex adapters; mixed stacks; bosun doctor --remot
 - UC-M7-3: a repo with two [[stack]] entries runs each gate with the right profile.
 - UC-M7-4: a new channel version reaches a consumer as one R-gov PR from the splice update bot.
 - UC-M7-5: a generic adapter shows "reduced integrity" in bosun status.
+
+`bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--source SRC] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]` runs `splice channel add` for the bosun channel on branch `bosun/init` (ref `v<bosun version>` by default; a non-release ref also passes `bosun_version`), keeps an existing `.claude/settings.json` or `splice.yml` (`--exclude`), commits, pushes and opens one R-gov setup PR whose body lists the owner steps. It skips the kill switch (a fresh repo has no labels); `--no-pr` stops after the commit and needs no token. Beside a hull template it passes `own_ci=1` when a workflow already defines a `ci-ok` job, adds the `claude-md` piece unless a splice lock lists `CLAUDE.md`, excludes every existing seed path and `.claude/settings.json` (if that file lacks the bosun hooks, an owner step says to take them from the template that owns it, not to edit it), and appends the missing required checks to an existing `hoist.toml` (`bosun-ok` too with `own_ci`), checked before splice runs and refused when the edit cannot be made safely.
 
 M8 Review mode (b). Tasks: review as a CI check; delta review; comparison of mode (a) and mode (b)
 verdicts on the same PRs. Done when:

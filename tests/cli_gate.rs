@@ -299,3 +299,64 @@ fn a_stack_in_a_subdirectory_skips_until_its_manifest_exists() {
     assert_eq!(v["data"]["skipped"], false);
     assert_eq!(r.calls(), vec!["fmt --check"]);
 }
+
+const KEYS: &str = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n\
+[gates.test]\ncmd = [\"cargo\", \"{packages}\", \"run\", \"it\"]\neach_package = [\"--filter\", \"{package}\"]\nall = [\"--all\"]\n\
+[gates.deps]\ncmd = [\"cargo\", \"deny\", \"check\"]\nrequires = \"Cargo.lock\"\n";
+
+#[test]
+fn packages_placeholder_puts_the_package_args_in_the_middle() {
+    let r = repo();
+    write(&r.root, ".bosun/profiles/rust.toml", KEYS);
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "profile"]);
+    git(&r.root, &["branch", "-f", "main", "work"]);
+    r.change("a/src/lib.rs");
+    r.change("b/src/lib.rs");
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["--filter a --filter b run it"]);
+}
+
+#[test]
+fn requires_skips_a_gate_whose_file_never_existed() {
+    let r = repo();
+    write(&r.root, ".bosun/profiles/rust.toml", KEYS);
+    r.change("a/src/lib.rs");
+    for args in [
+        &["deps", "--base", "main"][..],
+        &["deps", "--base", "main", "--all"],
+    ] {
+        let (code, v, _) = r.gate(args, "0");
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(v["data"]["skipped"], true);
+        assert_eq!(v["data"]["reason"], "no Cargo.lock");
+    }
+    assert!(r.calls().is_empty());
+    write(&r.root, "Cargo.lock", "# lock\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "lock"]);
+    let (code, v, _) = r.gate(&["deps", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+    assert_eq!(r.calls(), vec!["deny check"]);
+}
+
+#[test]
+fn deleting_the_required_file_still_runs_the_gate() {
+    let r = repo();
+    write(&r.root, ".bosun/profiles/rust.toml", KEYS);
+    write(&r.root, "Cargo.lock", "# lock\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "lock"]);
+    git(&r.root, &["branch", "-f", "main", "work"]);
+    git(&r.root, &["rm", "-q", "Cargo.lock"]);
+    git(&r.root, &["commit", "-q", "-m", "delete lock"]);
+    let (code, v, _) = r.gate(&["deps", "--base", "main"], "1");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+    let (code, v, _) = r.gate(&["deps", "--base", "main", "--all"], "1");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+    assert_eq!(r.calls(), vec!["deny check", "deny check"]);
+}

@@ -7,20 +7,24 @@ use std::process::Command;
 use serde_json::json;
 
 use super::PrArgs;
-use crate::app::{App, default_branch, kill_switch, set_state};
+use crate::app::{App, default_branch, kill_switch, set_state, sync_merged};
+use crate::core::checks;
+use crate::core::meta::linked_issues;
 use crate::core::state::{State, state_of};
-use crate::github::{Github, IssueState};
+use crate::github::{Github, IssueState, enable_auto_merge_any};
 use crate::output::{BosunError, CmdResult, Outcome};
 
-/// The checks that must be green before auto-merge (spec D15, D32); `BOSUN_REQUIRED_CHECKS`
-/// (comma-separated) overrides them.
-pub const REQUIRED: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
+/// The default checks that must be green before auto-merge (spec D15, D32). `required` lets
+/// `BOSUN_REQUIRED_CHECKS` replace them, and `hoist.toml` `[github] required_checks` add to them.
+pub const REQUIRED: [&str; 4] = checks::DEFAULT_REQUIRED;
 
-fn required() -> Vec<String> {
-    match std::env::var("BOSUN_REQUIRED_CHECKS") {
-        Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).collect(),
-        _ => REQUIRED.iter().map(|s| s.to_string()).collect(),
-    }
+/// Read from the default branch, so a PR cannot change the checks that judge it.
+fn required(gh: &dyn Github, base: &str) -> Result<Vec<String>, BosunError> {
+    let hoist = gh.file_at("hoist.toml", base)?;
+    Ok(checks::required_checks(
+        std::env::var("BOSUN_REQUIRED_CHECKS").ok().as_deref(),
+        hoist.as_deref(),
+    ))
 }
 
 fn current_branch(dir: &Path) -> Result<String, BosunError> {
@@ -41,11 +45,11 @@ fn current_branch(dir: &Path) -> Result<String, BosunError> {
 }
 
 /// `(context, state)` of every required check that is not green on `sha`.
-fn not_green(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
     let mut bad = Vec::new();
-    for ctx in required() {
+    for ctx in required(gh, base)? {
         let status = statuses.iter().find(|s| s.context == ctx);
         let run = runs.iter().find(|r| r.name == ctx);
         let green = status.is_some_and(|s| s.state == "success")
@@ -81,8 +85,30 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         ));
     }
     let head = format!("{}:{branch}", app.ctx.repo.owner);
-    let existing = gh.list_pulls(Some(&head), IssueState::Open)?;
-    let (pull, created) = match existing.into_iter().next() {
+    let mut found = gh.list_pulls(Some(&head), IssueState::All)?;
+    found.sort_by_key(|p| p.state != "open");
+    let open = found.iter().position(|p| p.state == "open");
+    if open.is_none() {
+        // Lists do not say `merged`; read each closed PR.
+        for p in found
+            .iter()
+            .filter(|p| p.state == "closed" && linked_issues(&p.body).contains(&n))
+        {
+            if gh.get_pull(p.number)?.is_some_and(|f| f.merged) {
+                let moved = sync_merged(gh, n, &issue, Some(&app.ctx.session))?;
+                let task_state = if moved {
+                    Some(State::Merged)
+                } else {
+                    state_of(&issue.labels)
+                };
+                return Ok(Outcome::data(json!({
+                    "pr": p.number, "head_sha": p.head_sha, "created": false,
+                    "auto_merge": false, "merged": true, "task_state": task_state.map(State::name),
+                })));
+            }
+        }
+    }
+    let (pull, created) = match open.map(|i| found.swap_remove(i)) {
         Some(p) => (p, false),
         None => {
             let title = args.title.clone().unwrap_or_else(|| issue.title.clone());
@@ -91,13 +117,18 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         }
     };
     let mut state = state_of(&issue.labels);
-    if matches!(
-        state,
-        Some(State::Claimed | State::Building | State::Fixing)
-    ) {
+    // A PR exists only after the branch is pushed: claimed -> building is "first commit pushed".
+    let mut issue = issue;
+    if state == Some(State::Claimed) {
+        set_state(gh, n, &issue, State::Building)?;
+        issue = gh.get_issue(n)?.unwrap_or(issue);
+        state = Some(State::Building);
+    }
+    if matches!(state, Some(State::Building | State::Fixing)) {
         set_state(gh, n, &issue, State::Review)?;
         state = Some(State::Review);
     }
+    let mut route = None;
     if args.auto_merge {
         if state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
@@ -106,7 +137,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
             ));
         }
-        let bad = not_green(gh, &pull.head_sha)?;
+        let bad = not_green(gh, &base, &pull.head_sha)?;
         if !bad.is_empty() {
             let list: Vec<String> = bad.iter().map(|(c, s)| format!("{c}: {s}")).collect();
             return Err(BosunError::error(
@@ -123,13 +154,13 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     .collect::<Vec<_>>(),
             })));
         }
-        gh.enable_auto_merge(&pull.node_id, "SQUASH")?;
+        route = Some(enable_auto_merge_any(gh, &pull)?);
         let fresh = gh.get_issue(n)?.unwrap_or(issue);
         set_state(gh, n, &fresh, State::Queued)?;
         state = Some(State::Queued);
     }
     Ok(Outcome::data(json!({
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
-        "auto_merge": args.auto_merge, "task_state": state.map(State::name),
+        "auto_merge": args.auto_merge, "auto_merge_route": route, "task_state": state.map(State::name),
     })))
 }

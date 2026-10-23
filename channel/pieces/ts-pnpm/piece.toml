@@ -1,0 +1,6 @@
+id = "ts-pnpm"
+description = "A TypeScript pnpm workspace: the ts-pnpm gate profile, Node 24 and pnpm in CI"
+requires = ["core"]
+
+[files]
+seed = [".npmrc"]
