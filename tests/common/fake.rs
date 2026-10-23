@@ -418,6 +418,8 @@ impl FakeGithub {
         c.created_at = at.into();
         c.updated_at = at.into();
         let i = s.issues.iter_mut().find(|i| i.number == issue).unwrap();
+        // `updated_at` starts at the sentinel `TS` (the fake's "now"), which any explicit time
+        // replaces, even an earlier one; after that it only moves forward.
         if i.updated_at.as_str() < at || i.updated_at == TS {
             i.updated_at = at.into();
         }
@@ -715,6 +717,10 @@ fn route(
     };
     match (method, rest) {
         ("GET", ["issues"]) if query.get("sort").is_some_and(|s| s == "updated") => {
+            // `fail_path("recent", status)` fails only this updated-since listing.
+            if let Some((_, code)) = s.fail_paths.iter().find(|f| f.0 == "recent") {
+                return msg(*code, "fake recent failure");
+            }
             let since = query.get("since").cloned().unwrap_or_default();
             let per: usize = query
                 .get("per_page")
@@ -726,10 +732,29 @@ fn route(
                 .filter(|i| !i.hidden && !i.is_pr && i.updated_at >= since)
                 .collect();
             hits.sort_by(|a, b| (&b.updated_at, b.number).cmp(&(&a.updated_at, a.number)));
-            // One page only: no Link header, as the caller reads a single page.
-            ok(Value::Array(
-                hits.into_iter().take(per).map(issue_json).collect(),
-            ))
+            // Paged by `per_page` (not the fake's PAGE_SIZE), with a Link header.
+            let n: usize = query.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+            let items: Vec<Value> = hits
+                .iter()
+                .skip((n - 1) * per)
+                .take(per)
+                .map(|i| issue_json(i))
+                .collect();
+            let mut r = ok(Value::Array(items));
+            if n * per < hits.len() {
+                let rest: Vec<&str> = raw_query
+                    .split('&')
+                    .filter(|p| !p.is_empty() && !p.starts_with("page="))
+                    .collect();
+                let q = [rest, vec![&format!("page={}", n + 1)[..]]]
+                    .concat()
+                    .join("&");
+                r.2.push((
+                    "Link".to_string(),
+                    format!("<{base}{path}?{q}>; rel=\"next\""),
+                ));
+            }
+            r
         }
         ("GET", ["issues"]) => {
             let want: Vec<&str> = query

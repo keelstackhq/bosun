@@ -260,15 +260,12 @@ fn a_thread_listed_key_beyond_the_global_cap_can_be_acked() {
 #[test]
 fn a_result_older_than_the_thread_lease_is_stale() {
     let e = env();
-    // A "blocked" result from before this thread spawned the epic again.
-    e.epic_at(
-        10,
-        Some(TS),
-        "ada",
-        "ada",
-        "blocked",
-        ["2026-10-22T09:00:00Z", "2026-10-22T08:00:00Z"],
-    );
+    // A "blocked" result from before this thread spawned the epic again: no thread lease yet.
+    e.fake.issue(10, "epic", READY, "");
+    let res = json!({"bosun": "result", "session": "s", "outcome": "blocked"}).to_string();
+    e.fake.comment_at(10, "ada", &res, "2026-10-22T08:00:00Z");
+    e.fake
+        .comment_at(10, "ada", &lease_rec(TS), "2026-10-22T09:00:00Z");
     let (code, v) = e.notify(&["--thread", TS]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["pending"], json!([]));
@@ -322,4 +319,68 @@ fn thread_and_ack_together_are_a_usage_error() {
     let e = env();
     let (code, v) = e.run(&["notify", "--thread", TS, "--ack", "halt:1"], "");
     assert_eq!(code, 2, "{v}");
+}
+
+fn lease_rec(ts: &str) -> String {
+    json!({"bosun": "lease", "session": "s", "origin": "slack",
+        "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": ts})
+    .to_string()
+}
+
+#[test]
+fn a_respawn_in_the_same_thread_keeps_the_earlier_result() {
+    let e = env();
+    e.fake.issue(10, "epic", READY, "");
+    e.fake
+        .comment_at(10, "ada", &lease_rec(TS), "2026-10-22T08:00:00Z");
+    let res = json!({"bosun": "result", "session": "s", "outcome": "blocked"}).to_string();
+    let id = e.fake.comment_at(10, "ada", &res, "2026-10-22T08:30:00Z");
+    e.fake
+        .comment_at(10, "ada", &lease_rec(TS), "2026-10-22T08:40:00Z");
+    let (_, v) = e.notify(&[]);
+    assert_eq!(Env::keys(&v), [format!("result:10:{id}")]);
+    assert_eq!(v["next"][0]["args"]["thread_ts"], TS);
+}
+
+#[test]
+fn a_result_goes_to_the_thread_that_was_current_when_it_was_written() {
+    let e = env();
+    let b = "1700000001.000100";
+    e.fake.issue(10, "epic", READY, "");
+    e.fake
+        .comment_at(10, "ada", &lease_rec(TS), "2026-10-22T08:00:00Z");
+    let res = json!({"bosun": "result", "session": "s", "outcome": "merged"}).to_string();
+    e.fake.comment_at(10, "ada", &res, "2026-10-22T08:30:00Z");
+    e.fake
+        .comment_at(10, "ada", &lease_rec(b), "2026-10-22T08:40:00Z");
+    let (_, v) = e.notify(&[]);
+    assert_eq!(v["next"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["next"][0]["args"]["thread_ts"], TS);
+}
+
+#[test]
+fn more_than_five_pages_of_recent_issues_is_reported() {
+    let e = env();
+    e.epic(2, Some(TS), "ada", "ada", "merged");
+    for n in 3..510 {
+        e.fake.issue(n, "busy", READY, "");
+    }
+    let (code, v) = e.notify(&[]);
+    assert_eq!(code, 0, "{v}");
+    let errs = v["data"]["errors"].to_string();
+    assert!(
+        errs.contains("more than 500 issues updated in 7 days"),
+        "{errs}"
+    );
+}
+
+#[test]
+fn a_failing_issue_list_is_reported_not_empty() {
+    let e = env();
+    e.epic(2, Some(TS), "ada", "ada", "merged");
+    e.fake.fail_path("recent", 404);
+    let (code, v) = e.run(&["notify"], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["errors"][0]["kind"], "thread-result", "{v}");
+    assert_eq!(v["data"]["pending"], json!([]));
 }

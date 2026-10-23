@@ -314,13 +314,13 @@ fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Fou
 
     if listed("thread-result") && notified_ok {
         let r = thread_results(
-            gh,
-            ctx,
+            app,
             &mut trust,
             &done,
             only_thread,
             results,
             &mut pending,
+            &mut errors,
         );
         if let Err(e) = r {
             errors.push(json!({"kind": "thread-result", "message": e.message}));
@@ -335,8 +335,8 @@ fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Fou
     })
 }
 
-/// One `result` record that counts: by a writer, on an issue with a writer's thread lease, and
-/// written after that lease.
+/// One `result` record that counts: by a writer, written after a writer's thread lease, which
+/// gives its thread.
 struct Reply {
     id: u64,
     outcome: String,
@@ -345,37 +345,32 @@ struct Reply {
     thread_ts: String,
 }
 
-/// The counting results of one issue, oldest first. The thread is that of the newest lease with
-/// a valid `thread_ts` by a writer; a result before that lease belongs to an earlier spawn.
+/// The counting results of one issue, oldest first. A result goes to the thread of the newest
+/// lease with a valid `thread_ts` by a writer written before it, so a later re-spawn does not
+/// move or drop it; one before any such lease belongs to no thread.
 fn replies_of(gh: &dyn Github, trust: &mut Trust, issue: u64) -> Result<Vec<Reply>, BosunError> {
-    let mut lease: Option<(String, Timestamp)> = None;
-    let mut results = Vec::new();
+    let mut lease: Option<String> = None;
+    let mut out = Vec::new();
     for c in gh.list_comments(issue)? {
-        let at = parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0));
         match parse_record(&c.body) {
             Some(Record::Lease {
                 thread_ts: Some(t), ..
-            }) if valid_ts(&t) && trust.ok(&c.user)? => lease = Some((t, at)),
+            }) if valid_ts(&t) && trust.ok(&c.user)? => lease = Some(t),
             Some(Record::Result { outcome, pr, .. }) if trust.ok(&c.user)? => {
-                results.push((c.id, outcome, pr, at));
+                if let Some(thread_ts) = &lease {
+                    out.push(Reply {
+                        id: c.id,
+                        outcome,
+                        pr,
+                        at: parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0)),
+                        thread_ts: thread_ts.clone(),
+                    });
+                }
             }
             _ => {}
         }
     }
-    let Some((thread_ts, since)) = lease else {
-        return Ok(Vec::new());
-    };
-    Ok(results
-        .into_iter()
-        .filter(|(.., at)| *at > since)
-        .map(|(id, outcome, pr, at)| Reply {
-            id,
-            outcome,
-            pr,
-            at,
-            thread_ts: thread_ts.clone(),
-        })
-        .collect())
+    Ok(out)
 }
 
 /// The unacked thread replies. `Results::Scan` reads one page of the issues updated in the last
@@ -383,23 +378,31 @@ fn replies_of(gh: &dyn Github, trust: &mut Trust, issue: u64) -> Result<Vec<Repl
 /// result younger than the grace period is left to the live thread. `Results::Issue` checks one
 /// issue, for `--ack`. The cap counts only results still pending.
 fn thread_results(
-    gh: &dyn Github,
-    ctx: &crate::ctx::Ctx,
+    app: &App,
     trust: &mut Trust,
     done: &[String],
     only_thread: Option<&str>,
     mode: Results,
     pending: &mut Vec<Pending>,
+    errors: &mut Vec<Value>,
 ) -> Result<(), BosunError> {
+    let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let issues: Vec<u64> = match mode {
         Results::Off => return Ok(()),
         Results::Issue(n) => vec![n],
-        Results::Scan => gh
-            .recent_issues(&ctx.now.minus_secs(WINDOW_SECS).to_string())?
-            .into_iter()
-            .filter(|i| i.labels.iter().any(|l| l.starts_with("bosun:state/")))
-            .map(|i| i.number)
-            .collect(),
+        Results::Scan => {
+            let (found, more) = gh.recent_issues(&ctx.now.minus_secs(WINDOW_SECS).to_string())?;
+            if more {
+                let max = crate::github::RECENT_PAGES * 100;
+                errors.push(json!({"kind": "thread-result", "message":
+                    format!("more than {max} issues updated in 7 days; some results may be missed")}));
+            }
+            found
+                .into_iter()
+                .filter(|i| i.labels.iter().any(|l| l.starts_with("bosun:state/")))
+                .map(|i| i.number)
+                .collect()
+        }
     };
     let base = format!("https://github.com/{}/{}", ctx.repo.owner, ctx.repo.name);
     let mut count = 0;

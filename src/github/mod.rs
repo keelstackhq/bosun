@@ -65,12 +65,15 @@ pub enum Probe {
     Gone,
 }
 
+/// Pages (of 100) that `recent_issues` reads.
+pub const RECENT_PAGES: usize = 5;
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
-    /// Issues (never pull requests) updated since `since` (RFC 3339), newest update first: one
-    /// page of at most 100.
-    fn recent_issues(&self, since: &str) -> Result<Vec<Issue>>;
+    /// Issues (never pull requests) updated since `since` (RFC 3339), newest update first, at
+    /// most `RECENT_PAGES` pages of 100; the flag says that more pages were left.
+    fn recent_issues(&self, since: &str) -> Result<(Vec<Issue>, bool)>;
     fn get_issue(&self, number: u64) -> Result<Option<Issue>>;
     /// Like `get_issue`, but a deleted or transferred number is `Gone`, not an error.
     fn probe_issue(&self, number: u64) -> Result<Probe>;
@@ -255,17 +258,17 @@ impl Github for LiveGithub {
         Ok(issues.into_iter().filter(|i| !i.pull_request).collect())
     }
 
-    fn recent_issues(&self, since: &str) -> Result<Vec<Issue>> {
+    fn recent_issues(&self, since: &str) -> Result<(Vec<Issue>, bool)> {
         let path = self.path(&format!(
             "/issues?state=all&sort=updated&direction=desc&since={}&per_page=100",
             enc(since)
         ));
-        let items = match self.http.get_json(&path)? {
-            Some(Value::Array(a)) => a,
-            _ => Vec::new(),
-        };
+        let (items, more) = self.http.get_pages(&path, RECENT_PAGES)?;
         let issues: Vec<Issue> = self.parse_all("issue", items)?;
-        Ok(issues.into_iter().filter(|i| !i.pull_request).collect())
+        Ok((
+            issues.into_iter().filter(|i| !i.pull_request).collect(),
+            more,
+        ))
     }
 
     fn get_issue(&self, number: u64) -> Result<Option<Issue>> {
