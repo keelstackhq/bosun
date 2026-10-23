@@ -159,3 +159,4 @@ Human-only items, in order. Each has the exact action.
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
    check run) and that source required in the `main` ruleset. Until then it is an accepted
    residual: such a PR is R-ci, so it needs an owner's look anyway.
+- 2026-10-23 · M8/T3 · agreement harness `core::agreement` + synthetic fixtures + `review-ci --dry-run`; UC-M8-3 stays open until 20 real recordings exist

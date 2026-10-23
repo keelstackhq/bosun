@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::PrArg;
+use super::ReviewCiArgs;
 use super::review_pack::build;
 use super::verdict::{CONTEXT, current_pull, record};
 use crate::anthropic::Anthropic;
@@ -14,7 +14,7 @@ use crate::config::ReviewMode;
 use crate::core::budget::{Level, level};
 use crate::core::records::{Record, spend_total};
 use crate::core::risk::{FileView, unseen_diff};
-use crate::core::verdict::{Finding, Verdict};
+use crate::core::verdict::{Finding, Verdict, effective};
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -37,7 +37,8 @@ const COMMENT_FINDINGS: usize = 20;
 const COMMENT_BYTES: usize = 8000;
 const FIELD_CHARS: usize = 300;
 
-pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
+pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
+    let dry = args.dry_run;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
@@ -58,7 +59,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         let short: String = evidence.chars().take(MAX_REASON).collect();
         return Err(refuse(
             gh,
-            &head_sha,
+            (!dry).then_some(head_sha.as_str()),
             format!("unreviewable diff: {short}; review in a session (mode a)"),
             format!("the diff of PR #{n} cannot be seen in full: {evidence}"),
             "review it in a session (`bosun review-pack`, then `bosun verdict post`)",
@@ -103,7 +104,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         let cap = cfg.max_diff_bytes;
         return Err(refuse(
             gh,
-            &head_sha,
+            (!dry).then_some(head_sha.as_str()),
             format!("too large for CI review: {size} bytes > {cap}; review in a session (mode a)"),
             format!("the review of PR #{n} is too large for CI review: {size} bytes > {cap}"),
             "review it in a session (`bosun review-pack`, then `bosun verdict post`), or raise review.max_diff_bytes in .bosun/bosun.toml",
@@ -127,19 +128,26 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     } else {
         None
     };
-    let spend = record_spend(&app, usd, task);
+    // A dry run spends tokens but writes nothing: the cost is in `usage`.
+    let spend = if dry {
+        Value::Null
+    } else {
+        record_spend(&app, usd, task)
+    };
 
     let verdict = match parse(&reply.text, n, &head_sha) {
         Ok(v) => v,
         Err(why) => {
             let why: String = why.chars().take(MAX_REASON).collect();
-            gh.create_status(
-                &head_sha,
-                CONTEXT,
-                "failure",
-                &format!("reviewer output invalid: {why}"),
-                None,
-            )?;
+            if !dry {
+                gh.create_status(
+                    &head_sha,
+                    CONTEXT,
+                    "failure",
+                    &format!("reviewer output invalid: {why}"),
+                    None,
+                )?;
+            }
             return Err(BosunError::error(
                 format!("the reviewer's output is invalid: {why}"),
                 "run `bosun review-ci` again, or review in a session (mode a)",
@@ -148,6 +156,14 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
                 "usage": usage_json, "spend": spend})));
         }
     };
+    if dry {
+        let approved = effective(&verdict).approve && !verdict.escalate_risk;
+        return Ok(Outcome::data(
+            json!({"pr": n, "head_sha": head_sha, "dry_run": true,
+            "since_sha": pack["since_sha"], "model": cfg.model, "usage": usage_json,
+            "approved": approved, "verdict": verdict}),
+        ));
+    }
     let mut pull = current_pull(gh, &verdict)?;
     if task.is_none() {
         pull.body.clear();
@@ -219,15 +235,17 @@ fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
     (!evidence.is_empty()).then(|| evidence.join("; "))
 }
 
-/// Set the status to failure, and return the error to exit with.
+/// Set the status to failure (unless `head_sha` is None: a dry run), and return the error.
 fn refuse(
     gh: &dyn Github,
-    head_sha: &str,
+    head_sha: Option<&str>,
     description: String,
     message: String,
     fix: &str,
 ) -> Result<BosunError, BosunError> {
-    gh.create_status(head_sha, CONTEXT, "failure", &description, None)?;
+    if let Some(sha) = head_sha {
+        gh.create_status(sha, CONTEXT, "failure", &description, None)?;
+    }
     Ok(BosunError::error(message, fix))
 }
 

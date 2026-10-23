@@ -641,3 +641,89 @@ fn model_text_cannot_forge_a_verdict_marker_or_a_command() {
     }
     assert!(::bosun::core::verdict::comment_json(&c).is_none());
 }
+
+/// `review-ci 42 --dry-run`: (exit code, envelope).
+fn dry_run(e: &Env) -> (i32, Value) {
+    let out = bosun()
+        .current_dir(e.dir.path())
+        .env("BOSUN_GITHUB_API", e.gh.url())
+        .env("BOSUN_ANTHROPIC_API", e.ai.url())
+        .env("ANTHROPIC_API_KEY", KEY_CANARY)
+        .env("BOSUN_SESSION", "s")
+        .args(["review-ci", "42", "--dry-run"])
+        .output()
+        .unwrap();
+    assert!(!String::from_utf8_lossy(&out.stdout).contains(KEY_CANARY));
+    (out.status.code().unwrap(), one_object(&out.stdout))
+}
+
+fn writes(e: &Env) -> Vec<String> {
+    e.gh.requests()
+        .into_iter()
+        .filter(|r| r.method != "GET")
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect()
+}
+
+#[test]
+fn dry_run_returns_the_verdict_and_usage_and_writes_nothing() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &["major"]));
+    let before = writes(&e);
+    let (code, v) = dry_run(&e);
+    assert_eq!(code, 0, "{v}");
+    let d = &v["data"];
+    assert_eq!(d["dry_run"], true);
+    assert_eq!(d["approved"], true);
+    assert_eq!(d["verdict"]["verdict"], "approve");
+    assert_eq!(d["verdict"]["head_sha"], "sha42");
+    assert_eq!(d["verdict"]["findings"].as_array().unwrap().len(), 1);
+    assert!(d["usage"]["input_tokens"].is_u64() && d["usage"]["usd"].is_f64());
+    assert_eq!(e.ai.requests().len(), 1);
+    assert_eq!(writes(&e), before, "dry run wrote to GitHub");
+    assert!(statuses(&e).is_empty());
+    assert!(spends_on(&e, 7).is_empty() && e.gh.comments_of(42).is_empty());
+}
+
+#[test]
+fn dry_run_with_invalid_output_exits_1_and_writes_no_status() {
+    let e = setup(CI, "no json at all");
+    let (code, v) = dry_run(&e);
+    assert_eq!(code, 1, "{v}");
+    assert!(statuses(&e).is_empty());
+}
+
+#[test]
+fn dry_run_refusals_write_no_status_and_make_no_call() {
+    let e = setup(
+        "[review]\nmode = \"ci\"\nmax_diff_bytes = 10\n",
+        &verdict_json("approve", 0.9, &[]),
+    );
+    let (code, v) = dry_run(&e);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("too large")
+    );
+    assert!(e.ai.requests().is_empty() && statuses(&e).is_empty());
+
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.pull_file(42, "x.bin", "added", 5000, 0, None);
+    let (code, v) = dry_run(&e);
+    assert_eq!(code, 1, "{v}");
+    assert!(e.ai.requests().is_empty() && statuses(&e).is_empty());
+}
+
+#[test]
+fn dry_run_still_obeys_the_daily_budget() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.issue(30, "registry", &["bosun:registry"], "");
+    e.gh.comment(
+        30,
+        r#"{"bosun":"spend","session":"s","usd":150.0,"at":"2026-10-22T03:00:00Z"}"#,
+    );
+    let (code, _) = dry_run(&e);
+    assert_eq!(code, 6);
+    assert!(e.ai.requests().is_empty());
+}
