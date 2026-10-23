@@ -129,6 +129,7 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-23 · M5 T4 · a hit on a mechanized lesson (closed as completed, labelled `bosun:lesson/mechanizable`) reopens it as blocking; `lesson add --upstream` files the lesson on keelstackhq/bosun; `bosun progress --lessons` (open, blocking, mechanized, hits per week) · UC-M5-5 · `tests/cli_lesson_reopen.rs` 9/9 · PR #166 · M5 done: UC-M5-1..5 pass (`tests/uc_m5.rs`)
 - 2026-10-23 · Follow-up · `risk.yml` and `verdict.yml` run the release pinned in `.bosun/version` (build only while it says `unreleased`), so a main that does not compile cannot block its own mainfix; `COMMANDS` is a slice · `tests/workflows.rs` · PR #159
 - 2026-10-23 · M2 T4 · `bosun intake "<text>" --source slack|lesson|flake|human [--item ID] [--title T] [--plan FILE]`: one kind/plan issue (ready, `bosun:source/<source>`) that asks for a plan amendment; the text is fenced and cannot forge metadata; an open issue of the same source and title is returned instead · `tests/cli_intake.rs` 8/8 · PR #165 · M2 done: UC-M2-1..4 pass (`tests/uc_m2.rs`)
+- 2026-10-23 · M8 T1a (#143) · `bosun review-ci <pr>` (review mode b): `src/anthropic.rs` (one Messages call, key from env, never printed), `review.model|max_tokens|max_diff_bytes`, diff cap, untrusted-data prompt, verdict recorded as session `review-ci`, spend record · `tests/cli_review_ci.rs` 16/16, UC-M8-1 in `tests/uc_m8.rs` · the workflow is T1b
 
 ## Blocked
 

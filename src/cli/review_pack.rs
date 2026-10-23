@@ -10,6 +10,7 @@ use crate::core::lessons;
 use crate::core::records::{Record, parse_record};
 use crate::core::review::use_cases;
 use crate::core::verdict::closes_issue;
+use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
@@ -19,8 +20,11 @@ const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let app = App::load(dir)?;
-    let gh = app.gh.as_ref();
-    let n = args.pr;
+    Ok(Outcome::data(build(app.gh.as_ref(), args.pr)?))
+}
+
+/// The pack of PR `n` (also the input of `bosun review-ci`).
+pub(crate) fn build(gh: &dyn Github, n: u64) -> Result<Value, BosunError> {
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
             format!("PR #{n} does not exist"),
@@ -67,7 +71,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
-    Ok(Outcome::data(json!({
+    Ok(json!({
         "pr": n, "title": pull.title, "head_sha": pull.head_sha, "base_sha": pull.base_sha,
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,
@@ -75,5 +79,5 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
         "instructions": INSTRUCTIONS,
-    })))
+    }))
 }

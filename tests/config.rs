@@ -80,6 +80,28 @@ fn config_defaults_and_full_file() {
         (1, ".", "rust")
     );
     assert_eq!(c.review.mode, ReviewMode::Subagent);
+    assert_eq!(
+        (
+            c.review.model.as_str(),
+            c.review.max_tokens,
+            c.review.max_diff_bytes
+        ),
+        ("claude-opus-5-5", 8192, 200_000)
+    );
+    let r = Config::parse("[review]\nmode = \"ci\"\n", "r")
+        .unwrap()
+        .review;
+    assert_eq!((r.max_tokens, r.max_diff_bytes), (8192, 200_000));
+    let r = Config::parse(
+        "[review]\nmodel = \"m\"\nmax_tokens = 100\nmax_diff_bytes = 5\n",
+        "r",
+    )
+    .unwrap()
+    .review;
+    assert_eq!(
+        (r.model.as_str(), r.max_tokens, r.max_diff_bytes),
+        ("m", 100, 5)
+    );
     assert!(c.slack.is_none() && c.prices.is_empty());
     let c = Config::parse(
         "project = \"p\"\n[[stack]]\npath = \"web\"\nprofile = \"ts-pnpm\"\n[review]\nmode = \"ci\"\n\

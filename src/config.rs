@@ -57,10 +57,26 @@ pub enum ReviewMode {
     Ci,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Review {
     pub mode: ReviewMode,
+    /// Model of `bosun review-ci` (mode b).
+    pub model: String,
+    pub max_tokens: u32,
+    /// `review-ci` refuses a diff with more patch bytes than this; it never truncates.
+    pub max_diff_bytes: u64,
+}
+
+impl Default for Review {
+    fn default() -> Self {
+        Review {
+            mode: ReviewMode::default(),
+            model: "claude-opus-5-5".into(),
+            max_tokens: 8192,
+            max_diff_bytes: 200_000,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
