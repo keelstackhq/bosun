@@ -236,13 +236,15 @@ and never uses send_later or send_message.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 
 `bosun spawn` checks, in this order:
-1. Main is not red.
+1. Main is not red, and process is not red (a mainfix or process-fix epic is exempt from process-red).
 2. The daily budget is below 80 %.
 3. The depth of the new session is at most max_depth.
 4. The live sessions (all origins) are fewer than max_live_sessions.
 5. The children of the parent are fewer than max_children.
 6. There is no conflict with a live lease or area owner.
 7. Claim the epic, then return the `create_session` call in `next` (D29).
+
+`bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
 `spawn` and `budget record` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
 
@@ -283,6 +285,10 @@ Janitor, resume, results:
   `bosun notify`.
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
+  It renews the join record of the session (joining again if the registry has none) and every
+  lease of the session in place. An expired lease is renewed only when no live lease overlaps
+  its touch paths, else it is listed under `lost`. For each held task it returns the state,
+  the linked open PR, its branch and a short `action`.
 - Results (D14): a child posts its result as an issue comment on its epic,
   `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
   sees it with `bosun wait`.
@@ -303,9 +309,18 @@ Capture:
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
+- Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
+  `<!-- bosun:lesson {"signature":"<hex>","kind":"<kind>"} -->` in the body. The signature is
+  FNV-1a 64 of the kind and the normalised failure text (hex ids, times, numbers and temp paths
+  replaced; first 20 lines). `bosun lesson capture --kind <k> [--issue N] --from -` opens the
+  issue, or posts a `Seen again` comment with a `lesson-seen` record on the open one with the same
+  signature; that record is the hit.
 
 Triage (curator Routine, daily, Sonnet):
-- blocking: sets process-red, so waves pause as on main-red.
+- blocking: sets process-red, so waves pause as on main-red. Process-red is an open issue labelled
+  `bosun:process-red` (a blocking lesson carries it). While one is open, `claim` and `spawn` refuse
+  work other than `mainfix` and `process-fix` with exit 4, and `wave plan` returns exit 4, except
+  for a mainfix or process-fix epic.
 - mechanizable: opens a kind/process-fix task, which runs before the features of the same area.
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
@@ -376,6 +391,7 @@ profile has three adapters:
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
+- A profile may name its stack `manifest` (rust: `Cargo.toml`); a stack whose manifest is missing at the head and at the base skips each gate (exit 0, `skipped: true`, with a `reason`), so an empty repo after `bosun init` stays green.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
