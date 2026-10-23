@@ -102,36 +102,59 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         }
     }
     // `cd` moves later git commands: `Some(args)` as `-C` options, `None` when the directory
-    // cannot be told (git commands then count as on the default branch: fail closed).
+    // cannot be told (git commands then count as on the default branch: fail closed). A `cd`
+    // counts only when the shell surely runs it in this shell: after the start, `;` or a
+    // newline, or inside an `&&` chain that the git command continues; never in a pipeline
+    // or a `( .. )` group. `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` make it unknown.
     let mut dir: Option<Vec<String>> = Some(Vec::new());
+    let (mut prev, mut chained) = ("", false);
     for (segment, sep) in segments_with_sep(command) {
         let words: Vec<&str> = segment.split_whitespace().collect();
-        if words.first() == Some(&"cd") {
-            dir = match (dir, cd_target(&words[1..])) {
-                (Some(mut d), Some(t)) if matches!(sep, "&&" | ";" | "\n" | "") => {
-                    d.extend(["-C".to_string(), t]);
-                    Some(d)
-                }
-                _ => None,
-            };
-            continue;
+        if ["GIT_DIR", "GIT_WORK_TREE", "core.worktree"]
+            .iter()
+            .any(|v| segment.contains(v))
+        {
+            dir = None;
         }
         // A `bosun` segment is exempt from the label-lock only; its nested commands were
         // checked above and the merge rules see no `gh` or `git` in it.
         if words.first() != Some(&"bosun") && segment.contains("bosun:state/") {
             return Some(label_reason());
         }
-        let target = Target {
-            dir: dir.as_deref(),
-            branch_at,
-            default_branch,
-        };
-        if let Some(why) = merge_rule(&words, segment, &target) {
-            return Some(format!(
-                "`{}` is refused ({why}): {MERGE_FIX}",
-                segment.trim()
-            ));
+        if words.first() == Some(&"cd") {
+            let start = segment.as_ptr() as usize - command.as_ptr() as usize;
+            let before = &command[..start];
+            let grouped = before.matches('(').count() > before.matches(')').count()
+                || segment.contains(['(', ')']);
+            let runs = matches!(prev, "" | ";" | "\n" | "&&");
+            let keeps = matches!(sep, "&&" | ";" | "\n" | "");
+            dir = match (dir, cd_target(&words[1..])) {
+                (Some(mut d), Some(t)) if runs && keeps && !grouped => {
+                    d.extend(["-C".to_string(), t]);
+                    chained |= prev == "&&";
+                    Some(d)
+                }
+                _ => None,
+            };
+        } else {
+            let target = Target {
+                dir: dir.as_deref(),
+                branch_at,
+                default_branch,
+            };
+            if let Some(why) = merge_rule(&words, segment, &target) {
+                return Some(format!(
+                    "`{}` is refused ({why}): {MERGE_FIX}",
+                    segment.trim()
+                ));
+            }
         }
+        // A `cd` that ran only if an `&&` chain held may have been skipped once the chain
+        // ends: later commands then run where the shell started.
+        if chained && !matches!(sep, "&&" | "") {
+            dir = None;
+        }
+        prev = sep;
     }
     None
 }
@@ -399,7 +422,12 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         None => true,
         Some(dir) => {
             let all: Vec<String> = dir.iter().cloned().chain(opts).collect();
-            (target.branch_at)(&all).as_deref() == Some(default_branch)
+            match (target.branch_at)(&all) {
+                Some(b) => b == default_branch,
+                // A moved target git cannot read (a failed `cd`, a missing `-C` dir) may
+                // leave git where the shell started: fail closed.
+                None => !all.is_empty(),
+            }
         }
     };
     match sub {
@@ -531,6 +559,12 @@ mod tests {
         // The hook's own directory is on main.
         assert!(in_worktree("git commit -m x").1.is_some());
         assert!(in_worktree("git -C /other commit -m x").1.is_some());
+        // A moved target git cannot read (a failed `cd`) leaves git in the start dir.
+        let none = |_: &[String]| None;
+        let cmd = json!({"command": "cd /missing; git commit -m x"});
+        assert!(tool_rules("Bash", &cmd, &none, "main").is_some());
+        let cmd = json!({"command": "git commit -m x"});
+        assert_eq!(tool_rules("Bash", &cmd, &none, "main"), None);
     }
 
     #[test]
@@ -553,6 +587,20 @@ mod tests {
                 assert!(asked.is_empty(), "{cmd}: asked {asked:?}");
             }
         }
+        // A `cd` the shell may skip, or runs in a subshell, does not move git.
+        for cmd in [
+            "false && cd /wt; git commit -m x",
+            "true || cd /wt; git commit -m x",
+            "echo | cd /wt; git commit -m x",
+            "(\ncd /wt\n)\ngit commit -m x",
+            "cd /wt && GIT_DIR=/main/.git git commit -m x",
+            "export GIT_WORK_TREE=/main; cd /wt && git commit -m x",
+            "cd /wt && git -c core.worktree=/main commit -m x",
+        ] {
+            assert!(in_worktree(cmd).1.is_some(), "{cmd}");
+        }
+        // An `&&` chain that reaches git keeps the move.
+        assert_eq!(in_worktree("make && cd /wt && git commit -m x").1, None);
         // Reading commands stay allowed wherever they run.
         assert_eq!(in_worktree("cd $WT && git status").1, None);
         assert_eq!(in_worktree("git -C $X log").1, None);
