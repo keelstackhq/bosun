@@ -223,7 +223,7 @@ fn success_claims_the_epic_and_returns_one_create_session() {
     assert!(prompt.contains("#10"));
     assert!(prompt.contains("bosun join --area lifecycle --parent session_test --depth 2"));
     assert!(prompt.contains("bosun wave plan 10"));
-    assert!(prompt.contains(r#""bosun":"result""#));
+    assert!(prompt.contains("bosun result 10 --outcome merged --pr <N>"));
 
     assert!(
         fake.labels_of(10)

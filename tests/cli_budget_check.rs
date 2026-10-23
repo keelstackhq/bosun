@@ -59,6 +59,30 @@ fn uc_m4_2_at_100_percent_interrupts_every_other_live_session() {
 }
 
 #[test]
+fn uc_m4_2_wave_agents_fold_into_their_session_and_local_ids_are_skipped() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    for s in [
+        "session_a",
+        "session_a/M4-T1",
+        "session_b/M4-T2",
+        "local-host",
+        "session_me/M4-T3",
+    ] {
+        fake.comment(1, &join_note(s, LIVE));
+    }
+    fake.comment(1, &spend(150.0, "2026-10-22T03:00:00Z"));
+    let v = check(&fake);
+    assert_eq!(v["data"]["stopped"], json!(["session_a", "session_b"]));
+    let next = v["next"].as_array().unwrap();
+    assert_eq!(next.len(), 2, "{v}");
+    for (n, id) in next.iter().zip(["session_a", "session_b"]) {
+        assert_eq!(n["tool"], "interrupt_session");
+        assert_eq!(n["args"], json!({"session_id": id}));
+    }
+}
+
+#[test]
 fn uc_m4_2_at_85_percent_is_guard_and_stops_nobody() {
     let v = check(&setup(127.5));
     assert_eq!(v["data"]["level"], "guard");

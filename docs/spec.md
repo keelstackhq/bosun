@@ -152,7 +152,7 @@ State machine:
 
 | From | To | When |
 | ---- | -- | ---- |
-| planned | ready | only when its plan task merged |
+| planned | ready | only when its plan task merged (`bosun plan import` moves it) |
 | ready | claimed | `bosun claim`; lease written |
 | claimed | building | first commit pushed |
 | building | review | `bosun pr`; gates green |
@@ -294,9 +294,11 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
-- Results (D14): a child posts its result as an issue comment on its epic,
-  `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
-  sees it with `bosun wait`.
+- Results (D14): a child runs `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`.
+  It posts an issue comment on the epic with the record
+  `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
+  (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
+  parent sees the result with `bosun wait --child`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
@@ -326,7 +328,11 @@ Triage (curator Routine, daily, Sonnet):
   `bosun:process-red` (a blocking lesson carries it). While one is open, `claim` and `spawn` refuse
   work other than `mainfix` and `process-fix` with exit 4, and `wave plan` returns exit 4, except
   for a mainfix or process-fix epic.
-- mechanizable: opens a kind/process-fix task, which runs before the features of the same area.
+- `bosun lesson triage <issue> --as blocking|mechanizable|advice` applies one of the labels
+  `bosun:lesson/blocking`, `bosun:lesson/mechanizable`, `bosun:lesson/advice`; a re-triage removes
+  the other two.
+- mechanizable: opens a kind/process-fix task (`bosun:kind/process-fix` + `bosun:state/ready`),
+  which runs before the features of the same area.
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
 
@@ -527,8 +533,18 @@ Main-health:
 - The required check main-open fails every non-mainfix PR while main is red.
 - `bosun gate main-open --pr N` posts the `main-open` status on the PR head: success while main is open or for a mainfix PR; else failure and exit 4. Only the label `bosun:kind/mainfix` makes a mainfix: on the PR, or on a linked issue that is open and not a pull request. A task marker in a body is never trusted (labels need triage rights, bodies do not).
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
+  `bosun main-triage --good REV [--bad REV] [--run CMD]` bisects the first-parent commits between
+  good and bad (bad defaults to HEAD) in temporary worktrees. `--run` is a shell command, non-zero
+  is bad; the default is `bosun gate test --all`. It prints the first bad sha, subject and PR.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
+- `bosun revert <pr>` needs a merged PR (else exit 3). It reverts the merge commit (`-m 1` for a
+  merge) on the new branch `bosun/revert-<pr>` from the default branch, pushes that branch (never
+  the default branch, never with force), opens a PR "Revert #<pr>: <title>" with the body marker
+  `<!-- bosun:revert <pr> -->` and the main-red issue, and labels it `bosun:kind/mainfix`. Main-red
+  does not block it. It works in a temporary worktree, so the caller's checkout is never touched. A revert
+  conflict is exit 1: revert by hand or make a forward fix. `data.warning` flags a PR with more than
+  one commit whose merge commit has one parent (a possible rebase merge: only the last commit is reverted).
 - Each main-red opens a lesson.
 
 Cost:
@@ -710,6 +726,8 @@ profile and adapters; generic regex adapters; mixed stacks; bosun doctor --remot
 - UC-M7-3: a repo with two [[stack]] entries runs each gate with the right profile.
 - UC-M7-4: a new channel version reaches a consumer as one R-gov PR from the splice update bot.
 - UC-M7-5: a generic adapter shows "reduced integrity" in bosun status.
+
+`bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--source SRC] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]` runs `splice channel add` for the bosun channel on branch `bosun/init` (ref `v<bosun version>` by default; a non-release ref also passes `bosun_version`), keeps an existing `.claude/settings.json` or `splice.yml` (`--exclude`), commits, pushes and opens one R-gov setup PR whose body lists the owner steps. It skips the kill switch (a fresh repo has no labels); `--no-pr` stops after the commit and needs no token.
 
 M8 Review mode (b). Tasks: review as a CI check; delta review; comparison of mode (a) and mode (b)
 verdicts on the same PRs. Done when:
