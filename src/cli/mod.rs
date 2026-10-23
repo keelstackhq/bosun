@@ -689,6 +689,9 @@ pub struct NotifyArgs {
     /// Record that the post with this key was made.
     #[arg(long, value_name = "KEY")]
     pub ack: Option<String>,
+    /// List only the thread-results of this Slack thread (`^[0-9]+\.[0-9]+$`).
+    #[arg(long, value_name = "TS")]
+    pub thread: Option<String>,
     /// Accepted for symmetry; the output is always JSON.
     #[arg(long)]
     pub json: bool,

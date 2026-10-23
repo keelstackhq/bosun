@@ -9,6 +9,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::NotifyArgs;
+use super::spawn::valid_ts;
 use crate::app::{App, HALT_LABEL, default_branch, limits_from_default, main_red};
 use crate::cli::risk_check::owner_logins;
 use crate::core::budget::{Level, level};
@@ -18,14 +19,46 @@ use crate::github::{Github, IssueState, Variable};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 use crate::slack::{ChannelInfo, Pending, neutralise, valid_key};
+use crate::time::{Timestamp, parse_rfc3339};
 
 /// At most this many owner questions per run.
 const MAX_ASKS: usize = 5;
+/// At most this many pending thread replies per run.
+const MAX_RESULTS: usize = 10;
+/// Issues updated within this many seconds (7 days) are searched for results.
+const WINDOW_SECS: i64 = 7 * 86_400;
+/// Without `--thread`, a result younger than this is left to the live thread (15 minutes).
+const GRACE_SECS: i64 = 900;
+
+/// Where `collect` looks for thread replies.
+#[derive(Clone, Copy, PartialEq)]
+enum Results {
+    /// Not at all.
+    Off,
+    /// The recently updated issues.
+    Scan,
+    /// One issue (for `--ack` of a `result:<issue>:<comment>` key).
+    Issue(u64),
+}
 
 pub fn run(dir: Option<&Path>, args: &NotifyArgs) -> CmdResult {
     match &args.ack {
+        Some(_) if args.thread.is_some() => Err(BosunError::usage(
+            "--thread and --ack cannot be used together",
+            "list with `bosun notify --thread TS`, then ack a key with `bosun notify --ack KEY`",
+        )),
         Some(key) => ack(dir, key),
-        None => list(dir, args.channel_info.as_deref()),
+        None => {
+            if let Some(ts) = &args.thread
+                && !valid_ts(ts)
+            {
+                return Err(BosunError::usage(
+                    format!("--thread {ts:?} is not a Slack timestamp"),
+                    "pass the thread ts as digits, a dot and digits, such as 1700000000.000200",
+                ));
+            }
+            list(dir, args.channel_info.as_deref(), args.thread.as_deref())
+        }
     }
 }
 
@@ -38,7 +71,17 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
     }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    let found = collect(&app)?;
+    // A result key is checked on its own issue: the capped list may not hold it, but
+    // `--thread` can list it.
+    let mode = match key
+        .strip_prefix("result:")
+        .and_then(|r| r.split_once(':'))
+        .and_then(|(n, _)| n.parse().ok())
+    {
+        Some(n) => Results::Issue(n),
+        None => Results::Off,
+    };
+    let found = collect(&app, None, mode)?;
     if found.done.iter().any(|k| k == key) {
         return Ok(Outcome::data(json!({"acked": key, "already": true})));
     }
@@ -97,15 +140,23 @@ struct Found {
 }
 
 fn push(pending: &mut Vec<Pending>, key: String, kind: &'static str, text: String) {
-    pending.push(Pending { key, kind, text });
+    pending.push(Pending {
+        key,
+        kind,
+        text,
+        thread_ts: None,
+    });
 }
 
 /// The pending posts. Halt and main-red come first; a later section that fails is reported in
-/// `errors` and does not hide them. A `notified` or `ask` record counts only from a writer.
-fn collect(app: &App) -> Result<Found, BosunError> {
+/// `errors` and does not hide them. A `notified`, `ask`, `result` or thread-carrying lease record
+/// counts only from a writer. With `only_thread`, only the thread-results of that thread.
+fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Found, BosunError> {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let slack = ctx.config.slack.clone().unwrap_or_default();
-    let wants = |kind: &str| slack.notify.is_empty() || slack.notify.iter().any(|k| k == kind);
+    let listed = |kind: &str| slack.notify.is_empty() || slack.notify.iter().any(|k| k == kind);
+    let wants =
+        |kind: &str| only_thread.is_none() && !matches!(results, Results::Issue(_)) && listed(kind);
     let url = |n: u64| {
         format!(
             "https://github.com/{}/{}/issues/{n}",
@@ -261,12 +312,131 @@ fn collect(app: &App) -> Result<Found, BosunError> {
         }
     }
 
+    if listed("thread-result") && notified_ok {
+        let r = thread_results(
+            app,
+            &mut trust,
+            &done,
+            only_thread,
+            results,
+            &mut pending,
+            &mut errors,
+        );
+        if let Err(e) = r {
+            errors.push(json!({"kind": "thread-result", "message": e.message}));
+        }
+    }
+
     pending.retain(|p| !done.contains(&p.key));
     Ok(Found {
         pending,
         done,
         errors,
     })
+}
+
+/// One `result` record that counts: by a writer, written after a writer's thread lease, which
+/// gives its thread.
+struct Reply {
+    id: u64,
+    outcome: String,
+    pr: Option<u64>,
+    at: Timestamp,
+    thread_ts: String,
+}
+
+/// The counting results of one issue, oldest first. A result goes to the thread of the newest
+/// lease with a valid `thread_ts` by a writer written before it, so a later re-spawn does not
+/// move or drop it; one before any such lease belongs to no thread.
+fn replies_of(gh: &dyn Github, trust: &mut Trust, issue: u64) -> Result<Vec<Reply>, BosunError> {
+    let mut lease: Option<String> = None;
+    let mut out = Vec::new();
+    for c in gh.list_comments(issue)? {
+        match parse_record(&c.body) {
+            // A trusted lease sets the current thread; one without a (valid) thread_ts, such as
+            // a later normal spawn, ends it, so that child's result is not a thread reply.
+            Some(Record::Lease { thread_ts, .. }) if trust.ok(&c.user)? => {
+                lease = thread_ts.filter(|t| valid_ts(t));
+            }
+            Some(Record::Result { outcome, pr, .. }) if trust.ok(&c.user)? => {
+                if let Some(thread_ts) = &lease {
+                    out.push(Reply {
+                        id: c.id,
+                        outcome,
+                        pr,
+                        at: parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0)),
+                        thread_ts: thread_ts.clone(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// The unacked thread replies. `Results::Scan` reads one page of the issues updated in the last
+/// 7 days (newest 100) and the comments of those with a state label; without `only_thread` a
+/// result younger than the grace period is left to the live thread. `Results::Issue` checks one
+/// issue, for `--ack`. The cap counts only results still pending.
+fn thread_results(
+    app: &App,
+    trust: &mut Trust,
+    done: &[String],
+    only_thread: Option<&str>,
+    mode: Results,
+    pending: &mut Vec<Pending>,
+    errors: &mut Vec<Value>,
+) -> Result<(), BosunError> {
+    let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
+    let issues: Vec<u64> = match mode {
+        Results::Off => return Ok(()),
+        Results::Issue(n) => vec![n],
+        Results::Scan => {
+            let (found, more) = gh.recent_issues(&ctx.now.minus_secs(WINDOW_SECS).to_string())?;
+            if more {
+                let max = crate::github::RECENT_PAGES * 100;
+                errors.push(json!({"kind": "thread-result", "message":
+                    format!("more than {max} issues updated in 7 days; some results may be missed")}));
+            }
+            found
+                .into_iter()
+                .filter(|i| i.labels.iter().any(|l| l.starts_with("bosun:state/")))
+                .map(|i| i.number)
+                .collect()
+        }
+    };
+    let base = format!("https://github.com/{}/{}", ctx.repo.owner, ctx.repo.name);
+    let mut count = 0;
+    for n in issues {
+        for r in replies_of(gh, trust, n)? {
+            let key = format!("result:{n}:{}", r.id);
+            let young = ctx.now.0 - r.at.0 < GRACE_SECS;
+            if done.contains(&key)
+                || only_thread.is_some_and(|t| t != r.thread_ts)
+                || (mode == Results::Scan && only_thread.is_none() && young)
+            {
+                continue;
+            }
+            if mode == Results::Scan && count >= MAX_RESULTS {
+                return Ok(());
+            }
+            let pr_text =
+                r.pr.map_or(String::new(), |p| format!(" PR {base}/pull/{p}"));
+            let text = format!(
+                "result of #{n}: {}. {base}/issues/{n}{pr_text}",
+                neutralise(&r.outcome)
+            );
+            pending.push(Pending {
+                key,
+                kind: "thread-result",
+                text,
+                thread_ts: Some(r.thread_ts),
+            });
+            count += 1;
+        }
+    }
+    Ok(())
 }
 
 fn read_info(from: &str) -> Result<String, String> {
@@ -280,7 +450,7 @@ fn read_info(from: &str) -> Result<String, String> {
         .map_err(|e| format!("cannot read {from}: {e}"))
 }
 
-fn list(dir: Option<&Path>, channel_info: Option<&str>) -> CmdResult {
+fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) -> CmdResult {
     let app = App::load(dir)?;
     let channel = app
         .ctx
@@ -297,7 +467,7 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>) -> CmdResult {
     }
     let Found {
         pending, errors, ..
-    } = collect(&app)?;
+    } = collect(&app, thread, Results::Scan)?;
 
     if !pending.is_empty() {
         let keys: Vec<&str> = pending.iter().map(|p| p.key.as_str()).collect();
@@ -341,12 +511,16 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>) -> CmdResult {
         "channel": channel,
         "errors": errors,
         "pending": pending.iter().map(|p| json!({
-            "key": p.key, "kind": p.kind, "text": p.text,
+            "key": p.key, "kind": p.kind, "text": p.text, "thread_ts": p.thread_ts,
             "ack": format!("bosun notify --ack {}", p.key),
         })).collect::<Vec<Value>>(),
     }));
     for p in &pending {
-        out = out.with_next("slack_post", json!({"channel": channel, "text": p.text}));
+        let mut args = json!({"channel": channel, "text": p.text});
+        if let Some(ts) = &p.thread_ts {
+            args["thread_ts"] = json!(ts);
+        }
+        out = out.with_next("slack_post", args);
     }
     Ok(out)
 }
