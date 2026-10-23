@@ -5,11 +5,11 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
+use crate::core::checks;
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
-const REQUIRED_CHECKS: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
 const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token (docs/PROGRESS.md Blocked)";
 
 fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &str) -> Value {
@@ -30,6 +30,22 @@ fn routines() -> Value {
         {"name": "notify", "schedule": "every 15 minutes", "model": "haiku",
          "prompt": "Run `bosun notify` and post what it prints to the Slack channel from .bosun/bosun.toml."},
     ])
+}
+
+/// Check contexts of every `.github/workflows/*.yml` and `*.yaml` (see `checks::workflow_checks`).
+fn workflow_jobs(root: &Path) -> Vec<String> {
+    let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x == "yml" || x == "yaml")
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .flat_map(|t| checks::workflow_checks(&t))
+        .collect()
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -340,12 +356,18 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .collect()
         })
         .unwrap_or_default();
-    let absent: Vec<_> = REQUIRED_CHECKS
-        .iter()
-        .filter(|c| !listed.iter().any(|l| l == *c))
-        .collect();
-    let ci_ok_job = read(root, ".github/workflows/ci.yml")
-        .is_some_and(|t| t.lines().any(|l| l.trim_end() == "  ci-ok:"));
+    let jobs = workflow_jobs(root);
+    let has_job = |j: &str| jobs.iter().any(|x| x == j);
+    let mut absent: Vec<&str> = checks::DEFAULT_REQUIRED.to_vec();
+    if has_job("bosun-ok") {
+        absent.push("bosun-ok");
+    }
+    absent.retain(|c| !listed.iter().any(|l| l == c));
+    let step3_fix = if absent.is_empty() {
+        HOIST_FIX.to_string()
+    } else {
+        format!("add {absent:?} to hoist.toml [github] required_checks, then {HOIST_FIX}")
+    };
     items.push(item(
         3,
         "required checks",
@@ -355,13 +377,13 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             Some(format!(
                 "hoist.toml [github] required_checks lacks {absent:?}"
             ))
-        } else if !ci_ok_job {
-            Some(".github/workflows/ci.yml has no `ci-ok` job".into())
+        } else if !has_job("ci-ok") {
+            Some("no .github/workflows/*.yml has a `ci-ok` job".into())
         } else {
             None
         },
-        "hoist.toml lists the four checks and ci.yml has the ci-ok job".into(),
-        HOIST_FIX,
+        "hoist.toml lists the required checks and a workflow has the ci-ok job".into(),
+        &step3_fix,
     ));
 
     let owners = read(root, "governance/owners.toml")

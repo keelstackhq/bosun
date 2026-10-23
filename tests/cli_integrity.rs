@@ -112,6 +112,27 @@ fn deleted_test_file_is_refused() {
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
 }
 
+const RS_WITH_TEST: &str = "pub fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {\n        assert!(true);\n    }\n}\n";
+
+#[test]
+fn rs_file_losing_all_its_tests_is_a_deleted_test() {
+    let r = repo();
+    r.edit("src/lib.rs", RS_WITH_TEST);
+    git(&r.root, &["checkout", "-q", "-b", "work2"]);
+    r.edit("src/lib.rs", "pub fn f() {}\n");
+    let out = bosun()
+        .arg("-C")
+        .arg(&r.root)
+        .args(["test-integrity", "--base", "work"])
+        .env_remove("BOSUN_INTEGRITY_ALLOW")
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{v}");
+    assert_eq!(kinds(&v), vec!["deleted-test"]);
+    assert_eq!(v["data"]["findings"][0]["file"], "src/lib.rs");
+}
+
 #[test]
 fn allow_list_lets_a_deleted_test_through() {
     let r = repo();
