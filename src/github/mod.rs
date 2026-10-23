@@ -71,6 +71,9 @@ pub trait Github {
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()>;
     fn list_comments(&self, number: u64) -> Result<Vec<Comment>>;
     fn add_comment(&self, number: u64, body: &str) -> Result<Comment>;
+    /// A user's permission on the repository (`admin`, `write`, `read` or `none`; maintain
+    /// reads as `write`); `None` when GitHub does not know the user.
+    fn permission(&self, user: &str) -> Result<Option<String>>;
     /// One issue or PR comment by id; `None` when it does not exist.
     fn get_comment(&self, id: u64) -> Result<Option<Comment>>;
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
@@ -292,6 +295,14 @@ impl Github for LiveGithub {
         let path = self.path(&format!("/issues/{number}/comments"));
         let v = self.http.send_json("POST", &path, &json!({"body": body}))?;
         self.parse("comment", v)
+    }
+
+    fn permission(&self, user: &str) -> Result<Option<String>> {
+        let path = self.path(&format!("/collaborators/{}/permission", enc(user)));
+        Ok(self
+            .http
+            .get_json(&path)?
+            .and_then(|v| v["permission"].as_str().map(str::to_string)))
     }
 
     fn get_comment(&self, id: u64) -> Result<Option<Comment>> {

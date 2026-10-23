@@ -385,10 +385,20 @@ fn verdict_apply_refuses_edited_foreign_misplaced_and_stale_comments() {
     assert!(v["error"]["message"].as_str().unwrap().contains("edited"));
 
     let id = comment(&fake);
-    fake.last_comment(|c| c.association = "NONE".into());
+    fake.last_comment(|c| c.user = "mallory".into());
+    fake.state
+        .lock()
+        .unwrap()
+        .permissions
+        .insert("mallory".into(), "read".into());
     let (code, v) = apply(&fake, id);
     assert_eq!(code, 1, "{v}");
-    assert!(v["error"]["message"].as_str().unwrap().contains("NONE"));
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("read access")
+    );
 
     let id = comment(&fake);
     fake.last_comment(|c| c.issue = 7);
@@ -410,4 +420,20 @@ fn verdict_apply_refuses_edited_foreign_misplaced_and_stale_comments() {
     assert_eq!(apply(&fake, plain).0, 1);
     assert_eq!(apply(&fake, 99999).0, 1);
     assert!(fake.statuses_of("sha42").is_empty());
+}
+
+#[test]
+fn verdict_apply_trusts_the_permission_not_the_association() {
+    // A workflow token sees an org member as CONTRIBUTOR; write permission decides.
+    let fake = setup();
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    fake.last_comment(|c| c.association = "CONTRIBUTOR".into());
+    let id = fake.comments_of(42)[0].id;
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
 }

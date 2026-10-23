@@ -17,6 +17,12 @@ bosun is unreleased, so every entry is under Unreleased.
   `bosun verdict apply <comment-id>` to check it and post the `review-verdict` status, so cloud
   sessions (which cannot write statuses) can deliver verdicts.
 
+### Fixed
+
+- `bosun verdict apply` checks the author's repository permission (write or admin) instead of
+  `author_association`: the workflow token sees an org member as `CONTRIBUTOR`, so the first
+  verdict comment (#73) was refused.
+
 ### Changed
 
 - risk-check counts a `/bosun approve` comment only when GitHub says no app wrote it

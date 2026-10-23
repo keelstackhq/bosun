@@ -78,6 +78,8 @@ pub struct State {
     pub release: Option<String>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
+    /// Repository permission by login; a login not listed has `write`.
+    pub permissions: HashMap<String, String>,
     /// (path suffix, status) answered for every matching request.
     pub fail_paths: Vec<(String, u16)>,
     /// Scripted mutations; see `FakeGithub::after_requests`.
@@ -706,6 +708,10 @@ fn route(
                 comment_json(s.comments.iter().find(|c| c.id == id).unwrap()),
                 vec![],
             )
+        }
+        ("GET", ["collaborators", user, "permission"]) => {
+            let p = s.permissions.get(*user).cloned().unwrap_or("write".into());
+            ok(json!({"permission": p, "role_name": p}))
         }
         ("GET", ["issues", "comments", id]) => {
             let id: u64 = id.parse().unwrap_or(0);
