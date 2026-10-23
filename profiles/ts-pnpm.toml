@@ -1,5 +1,7 @@
 # Built-in ts-pnpm profile (spec §7). Override per repo in .bosun/profiles/ts-pnpm.toml.
 # The gates call the workspace's own root package.json scripts, so a repo chooses its tools.
+# A stack with no package.json yet (a repo right after `bosun init`) has nothing to check, so gates skip it.
+manifest = "package.json"
 [adapters]
 packages = "pnpm-workspace"
 pending = "ts-skip"

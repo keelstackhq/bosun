@@ -51,6 +51,34 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Whether `git cat-file -e <spec>` finds the object; any failure counts as "no".
+fn git_has(root: &Path, spec: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "-e", spec])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The profile's manifest when the stack has none in the working tree and none at the base
+/// either, also with `--all`: a stack that never had one has nothing to check yet.
+fn missing_manifest<'a>(req: &Request, stack: &Stack, profile: &'a Profile) -> Option<&'a str> {
+    let manifest = profile.manifest.as_deref()?;
+    let rel = stack_rel(&stack.path);
+    if req.root.join(rel).join(manifest).exists() {
+        return None;
+    }
+    // Also with --all: a merge-queue run after a PR deleted the manifest must still fail.
+    let in_base = {
+        let path = Path::new(rel).join(manifest);
+        git_has(req.root, &format!("{}:{}", req.base, path.display()))
+    };
+    (!in_base).then_some(manifest)
+}
+
 /// A stack path as a clean relative path; `.` and empty mean the repo root.
 fn stack_rel(path: &str) -> &str {
     let p = path.trim_start_matches("./").trim_end_matches('/');
@@ -102,7 +130,14 @@ pub fn run(req: &Request) -> CmdResult {
     let mut failed: Option<i64> = None;
     for (stack, profile, files) in &plan {
         let gate = profile.gate(req.gate)?;
-        let run = execute(req, stack, &profile.adapters.packages, gate, files)?;
+        let run = match missing_manifest(req, stack, profile) {
+            Some(manifest) => json!({
+                "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
+                "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+                "reason": format!("no {manifest} in {}", stack.path),
+            }),
+            None => execute(req, stack, &profile.adapters.packages, gate, files)?,
+        };
         let status = run["exit_status"].as_i64().unwrap_or(0);
         runs.push(run);
         if status != 0 {
