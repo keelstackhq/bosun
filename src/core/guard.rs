@@ -70,11 +70,36 @@ pub fn tool_rules(
         if matches!(name, "merge_pull_request" | "enable_pr_auto_merge") {
             return Some(format!("`{tool}` is refused: {MERGE_FIX}"));
         }
-        if input.to_string().contains("bosun:state/") {
+        // A label tool is judged on its whole input; any other tool only on its label fields,
+        // so a PR or issue body that names a state label in prose is not a label edit.
+        let set = if name.contains("label") {
+            input.to_string()
+        } else {
+            label_fields(input)
+        };
+        if set.contains("bosun:state/") {
             return Some(label_reason());
         }
     }
     None
+}
+
+/// The values under any key whose name contains `label`, at any depth, as JSON text.
+fn label_fields(v: &Value) -> String {
+    match v {
+        Value::Object(m) => m
+            .iter()
+            .map(|(k, v)| {
+                if k.to_ascii_lowercase().contains("label") {
+                    v.to_string()
+                } else {
+                    label_fields(v)
+                }
+            })
+            .collect(),
+        Value::Array(a) => a.iter().map(label_fields).collect(),
+        _ => String::new(),
+    }
 }
 
 fn label_reason() -> String {
@@ -686,6 +711,17 @@ mod tests {
             tool_rules("mcp__github__issue_write", &other, &|_| None, "main"),
             None
         );
+        // Prose that names a state label is not a label edit.
+        let pr = json!({"title": "x", "body": "moves tasks to bosun:state/ready after merge"});
+        assert_eq!(
+            tool_rules("mcp__github__create_pull_request", &pr, &|_| None, "main"),
+            None
+        );
+        // Label fields at any depth, and label tools on their whole input, are still refused.
+        let nested = json!({"issue": {"Labels": [{"name": "bosun:state/merged"}]}});
+        assert!(tool_rules("mcp__github__issue_write", &nested, &|_| None, "main").is_some());
+        let tool = json!({"name": "bosun:state/merged"});
+        assert!(tool_rules("mcp__github__update_label", &tool, &|_| None, "main").is_some());
         for t in [
             "mcp__github__merge_pull_request",
             "mcp__github__enable_pr_auto_merge",
