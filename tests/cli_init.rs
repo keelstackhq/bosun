@@ -348,7 +348,11 @@ const HOIST: &str = "# keep me\n[github]\n# the gates\nrequired_checks = [\"ci-o
 #[test]
 fn a_hull_repo_gets_own_ci_excludes_and_hoist_checks() {
     let e = Env::new();
-    commit_file(&e, ".github/workflows/ci.yml", "name: ci\n");
+    commit_file(
+        &e,
+        ".github/workflows/ci.yml",
+        "name: ci\njobs:\n  build:\n    runs-on: x\n  ci-ok: # gate\n    needs: [build]\n",
+    );
     commit_file(&e, ".claude/settings.json", "{}");
     commit_file(&e, "CLAUDE.md", "# x\n");
     commit_file(&e, "hoist.toml", HOIST);
@@ -383,11 +387,11 @@ fn a_hull_repo_gets_own_ci_excludes_and_hoist_checks() {
         serde_json::json!(["risk-check", "review-verdict", "main-open", "bosun-ok"])
     );
     let steps = d["owner_steps"].as_array().unwrap();
-    assert!(
-        steps
-            .iter()
-            .any(|s| s.as_str().unwrap().contains("bosun hook pre-tool-use"))
-    );
+    assert!(steps.iter().any(|s| {
+        s.as_str()
+            .unwrap()
+            .contains("hooks are missing from .claude/settings.json")
+    }));
     let posts: Vec<_> = fake
         .requests()
         .into_iter()
@@ -398,7 +402,7 @@ fn a_hull_repo_gets_own_ci_excludes_and_hoist_checks() {
             .body
             .as_deref()
             .unwrap()
-            .contains("bosun hook session-start")
+            .contains("hooks are missing from .claude/settings.json")
     );
 }
 
@@ -421,9 +425,9 @@ fn settings_with_the_hooks_need_no_owner_step() {
     assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
 }
 
-/// An invalid hoist.toml fails after splice and rolls back.
+/// An invalid hoist.toml fails before splice runs, so there is nothing to roll back.
 #[test]
-fn an_invalid_hoist_toml_rolls_back() {
+fn an_invalid_hoist_toml_fails_before_splice() {
     let e = Env::new();
     commit_file(&e, "hoist.toml", "[github\n");
     git(e.repo.path(), &["add", "-A"]);
@@ -432,8 +436,94 @@ fn an_invalid_hoist_toml_rolls_back() {
     let splice = e.splice(OK_JSON, 0);
     let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
     assert_eq!(code, 1, "{v}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("rolled back"));
+    assert!(v["error"]["fix"].as_str().unwrap().contains("valid TOML"));
+    assert!(e.argv().is_empty());
     assert_eq!(git_out(e.repo.path(), &["status", "--porcelain"]), "");
+    assert_eq!(
+        git_out(e.repo.path(), &["branch", "--show-current"]),
+        "main"
+    );
+}
+
+/// own_ci means a `ci-ok` job exists in some workflow, not that ci.yml exists.
+#[test]
+fn own_ci_needs_a_ci_ok_job() {
+    let e = Env::new();
+    commit_file(
+        &e,
+        ".github/workflows/ci.yml",
+        "jobs:\n  build:\n    runs-on: x\n",
+    );
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "ci"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(!e.argv().contains("own_ci"), "{}", e.argv());
+    assert_eq!(v["data"]["own_ci"], false);
+}
+
+#[test]
+fn a_ci_ok_job_in_another_workflow_sets_own_ci() {
+    let e = Env::new();
+    commit_file(
+        &e,
+        ".github/workflows/build.yaml",
+        "on: push\njobs:\n  ci-ok:\n    runs-on: x\n",
+    );
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "ci"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(e.argv().contains("--data own_ci=1"), "{}", e.argv());
+    assert_eq!(v["data"]["own_ci"], true);
+    let step = v["data"]["owner_steps"][1].as_str().unwrap();
+    assert!(step.contains("bosun-ok"), "{step}");
+}
+
+/// A channel lock's [files] counts as ownership of CLAUDE.md too; the piece is then left out.
+#[test]
+fn a_channel_lock_owning_claude_md_skips_the_piece() {
+    let e = Env::new();
+    commit_file(
+        &e,
+        ".splice/channels/other.toml",
+        "[files]\n\"CLAUDE.md\" = \"x\"\n",
+    );
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "ch"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(!e.argv().contains("claude-md"), "{}", e.argv());
+    assert_eq!(v["data"]["pieces"].as_array().unwrap().len(), 1);
+}
+
+/// A form init cannot edit is refused up front, and the fix names the checks to add by hand.
+#[test]
+fn an_uneditable_hoist_toml_names_the_checks_to_add() {
+    let e = Env::new();
+    commit_file(
+        &e,
+        "hoist.toml",
+        "[ github ]\nrequired_checks = [\"ci-ok\"]\n",
+    );
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "odd"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("risk-check") && fix.contains("by hand"),
+        "{fix}"
+    );
+    assert!(e.argv().is_empty());
 }
 
 /// The push worked but the PR did not: the fix names a command that opens it.
