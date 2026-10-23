@@ -104,13 +104,12 @@ fn apply(app: &App, id: u64) -> CmdResult {
     if !c.unedited() {
         return Err(refuse("it was edited".into()));
     }
-    if !matches!(
-        c.author_association.as_str(),
-        "OWNER" | "MEMBER" | "COLLABORATOR"
-    ) {
+    // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
+    let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
+    if !matches!(permission.as_str(), "admin" | "write") {
         return Err(refuse(format!(
-            "{} is {}, not a member or collaborator",
-            c.user, c.author_association
+            "{} has {permission} access, not write",
+            c.user
         )));
     }
     let verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;

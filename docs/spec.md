@@ -398,8 +398,9 @@ REVIEW.md). The reviewer returns:
   (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
   `bosun verdict apply <comment-id>` built from the default branch, never PR code. `apply`
-  re-reads the comment and refuses it (exit 1) unless it is unedited, its author is an `OWNER`,
-  `MEMBER` or `COLLABORATOR`, it sits on the PR its JSON names, and the JSON is valid; a
+  re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or
+  admin) permission on the repo (`GET collaborators/{user}/permission`; `author_association` is no
+  proof, since a workflow token sees an org member as `CONTRIBUTOR`), it sits on the PR its JSON names, and the JSON is valid; a
   `head_sha` that is no longer the head is exit 3, and a comment is refused when a newer verdict
   comment for the same head exists (the workflow also runs one comment per PR at a time). The
   verdict record names the reviewer session from the comment's `<!-- bosun:reviewer … -->` tag,
