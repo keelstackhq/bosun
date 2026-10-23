@@ -532,10 +532,11 @@ Cost:
 - `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
+- `bosun progress [--days N]` (default 7, read-only) reports it for the window of N days ending now: `merged` counts task issues closed with `closed_at` in the window (closed as `not_planned` or `duplicate` does not count), `spend_usd` sums the registry spend records with `at` in the window (unmerged work counts), and `cost_per_merged_task_usd` is `spend_usd / merged` (`null` when none merged); `task_cost_avg_usd` is the mean of the merged tasks' own spend (all time), and `tasks` lists `{issue, title, closed_at, usd}` by issue.
 
 Spend guard:
 - Below 80 % of the daily budget: normal.
-- At 80 % or more: no new work; mainfix is exempt.
+- At 80 % or more: no new work; mainfix is exempt. `claim` checks it like spawn check 2 (exit 6).
 - At 100 %: the janitor stops the sessions.
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.

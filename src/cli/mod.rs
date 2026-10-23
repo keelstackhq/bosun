@@ -12,7 +12,9 @@ pub mod heartbeat;
 pub mod join;
 pub mod lesson;
 pub mod msg;
+pub mod plan;
 pub mod pr;
+pub mod progress;
 pub mod reap;
 pub mod release;
 pub mod resume;
@@ -104,16 +106,21 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// Plan commands.
+    #[command(subcommand)]
+    Plan(PlanCmd),
     /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
     Fail(FailArgs),
     /// After a container restart: renew this session's leases and list the PRs to continue.
     Resume,
+    /// Cost per merged task over the last N days (read-only).
+    Progress(ProgressArgs),
     /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
     MainHealth(MainHealthArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 25] = [
+pub const COMMANDS: [&str; 27] = [
     "join",
     "claim",
     "heartbeat",
@@ -136,8 +143,10 @@ pub const COMMANDS: [&str; 25] = [
     "hook",
     "doctor",
     "budget",
+    "plan",
     "fail",
     "resume",
+    "progress",
     "main-health",
 ];
 
@@ -172,8 +181,11 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Plan(PlanCmd::Check(_)) => "plan check",
+            Command::Plan(PlanCmd::Import(_)) => "plan import",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
+            Command::Progress(_) => "progress",
             Command::MainHealth(_) => "main-health",
         }
     }
@@ -400,6 +412,13 @@ pub enum BudgetCmd {
 }
 
 #[derive(Debug, Args)]
+pub struct ProgressArgs {
+    /// Length of the window in days, ending now.
+    #[arg(long, default_value_t = 7)]
+    pub days: u32,
+}
+
+#[derive(Debug, Args)]
 pub struct BudgetRecordArgs {
     pub issue: u64,
     #[arg(long, value_parser = ["claude-sessions", "generic"])]
@@ -410,6 +429,32 @@ pub struct BudgetRecordArgs {
     pub turns: Option<u64>,
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PlanCmd {
+    /// Parse a plan file and report every error with its line and fix (no GitHub).
+    Check(PlanCheckArgs),
+    /// Create the epics, plan tasks and tasks of a plan that do not exist yet.
+    Import(PlanImportArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanCheckArgs {
+    /// The plan file, for example plans/bosun.md.
+    pub file: String,
+}
+
+#[derive(Debug, Args)]
+pub struct PlanImportArgs {
+    /// The plan file, for example plans/bosun.md.
+    pub file: String,
+    /// Show what would be created; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Import only this item (repeatable); default all.
+    #[arg(long = "item", value_name = "ID")]
+    pub item: Vec<String>,
 }
 
 #[derive(Debug, Args)]
