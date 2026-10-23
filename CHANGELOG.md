@@ -2,6 +2,10 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+- `bosun fail`: stop rules (3 equal failures or 0 changed lines block the task) and tier escalation, with `failure` and `escalate` records.
+
 ## v0.1.0
 
 The first release: the seed (S1-S10, `docs/superpowers/plans/2026-10-22-bosun-seed.md`).
