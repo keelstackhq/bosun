@@ -430,6 +430,7 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
         bad!(errs, items[c[0]].line; "remove one of these `depends:` links" => "item dependency cycle: {}", names.join(" -> "));
     }
 
+    let mut adjs: Vec<Vec<Vec<usize>>> = Vec::new();
     for it in &mut items {
         let own: HashMap<String, usize> = it
             .tasks
@@ -466,16 +467,40 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
                 t.depends.push(full);
             }
         }
-        if let Some(c) = find_cycle(&adj) {
-            let names: Vec<_> = c
+        adjs.push(adj);
+    }
+    // One cycle check over every `<item>/<task>` node, same-item and cross-item edges alike.
+    let flat: Vec<(String, usize)> = items
+        .iter()
+        .flat_map(|i| i.tasks.iter().map(|t| (t.plan_id(&i.id), t.line)))
+        .collect();
+    let gi: HashMap<&str, usize> = flat
+        .iter()
+        .enumerate()
+        .map(|(k, (id, _))| (id.as_str(), k))
+        .collect();
+    let gadj: Vec<Vec<usize>> = items
+        .iter()
+        .flat_map(|i| i.tasks.iter())
+        .map(|t| {
+            t.depends
                 .iter()
-                .chain(&c[..1])
-                .map(|&i| it.tasks[i].id.as_str())
-                .collect();
-            bad!(errs, it.tasks[c[0]].line; "remove one of these `depends:` links" => "task dependency cycle in {}: {}", it.id, names.join(" -> "));
-        } else {
+                .filter_map(|d| gi.get(d.as_str()).copied())
+                .collect()
+        })
+        .collect();
+    if let Some(c) = find_cycle(&gadj) {
+        let names: Vec<_> = c
+            .iter()
+            .chain(&c[..1])
+            .map(|&i| flat[i].0.as_str())
+            .collect();
+        bad!(errs, flat[c[0]].1; "remove one of these `depends:` links" => "task dependency cycle: {}", names.join(" -> "));
+    } else {
+        // The critical path counts same-item chains only.
+        for (it, adj) in items.iter().zip(&adjs) {
             let mut memo = vec![0; adj.len()];
-            let deepest = (0..adj.len()).max_by_key(|&k| longest(k, &adj, &mut memo));
+            let deepest = (0..adj.len()).max_by_key(|&k| longest(k, adj, &mut memo));
             if let Some(d) = deepest.filter(|&d| memo[d] > 4) {
                 bad!(errs, it.tasks[d].line; "cut the dependency chain to at most 4 tasks" => "critical path of {} is {} tasks, over 4", it.id, memo[d]);
             }
@@ -587,7 +612,15 @@ mod tests {
     fn cycles_and_critical_path() {
         let m2 = OK.replace("M1", "M2").replace("depends: seed", "depends: M1").replace("# Plan: x\n\nproject: x\n", "");
         at(&format!("{}\n{m2}", w("depends: seed", "depends: M2")), 5, "cycle: M1 -> M2 -> M1");
-        chk("size: 100", "size: 100\n  depends: T2", 14, "cycle in M1: T1 -> T2 -> T1");
+        chk("size: 100", "size: 100\n  depends: T2", 14, "cycle: M1/T1 -> M1/T2 -> M1/T1");
+        chk("size: 100", "size: 100\n  depends: T1", 14, "cycle: M1/T1 -> M1/T1");
+        let two = |d1: &str, d2: &str| format!("# P\n## M1: A\narea: a\n### Tasks\n- T1: t\n  touch: a\n{d1}### Done when\n- UC-M1-1: ok\n## M2: B\narea: b\n### Tasks\n- T1: t\n  touch: a\n{d2}### Done when\n- UC-M2-1: ok\n");
+        at(&two("  depends: M2/T1\n", "  depends: M1/T1\n"), 5, "cycle: M1/T1 -> M2/T1 -> M1/T1");
+        at(&two("  depends: M2/T1\n  size: ten\n", "  depends: M1/T1\n"), 5, "cycle: M1/T1");
+        at(&two("  depends: M2/T1\n  size: ten\n", "  depends: M1/T1\n"), 8, "not an integer");
+        assert!(parse(&two("  depends: M2/T1\n", "")).is_ok());
+        let diamond = "# P\n## M1: A\narea: a\n### Tasks\n- T1: t\n  touch: a\n- T2: t\n  touch: a\n  depends: T1\n- T3: t\n  touch: a\n  depends: T1\n- T4: t\n  touch: a\n  depends: T2, T3\n### Done when\n- UC-M1-1: ok\n";
+        assert!(parse(diamond).is_ok());
         let chain = |n: usize| {
             let tasks: String = (1..=n).map(|k| format!("- T{k}: t\n  touch: a\n{}", if k > 1 { format!("  depends: T{}\n", k - 1) } else { String::new() })).collect();
             format!("# P\n## M1: One\narea: a\n### Tasks\n{tasks}### Done when\n- UC-M1-1: ok\n")
