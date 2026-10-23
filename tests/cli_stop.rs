@@ -204,3 +204,22 @@ fn a_failed_capture_does_not_hide_the_stop() {
     assert!(v["data"]["lesson"].is_null());
     assert!(!v["data"]["lesson_error"].as_str().unwrap().is_empty());
 }
+
+#[test]
+fn a_long_signature_gives_a_short_lesson_title() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    let sig = "x".repeat(400);
+    fail(&fake, 5, &sig, &["--changed-lines", "0"]);
+    let titles: Vec<String> = fake
+        .state
+        .lock()
+        .unwrap()
+        .issues
+        .iter()
+        .filter(|i| i.labels.iter().any(|l| l == "bosun:lesson"))
+        .map(|i| i.title.clone())
+        .collect();
+    assert_eq!(titles.len(), 1);
+    assert!(titles[0].chars().count() <= 200, "{}", titles[0].len());
+}

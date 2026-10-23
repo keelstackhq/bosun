@@ -107,7 +107,9 @@ pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
 fn add_lesson(data: &mut serde_json::Value, gh: &dyn Github, session: &str, n: u64) {
     let rule = data["rule"].as_str().unwrap_or_default().to_string();
     let sig = data["signature"].as_str().unwrap_or_default().to_string();
-    let title = format!("Stop rule {rule} on #{n}: {sig}");
+    // GitHub caps issue titles at 256 characters; the full signature stays in the text.
+    let short: String = sig.chars().take(120).collect();
+    let title = format!("Stop rule {rule} on #{n}: {short}");
     let text = format!("Stop rule {rule}\nFailure signature: {sig}");
     match capture_lesson(gh, session, "stop-rule", &title, &text, Some(n)) {
         Ok(c) => {
