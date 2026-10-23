@@ -53,6 +53,13 @@ pub enum Record {
         head_sha: String,
         approved: bool,
     },
+    /// The same failure signature seen again; `issue` is the task where it was seen (spec §6).
+    LessonSeen {
+        session: String,
+        signature: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        issue: Option<u64>,
+    },
 }
 
 impl Record {
@@ -71,7 +78,8 @@ impl Record {
             | Record::Spend { session, .. }
             | Record::Ask { session, .. }
             | Record::LessonHit { session, .. }
-            | Record::Verdict { session, .. } => session,
+            | Record::Verdict { session, .. }
+            | Record::LessonSeen { session, .. } => session,
         }
     }
 }
@@ -159,6 +167,20 @@ mod tests {
         assert_eq!(
             r.to_line(),
             r#"{"bosun":"lease","session":"session_1","origin":"spawned","expires":"2026-10-22T10:30:00Z","touch":["src/core/lease.rs"]}"#
+        );
+        assert_eq!(parse_record(&r.to_line()), Some(r));
+    }
+
+    #[test]
+    fn lesson_seen_round_trips() {
+        let r = Record::LessonSeen {
+            session: "s".into(),
+            signature: "00ff00ff00ff00ff".into(),
+            issue: Some(7),
+        };
+        assert_eq!(
+            r.to_line(),
+            r#"{"bosun":"lesson-seen","session":"s","signature":"00ff00ff00ff00ff","issue":7}"#
         );
         assert_eq!(parse_record(&r.to_line()), Some(r));
     }

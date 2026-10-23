@@ -9,6 +9,7 @@ pub mod meta;
 pub mod records;
 pub mod review;
 pub mod risk;
+pub mod signature;
 pub mod spawn;
 pub mod state;
 pub mod verdict;
