@@ -34,6 +34,7 @@ pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
+pub mod main_health;
 pub mod stop;
 pub mod test_integrity;
 
@@ -130,6 +131,8 @@ pub enum Command {
     Revert(RevertArgs),
     /// Open a kind/plan issue that asks for a plan amendment (the only way new work enters).
     Intake(IntakeArgs),
+    /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
+    MainHealth(MainHealthArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -165,6 +168,7 @@ pub const COMMANDS: &[&str] = &[
     "init",
     "revert",
     "intake",
+    "main-health",
 ];
 
 impl Command {
@@ -211,6 +215,7 @@ impl Command {
             Command::Init(_) => "init",
             Command::Revert(_) => "revert",
             Command::Intake(_) => "intake",
+            Command::MainHealth(_) => "main-health",
         }
     }
 }
@@ -619,4 +624,14 @@ pub struct InitArgs {
 pub struct RevertArgs {
     /// The merged PR to revert.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct MainHealthArgs {
+    /// The CI conclusion: success, failure, cancelled, skipped, ...
+    #[arg(long)]
+    pub result: String,
+    /// The URL of the run, for the issue and the comment.
+    #[arg(long)]
+    pub run_url: Option<String>,
 }

@@ -36,6 +36,7 @@ const CALLS: &[&[&str]] = &[
     &["init"],
     &["revert", "3"],
     &["intake", "x", "--source", "human"],
+    &["main-health", "--result", "cancelled"],
 ];
 
 #[test]
