@@ -12,6 +12,7 @@ use crate::output::BosunError;
 pub const DEFAULT_BUDGET_SECS: u64 = 480;
 
 const RUST: &str = include_str!("../../profiles/rust.toml");
+const TS_PNPM: &str = include_str!("../../profiles/ts-pnpm.toml");
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -202,10 +203,11 @@ impl Profile {
             Ok(t) => (t, file),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => match name {
                 "rust" => (RUST.to_string(), "profiles/rust.toml".to_string()),
+                "ts-pnpm" => (TS_PNPM.to_string(), "profiles/ts-pnpm.toml".to_string()),
                 _ => {
                     return Err(BosunError::usage(
                         format!("unknown profile `{name}`"),
-                        format!("use `rust`, or add .bosun/profiles/{name}.toml"),
+                        format!("use `rust` or `ts-pnpm`, or add .bosun/profiles/{name}.toml"),
                     ));
                 }
             },
@@ -300,6 +302,29 @@ mod tests {
             ["-p", "x", "-p", "y"]
         );
         assert_eq!(g.budget(), 5);
+    }
+
+    #[test]
+    fn built_in_ts_pnpm_profile_parses() {
+        let p = Profile::load(Path::new("/nonexistent"), "ts-pnpm").unwrap();
+        assert_eq!(p.adapters.packages, "pnpm-workspace");
+        for g in ["fmt", "lint", "types", "test", "deps"] {
+            assert!(p.gates.contains_key(g), "{g}");
+        }
+        assert_eq!(p.gates["deps"].requires.as_deref(), Some("pnpm-lock.yaml"));
+        let t = &p.gates["test"];
+        assert_eq!(t.when_no_package, WhenNoPackage::Skip);
+        let args = t.package_args(&["a".into(), "b".into()]);
+        assert_eq!(
+            t.expand_packages(t.expand_cmd(&[], None), args),
+            [
+                "pnpm", "--filter", "...a", "--filter", "...b", "run", "test"
+            ]
+        );
+        assert_eq!(
+            t.expand_packages(t.expand_cmd(&[], None), t.all.clone()),
+            ["pnpm", "-r", "--include-workspace-root", "run", "test"]
+        );
     }
 
     #[test]
