@@ -572,3 +572,49 @@ fn other_profiles_get_no_stubs_and_a_warning() {
             .any(|w| w == "UC stubs are only written for the rust profile")
     );
 }
+
+#[test]
+fn issues_missing_from_the_lagging_list_are_still_found() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    plan(&fake, tmp.path(), &["import", &file]);
+    let made = posts(&fake);
+    let top = fake
+        .state
+        .lock()
+        .unwrap()
+        .issues
+        .iter()
+        .map(|i| i.number)
+        .max()
+        .unwrap();
+    for n in top - 2..=top {
+        fake.hide_from_list(n);
+    }
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), made);
+    assert!(v["data"]["warnings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn issues_closed_as_duplicate_never_match_or_warn() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    // The lowest number would win, but it is a closed duplicate.
+    fake.issue(1, "old dup", &[], "<!-- bosun:plan M1/T1 -->");
+    close_as(&fake, 1, "duplicate");
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), 7, "{v}");
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(posts(&fake), 7);
+    assert!(v["data"]["warnings"].as_array().unwrap().is_empty(), "{v}");
+    let row = v["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "M1/T1")
+        .unwrap();
+    assert_ne!(row["issue"], 1);
+}

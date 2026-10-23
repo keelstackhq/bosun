@@ -101,14 +101,21 @@ fn lookup(
     warnings: &mut Vec<String>,
 ) -> Option<(Issue, bool)> {
     let m = marker(id);
+    // Issues closed as duplicates keep the marker but never win and never warn.
+    let issues: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| i.state_reason.as_deref() != Some("duplicate"))
+        .collect();
     let mut found: Vec<&Issue> = issues
         .iter()
+        .copied()
         .filter(|i| i.body_text().contains(&m))
         .collect();
     let adopted = found.is_empty();
     if adopted {
         found = issues
             .iter()
+            .copied()
             .filter(|i| match task {
                 Some(t) => task_meta(i).is_some_and(|m| m.item == item && m.task == t),
                 None => epic_item(i.body_text()).as_deref() == Some(item),
@@ -410,7 +417,7 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
     }
     let mut imp = Importer {
         gh: app.gh.as_ref(),
-        issues: app.gh.list_issues(&[], IssueState::All)?,
+        issues: all_issues(app.gh.as_ref())?,
         dry: a.dry_run,
         ensured: HashSet::new(),
         epics: vec![],
@@ -425,6 +432,24 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
         Ok(()) => Ok(Outcome::data(imp.data(&a.file))),
         Err(e) => Err(e.with_data(imp.data(&a.file))),
     }
+}
+
+/// Every issue, including ones the list does not show yet: GitHub's list lags seconds behind
+/// creation, while GET by number is consistent. Probe the numbers after the highest listed one.
+fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
+    let mut issues = gh.list_issues(&[], IssueState::All)?;
+    let first = issues.iter().map(|i| i.number).max().unwrap_or(0) + 1;
+    for next in (first..).take(50) {
+        match gh.get_issue(next)? {
+            Some(i) => {
+                if !i.pull_request && !issues.iter().any(|x| x.number == i.number) {
+                    issues.push(i);
+                }
+            }
+            None => break,
+        }
+    }
+    Ok(issues)
 }
 
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
