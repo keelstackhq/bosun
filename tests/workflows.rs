@@ -212,4 +212,7 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
         ]
     );
     assert!(yaml.contains("COMMENT: ${{ github.event.comment.id }}"));
+    // Other comments must not replace a pending verdict run.
+    assert!(yaml.contains("&& github.run_id || 'apply'"), "{yaml}");
+    assert!(yaml.contains("cancel-in-progress: false"));
 }

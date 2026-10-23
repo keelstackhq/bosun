@@ -1,4 +1,5 @@
-//! `bosun verdict post`: record the reviewer's verdict as the `review-verdict` status (spec §7).
+//! `bosun verdict post|comment|apply`: record the reviewer's verdict as the `review-verdict`
+//! status, directly or through a verdict comment that the verdict workflow applies (spec §7).
 
 use std::io::Read;
 use std::path::Path;
@@ -10,7 +11,7 @@ use crate::app::{App, kill_switch, set_state};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
-    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_json, effective,
+    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_json, comment_session, effective,
 };
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -41,12 +42,12 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
         VerdictCmd::Post(FromArg { from }) => {
             let verdict = parse(&read_input(from)?)?;
             let pull = current_pull(gh, &verdict)?;
-            record(&app, &pull, &verdict)
+            record(&app, &pull, &verdict, &app.ctx.session)
         }
         VerdictCmd::Comment(FromArg { from }) => {
             let verdict = parse(&read_input(from)?)?;
             current_pull(gh, &verdict)?;
-            let c = gh.add_comment(verdict.pr, &comment_body(&verdict))?;
+            let c = gh.add_comment(verdict.pr, &comment_body(&verdict, &app.ctx.session))?;
             Ok(Outcome::data(
                 json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
                 "comment_id": c.id, "applied_by": "the verdict workflow"}),
@@ -112,16 +113,30 @@ fn apply(app: &App, id: u64) -> CmdResult {
             c.user, c.author_association
         )));
     }
-    let verdict = parse(text)?;
+    let verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
     if !c.issue_url.ends_with(&format!("/issues/{}", verdict.pr)) {
         return Err(refuse(format!("it is not on PR #{}", verdict.pr)));
     }
     let pull = current_pull(gh, &verdict)?;
-    record(app, &pull, &verdict)
+    // Comments apply in order: a newer verdict comment for the same head replaces this one.
+    let newer = gh.list_comments(verdict.pr)?.into_iter().any(|o| {
+        o.id > c.id
+            && comment_json(&o.body)
+                .and_then(|t| Verdict::parse(t).ok())
+                .is_some_and(|v| v.head_sha == verdict.head_sha)
+    });
+    if newer {
+        return Err(refuse(format!(
+            "a newer verdict comment for {} replaces it",
+            verdict.head_sha
+        )));
+    }
+    let session = comment_session(&c.body).unwrap_or("unknown");
+    record(app, &pull, &verdict, session)
 }
 
 /// Post the review-verdict status and the verdict record, and move the linked task.
-fn record(app: &App, pull: &Pull, verdict: &Verdict) -> CmdResult {
+fn record(app: &App, pull: &Pull, verdict: &Verdict, session: &str) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = verdict.pr;
     let mut eff = effective(verdict);
@@ -138,7 +153,7 @@ fn record(app: &App, pull: &Pull, verdict: &Verdict) -> CmdResult {
     };
     gh.create_status(&verdict.head_sha, CONTEXT, state, &description, None)?;
     let record = Record::Verdict {
-        session: app.ctx.session.clone(),
+        session: session.to_string(),
         head_sha: verdict.head_sha.clone(),
         approved: eff.approve,
     };

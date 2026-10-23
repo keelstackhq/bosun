@@ -12,6 +12,15 @@ on:
   issue_comment:
     types: [created]
 
+# Verdict comments on one PR apply one at a time, in order; `apply` also refuses a comment that
+# a newer one for the same head replaces. Other comments get a group of their own: a new run
+# replaces the pending one in a group, and a skipped run must never replace a verdict.
+concurrency:
+  group: >-
+    verdict-${{ github.event.issue.number }}-${{
+    !contains(github.event.comment.body, '<!-- bosun:verdict -->') && github.run_id || 'apply' }}
+  cancel-in-progress: false
+
 # Least privilege: statuses for the verdict; issues: write for the verdict record comment and the
 # task's state labels; read for the PR.
 permissions:

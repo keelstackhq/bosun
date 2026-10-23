@@ -125,14 +125,24 @@ pub fn closes_issue(body: &str) -> Option<u64> {
 /// Marks a PR comment that carries a verdict for `bosun verdict apply` (spec §7).
 pub const COMMENT_MARKER: &str = "<!-- bosun:verdict -->";
 
-/// The PR comment `bosun verdict comment` posts: a summary, the marker, the JSON.
-pub fn comment_body(v: &Verdict) -> String {
+const SESSION_TAG: &str = "<!-- bosun:reviewer ";
+
+/// The PR comment `bosun verdict comment` posts: a summary, the reviewer session (for the
+/// record; the session writes it, so it is not proof), the marker, the JSON.
+pub fn comment_body(v: &Verdict, session: &str) -> String {
     let json = serde_json::to_string(v).unwrap_or_default();
     format!(
-        "Review verdict for {}: {}.\n\n{COMMENT_MARKER}\n```json\n{json}\n```",
+        "Review verdict for {}: {}.\n\n{SESSION_TAG}{session} -->\n{COMMENT_MARKER}\n```json\n{json}\n```",
         v.head_sha,
         v.summary()
     )
+}
+
+/// The reviewer session a verdict comment names, if any.
+pub fn comment_session(body: &str) -> Option<&str> {
+    let (_, rest) = body.split_once(SESSION_TAG)?;
+    let (s, _) = rest.split_once(" -->")?;
+    (!s.is_empty() && !s.contains(char::is_whitespace)).then_some(s)
 }
 
 /// The verdict JSON of a verdict comment: the text after the marker, without a code fence.
@@ -215,8 +225,10 @@ mod tests {
     fn a_verdict_comment_round_trips() {
         let v = Verdict::parse(r#"{"pr":3,"head_sha":"abc","verdict":"approve","confidence":0.9}"#)
             .unwrap();
-        let body = comment_body(&v);
+        let body = comment_body(&v, "session_r");
         assert!(body.contains(COMMENT_MARKER));
+        assert_eq!(comment_session(&body), Some("session_r"));
+        assert_eq!(comment_session("no tag"), None);
         assert_eq!(Verdict::parse(comment_json(&body).unwrap()).unwrap(), v);
         assert_eq!(comment_json("no marker"), None);
     }

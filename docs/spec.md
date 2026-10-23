@@ -400,7 +400,12 @@ REVIEW.md). The reviewer returns:
   `bosun verdict apply <comment-id>` built from the default branch, never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author is an `OWNER`,
   `MEMBER` or `COLLABORATOR`, it sits on the PR its JSON names, and the JSON is valid; a
-  `head_sha` that is no longer the head is exit 3. Then it does what `verdict post` does: the
+  `head_sha` that is no longer the head is exit 3, and a comment is refused when a newer verdict
+  comment for the same head exists (the workflow also runs one comment per PR at a time). The
+  verdict record names the reviewer session from the comment's `<!-- bosun:reviewer … -->` tag,
+  which the session writes, so it is an audit hint, not proof. Any member session can post a
+  verdict, the PR's author session included, as with `verdict post`. Then it does what
+  `verdict post` does: the
   status (as github-actions), the verdict record and the task state. A verdict may come through
   the agent app: it is a reviewer's opinion, not an owner's approval. Permissions of the
   workflow: `contents: read`, `pull-requests: read`, `issues: write` (record and state labels),

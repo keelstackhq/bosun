@@ -340,11 +340,34 @@ fn verdict_apply_posts_the_status_of_a_valid_comment() {
     let st = fake.statuses_of("sha42");
     assert_eq!(st[0]["context"], "review-verdict");
     assert_eq!(st[0]["state"], "success");
+    let rec = &fake.comments_of(42)[1].body;
+    assert!(rec.contains(r#""bosun":"verdict""#));
     assert!(
-        fake.comments_of(42)[1]
-            .body
-            .contains(r#""bosun":"verdict""#)
+        rec.contains(r#""session":"session_test""#),
+        "the reviewer, not the workflow: {rec}"
     );
+}
+
+#[test]
+fn a_newer_verdict_comment_for_the_same_head_replaces_an_older_one() {
+    let fake = setup();
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "approve", 0.9, &[], false),
+    );
+    verdict_cmd(
+        &fake,
+        "comment",
+        &verdict("sha42", "request-changes", 0.9, &["major"], false),
+    );
+    let ids: Vec<u64> = fake.comments_of(42).iter().map(|c| c.id).collect();
+    let (code, v) = apply(&fake, ids[0]);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("newer"));
+    let (code, v) = apply(&fake, ids[1]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "failure");
 }
 
 #[test]
@@ -374,6 +397,14 @@ fn verdict_apply_refuses_edited_foreign_misplaced_and_stale_comments() {
     let id = comment(&fake);
     fake.pull_set(42, "head", json!({"sha": "sha43", "ref": "claude/x"}));
     assert_eq!(apply(&fake, id).0, 3, "the head moved on");
+
+    let id = comment(&fake);
+    fake.last_comment(|c| c.body = c.body.replace("\"pr\":42", "\"pr\":42,\"x\":1"));
+    let (code, v) = apply(&fake, id);
+    assert_eq!(
+        code, 1,
+        "invalid JSON in a comment is a refusal, not a usage error: {v}"
+    );
 
     let plain = fake.comment(42, "just a comment");
     assert_eq!(apply(&fake, plain).0, 1);
