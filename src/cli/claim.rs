@@ -10,11 +10,11 @@ use crate::app::{
     task_meta,
 };
 use crate::cli::status::process_red;
+use crate::core::budget::{BUDGET_STOP, no_new_work};
 use crate::core::glob;
 use crate::core::lease::{TTL_SECS, conflicts, leases_of, members};
 use crate::core::meta::area_of;
 use crate::core::records::{Record, spend_total};
-use crate::core::spawn::BUDGET_STOP;
 use crate::core::state::{State, state_of};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -84,7 +84,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
         let spent =
             registry::load(gh)?.map_or(0.0, |(_, reg)| spend_total(&reg, Some(now.day_start())));
-        if daily > 0.0 && spent >= BUDGET_STOP * daily {
+        if no_new_work(spent, daily) {
             return Err(BosunError::limit(
                 format!(
                     "spent ${spent:.2} of ${daily:.2} today (at or over {:.0} %); no new work",
