@@ -1,0 +1,90 @@
+name: review
+
+# Review mode (b), spec §7 and M8: `bosun review-ci` posts the required `review-verdict` status
+# with no Claude session. It does nothing unless `.bosun/bosun.toml` on the base says
+# `[review] mode = "ci"`; in mode (a) a session's verdict comment and verdict.yml set the status.
+#
+# pull_request_target runs this file from the base branch, so a PR cannot rewrite the job that
+# reviews it. The job never checks out or runs PR-head code: it runs the bosun release pinned in
+# the PR's base commit and reads the PR through the API; the diff reaches the model only as data.
+# Event data reaches `run:` lines through `env:` only, never as `${{ }}` in a script.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# A new head replaces the review of the old one.
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Least privilege: statuses for the verdict; pull-requests and issues write for the findings
+# comment, the verdict record and the task's state labels; read for the base files.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  review:
+    # Same-repo PRs only: a fork PR would spend the API budget; it is reviewed in a session.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      # The release pinned in .bosun/version of this checkout (spec §11), as ci.yml's bosun-bin.
+      # `unreleased` builds instead.
+      - name: pinned release
+        id: pin
+        run: |
+          v="$(tr -d '[:space:]' < .bosun/version 2>/dev/null || true)"
+          case "$v" in ""|unreleased) v="";; esac
+          # An exact x.y.z only: never a dist-tag, range, URL or path.
+          if [ -n "$v" ] && ! printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::.bosun/version must be 'unreleased' or an exact x.y.z, not '$v'"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - if: steps.pin.outputs.version != ''
+        name: install the pinned release
+        env:
+          VERSION: ${{ steps.pin.outputs.version }}
+        run: |
+          npm install -g --ignore-scripts "@keelstackhq/bosun@${VERSION}"
+          dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+          mkdir -p target/release
+          cp "$dir/bin/bosun" target/release/bosun
+          got="$(target/release/bosun --version)"
+          echo "$got"
+          test "$got" = "bosun ${VERSION}"
+      - if: steps.pin.outputs.version == ''
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - if: steps.pin.outputs.version == ''
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: bosun-bin
+      - if: steps.pin.outputs.version == ''
+        run: cargo build --release --locked --bin bosun
+      - name: bosun review-ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        # A pinned release without review-ci skips: it posts no status at all (never success),
+        # so mode (a) stays in charge until a release with review-ci is pinned.
+        run: |
+          if ! ./target/release/bosun review-ci --help >/dev/null 2>&1; then
+            echo "::warning::the pinned bosun has no review-ci, so no review-verdict status is set; mode a reviews this PR"
+            exit 0
+          fi
+          ./target/release/bosun review-ci "$PR"
