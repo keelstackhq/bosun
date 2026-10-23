@@ -371,6 +371,9 @@ fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
             Some("GraphQL merge or ref mutation")
         }
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("/merge")) => Some("merge API"),
+        ["api", rest @ ..] if rest.iter().any(|a| a.contains("auto_merge")) => {
+            Some("auto-merge API")
+        }
         ["api", rest @ ..]
             if rest
                 .iter()
@@ -630,6 +633,8 @@ mod tests {
             "curl https://api.github.com/repos/o/r/releases -d '{\"tag_name\":\"v1\"}'",
             "curl https://api.github.com/graphql -d '{\"query\":\"mutation{mergePullRequest(input:{})}\"}'",
             "curl https://api.github.com/repos/o/r/pulls/1 -d '{\"auto_merge\":true}'",
+            "gh api -X PUT repos/o/r/pulls/1/ccr/auto_merge -f merge_method=squash",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/1/ccr/auto_merge -d '{\"merge_method\":\"squash\"}'",
             "wget --method=PUT https://api.github.com/repos/o/r/pulls/1/merge",
             "http PUT api.github.com/repos/o/r/pulls/1/merge",
             "https PUT api.github.com/repos/o/r/git/refs ref=refs/tags/v1",

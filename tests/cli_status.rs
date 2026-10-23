@@ -75,6 +75,33 @@ fn status_with_a_seeded_repo() {
 }
 
 #[test]
+fn budget_pct_uses_the_daily_usd_of_the_default_branch() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/limits.toml"),
+        "[budget]\ndaily_usd = 150\n",
+    )
+    .unwrap();
+    fake.content(".bosun/limits.toml", "main", "[budget]\ndaily_usd = 100\n");
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.comment(1, &spend(50.0, "2026-10-22T08:00:00Z"));
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_a")
+        .env("BOSUN_NOW", T0)
+        .arg("-C")
+        .arg(tmp.path())
+        .arg("status")
+        .output()
+        .unwrap();
+    let v = common::one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(v["data"]["budget_pct"], 50.0);
+    assert_eq!(v["data"]["daily_usd"], 100.0);
+}
+
+#[test]
 fn a_custom_profile_means_reduced_integrity() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
