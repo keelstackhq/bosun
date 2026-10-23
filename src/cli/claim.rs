@@ -6,12 +6,14 @@ use serde_json::{Value, json};
 
 use super::ClaimArgs;
 use crate::app::{
-    App, active_issues, kill_switch, main_red, notes, set_state, settle_race, task_meta,
+    App, active_issues, kill_switch, limits_from_default, main_red, notes, set_state, settle_race,
+    task_meta,
 };
 use crate::core::glob;
 use crate::core::lease::{TTL_SECS, conflicts, leases_of, members};
 use crate::core::meta::area_of;
-use crate::core::records::Record;
+use crate::core::records::{Record, spend_total};
+use crate::core::spawn::BUDGET_STOP;
 use crate::core::state::{State, state_of};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -28,7 +30,8 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         )
     })?;
     let meta = task_meta(&issue);
-    let mainfix = meta.as_ref().is_some_and(|m| m.kind == "mainfix");
+    let mainfix = meta.as_ref().is_some_and(|m| m.kind == "mainfix")
+        || issue.labels.iter().any(|l| l == "bosun:kind/mainfix");
     if let Some(red) = main_red(gh)?
         && !mainfix
     {
@@ -59,6 +62,25 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
             ),
             "claim a task in state ready; `bosun wave plan` lists them",
         ));
+    }
+
+    // Spend guard (spec §9, UC-M4-1): the same rule as spawn check 2. It sits after the
+    // idempotent re-claim above, which is not new work.
+    if !mainfix {
+        let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
+        let spent =
+            registry::load(gh)?.map_or(0.0, |(_, reg)| spend_total(&reg, Some(now.day_start())));
+        if daily > 0.0 && spent >= BUDGET_STOP * daily {
+            return Err(BosunError::limit(
+                format!(
+                    "spent ${spent:.2} of ${daily:.2} today (at or over {:.0} %); no new work",
+                    BUDGET_STOP * 100.0
+                ),
+                "wait for the day to reset at 00:00 UTC, claim a mainfix task, or ask the owner to raise budget.daily_usd in .bosun/limits.toml",
+            )
+            .with_data(json!({"check": 2, "name": "budget", "spent_today_usd": spent,
+                "daily_usd": daily, "pct": spent / daily * 100.0})));
+        }
     }
 
     let touch_raw = if args.touch.is_empty() {
