@@ -10,8 +10,7 @@ packages, crates.io `keel-bosun`, GitHub Release) and pinned in `.bosun/version`
 installs the release pinned in each PR's base commit, and job `pin` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
-prompt has children post the record by hand); plan import (M2) must give plan tasks
-`allow = ["skip"]` so their pending UC tests pass test-integrity; the merge queue comes with M3.
+prompt has children post the record by hand); the merge queue comes with M3.
 
 ## Done
 
@@ -115,6 +114,21 @@ prompt has children post the record by hand); plan import (M2) must give plan ta
 - 2026-10-23 · Follow-up · `bosun pr --auto-merge` falls back to `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` only on the cloud proxy's GraphQL 403 (`auto_merge_route`); the merge-lock also blocks `gh api` to auto-merge routes · `tests/cli_pr.rs` +3 · PR #164
 - 2026-10-23 · M1 T4 · `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`: result record on the epic, lease-end `result`, registry leave `done`, works while halted; the spawn prompt uses it · D14 · `tests/cli_result.rs` 5/5 · PR #116
 - 2026-10-23 · M1 janitor · the janitor Routine prompt runs `bosun reap` (reports reaped, left, merged) and `bosun budget check` with only its `interrupt_session` calls · UC-M4-2 wiring · `tests/cli_doctor.rs` · PR #174 · M1 done: UC-M1-1..4 pass (`uc_m1_1_*`, `uc_m1_2_*`, `uc_m1_3_*`, `uc_m1_4_*`)
+- 2026-10-23 · Follow-up · the merge-lock reads the branch where git acts: `cd` earlier in the command, `git -C`, `--git-dir`, `--work-tree`; it fails closed on an unreadable target and on `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` · `core::guard` · PR #101
+- 2026-10-23 · M5 T1 · `bosun lesson capture --kind K [--issue N] [--title T] [--from -|FILE]` and `cli::lesson::capture_lesson`: `core::signature` (FNV-1a 64 of the kind and the normalised text); a new `bosun:lesson` issue with the lesson marker, or a `lesson-seen` record on the open one (a hit) · UC-M5-1 · `tests/cli_lesson_capture.rs` 6/6, `core::signature` 6/6 · PR #103
+- 2026-10-23 · M5 T2 · process-red (an open `bosun:process-red` issue, `status::process_red`): `claim` and `spawn` refuse all but mainfix and process-fix work with exit 4, `wave plan` of a feature epic plans only its ready process-fix tasks (exit 4 when there are none), `status` reports it · UC-M5-2 · `tests/cli_process_red.rs` 9/9 · PR #102
+- 2026-10-23 · Follow-up · next-page links `/repositories/<id>/..` are followed as `/repos/<owner>/<repo>/..` (the cloud proxy refuses the id form) · `github::http` +1 · PR #120
+- 2026-10-23 · Docs · M2/M5 plan `docs/superpowers/plans/2026-10-23-m2-m5.md` (decisions P1-P5, L1-L4; tasks 1a-8) · PR #119
+- 2026-10-23 · M2 T1a · `core::plan::parse`: rules 1-5, 7 and 8 of `docs/plan-format.md`, line-numbered errors with a fix, warnings; `plans/bosun.md` parses · `tests/plan_parse.rs`, `core::plan` · PR #113
+- 2026-10-23 · M2 T2a · `bosun plan check <file>` and `bosun plan import <file> [--item ID] [--dry-run]`: epics, tasks and one plan task `<item>/P` per item (kind/plan, ready, `allow = ["skip"]`, closes the seed follow-up), idempotent by the `bosun:plan` marker; hand-made issues are adopted by their metadata · UC-M2-1 · `tests/cli_plan_import.rs` · PR #124
+- 2026-10-23 · Follow-up · the label-lock checks only the label fields of MCP tools that are not label tools, so a PR body that names a state label is no longer refused · `core::guard` · PR #162
+- 2026-10-23 · M2 T1b · rule 6 (an item's critical path is at most 4 tasks) and dependency cycles over items and over every `<item>/<task>` · `core::plan` · PR #151
+- 2026-10-23 · M2 T2b · import moves an item's epic and tasks from planned to ready once its plan task merged (label `merged`, or closed as completed); missing UC stubs go to `tests/uc_<item>.rs` (rust); issue numbers past the list are probed, because GitHub's list lags (410 and 301 are skipped) · UC-M2-2, UC-M2-3 · `tests/cli_plan_import.rs` 25/25 · PR #153
+- 2026-10-23 · M5 T3 · `bosun lesson triage <issue> --as blocking|mechanizable|advice`: blocking sets process-red, mechanizable opens a kind/process-fix task (`--touch`), advice adds a rule to `docs/lessons.toml` and the store PR closes the lesson; the curator Routine prompt calls it · UC-M5-3, UC-M5-4 · `tests/cli_lesson_triage.rs` 8/8 · PR #154
+- 2026-10-23 · M2 T3 · `bosun plan amend <file>`: import, then reconcile the issues of the same plan file: gone ids close as not planned, changed titles and metadata update in place, re-added items reopen; claimed or leased tasks are skipped; `wave plan` no longer counts not-planned issues as merged · UC-M2-4 · `tests/cli_plan_amend.rs` 13/13 · PR #163
+- 2026-10-23 · M5 T4 · a hit on a mechanized lesson (closed as completed, labelled `bosun:lesson/mechanizable`) reopens it as blocking; `lesson add --upstream` files the lesson on keelstackhq/bosun; `bosun progress --lessons` (open, blocking, mechanized, hits per week) · UC-M5-5 · `tests/cli_lesson_reopen.rs` 9/9 · PR #166 · M5 done: UC-M5-1..5 pass (`tests/uc_m5.rs`)
+- 2026-10-23 · Follow-up · `risk.yml` and `verdict.yml` run the release pinned in `.bosun/version` (build only while it says `unreleased`), so a main that does not compile cannot block its own mainfix; `COMMANDS` is a slice · `tests/workflows.rs` · PR #159
+- 2026-10-23 · M2 T4 · `bosun intake "<text>" --source slack|lesson|flake|human [--item ID] [--title T] [--plan FILE]`: one kind/plan issue (ready, `bosun:source/<source>`) that asks for a plan amendment; the text is fenced and cannot forge metadata; an open issue of the same source and title is returned instead · `tests/cli_intake.rs` 8/8 · PR #165 · M2 done: UC-M2-1..4 pass (`tests/uc_m2.rs`)
 
 ## Blocked
 
