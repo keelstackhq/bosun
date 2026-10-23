@@ -466,7 +466,7 @@ REVIEW.md). The reviewer returns:
   runs `bosun verdict comment --from -`. It validates the JSON, refuses a stale `head_sha`
   (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
-  `bosun verdict apply <comment-id>` built from the default branch, never PR code. `apply`
+  `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or
   admin) permission on the repo (`GET collaborators/{user}/permission`; `author_association` is no
   proof, since a workflow token sees an org member as `CONTRIBUTOR`), it sits on the PR its JSON names, and the JSON is valid; a
@@ -527,8 +527,9 @@ High-risk PRs:
   reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
   comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
   the workflow file from the base branch, so a PR cannot rewrite the job that judges it. The job
-  never checks out or runs PR-head code: it builds bosun from the PR's base SHA (on a comment,
-  the default branch) and reads the PR through the API. Event data reaches scripts through `env`
+  never checks out or runs PR-head code: it runs the release pinned in `.bosun/version` of the
+  PR's base SHA (on a comment, the default branch; built from it only while the pin says
+  `unreleased`), so a base that does not compile cannot block its own mainfix, and reads the PR through the API. Event data reaches scripts through `env`
   only. Permissions: `contents: read`, `issues: read`, `statuses: write`, and
   `pull-requests: write` for the Risk note in the PR body. `tests/workflows.rs` asserts all of
   this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
