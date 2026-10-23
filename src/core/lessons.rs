@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::glob::Glob;
+use crate::time::Timestamp;
 
 /// At most this many entries.
 pub const MAX: usize = 40;
@@ -122,9 +123,68 @@ pub fn matching<'a>(store: &'a Store, paths: &[String]) -> Vec<&'a Lesson> {
         .collect()
 }
 
+/// Label of a lesson triaged as advice (spec §6).
+pub const ADVICE_LABEL: &str = "bosun:lesson/advice";
+
+/// Label of a lesson triaged as mechanizable (spec §6).
+pub const MECHANIZABLE_LABEL: &str = "bosun:lesson/mechanizable";
+
+/// A lesson issue is mechanized when it was triaged as mechanizable and closed as `completed`
+/// (its mechanism landed). Advice and untriaged lessons never are (spec §6).
+pub fn is_mechanized(state: &str, state_reason: Option<&str>, labels: &[String]) -> bool {
+    state == "closed"
+        && state_reason == Some("completed")
+        && labels.iter().any(|l| l == MECHANIZABLE_LABEL)
+        && !labels.iter().any(|l| l == ADVICE_LABEL)
+}
+
+/// Hits per week for the last `weeks` weeks ending at `now`, oldest first. Week `i` is
+/// `[now - (weeks - i) * 7d, now - (weeks - i - 1) * 7d)`; the last week also holds `now`.
+/// Returns `(week_start, hits)`.
+pub fn hits_by_week(hits: &[Timestamp], now: Timestamp, weeks: usize) -> Vec<(Timestamp, usize)> {
+    const WEEK: i64 = 7 * 86_400;
+    (0..weeks)
+        .map(|i| {
+            let start = now.minus_secs((weeks - i) as i64 * WEEK);
+            let end = start.plus_secs(WEEK);
+            let last = i + 1 == weeks;
+            let n = hits
+                .iter()
+                .filter(|t| **t >= start && (**t < end || (last && **t == end)))
+                .count();
+            (start, n)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mechanized_means_closed_completed_and_not_advice() {
+        let none: Vec<String> = vec![];
+        let mech = vec![MECHANIZABLE_LABEL.to_string()];
+        assert!(is_mechanized("closed", Some("completed"), &mech));
+        assert!(!is_mechanized("closed", Some("completed"), &none));
+        assert!(!is_mechanized("open", None, &mech));
+        assert!(!is_mechanized("closed", Some("not_planned"), &mech));
+        assert!(!is_mechanized(
+            "closed",
+            Some("completed"),
+            &[MECHANIZABLE_LABEL.into(), ADVICE_LABEL.into()]
+        ));
+    }
+
+    #[test]
+    fn weeks_split_the_window() {
+        let now = Timestamp(100 * 86_400);
+        let day = |d: i64| now.minus_secs(d * 86_400);
+        let w = hits_by_week(&[day(0), day(3), day(8), day(27), day(40)], now, 4);
+        let n: Vec<usize> = w.iter().map(|x| x.1).collect();
+        assert_eq!(n, [1, 0, 1, 2]);
+        assert_eq!(w[3].0, day(7));
+    }
 
     fn add_n(s: &mut Store, scope: &[&str]) -> Result<String, CapError> {
         add(
