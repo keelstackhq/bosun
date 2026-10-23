@@ -2,6 +2,10 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+- `bosun result <epic> --outcome .. [--pr N]`: a child posts its result on the epic, ends its lease and leaves the registry; the spawn prompt uses it.
+
 ## v0.1.0
 
 The first release: the seed (S1-S10, `docs/superpowers/plans/2026-10-22-bosun-seed.md`).

@@ -15,6 +15,7 @@ pub mod msg;
 pub mod pr;
 pub mod reap;
 pub mod release;
+pub mod result;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -101,10 +102,12 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// Post this session's result on its epic, end its lease and leave the registry.
+    Result(ResultArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 22] = [
+pub const COMMANDS: [&str; 23] = [
     "join",
     "claim",
     "heartbeat",
@@ -127,6 +130,7 @@ pub const COMMANDS: [&str; 22] = [
     "hook",
     "doctor",
     "budget",
+    "result",
 ];
 
 impl Command {
@@ -159,6 +163,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Result(_) => "result",
         }
     }
 }
@@ -195,6 +200,18 @@ pub struct ReleaseArgs {
     /// The state after the release.
     #[arg(long = "to", default_value = "ready", value_parser = ["ready", "blocked", "review"])]
     pub to: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ResultArgs {
+    /// The epic issue number.
+    pub epic: u64,
+    /// How the work ended.
+    #[arg(long, value_parser = ["merged", "blocked", "needs-human"])]
+    pub outcome: String,
+    /// The PR of the work.
+    #[arg(long)]
+    pub pr: Option<u64>,
 }
 
 #[derive(Debug, Args)]

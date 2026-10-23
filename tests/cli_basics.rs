@@ -3,7 +3,7 @@ mod common;
 use common::{TOKEN_CANARY, bosun, one_object};
 
 /// Minimal valid arguments for every command (S1 Done when).
-const CALLS: [&[&str]; 24] = [
+const CALLS: [&[&str]; 25] = [
     &["join"],
     &["claim", "4"],
     &["heartbeat"],
@@ -28,6 +28,7 @@ const CALLS: [&[&str]; 24] = [
     &["hook", "session-start"],
     &["doctor"],
     &["budget", "record", "4", "--provider", "generic"],
+    &["result", "4", "--outcome", "merged"],
 ];
 
 #[test]

@@ -169,8 +169,7 @@ fn default_prompt(epic: u64, title: &str, area: Option<&str>, me: &str, depth: u
         "You orchestrate epic #{epic} ({title}).\n\
          1. Run `bosun join {area_flag}--parent {me} --depth {depth}`.\n\
          2. Run `bosun wave plan {epic}` and work the tasks it returns as wave agents, each in its own workspace with `BOSUN_SESSION={me}/<task>` set.\n\
-         3. When done, post a comment on #{epic} with this line (outcome is merged, blocked or needs-human):\n\
-         {{\"bosun\":\"result\",\"session\":\"<your session id>\",\"outcome\":\"merged\"}}\n"
+         3. When done, run `bosun result {epic} --outcome merged --pr <N>` (outcome is merged, blocked or needs-human; leave out --pr when there is none).\n"
     )
 }
 

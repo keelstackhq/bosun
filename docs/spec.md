@@ -279,9 +279,11 @@ Janitor, resume, results:
   `bosun notify`.
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
-- Results (D14): a child posts its result as an issue comment on its epic,
-  `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
-  sees it with `bosun wait`.
+- Results (D14): a child runs `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`.
+  It posts an issue comment on the epic with the record
+  `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
+  (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
+  parent sees the result with `bosun wait --child`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
