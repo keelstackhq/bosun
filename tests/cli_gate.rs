@@ -271,4 +271,31 @@ fn deleting_the_manifest_still_runs_the_gate() {
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["data"]["skipped"], false);
     assert_eq!(r.calls(), vec!["fmt --check"]);
+    // The merge queue and main run with --all; the base still has the manifest.
+    let (code, v, _) = r.gate(&["fmt", "--base", "main", "--all"], "1");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+}
+
+#[test]
+fn a_stack_in_a_subdirectory_skips_until_its_manifest_exists() {
+    let r = repo();
+    write(
+        &r.root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \"web\"\nprofile = \"rust\"\n",
+    );
+    write(&r.root, "web/README.md", "x\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "web stack"]);
+    let (code, v, _) = r.gate(&["fmt", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["reason"], "no Cargo.toml in web");
+    write(&r.root, "web/Cargo.toml", "[package]\nname = \"web\"\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "web crate"]);
+    let (code, v, _) = r.gate(&["fmt", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+    assert_eq!(r.calls(), vec!["fmt --check"]);
 }

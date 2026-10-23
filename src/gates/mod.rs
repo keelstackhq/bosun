@@ -71,7 +71,8 @@ fn missing_manifest<'a>(req: &Request, stack: &Stack, profile: &'a Profile) -> O
     if req.root.join(rel).join(manifest).exists() {
         return None;
     }
-    let in_base = !req.all && {
+    // Also with --all: a merge-queue run after a PR deleted the manifest must still fail.
+    let in_base = {
         let path = Path::new(rel).join(manifest);
         git_has(req.root, &format!("{}:{}", req.base, path.display()))
     };
