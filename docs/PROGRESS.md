@@ -129,6 +129,10 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-23 · M5 T4 · a hit on a mechanized lesson (closed as completed, labelled `bosun:lesson/mechanizable`) reopens it as blocking; `lesson add --upstream` files the lesson on keelstackhq/bosun; `bosun progress --lessons` (open, blocking, mechanized, hits per week) · UC-M5-5 · `tests/cli_lesson_reopen.rs` 9/9 · PR #166 · M5 done: UC-M5-1..5 pass (`tests/uc_m5.rs`)
 - 2026-10-23 · Follow-up · `risk.yml` and `verdict.yml` run the release pinned in `.bosun/version` (build only while it says `unreleased`), so a main that does not compile cannot block its own mainfix; `COMMANDS` is a slice · `tests/workflows.rs` · PR #159
 - 2026-10-23 · M2 T4 · `bosun intake "<text>" --source slack|lesson|flake|human [--item ID] [--title T] [--plan FILE]`: one kind/plan issue (ready, `bosun:source/<source>`) that asks for a plan amendment; the text is fenced and cannot forge metadata; an open issue of the same source and title is returned instead · `tests/cli_intake.rs` 8/8 · PR #165 · M2 done: UC-M2-1..4 pass (`tests/uc_m2.rs`)
+- 2026-10-23 · M8 T2 · `review-pack` takes `since_sha` from the newest older head that has a verdict record and a successful `review-verdict` status, is an ancestor of the head (compare `ahead`) and is one of the PR's commits; anything else, any compare error or more than 20 older heads is a full review with `delta_fallback` saying why · UC-M8-2 · `tests/cli_review_delta.rs` 8/8 · PR #180
+- 2026-10-23 · Fix · risk-check's `R-unseen` flags every listed file with changed lines and no patch, whatever its name (no extension exemption) and whatever its status but removed or unchanged · `core::risk`, `tests/cli_risk.rs` · PR #181
+- 2026-10-23 · M8 T1a · `bosun review-ci <pr>` (review mode b): kill switch, `review.mode = "ci"` only, daily budget (exit 6); fails closed before any call on an unseen diff or a request over `review.max_diff_bytes`; one Anthropic Messages API call (`ANTHROPIC_API_KEY`, never printed; `[review] model`, `max_tokens`); untrusted-data prompt; `pr` and `head_sha` from the pack; status, record and task move as `verdict post` with session `review-ci`; findings in data and a neutralised PR comment; spend for `review-ci` · UC-M8-1 · `tests/cli_review_ci.rs` 31/31, fake Anthropic server in `tests/common` · PR #182
+- 2026-10-23 · M8 T3 · `core::agreement` (same effective outcome; passes at 20 or more pairs and 90 % or more), the recorded-review fixture format (`tests/fixtures/reviews/`), and `review-ci --dry-run` (always a full review, writes nothing) for recording; UC-M8-3 stays open until 20 real recordings exist · `tests/review_agreement.rs` 3/3, `tests/cli_review_ci.rs` +6 · PR #184
 
 ## Blocked
 
@@ -159,3 +163,16 @@ Human-only items, in order. Each has the exact action.
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
    check run) and that source required in the `main` ruleset. Until then it is an accepted
    residual: such a PR is R-ci, so it needs an owner's look anyway.
+6. **Review mode b (M8).** The code is on main; three steps turn it on.
+   - Approve `.github/workflows/review.yml` (PR #183, R-ci): `/bosun approve <head sha>` on it.
+   - Create the environment `review` (Settings → Environments, deployment branches: `main` only)
+     and its secret: `gh secret set ANTHROPIC_API_KEY --env review --repo keelstackhq/bosun`.
+   - Cut a release that contains `review-ci` and pin it in `.bosun/version`. Until then the job
+     skips with a warning and sets no status.
+   - UC-M8-3 is open: record mode b on 20 merged PRs with `bosun review-ci <pr> --dry-run` and
+     add each as a fixture next to its mode-a verdict (`tests/fixtures/reviews/README.md`); the
+     `uc_m8_3` test lands with them. Then switch with an R-gov PR: `[review] mode = "ci"`.
+7. **Pending UC tests in CI (owner decision, #179).** Plan tasks allow `skip`, but CI never
+   passes the task's allow list to `gate-test-integrity`, so P2's pending UC tests cannot land.
+   Choose (a) `bosun test-integrity --pr` reads `allow` only from a source agents cannot write,
+   or (b) drop P2's pending-test step. M8 used (b) meanwhile.

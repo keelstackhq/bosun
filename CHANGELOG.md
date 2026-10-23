@@ -27,6 +27,10 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - The merge-lock follows `cd`, `git -C`, `--git-dir` and `--work-tree`; the label-lock reads label fields only.
 - Paging works through the Claude Code cloud proxy.
 - `risk.yml` and `verdict.yml` run the pinned bosun release instead of building main.
+- `bosun review-ci <pr>`: review mode (b). The review verdict comes from one Anthropic API call in CI, with no session (UC-M8-1); it fails closed on a diff it cannot see or a request over the cap, and does nothing unless `review.mode = "ci"`. `--dry-run` records a verdict and writes nothing.
+- A later review covers only the new commits, and only from an approved ancestor that is one of the PR's commits (UC-M8-2).
+- `core::agreement` and the recorded-review fixtures for comparing mode (a) with mode (b) (UC-M8-3 waits for 20 recordings).
+- risk-check flags a file with changed lines and no patch whatever its name.
 
 ## v0.1.0
 
