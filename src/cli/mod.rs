@@ -103,17 +103,14 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
-<<<<<<< HEAD
-    /// Open a kind/mainfix PR that reverts a merged PR.
-    Revert(RevertArgs),
-=======
     /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
     Fail(FailArgs),
->>>>>>> origin/main
+    /// Open a kind/mainfix PR that reverts a merged PR.
+    Revert(RevertArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 23] = [
+pub const COMMANDS: [&str; 24] = [
     "join",
     "claim",
     "heartbeat",
@@ -136,11 +133,8 @@ pub const COMMANDS: [&str; 23] = [
     "hook",
     "doctor",
     "budget",
-<<<<<<< HEAD
-    "revert",
-=======
     "fail",
->>>>>>> origin/main
+    "revert",
 ];
 
 impl Command {
@@ -173,11 +167,8 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
-<<<<<<< HEAD
-            Command::Revert(_) => "revert",
-=======
             Command::Fail(_) => "fail",
->>>>>>> origin/main
+            Command::Revert(_) => "revert",
         }
     }
 }
@@ -395,11 +386,6 @@ pub struct BudgetRecordArgs {
 }
 
 #[derive(Debug, Args)]
-<<<<<<< HEAD
-pub struct RevertArgs {
-    /// The merged PR to revert.
-    pub pr: u64,
-=======
 pub struct FailArgs {
     /// The task issue number.
     pub issue: u64,
@@ -412,5 +398,10 @@ pub struct FailArgs {
     /// The model tier in use (default: the newest escalation, else the build model).
     #[arg(long)]
     pub model: Option<String>,
->>>>>>> origin/main
+}
+
+#[derive(Debug, Args)]
+pub struct RevertArgs {
+    /// The merged PR to revert.
+    pub pr: u64,
 }
