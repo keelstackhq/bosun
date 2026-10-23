@@ -88,7 +88,7 @@ fn marker(id: &str) -> String {
     format!("<!-- bosun:plan {id} -->")
 }
 
-fn epic_item(body: &str) -> Option<String> {
+pub(crate) fn epic_item(body: &str) -> Option<String> {
     let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
     let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
     v["item"].as_str().map(str::to_string)

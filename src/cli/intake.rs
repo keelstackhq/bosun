@@ -54,7 +54,13 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
         .unwrap_or(first);
     let title = format!(
         "intake: {}",
-        title_text.chars().take(80).collect::<String>()
+        title_text
+            .chars()
+            .take(80)
+            .collect::<String>()
+            .replace('`', "\u{02cb}")
+            .replace('@', "@\u{200b}")
+            .replace("<!--", "<!-\u{200b}-")
     );
     let kind = "bosun:kind/plan";
     let source = format!("bosun:source/{}", a.source);

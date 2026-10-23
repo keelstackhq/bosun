@@ -27,16 +27,24 @@ impl Lease {
     }
 }
 
-/// The Slack thread ts of the newest lease record that carries one (`bosun spawn
-/// --slack-thread`); `None` when no lease on the issue came from a thread.
-pub fn thread_of(notes: &[Note]) -> Option<String> {
-    notes
-        .iter()
-        .rev()
-        .find_map(|n| match parse_record(&n.body) {
-            Some(Record::Lease { thread_ts, .. }) => thread_ts,
-            _ => None,
-        })
+/// The Slack thread ts (`bosun spawn --slack-thread`) of the live lease `session` holds on
+/// `issue`, with the id of the comment that carries it; `None` when it holds none or that lease
+/// came from no thread. Never another session's lease and never an expired one. The caller
+/// must check that the comment's author has write access before it trusts the ts.
+pub fn thread_of(
+    issue: u64,
+    session: &str,
+    now: Timestamp,
+    notes: &[Note],
+) -> Option<(String, u64)> {
+    let lease = leases_of(issue, notes)
+        .into_iter()
+        .find(|l| l.session == session && l.is_live(now))?;
+    let note = notes.iter().find(|n| n.id == lease.comment_id)?;
+    match parse_record(&note.body) {
+        Some(Record::Lease { thread_ts, .. }) => thread_ts.map(|t| (t, note.id)),
+        _ => None,
+    }
 }
 
 /// The newest lease per session on one issue, ended leases removed. Expired ones are kept

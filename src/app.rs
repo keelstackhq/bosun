@@ -173,6 +173,33 @@ pub fn notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
         .collect())
 }
 
+/// The comments of an issue written by users with admin or write access, oldest first. A
+/// record from anyone else (a read-only user, an outsider) is forged until proven otherwise.
+pub fn trusted_notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
+    let mut cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for c in gh.list_comments(number)? {
+        let trusted = match cache.get(&c.user) {
+            Some(t) => *t,
+            None => {
+                let perm = gh.permission(&c.user)?.unwrap_or_default();
+                // GitHub reports the maintain role as `write`.
+                let t = matches!(perm.as_str(), "admin" | "write");
+                cache.insert(c.user.clone(), t);
+                t
+            }
+        };
+        if trusted {
+            out.push(Note {
+                id: c.id,
+                body: c.body,
+                created_at: parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0)),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// The task metadata of an issue.
 pub fn task_meta(issue: &Issue) -> Option<TaskMeta> {
     parse_task_meta(issue.body_text())

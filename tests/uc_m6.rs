@@ -96,6 +96,7 @@ fn uc_m6_3() {
         "main",
         "[[owner]]\ngithub = \"ada\"\nslack = \"U0ADA1\"\n",
     );
+    fake.content(".bosun/bosun.toml", "main", "[slack]\nchannel = \"C1\"\n");
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("plans")).unwrap();
     std::fs::write(
