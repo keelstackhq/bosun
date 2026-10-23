@@ -229,6 +229,10 @@ overlap when a path of one matches a glob of the other, or two globs can match a
 Intake: intake is the only way that new work enters. `bosun intake` (from Slack, a lesson, a flake
 or a human) writes a plan amendment as a kind/plan task. Only a merged plan task makes its tasks
 ready. After an amendment merges, `bosun plan amend` imports the new work and closes what the plan dropped.
+`bosun intake "<text>" --source slack|lesson|flake|human [--item ID] [--title T] [--plan FILE]` opens one
+`kind/plan` issue (state ready, `bosun:source/<source>`, `bosun:area/<area>` of `--item`) that asks for the
+amendment of the plan file (default `plans/<project>.md`; a missing file or unknown item is exit 2). An open
+issue of the same source with the same title is returned instead (`created: false`).
 
 ## 5. Spawning, waves and limits
 
@@ -566,6 +570,7 @@ Main-health:
   conflict is exit 1: revert by hand or make a forward fix. `data.warning` flags a PR with more than
   one commit whose merge commit has one parent (a possible rebase merge: only the last commit is reverted).
 - Each main-red opens a lesson.
+- `bosun main-health --result R [--run-url U]` does this: `failure` opens the main-red issue (if none is open) and captures a `main-red` lesson; `success` comments and closes it; `timed_out` and `startup_failure` count as `failure`; any other result changes nothing. `success` closes every open main-red issue; two parallel failures keep the oldest issue. On every success or failure it re-judges every open PR (`main-open` status; a failed re-judge makes the exit 1), so queued PRs cannot auto-merge into a red main. Repeated main-red episodes hit the same open lesson (same signature, §6 dedupe). It checks no kill switch: it starts no work.
 
 Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for

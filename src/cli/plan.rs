@@ -36,7 +36,7 @@ fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
     plan::parse(&text).map_err(|errs| plan_errors(file, &errs))
 }
 
-fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
+pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
     let first = &errs[0];
     BosunError::error(
         format!("{} errors in {file}", errs.len()),
@@ -483,7 +483,7 @@ fn epic_plan(body: &str) -> Option<String> {
 
 /// Replace the task metadata comment of `body`, keeping every other byte.
 fn replace_task_meta(body: &str, meta: &TaskMeta) -> Option<String> {
-    let start = body.find("<!-- bosun:task")?;
+    let start = body.rfind(crate::core::meta::OPEN)?;
     let end = start + body[start..].find("-->")? + "-->".len();
     let json = serde_json::to_string(meta).expect("meta serializes");
     Some(format!(

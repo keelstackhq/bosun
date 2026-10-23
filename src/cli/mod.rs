@@ -10,6 +10,7 @@ pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
 pub mod init;
+pub mod intake;
 pub mod join;
 pub mod lesson;
 pub mod lesson_triage;
@@ -33,6 +34,7 @@ pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
+pub mod main_health;
 pub mod stop;
 pub mod test_integrity;
 
@@ -127,6 +129,10 @@ pub enum Command {
     Init(InitArgs),
     /// Open a kind/mainfix PR that reverts a merged PR.
     Revert(RevertArgs),
+    /// Open a kind/plan issue that asks for a plan amendment (the only way new work enters).
+    Intake(IntakeArgs),
+    /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
+    MainHealth(MainHealthArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -161,6 +167,8 @@ pub const COMMANDS: &[&str] = &[
     "main-triage",
     "init",
     "revert",
+    "intake",
+    "main-health",
 ];
 
 impl Command {
@@ -206,6 +214,8 @@ impl Command {
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
             Command::Revert(_) => "revert",
+            Command::Intake(_) => "intake",
+            Command::MainHealth(_) => "main-health",
         }
     }
 }
@@ -540,6 +550,24 @@ pub struct PlanImportArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct IntakeArgs {
+    /// What is wanted.
+    pub text: String,
+    /// Where the request came from.
+    #[arg(long, value_parser = ["slack", "lesson", "flake", "human"])]
+    pub source: String,
+    /// The plan item the request belongs to (sets the area label).
+    #[arg(long, value_name = "ID")]
+    pub item: Option<String>,
+    /// Issue title after `intake: ` (default: the first line of the text).
+    #[arg(long)]
+    pub title: Option<String>,
+    /// The plan file to amend (default plans/<project>.md).
+    #[arg(long, value_name = "FILE")]
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct FailArgs {
     /// The task issue number.
     pub issue: u64,
@@ -596,4 +624,14 @@ pub struct InitArgs {
 pub struct RevertArgs {
     /// The merged PR to revert.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct MainHealthArgs {
+    /// The CI conclusion: success, failure, cancelled, skipped, ...
+    #[arg(long)]
+    pub result: String,
+    /// The URL of the run, for the issue and the comment.
+    #[arg(long)]
+    pub run_url: Option<String>,
 }
