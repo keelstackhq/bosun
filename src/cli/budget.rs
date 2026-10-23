@@ -102,8 +102,9 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     // One lesson for "a task went over its cap" (the amounts and the task number do not enter
     // the signature: each task adds a hit). Only the record that blocks the task captures, so
     // later records on a blocked task add no hit; a task blocked for another reason first, or
-    // one that cannot move to blocked, gets no budget lesson. The spend is already recorded, so
-    // a failed capture must not fail the command: a retry would record the spend twice.
+    // one that cannot move to blocked, gets no budget lesson; two records racing on one task can
+    // both capture (one extra hit). The spend is already recorded, so a failed capture must not
+    // fail the command: a retry would record the spend twice.
     let lesson = if blocked && !was_blocked {
         match capture_lesson(
             gh,

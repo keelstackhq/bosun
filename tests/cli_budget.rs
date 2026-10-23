@@ -262,8 +262,9 @@ fn uc_m4_3_a_failed_lesson_capture_keeps_the_spend_and_exits_0() {
     let fake = FakeGithub::start();
     fake.issue(5, "task", &[BUILDING], "");
     let (_, _) = spend(&fake, 5, "20.0");
-    // In the next record the first label write (the blocked state) succeeds; from the lesson's
-    // label writes on, every write to /labels fails, so the capture fails after the block.
+    // In the next record the two label writes of the blocked state (ensure_label, add_labels)
+    // succeed; from the lesson's label writes on, every write to /labels fails, so the capture
+    // fails after the block.
     fake.after_requests("/labels", 1, |s| {
         s.fail_paths.push(("/labels".into(), 500));
     });
