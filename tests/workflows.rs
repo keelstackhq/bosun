@@ -295,7 +295,13 @@ fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
         triggers.contains("\n  pull_request_target:\n"),
         "{triggers}"
     );
-    for other in ["pull_request:", "issue_comment", "workflow_run", "push"] {
+    for other in [
+        "pull_request:",
+        "pull_request_review",
+        "issue_comment",
+        "workflow_run",
+        "push",
+    ] {
         assert!(
             !triggers.contains(other),
             "review.yml must not run on {other}"
@@ -319,14 +325,30 @@ fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
         "head_ref",
         "refs/pull",
         "merge_commit_sha",
+        "/head",
+        "git fetch",
     ] {
         assert!(!yaml.contains(bad), "review.yml mentions {bad}");
     }
-    // Same-repo PRs only: a fork must not spend the API budget.
-    assert!(
-        yaml.contains("github.event.pull_request.head.repo.full_name == github.repository"),
-        "{yaml}"
+    // Non-draft, same-repo PRs by the repo's own people: exactly these three conditions.
+    let cond = &yaml[yaml.find("    if: >-\n").unwrap()..yaml.find("    environment:").unwrap()];
+    let terms: Vec<&str> = cond
+        .lines()
+        .skip(1)
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .map(|l| l.trim().trim_end_matches(" &&"))
+        .collect();
+    assert_eq!(
+        terms,
+        [
+            "github.event.pull_request.draft == false",
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            "contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.pull_request.author_association)",
+        ],
+        "{cond}"
     );
+    // The key lives in an environment limited to main.
+    assert!(yaml.contains("\n    environment: review\n"), "{yaml}");
     assert_eq!(yaml.matches("permissions:").count(), 1);
     let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
     let granted: Vec<&str> = perms
@@ -359,7 +381,8 @@ fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
         .find(|s| s.contains("review-ci \"$PR\""))
         .expect("a script runs review-ci");
     let skip = &review[..review.find("fi\n").expect("an if block")];
-    assert!(skip.contains("review-ci --help"), "{review}");
+    assert!(review.contains("review-ci --help"), "{review}");
+    assert!(skip.contains("-eq 2"), "only exit 2 skips: {review}");
     assert!(skip.contains("::warning::"), "{review}");
     assert!(skip.contains("exit 0"), "{review}");
     for bad in ["statuses", "curl", "gh ", "verdict post", "verdict comment"] {

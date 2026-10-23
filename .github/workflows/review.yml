@@ -28,10 +28,15 @@ permissions:
 
 jobs:
   review:
-    # Same-repo PRs only: a fork PR would spend the API budget; it is reviewed in a session.
+    # Same-repo PRs by the repo's own people only: anyone else's PR would spend the API budget;
+    # it is reviewed in a session.
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association)
+    # Keep ANTHROPIC_API_KEY in this environment, limited to the main branch: a workflow on a
+    # pushed branch then cannot read it (pull_request_target runs with the base ref).
+    environment: review
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -83,8 +88,12 @@ jobs:
         # A pinned release without review-ci skips: it posts no status at all (never success),
         # so mode (a) stays in charge until a release with review-ci is pinned.
         run: |
-          if ! ./target/release/bosun review-ci --help >/dev/null 2>&1; then
+          rc=0
+          ./target/release/bosun review-ci --help >/dev/null 2>&1 || rc=$?
+          # Exit 2 is the usage error of an unknown command; anything else is a broken binary.
+          if [ "$rc" -eq 2 ]; then
             echo "::warning::the pinned bosun has no review-ci, so no review-verdict status is set; mode a reviews this PR"
             exit 0
           fi
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
           ./target/release/bosun review-ci "$PR"
