@@ -99,6 +99,8 @@ pub trait Github {
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>>;
     /// Like `compare_files`, with the comparison's `status` (`ahead` when base is an ancestor).
     fn compare(&self, base: &str, head: &str) -> Result<Compare>;
+    /// The shas of the pull request's commits (GitHub lists at most 250).
+    fn pull_commits(&self, number: u64) -> Result<Vec<String>>;
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
@@ -399,6 +401,16 @@ impl Github for LiveGithub {
 
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>> {
         Ok(self.compare(base, head)?.files)
+    }
+
+    fn pull_commits(&self, number: u64) -> Result<Vec<String>> {
+        let path = self.path(&format!("/pulls/{number}/commits?per_page=100"));
+        Ok(self
+            .http
+            .get_all(&path)?
+            .iter()
+            .filter_map(|c| c["sha"].as_str().map(String::from))
+            .collect())
     }
 
     fn compare(&self, base: &str, head: &str) -> Result<Compare> {

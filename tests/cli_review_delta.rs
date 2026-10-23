@@ -161,3 +161,20 @@ fn each_older_sha_is_asked_once_and_the_scan_is_capped() {
     assert_eq!(names(&v), ["a.rs", "b.rs"]);
     assert_eq!(asked("S04"), 0, "the scan stopped at the cap");
 }
+
+#[test]
+fn an_approved_ahead_sha_outside_the_pr_gives_a_full_review() {
+    // X was approved in a stacked PR and is an ancestor, but is not a commit of this PR
+    let fake = setup();
+    verdict_at(&fake, "X", "success");
+    set_head(&fake, "B");
+    fake.compare_file("X", "B", "b.rs", "@@ only after X");
+    fake.pull_commit_shas(42, &["B"]);
+    let v = pack(&fake);
+    assert!(v["data"]["since_sha"].is_null(), "{v}");
+    assert_eq!(names(&v), ["a.rs", "b.rs"]);
+    assert_eq!(v["data"]["delta_fallback"], "X is not a commit of this PR");
+    // the same sha is a delta once it is one of the PR's commits
+    fake.pull_commit_shas(42, &["X", "B"]);
+    assert_eq!(pack(&fake)["data"]["since_sha"], "X");
+}

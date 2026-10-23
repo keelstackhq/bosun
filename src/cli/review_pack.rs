@@ -15,6 +15,8 @@ use crate::output::{BosunError, CmdResult, Outcome};
 
 /// Distinct older heads the delta scan asks about before it gives up.
 const MAX_SCAN: usize = 20;
+/// GitHub lists at most this many commits of a PR.
+const MAX_PR_COMMITS: usize = 250;
 
 const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
 \"verdict\":\"approve\"|\"request-changes\",\"confidence\":0..1,\"findings\":[{\"severity\":\
@@ -61,26 +63,41 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     // behind or diverged sha is empty or misleading). The old sha can also be gone after a
     // force-push. Any problem means a full review, the safe direction.
     let files = match &since {
-        Some(s) => match gh.compare(s, &pull.head_sha) {
-            Ok(c) if c.status == "ahead" => c.files,
-            other => {
-                let why = match other {
-                    Ok(c) => format!(
-                        "{s} is not an ancestor of the head ({})",
-                        if c.status.is_empty() {
-                            "unknown"
-                        } else {
-                            &c.status
-                        }
-                    ),
-                    Err(e) => format!("cannot compare {s}...{}: {}", pull.head_sha, e.message),
-                };
-                eprintln!("bosun: full review instead of a delta: {why}");
-                delta_fallback = Some(why);
-                since = None;
-                gh.pull_files(n)?
+        Some(s) => {
+            let delta: Result<Vec<_>, String> = match gh.compare(s, &pull.head_sha) {
+                Ok(c) if c.status == "ahead" => {
+                    // An ancestor can still belong to another PR (a stack): it must be one of
+                    // this PR's commits. GitHub lists at most 250, so a full list proves nothing.
+                    let commits = gh.pull_commits(n)?;
+                    if commits.len() < MAX_PR_COMMITS && commits.contains(s) {
+                        Ok(c.files)
+                    } else {
+                        Err(format!("{s} is not a commit of this PR"))
+                    }
+                }
+                Ok(c) => Err(format!(
+                    "{s} is not an ancestor of the head ({})",
+                    if c.status.is_empty() {
+                        "unknown"
+                    } else {
+                        &c.status
+                    }
+                )),
+                Err(e) => Err(format!(
+                    "cannot compare {s}...{}: {}",
+                    pull.head_sha, e.message
+                )),
+            };
+            match delta {
+                Ok(f) => f,
+                Err(why) => {
+                    eprintln!("bosun: full review instead of a delta: {why}");
+                    delta_fallback = Some(why);
+                    since = None;
+                    gh.pull_files(n)?
+                }
             }
-        },
+        }
         None => gh.pull_files(n)?,
     };
     let names: Vec<String> = files.iter().map(|f| f.filename.clone()).collect();
