@@ -39,9 +39,11 @@ struct RawPackage {
 pub fn load(adapter: &str, stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
     match adapter {
         "cargo-metadata" => load_cargo(stack_dir),
+        // The generic adapter: the stack has no packages, so a per-package gate runs once.
+        "none" | "generic" => Ok(Vec::new()),
         other => Err(BosunError::error(
             format!("unknown packages adapter `{other}`"),
-            "set `packages` in the profile to a known adapter (`cargo-metadata`)",
+            "set `packages` in the profile to a known adapter (`cargo-metadata`, `none`)",
         )),
     }
 }
@@ -56,6 +58,7 @@ pub fn affected(
 ) -> Affected {
     match adapter {
         "cargo-metadata" => affected_cargo(stack_dir, changed, packages),
+        "none" | "generic" => Affected::All,
         _ => Affected::All,
     }
 }
@@ -213,6 +216,15 @@ mod tests {
         let e = load("nope", Path::new("/r")).unwrap_err();
         assert!(e.message.contains("nope"), "{}", e.message);
         assert!(!e.fix.is_empty());
+    }
+
+    #[test]
+    fn the_generic_adapter_has_no_packages_and_affects_everything() {
+        for name in ["none", "generic"] {
+            assert_eq!(load(name, Path::new("/r")).unwrap(), vec![]);
+            let files = vec!["a.py".to_string()];
+            assert_eq!(affected(name, Path::new("/r"), &files, &[]), Affected::All);
+        }
     }
 
     #[test]

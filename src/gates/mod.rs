@@ -84,7 +84,7 @@ fn missing_manifest<'a>(req: &Request, stack: &Stack, profile: &'a Profile) -> O
 }
 
 /// A stack path as a clean relative path; `.` and empty mean the repo root.
-fn stack_rel(path: &str) -> &str {
+pub(crate) fn stack_rel(path: &str) -> &str {
     let p = path.trim_start_matches("./").trim_end_matches('/');
     if p == "." { "" } else { p }
 }

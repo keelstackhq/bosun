@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::cli::IntegrityArgs;
 use crate::cli::gate::{repo_root, resolve_base_in};
+use crate::config::Config;
 use crate::gates::integrity::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
@@ -37,8 +38,10 @@ pub fn check(dir: Option<&Path>, base: Option<&str>) -> CmdResult {
     // Task 13+ reads them from the PR and the task metadata.
     let body = std::env::var("BOSUN_PR_BODY").unwrap_or_default();
     let allow = parse_allow(&std::env::var("BOSUN_INTEGRITY_ALLOW").unwrap_or_default());
+    let config = Config::load(&root)?;
     integrity::run(&Request {
         root: &root,
+        stacks: &config.stack,
         base: &base,
         body: &body,
         allow: &allow,

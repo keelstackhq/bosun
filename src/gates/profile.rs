@@ -30,6 +30,40 @@ pub struct Adapters {
     pub packages: String,
     pub pending: String,
     pub assertions: String,
+    /// Patterns for the generic `regex` adapters; absent in profiles with built-in adapters.
+    #[serde(default)]
+    pub regex: RegexKeys,
+}
+
+/// `[adapters.regex]`: what the `pending = "regex"` and `assertions = "regex"` adapters look for.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct RegexKeys {
+    /// Globs (relative to the stack directory) of the test files.
+    pub test_files: Vec<String>,
+    /// Regexes; a line that matches one is a skip marker.
+    pub pending: Vec<String>,
+    /// Regexes; every match counts as one assertion.
+    pub assertions: Vec<String>,
+}
+
+impl Adapters {
+    /// Does test-integrity use the generic regex adapters for this profile?
+    pub fn uses_regex(&self) -> bool {
+        self.pending == "regex" || self.assertions == "regex"
+    }
+
+    /// The generic adapter kind the profile relies on (`regex` or `generic`), if any. A stack
+    /// with one gets reduced integrity (spec section 7).
+    pub fn generic_kind(&self) -> Option<&'static str> {
+        if self.uses_regex() {
+            Some("regex")
+        } else if matches!(self.packages.as_str(), "none" | "generic") {
+            Some("generic")
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -219,6 +253,29 @@ mod tests {
         let p: Profile = toml::from_str(t).unwrap();
         assert_eq!(p.gates["deps"].requires.as_deref(), Some("Cargo.lock"));
         assert_eq!(p.gates["fmt"].requires, None);
+    }
+
+    #[test]
+    fn regex_keys_are_optional_and_name_the_generic_kind() {
+        let head = "[adapters]\npackages = \"cargo-metadata\"\n";
+        let gates = "[gates.x]\ncmd = [\"x\"]\n";
+        let old = format!("{head}pending = \"rust-ignore\"\nassertions = \"rust\"\n{gates}");
+        let p: Profile = toml::from_str(&old).unwrap();
+        assert_eq!(p.adapters.regex, RegexKeys::default());
+        assert_eq!(p.adapters.generic_kind(), None);
+        let new = format!(
+            "[adapters]\npackages = \"none\"\npending = \"regex\"\nassertions = \"regex\"\n\
+             [adapters.regex]\ntest_files = [\"**/test_*.py\"]\npending = [\"skip\"]\n{gates}"
+        );
+        let p: Profile = toml::from_str(&new).unwrap();
+        assert_eq!(p.adapters.regex.test_files, ["**/test_*.py"]);
+        assert!(p.adapters.regex.assertions.is_empty());
+        assert_eq!(p.adapters.generic_kind(), Some("regex"));
+        let none = format!(
+            "[adapters]\npackages = \"none\"\npending = \"x\"\nassertions = \"y\"\n{gates}"
+        );
+        let p: Profile = toml::from_str(&none).unwrap();
+        assert_eq!(p.adapters.generic_kind(), Some("generic"));
     }
 
     #[test]

@@ -388,6 +388,7 @@ profile has three adapters:
 
 - Custom profiles and generic regex adapters are allowed; `bosun status` shows "reduced
   integrity" when a generic adapter is used.
+- Generic adapters, for stacks bosun has no built-in adapters for (a repo profile `.bosun/profiles/<name>.toml`): `packages = "none"` (or `"generic"`) means the stack has no packages, so a per-package gate runs once over the whole stack with its `all` arguments; `pending = "regex"` and `assertions = "regex"` read `[adapters.regex]`: `test_files` (globs relative to the stack directory, required), `pending` (regexes; a matching line is a skip marker, and a `UC-…` id on it makes it a plan marker) and `assertions` (regexes; each match is one assertion). Profiles without `[adapters.regex]` are unchanged. There is no test counter, so `fewer-tests` does not fire for a regex stack. When any stack's profile uses a generic adapter, test-integrity still runs, and its data and `bosun status` say `"integrity": "reduced"` with `integrity_reason` (for example "stack py uses regex adapters"); otherwise `"integrity": "full"`.
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
