@@ -115,6 +115,16 @@ prompt has children post the record by hand); plan import (M2) must give plan ta
 - 2026-10-23 · Follow-up · `bosun pr --auto-merge` falls back to `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` only on the cloud proxy's GraphQL 403 (`auto_merge_route`); the merge-lock also blocks `gh api` to auto-merge routes · `tests/cli_pr.rs` +3 · PR #164
 - 2026-10-23 · M1 T4 · `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`: result record on the epic, lease-end `result`, registry leave `done`, works while halted; the spawn prompt uses it · D14 · `tests/cli_result.rs` 5/5 · PR #116
 - 2026-10-23 · M1 janitor · the janitor Routine prompt runs `bosun reap` (reports reaped, left, merged) and `bosun budget check` with only its `interrupt_session` calls · UC-M4-2 wiring · `tests/cli_doctor.rs` · PR #174 · M1 done: UC-M1-1..4 pass (`uc_m1_1_*`, `uc_m1_2_*`, `uc_m1_3_*`, `uc_m1_4_*`)
+- 2026-10-23 · M7 T1 · splice channel `channel/` (D16, spec §3): `splice.toml` (vars project, owner, bosun_version, rust_path, ts_path, own_ci), pieces core, rust, ts-pnpm and claude-md; consumer workflows in `bosun.yml` (aggregate `ci-ok`, `bosun-ok` with `own_ci`), risk, verdict, main-open, main-health (fork guard; with `own_ci` closes main-red only when bosun.yml and ci.yml are green on main), splice · `tests/channel.rs` 7/7, real splice 0.2.0 renders · PRs #107, #109, #131
+- 2026-10-23 · M7 risk · `.bosun/risk.toml`: `channel/**` is R-ci · PR #121
+- 2026-10-23 · M7 T2 · `bosun init --stack .. [--plan] [--owner] [--source] [--ref] [--bosun-version] [--no-pr]`: `splice channel add` on `bosun/init`, plan copy, one R-gov setup PR with owner steps, rollback on failure · UC-M7-1 rehearsed on an empty repo (all gates exit 0) · `tests/cli_init.rs` · PR #112
+- 2026-10-23 · M7 T2b · init beside a hull template: `own_ci` from an existing `ci-ok` job, `claude-md` unless a lock owns CLAUDE.md, excludes for existing seeds and `.claude/settings.json`, hoist.toml text merge (dry run, re-parse) · end-to-end on hull template-rust: no splice refusal, `splice check` no drift · `tests/cli_init.rs` · PR #157
+- 2026-10-23 · M7 T4 · `bosun doctor --remote`: `hoist check --json` with a deadline, drift folded into steps 3, 5 and 10 · `tests/cli_doctor_remote.rs` · PR #118
+- 2026-10-23 · Follow-up · required checks = defaults ∪ hoist.toml `[github] required_checks` (default branch); `BOSUN_REQUIRED_CHECKS` replaces all; doctor finds `ci-ok` in any workflow (`core::checks`) · `tests/cli_pr.rs`, `tests/cli_doctor.rs` · PR #158
+- 2026-10-23 · M7 T3 1a · gate runner keys `{packages}` and `requires` (head and base), packages adapter dispatch · `tests/cli_gate.rs` · PR #167
+- 2026-10-23 · M7 T3 1b · `profiles/ts-pnpm.toml` and the `pnpm-workspace` packages adapter (`--filter ...pkg`, `-r --include-workspace-root`) · UC-M7-2 · `tests/cli_gate_ts.rs` · PR #122
+- 2026-10-23 · M7 T3 2 · test-integrity adapters `ts-skip` and `ts` (lexer-aware: strings, comments, regex literals, template literals) · `tests/cli_integrity_ts.rs` · PR #123
+- 2026-10-23 · M7 T3 3 · generic `regex` adapters (both sides or neither, non-empty patterns), reduced integrity reported, one kit per stack (innermost wins), closed adapter names · UC-M7-3, UC-M7-5 · `tests/uc_m7.rs` · PR #168 · M7 done: UC-M7-1..5
 
 ## Blocked
 
@@ -145,3 +155,12 @@ Human-only items, in order. Each has the exact action.
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
    check run) and that source required in the `main` ruleset. Until then it is an accepted
    residual: such a PR is R-ci, so it needs an owner's look anyway.
+6. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one
+   commit and the Claude GitHub App; in a session with splice and bosun, `bosun init --stack
+   rust --owner <login> [--plan plan.md]`; review and merge the setup PR by hand (its base has
+   no bosun workflows, so risk-check and review-verdict cannot post: a one-time bootstrap);
+   `hoist apply --area github --yes`; `gh label create bosun:halt --color B60205`; the secret
+   `SPLICE_BOT_TOKEN`; check `governance/owners.toml` and `.github/CODEOWNERS`; paste
+   `docs/setup-script.sh` into the cloud environment; create the Routines from `bosun doctor`.
+   In a hull template-rust repo, the two bosun hooks come from hull's `.claude/settings.json`
+   (hull#22); until then init lists them as an owner step.

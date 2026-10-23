@@ -16,6 +16,13 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun result <epic> --outcome .. [--pr N]`: a child posts its result, ends its epic lease and leaves the registry; the spawn prompt uses it.
 - `bosun pr --auto-merge` works in Claude Code cloud sessions: it falls back to the CCR auto-merge route when GraphQL is refused; the merge-lock also blocks `gh api` auto-merge calls.
 - The janitor Routine prompt (`bosun doctor`) runs `bosun budget check` and makes its `interrupt_session` calls.
+- The splice channel `gh:keelstackhq/bosun//channel` (D16): pieces `core` (governance seeds, the `bosun`, `risk`, `verdict`, `main-open`, `main-health` and `splice` workflows, the AGENTS.md and REVIEW.md sections), `rust`, `ts-pnpm` and the optional `claude-md`. The gates run in `.github/workflows/bosun.yml` (aggregate `ci-ok`, or `bosun-ok` beside a repo's own ci.yml); consumer workflows run the release pinned in `.bosun/version`, never PR code.
+- `bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]`: adds the channel on branch `bosun/init` and opens one R-gov setup PR with the owner steps. Beside a hull template it sets `own_ci`, skips `claude-md` when the template owns CLAUDE.md, excludes existing seeds and `.claude/settings.json`, and merges the required checks into an existing hoist.toml.
+- Gate profiles: `manifest` (a stack whose manifest is missing at the head and the base is skipped, so an empty repo's setup PR is green), `requires`, the `{packages}` placeholder and a closed set of packages adapters (`cargo-metadata`, `pnpm-workspace`, `none`, `generic`).
+- The `ts-pnpm` profile (root `package.json` scripts, `pnpm --filter`), the `ts-skip` and `ts` test-integrity adapters, and generic `regex` adapters for any stack, reported as reduced integrity; mixed stacks get one kit per stack.
+- `bosun pr --auto-merge` and `bosun doctor` read the required checks as the defaults plus hoist.toml `[github] required_checks` from the default branch; doctor finds `ci-ok` in any workflow.
+- `bosun doctor --remote` runs `hoist check` and folds its drift into steps 3, 5 and 10.
+- `.bosun/risk.toml`: `channel/**` is R-ci.
 
 ## v0.1.0
 
