@@ -144,3 +144,82 @@ fn model_never_goes_below_the_newest_escalation() {
     assert_eq!(v["data"]["escalate"]["from"], "sonnet");
     assert_eq!(v["data"]["escalate"]["to"], "opus");
 }
+
+fn created_issues(fake: &FakeGithub) -> usize {
+    fake.requests()
+        .iter()
+        .filter(|r| r.method == "POST" && r.path.ends_with("/issues"))
+        .count()
+}
+
+#[test]
+fn a_stop_opens_a_lesson_and_the_same_signature_on_another_task_hits_it() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    building(&fake, 6);
+    for _ in 0..2 {
+        fail(&fake, 5, "E0308 in src/x.rs", &[]);
+    }
+    let (_, v) = fail(&fake, 5, "E0308 in src/x.rs", &[]);
+    assert_eq!(v["data"]["lesson"]["created"], true, "{v}");
+    let lesson = v["data"]["lesson"]["issue"].as_u64().unwrap();
+    assert!(fake.labels_of(lesson).contains(&"bosun:lesson".to_string()));
+    assert_eq!(created_issues(&fake), 1);
+    for _ in 0..2 {
+        fail(&fake, 6, "E0308 in src/x.rs", &[]);
+    }
+    let (code, v) = fail(&fake, 6, "E0308 in src/x.rs", &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["lesson"]["created"], false);
+    assert_eq!(v["data"]["lesson"]["issue"], lesson);
+    assert_eq!(v["data"]["lesson"]["hits"], 1);
+    assert_eq!(created_issues(&fake), 1);
+}
+
+#[test]
+fn the_needs_human_path_also_captures_a_lesson() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    fake.comment(
+        5,
+        r#"{"bosun":"escalate","session":"s","from":"sonnet","to":"opus","reason":"same-failure"}"#,
+    );
+    let (code, v) = fail(&fake, 5, "a", &["--changed-lines", "0"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["lesson"]["created"], true, "{v}");
+    assert_eq!(created_issues(&fake), 1);
+}
+
+#[test]
+fn a_failed_capture_does_not_hide_the_stop() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    // The kill switch lists `/issues` once; every later list (the lesson lookup) fails.
+    fake.after_requests("/issues", 1, |s| {
+        s.fail_paths.push(("/issues".into(), 500));
+    });
+    let (code, v) = fail(&fake, 5, "a", &["--changed-lines", "0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["state"], "blocked");
+    assert!(v["data"]["lesson"].is_null());
+    assert!(!v["data"]["lesson_error"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn a_long_signature_gives_a_short_lesson_title() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    let sig = "x".repeat(400);
+    fail(&fake, 5, &sig, &["--changed-lines", "0"]);
+    let titles: Vec<String> = fake
+        .state
+        .lock()
+        .unwrap()
+        .issues
+        .iter()
+        .filter(|i| i.labels.iter().any(|l| l == "bosun:lesson"))
+        .map(|i| i.title.clone())
+        .collect();
+    assert_eq!(titles.len(), 1);
+    assert!(titles[0].chars().count() <= 200, "{}", titles[0].len());
+}

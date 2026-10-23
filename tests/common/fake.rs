@@ -215,6 +215,17 @@ impl FakeGithub {
         p.unwrap_or_else(|| panic!("no pull {number}"))[key] = value;
     }
 
+    /// What GitHub does on an auto-merge: the pull closes as merged and the issue it closes
+    /// (`Closes #N`) closes too.
+    pub fn merge_pull(&self, number: u64, closes_issue: u64) {
+        self.pull_set(number, "state", json!("closed"));
+        self.pull_set(number, "merged", json!(true));
+        let mut s = self.state.lock().unwrap();
+        if let Some(i) = s.issues.iter_mut().find(|i| i.number == closes_issue) {
+            i.state = "closed".into();
+        }
+    }
+
     pub fn pull_file(
         &self,
         number: u64,
