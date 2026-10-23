@@ -681,6 +681,8 @@ profile and adapters; generic regex adapters; mixed stacks; bosun doctor --remot
 - UC-M7-4: a new channel version reaches a consumer as one R-gov PR from the splice update bot.
 - UC-M7-5: a generic adapter shows "reduced integrity" in bosun status.
 
+`bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--source SRC] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]` runs `splice channel add` for the bosun channel on branch `bosun/init` (ref `v<bosun version>` by default; a non-release ref also passes `bosun_version`), keeps an existing `.claude/settings.json` or `splice.yml` (`--exclude`), commits, pushes and opens one R-gov setup PR whose body lists the owner steps. It skips the kill switch (a fresh repo has no labels); `--no-pr` stops after the commit and needs no token.
+
 M8 Review mode (b). Tasks: review as a CI check; delta review; comparison of mode (a) and mode (b)
 verdicts on the same PRs. Done when:
 - UC-M8-1: with review.mode = "ci", the review-verdict check runs with no session.

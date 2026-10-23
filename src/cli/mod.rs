@@ -9,6 +9,7 @@ pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
+pub mod init;
 pub mod join;
 pub mod lesson;
 pub mod msg;
@@ -101,10 +102,12 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// Set up this repo for bosun: add the splice channel and open the setup PR.
+    Init(InitArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 22] = [
+pub const COMMANDS: [&str; 23] = [
     "join",
     "claim",
     "heartbeat",
@@ -127,6 +130,7 @@ pub const COMMANDS: [&str; 22] = [
     "hook",
     "doctor",
     "budget",
+    "init",
 ];
 
 impl Command {
@@ -159,6 +163,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Init(_) => "init",
         }
     }
 }
@@ -373,4 +378,29 @@ pub struct BudgetRecordArgs {
     pub turns: Option<u64>,
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// A stack to set up (repeatable for a mixed repo).
+    #[arg(long = "stack", required = true, value_parser = ["rust", "ts-pnpm"])]
+    pub stack: Vec<String>,
+    /// A plan file to copy to plans/.
+    #[arg(long, value_name = "FILE")]
+    pub plan: Option<PathBuf>,
+    /// The owner's GitHub login, seeded into governance/owners.toml.
+    #[arg(long, value_name = "LOGIN")]
+    pub owner: Option<String>,
+    /// The splice source of the channel.
+    #[arg(long, default_value = "gh:keelstackhq/bosun//channel")]
+    pub source: String,
+    /// The channel ref (default: v<this version>).
+    #[arg(long = "ref", value_name = "REF")]
+    pub git_ref: Option<String>,
+    /// Pin .bosun/version to this exact X.Y.Z.
+    #[arg(long, value_name = "X.Y.Z")]
+    pub bosun_version: Option<String>,
+    /// Commit on bosun/init but do not push or open a PR.
+    #[arg(long)]
+    pub no_pr: bool,
 }
