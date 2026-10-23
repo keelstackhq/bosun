@@ -176,6 +176,9 @@ Stop rules:
   applies these rules. A stop sets `blocked` and posts an `escalate` record (`from`, `to`,
   `reason`); an escalation restarts the count. With opus used up it sets `needs-human` (exit 5).
   The signature is in `data` for the lessons.
+- Each stop (both paths) also captures a lesson of kind `stop-rule` from the rule and the
+  signature; the same stop on another task hits the same lesson. `data.lesson` is `{issue,
+  created, hits}`, or null with `lesson_error` when capture fails (the stop still stands).
 - Each stop rule opens or hits a lesson.
 - When main is red, feature work pauses; only mainfix tasks continue.
 
