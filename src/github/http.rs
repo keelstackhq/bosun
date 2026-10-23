@@ -161,15 +161,18 @@ impl Http {
             }
             next = match &r.link_next {
                 // Only follow links that stay on the configured API host.
-                Some(url) => Some(same_host_path(&self.base, url).ok_or_else(|| {
-                    BosunError::error(
-                        format!(
-                            "GitHub GET {}: next page points to another host",
-                            bare(&path)
-                        ),
-                        "retry; if it persists check https://www.githubstatus.com",
-                    )
-                })?),
+                Some(url) => Some(by_name(
+                    &path,
+                    &same_host_path(&self.base, url).ok_or_else(|| {
+                        BosunError::error(
+                            format!(
+                                "GitHub GET {}: next page points to another host",
+                                bare(&path)
+                            ),
+                            "retry; if it persists check https://www.githubstatus.com",
+                        )
+                    })?,
+                )),
                 None => None,
             };
         }
@@ -364,6 +367,20 @@ fn bare(path: &str) -> &str {
     path.split('?').next().unwrap_or(path)
 }
 
+/// GitHub's next-page links name the repo by id (`/repositories/<id>/...`), which some
+/// proxies refuse (the Claude Code cloud proxy answers 403). Keep the `/repos/<owner>/<repo>`
+/// prefix of the page that gave the link.
+fn by_name(prev: &str, next: &str) -> String {
+    let rest = next.strip_prefix("/repositories/").and_then(|r| {
+        let (id, rest) = r.split_once('/')?;
+        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(rest)
+    });
+    match (prev.splitn(5, '/').collect::<Vec<_>>().as_slice(), rest) {
+        (["", "repos", owner, repo, ..], Some(rest)) => format!("/repos/{owner}/{repo}/{rest}"),
+        _ => next.to_string(),
+    }
+}
+
 /// The `rel="next"` target of a `Link` header.
 /// `url` without `base`, when `base` ends at a path, query or the end of the URL (so
 /// `https://api.github.com.evil.com/x` is not on `https://api.github.com`).
@@ -394,6 +411,20 @@ mod tests {
     fn enc_escapes_label_characters() {
         assert_eq!(enc("bosun:state/ready"), "bosun%3Astate%2Fready");
         assert_eq!(enc("a b-c_d.e~"), "a%20b-c_d.e~");
+    }
+
+    #[test]
+    fn numeric_repository_links_keep_the_owner_repo_path() {
+        let first = "/repos/o/r/issues?state=all&per_page=100";
+        let next = "/repositories/1429812821/issues?state=all&per_page=100&page=2";
+        assert_eq!(
+            by_name(first, next),
+            "/repos/o/r/issues?state=all&per_page=100&page=2"
+        );
+        // Other links stay as they are.
+        assert_eq!(by_name(first, "/repos/o/r/x?page=2"), "/repos/o/r/x?page=2");
+        assert_eq!(by_name("/user/repos", "/repositories/1"), "/repositories/1");
+        assert_eq!(by_name(first, "/repositories/x1/a"), "/repositories/x1/a");
     }
 
     #[test]
