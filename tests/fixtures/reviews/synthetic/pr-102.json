@@ -1,0 +1,38 @@
+{
+ "pr": 102,
+ "head_sha": "s102",
+ "a": {
+  "pr": 102,
+  "head_sha": "s102",
+  "verdict": "request-changes",
+  "confidence": 0.9,
+  "findings": [
+   {
+    "severity": "blocker",
+    "file": "src/a.rs",
+    "line": 3,
+    "claim": "unwrap on user input",
+    "evidence": "let x = s.parse().unwrap();"
+   }
+  ],
+  "lessons_hit": [],
+  "escalate_risk": false
+ },
+ "b": {
+  "pr": 102,
+  "head_sha": "s102",
+  "verdict": "request-changes",
+  "confidence": 0.8,
+  "findings": [
+   {
+    "severity": "blocker",
+    "file": "src/a.rs",
+    "line": 3,
+    "claim": "unwrap on user input",
+    "evidence": "let x = s.parse().unwrap();"
+   }
+  ],
+  "lessons_hit": [],
+  "escalate_risk": false
+ }
+}

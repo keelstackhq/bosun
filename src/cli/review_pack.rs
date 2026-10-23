@@ -26,11 +26,12 @@ const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let app = App::load(dir)?;
-    Ok(Outcome::data(build(app.gh.as_ref(), args.pr)?))
+    Ok(Outcome::data(build(app.gh.as_ref(), args.pr, false)?))
 }
 
-/// The pack of PR `n` (also the input of `bosun review-ci`).
-pub(crate) fn build(gh: &dyn Github, n: u64) -> Result<Value, BosunError> {
+/// The pack of PR `n` (also the input of `bosun review-ci`). With `full` there is no delta
+/// scan: `since_sha` and `delta_fallback` are null and the files are all of the PR's.
+pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunError> {
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
             format!("PR #{n} does not exist"),
@@ -44,7 +45,8 @@ pub(crate) fn build(gh: &dyn Github, n: u64) -> Result<Value, BosunError> {
     let mut since = None;
     let mut delta_fallback = None;
     let mut seen: HashSet<String> = HashSet::new();
-    for c in notes(gh, n)?.iter().rev() {
+    let records = if full { vec![] } else { notes(gh, n)? };
+    for c in records.iter().rev() {
         if let Some(Record::Verdict { head_sha, .. }) = parse_record(&c.body)
             && head_sha != pull.head_sha
             && seen.insert(head_sha.clone())
