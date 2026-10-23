@@ -256,11 +256,15 @@ fn release_workflow_is_gated_so_a_merge_publishes_nothing() {
     }
     let publish = job(&text, "publish");
     assert!(publish.contains("pending == 'true'") && publish.contains("environment: release"));
-    // A manual run from a branch never publishes, even before the environment has a policy.
-    assert!(
-        publish.contains("github.ref == 'refs/heads/main'"),
-        "publish runs only on main:\n{publish}"
-    );
+    // A manual run from a branch never publishes or opens a release PR, even before the
+    // environment has a policy.
+    for name in ["publish", "prepare"] {
+        let j = job(&text, name);
+        assert!(
+            j.contains("github.ref == 'refs/heads/main'"),
+            "{name} runs only on main:\n{j}"
+        );
+    }
     let build = job(&text, "build");
     assert!(build.contains("workflow_dispatch") && build.contains("enabled == 'true'"));
     // Decision 3: hoist from npm, exact version, in both writing jobs; GH_TOKEN never meets cargo.

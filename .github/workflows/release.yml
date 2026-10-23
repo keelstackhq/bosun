@@ -186,7 +186,8 @@ jobs:
 
   prepare:
     needs: [detect, publish]
-    if: ${{ !cancelled() && needs.detect.outputs.enabled == 'true' && (needs.detect.outputs.pending == 'false' || needs.publish.result == 'success') }}
+    # Only from main, like publish: the release PR is computed from main's version.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.detect.outputs.enabled == 'true' && (needs.detect.outputs.pending == 'false' || needs.publish.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

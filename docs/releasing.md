@@ -21,7 +21,7 @@ These files define the release: `hoist.toml`, `npm/bosun/**`, `npm/bosun-*/packa
 | Event | Variable unset | Variable `enabled` |
 | ----- | -------------- | ------------------ |
 | push to `main` | `detect` only | `detect`, then `build`, `publish` and `prepare` when a release is pending |
-| `workflow_dispatch` | `detect` and `build` (dry run: 5 targets, `bosun --version` smoke test, static check of the musl binaries; nothing is published) | on `main` as push, plus the dry-run checks; on another branch the same as unset (`publish` runs only on `main`) |
+| `workflow_dispatch` | `detect` and `build` (dry run: 5 targets, `bosun --version` smoke test, static check of the musl binaries; nothing is published) | on `main` as push, plus the dry-run checks; on another branch the same as unset (`publish` and `prepare` run only on `main`) |
 
 So a merge to `main` never tags, releases or publishes until the owner sets the variable.
 
