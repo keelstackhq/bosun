@@ -135,3 +135,46 @@ fn wave_plan_under_process_red_runs_mainfix_epics_and_only_process_fix_tasks() {
         "process is red (#99): only process-fix tasks run"
     );
 }
+
+fn in_flight_feature(fake: &FakeGithub) {
+    fake.issue(10, "Epic", &["bosun:state/claimed"], "");
+    let body = task("feature").replace(r#""T1""#, r#""T0""#);
+    fake.issue(11, "running", &["bosun:state/building"], &body);
+    fake.comment(11, &common::lease_note("other", LATER, "src/a.rs"));
+    red(fake);
+}
+
+#[test]
+fn process_fix_tasks_respect_max_parallel_of_in_flight_work() {
+    let fake = FakeGithub::start();
+    in_flight_feature(&fake);
+    let body = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/b.rs"],"kind":"process-fix"} -->"#;
+    fake.issue(12, "process fix", &["bosun:state/ready"], body);
+    let dir = std::env::temp_dir().join(format!("bosun-pr-wave-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join(".bosun")).unwrap();
+    std::fs::write(
+        dir.join(".bosun/limits.toml"),
+        "[waves]\nmax_parallel = 1\n",
+    )
+    .unwrap();
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(&dir)
+        .args(["wave", "plan", "10"])
+        .output()
+        .unwrap();
+    let v = common::one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert!(v["data"]["run"].as_array().unwrap().is_empty(), "{v}");
+    let waiting = v["data"]["waiting"].to_string();
+    assert!(waiting.contains("waves.max_parallel is 1"), "{waiting}");
+}
+
+#[test]
+fn wave_plan_stays_halted_when_no_process_fix_task_is_ready() {
+    let fake = FakeGithub::start();
+    in_flight_feature(&fake);
+    let (code, v) = run(&fake, "session_a", NOW, &["wave", "plan", "10"]);
+    assert_eq!(code, 4, "{v}");
+}

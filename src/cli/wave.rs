@@ -35,7 +35,9 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     // Process-red under a feature epic: only its process-fix tasks may run.
     let only_fix = process_red(gh)?
         .filter(|_| !fixing("bosun:kind/mainfix") && !fixing("bosun:kind/process-fix"));
+    // Ready process-fix tasks; active tasks stay in the plan so they count against the cap.
     let mut fix_tasks: Vec<u64> = Vec::new();
+    let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -47,7 +49,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         if issue.state == "closed" || state == Some(State::Merged) {
             merged.push(plan_id);
         } else if meta.epic == Some(*epic) {
-            if meta.kind == "process-fix" {
+            if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
@@ -74,7 +76,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     }
     let infos: Vec<TaskInfo> = tasks
         .iter()
-        .filter(|t| only_fix.is_none() || fix_tasks.contains(&t.0.issue))
+        .filter(|t| only_fix.is_none() || fix_tasks.contains(&t.0.issue) || active(t))
         .map(|t| t.0.clone())
         .collect();
     let mut leased = Vec::new();
@@ -100,7 +102,10 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         .map(|(n, reason)| json!({"issue": n, "reason": reason}))
         .collect();
     if let Some(red) = only_fix {
-        for (info, _, _) in tasks.iter().filter(|t| !fix_tasks.contains(&t.0.issue)) {
+        for (info, _, _) in tasks
+            .iter()
+            .filter(|t| !fix_tasks.contains(&t.0.issue) && !active(t))
+        {
             let reason = format!("process is red (#{red}): only process-fix tasks run");
             waiting.push(json!({"issue": info.issue, "reason": reason}));
         }
