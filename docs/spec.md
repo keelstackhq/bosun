@@ -251,7 +251,7 @@ and never uses send_later or send_message.
 
 `bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
-`spawn` and `budget record` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
+`spawn`, `claim`, `budget record`, `wave plan` and `status` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
 
 A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in check 6 is exit 3.
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
@@ -545,7 +545,7 @@ Spend guard:
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
 - Only the owner raises a budget (an R-gov change of limits.toml).
-- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with its percent of `daily_usd`, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
+- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with `daily_usd` (from the default branch, as in §5) and its percent of it, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
 
 ## 10. Slack stream (Claude Tag)
 
