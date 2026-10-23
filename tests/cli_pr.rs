@@ -246,7 +246,7 @@ fn pr_setup(hoist: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
     green_four(&fake);
     let dir = repo("claude/t7");
     if let Some(h) = hoist {
-        std::fs::write(dir.path().join("hoist.toml"), h).unwrap();
+        fake.content("hoist.toml", "main", h);
     }
     (fake, dir)
 }
@@ -289,9 +289,20 @@ fn a_missing_or_invalid_hoist_toml_gives_the_defaults() {
         None,
         Some("not = [toml"),
         Some("[github]\nrequired_checks = []\n"),
+        Some("[github]\nrequired_checks = [\"ci-ok\"]\n"),
     ] {
         let (fake, dir) = pr_setup(hoist);
         let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
         assert_eq!(code, 0, "{hoist:?} {v}");
     }
+}
+
+#[test]
+fn a_pr_cannot_change_the_checks_that_judge_it() {
+    // The PR branch's working tree lists bosun-ok (pending); the default branch does not.
+    let (fake, dir) = pr_setup(None);
+    fake.status("sha20", "bosun-ok", "pending", "");
+    std::fs::write(dir.path().join("hoist.toml"), HULL).unwrap();
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
 }

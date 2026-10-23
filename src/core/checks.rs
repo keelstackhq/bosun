@@ -17,14 +17,70 @@ pub fn hoist_required(hoist_toml: &str) -> Option<Vec<String>> {
     (!list.is_empty()).then_some(list)
 }
 
-/// The env value (comma-separated) if non-empty, else `hoist.toml`, else the defaults.
+/// The env value (comma-separated, empty entries dropped) is the explicit full override. Else the
+/// defaults, then the extra entries of `hoist.toml`: a repo can add checks, never drop defaults.
 pub fn required_checks(env: Option<&str>, hoist_toml: Option<&str>) -> Vec<String> {
-    if let Some(v) = env.filter(|v| !v.trim().is_empty()) {
-        return v.split(',').map(|s| s.trim().to_string()).collect();
+    let from_env: Vec<String> = env
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !from_env.is_empty() {
+        return from_env;
     }
-    hoist_toml
-        .and_then(hoist_required)
-        .unwrap_or_else(|| DEFAULT_REQUIRED.iter().map(|s| s.to_string()).collect())
+    let mut out: Vec<String> = DEFAULT_REQUIRED.iter().map(|s| s.to_string()).collect();
+    for c in hoist_toml.and_then(hoist_required).unwrap_or_default() {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn unquote(s: &str) -> &str {
+    let s = s.split(" #").next().unwrap_or(s).trim();
+    s.trim_matches(|c| c == '"' || c == '\'')
+}
+
+/// The check contexts of a workflow: for each key directly under the top-level `jobs:`, its
+/// `name:` if it has one, else the key. Not a YAML parser; it reads the indentation.
+pub fn workflow_checks(yaml: &str) -> Vec<String> {
+    let mut jobs: Vec<(String, Option<String>)> = Vec::new();
+    let (mut in_jobs, mut job_indent, mut name_indent) = (false, None::<usize>, None::<usize>);
+    for line in yaml.lines() {
+        let body = line.trim_start();
+        if body.is_empty() || body.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - body.len();
+        if indent == 0 {
+            in_jobs = unquote(body.trim_end()) == "jobs:" || body.starts_with("jobs: #");
+            job_indent = None;
+            continue;
+        }
+        if !in_jobs {
+            continue;
+        }
+        let ji = *job_indent.get_or_insert(indent);
+        if indent == ji {
+            let key = body.split(" #").next().unwrap_or(body).trim_end();
+            if let Some(k) = key.strip_suffix(':') {
+                jobs.push((unquote(k).to_string(), None));
+                name_indent = None;
+            }
+        } else if indent > ji && !body.starts_with('-') {
+            let ni = *name_indent.get_or_insert(indent);
+            if indent == ni
+                && let Some(v) = body.strip_prefix("name:")
+                && let Some(last) = jobs.last_mut()
+                && last.1.is_none()
+            {
+                last.1 = Some(unquote(v).to_string());
+            }
+        }
+    }
+    jobs.into_iter().map(|(k, n)| n.unwrap_or(k)).collect()
 }
 
 #[cfg(test)]
@@ -34,9 +90,13 @@ mod tests {
     #[test]
     fn precedence_env_then_hoist_then_defaults() {
         let h = "[github]\nrequired_checks = [\"a\", \"b\"]\n";
-        assert_eq!(required_checks(Some("x, y"), Some(h)), ["x", "y"]);
-        assert_eq!(required_checks(Some(" "), Some(h)), ["a", "b"]);
-        assert_eq!(required_checks(None, Some(h)), ["a", "b"]);
+        assert_eq!(required_checks(Some("x, ,y,"), Some(h)), ["x", "y"]);
+        assert_eq!(required_checks(Some(" , "), None), DEFAULT_REQUIRED);
+        let extra = required_checks(None, Some(h));
+        assert_eq!(extra[..4], DEFAULT_REQUIRED);
+        assert_eq!(extra[4..], ["a", "b"]);
+        let subset = "[github]\nrequired_checks = [\"ci-ok\"]\n";
+        assert_eq!(required_checks(None, Some(subset)), DEFAULT_REQUIRED);
         for bad in [
             "[github]\nrequired_checks = []\n",
             "[github]\nrequired_checks = [1]\n",
@@ -46,5 +106,11 @@ mod tests {
             assert_eq!(required_checks(None, Some(bad)).len(), 4, "{bad}");
         }
         assert_eq!(required_checks(None, None).len(), 4);
+    }
+
+    #[test]
+    fn workflow_checks_reads_only_top_level_jobs() {
+        let y = "on:\n  push:\n    branches: [main]\nname: x\njobs: # all\n  ci-ok: # agg\n    runs-on: x\n    steps:\n      - name: not a job name\n  \"quoted\":\n    name: Pretty\n    runs-on: x\n  other:\n    steps:\n      - run: a\nenv:\n  late:\n    x: 1\n";
+        assert_eq!(workflow_checks(y), ["ci-ok", "Pretty", "other"]);
     }
 }

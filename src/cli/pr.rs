@@ -14,15 +14,16 @@ use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// The default checks that must be green before auto-merge (spec D15, D32). `required` lets
-/// `BOSUN_REQUIRED_CHECKS`, then `hoist.toml` `[github] required_checks`, override them.
+/// `BOSUN_REQUIRED_CHECKS` replace them, and `hoist.toml` `[github] required_checks` add to them.
 pub const REQUIRED: [&str; 4] = checks::DEFAULT_REQUIRED;
 
-fn required(root: &Path) -> Vec<String> {
-    let hoist = std::fs::read_to_string(root.join("hoist.toml")).ok();
-    checks::required_checks(
+/// Read from the default branch, so a PR cannot change the checks that judge it.
+fn required(gh: &dyn Github, base: &str) -> Result<Vec<String>, BosunError> {
+    let hoist = gh.file_at("hoist.toml", base)?;
+    Ok(checks::required_checks(
         std::env::var("BOSUN_REQUIRED_CHECKS").ok().as_deref(),
         hoist.as_deref(),
-    )
+    ))
 }
 
 fn current_branch(dir: &Path) -> Result<String, BosunError> {
@@ -43,11 +44,11 @@ fn current_branch(dir: &Path) -> Result<String, BosunError> {
 }
 
 /// `(context, state)` of every required check that is not green on `sha`.
-fn not_green(gh: &dyn Github, root: &Path, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
     let mut bad = Vec::new();
-    for ctx in required(root) {
+    for ctx in required(gh, base)? {
         let status = statuses.iter().find(|s| s.context == ctx);
         let run = runs.iter().find(|r| r.name == ctx);
         let green = status.is_some_and(|s| s.state == "success")
@@ -108,7 +109,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
             ));
         }
-        let bad = not_green(gh, &app.ctx.dir, &pull.head_sha)?;
+        let bad = not_green(gh, &base, &pull.head_sha)?;
         if !bad.is_empty() {
             let list: Vec<String> = bad.iter().map(|(c, s)| format!("{c}: {s}")).collect();
             return Err(BosunError::error(

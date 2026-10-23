@@ -5,11 +5,11 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
+use crate::core::checks;
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
-const REQUIRED_CHECKS: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
 const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token (docs/PROGRESS.md Blocked)";
 
 fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &str) -> Value {
@@ -32,23 +32,19 @@ fn routines() -> Value {
     ])
 }
 
-/// Top-level job names (two-space-indented `name:` lines) of every `.github/workflows/*.yml`.
+/// Check contexts of every `.github/workflows/*.yml` and `*.yaml` (see `checks::workflow_checks`).
 fn workflow_jobs(root: &Path) -> Vec<String> {
     let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
         return Vec::new();
     };
     dir.flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "yml"))
-        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-        .flat_map(|t| {
-            t.lines()
-                .filter_map(|l| {
-                    let l = l.trim_end().strip_prefix("  ")?;
-                    let name = l.strip_suffix(':')?;
-                    (!name.starts_with(' ') && !name.contains(' ')).then(|| name.to_string())
-                })
-                .collect::<Vec<_>>()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x == "yml" || x == "yaml")
         })
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .flat_map(|t| checks::workflow_checks(&t))
         .collect()
 }
 
@@ -155,7 +151,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         .unwrap_or_default();
     let jobs = workflow_jobs(root);
     let has_job = |j: &str| jobs.iter().any(|x| x == j);
-    let mut absent: Vec<&str> = REQUIRED_CHECKS.to_vec();
+    let mut absent: Vec<&str> = checks::DEFAULT_REQUIRED.to_vec();
     if has_job("bosun-ok") {
         absent.push("bosun-ok");
     }

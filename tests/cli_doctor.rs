@@ -145,3 +145,23 @@ fn step_3_wants_bosun_ok_in_hoist_toml_when_a_workflow_has_it() {
     write(d, "hoist.toml", FIVE);
     assert_eq!(step3(d)["status"], "ok");
 }
+
+#[test]
+fn step_3_reads_jobs_not_other_keys_and_accepts_comments_and_yaml() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    write(d, "hoist.toml", FOUR);
+    // `ci-ok:` under `on:` is not a job.
+    write(
+        d,
+        ".github/workflows/ci.yml",
+        "on:\n  ci-ok:\n    x: 1\njobs:\n  build:\n    runs-on: x\n",
+    );
+    assert_eq!(step3(d)["status"], "missing");
+    write(
+        d,
+        ".github/workflows/bosun.yaml",
+        "jobs: # gates\n  ci-ok: # aggregate\n    runs-on: x\n",
+    );
+    assert_eq!(step3(d)["status"], "ok");
+}
