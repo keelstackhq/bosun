@@ -68,46 +68,39 @@ pub fn run(dir: Option<&Path>, args: &RevertArgs) -> CmdResult {
             format!("delete it with `git branch -D {branch}` or reuse its PR, then rerun"),
         ));
     }
-    let previous = git_ok(
-        wd,
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-        "run bosun inside the repo checkout",
-    )?;
+    git(wd, &["worktree", "prune"])?;
     git_ok(
         wd,
         &["fetch", "origin", &base],
         "check the origin remote and network access",
     )?;
+    // Work in a temporary detached worktree: the caller's checkout is never touched.
+    let tmp = std::env::temp_dir().join(format!("bosun-revert-{n}-{}", std::process::id()));
+    let tmp_s = tmp.to_string_lossy().to_string();
     let start = format!("origin/{base}");
     git_ok(
         wd,
-        &["switch", "-q", "-c", &branch, &start],
-        "commit or stash local changes, then rerun",
+        &["worktree", "add", "-q", "--detach", &tmp_s, &start],
+        "check that the temp directory is writable",
     )?;
-    let parents = git_ok(
-        wd,
-        &["rev-list", "--parents", "-n", "1", &sha],
-        "fetch the merge commit; is it on the default branch?",
-    )?;
-    let mut revert = vec!["revert", "--no-edit"];
-    if parents.split_whitespace().count() > 2 {
-        revert.extend(["-m", "1"]);
-    }
-    revert.push(&sha);
-    if !git(wd, &revert)?.status.success() {
-        let _ = git(wd, &["revert", "--abort"]);
-        let _ = git(wd, &["switch", "-q", &previous]);
+    let result = revert_in(&tmp, &branch, &sha);
+    let _ = git(wd, &["worktree", "remove", "--force", &tmp_s]);
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = git(wd, &["worktree", "prune"]);
+    if let Err(e) = result {
         let _ = git(wd, &["branch", "-D", &branch]);
-        return Err(BosunError::error(
-            format!("git cannot revert {sha} without a conflict"),
-            "revert by hand or make a forward fix",
-        ));
+        return Err(e);
     }
-    git_ok(
-        wd,
-        &["push", "-u", "origin", &branch],
-        "check push access to origin; bosun never pushes the default branch",
-    )?;
+    let warning = (pull.commits > 1
+        && git_ok(wd, &["rev-list", "--parents", "-n", "1", &sha], "")
+            .is_ok_and(|p| p.split_whitespace().count() == 2))
+    .then(|| {
+        format!(
+            "PR #{n} has {} commits but its merge commit has one parent: if it was rebase-merged, \
+             only the last commit is reverted",
+            pull.commits
+        )
+    });
     let title = format!("Revert #{n}: {}", pull.title);
     let mut body = format!("Reverts #{n} ({sha}).\n\n");
     if let Some(r) = red {
@@ -119,6 +112,47 @@ pub fn run(dir: Option<&Path>, args: &RevertArgs) -> CmdResult {
     gh.add_labels(created.number, &[MAINFIX])?;
     Ok(Outcome::data(json!({
         "pr": n, "revert_pr": created.number, "branch": branch, "base": base,
-        "reverted_sha": sha, "main_red": red,
+        "reverted_sha": sha, "main_red": red, "warning": warning,
     })))
+}
+
+/// Create the branch in the temporary worktree, revert `sha` and push the branch.
+fn revert_in(wt: &Path, branch: &str, sha: &str) -> Result<(), BosunError> {
+    git_ok(
+        wt,
+        &["switch", "-q", "-c", branch],
+        "delete the branch or pick a clean checkout",
+    )?;
+    let parents = git_ok(
+        wt,
+        &["rev-list", "--parents", "-n", "1", sha],
+        "fetch the merge commit; is it on the default branch?",
+    )?;
+    let mut revert = vec!["revert", "--no-edit"];
+    if parents.split_whitespace().count() > 2 {
+        revert.extend(["-m", "1"]);
+    }
+    revert.push(sha);
+    let out = git(wt, &revert)?;
+    if !out.status.success() {
+        let _ = git(wt, &["revert", "--abort"]);
+        let err = String::from_utf8_lossy(&out.stderr);
+        let tail: Vec<&str> = err.lines().rev().take(3).collect();
+        let tail = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
+        let what = if err.contains("conflict") || err.contains("CONFLICT") {
+            "conflicts"
+        } else {
+            "fails"
+        };
+        return Err(BosunError::error(
+            format!("git revert of {sha} {what}: {tail}"),
+            "revert by hand or make a forward fix",
+        ));
+    }
+    git_ok(
+        wt,
+        &["push", "-u", "origin", branch],
+        "check push access to origin; bosun never pushes the default branch",
+    )?;
+    Ok(())
 }

@@ -140,3 +140,76 @@ fn revert_of_an_unmerged_pr_is_a_conflict_and_pushes_nothing() {
     let branches = git(&r.origin, &["branch", "--list"]);
     assert!(!branches.contains("revert"), "{branches}");
 }
+
+fn merged_fake(r: &Repos) -> FakeGithub {
+    let fake = FakeGithub::start();
+    fake.pull(5, "Add broken", "claude/five", "");
+    fake.pull_merged(5, &r.sha5);
+    fake
+}
+
+#[test]
+fn revert_leaves_the_callers_branch_and_changes_alone() {
+    let r = repos();
+    git(&r.clone, &["switch", "-q", "-c", "claude/work"]);
+    std::fs::write(r.clone.join("init.txt"), "edited\n").unwrap();
+    let fake = merged_fake(&r);
+    let (code, v) = run(&fake, &r.clone);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        git(&r.clone, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "claude/work"
+    );
+    assert_eq!(git(&r.clone, &["status", "--short"]), "M init.txt");
+    assert!(!git(&r.clone, &["worktree", "list"]).contains("revert"));
+}
+
+#[test]
+fn revert_works_from_a_detached_head() {
+    let r = repos();
+    git(&r.clone, &["checkout", "-q", "--detach"]);
+    let head = git(&r.clone, &["rev-parse", "HEAD"]);
+    let fake = merged_fake(&r);
+    let (code, v) = run(&fake, &r.clone);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(git(&r.clone, &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(&r.clone, &["branch", "--show-current"]), "");
+}
+
+#[test]
+fn a_revert_conflict_exits_1_and_leaves_nothing_behind() {
+    let r = repos();
+    let good = git(&r.clone, &["rev-parse", "HEAD"]);
+    std::fs::write(r.clone.join("broken"), "changed later\n").unwrap();
+    git(&r.clone, &["commit", "-q", "-a", "-m", "touch broken"]);
+    git(&r.clone, &["push", "-q", "origin", "main"]);
+    let fake = merged_fake(&r);
+    let (code, v) = run(&fake, &r.clone);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("conflicts")
+    );
+    assert_eq!(v["error"]["fix"], "revert by hand or make a forward fix");
+    assert_eq!(creates(&fake), 0);
+    assert!(!git(&r.clone, &["branch", "--list", "bosun/*"]).contains("revert"));
+    assert!(!git(&r.clone, &["worktree", "list"]).contains("revert"));
+    assert_eq!(git(&r.clone, &["branch", "--show-current"]), "main");
+    // Fix main (test-only force push), then a rerun works.
+    git(&r.clone, &["reset", "-q", "--hard", &good]);
+    git(&r.clone, &["push", "-q", "--force", "origin", "main"]);
+    let (code, v) = run(&fake, &r.clone);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_pr_with_many_commits_and_a_single_parent_merge_commit_warns() {
+    let r = repos();
+    let fake = merged_fake(&r);
+    fake.pull_set(5, "commits", serde_json::json!(3));
+    let (code, v) = run(&fake, &r.clone);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["warning"].as_str().unwrap().contains("3 commits"));
+}

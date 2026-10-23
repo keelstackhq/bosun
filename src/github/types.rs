@@ -91,6 +91,8 @@ pub struct Pull {
     pub changed_files: u64,
     /// The merge commit of a merged PR; `None` while open (or when GitHub sent `null`).
     pub merge_commit_sha: Option<String>,
+    /// Number of commits in the PR; 0 when GitHub did not say.
+    pub commits: u64,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +126,8 @@ struct RawPull {
     changed_files: u64,
     #[serde(default)]
     merge_commit_sha: Option<String>,
+    #[serde(default)]
+    commits: u64,
 }
 
 impl From<RawPull> for Pull {
@@ -144,6 +148,7 @@ impl From<RawPull> for Pull {
             user: r.user,
             changed_files: r.changed_files,
             merge_commit_sha: r.merge_commit_sha,
+            commits: r.commits,
         }
     }
 }
