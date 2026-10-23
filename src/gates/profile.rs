@@ -55,6 +55,9 @@ pub struct Gate {
     #[serde(default)]
     pub when_no_package: WhenNoPackage,
     pub budget_secs: Option<u64>,
+    /// A file in the stack directory the gate needs; without it the gate is skipped.
+    #[serde(default)]
+    pub requires: Option<String>,
 }
 
 impl Gate {
@@ -182,6 +185,7 @@ mod tests {
             all: vec![],
             when_no_package: WhenNoPackage::Run,
             budget_secs: Some(5),
+            requires: None,
         };
         assert_eq!(
             g.expand_cmd(&["a".into(), "b".into()], None),
@@ -201,16 +205,19 @@ mod tests {
         for g in ["fmt", "lint", "types", "test", "deps"] {
             assert!(p.gates.contains_key(g), "{g}");
         }
+        assert_eq!(p.gates["deps"].requires.as_deref(), Some("pnpm-lock.yaml"));
         let t = &p.gates["test"];
         assert_eq!(t.when_no_package, WhenNoPackage::Skip);
         let args = t.package_args(&["a".into(), "b".into()]);
         assert_eq!(
             t.expand_packages(t.expand_cmd(&[], None), args),
-            ["pnpm", "--filter", "a", "--filter", "b", "run", "test"]
+            [
+                "pnpm", "--filter", "...a", "--filter", "...b", "run", "test"
+            ]
         );
         assert_eq!(
             t.expand_packages(t.expand_cmd(&[], None), t.all.clone()),
-            ["pnpm", "-r", "run", "test"]
+            ["pnpm", "-r", "--include-workspace-root", "run", "test"]
         );
     }
 

@@ -116,7 +116,7 @@ fn change_in_one_package_tests_only_that_package() {
     r.change("packages/a/src/x.ts");
     let (code, v) = r.gate(&["test", "--base", "main"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(r.calls(), vec!["--filter @w/a run test"]);
+    assert_eq!(r.calls(), vec!["--filter ...@w/a run test"]);
     assert_eq!(v["data"]["packages"], serde_json::json!(["@w/a"]));
 }
 
@@ -126,7 +126,7 @@ fn root_change_tests_every_package() {
     r.change("pnpm-lock.yaml");
     let (code, v) = r.gate(&["test", "--base", "main"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(r.calls(), vec!["-r run test"]);
+    assert_eq!(r.calls(), vec!["-r --include-workspace-root run test"]);
     assert_eq!(v["data"]["packages"], serde_json::json!(["@w/a", "b"]));
 }
 
@@ -144,6 +144,7 @@ fn doc_only_change_skips_the_test_gate() {
 fn fmt_lint_types_deps_call_the_root_scripts() {
     let r = repo();
     r.change("packages/b/src/x.ts");
+    write(&r.root, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
     for gate in ["fmt", "lint", "types", "deps"] {
         let (code, v) = r.gate(&[gate, "--base", "main"]);
         assert_eq!(code, 0, "{gate}: {v}");
@@ -173,4 +174,55 @@ fn unknown_profile_fix_lists_ts_pnpm() {
     assert_eq!(code, 2, "{v}");
     let fix = v["error"]["fix"].as_str().unwrap();
     assert!(fix.contains("rust") && fix.contains("ts-pnpm"), "{fix}");
+}
+
+#[test]
+fn deps_gate_is_skipped_without_a_lockfile() {
+    let r = repo();
+    r.change("packages/b/src/x.ts");
+    let (code, v) = r.gate(&["deps", "--base", "main"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true);
+    assert_eq!(v["data"]["reason"], "no pnpm-lock.yaml");
+    assert!(r.calls().is_empty());
+}
+
+#[test]
+fn non_code_file_in_a_package_still_runs_its_tests() {
+    let r = repo();
+    r.change("packages/a/__snapshots__/x.snap");
+    let (code, v) = r.gate(&["test", "--base", "main"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["--filter ...@w/a run test"]);
+}
+
+#[test]
+fn flow_list_workspace_file_finds_the_packages() {
+    let r = repo();
+    write(&r.root, "pnpm-workspace.yaml", "packages: ['packages/*']\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "flow"]);
+    git(&r.root, &["branch", "-f", "main", "work"]);
+    r.change("packages/b/src/x.ts");
+    let (code, v) = r.gate(&["test", "--base", "main"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["--filter ...b run test"]);
+}
+
+#[test]
+fn unparsable_workspace_globs_are_an_error_with_a_fix() {
+    let r = repo();
+    write(
+        &r.root,
+        "pnpm-workspace.yaml",
+        "packages:\n  - 'packages/{a,b}'\n",
+    );
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "braces"]);
+    git(&r.root, &["branch", "-f", "main", "work"]);
+    r.change("packages/b/src/x.ts");
+    let (code, v) = r.gate(&["test", "--base", "main"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert!(r.calls().is_empty());
 }

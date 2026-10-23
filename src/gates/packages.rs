@@ -155,65 +155,111 @@ pub fn affected_cargo(stack_dir: &Path, changed: &[String], packages: &[Package]
     )
 }
 
-/// The `packages:` globs of a `pnpm-workspace.yaml` (a line-based reader: the block list under
-/// `packages:`, quotes and comments dropped). `!glob` entries are kept for the caller to exclude.
-pub fn parse_workspace_globs(yaml: &str) -> Vec<String> {
+fn workspace_error(message: String, fix: &str) -> BosunError {
+    BosunError::error(message, fix)
+}
+
+/// The text of a YAML line without its `#` comment.
+fn yaml_code(line: &str) -> &str {
+    match line.trim_start().starts_with('#') {
+        true => "",
+        false => line.split(" #").next().unwrap_or(""),
+    }
+}
+
+fn unquote(item: &str) -> &str {
+    item.trim().trim_matches(['"', '\''])
+}
+
+/// The `packages:` globs of a `pnpm-workspace.yaml` (a line-based reader). Both forms work: the
+/// block list under `packages:` and the flow list `packages: [a, 'b', "c"]` on one line. Quotes
+/// and comments are dropped; `!glob` entries are kept for the caller to exclude. Any other value
+/// after `packages:` is an error, not an empty list.
+pub fn parse_workspace_globs(yaml: &str) -> Result<Vec<String>, BosunError> {
+    const FIX: &str = "write `packages:` in pnpm-workspace.yaml as a block list (`  - 'packages/*'`) or a one-line list (`packages: ['packages/*']`)";
     let mut out = Vec::new();
     let mut in_list = false;
     for raw in yaml.lines() {
-        let line = raw.split(" #").next().unwrap_or("");
-        let line = if line.trim_start().starts_with('#') {
-            ""
-        } else {
-            line
-        };
+        let line = yaml_code(raw);
         if line.trim().is_empty() {
             continue;
         }
         if !line.starts_with([' ', '\t', '-']) {
-            in_list = line.trim_end() == "packages:";
-            continue;
-        }
-        if let (true, Some(item)) = (in_list, line.trim().strip_prefix('-')) {
-            let item = item.trim().trim_matches(['"', '\'']);
+            in_list = false;
+            let Some(value) = line.trim_end().strip_prefix("packages:") else {
+                continue;
+            };
+            let value = value.trim();
+            if value.is_empty() {
+                in_list = true;
+            } else if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+                out.extend(
+                    inner
+                        .split(',')
+                        .map(unquote)
+                        .filter(|i| !i.is_empty())
+                        .map(String::from),
+                );
+            } else {
+                return Err(workspace_error(
+                    format!("pnpm-workspace.yaml: cannot read `packages: {value}`"),
+                    FIX,
+                ));
+            }
+        } else if let (true, Some(item)) = (in_list, line.trim().strip_prefix('-')) {
+            let item = unquote(item);
             if !item.is_empty() {
                 out.push(item.to_string());
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Keep the directories (relative, `/`-separated) that match an include glob and no `!` glob.
-pub fn select_dirs(dirs: &[String], globs: &[String]) -> Vec<String> {
-    let parse = |g: &str| crate::core::glob::Glob::parse(g.trim_end_matches('/')).ok();
-    let inc: Vec<_> = globs
+/// A glob that does not parse (braces, classes) is an error, not a dropped entry.
+pub fn select_dirs(dirs: &[String], globs: &[String]) -> Result<Vec<String>, BosunError> {
+    let parse = |g: &str| {
+        crate::core::glob::Glob::parse(g.trim_end_matches('/')).map_err(|e| {
+            workspace_error(
+                format!("pnpm-workspace.yaml: {e}"),
+                "use only `*`, `?` and `**` in `packages:` globs, one glob per line",
+            )
+        })
+    };
+    let mut inc = Vec::new();
+    let mut exc = Vec::new();
+    for g in globs {
+        match g.strip_prefix('!') {
+            Some(rest) => exc.push(parse(rest)?),
+            None => inc.push(parse(g)?),
+        }
+    }
+    Ok(dirs
         .iter()
-        .filter(|g| !g.starts_with('!'))
-        .filter_map(|g| parse(g))
-        .collect();
-    let exc: Vec<_> = globs
-        .iter()
-        .filter_map(|g| g.strip_prefix('!'))
-        .filter_map(parse)
-        .collect();
-    dirs.iter()
         .filter(|d| inc.iter().any(|g| g.matches(d)) && !exc.iter().any(|g| g.matches(d)))
         .cloned()
-        .collect()
+        .collect())
 }
 
+/// Directories that are never workspace packages and can be huge or cyclic.
+const SKIP_DIRS: [&str; 5] = ["node_modules", "target", "dist", "build", "coverage"];
+
 /// Relative paths of every directory under `dir` that holds a `package.json` (the root itself is
-/// not listed; `node_modules` and dot directories are skipped).
+/// not listed). Dot directories, `SKIP_DIRS` and symlinks are not entered.
 fn package_dirs(dir: &Path, rel: &str, out: &mut Vec<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut subs: Vec<_> = entries.flatten().filter(|e| e.path().is_dir()).collect();
+    // `DirEntry::file_type` does not follow symlinks, so a link loop cannot recurse.
+    let mut subs: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .collect();
     subs.sort_by_key(|e| e.file_name());
     for e in subs {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name == "node_modules" || name.starts_with('.') {
+        if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
             continue;
         }
         let sub = if rel.is_empty() {
@@ -229,7 +275,7 @@ fn package_dirs(dir: &Path, rel: &str, out: &mut Vec<String>) {
 }
 
 /// Read `pnpm-workspace.yaml` in `stack_dir`, expand its globs to directories with a
-/// `package.json`, and read each package's `name`.
+/// `package.json`, and read each package's `name`. A package.json without a `name` is skipped.
 fn load_pnpm(stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
     let file = stack_dir.join("pnpm-workspace.yaml");
     let yaml = std::fs::read_to_string(&file).map_err(|e| {
@@ -241,29 +287,27 @@ fn load_pnpm(stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
     let mut dirs = Vec::new();
     package_dirs(stack_dir, "", &mut dirs);
     let mut out = Vec::new();
-    for rel in select_dirs(&dirs, &parse_workspace_globs(&yaml)) {
+    for rel in select_dirs(&dirs, &parse_workspace_globs(&yaml)?)? {
         let manifest = stack_dir.join(&rel).join("package.json");
         let name = std::fs::read_to_string(&manifest)
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| v["name"].as_str().map(String::from))
-            .ok_or_else(|| {
-                BosunError::error(
-                    format!("{} has no readable `name`", manifest.display()),
-                    "give the package a `name` in its package.json",
-                )
-            })?;
-        out.push(Package {
-            name,
-            dir: stack_dir.join(&rel),
-        });
+            .and_then(|v| v["name"].as_str().map(String::from));
+        if let Some(name) = name {
+            out.push(Package {
+                name,
+                dir: stack_dir.join(&rel),
+            });
+        }
     }
     Ok(out)
 }
 
-/// Like `affected_cargo`: each changed path goes to the package with the longest dir prefix. A
-/// root workspace or toolchain file, or a TypeScript-relevant file (`.ts`, `.tsx`, `.js`, `.json`,
-/// `.yaml`, ...) in no package, means all packages; other files (docs) affect none.
+/// Like `affected_cargo`: each changed path goes to the package with the longest dir prefix,
+/// whatever its extension (a `.snap`, `.css` or `.md` inside a package affects it). A root
+/// `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc` or `.nvmrc`, or a file with
+/// extension ts, tsx, mts, cts, js, jsx, mjs, cjs, json, yaml or yml in no package, means all
+/// packages; other files outside every package (docs) affect none.
 pub fn affected_pnpm(stack_dir: &Path, changed: &[String], packages: &[Package]) -> Affected {
     let mut hit: Vec<&str> = Vec::new();
     for rel in changed {
@@ -289,7 +333,18 @@ pub fn affected_pnpm(stack_dir: &Path, changed: &[String], packages: &[Package])
                 let ext = rel_path.extension().and_then(|e| e.to_str());
                 if matches!(
                     ext,
-                    Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "json" | "yaml" | "yml")
+                    Some(
+                        "ts" | "tsx"
+                            | "mts"
+                            | "cts"
+                            | "js"
+                            | "jsx"
+                            | "mjs"
+                            | "cjs"
+                            | "json"
+                            | "yaml"
+                            | "yml"
+                    )
                 ) {
                     return Affected::All;
                 }
@@ -380,11 +435,33 @@ mod tests {
     fn workspace_globs_parse() {
         let y = "# c\npackages:\n  - 'packages/*'\n  - \"apps/**\" # x\n  - '!**/test/**'\ncatalog:\n  - nope\n";
         assert_eq!(
-            parse_workspace_globs(y),
+            parse_workspace_globs(y).unwrap(),
             ["packages/*", "apps/**", "!**/test/**"]
         );
-        assert_eq!(parse_workspace_globs("packages:\n- a\n- b\n"), ["a", "b"]);
-        assert!(parse_workspace_globs("name: x\n").is_empty());
+        assert_eq!(
+            parse_workspace_globs("packages:\n- a\n- b\n").unwrap(),
+            ["a", "b"]
+        );
+        assert!(parse_workspace_globs("name: x\n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn flow_list_parses_and_odd_values_are_errors() {
+        assert_eq!(
+            parse_workspace_globs("packages: [a, 'b/*', \"c\"] # x\ncatalog: [z]\n").unwrap(),
+            ["a", "b/*", "c"]
+        );
+        for bad in [
+            "packages: packages/*\n",
+            "packages: [a,\n  b]\n",
+            "packages: {a: 1}\n",
+        ] {
+            let e = parse_workspace_globs(bad).unwrap_err();
+            assert!(!e.fix.is_empty(), "{bad}");
+        }
+        let dirs = vec!["packages/a".to_string()];
+        let e = select_dirs(&dirs, &["packages/{a,b}".to_string()]).unwrap_err();
+        assert!(e.fix.contains("`*`"), "{}", e.fix);
     }
 
     #[test]
@@ -395,7 +472,10 @@ mod tests {
         let g: Vec<String> = ["packages/*", "tools/*", "!tools/x"]
             .map(String::from)
             .to_vec();
-        assert_eq!(select_dirs(&dirs, &g), ["packages/a", "packages/b"]);
+        assert_eq!(
+            select_dirs(&dirs, &g).unwrap(),
+            ["packages/a", "packages/b"]
+        );
     }
 
     #[test]
@@ -423,9 +503,52 @@ mod tests {
             "pnpm-lock.yaml",
             "tsconfig.base.json",
             "eslint.config.js",
+            "vitest.config.mts",
+            "eslint.config.cts",
         ] {
             assert_eq!(aff(&[f]), Affected::All, "{f}");
         }
         assert_eq!(aff(&["docs/x.md", "README.md"]), Affected::None);
+        // Whatever the extension, a file inside a package affects it.
+        for f in [
+            "__snapshots__/x.snap",
+            "a.css",
+            "q.sql",
+            "README.md",
+            "fixtures/in.bin",
+        ] {
+            let path = format!("packages/a/{f}");
+            assert_eq!(aff(&[&path]), Affected::Some(vec!["a".into()]), "{f}");
+        }
+    }
+
+    fn write(root: &Path, rel: &str, text: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    #[test]
+    fn load_pnpm_reads_flow_lists_and_skips_odd_dirs() {
+        let t = tempfile::tempdir().unwrap();
+        let r = t.path();
+        write(
+            r,
+            "pnpm-workspace.yaml",
+            "packages: ['packages/*', \"tools/**\"]\n",
+        );
+        write(r, "packages/a/package.json", "{\"name\":\"@w/a\"}");
+        write(r, "packages/nameless/package.json", "{}");
+        write(
+            r,
+            "packages/a/dist/x/package.json",
+            "{\"name\":\"dist-pkg\"}",
+        );
+        write(r, "tools/x/y/package.json", "{\"name\":\"y\"}");
+        // A symlink loop must neither hang nor add packages.
+        std::os::unix::fs::symlink(r, r.join("packages/a/loop")).unwrap();
+        let got = load_pnpm(r).unwrap();
+        let names: Vec<_> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["@w/a", "y"]);
     }
 }

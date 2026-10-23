@@ -130,13 +130,24 @@ pub fn run(req: &Request) -> CmdResult {
     let mut failed: Option<i64> = None;
     for (stack, profile, files) in &plan {
         let gate = profile.gate(req.gate)?;
+        let missing_file = gate
+            .requires
+            .as_deref()
+            .filter(|f| !req.root.join(stack_rel(&stack.path)).join(f).exists());
         let run = match missing_manifest(req, stack, profile) {
             Some(manifest) => json!({
                 "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
                 "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
                 "reason": format!("no {manifest} in {}", stack.path),
             }),
-            None => execute(req, stack, &profile.adapters.packages, gate, files)?,
+            None => match missing_file {
+                Some(file) => json!({
+                    "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
+                    "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+                    "reason": format!("no {file}"),
+                }),
+                None => execute(req, stack, &profile.adapters.packages, gate, files)?,
+            },
         };
         let status = run["exit_status"].as_i64().unwrap_or(0);
         runs.push(run);

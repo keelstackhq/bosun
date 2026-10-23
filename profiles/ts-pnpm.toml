@@ -19,13 +19,16 @@ cmd = ["pnpm", "run", "lint"]
 [gates.types]
 cmd = ["pnpm", "run", "typecheck"]
 
-# test: `--filter` must precede `run test` (later args go to the script), hence {packages}; all -> `-r`.
+# test: `--filter` must precede `run test` (later args go to the script), hence {packages};
+# `...pkg` selects pkg and its dependents; all -> every package plus the root project's own script.
 [gates.test]
 cmd = ["pnpm", "{packages}", "run", "test"]
-each_package = ["--filter", "{package}"]
-all = ["-r"]
+each_package = ["--filter", "...{package}"]
+all = ["-r", "--include-workspace-root"]
 when_no_package = "skip"
 
-# deps: audit production dependencies only, fail on high or critical advisories.
+# deps: audit production dependencies only, fail on high or critical advisories; `pnpm audit`
+# fails without a lockfile, so the gate is skipped until pnpm-lock.yaml exists (`requires`).
 [gates.deps]
+requires = "pnpm-lock.yaml"
 cmd = ["pnpm", "audit", "--prod", "--audit-level", "high"]
