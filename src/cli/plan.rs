@@ -3,15 +3,15 @@
 //! `<!-- bosun:plan <id> -->` (or adopted by their metadata) and never changed.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use super::{PlanCheckArgs, PlanCmd, PlanImportArgs};
-use crate::app::{App, Result, kill_switch, task_meta};
+use crate::app::{App, Result, kill_switch, set_state, task_meta};
 use crate::core::meta::TaskMeta;
-use crate::core::plan::{self, Item, Plan, PlanError, Task};
-use crate::core::state::state_of;
+use crate::core::plan::{self, Item, Plan, PlanError, Task, Uc};
+use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -64,6 +64,8 @@ struct Slot {
     action: &'static str,
     state: Option<String>,
     closed: bool,
+    /// The issue is merged: labelled `merged`, or closed as completed.
+    merged: bool,
 }
 
 impl Slot {
@@ -99,14 +101,21 @@ fn lookup(
     warnings: &mut Vec<String>,
 ) -> Option<(Issue, bool)> {
     let m = marker(id);
+    // Issues closed as duplicates keep the marker but never win and never warn.
+    let issues: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| i.state_reason.as_deref() != Some("duplicate"))
+        .collect();
     let mut found: Vec<&Issue> = issues
         .iter()
+        .copied()
         .filter(|i| i.body_text().contains(&m))
         .collect();
     let adopted = found.is_empty();
     if adopted {
         found = issues
             .iter()
+            .copied()
             .filter(|i| match task {
                 Some(t) => task_meta(i).is_some_and(|m| m.item == item && m.task == t),
                 None => epic_item(i.body_text()).as_deref() == Some(item),
@@ -134,6 +143,10 @@ struct Importer<'a> {
     epics: Vec<Slot>,
     tasks: Vec<Slot>,
     warnings: Vec<String>,
+    dir: PathBuf,
+    rust: bool,
+    promoted: Vec<String>,
+    stubs: Vec<Value>,
 }
 
 impl Importer<'_> {
@@ -152,6 +165,8 @@ impl Importer<'_> {
                 action: if adopted { "adopted" } else { "existing" },
                 state: state_of(&i.labels).map(|s| s.name().to_string()),
                 closed: i.state == "closed",
+                merged: state_of(&i.labels) == Some(State::Merged)
+                    || (i.state == "closed" && i.state_reason.as_deref() == Some("completed")),
             };
             self.keep(&slot, key.1.is_none());
             return Ok(slot);
@@ -168,6 +183,7 @@ impl Importer<'_> {
                 action: "would-create",
                 state,
                 closed: false,
+                merged: false,
             };
             self.keep(&slot, key.1.is_none());
             return Ok(slot);
@@ -190,6 +206,7 @@ impl Importer<'_> {
             action: "created",
             state,
             closed: false,
+            merged: false,
         };
         self.keep(&slot, key.1.is_none());
         Ok(slot)
@@ -206,14 +223,103 @@ impl Importer<'_> {
 
     /// What was found or made so far: the output, and the data of an error part-way through.
     fn data(&self, file: &str) -> Value {
+        let (promote, write) = if self.dry {
+            ("would_promote", "would_write")
+        } else {
+            ("promoted", "stubs")
+        };
         json!({
             "file": file,
             "dry_run": self.dry,
             "epics": self.epics.iter().map(|s| s.json(false)).collect::<Vec<_>>(),
             "tasks": self.tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
+            promote: self.promoted,
+            write: self.stubs,
             "warnings": self.warnings,
         })
     }
+
+    /// Once the plan task of an item merged, the epic and the tasks this plan made move from
+    /// `planned` to `ready`. Adopted hand-made issues are never touched.
+    fn promote(&mut self, epic: &Slot, pslot: &Slot, tasks: &[Slot]) -> Result<()> {
+        if !pslot.merged {
+            return Ok(());
+        }
+        for s in std::iter::once(epic).chain(tasks) {
+            if s.action == "adopted" || s.closed || s.state.as_deref() != Some("planned") {
+                continue;
+            }
+            if !self.dry {
+                let number = s.issue.expect("a made or found issue has a number");
+                let issue = match self.issues.iter().find(|i| i.number == number) {
+                    Some(i) => i.clone(),
+                    None => self.gh.get_issue(number)?.ok_or_else(|| {
+                        BosunError::error(
+                            format!("#{number} ({}) vanished during the import", s.id),
+                            "run `bosun plan import` again",
+                        )
+                    })?,
+                };
+                set_state(self.gh, number, &issue, State::Ready)?;
+            }
+            self.promoted.push(s.id.clone());
+        }
+        Ok(())
+    }
+
+    /// Write the UCs of `item` that no file under `tests/` mentions yet (rust profile only).
+    fn stub(&mut self, item: &Item) -> Result<()> {
+        let all = tests_text(&self.dir.join("tests"));
+        let missing: Vec<&Uc> = item
+            .ucs
+            .iter()
+            .filter(|u| !plan::mentions_uc(&all, &u.id))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let rel = format!("tests/uc_{}.rs", item.id.to_lowercase());
+        if !self.dry {
+            let path = self.dir.join(&rel);
+            let mut text = match std::fs::read_to_string(&path) {
+                Ok(t) if t.ends_with('\n') || t.is_empty() => t,
+                Ok(t) => t + "\n",
+                Err(_) => plan::uc_file_header(item),
+            };
+            for u in &missing {
+                text.push_str(&plan::uc_stub(&u.id, &u.text));
+            }
+            let io = |e: std::io::Error| {
+                BosunError::error(
+                    format!("cannot write {rel}: {e}"),
+                    "make `tests/` writable, then run `bosun plan import` again",
+                )
+            };
+            std::fs::create_dir_all(path.parent().expect("has a parent")).map_err(io)?;
+            std::fs::write(&path, text).map_err(io)?;
+        }
+        let ucs: Vec<&str> = missing.iter().map(|u| u.id.as_str()).collect();
+        self.stubs.push(json!({"file": rel, "ucs": ucs}));
+        Ok(())
+    }
+}
+
+/// Every file under `dir`, concatenated; unreadable files are skipped.
+fn tests_text(dir: &Path) -> String {
+    let mut out = String::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            out.push_str(&tests_text(&path));
+        } else if let Ok(t) = std::fs::read_to_string(&path) {
+            out.push_str(&t);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn labels(kind: &str, area: &str, state: &str) -> Vec<String> {
@@ -311,12 +417,16 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
     }
     let mut imp = Importer {
         gh: app.gh.as_ref(),
-        issues: app.gh.list_issues(&[], IssueState::All)?,
+        issues: all_issues(app.gh.as_ref())?,
         dry: a.dry_run,
         ensured: HashSet::new(),
         epics: vec![],
         tasks: vec![],
         warnings: vec![],
+        rust: app.ctx.config.stack.iter().any(|s| s.profile == "rust"),
+        dir: app.ctx.dir.clone(),
+        promoted: vec![],
+        stubs: vec![],
     };
     match import_items(&mut imp, &p, a) {
         Ok(()) => Ok(Outcome::data(imp.data(&a.file))),
@@ -324,12 +434,32 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
     }
 }
 
+/// Every issue, including ones the list does not show yet: GitHub's list lags seconds behind
+/// creation, while GET by number is consistent. Probe the numbers after the highest listed one.
+fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
+    let mut issues = gh.list_issues(&[], IssueState::All)?;
+    let first = issues.iter().map(|i| i.number).max().unwrap_or(0) + 1;
+    for next in (first..).take(50) {
+        match gh.get_issue(next)? {
+            Some(i) => {
+                if !i.pull_request && !issues.iter().any(|x| x.number == i.number) {
+                    issues.push(i);
+                }
+            }
+            None => break,
+        }
+    }
+    Ok(issues)
+}
+
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
+    let mut imported = false;
     for item in p
         .items
         .iter()
         .filter(|i| a.item.is_empty() || a.item.contains(&i.id))
     {
+        imported = true;
         let epic = imp.slot(&item.id, (&item.id, None), || {
             (
                 format!("{}: {}", item.id, item.title),
@@ -338,7 +468,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             )
         })?;
         let pid = format!("{}/P", item.id);
-        imp.slot(&pid, (&item.id, Some("P")), || {
+        let pslot = imp.slot(&pid, (&item.id, Some("P")), || {
             let intro = format!(
                 "Write each UC of {id} as a pending test (`#[ignore = \"UC-..\"]`) in tests/uc_{low}.rs; \
                  the item's tasks become ready when this merges (run `bosun plan import` again).\n\n{}\n",
@@ -356,16 +486,25 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 labels("plan", &item.area, "ready"),
             )
         })?;
+        let mut slots = vec![];
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);
-            imp.slot(&tid, (&item.id, Some(&t.id)), || {
+            slots.push(imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),
                     task_body(&tid, "", &task_meta_of(item, t, epic.issue)),
                     labels(&t.kind, &item.area, "planned"),
                 )
-            })?;
+            })?);
         }
+        imp.promote(&epic, &pslot, &slots)?;
+        if imp.rust {
+            imp.stub(item)?;
+        }
+    }
+    if imported && !imp.rust {
+        imp.warnings
+            .push("UC stubs are only written for the rust profile".into());
     }
     Ok(())
 }

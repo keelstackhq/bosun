@@ -18,7 +18,6 @@ pub struct FakeIssue {
     pub title: String,
     pub body: String,
     pub state: String,
-    pub state_reason: Option<String>,
     /// Left out of the issue list (GET by number still works): GitHub's list lags.
     pub hidden: bool,
     pub labels: Vec<String>,
@@ -147,7 +146,6 @@ impl FakeGithub {
             title: title.into(),
             body: body.into(),
             state: "open".into(),
-            state_reason: None,
             hidden: false,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             is_pr: false,
@@ -173,6 +171,16 @@ impl FakeGithub {
         i.state = "closed".into();
         i.closed_at = Some(at.into());
         i.state_reason = Some(reason.into());
+    }
+
+    /// Leave an issue out of the list while GET by number still returns it.
+    pub fn hide_from_list(&self, number: u64) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .hidden = true;
     }
 
     /// An entry in the issues list that is a pull request.
@@ -639,7 +647,6 @@ fn route(
                 title: body["title"].as_str().unwrap_or("").into(),
                 body: body["body"].as_str().unwrap_or("").into(),
                 state: "open".into(),
-                state_reason: None,
                 hidden: false,
                 labels,
                 is_pr: false,
