@@ -114,7 +114,7 @@ pub enum Command {
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 24] = [
+pub const COMMANDS: [&str; 25] = [
     "join",
     "claim",
     "heartbeat",
