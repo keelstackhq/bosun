@@ -337,6 +337,12 @@ pub fn capability_labels<S: AsRef<str>>(labels: &[S]) -> Vec<String> {
         .collect()
 }
 
+/// Whether a PR comment approves `head`: its trimmed body is exactly `/bosun approve <head>`
+/// with the full 40-character SHA.
+pub fn comment_approves(body: &str, head: &str) -> bool {
+    head.len() == 40 && body.trim() == format!("/bosun approve {head}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +506,21 @@ libc = "0"
             capability_labels(&["bug", "bosun:capability/prod-write"]),
             ["prod-write"]
         );
+    }
+
+    #[test]
+    fn a_comment_approves_only_the_full_head_sha() {
+        let head = "0123456789abcdef0123456789abcdef01234567";
+        assert!(comment_approves(&format!(" /bosun approve {head}\n"), head));
+        assert!(!comment_approves(
+            &format!("/bosun approve {}", &head[..7]),
+            head
+        ));
+        assert!(!comment_approves("/bosun approve 0123456", "0123456"));
+        assert!(!comment_approves(
+            &format!("/bosun approve {head} ok"),
+            head
+        ));
+        assert!(!comment_approves(&format!("/bosun  approve {head}"), head));
     }
 }
