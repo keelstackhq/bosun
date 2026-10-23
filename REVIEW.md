@@ -1,7 +1,7 @@
 # Review rules
 
 The reviewer gets `bosun review-pack <pr>` (diff, task, UCs, matching lessons, this file) and
-returns one JSON verdict for `bosun verdict post`. Approve needs confidence >= 0.85 and no
+returns one JSON verdict for `bosun verdict post` (or `bosun verdict comment`). Approve needs confidence >= 0.85 and no
 blocker finding (spec §7).
 
 ## Severity

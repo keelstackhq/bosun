@@ -24,7 +24,11 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
 - **Approve a high-risk PR.** Comment on the PR, as a login in `governance/owners.toml`, with
   exactly `/bosun approve <head sha>` (the full 40-character SHA of the current head). The
   `risk` workflow re-runs and `risk-check` turns green. A new push needs a new comment. A GitHub
-  review that approves the head SHA counts too, when the owner did not open the PR.
+  review that approves the head SHA counts too, when the owner did not open the PR. Post the
+  comment yourself (web UI or `gh` with your own token): a comment that an agent session writes
+  through the Claude app does not count, even under your login.
+- **Review verdicts from cloud sessions.** A reviewer runs `bosun verdict comment --from -`;
+  the `verdict` workflow checks the comment and posts the `review-verdict` status.
 - **Stop all work.** Create the label once:
   `gh label create bosun:halt --repo keelstackhq/bosun --color B60205`. Then open an issue with
   that label: `gh issue create --repo keelstackhq/bosun --label bosun:halt --title halt --body "<why>"`.

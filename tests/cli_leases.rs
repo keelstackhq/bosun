@@ -382,6 +382,9 @@ fn rival_lease(s: &mut common::fake::State, issue: u64, session: &str, touch: &s
         user: "octocat".into(),
         created_at: "2026-10-22T09:59:59Z".into(),
         updated_at: "2026-10-22T09:59:59Z".into(),
+        via_app: None,
+        no_app_field: false,
+        association: "MEMBER".into(),
     });
 }
 

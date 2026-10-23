@@ -35,6 +35,32 @@ pub struct Comment {
     pub user: String,
     pub created_at: String,
     pub updated_at: String,
+    /// `performed_via_github_app`: `None` when GitHub left the field out, `Some(None)` when it
+    /// is `null` (a plain user token), `Some(Some(slug))` when an app wrote the comment.
+    #[serde(
+        default,
+        rename = "performed_via_github_app",
+        deserialize_with = "app_slug"
+    )]
+    pub via_app: Option<Option<String>>,
+    #[serde(default)]
+    pub author_association: String,
+    /// `.../issues/<n>`: the issue or PR the comment is on.
+    #[serde(default)]
+    pub issue_url: String,
+}
+
+impl Comment {
+    /// Written with a plain user token: the app field is present and `null`. A missing field
+    /// is not proof, so it counts as written by an app (fail closed).
+    pub fn by_user_token(&self) -> bool {
+        self.via_app == Some(None)
+    }
+
+    /// Never edited since it was created.
+    pub fn unedited(&self) -> bool {
+        self.created_at == self.updated_at
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -178,6 +204,15 @@ fn text_or_empty<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
 /// True when the key is present with a non-null value.
 fn present<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     Ok(Option::<serde::de::IgnoredAny>::deserialize(d)?.is_some())
+}
+
+fn app_slug<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    #[derive(Deserialize)]
+    struct App {
+        #[serde(default)]
+        slug: String,
+    }
+    Ok(Some(Option::<App>::deserialize(d)?.map(|a| a.slug)))
 }
 
 fn login<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {

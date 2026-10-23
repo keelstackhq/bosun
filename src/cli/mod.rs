@@ -147,6 +147,8 @@ impl Command {
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
             Command::Verdict(VerdictCmd::Post(_)) => "verdict post",
+            Command::Verdict(VerdictCmd::Comment(_)) => "verdict comment",
+            Command::Verdict(VerdictCmd::Apply(_)) => "verdict apply",
             Command::Pr(_) => "pr",
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
@@ -277,6 +279,16 @@ pub struct IntegrityArgs {
 pub enum VerdictCmd {
     /// Post a reviewer verdict as the review-verdict status.
     Post(FromArg),
+    /// Post the verdict as a PR comment; the verdict workflow applies it (no status write).
+    Comment(FromArg),
+    /// Check a verdict comment and post its review-verdict status (the verdict workflow).
+    Apply(ApplyArg),
+}
+
+#[derive(Debug, Args)]
+pub struct ApplyArg {
+    /// The id of the PR comment that carries the verdict.
+    pub comment_id: u64,
 }
 
 #[derive(Debug, Args)]
