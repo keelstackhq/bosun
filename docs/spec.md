@@ -499,6 +499,9 @@ Main-health:
   failure and closes it on recovery.
 - The required check main-open fails every non-mainfix PR while main is red.
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
+  `bosun main-triage --good REV [--bad REV] [--run CMD]` bisects the first-parent commits between
+  good and bad (bad defaults to HEAD) in temporary worktrees. `--run` is a shell command, non-zero
+  is bad; the default is `bosun gate test --all`. It prints the first bad sha, subject and PR.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
 - Each main-red opens a lesson.

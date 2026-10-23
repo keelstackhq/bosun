@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod heartbeat;
 pub mod join;
 pub mod lesson;
+pub mod main_triage;
 pub mod msg;
 pub mod pr;
 pub mod reap;
@@ -101,10 +102,12 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// Bisect the merged PRs between a good and a bad rev; name the first bad one.
+    MainTriage(MainTriageArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 22] = [
+pub const COMMANDS: [&str; 23] = [
     "join",
     "claim",
     "heartbeat",
@@ -127,6 +130,7 @@ pub const COMMANDS: [&str; 22] = [
     "hook",
     "doctor",
     "budget",
+    "main-triage",
 ];
 
 impl Command {
@@ -159,6 +163,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::MainTriage(_) => "main-triage",
         }
     }
 }
@@ -373,4 +378,17 @@ pub struct BudgetRecordArgs {
     pub turns: Option<u64>,
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct MainTriageArgs {
+    /// A rev where the check passes (older than --bad).
+    #[arg(long)]
+    pub good: String,
+    /// A rev where the check fails (default HEAD).
+    #[arg(long)]
+    pub bad: Option<String>,
+    /// Shell command to run in each worktree; non-zero is bad (default: bosun gate test --all).
+    #[arg(long)]
+    pub run: Option<String>,
 }
