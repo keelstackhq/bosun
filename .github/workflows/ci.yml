@@ -68,13 +68,36 @@ jobs:
           fi
       - if: steps.boot.outputs.self == 'true'
         uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The gates run the release pinned in the base's .bosun/version (spec §11), so a change to
+      # bosun cannot approve itself. A base that says `unreleased` builds bosun from the base.
+      - name: pinned release of the base
+        id: pin
+        run: |
+          v="$(tr -d '[:space:]' < .bosun/version 2>/dev/null || true)"
+          case "$v" in ""|unreleased) v="";; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - if: steps.pin.outputs.version != ''
+        name: install the pinned release
+        env:
+          VERSION: ${{ steps.pin.outputs.version }}
+        run: |
+          npm install -g "@keelstackhq/bosun@${VERSION}"
+          dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+          mkdir -p target/release
+          cp "$dir/bin/bosun" target/release/bosun
+          got="$(target/release/bosun --version)"
+          echo "$got"
+          test "$got" = "bosun ${VERSION}"
+      - if: steps.pin.outputs.version == ''
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97"
-      - uses: Swatinem/rust-cache@v2
+      - if: steps.pin.outputs.version == ''
+        uses: Swatinem/rust-cache@v2
         with:
           shared-key: bosun-bin
-      - run: cargo build --release --locked --bin bosun
+      - if: steps.pin.outputs.version == ''
+        run: cargo build --release --locked --bin bosun
       - uses: actions/upload-artifact@v4
         with:
           name: bosun-bin
@@ -121,14 +144,30 @@ jobs:
 
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).
+  # The pin this change sets must be a published release that reports its own version; the
+  # gates of the next PRs install it.
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: the pinned release installs and reports its version
+        run: |
+          v="$(tr -d '[:space:]' < .bosun/version)"
+          if [ "$v" = unreleased ]; then echo "no release pinned yet"; exit 0; fi
+          npm install -g "@keelstackhq/bosun@${v}"
+          got="$(bosun --version)"
+          echo "$got"
+          test "$got" = "bosun ${v}"
+
   ci-ok:
-    needs: [docs, bosun-bin, gate]
+    needs: [docs, bosun-bin, gate, pin]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
         run: |
-          echo "docs: ${{ needs.docs.result }}, bosun-bin: ${{ needs.bosun-bin.result }}, gate: ${{ needs.gate.result }}"
+          echo "docs: ${{ needs.docs.result }}, bosun-bin: ${{ needs.bosun-bin.result }}, gate: ${{ needs.gate.result }}, pin: ${{ needs.pin.result }}"
           test "${{ needs.docs.result }}" = "success"
           test "${{ needs.bosun-bin.result }}" = "success"
           test "${{ needs.gate.result }}" = "success"
+          test "${{ needs.pin.result }}" = "success"

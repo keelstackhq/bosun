@@ -557,8 +557,10 @@ Rules:
 ## 11. Seed and bootstrap
 
 bosun pins its own release in `.bosun/version`. Its gates run the pinned release, never the binary
-built from main, so a bad change to bosun cannot approve itself. Until the first release exists,
-the gates run the binary built from the PR's base commit (seed only, see the seed plan S10). One
+built from main, so a bad change to bosun cannot approve itself: job `bosun-bin` reads the pin from
+the PR's base commit and installs `@keelstackhq/bosun@<pin>` from npm, checking that it reports that
+version. A base that pins `unreleased` (the seed, see the seed plan S10) builds bosun from the base
+commit instead. Job `pin` checks the pin a PR sets: that release must install and report its version. One
 bootstrap exception: when the base has no self-gating CI yet (the PR that adds it, and PRs stacked
 on it before it merges), the change builds bosun itself, and CI says so in a warning.
 

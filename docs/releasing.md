@@ -99,6 +99,8 @@ download do not work. Build from source with `cargo install --path .`.
 
 ## After v0.1.0: pin the release (R-gov PR)
 
+Done for v0.1.0. For a later release, the same PR moves the pin.
+
 An agent opens one PR, and the owner approves it on its head SHA (R-gov, R-ci). The PR:
 
 - sets `.bosun/version` to `0.1.0`;
