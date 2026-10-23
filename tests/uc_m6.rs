@@ -81,3 +81,57 @@ fn uc_m6_2() {
     assert_eq!(fake.labels_of(4), ["bosun:state/needs-human"]);
     assert_eq!(fake.comments_of(4).len(), 1);
 }
+
+/// UC-M6-3: a thread request with no ready issue runs intake, then a plan task, then spawn.
+#[test]
+fn uc_m6_3() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.comment(
+        1,
+        r#"{"bosun":"join","session":"session_test","origin":"slack","depth":1,"expires":"2026-10-22T10:20:00Z"}"#,
+    );
+    fake.content(
+        "governance/owners.toml",
+        "main",
+        "[[owner]]\ngithub = \"ada\"\nslack = \"U0ADA1\"\n",
+    );
+    fake.content(".bosun/bosun.toml", "main", "[slack]\nchannel = \"C1\"\n");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plans")).unwrap();
+    std::fs::write(
+        dir.path().join("plans/widget.md"),
+        "# Plan: widget\n\nproject: widget\n\n## M1: Lifecycle\n\narea: lifecycle\n\n### Tasks\n\n- T1: State machine\n  touch: src/core/state.rs\n\n### Done when\n\n- UC-M1-1: a task moves planned -> merged.\n",
+    )
+    .unwrap();
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_ORIGIN", "slack")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["spawn", "--slack-thread", "1700000000.000200"])
+        .args(["--slack-user", "U0ADA1", "--request", "-"])
+        .write_stdin("add a dry-run flag")
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    let n = v["data"]["intake"]
+        .as_u64()
+        .expect("intake opened an issue");
+    let labels = fake.labels_of(n);
+    assert!(
+        labels.contains(&"bosun:kind/plan".to_string()),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(&"bosun:source/slack".to_string()),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(&"bosun:state/claimed".to_string()),
+        "{labels:?}"
+    );
+    assert_eq!(v["data"]["epic"], n, "spawn took the plan task");
+    assert_eq!(v["next"][0]["tool"], "create_session");
+}

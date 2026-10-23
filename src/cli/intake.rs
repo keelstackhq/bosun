@@ -26,9 +26,14 @@ pub(crate) fn fence_text(text: &str) -> String {
 }
 
 pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
-    let text = a.text.trim();
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
+    open(&app, a)
+}
+
+/// Open (or find) the kind/plan issue of a request; the kill switch is the caller's.
+pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
+    let text = a.text.trim();
     if text.is_empty() {
         return Err(BosunError::usage(
             "the intake text is empty",
@@ -49,7 +54,13 @@ pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
         .unwrap_or(first);
     let title = format!(
         "intake: {}",
-        title_text.chars().take(80).collect::<String>()
+        title_text
+            .chars()
+            .take(80)
+            .collect::<String>()
+            .replace('`', "\u{02cb}")
+            .replace('@', "@\u{200b}")
+            .replace("<!--", "<!-\u{200b}-")
     );
     let kind = "bosun:kind/plan";
     let source = format!("bosun:source/{}", a.source);
