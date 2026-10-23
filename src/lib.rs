@@ -51,6 +51,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::MainTriage(a) => cli::main_triage::run(dir, a),
         Command::Init(a) => cli::init::run(dir, a),
         Command::Revert(a) => cli::revert::run(dir, a),
+        Command::Intake(a) => cli::intake::run(dir, a),
         Command::MainHealth(a) => cli::main_health::run(dir, a),
     }
 }

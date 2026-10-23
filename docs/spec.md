@@ -229,6 +229,10 @@ overlap when a path of one matches a glob of the other, or two globs can match a
 Intake: intake is the only way that new work enters. `bosun intake` (from Slack, a lesson, a flake
 or a human) writes a plan amendment as a kind/plan task. Only a merged plan task makes its tasks
 ready. After an amendment merges, `bosun plan amend` imports the new work and closes what the plan dropped.
+`bosun intake "<text>" --source slack|lesson|flake|human [--item ID] [--title T] [--plan FILE]` opens one
+`kind/plan` issue (state ready, `bosun:source/<source>`, `bosun:area/<area>` of `--item`) that asks for the
+amendment of the plan file (default `plans/<project>.md`; a missing file or unknown item is exit 2). An open
+issue of the same source with the same title is returned instead (`created: false`).
 
 ## 5. Spawning, waves and limits
 
