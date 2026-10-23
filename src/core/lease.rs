@@ -27,6 +27,18 @@ impl Lease {
     }
 }
 
+/// The Slack thread ts of the newest lease record that carries one (`bosun spawn
+/// --slack-thread`); `None` when no lease on the issue came from a thread.
+pub fn thread_of(notes: &[Note]) -> Option<String> {
+    notes
+        .iter()
+        .rev()
+        .find_map(|n| match parse_record(&n.body) {
+            Some(Record::Lease { thread_ts, .. }) => thread_ts,
+            _ => None,
+        })
+}
+
 /// The newest lease per session on one issue, ended leases removed. Expired ones are kept
 /// (reap needs them); filter with `is_live`.
 pub fn leases_of(issue: u64, notes: &[Note]) -> Vec<Lease> {
@@ -46,6 +58,7 @@ fn timed_leases_of(issue: u64, notes: &[Note]) -> Vec<(Lease, Timestamp)> {
                 origin,
                 expires,
                 touch,
+                ..
             }) => {
                 // An unparseable expiry counts as already expired.
                 let expires = parse_rfc3339(&expires).unwrap_or(Timestamp(0));
@@ -238,6 +251,7 @@ mod tests {
             origin: "local".into(),
             expires: expires.into(),
             touch: touch.iter().map(|s| s.to_string()).collect(),
+            thread_ts: None,
         }
     }
 

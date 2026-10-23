@@ -9,7 +9,7 @@ use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
 use crate::core::lease::{Lease, leases_of, race_winner};
 use crate::core::meta::{TaskMeta, parse_task_meta};
-use crate::core::records::{Note, Record, replace_record};
+use crate::core::records::{Note, Record, parse_record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
 use crate::github::{Github, Issue, IssueState, LiveGithub, Variable};
@@ -247,16 +247,22 @@ pub fn renew_lease(
     notes: &[Note],
     expires: Timestamp,
 ) -> Result<()> {
+    let body = notes
+        .iter()
+        .find(|n| n.id == lease.comment_id)
+        .map_or("", |n| n.body.as_str());
+    // A heartbeat keeps the Slack thread of the lease it renews.
+    let thread_ts = match parse_record(body) {
+        Some(Record::Lease { thread_ts, .. }) => thread_ts,
+        _ => None,
+    };
     let record = Record::Lease {
         session: lease.session.clone(),
         origin: lease.origin.clone(),
         expires: expires.to_string(),
         touch: lease.touch.clone(),
+        thread_ts,
     };
-    let body = notes
-        .iter()
-        .find(|n| n.id == lease.comment_id)
-        .map_or("", |n| n.body.as_str());
     gh.update_comment(lease.comment_id, &replace_record(body, &record))?;
     Ok(())
 }

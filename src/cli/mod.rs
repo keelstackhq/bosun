@@ -283,8 +283,8 @@ pub struct ResultArgs {
 
 #[derive(Debug, Args)]
 pub struct SpawnArgs {
-    /// The epic issue number.
-    pub epic: u64,
+    /// The epic issue number (optional only with --slack-thread).
+    pub epic: Option<u64>,
     /// Model of the new session (never a [1m] model).
     #[arg(long)]
     pub model: Option<String>,
@@ -297,6 +297,15 @@ pub struct SpawnArgs {
     /// Read a tool result from this file, or `-` for stdin.
     #[arg(long)]
     pub from: Option<String>,
+    /// The Slack thread ts that asked for this work (needs --slack-user); stored in the lease.
+    #[arg(long, value_name = "TS")]
+    pub slack_thread: Option<String>,
+    /// The Slack user ID of the requester, from the Claude Tag event (an owner's `slack` ID).
+    #[arg(long, value_name = "U...")]
+    pub slack_user: Option<String>,
+    /// With --slack-thread and nothing ready: the request for intake, `-` for stdin, or a file.
+    #[arg(long, value_name = "FILE")]
+    pub request: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

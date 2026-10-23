@@ -26,9 +26,14 @@ pub(crate) fn fence_text(text: &str) -> String {
 }
 
 pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
-    let text = a.text.trim();
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
+    open(&app, a)
+}
+
+/// Open (or find) the kind/plan issue of a request; the kill switch is the caller's.
+pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
+    let text = a.text.trim();
     if text.is_empty() {
         return Err(BosunError::usage(
             "the intake text is empty",

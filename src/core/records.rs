@@ -12,6 +12,9 @@ pub enum Record {
         origin: String,
         expires: String,
         touch: Vec<String>,
+        /// The Slack thread that started this work (`bosun spawn --slack-thread`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_ts: Option<String>,
     },
     /// The end of a session's lease on this issue: `released` or `reaped`.
     LeaseEnd { session: String, reason: String },
@@ -190,6 +193,7 @@ mod tests {
             origin: "spawned".into(),
             expires: "2026-10-22T10:30:00Z".into(),
             touch: vec!["src/core/lease.rs".into()],
+            thread_ts: None,
         };
         assert_eq!(
             r.to_line(),
