@@ -232,13 +232,15 @@ and never uses send_later or send_message.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 
 `bosun spawn` checks, in this order:
-1. Main is not red.
+1. Main is not red, and process is not red (a mainfix or process-fix epic is exempt from process-red).
 2. The daily budget is below 80 %.
 3. The depth of the new session is at most max_depth.
 4. The live sessions (all origins) are fewer than max_live_sessions.
 5. The children of the parent are fewer than max_children.
 6. There is no conflict with a live lease or area owner.
 7. Claim the epic, then return the `create_session` call in `next` (D29).
+
+`bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
 `spawn` and `budget record` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
 

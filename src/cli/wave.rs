@@ -32,15 +32,10 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             format!("wait for #{red} to close, or plan a mainfix epic"),
         ));
     }
-    if let Some(red) = process_red(gh)?
-        && !fixing("bosun:kind/mainfix")
-        && !fixing("bosun:kind/process-fix")
-    {
-        return Err(BosunError::halted(
-            format!("waves pause while process is red (#{red})"),
-            format!("close #{red} by merging its process-fix, or plan a process-fix epic"),
-        ));
-    }
+    // Process-red under a feature epic: only its process-fix tasks may run.
+    let only_fix = process_red(gh)?
+        .filter(|_| !fixing("bosun:kind/mainfix") && !fixing("bosun:kind/process-fix"));
+    let mut fix_tasks: Vec<u64> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -52,6 +47,9 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         if issue.state == "closed" || state == Some(State::Merged) {
             merged.push(plan_id);
         } else if meta.epic == Some(*epic) {
+            if meta.kind == "process-fix" {
+                fix_tasks.push(issue.number);
+            }
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {
@@ -66,7 +64,19 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             ));
         }
     }
-    let infos: Vec<TaskInfo> = tasks.iter().map(|t| t.0.clone()).collect();
+    if let Some(red) = only_fix
+        && fix_tasks.is_empty()
+    {
+        return Err(BosunError::halted(
+            format!("waves pause while process is red (#{red})"),
+            format!("close #{red} by merging its process-fix, or plan a process-fix epic"),
+        ));
+    }
+    let infos: Vec<TaskInfo> = tasks
+        .iter()
+        .filter(|t| only_fix.is_none() || fix_tasks.contains(&t.0.issue))
+        .map(|t| t.0.clone())
+        .collect();
     let mut leased = Vec::new();
     for (i, n) in active_issues(gh)? {
         leased.push((i.number, n));
@@ -84,11 +94,17 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
                 "touch": info.touch, "workspace": workspace})
         })
         .collect();
-    let waiting: Vec<_> = wave
+    let mut waiting: Vec<_> = wave
         .waiting
         .iter()
         .map(|(n, reason)| json!({"issue": n, "reason": reason}))
         .collect();
+    if let Some(red) = only_fix {
+        for (info, _, _) in tasks.iter().filter(|t| !fix_tasks.contains(&t.0.issue)) {
+            let reason = format!("process is red (#{red}): only process-fix tasks run");
+            waiting.push(json!({"issue": info.issue, "reason": reason}));
+        }
+    }
     Ok(Outcome::data(
         json!({"epic": epic, "run": run, "waiting": waiting}),
     ))

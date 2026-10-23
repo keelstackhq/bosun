@@ -170,6 +170,9 @@ mod tests {
         i.main_red = true;
         assert_eq!(refused(i), (1, Exit::Halted));
         let mut i = ok_input();
+        i.process_red = true;
+        assert_eq!(refused(i), (1, Exit::Halted));
+        let mut i = ok_input();
         i.spent_today_usd = 120.0; // exactly 80 %
         assert_eq!(refused(i), (2, Exit::Limit));
         let mut i = ok_input();
@@ -192,6 +195,26 @@ mod tests {
         i.main_red = true;
         i.children = 9;
         assert_eq!(refused(i).0, 1);
+    }
+
+    #[test]
+    fn process_red_exempts_mainfix_and_process_fix() {
+        let mut i = ok_input();
+        i.process_red = true;
+        i.process_fix = true;
+        assert_eq!(check(&i), Ok(()));
+        i.process_fix = false;
+        i.mainfix = true;
+        assert_eq!(check(&i), Ok(()));
+        // process-fix work does not skip main-red or the budget.
+        let mut i = ok_input();
+        i.process_fix = true;
+        i.main_red = true;
+        assert_eq!(refused(i), (1, Exit::Halted));
+        let mut i = ok_input();
+        i.process_fix = true;
+        i.spent_today_usd = 120.0;
+        assert_eq!(refused(i), (2, Exit::Limit));
     }
 
     #[test]
