@@ -365,4 +365,7 @@ fn an_owner_comment_approves_exactly_the_head_sha() {
             .contains("approved by ada"),
         "{s}"
     );
+
+    fake.review(1, "ada", "CHANGES_REQUESTED", HEAD40);
+    assert_eq!(check(&fake).0, 5, "request-changes withdraws the comment");
 }

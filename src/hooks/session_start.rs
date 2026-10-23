@@ -46,7 +46,7 @@ fn context(dir: Option<&Path>) -> Result<String, String> {
     } else {
         mine.join(", ")
     };
-    let halt = matches!(halt_reason(app.gh.as_ref()), Ok(Some(_)));
+    let halt = !matches!(halt_reason(app.gh.as_ref()), Ok(None));
     let red = match main_red(app.gh.as_ref()).ok().flatten() {
         Some(n) => format!("Main is red: open main-red issue #{n}."),
         None => "No open main-red issue.".to_string(),
@@ -56,6 +56,10 @@ fn context(dir: Option<&Path>) -> Result<String, String> {
          Run `bosun status` for the full picture.",
         member.session,
         member.origin,
-        if halt { "on (all work stopped)" } else { "off" },
+        if halt {
+            "on or unreadable (work commands exit 4)"
+        } else {
+            "off"
+        },
     ))
 }

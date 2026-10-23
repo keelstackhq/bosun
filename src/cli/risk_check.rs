@@ -164,7 +164,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
 /// an approval) or by an unedited PR comment `/bosun approve <head>`.
 fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
-    let by_review = owners.iter().find(|o| {
+    let decisive = |o: &str| {
         reviews
             .iter()
             .rev()
@@ -175,15 +175,20 @@ fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<O
                     "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
                 )
             })
-            .is_some_and(|r| r.state == "APPROVED")
-    });
+            .map(|r| r.state.clone())
+    };
+    let by_review = owners
+        .iter()
+        .find(|o| decisive(o).as_deref() == Some("APPROVED"));
     if let Some(o) = by_review {
         return Ok(Some(o.clone()));
     }
     let comments = gh.list_comments(pr)?;
-    // An edited comment does not count: users with write access can edit others' comments.
+    // An edited comment does not count: users with write access can edit others' comments. An
+    // owner whose newest decisive review on `head` requests changes has withdrawn the approval.
     Ok(owners
         .iter()
+        .filter(|o| decisive(o).as_deref() != Some("CHANGES_REQUESTED"))
         .find(|o| {
             comments.iter().any(|c| {
                 c.user.eq_ignore_ascii_case(o)

@@ -22,7 +22,8 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let now = ctx.now;
 
-    let halted = matches!(halt_reason(gh), Ok(Some(_)));
+    // An unreadable kill switch halts work commands, so it shows as halted.
+    let halted = !matches!(halt_reason(gh), Ok(None));
     let process_red = gh
         .list_issues(&[PROCESS_RED_LABEL], IssueState::Open)?
         .first()

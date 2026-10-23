@@ -76,4 +76,6 @@ fn risk_runs_on_approval_comments_without_checking_out_the_pr() {
     assert!(
         yaml.contains("PR: ${{ github.event.pull_request.number || github.event.issue.number }}")
     );
+    // Other comments must not cancel the run that judges a new head.
+    assert!(yaml.contains("&& github.run_id || 'judge'"), "{yaml}");
 }

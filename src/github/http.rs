@@ -118,7 +118,16 @@ impl Http {
         match r.status {
             200..=299 => Ok(Ok(Some(r.json()))),
             404 => Ok(Ok(None)),
-            403 if r.retry_after.is_none() && !r.rate_remaining_zero => Ok(Err(())),
+            403 if r.retry_after.is_none()
+                && !r.rate_remaining_zero
+                && !r.json()["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains("rate limit") =>
+            {
+                Ok(Err(()))
+            }
             _ => Err(self.fail("GET", path, &r)),
         }
     }

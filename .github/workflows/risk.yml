@@ -12,8 +12,13 @@ on:
   issue_comment:
     types: [created]
 
+# A comment that is not an approval gets a group of its own: its run is skipped and must never
+# cancel the run that judges a new head.
 concurrency:
-  group: risk-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: >-
+    risk-${{ github.event.pull_request.number || github.event.issue.number }}-${{
+    (github.event_name == 'issue_comment' && !contains(github.event.comment.body, '/bosun approve'))
+    && github.run_id || 'judge' }}
   cancel-in-progress: true
 
 permissions:

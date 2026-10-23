@@ -65,6 +65,15 @@ pub fn halt_reason(gh: &dyn Github) -> Result<Option<(String, String)>> {
         let owners = default_branch(gh)
             .and_then(|b| owner_logins(gh, &b))
             .map_err(|e| closed("the owners on the default branch", e))?;
+        if owners.is_empty() {
+            return Ok(Some((
+                format!(
+                    "halt issue #{} is open and no owners are listed to judge it",
+                    issues[0].number
+                ),
+                "fill governance/owners.toml on the default branch, or close the halt issue".into(),
+            )));
+        }
         let by_owner = issues
             .iter()
             .find(|i| owners.iter().any(|o| o.eq_ignore_ascii_case(&i.user)));

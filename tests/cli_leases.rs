@@ -231,6 +231,16 @@ fn an_open_halt_issue_by_an_owner_halts() {
 }
 
 #[test]
+fn a_halt_issue_with_no_owners_listed_halts() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.issue(50, "stop", &["bosun:halt"], "");
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 4, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("owners.toml"));
+}
+
+#[test]
 fn unreadable_halt_issues_fail_closed() {
     let fake = FakeGithub::start();
     ready(&fake, 10, "src/a.rs");

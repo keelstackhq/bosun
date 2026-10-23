@@ -429,7 +429,9 @@ High-risk PRs:
   body, trimmed, is exactly `/bosun approve <head_sha>` with the full 40-character SHA. The
   comment path exists because GitHub forbids approving your own PR, and an owner may also be the
   account that opens the PRs. A comment binds to that SHA: a new push needs a new comment. An
-  edited comment does not count (users with write access can edit other users' comments).
+  edited comment does not count (users with write access can edit other users' comments). When
+  the owner's newest decisive review on the head SHA requests changes, their comment does not
+  count either.
 - The `risk` workflow runs on pull request events, on reviews, and on PR comments (`issue_comment`
   created) that contain `/bosun approve`, so a comment re-evaluates `risk-check` without a push.
   On a comment the workflow file and the judging bosun come from the default branch; risk-check
@@ -444,7 +446,10 @@ Kill switch: bosun is halted while either source says so, and then every command
 changes work (including `bosun pr` and `bosun verdict post`) is exit 4:
 - An open issue with the label `bosun:halt`, opened by a login in `governance/owners.toml` (read
   from the default branch). An issue opened by anyone else is ignored. Any error reading the
-  issues or the owners is exit 4 (fail closed). The owner creates the label once:
+  issues or the owners is exit 4 (fail closed), and so is an open halt issue while no owners
+  are listed. Agents must never close a halt issue or remove its label; bosun does not yet
+  enforce that (a token with Issues: write can), so against a misbehaving agent the owner also
+  sets `BOSUN_HALT=1`, which agents cannot change. The owner creates the label once:
   `gh label create bosun:halt --repo <owner>/<repo> --color B60205`. To halt:
   `gh issue create --repo <owner>/<repo> --label bosun:halt --title "halt" --body "<why>"`; to
   resume, close the issue.
