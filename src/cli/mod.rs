@@ -97,7 +97,7 @@ pub enum Command {
     #[command(subcommand)]
     Hook(HookCmd),
     /// Report each checklist step as ok or missing.
-    Doctor,
+    Doctor(DoctorArgs),
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
@@ -157,7 +157,7 @@ impl Command {
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
-            Command::Doctor => "doctor",
+            Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
         }
     }
@@ -314,6 +314,13 @@ pub struct CiLogArgs {
     pub pr: u64,
     #[arg(long, default_value_t = 80)]
     pub tail: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Also run `hoist check` for the repo settings (steps 3 and 5)
+    #[arg(long)]
+    pub remote: bool,
 }
 
 #[derive(Debug, Args)]

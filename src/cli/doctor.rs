@@ -82,7 +82,107 @@ fn claude_app_seen(gh: &dyn Github) -> Result<bool, BosunError> {
     Ok(false)
 }
 
-pub fn run(dir: Option<&Path>) -> CmdResult {
+const HOIST_INSTALL_FIX: &str =
+    "install hoist (`npm install -g @keelstackhq/hoist`) or set BOSUN_HOIST";
+
+/// The step `hoist check` covers for an item (D17): 3 = branch protection, auto-merge and
+/// required checks; 5 = environments, secrets, variables and the release area.
+fn hoist_step(area: &str, kind: &str) -> usize {
+    let settings = matches!(kind, "environment" | "secret" | "variable");
+    if area == "release" || (area == "github" && settings) {
+        5
+    } else {
+        3
+    }
+}
+
+fn describe(it: &Value) -> String {
+    let s = |k: &str| it[k].as_str().unwrap_or("");
+    format!(
+        "{}/{}/{}: {} ({})",
+        s("area"),
+        s("kind"),
+        s("key"),
+        s("action"),
+        s("reason")
+    )
+}
+
+fn hoist_failed(items: &mut [Value], detail: &str, fix: &str, exit_code: Value) -> Value {
+    for step in [3, 5] {
+        items[step - 1]["status"] = json!("missing");
+        items[step - 1]["detail"] = json!(detail);
+        items[step - 1]["fix"] = json!(fix);
+    }
+    json!({"exit_code": exit_code, "drift": [], "unknown": [], "error": detail})
+}
+
+/// Run `hoist check --json` and fold its items into steps 3 and 5. Returns `data.hoist`.
+fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
+    let bin = std::env::var("BOSUN_HOIST")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "hoist".into());
+    // The token reaches hoist through the inherited environment, never argv.
+    let child = std::process::Command::new(&bin)
+        .args(["check", "--json", "-C"])
+        .arg(root)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .output();
+    let Ok(out) = child else {
+        return hoist_failed(
+            items,
+            "hoist is not installed",
+            HOIST_INSTALL_FIX,
+            Value::Null,
+        );
+    };
+    let code = out.status.code();
+    let exit_json = code.map_or(Value::Null, |c| json!(c));
+    let report = serde_json::from_slice::<Value>(&out.stdout)
+        .ok()
+        .filter(|v| v["items"].is_array());
+    let (Some(report), true) = (report, code.is_some_and(|c| c <= 1)) else {
+        let detail = format!("hoist check failed (exit {exit_json}): no JSON report on stdout");
+        let fix = "run `hoist check` by hand and fix what it reports";
+        return hoist_failed(items, &detail, fix, exit_json);
+    };
+    let (mut drift, mut unknown) = (Vec::new(), Vec::new());
+    let mut per_step: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+    for it in report["items"].as_array().into_iter().flatten() {
+        let line = describe(it);
+        match it["action"].as_str().unwrap_or("") {
+            "ok" => {}
+            "unknown" => unknown.push(line),
+            _ => {
+                let step = hoist_step(
+                    it["area"].as_str().unwrap_or(""),
+                    it["kind"].as_str().unwrap_or(""),
+                );
+                per_step[usize::from(step == 5)].push(line.clone());
+                drift.push(line);
+            }
+        }
+    }
+    for (step, lines) in [3, 5].into_iter().zip(per_step) {
+        let it = &mut items[step - 1];
+        if !lines.is_empty() {
+            it["status"] = json!("missing");
+            it["detail"] = json!(format!("hoist check drift: {}", lines.join("; ")));
+            it["fix"] = json!(HOIST_FIX);
+        } else if it["status"] == "ok" {
+            let detail = format!(
+                "{}; hoist check: no drift",
+                it["detail"].as_str().unwrap_or("")
+            );
+            it["detail"] = json!(detail);
+        }
+    }
+    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown})
+}
+
+pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let root = ctx.dir.as_path();
@@ -292,8 +392,12 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
     ));
 
+    let hoist_data = remote.then(|| apply_hoist(&mut items, root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
-    let data = json!({"items": items, "missing": missing, "routines": routines()});
+    let mut data = json!({"items": items, "missing": missing, "routines": routines()});
+    if let Some(h) = hoist_data {
+        data["hoist"] = h;
+    }
     if missing > 0 {
         return Err(BosunError::needs_human(
             format!("{missing} checklist steps missing"),

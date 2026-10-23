@@ -41,7 +41,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Ask(a) => cli::ask::run(dir, a),
         Command::Lesson(a) => cli::lesson::run(dir, a),
         Command::Hook(a) => hooks::dispatch(dir, a),
-        Command::Doctor => cli::doctor::run(dir),
+        Command::Doctor(a) => cli::doctor::run(dir, a.remote),
         Command::Budget(a) => cli::budget::run(dir, a),
     }
 }

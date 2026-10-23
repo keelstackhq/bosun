@@ -564,7 +564,7 @@ commit instead. Job `pin` checks the pin a PR sets: that release must install an
 bootstrap exception: when the base has no self-gating CI yet (the PR that adds it, and PRs stacked
 on it before it merges), the change builds bosun itself, and CI says so in a warning.
 
-`bosun doctor` reports the 12 steps below as ok or missing (exit 5 with the count if any is missing). It cannot see Routines, so step 11 is missing unless the owner sets `BOSUN_ROUTINES_OK=1`; the three Routine prompts are in `data.routines`. Step 2 counts a login that starts with `claude` as the app; step 4 accepts any non-empty `owner`/`owners` key in `governance/owners.toml`.
+`bosun doctor` reports the 12 steps below as ok or missing (exit 5 with the count if any is missing). It cannot see Routines, so step 11 is missing unless the owner sets `BOSUN_ROUTINES_OK=1`; the three Routine prompts are in `data.routines`. Step 2 counts a login that starts with `claude` as the app; step 4 accepts any non-empty `owner`/`owners` key in `governance/owners.toml`. `bosun doctor --remote` also runs `hoist check` and maps its items to steps 3 (branch protection, required checks) and 5 (environments, secrets, variables, release) as `data.hoist` (D17).
 
 Human checklist (12 steps):
 1. Create the repo.
