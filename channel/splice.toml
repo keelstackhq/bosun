@@ -1,5 +1,6 @@
 # The splice channel that `bosun init` adds (spec D16): `splice channel add
-# gh:keelstackhq/bosun//channel --as bosun --piece rust`. A channel version is a bosun release
+# gh:keelstackhq/bosun//channel --as bosun --piece rust --piece claude-md` (`bosun init` picks the
+# pieces and vars; see spec §3). A channel version is a bosun release
 # tag, so the channel and the pinned binary move together; the splice update bot brings each new
 # version to a consumer as one R-gov PR.
 format = 1
