@@ -72,7 +72,7 @@ const ENV_DRIFT: &str = r#"{"area":"release","kind":"environment","key":"release
 const RULESET_DRIFT: &str = r#"{"area":"github","kind":"ruleset","key":"main","action":"update","reason":"differs","source":"hoist.toml","verify":null}"#;
 const NPM_DRIFT: &str = r#"{"area":"npm","kind":"first_publish","key":"@keelstackhq/bosun","action":"create","reason":"not on the registry","source":"npm/bosun/package.json","verify":null}"#;
 const PERMS_UNKNOWN: &str = r#"{"area":"github","kind":"actions_permissions","key":"default","action":"unknown","reason":"proxy refused","source":"default","verify":null}"#;
-const VERIFY_BAD: &str = r#"{"area":"github","kind":"ruleset","key":"main","action":"ok","reason":"","source":"hoist.toml","verify":{"ok":false,"detail":"bypass actor present"}}"#;
+const VERIFY_BAD: &str = r#"{"area":"github","kind":"required_check","key":"risk-check","action":"ok","reason":"","source":"hoist.toml","verify":{"ok":false,"detail":"no job named risk-check"}}"#;
 const UNKNOWN: &str = r#"{"area":"github","kind":"secret","key":"TOKEN","action":"unknown","reason":"proxy refused","source":"hoist.toml","verify":null}"#;
 
 #[test]
@@ -237,7 +237,7 @@ fn npm_drift_goes_to_step_ten_not_step_three() {
 }
 
 #[test]
-fn ruleset_drift_and_failed_verify_are_step_three_drift() {
+fn ruleset_drift_is_step_three_drift() {
     let tmp = tempfile::tempdir().unwrap();
     let h = fake_hoist(tmp.path(), &report(RULESET_DRIFT, false, 1), 1);
     let repo = repo_with_checks();
@@ -248,14 +248,6 @@ fn ruleset_drift_and_failed_verify_are_step_three_drift() {
             .as_str()
             .unwrap()
             .contains("hoist apply --area github")
-    );
-    let h = fake_hoist(tmp.path(), &report(VERIFY_BAD, false, 1), 1);
-    let (_, v) = run(&h, repo.path(), true);
-    assert!(
-        step(&v, 3)["detail"]
-            .as_str()
-            .unwrap()
-            .contains("bypass actor present")
     );
 }
 
@@ -316,5 +308,82 @@ fn a_hung_hoist_is_killed_after_the_timeout() {
                 .unwrap()
                 .contains("hoist check timed out after 1s")
         );
+    }
+}
+
+#[test]
+fn failed_verify_is_a_note_and_fails_no_step() {
+    let tmp = tempfile::tempdir().unwrap();
+    let h = fake_hoist(tmp.path(), &report(VERIFY_BAD, false, 1), 1);
+    let repo = repo_with_checks();
+    let (_, v) = run(&h, repo.path(), true);
+    assert_eq!(step(&v, 3)["status"], "ok", "{}", step(&v, 3));
+    assert_eq!(v["data"]["hoist"]["drift"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        v["data"]["hoist"]["notes"][0],
+        "github/required_check/risk-check: no job named risk-check"
+    );
+}
+
+#[test]
+fn a_timeout_kills_the_whole_process_group() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pidfile = tmp.path().join("grandchild.pid");
+    let bin = tmp.path().join("slow-hoist");
+    std::fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nsleep 30 &\necho $! > '{}'\nwait\n",
+            pidfile.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let repo = repo_with_checks();
+    let fake = FakeGithub::start();
+    bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_HOIST", &bin)
+        .env("BOSUN_HOIST_TIMEOUT_SECS", "1")
+        .arg("-C")
+        .arg(repo.path())
+        .args(["doctor", "--remote"])
+        .output()
+        .unwrap();
+    let pid = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .to_string();
+    let mut gone = false;
+    for _ in 0..50 {
+        // A killed child may linger as a zombie until init reaps it: read its state.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        if stat.is_empty() || stat.contains(") Z") {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(gone, "grandchild {pid} survived the timeout");
+}
+
+#[test]
+fn a_zero_or_invalid_timeout_uses_the_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let h = fake_hoist(tmp.path(), &report(OK_ITEM, true, 0), 0);
+    let repo = repo_with_checks();
+    let fake = FakeGithub::start();
+    for bad in ["0", "soon"] {
+        let out = bosun()
+            .env("BOSUN_GITHUB_API", fake.url())
+            .env("BOSUN_HOIST", &h)
+            .env("BOSUN_HOIST_TIMEOUT_SECS", bad)
+            .arg("-C")
+            .arg(repo.path())
+            .args(["doctor", "--remote"])
+            .output()
+            .unwrap();
+        let v = one_object(&out.stdout);
+        assert_eq!(step(&v, 3)["status"], "ok", "{bad}: {v}");
     }
 }

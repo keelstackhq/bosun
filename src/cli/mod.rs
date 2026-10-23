@@ -329,7 +329,9 @@ pub struct CiLogArgs {
 
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
-    /// Also run `hoist check` for the repo settings (steps 3 and 5)
+    /// Also run `hoist check` (120 s limit, BOSUN_HOIST_TIMEOUT_SECS): drift fails step 3 (github
+    /// settings and checks), 5 (release and environments) or 10 (npm and crates first publish);
+    /// unknown items and verify notes are listed in data.hoist
     #[arg(long)]
     pub remote: bool,
 }

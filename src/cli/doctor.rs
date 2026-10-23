@@ -129,23 +129,38 @@ fn hoist_failed(items: &mut [Value], detail: &str, fix: &str, exit_code: Value) 
     for step in [3, 5] {
         append_problem(&mut items[step - 1], detail, fix);
     }
-    json!({"exit_code": exit_code, "drift": [], "unknown": [], "error": detail})
+    json!({"exit_code": exit_code, "drift": [], "unknown": [], "notes": [], "error": detail})
 }
 
 type HoistRun = Result<(Option<i32>, Vec<u8>), Option<std::io::Error>>;
+
+/// Kill hoist and everything it started (its pgid is its pid; see `process_group(0)`).
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", child.id())])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
 
 /// Run hoist with stdout captured and a deadline; `Err(None)` means it timed out.
 fn run_hoist(bin: &str, root: &Path, secs: u64) -> HoistRun {
     use std::io::Read;
     // The token reaches hoist through the inherited environment, never argv.
-    let mut child = std::process::Command::new(bin)
-        .args(["check", "--json", "-C"])
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["check", "--json", "-C"])
         .arg(root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .spawn()
-        .map_err(Some)?;
+        .stderr(std::process::Stdio::inherit());
+    // Own process group, so a timeout can kill the node shim's native child too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().map_err(Some)?;
     let mut pipe = child.stdout.take();
     let reader = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -159,7 +174,7 @@ fn run_hoist(bin: &str, root: &Path, secs: u64) -> HoistRun {
         match child.try_wait().map_err(Some)? {
             Some(s) => break s,
             None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
+                kill_group(&mut child);
                 let _ = child.wait();
                 return Err(None);
             }
@@ -184,7 +199,8 @@ fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
         .unwrap_or_else(|| "hoist".into());
     let secs = std::env::var("BOSUN_HOIST_TIMEOUT_SECS")
         .ok()
-        .and_then(|v| v.trim().parse().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|n| *n > 0)
         .unwrap_or(HOIST_TIMEOUT_SECS);
     let (code, stdout) = match run_hoist(&bin, root, secs) {
         Ok(r) => r,
@@ -213,7 +229,7 @@ fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
         let detail = format!("hoist check exited with {exit_json} (expected 0 or 1)");
         return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
     }
-    let (mut drift, mut unknown) = (Vec::new(), Vec::new());
+    let (mut drift, mut unknown, mut notes) = (Vec::new(), Vec::new(), Vec::new());
     let mut per_step: std::collections::BTreeMap<usize, StepFindings> = [3, 5, 10]
         .into_iter()
         .map(|s| (s, StepFindings::default()))
@@ -223,22 +239,22 @@ fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
         let (step, area) = hoist_step(&s("area"), &s("kind"));
         let entry = per_step.entry(step).or_default();
         let action = s("action");
-        let verify_bad = it["verify"]["ok"] == false;
+        // A failed verify is a note, never drift: hoist's job-name check cannot see commit
+        // statuses such as risk-check, so it would fail forever on a correct repo.
+        if action == "ok" && it["verify"]["ok"] == false {
+            notes.push(format!(
+                "{}/{}/{}: {}",
+                s("area"),
+                s("kind"),
+                s("key"),
+                it["verify"]["detail"].as_str().unwrap_or("verify failed")
+            ));
+        }
         if action == "unknown" {
             unknown.push(describe(it));
             entry.unknown.push(format!("{}/{}", s("kind"), s("key")));
-        } else if action != "ok" || verify_bad {
-            let line = if action == "ok" {
-                format!(
-                    "{}/{}/{}: verify failed ({})",
-                    s("area"),
-                    s("kind"),
-                    s("key"),
-                    it["verify"]["detail"].as_str().unwrap_or("")
-                )
-            } else {
-                describe(it)
-            };
+        } else if action != "ok" {
+            let line = describe(it);
             if !entry.areas.contains(&area) {
                 entry.areas.push(area);
             }
@@ -270,7 +286,7 @@ fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
             it["detail"] = json!(format!("{}; {note}", it["detail"].as_str().unwrap_or("")));
         }
     }
-    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown})
+    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes})
 }
 
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
