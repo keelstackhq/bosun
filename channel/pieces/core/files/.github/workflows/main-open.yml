@@ -1,0 +1,29 @@
+# Written by the bosun splice channel (owned).
+name: main-open
+
+# The required `main-open` check (spec §9): while an issue labelled bosun:main-red is open,
+# only PRs labelled bosun:kind/mainfix may pass. M3 moves this into `bosun gate main-open`.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  main-open:
+    runs-on: ubuntu-latest
+    steps:
+      - name: main is open, or this is a mainfix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          red=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=bosun:main-red&state=open" --jq 'map(.number) | join(" ")')
+          if [ -z "$red" ]; then echo "main is open"; exit 0; fi
+          case ",$LABELS," in *",bosun:kind/mainfix,"*) echo "main is red (#$red); mainfix passes"; exit 0;; esac
+          echo "::error::main is red (#$red): only bosun:kind/mainfix PRs may merge until it closes"
+          exit 1

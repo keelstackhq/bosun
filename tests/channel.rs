@@ -1,5 +1,6 @@
 //! The splice channel in `channel/` (spec D16), checked without splice: the manifest and pieces,
-//! the classes of each file, and GitHub expressions kept out of the template syntax.
+//! the classes of each file, GitHub expressions kept out of the template syntax, and workflows
+//! that run the pinned bosun release, never code from the PR head.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -123,4 +124,44 @@ fn hoist_requires_the_four_checks() {
     let hoist = toml_at(&channel().join("pieces/core/files/hoist.toml"));
     let required = strings(hoist["github"].get("required_checks"));
     assert_eq!(required, bosun::cli::pr::REQUIRED);
+}
+
+#[test]
+fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
+    let wf = channel().join("pieces/core/files/.github/workflows");
+    for f in ["risk.yml", "verdict.yml"] {
+        let y = fs::read_to_string(wf.join(f)).unwrap();
+        assert!(!y.contains("cargo build"), "{f} builds bosun");
+        assert!(
+            y.contains(r#"npm install -g --ignore-scripts "@keelstackhq/bosun@${v}""#),
+            "{f} does not install the pinned release"
+        );
+        assert!(
+            !y.contains("head.sha") && !y.contains("head.ref"),
+            "{f} checks out the PR head"
+        );
+    }
+    let risk = fs::read_to_string(wf.join("risk.yml")).unwrap();
+    assert!(risk.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"));
+}
+
+#[test]
+fn ci_ok_needs_every_job() {
+    let ci = fs::read_to_string(channel().join("pieces/core/files/.github/workflows/ci.yml.jinja"))
+        .unwrap();
+    let body = &ci[ci.find("\njobs:\n").unwrap()..];
+    let ids: Vec<&str> = body
+        .lines()
+        .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.ends_with(':'))
+        .map(|l| l.trim().trim_end_matches(':'))
+        .collect();
+    assert_eq!(ids, ["bosun-bin", "gate", "pin", "ci-ok"]);
+    let ci_ok = &body[body.find("\n  ci-ok:").unwrap()..];
+    assert!(ci_ok.contains("needs: [bosun-bin, gate, pin]"));
+    assert!(ci_ok.contains("if: always()"));
+    for id in ["bosun-bin", "gate", "pin"] {
+        assert!(ci_ok.contains(&format!(
+            "test \"${{{{ needs.{id}.result }}}}\" = \"success\""
+        )));
+    }
 }

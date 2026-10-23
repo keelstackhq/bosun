@@ -1,0 +1,47 @@
+# Written by the bosun splice channel (owned).
+name: main-health
+
+# Keeps one bosun:main-red issue open while main fails (spec §9): it opens one when ci fails
+# on main or the nightly run fails, and closes it when main is green again.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  # The gates of ci.yml on all of main (`bosun gate <name> --all`), whatever the stacks are.
+  nightly:
+    if: github.event_name != 'workflow_run'
+    uses: ./.github/workflows/ci.yml
+
+  report:
+    needs: nightly
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: open or close the main-red issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}
+          RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+        run: |
+          repo="$GITHUB_REPOSITORY"
+          open=$(gh api "repos/$repo/issues?labels=bosun:main-red&state=open" --jq '.[0].number // empty')
+          if [ "$RESULT" = "success" ]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" --repo "$repo" --comment "main is green again: $RUN_URL"
+            fi
+          elif [ "$RESULT" = "failure" ] && [ -z "$open" ]; then
+            gh label create bosun:main-red --repo "$repo" --color B60205 \
+              --description "main is red; only mainfix work continues" 2>/dev/null || true
+            gh issue create --repo "$repo" --label bosun:main-red --title "main is red" \
+              --body "A run on main failed: $RUN_URL. Feature work pauses; fix it with a bosun:kind/mainfix PR (spec §9)."
+          fi

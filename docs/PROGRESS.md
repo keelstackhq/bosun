@@ -102,6 +102,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
 - 2026-10-23 · Pin v0.1.0 · `.bosun/version` = 0.1.0; ci.yml `bosun-bin` installs the base's pinned release from npm (falls back to building the base while it says `unreleased`), new job `pin` checks a PR's pin installs and reports its version; setup script installs `@keelstackhq/bosun@0.1.0` · spec §11
 - 2026-10-23 · M7 T1 (1/2) · splice channel `channel/` (pieces core, rust, ts-pnpm): governance seeds, AGENTS/REVIEW/CLAUDE sections; `.bosun/version` follows the channel version (a release tag) · `cargo test --test channel` 4/4, real splice 0.2.0 renders rust, ts-pnpm and mixed repos, a new version updates as one change
+- 2026-10-23 · M7 T1 (2/2) · channel workflows: ci.yml (gates via `bosun gate`, rust and ts-pnpm toolchains by piece, hoard for ts-pnpm, `ci-ok`), risk, verdict, main-open, main-health (nightly reuses ci.yml) and the splice update bot; all install the pinned release from npm, never PR code · `cargo test --test channel` 6/6, real splice renders valid YAML for rust, ts-pnpm and mixed
 
 ## Blocked
 

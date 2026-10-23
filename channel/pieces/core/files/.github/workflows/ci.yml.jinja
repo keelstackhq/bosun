@@ -1,0 +1,163 @@
+{% raw %}name: ci
+
+# Written by the bosun splice channel (owned: `splice update --channel bosun` replaces it, so a
+# local edit is drift). Every gate runs `bosun gate <name>`; change a gate's command in
+# .bosun/profiles/<profile>.toml, and add other checks in a workflow of your own.
+on:
+  pull_request:
+    branches: [main]
+    # `edited` covers a stacked PR being retargeted to main.
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+  merge_group:
+  # main-health runs the same gates nightly on all of main.
+  workflow_call:
+
+# A new push to the same PR or branch cancels its older run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # The gates run the bosun release pinned in the base commit's .bosun/version, never one the
+  # change under test picks, so a change cannot loosen the tool that judges it.
+  bosun-bin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: pinned release of the base
+        id: pin
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          v=""
+          if [ -n "$BASE" ]; then v="$(git show "$BASE:.bosun/version" 2>/dev/null | tr -d '[:space:]' || true)"; fi
+          if [ -z "$v" ]; then
+            # No base (nightly), or a base with no bosun yet (the setup PR): use this commit's pin.
+            v="$(tr -d '[:space:]' < .bosun/version)"
+            if [ "$EVENT" = pull_request ]; then
+              echo "::warning::the base pins no bosun release yet; using this change's pin $v (setup PR)"
+            fi
+          fi
+          # An exact x.y.z only: never a dist-tag, range, URL or path.
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || {
+            echo "::error::.bosun/version must be an exact x.y.z, not '$v'"
+            exit 1
+          }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: install the pinned release
+        env:
+          VERSION: ${{ steps.pin.outputs.version }}
+        run: |
+          npm install -g --ignore-scripts "@keelstackhq/bosun@${VERSION}"
+          dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp "$dir/bin/bosun" "$RUNNER_TEMP/bin/bosun"
+          got="$("$RUNNER_TEMP/bin/bosun" --version)"
+          echo "$got"
+          test "$got" = "bosun ${VERSION}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bosun-bin
+          path: ${{ runner.temp }}/bin/bosun
+          retention-days: 1
+
+  gate:
+    name: gate-${{ matrix.gate }}
+    needs: bosun-bin
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [fmt, lint, test, deps, test-integrity]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+{% endraw %}{% if "rust" in pieces %}      # rust stack: rust-toolchain.toml picks the toolchain; the cache is Swatinem/rust-cache.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: {{ rust_path }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+{% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack: Node 24, pnpm from package.json `packageManager`, the Turborepo cache
+      # through hoard. Skipped while the stack has no lockfile yet (a new repo).
+      - uses: pnpm/action-setup@v4
+        if: hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        with:
+          package_json_file: {{ ts_path }}/package.json
+      - uses: actions/setup-node@v4
+        if: hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: {{ ts_path }}/pnpm-lock.yaml
+      - if: hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        working-directory: {{ ts_path }}
+        run: pnpm install --frozen-lockfile
+      - uses: keelstackhq/hoard@v0
+        if: hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+{% endif %}{% raw %}      - uses: actions/download-artifact@v4
+        with:
+          name: bosun-bin
+          path: ${{ runner.temp }}/bosun
+      - name: bosun gate ${{ matrix.gate }}
+        env:
+          GATE: ${{ matrix.gate }}
+          # test-integrity reads the snapshot-change line from the PR body.
+          BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          bosun="$RUNNER_TEMP/bosun/bosun"
+          chmod +x "$bosun"
+          # A PR runs the gate on what it changed; main and the queue run it on everything.
+          if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
+          "$bosun" gate "$GATE" $all
+
+  # The pin a change sets must be a published release that reports its own version.
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: the pinned release installs and reports its version
+        run: |
+          v="$(tr -d '[:space:]' < .bosun/version)"
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || {
+            echo "::error::.bosun/version must be an exact x.y.z, not '$v'"
+            exit 1
+          }
+          npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
+          got="$(bosun --version)"
+          echo "$got"
+          test "$got" = "bosun ${v}"
+
+  # The one required CI check (spec D15): it fails unless every job above succeeded, also when
+  # one was skipped or cancelled.
+  ci-ok:
+    needs: [bosun-bin, gate, pin]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: All CI jobs succeeded
+        run: |
+          echo "bosun-bin: ${{ needs.bosun-bin.result }}, gate: ${{ needs.gate.result }}, pin: ${{ needs.pin.result }}"
+          test "${{ needs.bosun-bin.result }}" = "success"
+          test "${{ needs.gate.result }}" = "success"
+          test "${{ needs.pin.result }}" = "success"
+{% endraw %}
