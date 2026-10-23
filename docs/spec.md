@@ -224,7 +224,7 @@ overlap when a path of one matches a glob of the other, or two globs can match a
 
 Intake: intake is the only way that new work enters. `bosun intake` (from Slack, a lesson, a flake
 or a human) writes a plan amendment as a kind/plan task. Only a merged plan task makes its tasks
-ready.
+ready. After an amendment merges, `bosun plan amend` imports the new work and closes what the plan dropped.
 
 ## 5. Spawning, waves and limits
 
@@ -358,9 +358,20 @@ Prune:
 - `bosun lesson hit <id>` records a hit. `lesson add` and `lesson hit` change the local file `docs/lessons.toml` and need no GitHub; only `lesson hit --issue N`, which posts a `lesson-hit` record, does (and obeys the kill switch).
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
-- A lesson that gets a hit after its mechanism merged reopens as blocking.
-- `bosun lesson --upstream` sends a lesson about bosun itself to keelstackhq/bosun.
-- Metrics: `bosun progress --lessons` (open, mechanized, hits per week).
+- A lesson that gets a hit after its mechanism merged reopens as blocking. A lesson is mechanized
+  when its issue is labelled `bosun:lesson/mechanizable` and closed as `completed`. When
+  `lesson capture` finds no open issue with the signature but a mechanized one, it reopens that
+  issue, makes it `bosun:lesson/blocking` (the other triage labels go), adds `bosun:process-red`, and comments "The mechanism did not
+  hold: seen again. Reopened as blocking" with the `lesson-seen` record; the output has
+  `reopened: true`. Issues closed as `not_planned` or `duplicate`, advice lessons and untriaged
+  lessons are ignored: a new lesson opens.
+- `bosun lesson add --upstream "<text>" [--why ...]` sends a lesson about bosun itself to
+  keelstackhq/bosun as an issue (`bosun:lesson`, `bosun:source/lesson`; title cut to 120
+  characters), not to the local store.
+  It obeys the kill switch; data `{upstream: true, issue}`.
+- Metrics: `bosun progress --lessons` (open, mechanized, hits per week). data `lessons: {open,
+  blocking, mechanized, advice, hits_last_7_days, hits_by_week: [{week_start, hits}]}` (4 weeks,
+  oldest first), counted from `lesson-seen` and `lesson-hit` records.
 
 ## 7. Verification and the gate contract
 
@@ -450,7 +461,7 @@ REVIEW.md). The reviewer returns:
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record when that sha has a successful `review-verdict` status, else it is a full review (statuses are per SHA, so they cannot carry it).
-- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated), default `ci-ok,risk-check,review-verdict,main-open`; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses the repo's default branch (from GitHub), `main`, `master` and a detached HEAD (exit 2), opens the PR against the default branch, and `--auto-merge` is refused (exit 3) unless the task is in `review`, before any GraphQL call. Auto-merge goes through GraphQL; when a Claude Code cloud session's proxy refuses it (403, "GraphQL is not available from Claude Code sessions"), bosun uses `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` with `merge_method: squash` and reports `auto_merge_route` (`graphql` or `ccr`); any other error stops as before. The merge-lock hook still blocks agents from calling these routes themselves. `bosun gate` and `test-integrity` take their base from `origin/HEAD` when offline, else `origin/main`; `bosun ask` reads the owners from the default branch.
+- `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated, replaces all), else the defaults `ci-ok,risk-check,review-verdict,main-open` plus any extra entries of `hoist.toml` `[github] required_checks` read from the default branch via the API; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses the repo's default branch (from GitHub), `main`, `master` and a detached HEAD (exit 2), opens the PR against the default branch, and `--auto-merge` is refused (exit 3) unless the task is in `review`, before any GraphQL call. Auto-merge goes through GraphQL; when a Claude Code cloud session's proxy refuses it (403, "GraphQL is not available from Claude Code sessions"), bosun uses `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` with `merge_method: squash` and reports `auto_merge_route` (`graphql` or `ccr`); any other error stops as before. The merge-lock hook still blocks agents from calling these routes themselves. `bosun gate` and `test-integrity` take their base from `origin/HEAD` when offline, else `origin/main`; `bosun ask` reads the owners from the default branch.
 - `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; an `escalate_risk` verdict is never green (status `failure`, "escalated to the owner"); approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
 - `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
 

@@ -197,6 +197,7 @@ impl Command {
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
+            Command::Plan(PlanCmd::Amend(_)) => "plan amend",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
             Command::Progress(_) => "progress",
@@ -404,6 +405,9 @@ pub struct LessonAddArgs {
     pub why: Option<String>,
     #[arg(long = "evidence", value_name = "REF")]
     pub evidence: Vec<String>,
+    /// File the lesson on keelstackhq/bosun (it is about bosun itself); no local change.
+    #[arg(long)]
+    pub upstream: bool,
 }
 
 #[derive(Debug, Args)]
@@ -471,6 +475,9 @@ pub struct ProgressArgs {
     /// Length of the window in days, ending now.
     #[arg(long, default_value_t = 7)]
     pub days: u32,
+    /// Show the lessons view instead: open, blocking, mechanized, hits per week (spec §6).
+    #[arg(long, conflicts_with = "days")]
+    pub lessons: bool,
 }
 
 #[derive(Debug, Args)]
@@ -492,6 +499,17 @@ pub enum PlanCmd {
     Check(PlanCheckArgs),
     /// Create the epics, plan tasks and tasks of a plan that do not exist yet.
     Import(PlanImportArgs),
+    /// Import, then close what the plan dropped and update changed tasks (after an amendment merged).
+    Amend(PlanAmendArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanAmendArgs {
+    /// The plan file, for example plans/bosun.md.
+    pub file: String,
+    /// Show what would be created, closed and updated; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]

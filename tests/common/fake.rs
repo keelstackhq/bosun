@@ -177,6 +177,17 @@ impl FakeGithub {
         i.state_reason = Some(reason.into());
     }
 
+    /// Put a label on an issue.
+    pub fn label(&self, number: u64, label: &str) {
+        let mut s = self.state.lock().unwrap();
+        let i = s
+            .issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .expect("issue");
+        i.labels.push(label.into());
+    }
+
     /// Make `number` a deleted issue: out of the list, GET answers 410.
     pub fn gone(&self, number: u64) {
         self.hide_from_list(number);

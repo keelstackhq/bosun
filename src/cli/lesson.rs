@@ -5,13 +5,14 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::status::PROCESS_RED_LABEL;
 use super::{LessonAddArgs, LessonCaptureArgs, LessonCmd, LessonHitArgs};
 use crate::app::{App, kill_switch, notes};
-use crate::core::lessons::{self, Store};
+use crate::core::lessons::{self, Store, is_mechanized};
 use crate::core::records::{Record, parse_record};
 use crate::core::signature::{lesson_marker, normalise, parse_lesson_marker, signature};
 use crate::ctx::Ctx;
-use crate::github::{Github, IssueState};
+use crate::github::{Github, IssuePatch, IssueState, LiveGithub, PatchState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub const FILE: &str = "docs/lessons.toml";
@@ -67,6 +68,9 @@ pub(super) fn today(ctx: &Ctx) -> String {
 }
 
 fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
+    if a.upstream {
+        return upstream(dir, a);
+    }
     let ctx = Ctx::load(dir)?;
     let mut store = load(&ctx.dir)?;
     let id = lessons::add(
@@ -81,6 +85,38 @@ fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
     save(&ctx.dir, &store)?;
     Ok(Outcome::data(
         json!({"id": id, "count": store.lesson.len(), "global_count": store.global_count()}),
+    ))
+}
+
+/// Repository that owns bosun itself (`lesson add --upstream`).
+const UPSTREAM: (&str, &str) = ("keelstackhq", "bosun");
+
+/// `lesson add --upstream`: a lesson about bosun goes to keelstackhq/bosun as an issue; the
+/// local store does not change (spec §6).
+fn upstream(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
+    let app = App::load(dir)?;
+    kill_switch(app.gh.as_ref())?;
+    let gh = LiveGithub::new(UPSTREAM.0, UPSTREAM.1)?;
+    gh.ensure_label(LESSON_LABEL, "fbca04", "a failure the curator triages")?;
+    gh.ensure_label("bosun:source/lesson", "ededed", "opened by lesson capture")?;
+    let first = a.text.lines().map(str::trim).find(|l| !l.is_empty());
+    let title: String = first.unwrap_or("").chars().take(120).collect();
+    let why = a.why.as_deref().filter(|w| !w.is_empty());
+    let body = format!(
+        "{}\n\n{}Reported from {}/{} by {}.\n",
+        a.text,
+        why.map_or(String::new(), |w| format!("Why: {w}\n\n")),
+        app.ctx.repo.owner,
+        app.ctx.repo.name,
+        app.ctx.session
+    );
+    let issue = gh.create_issue(
+        &format!("lesson: {}", title),
+        &body,
+        &[LESSON_LABEL, "bosun:source/lesson"],
+    )?;
+    Ok(Outcome::data(
+        json!({"upstream": true, "issue": issue.number}),
     ))
 }
 
@@ -164,7 +200,7 @@ fn capture(dir: Option<&Path>, a: &LessonCaptureArgs) -> CmdResult {
     )?;
     Ok(Outcome::data(
         json!({"issue": c.issue, "signature": c.signature,
-        "created": c.created, "hits": c.hits, "kind": a.kind}),
+        "created": c.created, "reopened": c.reopened, "hits": c.hits, "kind": a.kind}),
     ))
 }
 
@@ -182,6 +218,8 @@ pub struct Captured {
     pub created: bool,
     /// `lesson-seen` records on the issue after this call; 0 for a new one.
     pub hits: usize,
+    /// True when the hit reopened a mechanized lesson as blocking.
+    pub reopened: bool,
 }
 
 /// Capture a failure as a lesson (spec §6). The signature is [`signature`] of `kind` and `text`.
@@ -199,18 +237,37 @@ pub fn capture_lesson(
 ) -> Result<Captured, BosunError> {
     let sig = signature(kind, text);
     let on_task = task.map_or(String::new(), |t| format!(" on #{t}"));
-    let existing = gh
+    let matches = |i: &crate::github::Issue| {
+        parse_lesson_marker(i.body_text()).is_some_and(|(s, _)| s == sig)
+    };
+    let mut existing = gh
         .list_issues(&[LESSON_LABEL], IssueState::Open)?
         .into_iter()
-        .find(|i| parse_lesson_marker(i.body_text()).is_some_and(|(s, _)| s == sig));
+        .find(matches);
+    let mut reopened = false;
+    if existing.is_none() {
+        // A mechanized lesson that is hit again: its mechanism did not hold (spec §6).
+        existing = gh
+            .list_issues(&[LESSON_LABEL], IssueState::Closed)?
+            .into_iter()
+            .find(|i| matches(i) && is_mechanized(&i.state, i.state_reason.as_deref(), &i.labels));
+        reopened = existing.is_some();
+    }
     if let Some(issue) = existing {
         let record = Record::LessonSeen {
             session: session.into(),
             signature: sig.clone(),
             issue: task,
         };
-        let comment = format!("Seen again{on_task}.\n\n{}", record.to_line());
-        gh.add_comment(issue.number, &comment)?;
+        let head = if reopened {
+            reopen_blocking(gh, issue.number)?;
+            format!(
+                "The mechanism did not hold: seen again{on_task}. Reopened as blocking (spec §6)."
+            )
+        } else {
+            format!("Seen again{on_task}.")
+        };
+        gh.add_comment(issue.number, &format!("{head}\n\n{}", record.to_line()))?;
         let hits = notes(gh, issue.number)?
             .iter()
             .filter(|n| {
@@ -223,6 +280,7 @@ pub fn capture_lesson(
             signature: sig,
             created: false,
             hits,
+            reopened,
         });
     }
     gh.ensure_label(LESSON_LABEL, "fbca04", "a failure the curator triages")?;
@@ -246,5 +304,29 @@ pub fn capture_lesson(
         signature: sig,
         created: true,
         hits: 0,
+        reopened: false,
     })
+}
+
+/// Reopen a lesson issue and make it blocking: `bosun:lesson/blocking` and process-red.
+fn reopen_blocking(gh: &dyn Github, n: u64) -> Result<(), BosunError> {
+    gh.update_issue(
+        n,
+        IssuePatch {
+            state: Some(PatchState::Open),
+            ..IssuePatch::default()
+        },
+    )?;
+    let blocking = format!("{LESSON_LABEL}/blocking");
+    gh.ensure_label(
+        PROCESS_RED_LABEL,
+        "b60205",
+        "a blocking lesson pauses waves",
+    )?;
+    gh.ensure_label(&blocking, "5319e7", "triage of a lesson issue")?;
+    gh.add_labels(n, &[&blocking, PROCESS_RED_LABEL])?;
+    for other in ["mechanizable", "advice"] {
+        gh.remove_label(n, &format!("{LESSON_LABEL}/{other}"))?;
+    }
+    Ok(())
 }
