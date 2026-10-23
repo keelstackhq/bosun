@@ -9,8 +9,8 @@ use super::PrArg;
 use crate::app::{App, Result, task_meta};
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
-    self, ChangedFile, FileView, Rules, added_lines, capability_labels, evaluate, new_dependencies,
-    parse_owners, replace_note, risk_note, unseen_diff,
+    self, ChangedFile, FileView, Rules, added_lines, capability_labels, comment_approves, evaluate,
+    new_dependencies, parse_owners, replace_note, risk_note, unseen_diff,
 };
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -146,7 +146,9 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let fix = if owners.is_empty() {
         format!("fill {OWNERS_PATH} on the base branch, then an owner must approve head {head}")
     } else {
-        format!("an owner in {OWNERS_PATH} must approve head {head}")
+        format!(
+            "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review, or the PR comment `/bosun approve {head}`"
+        )
     };
     Err(BosunError::needs_human(
         format!(
@@ -158,23 +160,44 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     .with_data(data))
 }
 
-/// The owner whose newest decisive review on `head` is an approval.
+/// The owner who approved `head`: by a GitHub review (their newest decisive review on `head` is
+/// an approval) or by an unedited PR comment `/bosun approve <head>`.
 fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
+    let decisive = |o: &str| {
+        reviews
+            .iter()
+            .rev()
+            .filter(|r| r.user.eq_ignore_ascii_case(o) && r.commit_id == head)
+            .find(|r| {
+                matches!(
+                    r.state.as_str(),
+                    "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+                )
+            })
+            .map(|r| r.state.clone())
+    };
+    let by_review = owners
+        .iter()
+        .find(|o| decisive(o).as_deref() == Some("APPROVED"));
+    if let Some(o) = by_review {
+        return Ok(Some(o.clone()));
+    }
+    let comments = gh.list_comments(pr)?;
+    // Only a comment written with a plain user token counts: agent sessions act as the same
+    // login through an app, and GitHub marks that in `performed_via_github_app` (spec §8).
+    // An edited comment does not count: users with write access can edit others' comments. An
+    // owner whose newest decisive review on `head` requests changes has withdrawn the approval.
     Ok(owners
         .iter()
+        .filter(|o| decisive(o).as_deref() != Some("CHANGES_REQUESTED"))
         .find(|o| {
-            reviews
-                .iter()
-                .rev()
-                .filter(|r| r.user.eq_ignore_ascii_case(o) && r.commit_id == head)
-                .find(|r| {
-                    matches!(
-                        r.state.as_str(),
-                        "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
-                    )
-                })
-                .is_some_and(|r| r.state == "APPROVED")
+            comments.iter().any(|c| {
+                c.user.eq_ignore_ascii_case(o)
+                    && c.unedited()
+                    && c.by_user_token()
+                    && comment_approves(&c.body, head)
+            })
         })
         .cloned())
 }

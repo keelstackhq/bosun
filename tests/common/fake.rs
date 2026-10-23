@@ -31,6 +31,11 @@ pub struct FakeComment {
     pub user: String,
     pub created_at: String,
     pub updated_at: String,
+    /// `None`: a plain user token (`null`); `Some(slug)`: written via that app.
+    pub via_app: Option<String>,
+    /// Leave `performed_via_github_app` out of the JSON.
+    pub no_app_field: bool,
+    pub association: String,
 }
 
 /// How the fake serves a job log.
@@ -73,6 +78,10 @@ pub struct State {
     pub release: Option<String>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
+    /// Repository permission by login; a login not listed has `write`.
+    pub permissions: HashMap<String, String>,
+    /// (path suffix, status) answered for every matching request.
+    pub fail_paths: Vec<(String, u16)>,
     /// Scripted mutations; see `FakeGithub::after_requests`.
     pub hooks: Vec<Hook>,
 }
@@ -302,6 +311,11 @@ impl FakeGithub {
         s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
     }
 
+    /// Change the last comment: `f` gets it mutably (app, association, edits).
+    pub fn last_comment(&self, f: impl FnOnce(&mut FakeComment)) {
+        f(self.state.lock().unwrap().comments.last_mut().unwrap());
+    }
+
     pub fn variable(&self, name: &str, value: &str) {
         self.state
             .lock()
@@ -313,6 +327,12 @@ impl FakeGithub {
     /// Answer the next `times` requests with `status` and a JSON message.
     pub fn fail_next(&self, status: u16, times: u32) {
         self.state.lock().unwrap().fail = Some((status, times));
+    }
+
+    /// Answer every request whose path ends with `suffix` with `status`.
+    pub fn fail_path(&self, suffix: &str, status: u16) {
+        let mut s = self.state.lock().unwrap();
+        s.fail_paths.push((suffix.into(), status));
     }
 
     /// Mutate the state once, after `n` requests to a path ending with `suffix` were served:
@@ -386,6 +406,9 @@ pub fn add_comment(s: &mut State, issue: u64, body: &str) -> u64 {
         user: "octocat".into(),
         created_at: TS.into(),
         updated_at: TS.into(),
+        via_app: None,
+        no_app_field: false,
+        association: "MEMBER".into(),
     });
     id
 }
@@ -454,8 +477,17 @@ fn pull_pos(s: &State, n: &str) -> Option<usize> {
 }
 
 fn comment_json(c: &FakeComment) -> Value {
-    json!({"id": c.id, "body": c.body, "user": {"login": c.user},
-        "created_at": c.created_at, "updated_at": c.updated_at})
+    let mut v = json!({"id": c.id, "body": c.body, "user": {"login": c.user},
+        "created_at": c.created_at, "updated_at": c.updated_at,
+        "author_association": c.association,
+        "issue_url": format!("https://api.github.com/repos/o/r/issues/{}", c.issue),
+        "performed_via_github_app": c.via_app.as_ref().map(|s| json!({"slug": s, "id": 1}))});
+    if c.no_app_field {
+        v.as_object_mut()
+            .unwrap()
+            .remove("performed_via_github_app");
+    }
+    v
 }
 
 fn dec(s: &str) -> String {
@@ -638,6 +670,10 @@ fn route(
             }
             ok(Value::Array(vec![]))
         }
+        ("GET", ["labels", name]) => match s.labels.iter().find(|l| l.0 == *name) {
+            Some(l) => ok(json!({"name": l.0, "color": l.1})),
+            None => msg(404, "Not Found"),
+        },
         ("POST", ["labels"]) => {
             let name = body["name"].as_str().unwrap_or("").to_string();
             if s.labels.iter().any(|l| l.0 == name) {
@@ -672,6 +708,17 @@ fn route(
                 comment_json(s.comments.iter().find(|c| c.id == id).unwrap()),
                 vec![],
             )
+        }
+        ("GET", ["collaborators", user, "permission"]) => {
+            let p = s.permissions.get(*user).cloned().unwrap_or("write".into());
+            ok(json!({"permission": p, "role_name": p}))
+        }
+        ("GET", ["issues", "comments", id]) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            match s.comments.iter().find(|c| c.id == id) {
+                Some(c) => ok(comment_json(c)),
+                None => msg(404, "Not Found"),
+            }
         }
         ("PATCH", ["issues", "comments", id]) => {
             let id: u64 = id.parse().unwrap_or(0);
@@ -933,6 +980,8 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
         } else if let Some((code, left)) = s.fail.filter(|f| f.1 > 0) {
             s.fail = Some((code, left - 1));
             msg(code, "fake failure")
+        } else if let Some((_, code)) = s.fail_paths.iter().find(|f| path.ends_with(&f.0)) {
+            msg(*code, "fake path failure")
         } else {
             let mut hooks = std::mem::take(&mut s.hooks);
             for h in hooks.iter_mut().filter(|h| path.ends_with(&h.suffix)) {

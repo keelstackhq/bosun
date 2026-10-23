@@ -180,18 +180,75 @@ fn halt_and_main_red_stop_claims_except_mainfix() {
 }
 
 #[test]
-fn an_unreadable_kill_switch_fails_closed_and_a_404_means_not_halted() {
+fn the_variable_halts_on_1_and_404_or_403_is_no_signal() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    // The variable is not set: the fake answers 404.
+    assert_eq!(run(&fake, "session_a", T0, &["claim", "10"]).0, 0);
+
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.variable("BOSUN_HALT", "1");
+    fake.fail_path("/actions/variables/BOSUN_HALT", 403);
+    assert_eq!(
+        run(&fake, "session_a", T0, &["claim", "10"]).0,
+        0,
+        "403 is no signal"
+    );
+
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.fail_path("/actions/variables/BOSUN_HALT", 500);
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 4, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("cannot read the BOSUN_HALT variable"), "{msg}");
+}
+
+#[test]
+fn an_open_halt_issue_by_an_owner_halts() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.content(
+        "governance/owners.toml",
+        "main",
+        "[[owner]]\ngithub = \"ada\"\n",
+    );
+    fake.issue(50, "stop", &["bosun:halt"], "");
+    fake.issue_by(50, "mallory");
+    assert_eq!(
+        run(&fake, "session_a", T0, &["claim", "10"]).0,
+        0,
+        "a non-owner cannot halt"
+    );
+    fake.issue(51, "stop", &["bosun:halt"], "");
+    fake.issue_by(51, "Ada");
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 4, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("#51"), "{msg}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("close"));
+}
+
+#[test]
+fn a_halt_issue_with_no_owners_listed_halts() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10, "src/a.rs");
+    fake.issue(50, "stop", &["bosun:halt"], "");
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 4, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("owners.toml"));
+}
+
+#[test]
+fn unreadable_halt_issues_fail_closed() {
     let fake = FakeGithub::start();
     ready(&fake, 10, "src/a.rs");
     fake.fail_next(403, 1);
     let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
     assert_eq!(code, 4, "{v}");
     let msg = v["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("cannot read the BOSUN_HALT variable"), "{msg}");
-    let fix = v["error"]["fix"].as_str().unwrap();
-    assert!(fix.contains("Variables: read"), "{fix}");
-    // The variable is not set: the fake answers 404.
-    assert_eq!(run(&fake, "session_a", T0, &["claim", "10"]).0, 0);
+    assert!(msg.contains("bosun:halt"), "{msg}");
 }
 
 #[test]
@@ -325,6 +382,9 @@ fn rival_lease(s: &mut common::fake::State, issue: u64, session: &str, touch: &s
         user: "octocat".into(),
         created_at: "2026-10-22T09:59:59Z".into(),
         updated_at: "2026-10-22T09:59:59Z".into(),
+        via_app: None,
+        no_app_field: false,
+        association: "MEMBER".into(),
     });
 }
 

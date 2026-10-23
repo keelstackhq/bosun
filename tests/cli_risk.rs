@@ -299,3 +299,93 @@ fn text_file_without_a_patch_is_high_but_binary_is_not() {
     let (code, v) = check(&fake);
     assert_eq!(code, 0, "{v}");
 }
+
+fn high_pr() -> FakeGithub {
+    let fake = pr("");
+    fake.pull_file(
+        1,
+        ".github/workflows/ci.yml",
+        "modified",
+        1,
+        0,
+        Some(&plus("x")),
+    );
+    fake
+}
+
+const HEAD40: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[test]
+fn an_owner_comment_approves_exactly_the_head_sha() {
+    let fake = high_pr();
+    fake.pull_set(
+        1,
+        "head",
+        serde_json::json!({"sha": HEAD40, "ref": "feature"}),
+    );
+    fake.comment_by(
+        1,
+        "ada",
+        "/bosun approve 1111111111111111111111111111111111111111",
+    );
+    fake.comment_by(1, "mallory", &format!("/bosun approve {HEAD40}"));
+    fake.comment_by(1, "ada", &format!("please /bosun approve {HEAD40}"));
+    assert_eq!(
+        check(&fake).0,
+        5,
+        "old sha, non-owner and extra text do not count"
+    );
+
+    // An edited comment does not count: someone with write access may have changed it.
+    fake.comment_by(1, "bo", &format!("/bosun approve {HEAD40}"));
+    fake.state
+        .lock()
+        .unwrap()
+        .comments
+        .last_mut()
+        .unwrap()
+        .updated_at = "2026-10-22T11:00:00Z".into();
+    assert_eq!(check(&fake).0, 5, "an edited comment does not count");
+
+    fake.comment_by(1, "Ada", &format!("  /bosun approve {HEAD40}\n"));
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved_by"], "ada");
+    let s = fake.statuses_of(HEAD40);
+    let s = s
+        .iter()
+        .rev()
+        .find(|s| s["context"] == "risk-check")
+        .unwrap();
+    assert_eq!(s["state"], "success");
+    assert!(
+        s["description"]
+            .as_str()
+            .unwrap()
+            .contains("approved by ada"),
+        "{s}"
+    );
+
+    fake.review(1, "ada", "CHANGES_REQUESTED", HEAD40);
+    assert_eq!(check(&fake).0, 5, "request-changes withdraws the comment");
+}
+
+#[test]
+fn an_approval_written_through_an_app_or_without_the_app_field_does_not_count() {
+    let fake = high_pr();
+    fake.pull_set(
+        1,
+        "head",
+        serde_json::json!({"sha": HEAD40, "ref": "feature"}),
+    );
+    // Agent sessions act as the owner's login through the Claude app.
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD40}"));
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    assert_eq!(check(&fake).0, 5, "a comment via an app is not the owner");
+    // A response without the field is no proof of a user token: fail closed.
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD40}"));
+    fake.last_comment(|c| c.no_app_field = true);
+    assert_eq!(check(&fake).0, 5, "a missing app field does not count");
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD40}"));
+    assert_eq!(check(&fake).0, 0, "a plain user token counts");
+}

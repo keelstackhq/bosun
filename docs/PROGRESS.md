@@ -93,6 +93,9 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-22 · Task 7b · S8: `src/hooks/{mod,pre_tool_use,cache}.rs`, `bosun hook pre-tool-use` (hook protocol on stdout, no envelope; label-lock, merge-lock, edit-lock from a `<git common dir>/bosun/leases.json` cache, fails open) · `cargo nextest run --locked` 160/160
 - 2026-10-22 · Task 7c · S8 done: `src/hooks/session_start.rs`, `bosun hook session-start` (registry join, cache refresh, one-paragraph context: session, origin, own leases, BOSUN_HALT, main-red; a context that says how to fix GitHub access when unreachable) · an Edit on another session's claimed path is denied; `cargo nextest run --locked` 162/162
 - 2026-10-22 · Wrap-up · seed status, Blocked list with exact owner steps, all plan boxes ticked · review findings #20-#32 closed by fixes A-E
+- 2026-10-23 · Org decisions · D-004 channel `gh:keelstackhq/decisions//channel` (piece `import-claude`): `.splice/channels/decisions.toml`, `docs/agents/org-decisions.md` (D-001 to D-006) imported by CLAUDE.md; update bot `.github/workflows/splice.yml` · `splice check --json` exit 0
+- 2026-10-23 · Fix F · owner approval and kill switch: risk-check accepts an owner's unedited PR comment `/bosun approve <head sha>` and the `risk` workflow runs on it (`issue_comment`, from the default branch); the kill switch is an owner's open `bosun:halt` issue (read errors halt), `BOSUN_HALT` stays a second source with 404/403 as no signal; doctor step 5 checks the label · spec §8, README, CHANGELOG
+- 2026-10-23 · Fix G · approvals by plain user token only (`performed_via_github_app` null; missing fails closed); `bosun verdict comment` and `verdict apply` with the `verdict` workflow post `review-verdict` for cloud sessions · spec §7 §8, README, CHANGELOG, workflow tests
 - 2026-10-23 · Release 1/3 · npm launcher `npm/bosun` (`@keelstackhq/bosun`, five platform packages as optionalDependencies, as in berth); a launcher failure prints one error envelope with a fix (spec §1.2) · `node --test npm/bosun/test/*.test.js` 12/12
 - 2026-10-23 · Release 2/3 · crate `keel-bosun` 0.1.0 publishable (LICENSE, include), `hoist.toml [publish]` (crates.io, GitHub Release for five targets), the five platform packages, pnpm workspace; `tests/release_config.rs` keeps them in step · `cargo test --test release_config` 6/6, `cargo package` builds
 - 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
@@ -106,10 +109,9 @@ Human-only items, in order. Each has the exact action.
    sets auto-merge, delete-branch-on-merge and the required checks `ci-ok`, `risk-check`,
    `review-verdict` and `main-open` from `hoist.toml` (no merge queue yet, see Status). From
    then on every PR needs a `review-verdict` status: post it with `bosun verdict post`.
-   hoist 0.2 has no repo-variable resource (checked in its source on 2026-10-22), so set the
-   kill switch by hand: `gh variable set BOSUN_HALT --body 0 --repo keelstackhq/bosun`. The
-   token the sessions use needs "Variables: read": bosun refuses work (exit 4) when it cannot
-   read `BOSUN_HALT`.
+   Create the kill-switch label: `gh label create bosun:halt --repo keelstackhq/bosun --color
+   B60205` (an owner's open issue with it halts bosun). `BOSUN_HALT` is optional; a token that
+   cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
    settings → setup script: paste `docs/setup-script.sh`.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
@@ -122,7 +124,14 @@ Human-only items, in order. Each has the exact action.
    workflow tags v0.1.0: `hoist release bootstrap` locally, the crates.io trusted publisher
    for `keel-bosun`, and the re-run of the failed `publish` job within 2 days. Then an agent
    opens the R-gov PR that pins `.bosun/version` to 0.1.0.
-5. **Org decision D-006 (D26).** Propose in keelstackhq/decisions: "Agents never merge or tag;
-   merges happen via auto-merge after the gates." Agents do not edit that repo.
-6. **Org decisions channel (D-004).** `splice channel add gh:keelstackhq/decisions//channel
-   --track main --piece import-claude` in a checkout, then commit as `chore: sync org decisions`.
+5. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
+   `splice/update` PR with `GITHUB_TOKEN` unless the secret `SPLICE_BOT_TOKEN` is set, and a PR
+   opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
+   token (keelstackhq/bosun, Contents and Pull requests: write), then
+   `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
+6. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
+   github-actions app, so a same-repo PR can add or edit a workflow (also via the
+   `pull_request_review` trigger, which runs the PR's copy of `risk.yml`) and post a forged
+   `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
+   check run) and that source required in the `main` ruleset. Until then it is an accepted
+   residual: such a PR is R-ci, so it needs an owner's look anyway.
