@@ -1,0 +1,23 @@
+{
+  "name": "@keelstackhq/bosun-darwin-x64",
+  "version": "0.1.0",
+  "description": "The bosun binary for macOS x64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keelstackhq/bosun.git",
+    "directory": "npm/bosun-darwin-x64"
+  },
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
