@@ -410,8 +410,8 @@ REVIEW.md). The reviewer returns:
   `verdict post` does: the
   status (as github-actions), the verdict record and the task state. A verdict may come through
   the agent app: it is a reviewer's opinion, not an owner's approval. Permissions of the
-  workflow: `contents: read`, `pull-requests: read`, `issues: write` (record and state labels),
-  `statuses: write`; `tests/workflows.rs` asserts them.
+  workflow: `contents: read`, `pull-requests: write` (the record comment on the PR; `issues: write`
+  alone gets 403 there), `issues: write` (the task's state labels), `statuses: write`; `tests/workflows.rs` asserts them.
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record when that sha has a successful `review-verdict` status, else it is a full review (statuses are per SHA, so they cannot carry it).

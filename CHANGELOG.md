@@ -19,6 +19,8 @@ bosun is unreleased, so every entry is under Unreleased.
 
 ### Fixed
 
+- The `verdict` workflow has `pull-requests: write`: with `issues: write` alone, its verdict record
+  comment on the PR got 403 after the status was posted (first full run, #73).
 - `bosun verdict apply` reads only the ```json block of a verdict comment: the agent proxy
   appends a footer to every comment, which made the second verdict comment on #73 invalid.
 - `bosun verdict apply` checks the author's repository permission (write or admin) instead of
