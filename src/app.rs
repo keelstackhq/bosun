@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
+use crate::cli::risk_check::owner_logins;
 use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
 use crate::core::lease::race_winner;
@@ -11,7 +12,7 @@ use crate::core::meta::{TaskMeta, parse_task_meta};
 use crate::core::records::{Note, Record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
-use crate::github::{Github, Issue, IssueState, LiveGithub};
+use crate::github::{Github, Issue, IssueState, LiveGithub, Variable};
 use crate::output::BosunError;
 use crate::time::{Timestamp, parse_rfc3339};
 use serde_json::json;
@@ -19,6 +20,7 @@ use serde_json::json;
 pub type Result<T> = std::result::Result<T, BosunError>;
 
 pub const MAIN_RED_LABEL: &str = "bosun:main-red";
+pub const HALT_LABEL: &str = "bosun:halt";
 
 pub struct App {
     pub ctx: Ctx,
@@ -34,19 +36,66 @@ impl App {
     }
 }
 
-/// Exit 4 when the repo variable `BOSUN_HALT` is `1`. A variable that is not set (404) means
-/// not halted; any other read error halts too (fail closed): a token without "Variables: read"
-/// must not switch the kill switch off.
+/// Exit 4 when bosun is halted (see [`halt_reason`]), or when it cannot tell (fail closed).
 pub fn kill_switch(gh: &dyn Github) -> Result<()> {
+    match halt_reason(gh)? {
+        Some((reason, fix)) => Err(BosunError::halted(reason, fix)),
+        None => Ok(()),
+    }
+}
+
+/// Why bosun is halted, with the fix; `None` when it is not (spec §8, kill switch). Two
+/// sources, either one halts: an open `bosun:halt` issue opened by an owner (owners from the
+/// default branch), and the repo variable `BOSUN_HALT=1`. Any error reading the issues or the
+/// owners is exit 4. For the variable, 404 (unset) and 403 (not readable from this token) are
+/// no signal; any other error is exit 4.
+pub fn halt_reason(gh: &dyn Github) -> Result<Option<(String, String)>> {
+    let closed = |what: &str, e: BosunError| {
+        BosunError::halted(
+            format!("cannot read {what}: {}", e.message),
+            format!(
+                "give the token Issues: read and Contents: read; bosun stays halted until it can read {what}"
+            ),
+        )
+    };
+    let issues = gh
+        .list_issues(&[HALT_LABEL], IssueState::Open)
+        .map_err(|e| closed("the bosun:halt issues", e))?;
+    if !issues.is_empty() {
+        let owners = default_branch(gh)
+            .and_then(|b| owner_logins(gh, &b))
+            .map_err(|e| closed("the owners on the default branch", e))?;
+        if owners.is_empty() {
+            return Ok(Some((
+                format!(
+                    "halt issue #{} is open and no owners are listed to judge it",
+                    issues[0].number
+                ),
+                "fill governance/owners.toml on the default branch, or close the halt issue".into(),
+            )));
+        }
+        let by_owner = issues
+            .iter()
+            .find(|i| owners.iter().any(|o| o.eq_ignore_ascii_case(&i.user)));
+        if let Some(i) = by_owner {
+            return Ok(Some((
+                format!(
+                    "halt issue #{} by {} is open: the owner stopped all work",
+                    i.number, i.user
+                ),
+                format!("wait for the owner to close #{}", i.number),
+            )));
+        }
+    }
     match gh.variable("BOSUN_HALT") {
-        Ok(Some(v)) if v.trim() == "1" => Err(BosunError::halted(
-            "BOSUN_HALT=1: the owner stopped all work",
-            "wait for the owner to set BOSUN_HALT=0",
-        )),
-        Ok(_) => Ok(()),
+        Ok(Variable::Set(v)) if v.trim() == "1" => Ok(Some((
+            "BOSUN_HALT=1: the owner stopped all work".into(),
+            "wait for the owner to set BOSUN_HALT=0".into(),
+        ))),
+        Ok(_) => Ok(None),
         Err(e) => Err(BosunError::halted(
             format!("cannot read the BOSUN_HALT variable: {}", e.message),
-            "give the token Variables: read, or set BOSUN_HALT=0",
+            "retry; only 404 (unset) or 403 (not readable) on BOSUN_HALT count as no signal",
         )),
     }
 }

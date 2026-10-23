@@ -108,6 +108,30 @@ impl Http {
         }
     }
 
+    /// Like `get_json`, but a 403 that is not a rate limit is `Ok(Err(()))`: the token may not
+    /// read this path.
+    pub fn get_json_or_forbidden(
+        &self,
+        path: &str,
+    ) -> Result<std::result::Result<Option<Value>, ()>> {
+        let r = self.request("GET", path, None)?;
+        match r.status {
+            200..=299 => Ok(Ok(Some(r.json()))),
+            404 => Ok(Ok(None)),
+            403 if r.retry_after.is_none()
+                && !r.rate_remaining_zero
+                && !r.json()["message"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains("rate limit") =>
+            {
+                Ok(Err(()))
+            }
+            _ => Err(self.fail("GET", path, &r)),
+        }
+    }
+
     /// GET every page of a list, following `Link: rel="next"`.
     pub fn get_all(&self, path: &str) -> Result<Vec<Value>> {
         self.pages(path, None)

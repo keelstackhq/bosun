@@ -73,6 +73,8 @@ pub struct State {
     pub release: Option<String>,
     /// (status, remaining) answered before any routing.
     pub fail: Option<(u16, u32)>,
+    /// (path suffix, status) answered for every matching request.
+    pub fail_paths: Vec<(String, u16)>,
     /// Scripted mutations; see `FakeGithub::after_requests`.
     pub hooks: Vec<Hook>,
 }
@@ -313,6 +315,12 @@ impl FakeGithub {
     /// Answer the next `times` requests with `status` and a JSON message.
     pub fn fail_next(&self, status: u16, times: u32) {
         self.state.lock().unwrap().fail = Some((status, times));
+    }
+
+    /// Answer every request whose path ends with `suffix` with `status`.
+    pub fn fail_path(&self, suffix: &str, status: u16) {
+        let mut s = self.state.lock().unwrap();
+        s.fail_paths.push((suffix.into(), status));
     }
 
     /// Mutate the state once, after `n` requests to a path ending with `suffix` were served:
@@ -638,6 +646,10 @@ fn route(
             }
             ok(Value::Array(vec![]))
         }
+        ("GET", ["labels", name]) => match s.labels.iter().find(|l| l.0 == *name) {
+            Some(l) => ok(json!({"name": l.0, "color": l.1})),
+            None => msg(404, "Not Found"),
+        },
         ("POST", ["labels"]) => {
             let name = body["name"].as_str().unwrap_or("").to_string();
             if s.labels.iter().any(|l| l.0 == name) {
@@ -933,6 +945,8 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
         } else if let Some((code, left)) = s.fail.filter(|f| f.1 > 0) {
             s.fail = Some((code, left - 1));
             msg(code, "fake failure")
+        } else if let Some((_, code)) = s.fail_paths.iter().find(|f| path.ends_with(&f.0)) {
+            msg(*code, "fake path failure")
         } else {
             let mut hooks = std::mem::take(&mut s.hooks);
             for h in hooks.iter_mut().filter(|h| path.ends_with(&h.suffix)) {

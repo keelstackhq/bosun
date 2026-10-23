@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::app::App;
+use crate::app::{App, HALT_LABEL, halt_reason};
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -169,26 +169,23 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         "add yourself to governance/owners.toml",
     ));
 
-    let halt = gh.variable("BOSUN_HALT");
+    // The kill switch is an open `bosun:halt` issue by an owner; BOSUN_HALT is optional.
+    let label = gh.label_exists(HALT_LABEL);
+    let halt = halt_reason(gh);
     items.push(item(
         5,
-        "kill switch variable",
-        match &halt {
-            Ok(Some(_)) => None,
-            Ok(None) => Some("the repo variable BOSUN_HALT is not set".into()),
-            Err(e) => Some(format!(
-                "cannot read the BOSUN_HALT variable: {}",
-                e.message
-            )),
+        "kill switch",
+        match (&label, &halt) {
+            (_, Err(e)) => Some(format!("cannot read the kill switch: {}", e.message)),
+            (Err(e), _) => Some(format!("cannot read the label {HALT_LABEL}: {}", e.message)),
+            (Ok(false), _) => Some(format!("the label {HALT_LABEL} does not exist")),
+            (Ok(true), Ok(_)) => None,
         },
-        format!(
-            "BOSUN_HALT={}",
-            halt.as_ref()
-                .ok()
-                .and_then(|v| v.clone())
-                .unwrap_or_default()
-        ),
-        "gh variable set BOSUN_HALT --body 0 --repo <owner>/<repo>",
+        match &halt {
+            Ok(Some((reason, _))) => format!("halted: {reason}"),
+            _ => format!("not halted; an owner's open {HALT_LABEL} issue stops all work"),
+        },
+        "gh label create bosun:halt --color B60205 --repo <owner>/<repo>",
     ));
 
     let version = read(root, ".bosun/version").map(|v| v.trim().to_string());
