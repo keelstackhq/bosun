@@ -165,6 +165,8 @@ State machine:
 
 Only bosun commands change the state label. A hook refuses a direct label edit.
 
+`bosun pr` sets claimed -> building -> review (a PR exists only after the first push). `bosun pr` or `bosun reap` sets queued -> merged once GitHub merged the PR, and ends the leases on the issue with reason `merged`; `reap` also looks at queued tasks whose issue is closed.
+
 Stop rules:
 - The same failure signature 3 times in a row: the task goes to blocked.
 - A fix round with 0 changed lines: the task goes to blocked.
