@@ -317,3 +317,20 @@ fn refusals_run_no_splice() {
     assert_eq!(code, 3, "{v}");
     assert!(e.argv().is_empty());
 }
+
+/// The push worked but the PR did not: the fix names a command that opens it.
+#[test]
+fn a_failed_pr_after_the_push_names_the_command() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    fake.fail_path("/pulls", 422);
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(e.origin_has_branch());
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("gh pr create --head bosun/init --base main"),
+        "{fix}"
+    );
+}
