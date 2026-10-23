@@ -12,6 +12,7 @@ use crate::output::BosunError;
 pub const DEFAULT_BUDGET_SECS: u64 = 480;
 
 const RUST: &str = include_str!("../../profiles/rust.toml");
+const TS_PNPM: &str = include_str!("../../profiles/ts-pnpm.toml");
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,7 +42,8 @@ pub enum WhenNoPackage {
 #[serde(deny_unknown_fields)]
 pub struct Gate {
     pub cmd: Vec<String>,
-    /// Appended once per affected package, `{package}` replaced by its name.
+    /// Once per affected package, `{package}` replaced by its name. Appended to `cmd`, or put in
+    /// place of an item that is exactly `{packages}` (for tools whose filters come first).
     #[serde(default)]
     pub each_package: Vec<String>,
     /// Appended instead when every package is affected.
@@ -90,6 +92,18 @@ impl Gate {
             .collect()
     }
 
+    /// Put the package arguments (`extra`) in place of a `{packages}` item of `argv`, else at the end.
+    pub fn expand_packages(&self, argv: Vec<String>, extra: Vec<String>) -> Vec<String> {
+        match argv.iter().position(|a| a == "{packages}") {
+            Some(i) => {
+                let mut out = argv;
+                out.splice(i..=i, extra);
+                out
+            }
+            None => argv.into_iter().chain(extra).collect(),
+        }
+    }
+
     pub fn needs_diff(&self) -> bool {
         self.cmd.iter().any(|a| a.contains("{diff}"))
     }
@@ -103,10 +117,11 @@ impl Profile {
             Ok(t) => (t, file),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => match name {
                 "rust" => (RUST.to_string(), "profiles/rust.toml".to_string()),
+                "ts-pnpm" => (TS_PNPM.to_string(), "profiles/ts-pnpm.toml".to_string()),
                 _ => {
                     return Err(BosunError::usage(
                         format!("unknown profile `{name}`"),
-                        format!("use `rust`, or add .bosun/profiles/{name}.toml"),
+                        format!("use `rust` or `ts-pnpm`, or add .bosun/profiles/{name}.toml"),
                     ));
                 }
             },
@@ -173,6 +188,36 @@ mod tests {
             ["-p", "x", "-p", "y"]
         );
         assert_eq!(g.budget(), 5);
+    }
+
+    #[test]
+    fn built_in_ts_pnpm_profile_parses() {
+        let p = Profile::load(Path::new("/nonexistent"), "ts-pnpm").unwrap();
+        assert_eq!(p.adapters.packages, "pnpm-workspace");
+        for g in ["fmt", "lint", "types", "test", "deps"] {
+            assert!(p.gates.contains_key(g), "{g}");
+        }
+        let t = &p.gates["test"];
+        assert_eq!(t.when_no_package, WhenNoPackage::Skip);
+        let args = t.package_args(&["a".into(), "b".into()]);
+        assert_eq!(
+            t.expand_packages(t.expand_cmd(&[], None), args),
+            ["pnpm", "--filter", "a", "--filter", "b", "run", "test"]
+        );
+        assert_eq!(
+            t.expand_packages(t.expand_cmd(&[], None), t.all.clone()),
+            ["pnpm", "-r", "run", "test"]
+        );
+    }
+
+    #[test]
+    fn packages_placeholder_defaults_to_append() {
+        let p = Profile::load(Path::new("/nonexistent"), "rust").unwrap();
+        let t = &p.gates["test"];
+        assert_eq!(
+            t.expand_packages(t.expand_cmd(&[], None), vec!["-p".into(), "x".into()]),
+            ["cargo", "nextest", "run", "--locked", "-p", "x"]
+        );
     }
 
     #[test]

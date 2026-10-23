@@ -391,6 +391,7 @@ profile has three adapters:
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
+- ts-pnpm profile: the gates call the workspace's root `package.json` scripts, so a repo chooses its tools: fmt runs `pnpm run format:check`, lint `pnpm run lint`, types `pnpm run typecheck`; test runs `pnpm --filter <pkg> run test` for each affected package (`pnpm -r run test` for all; `{packages}` in `cmd` marks where the `each_package` or `all` arguments go, else they are appended); deps runs `pnpm audit --prod --audit-level high`. Packages adapter `pnpm-workspace` reads the `packages:` globs of `pnpm-workspace.yaml`; a root `package.json`, `pnpm-lock.yaml` or `pnpm-workspace.yaml`, or a `.ts`, `.tsx`, `.js`, `.json` or `.yaml` file in no package, means all packages.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.

@@ -1,0 +1,29 @@
+# Built-in ts-pnpm profile (spec §7). Override per repo in .bosun/profiles/ts-pnpm.toml.
+# The gates call the workspace's own root package.json scripts, so a repo chooses its tools.
+[adapters]
+packages = "pnpm-workspace"
+pending = "ts-skip"
+assertions = "ts"
+
+# fmt: the root script `format:check` (e.g. prettier --check .).
+[gates.fmt]
+cmd = ["pnpm", "run", "format:check"]
+
+# lint: the root script `lint` (e.g. eslint --max-warnings 0 .).
+[gates.lint]
+cmd = ["pnpm", "run", "lint"]
+
+# types: the root script `typecheck` (e.g. tsc -b).
+[gates.types]
+cmd = ["pnpm", "run", "typecheck"]
+
+# test: `--filter` must precede `run test` (later args go to the script), hence {packages}; all -> `-r`.
+[gates.test]
+cmd = ["pnpm", "{packages}", "run", "test"]
+each_package = ["--filter", "{package}"]
+all = ["-r"]
+when_no_package = "skip"
+
+# deps: audit production dependencies only, fail on high or critical advisories.
+[gates.deps]
+cmd = ["pnpm", "audit", "--prod", "--audit-level", "high"]

@@ -102,7 +102,7 @@ pub fn run(req: &Request) -> CmdResult {
     let mut failed: Option<i64> = None;
     for (stack, profile, files) in &plan {
         let gate = profile.gate(req.gate)?;
-        let run = execute(req, stack, gate, files)?;
+        let run = execute(req, stack, &profile.adapters.packages, gate, files)?;
         let status = run["exit_status"].as_i64().unwrap_or(0);
         runs.push(run);
         if status != 0 {
@@ -130,16 +130,17 @@ pub fn run(req: &Request) -> CmdResult {
 fn execute(
     req: &Request,
     stack: &Stack,
+    adapter: &str,
     gate: &Gate,
     files: &[String],
 ) -> Result<Value, BosunError> {
     let dir: PathBuf = req.root.join(stack_rel(&stack.path));
     let (names, extra): (Vec<String>, Vec<String>) = if gate.is_per_package() {
-        let pkgs = packages::load(&dir)?;
+        let pkgs = packages::load(adapter, &dir)?;
         let affected = if req.all {
             Affected::All
         } else {
-            packages::affected(&dir, files, &pkgs)
+            packages::affected(adapter, &dir, files, &pkgs)
         };
         match affected {
             Affected::None if gate.when_no_package == WhenNoPackage::Skip => {
@@ -176,8 +177,7 @@ fn execute(
         None
     };
     let diff_str = diff.as_ref().map(|d| d.to_string_lossy().into_owned());
-    let mut argv = gate.expand_cmd(files, diff_str.as_deref());
-    argv.extend(extra);
+    let argv = gate.expand_packages(gate.expand_cmd(files, diff_str.as_deref()), extra);
 
     let result = spawn(&argv, &dir);
     if let Some(d) = &diff {
