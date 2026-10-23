@@ -2,6 +2,10 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+- `bosun gate main-open --pr N`: posts the `main-open` status; only mainfix PRs pass while main is red.
+
 ## v0.1.0
 
 The first release: the seed (S1-S10, `docs/superpowers/plans/2026-10-22-bosun-seed.md`).

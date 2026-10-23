@@ -259,6 +259,9 @@ pub struct GateArgs {
     /// Run on all packages (merge queue).
     #[arg(long)]
     pub all: bool,
+    /// The PR number, for `main-open` (default: env `BOSUN_PR`).
+    #[arg(long)]
+    pub pr: Option<u64>,
 }
 
 #[derive(Debug, Args)]
