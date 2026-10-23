@@ -121,3 +121,26 @@ fn empty_signature_is_usage_and_missing_issue_is_error() {
     let (code, _) = fail(&fake, 99, "a", &[]);
     assert_eq!(code, 1);
 }
+
+#[test]
+fn a_merged_task_is_refused_and_gets_no_comment() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &["bosun:state/merged"], "Do it.");
+    let (code, v) = fail(&fake, 5, "a", &[]);
+    assert_eq!(code, 3, "{v}");
+    assert!(fake.comments_of(5).is_empty());
+}
+
+#[test]
+fn model_never_goes_below_the_newest_escalation() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    fake.comment(
+        5,
+        r#"{"bosun":"escalate","session":"s","from":"haiku","to":"sonnet","reason":"same-failure"}"#,
+    );
+    let (code, v) = fail(&fake, 5, "a", &["--changed-lines", "0", "--model", "haiku"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["escalate"]["from"], "sonnet");
+    assert_eq!(v["data"]["escalate"]["to"], "opus");
+}

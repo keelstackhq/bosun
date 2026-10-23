@@ -9,8 +9,8 @@ use serde_json::json;
 use super::FailArgs;
 use crate::app::{App, kill_switch, limits_from_default, notes, set_state};
 use crate::core::records::Record;
-use crate::core::state::State;
-use crate::core::stop::{current_tier, evaluate, next_tier, streak};
+use crate::core::state::{State, state_of};
+use crate::core::stop::{current_tier, evaluate, next_tier, streak, tier_index};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
@@ -30,6 +30,13 @@ pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
             "check the number; `bosun status` lists the tasks",
         )
     })?;
+    // Check the state before writing, so a refused call leaves no comment behind.
+    if matches!(state_of(&issue.labels), None | Some(State::Merged)) {
+        return Err(BosunError::conflict(
+            format!("#{n} is not an open task"),
+            "record failures only on a task that is not merged; `bosun status` lists the tasks",
+        ));
+    }
     let record = Record::Failure {
         session: app.ctx.session.clone(),
         signature: signature.to_string(),
@@ -47,10 +54,13 @@ pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
         ));
     };
     let limits = limits_from_default(gh, &app.ctx)?;
-    let tier = args
-        .model
-        .clone()
-        .unwrap_or_else(|| current_tier(&all, &limits.models.build));
+    // `--model` never goes below the tier of the newest escalation.
+    let build = &limits.models.build;
+    let recorded = current_tier(&all, build);
+    let tier = match &args.model {
+        Some(m) if tier_index(m, build) >= tier_index(&recorded, build) => m.clone(),
+        _ => recorded,
+    };
     let mut data = json!({
         "issue": n, "stopped": true, "rule": stop.rule,
         "signature": stop.signature, "streak": stop.streak,
