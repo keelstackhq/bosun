@@ -1,0 +1,30 @@
+{
+ "pr": 103,
+ "head_sha": "s103",
+ "a": {
+  "pr": 103,
+  "head_sha": "s103",
+  "verdict": "approve",
+  "confidence": 0.92,
+  "findings": [],
+  "lessons_hit": [],
+  "escalate_risk": false
+ },
+ "b": {
+  "pr": 103,
+  "head_sha": "s103",
+  "verdict": "request-changes",
+  "confidence": 0.88,
+  "findings": [
+   {
+    "severity": "blocker",
+    "file": "src/a.rs",
+    "line": 3,
+    "claim": "unwrap on user input",
+    "evidence": "let x = s.parse().unwrap();"
+   }
+  ],
+  "lessons_hit": [],
+  "escalate_risk": false
+ }
+}

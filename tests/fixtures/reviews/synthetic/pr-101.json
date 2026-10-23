@@ -1,0 +1,22 @@
+{
+ "pr": 101,
+ "head_sha": "s101",
+ "a": {
+  "pr": 101,
+  "head_sha": "s101",
+  "verdict": "approve",
+  "confidence": 0.93,
+  "findings": [],
+  "lessons_hit": [],
+  "escalate_risk": false
+ },
+ "b": {
+  "pr": 101,
+  "head_sha": "s101",
+  "verdict": "approve",
+  "confidence": 0.9,
+  "findings": [],
+  "lessons_hit": [],
+  "escalate_risk": false
+ }
+}

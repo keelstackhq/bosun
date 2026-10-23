@@ -135,7 +135,7 @@ pub enum Command {
     /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
     MainHealth(MainHealthArgs),
     /// Review mode b: ask the Anthropic API for the verdict of a PR and record it (no session).
-    ReviewCi(PrArg),
+    ReviewCi(ReviewCiArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -342,6 +342,15 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct ReviewCiArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// Run up to the parsed verdict and write nothing to GitHub; print the verdict in data.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
