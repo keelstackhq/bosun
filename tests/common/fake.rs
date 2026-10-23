@@ -92,6 +92,10 @@ pub struct State {
     pub fail_paths: Vec<(String, u16)>,
     /// Scripted mutations; see `FakeGithub::after_requests`.
     pub hooks: Vec<Hook>,
+    /// `base...head` -> `status` of the comparison (default `ahead`).
+    pub compare_statuses: HashMap<String, String>,
+    /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
+    pub pull_commits: HashMap<u64, Vec<String>>,
 }
 
 type Mutation = Box<dyn FnOnce(&mut State) + Send>;
@@ -280,6 +284,20 @@ impl FakeGithub {
             .entry(format!("{base}...{head}"))
             .or_default()
             .push(f);
+    }
+
+    /// The `status` GitHub reports for the comparison `base...head` (`behind`, `diverged`, ...).
+    pub fn compare_status(&self, base: &str, head: &str, status: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.compare_statuses
+            .insert(format!("{base}...{head}"), status.into());
+    }
+
+    /// The commits of PR `number` (`GET /pulls/{n}/commits`).
+    pub fn pull_commit_shas(&self, number: u64, shas: &[&str]) {
+        let mut s = self.state.lock().unwrap();
+        s.pull_commits
+            .insert(number, shas.iter().map(|x| x.to_string()).collect());
     }
 
     pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
@@ -911,13 +929,28 @@ fn route(
             let items = n.parse().ok().and_then(|n: u64| s.files.get(&n)).cloned();
             page(items.unwrap_or_default(), &query, base, path, raw_query)
         }
+        ("GET", ["pulls", n, "commits"]) => {
+            let n: u64 = n.parse().unwrap_or(0);
+            let shas: Vec<String> = s.pull_commits.get(&n).cloned().unwrap_or_else(|| {
+                s.compares
+                    .keys()
+                    .flat_map(|k| k.split("...").map(String::from))
+                    .collect()
+            });
+            let items = shas.iter().map(|x| json!({"sha": x})).collect();
+            page(items, &query, base, path, raw_query)
+        }
         ("GET", ["compare", range]) => match s.compares.get(*range) {
             Some(files) => {
                 let num =
                     |k: &str, d: usize| query.get(k).and_then(|p| p.parse().ok()).unwrap_or(d);
                 let (n, per) = (num("page", 1), num("per_page", 300));
                 let chunk: Vec<&Value> = files.iter().skip((n - 1) * per).take(per).collect();
-                ok(json!({"files": chunk}))
+                let status = s
+                    .compare_statuses
+                    .get(*range)
+                    .map_or("ahead", |x| x.as_str());
+                ok(json!({"status": status, "files": chunk}))
             }
             None => msg(404, "Not Found"),
         },
