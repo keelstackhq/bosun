@@ -32,6 +32,9 @@ jobs:
       - name: diff check
         if: github.event_name == 'pull_request'
         run: git diff --check "origin/${{ github.base_ref }}...HEAD"
+      # The npm launcher (npm/bosun) has no Rust; the runner's Node runs its tests.
+      - name: npm launcher tests
+        run: node --test npm/bosun/test/*.test.js
 
   # The gates run bosun built from the base commit, never from the change under test, so a bad
   # change to bosun cannot pass its own gates (spec §11). After the first release they run the

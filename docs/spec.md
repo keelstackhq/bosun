@@ -44,7 +44,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D21 | Exit codes (A9) | Exit codes 0-6 as in §1.1; 2 is usage, as in splice and berth. Every error JSON has a `fix` field that says how to fix it. |
 | D22 | Seed shape (A10) | The seed is a sequence of PRs of at most 400 changed lines each, not one seed PR. |
 | D23 | Environment (A11) | The environment setup script installs Node 24, pnpm 12 (native binary), rust 1.97, cargo-nextest, cargo-deny, and the pinned bosun, splice, hoist and berth. |
-| D24 | First publish (A12) | The first publish follows the hoist bootstrap flow (`hoist release bootstrap`). npm trusted publishers expire if unused for 2 days, so the first workflow release follows within 2 days. |
+| D24 | First publish (A12) | The first publish follows the hoist bootstrap flow (`hoist release bootstrap`). npm trusted publishers expire if unused for 2 days, so the first workflow release follows within 2 days. `release.yml` publishes nothing until the owner sets the repo variable `BOSUN_RELEASE=enabled`; the steps are in `docs/releasing.md`. |
 | D25 | Repo and scope (A13) | The repo is `keelstackhq/bosun` (Q1 answered). SP2, the runtime, is out of scope. |
 | D26 | Org rule (A14) | "Agents never merge or tag; merges happen via auto-merge after the gates" is proposed to keelstackhq/decisions as D-006. bosun follows it now. |
 | D27 | Crate shape | One package `keel-bosun` with modules `cli`, `core`, `github`, `sessions`, `gates`, `plan`, `hooks`, not a workspace of 7 crates. This matches berth and hoist. `core` does no I/O; a test enforces it. |

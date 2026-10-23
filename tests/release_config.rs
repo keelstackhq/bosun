@@ -183,3 +183,114 @@ fn crate_is_keel_bosun_and_ships_what_the_binary_embeds() {
         "license = \"MIT\" needs a LICENSE file"
     );
 }
+
+#[test]
+fn changelog_has_the_cargo_version() {
+    let text = fs::read_to_string(root().join("CHANGELOG.md")).unwrap();
+    let heading = format!("## v{}", cargo_version());
+    assert!(
+        text.lines().any(|l| l.trim_end() == heading),
+        "CHANGELOG.md has no `{heading}`"
+    );
+}
+
+fn workflow(name: &str) -> String {
+    fs::read_to_string(root().join(".github/workflows").join(name)).unwrap()
+}
+
+/// The text of one top-level job: from `  <name>:` up to the next two-space-indented key.
+fn job(text: &str, name: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        let is_key =
+            line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':');
+        if is_key {
+            inside = line.trim() == format!("{name}:");
+        }
+        if inside {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    assert!(!out.is_empty(), "job {name}");
+    out
+}
+
+#[test]
+fn every_action_is_pinned_to_a_commit_sha() {
+    // bosun's older workflows pin tags; the one that holds publish rights pins commits.
+    for file in ["release.yml"] {
+        for line in workflow(file).lines().filter(|l| l.contains("uses:")) {
+            let spec = line.split("uses:").nth(1).unwrap().trim();
+            let (reference, comment) = spec.split_once(" # ").unwrap_or((spec, ""));
+            let sha = reference.rsplit('@').next().unwrap();
+            assert!(
+                sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "{file}: not pinned: {line}"
+            );
+            assert!(
+                !comment.is_empty(),
+                "{file}: needs a version comment: {line}"
+            );
+        }
+    }
+}
+
+#[test]
+fn release_workflow_is_gated_so_a_merge_publishes_nothing() {
+    let text = workflow("release.yml");
+    assert!(
+        text.contains("vars.BOSUN_RELEASE"),
+        "the gate reads the repository variable"
+    );
+    assert!(text.contains("enabled=$enabled") || text.contains("enabled: "));
+    let detect = job(&text, "detect");
+    assert!(!detect.contains("environment:") && !detect.contains("contents: write"));
+    for name in ["publish", "prepare"] {
+        let j = job(&text, name);
+        assert!(
+            j.contains("needs.detect.outputs.enabled == 'true'"),
+            "{name} must require the gate:\n{j}"
+        );
+    }
+    let publish = job(&text, "publish");
+    assert!(publish.contains("pending == 'true'") && publish.contains("environment: release"));
+    let build = job(&text, "build");
+    assert!(build.contains("workflow_dispatch") && build.contains("enabled == 'true'"));
+    // Decision 3: hoist from npm, exact version, in both writing jobs; GH_TOKEN never meets cargo.
+    assert_eq!(
+        text.matches("npm install -g @keelstackhq/hoist@0.2.0")
+            .count(),
+        2
+    );
+    let code: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for step in code.split("\n      - ").filter(|s| s.contains("GH_TOKEN")) {
+        assert!(
+            !step.contains("cargo "),
+            "a step with GH_TOKEN runs cargo:\n{step}"
+        );
+    }
+}
+
+#[test]
+fn release_job_builds_the_bosun_binary_and_ci_runs_the_launcher_tests() {
+    let text = workflow("release.yml");
+    assert!(
+        text.contains("target/$TARGET/release/bosun$ext"),
+        "build copies the bosun binary"
+    );
+    assert!(
+        text.contains("test \"$got\" = \"bosun $VERSION\""),
+        "smoke test of --version"
+    );
+    let ci = workflow("ci.yml");
+    assert!(
+        ci.contains("node --test npm/bosun/test/*.test.js"),
+        "ci.yml runs the launcher tests"
+    );
+}

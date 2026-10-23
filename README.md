@@ -8,7 +8,21 @@ checks, review verdicts, lessons and cost. A Claude Code session calls `bosun <c
 on the one JSON object it prints. GitHub issues, labels, comments and PRs are the only shared
 state.
 
-Status: seed in progress. Nothing is released yet. See `docs/PROGRESS.md`.
+Status: seed done; v0.1.0 is prepared (see `CHANGELOG.md`, `docs/PROGRESS.md`).
+
+## Install
+
+After the first release (see `docs/releasing.md`; until then build from source):
+
+```bash
+npm i -g @keelstackhq/bosun     # launcher; the binary comes from a platform package
+cargo install keel-bosun        # installs the binary `bosun`
+# or download bosun-<target> from GitHub Releases (SHA256SUMS next to it)
+```
+
+From source (Rust 1.97): `cargo install --path .` (package `keel-bosun`, binary `bosun`).
+
+## Use
 
 ```text
 bosun claim 42 --touch 'src/core/**'   # exit 3 if a live lease overlaps
