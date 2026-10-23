@@ -122,9 +122,10 @@ prompt has children post the record by hand); plan import (M2) must give plan ta
 - 2026-10-23 · M7 T4 · `bosun doctor --remote`: `hoist check --json` with a deadline, drift folded into steps 3, 5 and 10 · `tests/cli_doctor_remote.rs` · PR #118
 - 2026-10-23 · Follow-up · required checks = defaults ∪ hoist.toml `[github] required_checks` (default branch); `BOSUN_REQUIRED_CHECKS` replaces all; doctor finds `ci-ok` in any workflow (`core::checks`) · `tests/cli_pr.rs`, `tests/cli_doctor.rs` · PR #158
 - 2026-10-23 · M7 T3 1a · gate runner keys `{packages}` and `requires` (head and base), packages adapter dispatch · `tests/cli_gate.rs` · PR #167
-- 2026-10-23 · M7 T3 1b · `profiles/ts-pnpm.toml` and the `pnpm-workspace` packages adapter (`--filter ...pkg`, `-r --include-workspace-root`) · UC-M7-2 · `tests/cli_gate_ts.rs` · PR #122
+- 2026-10-23 · M7 T3 1b · `profiles/ts-pnpm.toml` and the `pnpm-workspace` packages adapter (`--filter ...pkg`, `-r --include-workspace-root`) · toward UC-M7-2 · `tests/cli_gate_ts.rs` · PR #122
 - 2026-10-23 · M7 T3 2 · test-integrity adapters `ts-skip` and `ts` (lexer-aware: strings, comments, regex literals, template literals) · `tests/cli_integrity_ts.rs` · PR #123
-- 2026-10-23 · M7 T3 3 · generic `regex` adapters (both sides or neither, non-empty patterns), reduced integrity reported, one kit per stack (innermost wins), closed adapter names · UC-M7-3, UC-M7-5 · `tests/uc_m7.rs` · PR #168 · M7 done: UC-M7-1..5
+- 2026-10-23 · M7 T3 3 · generic `regex` adapters (both sides or neither, non-empty patterns), reduced integrity reported, one kit per stack (innermost wins), closed adapter names · UC-M7-3, UC-M7-5 · `tests/uc_m7.rs` · PR #168
+- 2026-10-23 · M7 status · UC-M7-3 and UC-M7-5 pass (`tests/uc_m7.rs`); UC-M7-1 rehearsed by hand (empty repo, `bosun init`, every gate exits 0), no automated test; UC-M7-2 (a ts-pnpm repo's first PR is green) and UC-M7-4 (a new channel version reaches a consumer as one R-gov PR) are open: both need a released channel version
 
 ## Blocked
 
@@ -155,11 +156,12 @@ Human-only items, in order. Each has the exact action.
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
    check run) and that source required in the `main` ruleset. Until then it is an accepted
    residual: such a PR is R-ci, so it needs an owner's look anyway.
-6. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one
-   commit and the Claude GitHub App; in a session with splice and bosun, `bosun init --stack
-   rust --owner <login> [--plan plan.md]`; review and merge the setup PR by hand (its base has
-   no bosun workflows, so risk-check and review-verdict cannot post: a one-time bootstrap);
-   `hoist apply --area github --yes`; `gh label create bosun:halt --color B60205`; the secret
+6. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one commit
+   and the Claude GitHub App; in a session with splice, bosun and a `GITHUB_TOKEN` (push and
+   pull requests), `bosun init --stack rust --owner <login> [--plan plan.md]`; review and merge
+   the setup PR by hand (its base has no bosun workflows, so risk-check and review-verdict
+   cannot post: a one-time bootstrap); `hoist apply --area github --yes` from a checkout of main
+   with an admin token; `gh label create bosun:halt --color B60205`; the secret
    `SPLICE_BOT_TOKEN`; check `governance/owners.toml` and `.github/CODEOWNERS`; paste
    `docs/setup-script.sh` into the cloud environment; create the Routines from `bosun doctor`.
    In a hull template-rust repo, the two bosun hooks come from hull's `.claude/settings.json`
