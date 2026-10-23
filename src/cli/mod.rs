@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod heartbeat;
 pub mod join;
 pub mod lesson;
+pub mod lesson_triage;
 pub mod msg;
 pub mod plan;
 pub mod pr;
@@ -117,7 +118,7 @@ pub enum Command {
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 25] = [
+pub const COMMANDS: [&str; 26] = [
     "join",
     "claim",
     "heartbeat",
@@ -173,6 +174,7 @@ impl Command {
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
+            Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
@@ -356,6 +358,8 @@ pub enum LessonCmd {
     Hit(LessonHitArgs),
     /// Open a lesson issue for a failure, or add a hit to the one with the same signature.
     Capture(LessonCaptureArgs),
+    /// Triage a lesson issue: blocking, mechanizable or advice (spec §6).
+    Triage(LessonTriageArgs),
 }
 
 #[derive(Debug, Args)]
@@ -390,6 +394,27 @@ pub struct LessonCaptureArgs {
     /// The failure text: `-` for stdin, or a file.
     #[arg(long, default_value = "-")]
     pub from: String,
+}
+
+#[derive(Debug, Args)]
+pub struct LessonTriageArgs {
+    /// The lesson issue.
+    pub issue: u64,
+    /// blocking sets process-red, mechanizable opens a process-fix task, advice goes to the store.
+    #[arg(long = "as", value_parser = ["blocking", "mechanizable", "advice"])]
+    pub triage: String,
+    /// Paths the process-fix task touches (mechanizable; at least one).
+    #[arg(long = "touch", value_name = "GLOB")]
+    pub touch: Vec<String>,
+    /// Area label of the process-fix task.
+    #[arg(long)]
+    pub area: Option<String>,
+    /// The rule text (advice).
+    #[arg(long)]
+    pub rule: Option<String>,
+    /// Scope globs of the advice entry; none makes it global.
+    #[arg(long = "scope", value_name = "GLOB")]
+    pub scope: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]

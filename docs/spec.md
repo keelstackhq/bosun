@@ -321,7 +321,11 @@ Triage (curator Routine, daily, Sonnet):
   `bosun:process-red` (a blocking lesson carries it). While one is open, `claim` and `spawn` refuse
   work other than `mainfix` and `process-fix` with exit 4, and `wave plan` returns exit 4, except
   for a mainfix or process-fix epic.
-- mechanizable: opens a kind/process-fix task, which runs before the features of the same area.
+- `bosun lesson triage <issue> --as blocking|mechanizable|advice` applies one of the labels
+  `bosun:lesson/blocking`, `bosun:lesson/mechanizable`, `bosun:lesson/advice`; a re-triage removes
+  the other two.
+- mechanizable: opens a kind/process-fix task (`bosun:kind/process-fix` + `bosun:state/ready`),
+  which runs before the features of the same area.
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
 
