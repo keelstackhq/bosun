@@ -14,7 +14,8 @@ owned = [
 ]
 # Shared: merged key by key with the repo's own edits.
 shared = [".bosun/bosun.toml", ".claude/settings.json"]
-# Seed: written once, then the repo's own.
+# Seed: written once, then the repo's own. A stack added later does not re-render them: add its
+# R-ci paths to .bosun/risk.toml and .github/CODEOWNERS by hand.
 seed = [
   ".bosun/limits.toml",
   ".bosun/risk.toml",
