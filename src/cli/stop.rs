@@ -7,10 +7,12 @@ use std::path::Path;
 use serde_json::json;
 
 use super::FailArgs;
+use super::lesson::capture_lesson;
 use crate::app::{App, kill_switch, limits_from_default, notes, set_state};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::stop::{current_tier, evaluate, next_tier, streak, tier_index};
+use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
@@ -68,6 +70,7 @@ pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
     let Some(to) = next_tier(&tier, &limits.models.build) else {
         set_state(gh, n, &issue, State::NeedsHuman)?;
         data["state"] = json!("needs-human");
+        add_lesson(&mut data, gh, &app.ctx.session, n);
         return Err(BosunError::needs_human(
             format!(
                 "#{n} stopped by rule {} and escalation is used up",
@@ -94,5 +97,26 @@ pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
     )?;
     data["state"] = json!("blocked");
     data["escalate"] = json!({"from": tier, "to": to});
+    add_lesson(&mut data, gh, &app.ctx.session, n);
     Ok(Outcome::data(data))
+}
+
+/// Open or hit the `stop-rule` lesson for this stop (spec §4, §6). The text holds only the rule
+/// and the signature, so the same stop on another task hits the same lesson. A failure here must
+/// not hide the stop: it becomes `lesson: null` and `lesson_error`.
+fn add_lesson(data: &mut serde_json::Value, gh: &dyn Github, session: &str, n: u64) {
+    let rule = data["rule"].as_str().unwrap_or_default().to_string();
+    let sig = data["signature"].as_str().unwrap_or_default().to_string();
+    let title = format!("Stop rule {rule} on #{n}: {sig}");
+    let text = format!("Stop rule {rule}\nFailure signature: {sig}");
+    match capture_lesson(gh, session, "stop-rule", &title, &text, Some(n)) {
+        Ok(c) => {
+            data["lesson"] = json!({"issue": c.issue, "created": c.created, "hits": c.hits});
+        }
+        Err(e) => {
+            eprintln!("bosun: warning: lesson capture failed: {}", e.message);
+            data["lesson"] = serde_json::Value::Null;
+            data["lesson_error"] = json!(e.message);
+        }
+    }
 }
