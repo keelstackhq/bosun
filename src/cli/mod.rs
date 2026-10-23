@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod heartbeat;
 pub mod join;
 pub mod lesson;
+pub mod main_triage;
 pub mod msg;
 pub mod plan;
 pub mod pr;
@@ -117,10 +118,12 @@ pub enum Command {
     Progress(ProgressArgs),
     /// Post this session's result on its epic, end its lease and leave the registry.
     Result(ResultArgs),
+    /// Bisect the merged PRs between a good and a bad rev; name the first bad one.
+    MainTriage(MainTriageArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 27] = [
+pub const COMMANDS: [&str; 28] = [
     "join",
     "claim",
     "heartbeat",
@@ -148,6 +151,7 @@ pub const COMMANDS: [&str; 27] = [
     "resume",
     "progress",
     "result",
+    "main-triage",
 ];
 
 impl Command {
@@ -189,6 +193,7 @@ impl Command {
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
             Command::Result(_) => "result",
+            Command::MainTriage(_) => "main-triage",
         }
     }
 }
@@ -497,4 +502,17 @@ pub struct FailArgs {
     /// The model tier in use (default: the newest escalation, else the build model).
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct MainTriageArgs {
+    /// A rev where the check passes (older than --bad).
+    #[arg(long)]
+    pub good: String,
+    /// A rev where the check fails (default HEAD).
+    #[arg(long)]
+    pub bad: Option<String>,
+    /// Shell command to run in each worktree; non-zero is bad (default: bosun gate test --all).
+    #[arg(long)]
+    pub run: Option<String>,
 }
