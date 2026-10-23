@@ -63,8 +63,8 @@ fn git_has(root: &Path, spec: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// The profile's manifest when the stack has none in the working tree and (unless `--all`) none at
-/// the base either: a stack that never had one has nothing to check yet.
+/// The profile's manifest when the stack has none in the working tree and none at the base
+/// either, also with `--all`: a stack that never had one has nothing to check yet.
 fn missing_manifest<'a>(req: &Request, stack: &Stack, profile: &'a Profile) -> Option<&'a str> {
     let manifest = profile.manifest.as_deref()?;
     let rel = stack_rel(&stack.path);
