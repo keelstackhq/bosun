@@ -73,6 +73,8 @@ pub struct State {
     pub auto_merge: HashMap<u64, String>,
     /// Answers every GraphQL call with this error.
     pub graphql_error: Option<String>,
+    /// Answers every GraphQL call with this HTTP status and message.
+    pub graphql_status: Option<(u16, String)>,
     pub log: Vec<Logged>,
     /// Extra fields of `GET /repos/o/r` (default branch main, auto-merge off).
     pub repo: serde_json::Map<String, Value>,
@@ -312,6 +314,10 @@ impl FakeGithub {
     /// The merge method of the pull's enabled auto-merge, if any.
     pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
         self.state.lock().unwrap().auto_merge.get(&number).cloned()
+    }
+
+    pub fn graphql_status(&self, status: u16, message: &str) {
+        self.state.lock().unwrap().graphql_status = Some((status, message.into()));
     }
 
     pub fn graphql_error(&self, message: &str) {
@@ -601,6 +607,9 @@ fn route(
     let seg: Vec<String> = path.trim_start_matches('/').split('/').map(dec).collect();
     let seg: Vec<&str> = seg.iter().map(String::as_str).collect();
     if method == "POST" && seg == ["graphql"] {
+        if let Some((code, m)) = s.graphql_status.clone() {
+            return msg(code, &m);
+        }
         return graphql(s, body);
     }
     let ["repos", _, _, rest @ ..] = seg.as_slice() else {
@@ -701,6 +710,21 @@ fn route(
                     .map(|n| json!({"name": n}))
                     .collect(),
             ))
+        }
+        ("PUT", ["pulls", n, "ccr", "auto_merge"]) => {
+            let method = body["merge_method"].as_str().unwrap_or("");
+            if !["merge", "squash", "rebase"].contains(&method) {
+                return msg(400, "merge_method must be one of merge, squash, rebase.");
+            }
+            let Some(n) = n
+                .parse::<u64>()
+                .ok()
+                .filter(|n| s.pulls.iter().any(|p| p["number"].as_u64() == Some(*n)))
+            else {
+                return msg(404, "Not Found");
+            };
+            s.auto_merge.insert(n, method.to_uppercase());
+            ok(json!({}))
         }
         ("DELETE", ["issues", n, "labels", name]) => {
             let Some(p) = find(s, n) else {
