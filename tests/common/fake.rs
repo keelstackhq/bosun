@@ -18,6 +18,7 @@ pub struct FakeIssue {
     pub title: String,
     pub body: String,
     pub state: String,
+    pub state_reason: Option<String>,
     pub labels: Vec<String>,
     pub is_pr: bool,
     pub user: String,
@@ -142,6 +143,7 @@ impl FakeGithub {
             title: title.into(),
             body: body.into(),
             state: "open".into(),
+            state_reason: None,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             is_pr: false,
             user: "octocat".into(),
@@ -421,6 +423,9 @@ fn issue_json(i: &FakeIssue) -> Value {
         .collect();
     let mut v = json!({"number": i.number, "title": i.title, "body": i.body, "state": i.state,
         "labels": labels, "user": {"login": i.user}});
+    if let Some(r) = &i.state_reason {
+        v["state_reason"] = json!(r);
+    }
     if i.is_pr {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
@@ -610,6 +615,7 @@ fn route(
                 title: body["title"].as_str().unwrap_or("").into(),
                 body: body["body"].as_str().unwrap_or("").into(),
                 state: "open".into(),
+                state_reason: None,
                 labels,
                 is_pr: false,
                 user: "octocat".into(),
@@ -634,6 +640,9 @@ fn route(
             }
             if let Some(st) = body["state"].as_str() {
                 i.state = st.into();
+            }
+            if let Some(r) = body["state_reason"].as_str() {
+                i.state_reason = Some(r.into());
             }
             ok(issue_json(i))
         }

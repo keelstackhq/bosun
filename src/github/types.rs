@@ -10,6 +10,9 @@ pub struct Issue {
     #[serde(default)]
     pub body: Option<String>,
     pub state: String,
+    /// Why a closed issue was closed: `completed`, `not_planned`, ...
+    #[serde(default)]
+    pub state_reason: Option<String>,
     #[serde(default, deserialize_with = "label_names")]
     pub labels: Vec<String>,
     /// GitHub lists pull requests as issues; they carry a `pull_request` key.
