@@ -27,26 +27,33 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             "check the number; `gh pr list` shows the open PRs",
         )
     })?;
-    // The newest verdict on an older head makes this a delta review, but only when that head
-    // carries a successful `review-verdict` status: the record is a comment anyone with write
-    // access can post, the status is not.
+    // `since` is the newest older head with a verdict record and a successful `review-verdict`
+    // status: the record is a comment anyone with write access can post, the status is not.
+    // Records on the current head and on heads without a success status are skipped.
     let mut since = None;
     for c in notes(gh, n)?.iter().rev() {
         if let Some(Record::Verdict { head_sha, .. }) = parse_record(&c.body)
             && head_sha != pull.head_sha
-        {
-            if gh
+            && gh
                 .statuses(&head_sha)?
                 .iter()
                 .any(|s| s.context == "review-verdict" && s.state == "success")
-            {
-                since = Some(head_sha);
-            }
+        {
+            since = Some(head_sha);
             break;
         }
     }
+    // The old sha can be gone after a force-push: then the review is full, not an error.
+    let mut delta_fallback = None;
     let files = match &since {
-        Some(s) => gh.compare_files(s, &pull.head_sha)?,
+        Some(s) => match gh.compare_files(s, &pull.head_sha) {
+            Ok(f) => f,
+            Err(_) => {
+                delta_fallback = Some(format!("cannot compare {s}...{}", pull.head_sha));
+                since = None;
+                gh.pull_files(n)?
+            }
+        },
         None => gh.pull_files(n)?,
     };
     let names: Vec<String> = files.iter().map(|f| f.filename.clone()).collect();
@@ -67,7 +74,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
-    Ok(Outcome::data(json!({
+    let mut data = json!({
         "pr": n, "title": pull.title, "head_sha": pull.head_sha, "base_sha": pull.base_sha,
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,
@@ -75,5 +82,9 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
         "instructions": INSTRUCTIONS,
-    })))
+    });
+    if let Some(why) = delta_fallback {
+        data["delta_fallback"] = json!(why);
+    }
+    Ok(Outcome::data(data))
 }
