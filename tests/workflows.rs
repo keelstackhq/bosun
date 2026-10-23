@@ -216,3 +216,48 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
     assert!(yaml.contains("&& github.run_id || 'apply'"), "{yaml}");
     assert!(yaml.contains("cancel-in-progress: false"));
 }
+
+#[test]
+fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/release.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    // Only a push to main or a manual run: no pull request or comment reaches publish rights.
+    let triggers = &yaml[yaml.find("\non:\n").unwrap()..yaml.find("\npermissions:").unwrap()];
+    assert_eq!(
+        triggers.trim(),
+        "on:\n  push:\n    branches: [main]\n  workflow_dispatch:",
+        "{triggers}"
+    );
+    // Read-only by default; only the publish and prepare jobs widen it.
+    assert!(
+        yaml.contains("\npermissions:\n  contents: read\n\n"),
+        "{yaml}"
+    );
+    let jobs = &yaml[yaml.find("\njobs:\n").unwrap()..];
+    let mut job = String::new();
+    for line in jobs.lines() {
+        let line = line.split(" #").next().unwrap_or(line).trim_end();
+        if line.starts_with("  ") && !line.starts_with("   ") && line.ends_with(':') {
+            job = line.trim().trim_end_matches(':').to_string();
+        }
+        // `contents: write`, `permissions: write-all` and `{ contents: write }` all grant.
+        let tight: String = line.split_whitespace().collect();
+        let grants = tight.ends_with(":write")
+            || tight.contains("write-all")
+            || tight.contains(":write,")
+            || tight.contains(":write}");
+        if grants {
+            assert!(
+                job == "publish" || job == "prepare",
+                "job `{job}` grants {}",
+                line.trim()
+            );
+        }
+    }
+    // Event data reaches scripts through env only.
+    for s in run_scripts(&yaml) {
+        for bad in ["github.event", "head_ref", "github.actor", "inputs."] {
+            assert!(!s.contains(bad), "run script uses {bad}: {s}");
+        }
+    }
+}
