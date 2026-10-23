@@ -5,15 +5,23 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, active_issues, halt_reason, main_red};
+use crate::app::{App, Result, active_issues, halt_reason, main_red};
 use crate::core::lease::{live_leases, members};
 use crate::core::records::spend_total;
 use crate::core::state::State;
-use crate::github::IssueState;
+use crate::github::{Github, IssueState};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
 
 pub const PROCESS_RED_LABEL: &str = "bosun:process-red";
+
+/// The number of an open issue labelled `bosun:process-red` (a blocking lesson carries it).
+pub fn process_red(gh: &dyn Github) -> Result<Option<u64>> {
+    Ok(gh
+        .list_issues(&[PROCESS_RED_LABEL], IssueState::Open)?
+        .first()
+        .map(|i| i.number))
+}
 /// Stack profiles that ship inside bosun; any other profile is the owner's own file.
 pub const BUILTIN_PROFILES: [&str; 1] = ["rust"];
 
@@ -24,10 +32,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
 
     // An unreadable kill switch halts work commands, so it shows as halted.
     let halted = !matches!(halt_reason(gh), Ok(None));
-    let process_red = gh
-        .list_issues(&[PROCESS_RED_LABEL], IssueState::Open)?
-        .first()
-        .map(|i| i.number);
+    let process_red = process_red(gh)?;
 
     let (mut sessions, mut spend) = (Vec::new(), 0.0);
     if let Some((_, notes)) = registry::load(gh)? {

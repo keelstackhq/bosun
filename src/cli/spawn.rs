@@ -11,6 +11,7 @@ use crate::app::{
     App, end_lease, kill_switch, limits_from_default, main_red, notes, set_state, settle_race,
     task_meta,
 };
+use crate::cli::status::process_red;
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members};
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, spend_total};
@@ -61,6 +62,9 @@ pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
     let leases = leases_of(n, &notes(app.gh.as_ref(), n)?);
     let input = SpawnInput {
         main_red: main_red(app.gh.as_ref())?.is_some(),
+        process_red: process_red(app.gh.as_ref())?.is_some(),
+        process_fix: meta.as_ref().is_some_and(|m| m.kind == "process-fix")
+            || epic.labels.iter().any(|l| l == "bosun:kind/process-fix"),
         mainfix: meta.as_ref().is_some_and(|m| m.kind == "mainfix")
             || epic.labels.iter().any(|l| l == "bosun:kind/mainfix"),
         spent_today_usd: spend_total(reg_notes, Some(now.day_start())),
