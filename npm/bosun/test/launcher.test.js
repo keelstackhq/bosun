@@ -158,3 +158,11 @@ test("commandName names the command as bosun's envelope does", () => {
   assert.equal(launcher.commandName(["lesson"]), "lesson");
   assert.equal(launcher.commandName([]), "");
 });
+
+test("commandName skips the value of the global -C <DIR> option", () => {
+  assert.equal(launcher.commandName(["-C", "/repo", "claim", "1"]), "claim");
+  assert.equal(launcher.commandName(["-C", "/repo", "verdict", "post"]), "verdict post");
+  assert.equal(launcher.commandName(["-C=/repo", "status"]), "status");
+  assert.equal(launcher.commandName(["-C/repo", "wave", "plan", "3"]), "wave plan");
+  assert.equal(launcher.commandName(["-v", "-C", "/repo"]), "");
+});
