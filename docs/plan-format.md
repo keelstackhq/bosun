@@ -93,4 +93,7 @@ When it merges, run `bosun plan amend <file>` (`--dry-run` shows the changes fir
 `bosun plan import`, closes as "not planned" the epics, tasks and plan tasks the file no longer
 lists (with the comment "Removed from <file> by an amendment."), and updates the title and
 metadata (touch, depends, kind, risk) of changed tasks in place. It never touches the issues of
-another plan file or hand-made issues. Only after the plan task merged do new tasks become ready.
+another plan file or hand-made issues. A dropped task that is active or holds a live lease is not
+closed (it is listed under `skipped`, with a warning; its epic stays open); amend again after it
+ends. An item that comes back reopens its epic and tasks. Plan paths are stored relative to the
+repo root. Only after the plan task merged do new tasks become ready.

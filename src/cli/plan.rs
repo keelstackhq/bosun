@@ -2,18 +2,20 @@
 //! epics, plan tasks and tasks as GitHub issues. Issues are found by their hidden marker
 //! `<!-- bosun:plan <id> -->` (or adopted by their metadata) and never changed.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
-use crate::app::{App, Result, kill_switch, set_state, task_meta};
+use crate::app::{App, Result, kill_switch, notes, set_state, task_meta};
+use crate::core::lease::leases_of;
 use crate::core::meta::TaskMeta;
 use crate::core::plan::{self, Item, Plan, PlanError, Task, Uc};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
+use crate::time::Timestamp;
 
 pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
     match cmd {
@@ -148,6 +150,10 @@ struct Importer<'a> {
     rust: bool,
     promoted: Vec<String>,
     stubs: Vec<Value>,
+    /// The plan path as stored in epics: relative to the repo root.
+    plan_path: String,
+    roots: Vec<PathBuf>,
+    now: Timestamp,
 }
 
 impl Importer<'_> {
@@ -426,6 +432,10 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     if !a.dry_run {
         kill_switch(app.gh.as_ref())?;
     }
+    let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
+        .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
+    let mut roots = vec![app.ctx.dir.clone()];
+    roots.extend(std::fs::canonicalize(&app.ctx.dir).ok());
     let mut imp = Importer {
         gh: app.gh.as_ref(),
         issues: all_issues(app.gh.as_ref())?,
@@ -438,21 +448,25 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         dir: app.ctx.dir.clone(),
         promoted: vec![],
         stubs: vec![],
+        plan_path: plan_key(&a.file, &base, &roots),
+        roots,
+        now: app.ctx.now,
     };
     let mut data = match import_items(&mut imp, &p, a) {
         Ok(()) => imp.data(&a.file),
         Err(e) => return Err(e.with_data(imp.data(&a.file))),
     };
     if amend {
-        match reconcile(&mut imp, &p, &a.file) {
-            Ok((closed, updated)) => {
-                let (c, u) = if a.dry_run {
-                    ("would_close", "would_update")
-                } else {
-                    ("closed", "updated")
-                };
-                data[c] = json!(closed);
-                data[u] = json!(updated);
+        match reconcile(&mut imp, &p) {
+            Ok(ch) => {
+                let dry = a.dry_run;
+                let key =
+                    |plain: &'static str, would: &'static str| if dry { would } else { plain };
+                data[key("closed", "would_close")] = json!(ch.closed);
+                data[key("updated", "would_update")] = json!(ch.updated);
+                data[key("reopened", "would_reopen")] = json!(ch.reopened);
+                data["skipped"] = json!(ch.skipped);
+                data["warnings"] = json!(imp.warnings);
             }
             Err(e) => return Err(e.with_data(data)),
         }
@@ -479,62 +493,219 @@ fn replace_task_meta(body: &str, meta: &TaskMeta) -> Option<String> {
     ))
 }
 
-/// Close what the plan file dropped and update tasks whose definition changed. Only issues with
-/// the plan marker whose epic names this file are touched. Returns (closed, updated) plan ids.
-fn reconcile(imp: &mut Importer, p: &Plan, file: &str) -> Result<(Vec<String>, Vec<String>)> {
+/// What a reconcile did, by plan id.
+#[derive(Default)]
+struct Changes {
+    closed: Vec<String>,
+    updated: Vec<String>,
+    skipped: Vec<String>,
+    reopened: Vec<String>,
+}
+
+/// `p` without `.` and resolved `..` components.
+fn clean(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir if out.file_name().is_some() => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn slashed(p: &Path) -> String {
+    p.components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// A plan path as the epics store it: relative to the repo root, with `/`, without `./`.
+/// A relative `file` is resolved against `base`; a path outside every root stays as given.
+fn plan_key(file: &str, base: &Path, roots: &[PathBuf]) -> String {
+    let joined = clean(&base.join(file));
+    let canon = std::fs::canonicalize(&joined).unwrap_or_else(|_| joined.clone());
+    for cand in [&canon, &joined] {
+        for r in roots {
+            if let Ok(rel) = cand.strip_prefix(r)
+                && !rel.as_os_str().is_empty()
+            {
+                return slashed(rel);
+            }
+        }
+    }
+    slashed(&clean(Path::new(file)))
+}
+
+/// Why `i` must not be closed now: it is in an active state or holds a live lease.
+fn blocked(imp: &Importer, i: &Issue) -> Result<Option<String>> {
+    if let Some(s) = state_of(&i.labels)
+        && s.is_active()
+    {
+        return Ok(Some(s.name().to_string()));
+    }
+    let n = notes(imp.gh, i.number)?;
+    let live = leases_of(i.number, &n).iter().any(|l| l.is_live(imp.now));
+    Ok(live.then(|| "leased".to_string()))
+}
+
+/// Close what the plan file dropped, reopen what it brought back, and update tasks whose
+/// definition changed. Only issues with the plan marker whose epic names this file are touched.
+fn reconcile(imp: &mut Importer, p: &Plan) -> Result<Changes> {
+    let file = imp.plan_path.clone();
     let issues: Vec<Issue> = imp.issues.clone();
     let ours = |i: &Issue| i.state_reason.as_deref() != Some("duplicate");
-    // Epic issues of this plan file.
+    let marked = |i: &Issue| i.body_text().starts_with("<!-- bosun:plan ");
+    let same = |s: &str| plan_key(s, &imp.dir, &imp.roots) == file;
     let epics: HashSet<u64> = issues
         .iter()
-        .filter(|i| {
-            ours(i)
-                && i.body_text().starts_with("<!-- bosun:plan ")
-                && epic_plan(i.body_text()).as_deref() == Some(file)
-        })
+        .filter(|i| ours(i) && marked(i) && epic_plan(i.body_text()).is_some_and(|s| same(&s)))
         .map(|i| i.number)
         .collect();
-    let (mut closed, mut updated) = (vec![], vec![]);
-    let reason = format!("Removed from {file} by an amendment.");
-    let close = |imp: &Importer, i: &Issue| -> Result<()> {
+    if epics.is_empty()
+        && issues.iter().any(|i| {
+            ours(i)
+                && marked(i)
+                && epic_item(i.body_text()).is_some_and(|it| p.items.iter().any(|x| x.id == it))
+        })
+    {
+        imp.warnings.push(format!(
+            "no epic names {file}; nothing reconciled — check the path"
+        ));
+    }
+    // A task of this plan: its metadata and plan id.
+    let task_of = |i: &Issue| -> Option<(TaskMeta, String)> {
+        let meta = task_meta(i)?;
+        let id = format!("{}/{}", meta.item, meta.task);
+        (marked(i)
+            && i.body_text().contains(&marker(&id))
+            && meta.epic.is_some_and(|e| epics.contains(&e)))
+        .then_some((meta, id))
+    };
+    let in_plan = |meta: &TaskMeta| {
+        p.items
+            .iter()
+            .find(|x| x.id == meta.item)
+            .is_some_and(|x| meta.task == "P" || x.tasks.iter().any(|t| t.id == meta.task))
+    };
+    let mut ch = Changes::default();
+    let comment = |imp: &Importer, i: &Issue, text: &str, patch: IssuePatch| -> Result<()> {
         if !imp.dry {
-            imp.gh.add_comment(i.number, &reason)?;
-            imp.gh.update_issue(
-                i.number,
-                IssuePatch {
-                    state: Some(PatchState::Closed),
-                    state_reason: Some("not_planned".into()),
-                    ..IssuePatch::default()
-                },
-            )?;
+            imp.gh.add_comment(i.number, text)?;
+            imp.gh.update_issue(i.number, patch)?;
         }
         Ok(())
     };
-    for i in issues.iter().filter(|i| i.state == "open" && ours(i)) {
+    // Items that came back: reopen what an earlier amendment closed as not planned.
+    let mut reopened: HashSet<u64> = HashSet::new();
+    for i in issues
+        .iter()
+        .filter(|i| i.state == "closed" && i.state_reason.as_deref() == Some("not_planned"))
+    {
+        let id = if epics.contains(&i.number) {
+            epic_item(i.body_text()).filter(|it| p.items.iter().any(|x| &x.id == it))
+        } else {
+            task_of(i).filter(|(m, _)| in_plan(m)).map(|(_, id)| id)
+        };
+        if let Some(id) = id {
+            let patch = IssuePatch {
+                state: Some(PatchState::Open),
+                ..IssuePatch::default()
+            };
+            comment(imp, i, "Re-added by an amendment.", patch)?;
+            reopened.insert(i.number);
+            ch.reopened.push(id);
+        }
+    }
+    let live: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| (i.state == "open" || reopened.contains(&i.number)) && ours(i))
+        .collect();
+    let dropped = |meta: &TaskMeta| !in_plan(meta);
+    // Dropped tasks that must stay open, and the epics holding them.
+    let mut busy: HashMap<u64, Option<String>> = HashMap::new();
+    let mut busy_epics: HashSet<u64> = HashSet::new();
+    for i in &live {
+        if let Some((meta, _)) = task_of(i)
+            && dropped(&meta)
+            && !reopened.contains(&i.number)
+        {
+            let b = blocked(imp, i)?;
+            if b.is_some() {
+                busy_epics.extend(meta.epic);
+            }
+            busy.insert(i.number, b);
+        }
+    }
+    let reason = format!("Removed from {file} by an amendment.");
+    let closing = IssuePatch {
+        state: Some(PatchState::Closed),
+        state_reason: Some("not_planned".into()),
+        ..IssuePatch::default()
+    };
+    for i in live {
         let body = i.body_text();
         if epics.contains(&i.number) {
             let item = epic_item(body).unwrap_or_default();
-            if !p.items.iter().any(|x| x.id == item) {
-                close(imp, i)?;
-                closed.push(item);
+            if p.items.iter().any(|x| x.id == item) || reopened.contains(&i.number) {
+                continue;
             }
+            let why = if busy_epics.contains(&i.number) {
+                Some("has active tasks".to_string())
+            } else {
+                blocked(imp, i)?
+            };
+            if let Some(why) = why {
+                imp.warnings.push(if why == "has active tasks" {
+                    format!(
+                        "{item} #{} has active tasks; left open — finish or release them, then amend again",
+                        i.number
+                    )
+                } else {
+                    format!(
+                        "{item} #{} is {why}; not closed — finish or release it, then amend again",
+                        i.number
+                    )
+                });
+                ch.skipped.push(item);
+                continue;
+            }
+            comment(imp, i, &reason, closing.clone())?;
+            ch.closed.push(item);
             continue;
         }
-        let Some(meta) = task_meta(i) else { continue };
-        let id = format!("{}/{}", meta.item, meta.task);
-        if !body.contains(&marker(&id)) || !meta.epic.is_some_and(|e| epics.contains(&e)) {
-            continue;
-        }
-        let item = p.items.iter().find(|x| x.id == meta.item);
-        let task = item.and_then(|x| x.tasks.iter().find(|t| t.id == meta.task));
-        if meta.task == "P" && item.is_some() {
-            continue;
-        }
-        let Some(t) = task else {
-            close(imp, i)?;
-            closed.push(id);
+        let Some((meta, id)) = task_of(i) else {
             continue;
         };
+        if reopened.contains(&i.number) {
+            continue;
+        }
+        if dropped(&meta) {
+            if let Some(Some(why)) = busy.get(&i.number) {
+                imp.warnings.push(format!(
+                    "{id} #{} is {why}; not closed — finish or release it, then amend again",
+                    i.number
+                ));
+                ch.skipped.push(id);
+                continue;
+            }
+            comment(imp, i, &reason, closing.clone())?;
+            ch.closed.push(id);
+            continue;
+        }
+        if meta.task == "P" {
+            continue;
+        }
+        let t = p
+            .items
+            .iter()
+            .find(|x| x.id == meta.item)
+            .and_then(|x| x.tasks.iter().find(|t| t.id == meta.task))
+            .expect("in_plan checked");
         let title = format!("{id}: {}", t.title);
         let mut new = meta.clone();
         (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
@@ -561,9 +732,9 @@ fn reconcile(imp: &mut Importer, p: &Plan, file: &str) -> Result<(Vec<String>, V
                 imp.gh.add_labels(i.number, &[&label])?;
             }
         }
-        updated.push(id);
+        ch.updated.push(id);
     }
-    Ok((closed, updated))
+    Ok(ch)
 }
 
 /// Every issue, including ones the list does not show yet: GitHub's list lags seconds behind
@@ -595,6 +766,7 @@ fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
 
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     let mut imported = false;
+    let plan_path = imp.plan_path.clone();
     for item in p
         .items
         .iter()
@@ -604,7 +776,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         let epic = imp.slot(&item.id, (&item.id, None), || {
             (
                 format!("{}: {}", item.id, item.title),
-                epic_body(item, &a.file),
+                epic_body(item, &plan_path),
                 labels("feature", &item.area, "planned"),
             )
         })?;
@@ -620,7 +792,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                     .collect::<Vec<_>>()
                     .join("\n"),
                 id = item.id,
-                file = a.file,
+                file = plan_path,
                 low = item.id.to_lowercase()
             );
             (
