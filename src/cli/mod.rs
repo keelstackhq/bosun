@@ -9,6 +9,7 @@ pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
+pub mod intake;
 pub mod join;
 pub mod lesson;
 pub mod msg;
@@ -114,10 +115,12 @@ pub enum Command {
     Resume,
     /// Cost per merged task over the last N days (read-only).
     Progress(ProgressArgs),
+    /// Open a kind/plan issue that asks for a plan amendment (the only way new work enters).
+    Intake(IntakeArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 26] = [
+pub const COMMANDS: [&str; 27] = [
     "join",
     "claim",
     "heartbeat",
@@ -144,6 +147,7 @@ pub const COMMANDS: [&str; 26] = [
     "fail",
     "resume",
     "progress",
+    "intake",
 ];
 
 impl Command {
@@ -183,6 +187,7 @@ impl Command {
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
             Command::Progress(_) => "progress",
+            Command::Intake(_) => "intake",
         }
     }
 }
@@ -462,6 +467,24 @@ pub struct PlanImportArgs {
     /// Import only this item (repeatable); default all.
     #[arg(long = "item", value_name = "ID")]
     pub item: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct IntakeArgs {
+    /// What is wanted.
+    pub text: String,
+    /// Where the request came from.
+    #[arg(long, value_parser = ["slack", "lesson", "flake", "human"])]
+    pub source: String,
+    /// The plan item the request belongs to (sets the area label).
+    #[arg(long, value_name = "ID")]
+    pub item: Option<String>,
+    /// Issue title after `intake: ` (default: the first line of the text).
+    #[arg(long)]
+    pub title: Option<String>,
+    /// The plan file to amend (default plans/<project>.md).
+    #[arg(long, value_name = "FILE")]
+    pub plan: Option<String>,
 }
 
 #[derive(Debug, Args)]

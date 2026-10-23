@@ -34,7 +34,7 @@ fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
     plan::parse(&text).map_err(|errs| plan_errors(file, &errs))
 }
 
-fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
+pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
     let first = &errs[0];
     BosunError::error(
         format!("{} errors in {file}", errs.len()),
