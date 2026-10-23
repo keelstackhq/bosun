@@ -449,7 +449,7 @@ task and a lesson. A test is never skipped to get green.
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`.
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**`.
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Content `(?i)(api[_-]?key|secret|token)\s*=`.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.
