@@ -21,7 +21,7 @@ These files define the release: `hoist.toml`, `npm/bosun/**`, `npm/bosun-*/packa
 | Event | Variable unset | Variable `enabled` |
 | ----- | -------------- | ------------------ |
 | push to `main` | `detect` only | `detect`, then `build`, `publish` and `prepare` when a release is pending |
-| `workflow_dispatch` | `detect` and `build` (dry run: 5 targets, `bosun --version` smoke test, static check of the musl binaries; nothing is published) | as push, plus the dry-run checks |
+| `workflow_dispatch` | `detect` and `build` (dry run: 5 targets, `bosun --version` smoke test, static check of the musl binaries; nothing is published) | on `main` as push, plus the dry-run checks; on another branch the same as unset (`publish` runs only on `main`) |
 
 So a merge to `main` never tags, releases or publishes until the owner sets the variable.
 
@@ -43,8 +43,8 @@ Dry run at any time: `gh workflow run release.yml --repo keelstackhq/bosun --ref
 
 ## One-time setup for v0.1.0 (owner, in this order)
 
-Do steps 1 and 2 before the variable is set. Do steps 4 to 6 within 2 days of step 3: npm trusted
-publishers expire when they are not used for 2 days (D24).
+Do steps 1 and 2 before the variable is set. Do step 6 within 2 days of step 4: the npm trusted
+publishers that step 4 registers expire when they are not used for 2 days (D24).
 
 1. **Environment `release`**, limited to `main`, with you as the required reviewer. If the
    environment does not exist, the first run creates it without protection.

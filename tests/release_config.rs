@@ -244,7 +244,7 @@ fn release_workflow_is_gated_so_a_merge_publishes_nothing() {
         text.contains("vars.BOSUN_RELEASE"),
         "the gate reads the repository variable"
     );
-    assert!(text.contains("enabled=$enabled") || text.contains("enabled: "));
+    assert!(text.contains("echo \"enabled=$enabled\" >> \"$GITHUB_OUTPUT\""));
     let detect = job(&text, "detect");
     assert!(!detect.contains("environment:") && !detect.contains("contents: write"));
     for name in ["publish", "prepare"] {
@@ -256,6 +256,11 @@ fn release_workflow_is_gated_so_a_merge_publishes_nothing() {
     }
     let publish = job(&text, "publish");
     assert!(publish.contains("pending == 'true'") && publish.contains("environment: release"));
+    // A manual run from a branch never publishes, even before the environment has a policy.
+    assert!(
+        publish.contains("github.ref == 'refs/heads/main'"),
+        "publish runs only on main:\n{publish}"
+    );
     let build = job(&text, "build");
     assert!(build.contains("workflow_dispatch") && build.contains("enabled == 'true'"));
     // Decision 3: hoist from npm, exact version, in both writing jobs; GH_TOKEN never meets cargo.

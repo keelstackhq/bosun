@@ -148,7 +148,9 @@ jobs:
 
   publish:
     needs: [detect, build]
-    if: needs.detect.outputs.pending == 'true' && needs.detect.outputs.enabled == 'true'
+    # Only from main: a manual run on a branch stays a dry run even if the environment has no
+    # branch policy yet.
+    if: github.ref == 'refs/heads/main' && needs.detect.outputs.pending == 'true' && needs.detect.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     environment: release
     permissions:
