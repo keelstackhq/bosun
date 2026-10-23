@@ -689,7 +689,7 @@ fn dry_run_with_invalid_output_exits_1_and_writes_no_status() {
     let e = setup(CI, "no json at all");
     let (code, v) = dry_run(&e);
     assert_eq!(code, 1, "{v}");
-    assert!(statuses(&e).is_empty());
+    assert!(statuses(&e).is_empty() && writes(&e).is_empty());
 }
 
 #[test]
@@ -707,12 +707,14 @@ fn dry_run_refusals_write_no_status_and_make_no_call() {
             .contains("too large")
     );
     assert!(e.ai.requests().is_empty() && statuses(&e).is_empty());
+    assert!(writes(&e).is_empty());
 
     let e = setup(CI, &verdict_json("approve", 0.9, &[]));
     e.gh.pull_file(42, "x.bin", "added", 5000, 0, None);
     let (code, v) = dry_run(&e);
     assert_eq!(code, 1, "{v}");
     assert!(e.ai.requests().is_empty() && statuses(&e).is_empty());
+    assert!(writes(&e).is_empty());
 }
 
 #[test]
@@ -726,4 +728,48 @@ fn dry_run_still_obeys_the_daily_budget() {
     let (code, _) = dry_run(&e);
     assert_eq!(code, 6);
     assert!(e.ai.requests().is_empty());
+}
+
+#[test]
+fn dry_run_is_always_a_full_review_even_with_an_approved_older_head() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.pull_file(
+        42,
+        "src/b.rs",
+        "added",
+        1,
+        0,
+        Some("@@ -0,0 +1 @@\n+fn b() {}"),
+    );
+    e.gh.comment(
+        42,
+        r#"{"bosun":"verdict","session":"s","head_sha":"sha41","approved":true}"#,
+    );
+    e.gh.status("sha41", "review-verdict", "success", "approve");
+    e.gh.compare_file("sha41", "sha42", "src/delta.rs", "@@ -1 +1 @@\n+fn d() {}");
+    let (code, v) = dry_run(&e);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["since_sha"].is_null(), "{v}");
+    let body = e.ai.requests()[0].body.to_string();
+    assert!(
+        body.contains("src/a.rs") && body.contains("src/b.rs"),
+        "{body}"
+    );
+    assert!(!body.contains("src/delta.rs"), "{body}");
+    assert!(writes(&e).is_empty());
+}
+
+#[test]
+fn dry_run_with_a_blocker_or_escalate_risk_is_not_approved() {
+    let e = setup(CI, &verdict_json("approve", 0.95, &["blocker"]));
+    let (code, v) = dry_run(&e);
+    assert_eq!((code, &v["data"]["approved"]), (0, &json!(false)), "{v}");
+    assert!(writes(&e).is_empty());
+
+    let reply = verdict_json("approve", 0.95, &[])
+        .replace(r#""escalate_risk":false"#, r#""escalate_risk":true"#);
+    let e = setup(CI, &reply);
+    let (code, v) = dry_run(&e);
+    assert_eq!((code, &v["data"]["approved"]), (0, &json!(false)), "{v}");
+    assert!(writes(&e).is_empty());
 }

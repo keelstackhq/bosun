@@ -9,11 +9,13 @@ use std::path::Path;
 struct Recording {
     pr: u64,
     head_sha: String,
+    #[serde(default)]
+    since_sha: Option<String>,
     a: Verdict,
     b: Verdict,
 }
 
-fn load(dir: &Path) -> Vec<Recording> {
+fn load(dir: &Path, real: bool) -> Vec<Recording> {
     let mut files: Vec<_> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -26,6 +28,11 @@ fn load(dir: &Path) -> Vec<Recording> {
             let text = std::fs::read_to_string(p).unwrap();
             let r: Recording =
                 serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            assert!(
+                !real || r.since_sha.is_none(),
+                "{}: a real recording is a full review",
+                p.display()
+            );
             for v in [&r.a, &r.b] {
                 v.validate()
                     .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
@@ -49,7 +56,7 @@ fn dir(sub: &str) -> std::path::PathBuf {
 
 #[test]
 fn synthetic_fixtures_parse_and_agree_as_expected() {
-    let a = compare(load(&dir("synthetic")));
+    let a = compare(load(&dir("synthetic"), false));
     assert_eq!(a.total, 6);
     assert_eq!(a.agree, 4);
     assert_eq!(a.disagree, vec![103, 105]);
@@ -77,7 +84,7 @@ fn passes_at_eighteen_of_twenty_only() {
 /// lands with them: this test does not satisfy it, and asserts nothing while there are none.
 #[test]
 fn recorded_reviews_parse_and_pass_once_twenty_exist() {
-    let a = compare(load(&dir("")));
+    let a = compare(load(&dir(""), true));
     if a.total >= 20 {
         assert!(passes(&a), "disagree on PRs {:?}", a.disagree);
     }

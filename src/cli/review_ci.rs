@@ -11,10 +11,11 @@ use super::verdict::{CONTEXT, current_pull, record};
 use crate::anthropic::Anthropic;
 use crate::app::{App, kill_switch, limits_from_default};
 use crate::config::ReviewMode;
+use crate::core::agreement::approved;
 use crate::core::budget::{Level, level};
 use crate::core::records::{Record, spend_total};
 use crate::core::risk::{FileView, unseen_diff};
-use crate::core::verdict::{Finding, Verdict, effective};
+use crate::core::verdict::{Finding, Verdict};
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -50,7 +51,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
         ));
     }
     budget_guard(&app)?;
-    let mut pack = build(gh, n)?;
+    let mut pack = build(gh, n, dry)?;
     let head_sha = pack["head_sha"].as_str().unwrap_or_default().to_string();
 
     // Fail closed: a diff the model cannot see is never approved.
@@ -157,7 +158,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
         }
     };
     if dry {
-        let approved = effective(&verdict).approve && !verdict.escalate_risk;
+        let approved = approved(&verdict);
         return Ok(Outcome::data(
             json!({"pr": n, "head_sha": head_sha, "dry_run": true,
             "since_sha": pack["since_sha"], "model": cfg.model, "usage": usage_json,

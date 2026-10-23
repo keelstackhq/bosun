@@ -6,7 +6,7 @@ use crate::core::verdict::{Verdict, effective};
 pub const AGREE_MIN: (usize, usize) = (18, 20);
 
 /// Approved after the rules: [`effective`], and no `escalate_risk` (it makes the status fail).
-fn approved(v: &Verdict) -> bool {
+pub fn approved(v: &Verdict) -> bool {
     effective(v).approve && !v.escalate_risk
 }
 
