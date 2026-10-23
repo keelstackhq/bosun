@@ -93,6 +93,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-22 · Task 7b · S8: `src/hooks/{mod,pre_tool_use,cache}.rs`, `bosun hook pre-tool-use` (hook protocol on stdout, no envelope; label-lock, merge-lock, edit-lock from a `<git common dir>/bosun/leases.json` cache, fails open) · `cargo nextest run --locked` 160/160
 - 2026-10-22 · Task 7c · S8 done: `src/hooks/session_start.rs`, `bosun hook session-start` (registry join, cache refresh, one-paragraph context: session, origin, own leases, BOSUN_HALT, main-red; a context that says how to fix GitHub access when unreachable) · an Edit on another session's claimed path is denied; `cargo nextest run --locked` 162/162
 - 2026-10-22 · Wrap-up · seed status, Blocked list with exact owner steps, all plan boxes ticked · review findings #20-#32 closed by fixes A-E
+- 2026-10-23 · Org decisions · D-004 channel `gh:keelstackhq/decisions//channel` (piece `import-claude`): `.splice/channels/decisions.toml`, `docs/agents/org-decisions.md` (D-001 to D-006) imported by CLAUDE.md; update bot `.github/workflows/splice.yml` · `splice check --json` exit 0
 - 2026-10-23 · Fix F · owner approval and kill switch: risk-check accepts an owner's unedited PR comment `/bosun approve <head sha>` and the `risk` workflow runs on it (`issue_comment`, from the default branch); the kill switch is an owner's open `bosun:halt` issue (read errors halt), `BOSUN_HALT` stays a second source with 404/403 as no signal; doctor step 5 checks the label · spec §8, README, CHANGELOG
 
 ## Blocked
@@ -117,11 +118,12 @@ Human-only items, in order. Each has the exact action.
    checkout with npm and crates.io logins run `hoist release bootstrap --dry-run` and
    `hoist release bootstrap`; run the release workflow within 2 days so the npm trusted
    publishers do not expire. Then move `.bosun/version` to the release in an R-gov PR.
-5. **Org decision D-006 (D26).** Propose in keelstackhq/decisions: "Agents never merge or tag;
-   merges happen via auto-merge after the gates." Agents do not edit that repo.
-6. **Org decisions channel (D-004).** `splice channel add gh:keelstackhq/decisions//channel
-   --track main --piece import-claude` in a checkout, then commit as `chore: sync org decisions`.
-7. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
+5. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
+   `splice/update` PR with `GITHUB_TOKEN` unless the secret `SPLICE_BOT_TOKEN` is set, and a PR
+   opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
+   token (keelstackhq/bosun, Contents and Pull requests: write), then
+   `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
+6. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
    github-actions app, so a same-repo PR can add or edit a workflow (also via the
    `pull_request_review` trigger, which runs the PR's copy of `risk.yml`) and post a forged
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a

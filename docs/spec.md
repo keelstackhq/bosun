@@ -46,7 +46,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D23 | Environment (A11) | The environment setup script installs Node 24, pnpm 12 (native binary), rust 1.97, cargo-nextest, cargo-deny, and the pinned bosun, splice, hoist and berth. |
 | D24 | First publish (A12) | The first publish follows the hoist bootstrap flow (`hoist release bootstrap`). npm trusted publishers expire if unused for 2 days, so the first workflow release follows within 2 days. |
 | D25 | Repo and scope (A13) | The repo is `keelstackhq/bosun` (Q1 answered). SP2, the runtime, is out of scope. |
-| D26 | Org rule (A14) | "Agents never merge or tag; merges happen via auto-merge after the gates" is proposed to keelstackhq/decisions as D-006. bosun follows it now. |
+| D26 | Org rule (A14) | "Agents never merge or tag; merges happen via auto-merge after the gates" is org decision D-006 in keelstackhq/decisions (settled 2026-10-22). It reaches this repo through the decisions channel (D-004): `docs/agents/org-decisions.md`, imported by CLAUDE.md. |
 | D27 | Crate shape | One package `keel-bosun` with modules `cli`, `core`, `github`, `sessions`, `gates`, `plan`, `hooks`, not a workspace of 7 crates. This matches berth and hoist. `core` does no I/O; a test enforces it. |
 | D28 | HTTP | `ureq` 3 with rustls (as hoist), not octocrab. bosun is synchronous; no tokio. |
 | D29 | Session tools | bosun never calls the claude-code-remote tools itself; a binary cannot. A command that needs a tool call returns it in `next` (tool name and arguments). The session makes the call and passes the result back with `--from -` on stdin. |
