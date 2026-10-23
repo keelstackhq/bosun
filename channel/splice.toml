@@ -14,3 +14,6 @@ owner = { prompt = "GitHub login of the owner (empty: fill governance/owners.tom
 bosun_version = { prompt = "bosun release to pin (empty: the channel version)", default = "", pattern = "^([0-9]+\\.[0-9]+\\.[0-9]+)?$" }
 rust_path = { prompt = "directory of the rust stack", default = ".", pattern = "^[A-Za-z0-9._/-]+$" }
 ts_path = { prompt = "directory of the ts-pnpm stack", default = ".", pattern = "^[A-Za-z0-9._/-]+$" }
+# Non-empty when the repo already has its own ci.yml with a `ci-ok` job (a hull template, for
+# example): bosun.yml then names its aggregate job `bosun-ok`, a second required check.
+own_ci = { prompt = "the repo has its own ci.yml and ci-ok job (1 or empty)", default = "", pattern = "^1?$" }

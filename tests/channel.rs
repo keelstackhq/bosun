@@ -45,7 +45,14 @@ fn manifest_names_the_bosun_channel_with_core_as_base() {
     // Sections and raw blocks need splice 0.2.0 (template format §9.23, §9.26).
     assert_eq!(m["min_splice"].as_str(), Some("0.2.0"));
     let vars = m["vars"].as_table().unwrap();
-    for v in ["project", "owner", "bosun_version", "rust_path", "ts_path"] {
+    for v in [
+        "project",
+        "owner",
+        "bosun_version",
+        "rust_path",
+        "ts_path",
+        "own_ci",
+    ] {
         assert!(vars.contains_key(v), "splice.toml lacks var {v}");
     }
 }
@@ -57,7 +64,7 @@ fn each_piece_matches_its_directory_and_lists_real_files() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     ids.sort();
-    assert_eq!(ids, ["core", "rust", "ts-pnpm"]);
+    assert_eq!(ids, ["claude-md", "core", "rust", "ts-pnpm"]);
     for id in &ids {
         let dir = channel().join("pieces").join(id);
         let p = toml_at(&dir.join("piece.toml"));
@@ -120,8 +127,12 @@ fn github_expressions_stay_out_of_the_template_syntax() {
 }
 
 #[test]
-fn hoist_requires_the_four_checks() {
-    let hoist = toml_at(&channel().join("pieces/core/files/hoist.toml"));
+fn hoist_requires_the_four_checks_and_bosun_ok_beside_a_repo_ci() {
+    let path = channel().join("pieces/core/files/hoist.toml.jinja");
+    let text = fs::read_to_string(path).unwrap();
+    let beside = r#"{% if own_ci %}"bosun-ok", {% endif %}"#;
+    assert!(text.contains(beside), "{text}");
+    let hoist: toml::Table = text.replace(beside, "").parse().unwrap();
     let required = strings(hoist["github"].get("required_checks"));
     assert_eq!(required, bosun::cli::pr::REQUIRED);
 }
@@ -146,17 +157,21 @@ fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
 }
 
 #[test]
-fn ci_ok_needs_every_job() {
-    let ci = fs::read_to_string(channel().join("pieces/core/files/.github/workflows/ci.yml.jinja"))
-        .unwrap();
+fn the_aggregate_job_needs_every_job() {
+    let wf = channel().join("pieces/core/files/.github/workflows");
+    // bosun.yml, never ci.yml: a repo's own ci.yml (a hull template) stays untouched.
+    assert!(!wf.join("ci.yml.jinja").exists() && !wf.join("ci.yml").exists());
+    let ci = fs::read_to_string(wf.join("bosun.yml.jinja")).unwrap();
     let body = &ci[ci.find("\njobs:\n").unwrap()..];
     let ids: Vec<&str> = body
         .lines()
         .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.ends_with(':'))
         .map(|l| l.trim().trim_end_matches(':'))
         .collect();
-    assert_eq!(ids, ["bosun-bin", "gate", "pin", "ci-ok"]);
-    let ci_ok = &body[body.find("\n  ci-ok:").unwrap()..];
+    assert_eq!(ids, ["bosun-bin", "gate", "pin"]);
+    // The aggregate: ci-ok, or bosun-ok beside the repo's own ci-ok.
+    let head = "{% if own_ci %}  bosun-ok:\n{% else %}  ci-ok:\n{% endif %}";
+    let ci_ok = &body[body.find(head).expect("aggregate job")..];
     assert!(ci_ok.contains("needs: [bosun-bin, gate, pin]"));
     assert!(ci_ok.contains("if: always()"));
     for (var, id) in [("BIN", "bosun-bin"), ("GATE", "gate"), ("PIN", "pin")] {
@@ -201,18 +216,24 @@ fn block<'a>(yaml: &'a str, start: &str, end: &str) -> &'a str {
 fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
     let wf = channel().join("pieces/core/files/.github/workflows");
-    for f in [
-        "risk.yml",
-        "verdict.yml",
-        "main-open.yml",
-        "main-health.yml",
+    for (f, theirs_name) in [
+        ("risk.yml", "risk.yml"),
+        ("verdict.yml", "verdict.yml"),
+        ("main-open.yml", "main-open.yml"),
+        ("main-health.yml", "main-health.yml.jinja"),
     ] {
-        let theirs = fs::read_to_string(wf.join(f)).unwrap();
+        let theirs = fs::read_to_string(wf.join(theirs_name)).unwrap();
         let mine = fs::read_to_string(ours.join(f)).unwrap();
-        for (a, b) in [
-            ("\non:\n", "\npermissions:"),
-            ("\npermissions:\n", "\njobs:"),
-        ] {
+        // main-health watches bosun.yml (and the repo's ci), so only its permissions match.
+        let blocks: &[(&str, &str)] = if f == "main-health.yml" {
+            &[("\npermissions:\n", "\njobs:")]
+        } else {
+            &[
+                ("\non:\n", "\npermissions:"),
+                ("\npermissions:\n", "\njobs:"),
+            ]
+        };
+        for &(a, b) in blocks {
             assert_eq!(
                 block(&theirs, a, b),
                 block(&mine, a, b),
@@ -244,7 +265,9 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
         }
     }
     // A fork PR from a branch called main also fires workflow_run on [main].
-    let health = fs::read_to_string(wf.join("main-health.yml")).unwrap();
+    let health = fs::read_to_string(wf.join("main-health.yml.jinja")).unwrap();
+    assert!(health.contains("uses: ./.github/workflows/bosun.yml"));
+    assert!(health.contains("workflows: [bosun{% if own_ci %}, ci{% endif %}]"));
     assert!(health.contains("github.event.workflow_run.event == 'push'"));
     assert!(health.contains("workflow_run.head_repository.full_name == github.repository"));
     // The update bot can write: its splice is pinned.

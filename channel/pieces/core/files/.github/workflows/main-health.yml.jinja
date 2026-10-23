@@ -1,12 +1,13 @@
-# Written by the bosun splice channel (owned).
+{% raw %}# Written by the bosun splice channel (owned).
 name: main-health
 
-# Keeps one bosun:main-red issue open while main fails (spec §9): it opens one when ci fails
-# on main or the nightly run fails, and closes it when main is green again.
+# Keeps one bosun:main-red issue open while main fails (spec §9): it opens one when bosun's
+# gates (or the repo's own ci) fail on main or the nightly run fails, and closes it when main is
+# green again.
 on:
   workflow_run:
-    workflows: [ci]
-    types: [completed]
+{% endraw %}    workflows: [bosun{% if own_ci %}, ci{% endif %}]
+{% raw %}    types: [completed]
     branches: [main]
   schedule:
     - cron: "17 3 * * *"
@@ -17,10 +18,10 @@ permissions:
   issues: write
 
 jobs:
-  # The gates of ci.yml on all of main (`bosun gate <name> --all`), whatever the stacks are.
+  # The gates of bosun.yml on all of main (`bosun gate <name> --all`), whatever the stacks are.
   nightly:
     if: github.event_name != 'workflow_run'
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/bosun.yml
 
   report:
     needs: nightly
@@ -50,3 +51,4 @@ jobs:
             gh issue create --repo "$repo" --label bosun:main-red --title "main is red" \
               --body "A run on main failed: $RUN_URL. Feature work pauses; fix it with a bosun:kind/mainfix PR (spec §9)."
           fi
+{% endraw %}

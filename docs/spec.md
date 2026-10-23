@@ -148,6 +148,11 @@ or the default branch and never check out PR code. main-health's nightly calls c
 residual of PROGRESS Blocked item 5: a same-repo PR can add a workflow that posts a forged
 status; such a PR is R-ci and needs the owner.
 
+The channel never takes a file another template owns (a hull template owns ci.yml, CLAUDE.md
+and .claude/settings.json): its gates run in `.github/workflows/bosun.yml`, whose aggregate job is
+`ci-ok`, or `bosun-ok` (one more required check) when the repo has its own ci.yml (`own_ci`);
+the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
+
 ## 4. Work lifecycle and conflict avoidance
 
 Units: a plan has items. Each item becomes one epic issue. An item has tasks. A task is at most

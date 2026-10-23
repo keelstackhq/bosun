@@ -5,7 +5,7 @@ description = "bosun governance, CI that runs `bosun gate`, the risk and verdict
 # Owned: the bosun channel replaces them on update. A change goes to keelstackhq/bosun.
 owned = [
   ".bosun/version",
-  ".github/workflows/ci.yml",
+  ".github/workflows/bosun.yml",
   ".github/workflows/risk.yml",
   ".github/workflows/verdict.yml",
   ".github/workflows/main-open.yml",
@@ -32,4 +32,3 @@ seed = [
 [sections]
 "AGENTS.md" = "sections/agents.md"
 "REVIEW.md" = "sections/review.md"
-"CLAUDE.md" = "sections/claude.md"
