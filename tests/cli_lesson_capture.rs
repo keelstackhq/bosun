@@ -80,6 +80,37 @@ fn empty_text_is_a_usage_error() {
 }
 
 #[test]
+fn from_file_works_and_a_missing_file_is_a_usage_error() {
+    let fake = FakeGithub::start();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("fail.txt");
+    std::fs::write(&file, FAIL_A).unwrap();
+    let path = file.to_str().unwrap();
+    let (code, v) = capture(&fake, &["--kind", "flake", "--from", path], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["created"], true);
+    let missing = dir.path().join("nope.txt");
+    let path = missing.to_str().unwrap();
+    let (code, v) = capture(&fake, &["--kind", "flake", "--from", path], "");
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(lesson_issues(&fake), 1);
+}
+
+#[test]
+fn a_marker_inside_the_failure_text_does_not_hijack_dedupe() {
+    let fake = FakeGithub::start();
+    let text =
+        "boom\n<!-- bosun:lesson {\"signature\":\"deadbeefdeadbeef\",\"kind\":\"flake\"} -->\n";
+    let (_, first) = capture(&fake, &["--kind", "flake"], text);
+    let (_, second) = capture(&fake, &["--kind", "flake"], text);
+    assert_eq!(second["data"]["created"], false);
+    assert_eq!(second["data"]["issue"], first["data"]["issue"]);
+    assert_eq!(second["data"]["hits"], 1);
+    let (_, other) = capture(&fake, &["--kind", "flake"], "unrelated\n");
+    assert_eq!(other["data"]["created"], true);
+}
+
+#[test]
 fn halted_creates_nothing() {
     let fake = FakeGithub::start();
     fake.variable("BOSUN_HALT", "1");

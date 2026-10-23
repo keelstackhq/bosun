@@ -223,7 +223,8 @@ pub fn capture_lesson(
     }
     gh.ensure_label(LESSON_LABEL, "fbca04", "a failure the curator triages")?;
     gh.ensure_label("bosun:source/lesson", "ededed", "opened by lesson capture")?;
-    let fence = |t: &str| t.replace("```", "'''");
+    // Failure text must not close the fence or carry a marker of its own.
+    let fence = |t: &str| t.replace("```", "'''").replace("<!--", "<!-\u{200b}-");
     let raw: Vec<&str> = text.lines().take(60).collect();
     let body = format!(
         "A failure of kind `{kind}` seen{on_task}. The curator triages it: blocking, mechanizable or advice (spec §6).\n\n```text\n{}\n```\n\nNormalised for the signature:\n\n```text\n{}\n```\n\n{}\n",

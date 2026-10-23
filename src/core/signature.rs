@@ -104,6 +104,19 @@ fn normalise_line(line: &str) -> String {
                 out.push_str("<n>");
             } else if n >= 7 && hex && word.iter().any(char::is_ascii_digit) {
                 out.push_str("<id>");
+            } else if word[0].is_ascii_digit() {
+                // A number with a suffix (`15ms`): every digit run is `<n>`, the suffix stays.
+                let mut prev_digit = false;
+                for &c in word {
+                    if c.is_ascii_digit() {
+                        if !prev_digit {
+                            out.push_str("<n>");
+                        }
+                    } else {
+                        out.push(c);
+                    }
+                    prev_digit = c.is_ascii_digit();
+                }
             } else {
                 out.extend(word);
             }
@@ -150,7 +163,7 @@ pub fn lesson_marker(sig: &str, kind: &str) -> String {
 
 /// The `(signature, kind)` of the first lesson marker in an issue body.
 pub fn parse_lesson_marker(body: &str) -> Option<(String, String)> {
-    let start = body.find(MARKER_OPEN)? + MARKER_OPEN.len();
+    let start = body.rfind(MARKER_OPEN)? + MARKER_OPEN.len();
     let len = body[start..].find(MARKER_CLOSE)?;
     let v: serde_json::Value = serde_json::from_str(&body[start..start + len]).ok()?;
     Some((
@@ -188,6 +201,25 @@ mod tests {
         assert_eq!(normalise("defaced e0308"), "defaced e0308");
         let many: String = (0..30).map(|i| format!("line {i}x\n")).collect();
         assert_eq!(normalise(&many).lines().count(), 20);
+    }
+
+    #[test]
+    fn timings_do_not_change_the_signature() {
+        let a = "FAIL [   1.404s] foo::bar\nfinished in 0.06s, took 15ms";
+        let b = "FAIL [  12.071s] foo::bar\nfinished in 3.9s, took 207ms";
+        assert_eq!(signature("flake", a), signature("flake", b));
+        assert_eq!(normalise("took 15ms in 0.06s"), "took <n>ms in <n>.<n>s");
+        assert_ne!(
+            signature("flake", "error[E0308]: mismatched"),
+            signature("flake", "error[E0599]: mismatched")
+        );
+        assert_eq!(normalise("foo_1 utf8"), "foo_1 utf8");
+    }
+
+    #[test]
+    fn the_last_marker_wins() {
+        let body = format!("{}\n{}", lesson_marker("aa", "x"), lesson_marker("bb", "x"));
+        assert_eq!(parse_lesson_marker(&body).unwrap().0, "bb");
     }
 
     #[test]
