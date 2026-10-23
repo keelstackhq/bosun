@@ -6,6 +6,7 @@ pub mod guard;
 pub mod lease;
 pub mod lessons;
 pub mod meta;
+pub mod plan;
 pub mod records;
 pub mod review;
 pub mod risk;
