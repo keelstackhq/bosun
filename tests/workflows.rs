@@ -112,6 +112,15 @@ fn risk_judges_from_the_base_and_never_runs_pr_code() {
         1,
         "one checkout only"
     );
+    assert!(
+        yaml.contains("persist-credentials: false"),
+        "the token must not stay in .git"
+    );
+    assert_eq!(
+        yaml.matches("permissions:").count(),
+        1,
+        "no job-level permissions"
+    );
     for bad in [
         "head.sha",
         "head.ref",

@@ -121,3 +121,9 @@ Human-only items, in order. Each has the exact action.
    merges happen via auto-merge after the gates." Agents do not edit that repo.
 6. **Org decisions channel (D-004).** `splice channel add gh:keelstackhq/decisions//channel
    --track main --piece import-claude` in a checkout, then commit as `chore: sync org decisions`.
+7. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
+   github-actions app, so a same-repo PR can add or edit a workflow (also via the
+   `pull_request_review` trigger, which runs the PR's copy of `risk.yml`) and post a forged
+   `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
+   check run) and that source required in the `main` ruleset. Until then it is an accepted
+   residual: such a PR is R-ci, so it needs an owner's look anyway.
