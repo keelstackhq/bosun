@@ -351,9 +351,19 @@ Prune:
 - `bosun lesson hit <id>` records a hit. `lesson add` and `lesson hit` change the local file `docs/lessons.toml` and need no GitHub; only `lesson hit --issue N`, which posts a `lesson-hit` record, does (and obeys the kill switch).
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
-- A lesson that gets a hit after its mechanism merged reopens as blocking.
-- `bosun lesson --upstream` sends a lesson about bosun itself to keelstackhq/bosun.
-- Metrics: `bosun progress --lessons` (open, mechanized, hits per week).
+- A lesson that gets a hit after its mechanism merged reopens as blocking. A lesson is mechanized
+  when its issue is closed as `completed` and is not labelled `bosun:lesson/advice`. When
+  `lesson capture` finds no open issue with the signature but a mechanized one, it reopens that
+  issue, adds `bosun:lesson/blocking` and `bosun:process-red`, and comments "The mechanism did not
+  hold: seen again. Reopened as blocking" with the `lesson-seen` record; the output has
+  `reopened: true`. Issues closed as `not_planned` or `duplicate`, and advice lessons, are
+  ignored: a new lesson opens.
+- `bosun lesson add --upstream "<text>" [--why ...]` sends a lesson about bosun itself to
+  keelstackhq/bosun as an issue (`bosun:lesson`, `bosun:source/lesson`), not to the local store.
+  It obeys the kill switch; data `{upstream: true, issue}`.
+- Metrics: `bosun progress --lessons` (open, mechanized, hits per week). data `lessons: {open,
+  blocking, mechanized, advice, hits_last_7_days, hits_by_week: [{week_start, hits}]}` (4 weeks,
+  oldest first), counted from `lesson-seen` and `lesson-hit` records.
 
 ## 7. Verification and the gate contract
 

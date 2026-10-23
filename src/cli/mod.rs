@@ -371,6 +371,9 @@ pub struct LessonAddArgs {
     pub why: Option<String>,
     #[arg(long = "evidence", value_name = "REF")]
     pub evidence: Vec<String>,
+    /// File the lesson on keelstackhq/bosun (it is about bosun itself); no local change.
+    #[arg(long)]
+    pub upstream: bool,
 }
 
 #[derive(Debug, Args)]
@@ -436,6 +439,9 @@ pub struct ProgressArgs {
     /// Length of the window in days, ending now.
     #[arg(long, default_value_t = 7)]
     pub days: u32,
+    /// Show the lessons view instead: open, blocking, mechanized, hits per week (spec §6).
+    #[arg(long)]
+    pub lessons: bool,
 }
 
 #[derive(Debug, Args)]
