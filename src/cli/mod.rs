@@ -26,6 +26,7 @@ pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
+pub mod main_health;
 pub mod stop;
 pub mod test_integrity;
 
@@ -107,10 +108,12 @@ pub enum Command {
     Fail(FailArgs),
     /// After a container restart: renew this session's leases and list the PRs to continue.
     Resume,
+    /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
+    MainHealth(MainHealthArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 24] = [
+pub const COMMANDS: [&str; 25] = [
     "join",
     "claim",
     "heartbeat",
@@ -135,6 +138,7 @@ pub const COMMANDS: [&str; 24] = [
     "budget",
     "fail",
     "resume",
+    "main-health",
 ];
 
 impl Command {
@@ -170,6 +174,7 @@ impl Command {
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
+            Command::MainHealth(_) => "main-health",
         }
     }
 }
@@ -420,4 +425,14 @@ pub struct FailArgs {
     /// The model tier in use (default: the newest escalation, else the build model).
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct MainHealthArgs {
+    /// The CI conclusion: success, failure, cancelled, skipped, ...
+    #[arg(long)]
+    pub result: String,
+    /// The URL of the run, for the issue and the comment.
+    #[arg(long)]
+    pub run_url: Option<String>,
 }

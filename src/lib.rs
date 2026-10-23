@@ -45,5 +45,6 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Budget(a) => cli::budget::run(dir, a),
         Command::Fail(a) => cli::stop::run(dir, a),
         Command::Resume => cli::resume::run(dir),
+        Command::MainHealth(a) => cli::main_health::run(dir, a),
     }
 }
