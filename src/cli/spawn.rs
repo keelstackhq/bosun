@@ -7,7 +7,6 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{IntakeArgs, SpawnArgs, intake};
-use crate::app::trusted_notes;
 use crate::app::{
     App, default_branch, end_lease, kill_switch, limits_from_default, main_red, notes, set_state,
     settle_race, task_meta,
@@ -15,7 +14,7 @@ use crate::app::{
 use crate::cli::plan::epic_item;
 use crate::cli::risk_check::owner_slack_ids;
 use crate::cli::status::process_red;
-use crate::config::{CONFIG_FILE, Config, Slack};
+use crate::config::{CONFIG_FILE, Config};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members, thread_of};
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, spend_total};
@@ -240,10 +239,16 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
     // The gate reads the default branch, never the working tree.
     let branch = default_branch(gh)?;
     let slack = match gh.file_at(CONFIG_FILE, &branch)? {
-        Some(t) => Config::parse(&t, &format!("{CONFIG_FILE} on {branch}"))?
-            .slack
-            .unwrap_or_default(),
-        None => Slack::default(),
+        Some(t) => Config::parse(&t, &format!("{CONFIG_FILE} on {branch}"))?.slack,
+        None => None,
+    };
+    // Fail closed: a repo that never set Slack up has no thread spawns.
+    let Some(slack) = slack.filter(|s| !s.channel.trim().is_empty()) else {
+        return Err(BosunError::needs_human(
+            "Slack is not set up: add [slack] channel",
+            "the owner adds a [slack] table with `channel = \"C...\"` to .bosun/bosun.toml on the default branch",
+        )
+        .with_data(json!({"reason": "slack is not set up"})));
     };
     if !slack.may_spawn {
         return Err(BosunError::needs_human(
@@ -496,6 +501,34 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             )
         })?;
     let (gh, me, now, n) = (app.gh.as_ref(), &app.ctx.session, app.ctx.now, epic.number);
+    // The thread is decided before any write: this spawner's own live lease, and only when
+    // the comment's author can write (one permission call, none for a lease without a thread).
+    // A failing check gives no thread (a missing reply, never a wrong thread) and a warning.
+    let comments = gh.list_comments(n)?;
+    let plain: Vec<Note> = comments
+        .iter()
+        .map(|c| Note {
+            id: c.id,
+            body: c.body.clone(),
+            created_at: crate::time::parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0)),
+        })
+        .collect();
+    let mut warning = None;
+    let thread_ts = thread_of(n, me, now, &plain).and_then(|(ts, id)| {
+        let author = comments.iter().find(|c| c.id == id).map_or("", |c| c.user.as_str());
+        // GitHub reports the maintain role as `write`.
+        match gh.permission(author) {
+            Ok(Some(p)) if matches!(p.as_str(), "admin" | "write") => Some(ts),
+            Ok(_) => {
+                warning = Some(format!("the thread lease was written by {author} without write access; no thread recorded"));
+                None
+            }
+            Err(e) => {
+                warning = Some(format!("cannot check who wrote the thread lease ({}); no thread recorded", e.message));
+                None
+            }
+        }
+    });
     let (reg, reg_notes) = registry::ensure(gh)?;
     let all = members(&reg_notes);
     let depth = all
@@ -516,9 +549,6 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
-    // The thread is the one in this spawner's own live lease, written by a writer; read it
-    // before the lease ends.
-    let thread_ts = thread_of(n, me, now, &trusted_notes(gh, n)?);
     if leases_of(n, &notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me)
@@ -534,5 +564,9 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         thread_ts,
     };
     gh.add_comment(n, &format!("Handed to {child}.\n\n{}", lease.to_line()))?;
-    Ok(Outcome::data(json!({"epic": n, "child": child})))
+    let mut data = json!({"epic": n, "child": child});
+    if let Some(w) = warning {
+        data["warning"] = json!(w);
+    }
+    Ok(Outcome::data(data))
 }

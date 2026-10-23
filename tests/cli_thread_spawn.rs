@@ -9,6 +9,7 @@ use std::path::Path;
 const LATER: &str = "2026-10-22T10:20:00Z";
 const TS: &str = "1700000000.000200";
 const NOW: &str = "2026-10-22T10:00:00Z";
+const SLACK_ON: &str = "[slack]\nchannel = \"C1\"\n";
 const OWNER: &str = "U0ADA1";
 const PLAN: &str = "# Plan: widget\n\nproject: widget\n\n## M1: Lifecycle\n\narea: lifecycle\n\n### Tasks\n\n- T1: State machine\n  touch: src/core/state.rs\n\n### Done when\n\n- UC-M1-1: a task moves planned -> merged.\n";
 const EPIC_BODY: &str = "Epic.\n<!-- bosun:epic {\"item\":\"M1\"} -->";
@@ -23,6 +24,7 @@ fn setup() -> FakeGithub {
             r#"{{"bosun":"join","session":"session_test","origin":"slack","depth":1,"expires":"{LATER}"}}"#
         ),
     );
+    fake.content(".bosun/bosun.toml", "main", SLACK_ON);
     fake.content(
         "governance/owners.toml",
         "main",
@@ -166,7 +168,11 @@ fn a_non_owner_and_may_spawn_false_exit_5_and_write_nothing() {
     assert_eq!(writes(&fake), 0);
 
     // The gate is the default branch's: a local file that says true opens nothing.
-    fake.content(".bosun/bosun.toml", "main", "[slack]\nmay_spawn = false\n");
+    fake.content(
+        ".bosun/bosun.toml",
+        "main",
+        "[slack]\nchannel = \"C1\"\nmay_spawn = false\n",
+    );
     let local = repo("[slack]\nmay_spawn = true\n");
     let (code, v) = owner(&fake, local.path(), &["10"], "");
     assert_eq!(code, 5, "{v}");
@@ -181,7 +187,7 @@ fn other_spawners_values_exit_2_and_a_spawned_origin_exits_5() {
     fake.content(
         ".bosun/bosun.toml",
         "main",
-        "[slack]\nspawners = \"anyone\"\n",
+        "[slack]\nchannel = \"C1\"\nspawners = \"anyone\"\n",
     );
     let d = repo("[slack]\nspawners = \"owners\"\n");
     let (code, v) = owner(&fake, d.path(), &["10"], "");
@@ -538,4 +544,75 @@ fn a_normal_spawn_of_a_slack_plan_task_also_keeps_the_request_out_of_the_prompt(
     assert_eq!(code, 0, "{v}");
     let args = v["next"][0]["args"].to_string();
     assert!(!args.contains("secret"), "{args}");
+}
+
+#[test]
+fn a_thread_spawn_needs_slack_set_up_on_the_default_branch() {
+    for conf in [
+        "",
+        "[slack]\nmay_spawn = true\n",
+        "[slack]\nchannel = \" \"\n",
+    ] {
+        let fake = setup();
+        epic(&fake, 10);
+        fake.content(".bosun/bosun.toml", "main", conf);
+        // A local file that sets a channel does not help.
+        let d = repo(SLACK_ON);
+        let (code, v) = owner(&fake, d.path(), &["10"], "");
+        assert_eq!(code, 5, "{conf:?}: {v}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("[slack] channel")
+        );
+        assert_eq!(writes(&fake), 0);
+    }
+    // A normal spawn needs no Slack setup.
+    let fake = setup();
+    epic(&fake, 10);
+    fake.content(".bosun/bosun.toml", "main", "");
+    let (code, v) = common::run(&fake, "session_test", NOW, &["spawn", "10"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_permission_error_on_record_still_hands_over_without_a_thread() {
+    let fake = setup();
+    epic(&fake, 10);
+    fake.comment(10, &lease_with_thread("session_test", LATER, "4.4"));
+    fake.fail_path("/permission", 500);
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["spawn", "10", "--record", "--from", "-"])
+        .write_stdin(r#"{"id":"session_child"}"#)
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert!(
+        v["data"]["warning"].as_str().unwrap().contains("no thread"),
+        "{v}"
+    );
+    let last = fake.comments_of(10).pop().unwrap().body;
+    assert!(
+        last.contains("session_child") && !last.contains("thread_ts"),
+        "{last}"
+    );
+}
+
+#[test]
+fn a_normal_record_makes_no_permission_requests() {
+    let fake = setup();
+    epic(&fake, 10);
+    fake.comment(10, &common::lease_note("session_test", LATER, "x"));
+    let last = record_child(&fake);
+    assert!(last.contains("session_child"), "{last}");
+    assert!(
+        !fake
+            .requests()
+            .iter()
+            .any(|r| r.path.contains("permission")),
+        "no permission calls"
+    );
 }

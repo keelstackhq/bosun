@@ -183,6 +183,7 @@ pub fn trusted_notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
             Some(t) => *t,
             None => {
                 let perm = gh.permission(&c.user)?.unwrap_or_default();
+                // GitHub reports the maintain role as `write`.
                 let t = matches!(perm.as_str(), "admin" | "write");
                 cache.insert(c.user.clone(), t);
                 t
