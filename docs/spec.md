@@ -391,6 +391,7 @@ profile has three adapters:
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
+- A profile may name its stack `manifest` (rust: `Cargo.toml`); a stack whose manifest is missing at the head and at the base skips each gate (exit 0, `skipped: true`, with a `reason`), so an empty repo after `bosun init` stays green.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
