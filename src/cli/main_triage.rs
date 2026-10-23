@@ -42,6 +42,25 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// Resolve a rev to a commit sha. A rev that starts with `-` is a usage error.
+fn resolve(root: &Path, rev: &str) -> Result<String, BosunError> {
+    if rev.starts_with('-') {
+        return Err(BosunError::usage(
+            format!("{rev:?} is not a rev"),
+            "pass a commit, tag or branch name",
+        ));
+    }
+    git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{rev}^{{commit}}"),
+        ],
+    )
+}
+
 fn candidates(root: &Path, good: &str, bad: &str) -> Result<Vec<Candidate>, BosunError> {
     let range = format!("{good}..{bad}");
     let shas = git(root, &["rev-list", "--first-parent", "--reverse", &range])?;
@@ -111,22 +130,36 @@ pub fn run(dir: Option<&Path>, args: &MainTriageArgs) -> CmdResult {
             )
         }
     };
-    let bad = args.bad.as_deref().unwrap_or("HEAD");
-    let list = candidates(&root, &args.good, bad)?;
+    let good = resolve(&root, &args.good)?;
+    let bad = resolve(&root, args.bad.as_deref().unwrap_or("HEAD"))?;
+    let bad = bad.as_str();
+    // Clean worktrees that a killed run left behind.
+    git(&root, &["worktree", "prune"])?;
+    let list = candidates(&root, &good, bad)?;
     if list.is_empty() {
         return Err(BosunError::usage(
-            format!("no commits between {} and {bad}", args.good),
+            format!("no commits between {} and {bad}", good),
             "pass --good with a rev that is older than --bad on the first-parent line",
         ));
     }
     let found = bisect::first_bad(&list, |c| probe(&root, &c.sha, &cmd))?;
+    // Every probe may fail for a reason that is not a regression (for example the command cannot
+    // run at old commits). If the run fails at --good too, it judges nothing.
+    if found.first_bad == Some(0) && probe(&root, &good, &cmd)? {
+        return Err(BosunError::needs_human(
+            "the run fails at --good too: the command does not judge these commits",
+            "pass a --run that works at old commits, or an older --good",
+        )
+        .with_data(json!({"good": good, "bad": bad, "run": cmd})));
+    }
     let first = found.first_bad.map(|i| {
         let c = &list[i];
         json!({"sha": c.sha, "subject": c.subject, "pr": bisect::pr_number(&c.subject)})
     });
     let mut data = json!({
-        "good": args.good,
+        "good": good,
         "bad": bad,
+        "run": cmd,
         "candidates": list.len(),
         "runs": found.probes.len(),
         "first_bad": first,

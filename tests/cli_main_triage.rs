@@ -111,3 +111,68 @@ fn unknown_rev_is_an_error_with_a_fix() {
     assert_eq!(code, 1, "{v}");
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
 }
+
+#[test]
+fn run_failing_at_good_too_needs_a_human() {
+    let (dir, good) = history();
+    let (code, v, _) = triage(dir.path(), &good, "false");
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fails at --good too")
+    );
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert_eq!(worktrees(dir.path()), 1);
+}
+
+#[test]
+fn bad_rev_older_than_head_limits_the_range() {
+    let (dir, good) = history();
+    let bad = git(dir.path(), &["rev-parse", "HEAD~2"]);
+    let out = bosun()
+        .arg("-C")
+        .arg(dir.path())
+        .args([
+            "main-triage",
+            "--good",
+            &good,
+            "--bad",
+            "HEAD~2",
+            "--run",
+            "test ! -f broken",
+        ])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(v["data"]["candidates"], 6);
+    assert_eq!(v["data"]["bad"], bad);
+    assert_eq!(v["data"]["first_bad"]["pr"], 105);
+}
+
+#[test]
+fn default_run_is_gate_test_all() {
+    let (dir, good) = history();
+    let out = bosun()
+        .arg("-C")
+        .arg(dir.path())
+        .args(["main-triage", "--good", &good])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    let run = v["data"]["run"].as_str().unwrap();
+    assert!(run.ends_with("gate test --all"), "{v}");
+    assert_eq!(out.status.code(), Some(5), "{v}");
+    assert_ne!(out.status.code(), Some(0), "{v}");
+    assert_eq!(worktrees(dir.path()), 1);
+}
+
+#[test]
+fn rev_starting_with_dash_is_a_usage_error() {
+    let (dir, _) = history();
+    let (code, v, _) = triage(dir.path(), "--output=x", "true");
+    assert_eq!(code, 2, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+}
