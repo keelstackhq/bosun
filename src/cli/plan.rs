@@ -57,11 +57,13 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
 }
 
 /// What the import knows about one issue of the plan.
+#[derive(Clone)]
 struct Slot {
     id: String,
     issue: Option<u64>,
     action: &'static str,
     state: Option<String>,
+    closed: bool,
 }
 
 impl Slot {
@@ -69,6 +71,9 @@ impl Slot {
         let mut v = json!({"id": self.id, "issue": self.issue, "action": self.action});
         if with_state {
             v["state"] = json!(self.state);
+        }
+        if self.closed {
+            v["closed"] = json!(true);
         }
         v
     }
@@ -85,17 +90,40 @@ fn epic_item(body: &str) -> Option<String> {
 }
 
 /// The existing issue for a plan id: by marker, else adopted by metadata (`task` is `None` for
-/// an epic).
-fn lookup(issues: &[Issue], id: &str, item: &str, task: Option<&str>) -> Option<(Issue, bool)> {
+/// an epic). With several matches the lowest number wins, and a warning names them all.
+fn lookup(
+    issues: &[Issue],
+    id: &str,
+    item: &str,
+    task: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Option<(Issue, bool)> {
     let m = marker(id);
-    if let Some(i) = issues.iter().find(|i| i.body_text().contains(&m)) {
-        return Some((i.clone(), false));
+    let mut found: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| i.body_text().contains(&m))
+        .collect();
+    let adopted = found.is_empty();
+    if adopted {
+        found = issues
+            .iter()
+            .filter(|i| match task {
+                Some(t) => task_meta(i).is_some_and(|m| m.item == item && m.task == t),
+                None => epic_item(i.body_text()).as_deref() == Some(item),
+            })
+            .collect();
     }
-    let adopted = issues.iter().find(|i| match task {
-        Some(t) => task_meta(i).is_some_and(|m| m.item == item && m.task == t),
-        None => epic_item(i.body_text()).as_deref() == Some(item),
-    });
-    adopted.map(|i| (i.clone(), true))
+    found.sort_by_key(|i| i.number);
+    let first = *found.first()?;
+    if found.len() > 1 {
+        let nums: Vec<String> = found.iter().map(|i| format!("#{}", i.number)).collect();
+        warnings.push(format!(
+            "{id} matches {}; using #{}",
+            nums.join(" and "),
+            first.number
+        ));
+    }
+    Some((first.clone(), adopted))
 }
 
 struct Importer<'a> {
@@ -103,6 +131,9 @@ struct Importer<'a> {
     issues: Vec<Issue>,
     dry: bool,
     ensured: HashSet<String>,
+    epics: Vec<Slot>,
+    tasks: Vec<Slot>,
+    warnings: Vec<String>,
 }
 
 impl Importer<'_> {
@@ -113,13 +144,17 @@ impl Importer<'_> {
         key: (&str, Option<&str>),
         make: impl FnOnce() -> (String, String, Vec<String>),
     ) -> Result<Slot> {
-        if let Some((i, adopted)) = lookup(&self.issues, id, key.0, key.1) {
-            return Ok(Slot {
+        let found = lookup(&self.issues, id, key.0, key.1, &mut self.warnings);
+        if let Some((i, adopted)) = found {
+            let slot = Slot {
                 id: id.into(),
                 issue: Some(i.number),
                 action: if adopted { "adopted" } else { "existing" },
                 state: state_of(&i.labels).map(|s| s.name().to_string()),
-            });
+                closed: i.state == "closed",
+            };
+            self.keep(&slot, key.1.is_none());
+            return Ok(slot);
         }
         let (title, body, labels) = make();
         let state = labels
@@ -127,12 +162,15 @@ impl Importer<'_> {
             .find_map(|l| l.strip_prefix("bosun:state/"))
             .map(str::to_string);
         if self.dry {
-            return Ok(Slot {
+            let slot = Slot {
                 id: id.into(),
                 issue: None,
                 action: "would-create",
                 state,
-            });
+                closed: false,
+            };
+            self.keep(&slot, key.1.is_none());
+            return Ok(slot);
         }
         for l in &labels {
             if self.ensured.insert(l.clone()) {
@@ -146,11 +184,34 @@ impl Importer<'_> {
         }
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         let created = self.gh.create_issue(&title, &body, &refs)?;
-        Ok(Slot {
+        let slot = Slot {
             id: id.into(),
             issue: Some(created.number),
             action: "created",
             state,
+            closed: false,
+        };
+        self.keep(&slot, key.1.is_none());
+        Ok(slot)
+    }
+
+    fn keep(&mut self, slot: &Slot, epic: bool) {
+        let list = if epic {
+            &mut self.epics
+        } else {
+            &mut self.tasks
+        };
+        list.push(slot.clone());
+    }
+
+    /// What was found or made so far: the output, and the data of an error part-way through.
+    fn data(&self, file: &str) -> Value {
+        json!({
+            "file": file,
+            "dry_run": self.dry,
+            "epics": self.epics.iter().map(|s| s.json(false)).collect::<Vec<_>>(),
+            "tasks": self.tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
+            "warnings": self.warnings,
         })
     }
 }
@@ -253,8 +314,17 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
         issues: app.gh.list_issues(&[], IssueState::All)?,
         dry: a.dry_run,
         ensured: HashSet::new(),
+        epics: vec![],
+        tasks: vec![],
+        warnings: vec![],
     };
-    let (mut epics, mut tasks) = (vec![], vec![]);
+    match import_items(&mut imp, &p, a) {
+        Ok(()) => Ok(Outcome::data(imp.data(&a.file))),
+        Err(e) => Err(e.with_data(imp.data(&a.file))),
+    }
+}
+
+fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     for item in p
         .items
         .iter()
@@ -268,7 +338,7 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
             )
         })?;
         let pid = format!("{}/P", item.id);
-        let ptask = imp.slot(&pid, (&item.id, Some("P")), || {
+        imp.slot(&pid, (&item.id, Some("P")), || {
             let intro = format!(
                 "Write each UC of {id} as a pending test (`#[ignore = \"UC-..\"]`) in tests/uc_{low}.rs; \
                  the item's tasks become ready when this merges (run `bosun plan import` again).\n\n{}\n",
@@ -286,24 +356,16 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
                 labels("plan", &item.area, "ready"),
             )
         })?;
-        tasks.push(ptask);
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);
-            let slot = imp.slot(&tid, (&item.id, Some(&t.id)), || {
+            imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),
                     task_body(&tid, "", &task_meta_of(item, t, epic.issue)),
                     labels(&t.kind, &item.area, "planned"),
                 )
             })?;
-            tasks.push(slot);
         }
-        epics.push(epic);
     }
-    Ok(Outcome::data(json!({
-        "file": a.file,
-        "dry_run": a.dry_run,
-        "epics": epics.iter().map(|s| s.json(false)).collect::<Vec<_>>(),
-        "tasks": tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
-    })))
+    Ok(())
 }

@@ -310,3 +310,82 @@ fn check_summarises_a_good_plan_without_github() {
     );
     assert_eq!(v["data"]["warnings"], json!([]));
 }
+
+fn close(fake: &FakeGithub, number: u64) {
+    let mut s = fake.state.lock().unwrap();
+    s.issues
+        .iter_mut()
+        .find(|i| i.number == number)
+        .unwrap()
+        .state = "closed".into();
+}
+
+#[test]
+fn closed_issues_are_reported_not_recreated() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    fake.issue(1, "M1: x", &[], "<!-- bosun:plan M1 -->");
+    fake.issue(
+        2,
+        "by hand",
+        &["bosun:state/merged"],
+        r#"<!-- bosun:task {"item":"M1","task":"T1"} -->"#,
+    );
+    close(&fake, 1);
+    close(&fake, 2);
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), 5);
+    let e = &v["data"]["epics"][0];
+    assert_eq!(
+        (e["action"].as_str(), e["closed"].as_bool()),
+        (Some("existing"), Some(true))
+    );
+    let t = &v["data"]["tasks"][1];
+    assert_eq!(
+        (
+            t["issue"].as_u64(),
+            t["action"].as_str(),
+            t["closed"].as_bool()
+        ),
+        (Some(2), Some("adopted"), Some(true))
+    );
+    assert!(v["data"]["tasks"][0].get("closed").is_none());
+}
+
+#[test]
+fn a_failure_part_way_reports_progress_and_the_rerun_finishes() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    // Creates fail from the request after the epic and the plan task were made.
+    fake.after_requests("/issues", 3, |s| {
+        s.fail_paths.push(("/issues".into(), 400));
+    });
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["epics"].as_array().unwrap().len(), 1);
+    assert_eq!(v["data"]["epics"][0]["action"], "created");
+    assert_eq!(v["data"]["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(v["data"]["tasks"][0]["id"], "M1/P");
+    fake.state.lock().unwrap().fail_paths.clear();
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["epics"][0]["action"], "existing");
+    assert_eq!(v["data"]["tasks"][0]["action"], "existing");
+    assert_eq!(v["data"]["tasks"][1]["action"], "created");
+    assert_eq!(fake.state.lock().unwrap().issues.len(), 7);
+}
+
+#[test]
+fn several_matches_use_the_lowest_number_and_warn() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    fake.issue(9, "dup", &[], "<!-- bosun:plan M1/T1 -->");
+    fake.issue(5, "first", &[], "<!-- bosun:plan M1/T1 -->");
+    let file = write_plan(tmp.path(), PLAN);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(v["data"]["tasks"][1]["issue"], 5);
+    assert_eq!(
+        v["data"]["warnings"],
+        json!(["M1/T1 matches #5 and #9; using #5"])
+    );
+}
