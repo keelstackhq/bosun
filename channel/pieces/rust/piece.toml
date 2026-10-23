@@ -1,0 +1,7 @@
+id = "rust"
+description = "A Rust (cargo) stack: the rust gate profile, toolchain and cargo-deny config"
+requires = ["core"]
+
+[files]
+# Starting points the repo owns afterwards; both are R-ci in .bosun/risk.toml.
+seed = ["deny.toml", "rust-toolchain.toml"]

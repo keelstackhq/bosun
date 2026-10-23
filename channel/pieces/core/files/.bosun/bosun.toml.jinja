@@ -1,0 +1,15 @@
+# bosun's project config (spec §3). Unknown keys are an error. The bosun channel merges its
+# changes to this file key by key; your own values stay.
+project = "{{ project }}"
+{% if "rust" in pieces %}
+[[stack]]
+path = "{{ rust_path }}"
+profile = "rust"
+{% endif %}{% if "ts-pnpm" in pieces %}
+[[stack]]
+path = "{{ ts_path }}"
+profile = "ts-pnpm"
+{% endif %}
+[review]
+# "subagent" (mode a): a fresh subagent reviews each PR (spec §7).
+mode = "subagent"
