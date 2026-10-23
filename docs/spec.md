@@ -294,9 +294,11 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
-- Results (D14): a child posts its result as an issue comment on its epic,
-  `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
-  sees it with `bosun wait`.
+- Results (D14): a child runs `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`.
+  It posts an issue comment on the epic with the record
+  `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
+  (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
+  parent sees the result with `bosun wait --child`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
@@ -525,6 +527,9 @@ Main-health:
 - The required check main-open fails every non-mainfix PR while main is red.
 - `bosun gate main-open --pr N` posts the `main-open` status on the PR head: success while main is open or for a mainfix PR; else failure and exit 4. Only the label `bosun:kind/mainfix` makes a mainfix: on the PR, or on a linked issue that is open and not a pull request. A task marker in a body is never trusted (labels need triage rights, bodies do not).
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
+  `bosun main-triage --good REV [--bad REV] [--run CMD]` bisects the first-parent commits between
+  good and bad (bad defaults to HEAD) in temporary worktrees. `--run` is a shell command, non-zero
+  is bad; the default is `bosun gate test --all`. It prints the first bad sha, subject and PR.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
 - Each main-red opens a lesson.
@@ -533,7 +538,7 @@ Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for
   in `next`, passed back on stdin) and reads `usage.cost_usd`; `generic` estimates from turns and
   model with the prices in `docs/defaults.md`.
-- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
+- `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd`. The record that blocks the task also opens a lesson of kind `budget` through the lesson capture of §6 (one lesson for all tasks; each further task over its cap adds a hit). A failed capture does not fail the record: it exits 0 with `lesson: {error, fix}`, and the spend must not be recorded again. The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
 - `bosun progress [--days N]` (default 7, read-only) reports it for the window of N days ending now: `merged` counts task issues closed with `closed_at` in the window (closed as `not_planned` or `duplicate` does not count), `spend_usd` sums the registry spend records with `at` in the window (unmerged work counts), and `cost_per_merged_task_usd` is `spend_usd / merged` (`null` when none merged); `task_cost_avg_usd` is the mean of the merged tasks' own spend (all time), and `tasks` lists `{issue, title, closed_at, usd}` by issue.
