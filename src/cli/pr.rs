@@ -9,7 +9,7 @@ use serde_json::json;
 use super::PrArgs;
 use crate::app::{App, default_branch, kill_switch, set_state};
 use crate::core::state::{State, state_of};
-use crate::github::{Github, IssueState};
+use crate::github::{Github, IssueState, enable_auto_merge_any};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// The checks that must be green before auto-merge (spec D15, D32); `BOSUN_REQUIRED_CHECKS`
@@ -98,6 +98,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         set_state(gh, n, &issue, State::Review)?;
         state = Some(State::Review);
     }
+    let mut route = None;
     if args.auto_merge {
         if state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
@@ -123,13 +124,13 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     .collect::<Vec<_>>(),
             })));
         }
-        gh.enable_auto_merge(&pull.node_id, "SQUASH")?;
+        route = Some(enable_auto_merge_any(gh, &pull)?);
         let fresh = gh.get_issue(n)?.unwrap_or(issue);
         set_state(gh, n, &fresh, State::Queued)?;
         state = Some(State::Queued);
     }
     Ok(Outcome::data(json!({
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
-        "auto_merge": args.auto_merge, "task_state": state.map(State::name),
+        "auto_merge": args.auto_merge, "auto_merge_route": route, "task_state": state.map(State::name),
     })))
 }
