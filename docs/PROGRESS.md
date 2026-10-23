@@ -102,6 +102,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
 - 2026-10-23 · Pin v0.1.0 · `.bosun/version` = 0.1.0; ci.yml `bosun-bin` installs the base's pinned release from npm (falls back to building the base while it says `unreleased`), new job `pin` checks a PR's pin installs and reports its version; setup script installs `@keelstackhq/bosun@0.1.0` · spec §11
 - 2026-10-23 · M1 T5 · `tests/smoke_reap.rs`: UC-M1-3 smoke test with clock jumps (claim at 10:00, heartbeat at 10:20, janitor reaps at 10:31/10:49:59 nothing, at 10:50 the lease ends `reaped`, task ready, another session claims it, the old heartbeat extends nothing) · `cargo test --test smoke_reap` 1/1
+- 2026-10-23 · M1 T2 · `bosun fail` (src/cli/stop.rs, src/core/stop.rs), `failure` and `escalate` records, spec §4 · tests/cli_stop.rs 6/6, core::stop 5/5, cargo test all green
 - 2026-10-23 · M7 T2 · `bosun init --stack rust|ts-pnpm [--plan] [--owner] [--ref] [--bosun-version] [--no-pr]` runs `splice channel add` for the bosun channel on `bosun/init`, keeps an existing `.claude/settings.json` or `splice.yml`, commits, pushes and opens one R-gov setup PR with the owner steps; a failure rolls back to the start branch · `cargo test --test cli_init` 8/8
 
 ## Blocked

@@ -8,6 +8,7 @@ use super::ClaimArgs;
 use crate::app::{
     App, active_issues, kill_switch, main_red, notes, set_state, settle_race, task_meta,
 };
+use crate::cli::status::process_red;
 use crate::core::glob;
 use crate::core::lease::{TTL_SECS, conflicts, leases_of, members};
 use crate::core::meta::area_of;
@@ -35,6 +36,19 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         return Err(BosunError::halted(
             format!("main is red (#{red}); only mainfix tasks can be claimed"),
             format!("wait for #{red} to close, or claim a mainfix task"),
+        ));
+    }
+    if let Some(red) = process_red(gh)?
+        && !mainfix
+        && !meta.as_ref().is_some_and(|m| m.kind == "process-fix")
+    {
+        return Err(BosunError::halted(
+            format!(
+                "process is red (#{red}): a blocking lesson pauses feature work; only mainfix and process-fix tasks can be claimed"
+            ),
+            format!(
+                "fix the process (a process-fix task) and close #{red}, or claim a process-fix task"
+            ),
         ));
     }
 
