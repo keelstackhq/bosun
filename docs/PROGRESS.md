@@ -101,6 +101,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Release 2/3 · crate `keel-bosun` 0.1.0 publishable (LICENSE, include), `hoist.toml [publish]` (crates.io, GitHub Release for five targets), the five platform packages, pnpm workspace; `tests/release_config.rs` keeps them in step · `cargo test --test release_config` 6/6, `cargo package` builds
 - 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
 - 2026-10-23 · Pin v0.1.0 · `.bosun/version` = 0.1.0; ci.yml `bosun-bin` installs the base's pinned release from npm (falls back to building the base while it says `unreleased`), new job `pin` checks a PR's pin installs and reports its version; setup script installs `@keelstackhq/bosun@0.1.0` · spec §11
+- 2026-10-23 · M1 T5 · `tests/smoke_reap.rs`: UC-M1-3 smoke test with clock jumps (claim at 10:00, heartbeat at 10:20, janitor reaps at 10:31/10:49:59 nothing, at 10:50 the lease ends `reaped`, task ready, another session claims it, the old heartbeat extends nothing) · `cargo test --test smoke_reap` 1/1
 - 2026-10-23 · M7 (UC-M7-1) · profiles may name a `manifest` (rust: `Cargo.toml`); a gate skips a stack whose manifest is missing at the head and at the base (also with `--all`), so the setup PR of an empty repo is green · `cargo test --test cli_gate` 13/13
 
 ## Blocked
