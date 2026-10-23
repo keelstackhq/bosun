@@ -175,6 +175,7 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
         ));
     }
     for f in files {
+        // A deny-list on purpose: a status GitHub adds later counts as unseen, not as safe.
         if !matches!(f.status.as_str(), "removed" | "unchanged") && !f.has_patch && f.changes > 0 {
             evidence.push(format!("no patch for {}", f.path));
         }
