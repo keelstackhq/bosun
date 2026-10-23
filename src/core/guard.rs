@@ -48,17 +48,23 @@ pub fn edit_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
     ))
 }
 
-/// Label-lock and merge-lock; `None` allows the call. `branch` is the checked-out branch and
-/// `default_branch` the repo's default branch.
+/// The checked-out branch of the git target a command names, given as `git` global options
+/// (`-C dir`, `--git-dir=..`, `--work-tree=..`) applied after the hook's own directory; an
+/// empty list is the hook's directory. `None` when it cannot be read.
+pub type BranchAt<'a> = &'a dyn Fn(&[String]) -> Option<String>;
+
+/// Label-lock and merge-lock; `None` allows the call. `branch_at` reads the checked-out branch
+/// of the directory a git command acts on (after `cd dir &&` and `git -C dir`), and
+/// `default_branch` is the repo's default branch.
 pub fn tool_rules(
     tool: &str,
     input: &Value,
-    branch: Option<&str>,
+    branch_at: BranchAt,
     default_branch: &str,
 ) -> Option<String> {
     if tool == "Bash" {
         let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-        return bash_rules(command, branch, default_branch);
+        return bash_rules(command, branch_at, default_branch);
     }
     if let Some(name) = tool.strip_prefix("mcp__github__") {
         if matches!(name, "merge_pull_request" | "enable_pr_auto_merge") {
@@ -80,34 +86,47 @@ fn label_reason() -> String {
 /// Nested commands are checked first (label-lock and merge-lock both), to this depth.
 const MAX_DEPTH: usize = 3;
 
-fn bash_rules(command: &str, branch: Option<&str>, default_branch: &str) -> Option<String> {
-    check(command, branch, default_branch, 0)
+fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
+    check(command, branch_at, default_branch, 0)
 }
 
-fn check(
-    command: &str,
-    branch: Option<&str>,
-    default_branch: &str,
-    depth: usize,
-) -> Option<String> {
+fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some(format!(
             "commands nested deeper than {MAX_DEPTH} levels are refused: {MERGE_FIX}"
         ));
     }
     for inner in nested(command) {
-        if let Some(why) = check(&inner, branch, default_branch, depth + 1) {
+        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1) {
             return Some(why);
         }
     }
-    for segment in segments(command) {
+    // `cd` moves later git commands: `Some(args)` as `-C` options, `None` when the directory
+    // cannot be told (git commands then count as on the default branch: fail closed).
+    let mut dir: Option<Vec<String>> = Some(Vec::new());
+    for (segment, sep) in segments_with_sep(command) {
         let words: Vec<&str> = segment.split_whitespace().collect();
+        if words.first() == Some(&"cd") {
+            dir = match (dir, cd_target(&words[1..])) {
+                (Some(mut d), Some(t)) if matches!(sep, "&&" | ";" | "\n" | "") => {
+                    d.extend(["-C".to_string(), t]);
+                    Some(d)
+                }
+                _ => None,
+            };
+            continue;
+        }
         // A `bosun` segment is exempt from the label-lock only; its nested commands were
         // checked above and the merge rules see no `gh` or `git` in it.
         if words.first() != Some(&"bosun") && segment.contains("bosun:state/") {
             return Some(label_reason());
         }
-        if let Some(why) = merge_rule(&words, segment, branch, default_branch) {
+        let target = Target {
+            dir: dir.as_deref(),
+            branch_at,
+            default_branch,
+        };
+        if let Some(why) = merge_rule(&words, segment, &target) {
             return Some(format!(
                 "`{}` is refused ({why}): {MERGE_FIX}",
                 segment.trim()
@@ -223,16 +242,6 @@ fn shell_words(s: &str) -> Vec<String> {
     words
 }
 
-/// Split a shell line at `;`, `&&`, `||`, `|` and newlines (quotes are not parsed; a quoted
-/// separator only makes the check stricter).
-fn segments(command: &str) -> Vec<&str> {
-    command
-        .split(['\n', ';', '&', '|'])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 /// Words that run the next word as a command (`sudo gh ...`) or open a shell group.
 const WRAPPERS: &[&str] = &[
     "env", "command", "sudo", "nohup", "time", "exec", "nice", "{", "!", "then", "do", "else",
@@ -255,12 +264,60 @@ const HTTP_WRITES: &[&str] = &[
     "automerge",
 ];
 
-fn merge_rule(
-    words: &[&str],
-    segment: &str,
-    branch: Option<&str>,
-    default_branch: &str,
-) -> Option<&'static str> {
+/// Where a git command acts: the `-C` options of earlier `cd`s (`None`: unknown), and how to
+/// read the branch there.
+struct Target<'a> {
+    dir: Option<&'a [String]>,
+    branch_at: BranchAt<'a>,
+    default_branch: &'a str,
+}
+
+/// The segments of a command with the separator that ends each one (`&&`, `||`, `;`, `|`,
+/// `&`, a newline, or `""` at the end). Quotes are not parsed; a quoted separator only makes
+/// the check stricter.
+fn segments_with_sep(command: &str) -> Vec<(&str, &'static str)> {
+    let (b, mut out, mut start, mut i) = (command.as_bytes(), Vec::new(), 0, 0);
+    while i < b.len() {
+        let (sep, len): (&'static str, usize) = match (b[i], b.get(i + 1)) {
+            (b'&', Some(b'&')) => ("&&", 2),
+            (b'|', Some(b'|')) => ("||", 2),
+            (b'&', _) => ("&", 1),
+            (b'|', _) => ("|", 1),
+            (b';', _) => (";", 1),
+            (b'\n', _) => ("\n", 1),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        out.push((command[start..i].trim(), sep));
+        i += len;
+        start = i;
+    }
+    out.push((command[start..].trim(), ""));
+    out.into_iter().filter(|(s, _)| !s.is_empty()).collect()
+}
+
+/// A literal path without its quotes; `None` for anything the shell would expand.
+fn literal_path(word: &str) -> Option<String> {
+    let w = word.trim_matches(|c| c == '"' || c == '\'');
+    let expands = w.is_empty()
+        || w.starts_with('~')
+        || w == "-"
+        || w.contains(['$', '`', '*', '?', '[', '{']);
+    (!expands).then(|| w.to_string())
+}
+
+/// The directory of `cd ARGS`; `None` for `cd` alone, `cd -`, options or expansions.
+fn cd_target(args: &[&str]) -> Option<String> {
+    match args {
+        ["--", one] => literal_path(one),
+        [one] if !one.starts_with('-') => literal_path(one),
+        _ => None,
+    }
+}
+
+fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static str> {
     let words: Vec<&str> = words
         .iter()
         .copied()
@@ -268,7 +325,7 @@ fn merge_rule(
         .collect();
     match words.first().copied() {
         Some("gh") => gh_rule(&words[1..], segment),
-        Some("git") => git_rule(&words[1..], branch, default_branch),
+        Some("git") => git_rule(&words[1..], target),
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
@@ -312,14 +369,39 @@ fn version_like(r: &str) -> bool {
     })
 }
 
-fn git_rule(args: &[&str], branch: Option<&str>, default_branch: &str) -> Option<&'static str> {
-    // Skip git's global options (`-C dir`, `-c k=v`, `--no-pager`).
-    let mut i = 0;
+fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
+    let default_branch = target.default_branch;
+    // git's global options: `-C dir`, `--git-dir`, `--work-tree` move the target; `-c k=v`,
+    // `--no-pager` and the like do not. A target that cannot be read literally is unknown.
+    let (mut i, mut opts, mut known) = (0, Vec::new(), true);
     while i < args.len() && args[i].starts_with('-') {
-        i += if matches!(args[i], "-C" | "-c") { 2 } else { 1 };
+        let (a, next) = (args[i], args.get(i + 1).copied());
+        let (flag, value, step) = match a.split_once('=') {
+            Some((k @ ("--git-dir" | "--work-tree"), v)) => (Some(format!("{k}=")), Some(v), 1),
+            _ => match a {
+                "-C" => (Some("-C".to_string()), next, 2),
+                "--git-dir" | "--work-tree" => (Some(format!("{a}=")), next, 2),
+                "-c" => (None, None, 2),
+                _ => (None, None, 1),
+            },
+        };
+        if let Some(f) = flag {
+            match value.and_then(literal_path) {
+                Some(v) if f == "-C" => opts.extend([f, v]),
+                Some(v) => opts.push(format!("{f}{v}")),
+                None => known = false,
+            }
+        }
+        i += step;
     }
     let (sub, rest) = (args.get(i).copied()?, &args[(i + 1).min(args.len())..]);
-    let on_default = branch == Some(default_branch);
+    let on_default = match target.dir.filter(|_| known) {
+        None => true,
+        Some(dir) => {
+            let all: Vec<String> = dir.iter().cloned().chain(opts).collect();
+            (target.branch_at)(&all).as_deref() == Some(default_branch)
+        }
+    };
     match sub {
         "push" => {
             if rest.iter().any(|a| {
@@ -381,7 +463,12 @@ mod tests {
     use serde_json::json;
 
     fn bash(cmd: &str, branch: &str) -> Option<String> {
-        tool_rules("Bash", &json!({ "command": cmd }), Some(branch), "main")
+        tool_rules(
+            "Bash",
+            &json!({ "command": cmd }),
+            &|_| Some(branch.into()),
+            "main",
+        )
     }
 
     #[test]
@@ -409,6 +496,66 @@ mod tests {
         assert!(bash("git push", "main").is_some());
         assert!(bash("git push origin HEAD", "main").is_some());
         assert!(bash("git commit -m x", "main").is_some());
+    }
+
+    /// The hook's directory is on `main`; `/wt` (and anything below `-C /wt`) is a worktree on
+    /// `feature`. Returns the options the rule asked about, and its verdict.
+    fn in_worktree(cmd: &str) -> (Vec<Vec<String>>, Option<String>) {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let branch_at = |opts: &[String]| {
+            asked.borrow_mut().push(opts.to_vec());
+            let wt = opts
+                .iter()
+                .any(|o| o == "/wt" || o.ends_with("=/wt/.git") || o.ends_with("=/wt"));
+            Some(if wt { "feature" } else { "main" }.to_string())
+        };
+        let why = tool_rules("Bash", &json!({ "command": cmd }), &branch_at, "main");
+        (asked.into_inner(), why)
+    }
+
+    #[test]
+    fn merge_lock_reads_the_branch_where_git_acts() {
+        for cmd in [
+            "cd /wt && git commit -m x",
+            "cd \"/wt\"; git add -A; git commit -m x",
+            "git -C /wt commit -m x",
+            "git --git-dir=/wt/.git --work-tree=/wt commit -m x",
+            "git --git-dir /wt/.git commit -m x",
+            "cd /wt && git push -u origin feature",
+        ] {
+            let (asked, why) = in_worktree(cmd);
+            assert_eq!(why, None, "{cmd}: asked {asked:?}");
+        }
+        let (asked, _) = in_worktree("cd /wt && git -C sub commit -m x");
+        assert_eq!(asked, vec![vec!["-C", "/wt", "-C", "sub"]]);
+        // The hook's own directory is on main.
+        assert!(in_worktree("git commit -m x").1.is_some());
+        assert!(in_worktree("git -C /other commit -m x").1.is_some());
+    }
+
+    #[test]
+    fn merge_lock_fails_closed_on_a_target_it_cannot_read() {
+        for cmd in [
+            "cd $WT && git commit -m x",
+            "cd ~/wt && git commit -m x",
+            "cd && git commit -m x",
+            "cd - && git commit -m x",
+            "cd /wt | true; git commit -m x",
+            "cd /wt || git commit -m x",
+            "git -C \"$WT\" commit -m x",
+            "git -C `pwd` commit -m x",
+            "git --git-dir=$D commit -m x",
+            "git -C",
+        ] {
+            let (asked, why) = in_worktree(cmd);
+            if cmd != "git -C" {
+                assert!(why.is_some(), "{cmd}");
+                assert!(asked.is_empty(), "{cmd}: asked {asked:?}");
+            }
+        }
+        // Reading commands stay allowed wherever they run.
+        assert_eq!(in_worktree("cd $WT && git status").1, None);
+        assert_eq!(in_worktree("git -C $X log").1, None);
     }
 
     #[test]
@@ -480,10 +627,10 @@ mod tests {
         assert!(bash("gh issue edit 4 --add-label bosun:state/merged", "x").is_some());
         assert_eq!(bash("bosun claim 4 # bosun:state/claimed", "x"), None);
         let mcp = json!({"issue_number": 4, "labels": ["bosun:state/queued"]});
-        assert!(tool_rules("mcp__github__issue_write", &mcp, None, "main").is_some());
+        assert!(tool_rules("mcp__github__issue_write", &mcp, &|_| None, "main").is_some());
         let other = json!({"issue_number": 4, "labels": ["bug"]});
         assert_eq!(
-            tool_rules("mcp__github__issue_write", &other, None, "main"),
+            tool_rules("mcp__github__issue_write", &other, &|_| None, "main"),
             None
         );
         for t in [
@@ -491,7 +638,7 @@ mod tests {
             "mcp__github__enable_pr_auto_merge",
         ] {
             assert!(
-                tool_rules(t, &json!({}), None, "main")
+                tool_rules(t, &json!({}), &|_| None, "main")
                     .unwrap()
                     .contains("D13")
             );
