@@ -285,6 +285,10 @@ Janitor, resume, results:
   `bosun notify`.
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
+  It renews the join record of the session (joining again if the registry has none) and every
+  lease of the session in place. An expired lease is renewed only when no live lease overlaps
+  its touch paths, else it is listed under `lost`. For each held task it returns the state,
+  the linked open PR, its branch and a short `action`.
 - Results (D14): a child posts its result as an issue comment on its epic,
   `{"bosun":"result","session":..,"outcome":"merged|blocked|needs-human","pr":..}`. The parent
   sees it with `bosun wait`.

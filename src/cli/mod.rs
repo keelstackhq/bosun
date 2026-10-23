@@ -15,6 +15,7 @@ pub mod msg;
 pub mod pr;
 pub mod reap;
 pub mod release;
+pub mod resume;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -104,10 +105,12 @@ pub enum Command {
     Budget(BudgetCmd),
     /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
     Fail(FailArgs),
+    /// After a container restart: renew this session's leases and list the PRs to continue.
+    Resume,
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 23] = [
+pub const COMMANDS: [&str; 24] = [
     "join",
     "claim",
     "heartbeat",
@@ -131,6 +134,7 @@ pub const COMMANDS: [&str; 23] = [
     "doctor",
     "budget",
     "fail",
+    "resume",
 ];
 
 impl Command {
@@ -165,6 +169,7 @@ impl Command {
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Fail(_) => "fail",
+            Command::Resume => "resume",
         }
     }
 }
