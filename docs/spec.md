@@ -199,7 +199,7 @@ Conflict avoidance (three layers):
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.
-   The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`); branch protection stays the real guard, since a hook cannot see every shell trick.
+   The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`). Its default-branch rules (commit, merge, rebase, reset, cherry-pick, plain push) read the branch where git acts: the hook's directory moved by a `cd dir` joined with `&&`, `;` or a newline, and by `git -C dir`, `--git-dir` and `--work-tree`; a `cd` counts only when the shell surely runs it here (after the start, `;`, a newline, or in an `&&` chain that reaches the git command; never in a pipeline or a `( .. )` group); a directory it cannot read literally (`$VAR`, `~`, `cd -`), a moved target git cannot read (a failed `cd`), or `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` count as the default branch. Branch protection stays the real guard, since a hook cannot see every shell trick.
 
 Leases conflict per issue, not per session: wave agents run inside their orchestrator's session, so a
 lease on another issue conflicts even when it has the same session id; only a lease of the same session
@@ -303,6 +303,12 @@ Capture:
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
+- Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
+  `<!-- bosun:lesson {"signature":"<hex>","kind":"<kind>"} -->` in the body. The signature is
+  FNV-1a 64 of the kind and the normalised failure text (hex ids, times, numbers and temp paths
+  replaced; first 20 lines). `bosun lesson capture --kind <k> [--issue N] --from -` opens the
+  issue, or posts a `Seen again` comment with a `lesson-seen` record on the open one with the same
+  signature; that record is the hit.
 
 Triage (curator Routine, daily, Sonnet):
 - blocking: sets process-red, so waves pause as on main-red.
