@@ -391,6 +391,7 @@ profile has three adapters:
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
+- A profile may name its stack `manifest` (rust: `Cargo.toml`); a stack whose manifest is missing at the head and at the base skips each gate (exit 0, `skipped: true`, with a `reason`), so an empty repo after `bosun init` stays green.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
@@ -517,6 +518,7 @@ Main-health:
 - The main-health workflow runs on each push to main and nightly. It opens one main-red issue on
   failure and closes it on recovery.
 - The required check main-open fails every non-mainfix PR while main is red.
+- `bosun gate main-open --pr N` posts the `main-open` status on the PR head: success while main is open or for a mainfix PR; else failure and exit 4. Only the label `bosun:kind/mainfix` makes a mainfix: on the PR, or on a linked issue that is open and not a pull request. A task marker in a body is never trusted (labels need triage rights, bodies do not).
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
@@ -529,10 +531,11 @@ Cost:
 - `bosun budget record` posts the spend on the task issue and on the registry issue (created if missing), reads the `get_session` result from `--from -` (or a file), accepts `usage.cost_usd` at the top level or under `session`, and sets the task to blocked when the sum of its spend records exceeds `per_task_usd` (the lesson for it comes with the curator, M5). The record is a `{"bosun":"spend",..}`
   comment.
 - The headline metric is cost per merged task.
+- `bosun progress [--days N]` (default 7, read-only) reports it for the window of N days ending now: `merged` counts task issues closed with `closed_at` in the window (closed as `not_planned` or `duplicate` does not count), `spend_usd` sums the registry spend records with `at` in the window (unmerged work counts), and `cost_per_merged_task_usd` is `spend_usd / merged` (`null` when none merged); `task_cost_avg_usd` is the mean of the merged tasks' own spend (all time), and `tasks` lists `{issue, title, closed_at, usd}` by issue.
 
 Spend guard:
 - Below 80 % of the daily budget: normal.
-- At 80 % or more: no new work; mainfix is exempt.
+- At 80 % or more: no new work; mainfix is exempt. `claim` checks it like spawn check 2 (exit 6).
 - At 100 %: the janitor stops the sessions.
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
