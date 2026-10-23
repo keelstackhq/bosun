@@ -9,8 +9,11 @@ pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
+pub mod init;
 pub mod join;
 pub mod lesson;
+pub mod lesson_triage;
+pub mod main_triage;
 pub mod msg;
 pub mod plan;
 pub mod pr;
@@ -19,6 +22,7 @@ pub mod reap;
 pub mod release;
 pub mod result;
 pub mod resume;
+pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -102,7 +106,7 @@ pub enum Command {
     #[command(subcommand)]
     Hook(HookCmd),
     /// Report each checklist step as ok or missing.
-    Doctor,
+    Doctor(DoctorArgs),
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
@@ -117,10 +121,16 @@ pub enum Command {
     Progress(ProgressArgs),
     /// Post this session's result on its epic, end its lease and leave the registry.
     Result(ResultArgs),
+    /// Bisect the merged PRs between a good and a bad rev; name the first bad one.
+    MainTriage(MainTriageArgs),
+    /// Set up this repo for bosun: add the splice channel and open the setup PR.
+    Init(InitArgs),
+    /// Open a kind/mainfix PR that reverts a merged PR.
+    Revert(RevertArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 27] = [
+pub const COMMANDS: [&str; 30] = [
     "join",
     "claim",
     "heartbeat",
@@ -148,6 +158,9 @@ pub const COMMANDS: [&str; 27] = [
     "resume",
     "progress",
     "result",
+    "main-triage",
+    "init",
+    "revert",
 ];
 
 impl Command {
@@ -177,17 +190,22 @@ impl Command {
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
+            Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
-            Command::Doctor => "doctor",
+            Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
+            Command::Plan(PlanCmd::Amend(_)) => "plan amend",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
             Command::Result(_) => "result",
+            Command::MainTriage(_) => "main-triage",
+            Command::Init(_) => "init",
+            Command::Revert(_) => "revert",
         }
     }
 }
@@ -361,6 +379,15 @@ pub struct CiLogArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Also run `hoist check` (120 s limit, BOSUN_HOIST_TIMEOUT_SECS): drift fails step 3 (github
+    /// settings and checks), 5 (release and environments) or 10 (npm and crates first publish);
+    /// unknown items and verify notes are listed in data.hoist
+    #[arg(long)]
+    pub remote: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct AskArgs {
     pub issue: u64,
     pub question: String,
@@ -374,6 +401,8 @@ pub enum LessonCmd {
     Hit(LessonHitArgs),
     /// Open a lesson issue for a failure, or add a hit to the one with the same signature.
     Capture(LessonCaptureArgs),
+    /// Triage a lesson issue: blocking, mechanizable or advice (spec §6).
+    Triage(LessonTriageArgs),
 }
 
 #[derive(Debug, Args)]
@@ -385,6 +414,9 @@ pub struct LessonAddArgs {
     pub why: Option<String>,
     #[arg(long = "evidence", value_name = "REF")]
     pub evidence: Vec<String>,
+    /// File the lesson on keelstackhq/bosun (it is about bosun itself); no local change.
+    #[arg(long)]
+    pub upstream: bool,
 }
 
 #[derive(Debug, Args)]
@@ -410,6 +442,27 @@ pub struct LessonCaptureArgs {
     pub from: String,
 }
 
+#[derive(Debug, Args)]
+pub struct LessonTriageArgs {
+    /// The lesson issue.
+    pub issue: u64,
+    /// blocking sets process-red, mechanizable opens a process-fix task, advice goes to the store.
+    #[arg(long = "as", value_parser = ["blocking", "mechanizable", "advice"])]
+    pub triage: String,
+    /// Paths the process-fix task touches (mechanizable; at least one).
+    #[arg(long = "touch", value_name = "GLOB")]
+    pub touch: Vec<String>,
+    /// Area label of the process-fix task.
+    #[arg(long)]
+    pub area: Option<String>,
+    /// The rule text (advice).
+    #[arg(long)]
+    pub rule: Option<String>,
+    /// Scope globs of the advice entry; none makes it global.
+    #[arg(long = "scope", value_name = "GLOB")]
+    pub scope: Vec<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum HookCmd {
     /// PreToolUse: edit-lock, label-lock, merge-lock.
@@ -431,6 +484,9 @@ pub struct ProgressArgs {
     /// Length of the window in days, ending now.
     #[arg(long, default_value_t = 7)]
     pub days: u32,
+    /// Show the lessons view instead: open, blocking, mechanized, hits per week (spec §6).
+    #[arg(long, conflicts_with = "days")]
+    pub lessons: bool,
 }
 
 #[derive(Debug, Args)]
@@ -452,6 +508,17 @@ pub enum PlanCmd {
     Check(PlanCheckArgs),
     /// Create the epics, plan tasks and tasks of a plan that do not exist yet.
     Import(PlanImportArgs),
+    /// Import, then close what the plan dropped and update changed tasks (after an amendment merged).
+    Amend(PlanAmendArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanAmendArgs {
+    /// The plan file, for example plans/bosun.md.
+    pub file: String,
+    /// Show what would be created, closed and updated; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -485,4 +552,48 @@ pub struct FailArgs {
     /// The model tier in use (default: the newest escalation, else the build model).
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct MainTriageArgs {
+    /// A rev where the check passes (older than --bad).
+    #[arg(long)]
+    pub good: String,
+    /// A rev where the check fails (default HEAD).
+    #[arg(long)]
+    pub bad: Option<String>,
+    /// Shell command to run in each worktree; non-zero is bad (default: bosun gate test --all).
+    #[arg(long)]
+    pub run: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// A stack to set up (repeatable for a mixed repo).
+    #[arg(long = "stack", required = true, value_parser = ["rust", "ts-pnpm"])]
+    pub stack: Vec<String>,
+    /// A plan file to copy to plans/.
+    #[arg(long, value_name = "FILE")]
+    pub plan: Option<PathBuf>,
+    /// The owner's GitHub login, seeded into governance/owners.toml.
+    #[arg(long, value_name = "LOGIN")]
+    pub owner: Option<String>,
+    /// The splice source of the channel.
+    #[arg(long, default_value = "gh:keelstackhq/bosun//channel")]
+    pub source: String,
+    /// The channel ref (default: v<this version>).
+    #[arg(long = "ref", value_name = "REF")]
+    pub git_ref: Option<String>,
+    /// Pin .bosun/version to this exact X.Y.Z.
+    #[arg(long, value_name = "X.Y.Z")]
+    pub bosun_version: Option<String>,
+    /// Commit on bosun/init but do not push or open a PR.
+    #[arg(long)]
+    pub no_pr: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RevertArgs {
+    /// The merged PR to revert.
+    pub pr: u64,
 }

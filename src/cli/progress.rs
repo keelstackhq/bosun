@@ -6,15 +6,20 @@ use serde_json::json;
 
 use super::ProgressArgs;
 use crate::app::{App, notes, task_meta};
+use crate::cli::lesson::LESSON_LABEL;
 use crate::core::cost::{in_window, mean, per_task, round_usd, window_start};
-use crate::core::records::spend_total;
-use crate::github::IssueState;
+use crate::core::lessons::{hits_by_week, is_mechanized};
+use crate::core::records::{Record, parse_record, spend_total};
+use crate::github::{Issue, IssueState};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
 use crate::time::parse_rfc3339;
 
 pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
     let app = App::load(dir)?;
+    if args.lessons {
+        return lessons_view(&app);
+    }
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
     let since = window_start(now, args.days);
     // (issue, title, closed_at, usd) of the task issues merged in the window.
@@ -62,4 +67,46 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
         "task_cost_avg_usd": mean(&costs),
         "tasks": list,
     })))
+}
+
+/// `progress --lessons`: the state of the learning loop (spec §6). Hits are the `lesson-seen`
+/// and `lesson-hit` records on lesson issues, by comment time, for the last 4 weeks.
+fn lessons_view(app: &App) -> CmdResult {
+    let (gh, now) = (app.gh.as_ref(), app.ctx.now);
+    let all = gh.list_issues(&[LESSON_LABEL], IssueState::All)?;
+    let open: Vec<&Issue> = all.iter().filter(|i| i.state == "open").collect();
+    let blocking = open
+        .iter()
+        .filter(|i| i.labels.iter().any(|l| l == "bosun:lesson/blocking"))
+        .count();
+    let mechanized = all
+        .iter()
+        .filter(|i| is_mechanized(&i.state, i.state_reason.as_deref(), &i.labels))
+        .count();
+    let advice = crate::cli::lesson::load(&app.ctx.dir)?.lesson.len();
+    let mut times = Vec::new();
+    for issue in &all {
+        for n in notes(gh, issue.number)? {
+            if matches!(
+                parse_record(&n.body),
+                Some(Record::LessonSeen { .. } | Record::LessonHit { .. })
+            ) {
+                times.push(n.created_at);
+            }
+        }
+    }
+    let weeks = hits_by_week(&times, now, 4);
+    let last = weeks.last().map_or(0, |w| w.1);
+    let by_week: Vec<_> = weeks
+        .iter()
+        .map(|(start, hits)| json!({"week_start": start.to_string(), "hits": hits}))
+        .collect();
+    Ok(Outcome::data(json!({"lessons": {
+        "open": open.len(),
+        "blocking": blocking,
+        "mechanized": mechanized,
+        "advice": advice,
+        "hits_last_7_days": last,
+        "hits_by_week": by_week,
+    }})))
 }
