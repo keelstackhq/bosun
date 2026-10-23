@@ -33,7 +33,7 @@ enum Canned {
         input: u64,
         output: u64,
     },
-    Status(u16),
+    Status(u16, String),
 }
 
 pub struct FakeAnthropic {
@@ -83,7 +83,12 @@ impl FakeAnthropic {
 
     /// Answer every request with this status and an API-style error body.
     pub fn fail(&self, status: u16) {
-        *self.canned.lock().unwrap() = Canned::Status(status);
+        self.fail_with(status, "fake failure");
+    }
+
+    /// Like `fail`, with the error message the API sends.
+    pub fn fail_with(&self, status: u16, message: &str) {
+        *self.canned.lock().unwrap() = Canned::Status(status, message.into());
     }
 
     pub fn requests(&self) -> Vec<Seen> {
@@ -140,9 +145,9 @@ fn serve(
                     "content": [{"type": "text", "text": text}],
                     "usage": {"input_tokens": input, "output_tokens": output}}),
             ),
-            Canned::Status(code) => (
+            Canned::Status(code, message) => (
                 code,
-                json!({"type": "error", "error": {"type": "api_error", "message": "fake failure"}}),
+                json!({"type": "error", "error": {"type": "api_error", "message": message}}),
             ),
         };
         let mut resp = tiny_http::Response::from_string(body.to_string()).with_status_code(status);

@@ -46,6 +46,7 @@ impl Anthropic {
                 )
             })?;
         let base = std::env::var("BOSUN_ANTHROPIC_API").unwrap_or_else(|_| DEFAULT_BASE.into());
+        check_base(&base)?;
         Ok(Anthropic::new(&base, &key))
     }
 
@@ -70,9 +71,13 @@ impl Anthropic {
         }
     }
 
-    /// Replace the key wherever an error text might echo it.
+    /// Replace the key, and anything shaped like an Anthropic key, in an error text.
     fn clean(&self, text: &str) -> String {
-        text.replace(&self.key, "[redacted]")
+        static KEY_LIKE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r"sk-ant-[A-Za-z0-9_\-]+").expect("static regex")
+        });
+        let text = text.replace(&self.key, "[redacted]");
+        KEY_LIKE.replace_all(&text, "[redacted]").into_owned()
     }
 
     /// One Messages call: a system prompt and one user message.
@@ -108,9 +113,9 @@ impl Anthropic {
         let v: Value = serde_json::from_slice(&raw).unwrap_or(Value::Null);
         if !(200..=299).contains(&status) {
             let kind = v["error"]["type"].as_str().unwrap_or("error");
-            let msg: String = v["error"]["message"]
-                .as_str()
-                .unwrap_or("")
+            // Redact the whole message first, then cut it.
+            let msg: String = self
+                .clean(v["error"]["message"].as_str().unwrap_or(""))
                 .chars()
                 .take(200)
                 .collect();
@@ -142,5 +147,54 @@ impl Anthropic {
             input_tokens,
             output_tokens,
         })
+    }
+}
+
+/// The key travels in a header: the base must be https, or http on this machine.
+fn check_base(base: &str) -> Result<(), BosunError> {
+    let host = base.strip_prefix("http://").map(|r| {
+        let end = r.find(['/', '?', '#']).unwrap_or(r.len());
+        let auth = &r[..end];
+        let auth = auth.rsplit('@').next().unwrap_or(auth);
+        // "[::1]:80" is not a loopback name we accept; host is what precedes the port.
+        auth.split(':').next().unwrap_or(auth).to_string()
+    });
+    let ok = base.starts_with("https://")
+        || host
+            .as_deref()
+            .is_some_and(|h| h == "127.0.0.1" || h == "localhost")
+            && !base.contains('@');
+    if ok {
+        Ok(())
+    } else {
+        Err(BosunError::error(
+            "BOSUN_ANTHROPIC_API must be an https:// URL (http:// only for 127.0.0.1 or localhost)",
+            "unset BOSUN_ANTHROPIC_API to use https://api.anthropic.com, or set an https:// URL",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_base;
+
+    #[test]
+    fn the_base_must_be_https_or_loopback() {
+        for ok in [
+            "https://api.anthropic.com",
+            "http://127.0.0.1:8080",
+            "http://localhost",
+        ] {
+            assert!(check_base(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://example.com",
+            "http://127.0.0.1@evil.com",
+            "http://localhost.evil.com",
+            "ftp://x",
+            "api.anthropic.com",
+        ] {
+            assert!(check_base(bad).is_err(), "{bad}");
+        }
     }
 }

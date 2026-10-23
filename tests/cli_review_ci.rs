@@ -11,6 +11,9 @@ const KEY_CANARY: &str = "sk-ant-canary-0123456789";
 
 const CI: &str = "[review]\nmode = \"ci\"\n";
 
+/// A task issue: only a body with the `bosun:task` marker is a task.
+const TASK_BODY: &str = "Do it.\n<!-- bosun:task {\"task\":\"T1\"} -->";
+
 struct Env {
     gh: FakeGithub,
     ai: FakeAnthropic,
@@ -30,7 +33,7 @@ fn verdict_json(v: &str, conf: f64, sev: &[&str]) -> String {
 /// PR 42 (head `sha42`) closing task 7, one small patch, `config` in `.bosun/bosun.toml`.
 fn setup(config: &str, reply: &str) -> Env {
     let gh = FakeGithub::start();
-    gh.issue(7, "task", &["bosun:state/review"], "Do it.");
+    gh.issue(7, "task", &["bosun:state/review"], TASK_BODY);
     gh.pull_as_issue(42, "the pr");
     gh.pull(42, "the pr", "claude/x", "Closes #7");
     gh.pull_file(
@@ -72,6 +75,11 @@ fn review_ci(e: &Env, session: Option<&str>) -> (i32, Value, String) {
     );
     assert!(!all.contains(KEY_CANARY), "API key leaked: {all}");
     assert!(!all.contains(TOKEN_CANARY), "token leaked");
+    {
+        let s = e.gh.state.lock().unwrap();
+        assert!(s.comments.iter().all(|c| !c.body.contains(KEY_CANARY)));
+        assert!(!format!("{:?}", s.statuses).contains(KEY_CANARY));
+    }
     let v = one_object(&out.stdout);
     if v["ok"] == false {
         assert!(!v["error"]["fix"].as_str().unwrap().trim().is_empty());
@@ -132,7 +140,9 @@ fn approve_sets_success_records_review_ci_and_spend() {
     );
     assert_eq!(d["status"], "success");
     assert_eq!(d["model"], "claude-opus-5-5");
-    assert_eq!(d["findings"], 1);
+    assert_eq!(d["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(d["findings"][0]["severity"], "minor");
+    assert_eq!(d["findings_count"], 1);
     assert!(d["since_sha"].is_null());
     assert_eq!(d["usage"]["input_tokens"], 1000);
     assert_eq!(d["usage"]["output_tokens"], 200);
@@ -261,11 +271,207 @@ fn a_diff_over_the_cap_fails_the_status_and_makes_no_api_call() {
     let st = statuses(&e);
     assert_eq!(st[0]["state"], "failure");
     let d = st[0]["description"].as_str().unwrap();
+    assert!(d.starts_with("too large for CI review: "), "{d}");
+    assert!(d.contains(" bytes > 10;"), "{d}");
+    // the real size of the request text, system prompt included, not the patch sum
+    let size: u64 = d["too large for CI review: ".len()..]
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(size > 1000, "{d}");
+    assert!(spends_on(&e, 7).is_empty());
+}
+
+#[test]
+fn a_huge_task_text_with_a_small_patch_is_too_large_and_makes_no_call() {
+    let e = setup(
+        "[review]\nmode = \"ci\"\nmax_diff_bytes = 8000\n",
+        &verdict_json("approve", 0.9, &[]),
+    );
+    // The pack carries the task text, which the PR author picks through the link.
+    let big = format!("{TASK_BODY}{}", "x".repeat(20_000));
+    e.gh.issue(8, "big", &["bosun:state/review"], &big);
+    e.gh.pull_set(42, "body", json!("Closes #8"));
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 1, "{v}");
+    assert!(e.ai.requests().is_empty());
+    let st = statuses(&e);
+    assert_eq!(st[0]["state"], "failure");
     assert!(
-        d.starts_with("too large for CI review: 22 bytes > 10"),
+        st[0]["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("too large for CI review: ")
+    );
+}
+
+#[test]
+fn a_text_file_without_a_patch_is_unreviewable_and_makes_no_call() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.pull_file(42, "src/big.rs", "added", 500, 0, None);
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 1, "{v}");
+    assert!(e.ai.requests().is_empty());
+    let st = statuses(&e);
+    assert_eq!(st.len(), 1);
+    assert_eq!(st[0]["state"], "failure");
+    let d = st[0]["description"].as_str().unwrap();
+    assert!(d.starts_with("unreviewable diff: "), "{d}");
+    assert!(
+        d.contains("src/big.rs") && d.contains("review in a session (mode a)"),
         "{d}"
     );
+}
+
+#[test]
+fn fewer_listed_files_than_the_pr_changed_is_unreviewable() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.pull_set(42, "changed_files", json!(3001));
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 1, "{v}");
+    assert!(e.ai.requests().is_empty());
+    assert!(
+        statuses(&e)[0]["description"]
+            .as_str()
+            .unwrap()
+            .starts_with("unreviewable diff: ")
+    );
+}
+
+#[test]
+fn a_binary_file_is_listed_as_not_shown_and_does_not_fail() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.pull_file(42, "assets/logo.png", "added", 0, 0, None);
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 0, "{v}");
+    let req = &e.ai.requests()[0];
+    let user = req.body["messages"][0]["content"].as_str().unwrap();
+    assert!(user.contains("not_shown_binary") && user.contains("assets/logo.png"));
+    assert!(
+        req.body["system"]
+            .as_str()
+            .unwrap()
+            .contains("not_shown_binary")
+    );
+}
+
+#[test]
+fn findings_are_in_the_data_and_in_a_capped_fenced_comment() {
+    let evil = "x```\n<script>alert(1)</script> [link](http://e)".to_string() + &"y".repeat(1000);
+    let findings: Vec<Value> = (0..30)
+        .map(|i| json!({"severity": "major", "file": "a.rs", "line": i, "claim": evil, "evidence": "e"}))
+        .collect();
+    let reply = json!({"pr": 42, "head_sha": "sha42", "verdict": "request-changes",
+        "confidence": 0.9, "findings": findings})
+    .to_string();
+    let e = setup(CI, &reply);
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["findings"].as_array().unwrap().len(), 30);
+    assert_eq!(v["data"]["findings_count"], 30);
+    let comments = e.gh.comments_of(42);
+    let c = comments.last().unwrap().body.clone();
+    assert!(c.len() <= 8300, "{}", c.len());
+    assert!(c.contains("[major] a.rs:0"));
+    assert!(!c.contains("a.rs:25"), "at most 20 findings");
+    // one fence, opened and closed by bosun; model text cannot close it
+    assert_eq!(c.matches("```").count(), 2, "{c}");
+    assert!(!c.contains("bosun:verdict"));
+    assert!(!c.contains(&"y".repeat(400)), "claims are cut");
+}
+
+#[test]
+fn escalate_risk_is_a_failure_and_moves_the_task_to_needs_human() {
+    let reply = json!({"pr": 42, "head_sha": "sha42", "verdict": "approve",
+        "confidence": 0.95, "findings": [], "escalate_risk": true})
+    .to_string();
+    let e = setup(CI, &reply);
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["approved"], false);
+    assert_eq!(statuses(&e)[0]["state"], "failure");
+    assert!(
+        e.gh.labels_of(7)
+            .contains(&"bosun:state/needs-human".into())
+    );
+}
+
+#[test]
+fn a_link_to_a_plain_issue_or_the_registry_is_not_a_task() {
+    let e = setup(CI, &verdict_json("request-changes", 0.9, &[]));
+    e.gh.issue(9, "plain", &["bosun:state/review"], "no marker here");
+    e.gh.pull_set(42, "body", json!("Closes #9"));
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["task_state"].is_null());
+    assert_eq!(e.gh.labels_of(9), vec!["bosun:state/review".to_string()]);
+    assert!(spends_on(&e, 9).is_empty());
+    assert_eq!(v["data"]["spend"], json!({"usd": 0.008, "issue": null}));
+    assert_eq!(spends_on(&e, registry(&e)).len(), 1);
+}
+
+#[test]
+fn spend_at_the_daily_budget_is_exit_6_with_no_call_and_no_status() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.gh.issue(30, "registry", &["bosun:registry"], "");
+    e.gh.comment(
+        30,
+        r#"{"bosun":"spend","session":"s","usd":150.0,"at":"2026-10-22T03:00:00Z"}"#,
+    );
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 6, "{v}");
+    assert!(e.ai.requests().is_empty() && statuses(&e).is_empty());
+}
+
+#[test]
+fn a_negative_cost_is_refused_and_reported_without_hiding_the_verdict() {
+    let e = setup(
+        "[review]\nmode = \"ci\"\n[prices.claude-opus-5-5]\ninput_per_mtok = -5.0\noutput_per_mtok = 1.0\n",
+        &verdict_json("approve", 0.9, &[]),
+    );
+    let (code, v, _) = review_ci(&e, Some("s"));
+    assert_eq!(code, 0, "{v}");
+    assert!(!v["data"]["spend"]["error"].as_str().unwrap().is_empty());
     assert!(spends_on(&e, 7).is_empty());
+    assert_eq!(statuses(&e)[0]["state"], "success");
+}
+
+#[test]
+fn an_api_error_that_echoes_the_key_is_redacted() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.ai.fail_with(401, &format!("bad key {KEY_CANARY} and sk-ant-other-9999"));
+    let (code, v, all) = review_ci(&e, Some("s"));
+    assert_eq!(code, 1, "{v}");
+    assert!(all.contains("[redacted]"), "{all}");
+    assert!(!all.contains("sk-ant-other-9999"));
+    assert!(statuses(&e).is_empty());
+}
+
+#[test]
+fn a_key_that_is_cut_by_the_length_limit_is_still_redacted() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    e.ai.fail_with(401, &format!("{}{KEY_CANARY}", "z".repeat(190)));
+    let (_, _, all) = review_ci(&e, Some("s"));
+    assert!(!all.contains("sk-ant-canary"), "{all}");
+}
+
+#[test]
+fn a_plain_http_api_on_another_host_is_refused() {
+    let e = setup(CI, &verdict_json("approve", 0.9, &[]));
+    let out = bosun()
+        .current_dir(e.dir.path())
+        .env("BOSUN_GITHUB_API", e.gh.url())
+        .env("BOSUN_ANTHROPIC_API", "http://example.com")
+        .env("ANTHROPIC_API_KEY", KEY_CANARY)
+        .args(["review-ci", "42"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("https"));
+    assert!(statuses(&e).is_empty());
 }
 
 #[test]

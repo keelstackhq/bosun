@@ -122,3 +122,16 @@ fn config_defaults_and_full_file() {
     );
     assert_eq!(c.prices["opus"].output_per_mtok, 75.0);
 }
+
+#[test]
+fn review_limits_of_zero_are_refused() {
+    for text in [
+        "[review]\nmax_tokens = 0\n",
+        "[review]\nmax_diff_bytes = 0\n",
+    ] {
+        let err = Config::parse(text, ".bosun/bosun.toml").unwrap_err();
+        assert_eq!(err.exit.code(), 1);
+        assert!(err.message.contains("review."), "{}", err.message);
+        assert!(!err.fix.is_empty());
+    }
+}
