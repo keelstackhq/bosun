@@ -105,3 +105,20 @@ fn uc_m5_4() {
     assert_eq!(one_object(&out.stdout)["exit_code"], 6);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
 }
+
+/// UC-M5-5: a hit on a mechanized lesson reopens it as blocking.
+#[test]
+fn uc_m5_5() {
+    let fake = FakeGithub::start();
+    let first = capture(&fake, "stop rule: no progress\nsha 3f9c2ab81d04\n");
+    let n = first["data"]["issue"].as_u64().unwrap();
+    fake.label(n, "bosun:lesson/mechanizable");
+    fake.close_issue(n, "2026-10-20T09:00:00Z");
+    let again = capture(&fake, "stop rule: no progress\nsha 77aa88bb99cc\n");
+    assert_eq!(again["data"]["issue"].as_u64(), Some(n));
+    assert_eq!(again["data"]["reopened"], true);
+    let i = fake.issue_state(n);
+    assert_eq!(i.state, "open");
+    assert!(i.labels.contains(&"bosun:lesson/blocking".to_string()));
+    assert!(i.labels.contains(&"bosun:process-red".to_string()));
+}

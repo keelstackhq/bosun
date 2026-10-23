@@ -1,0 +1,29 @@
+# Risk rules (spec §8). risk-check reads this file from the PR's base branch, never from the
+# head, so a PR cannot change the rules that judge it. A rule only escalates. Add rules for the
+# paths of this project that need an owner (auth, payments, migrations, ...).
+
+[[rule]]
+id = "R-gov"
+why = "Governance files decide who approves what, and the rules agents and reviewers follow."
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "hoist.toml",
+  "AGENTS.md", "REVIEW.md", "CLAUDE.md"]
+
+[[rule]]
+id = "R-ci"
+why = "CI decides what is verified."
+paths = [".github/workflows/**"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
+
+[[rule]]
+id = "R-secrets"
+why = "A secret in the repo is a leak."
+content = '(?i)(api[_-]?key|secret|token)\s*='
+
+[[rule]]
+id = "R-deps"
+why = "A new dependency adds code that nobody reviewed."
+new_dependency = true
+
+[[rule]]
+id = "R-prod-write"
+why = "A write to production cannot be undone by a revert."
+capability = "prod-write"

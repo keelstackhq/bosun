@@ -1,0 +1,4 @@
+# The toolchain of the gates and of every session (the setup script installs it).
+[toolchain]
+channel = "1.97"
+components = ["rustfmt", "clippy"]

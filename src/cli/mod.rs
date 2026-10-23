@@ -107,7 +107,7 @@ pub enum Command {
     #[command(subcommand)]
     Hook(HookCmd),
     /// Report each checklist step as ok or missing.
-    Doctor,
+    Doctor(DoctorArgs),
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
@@ -133,7 +133,7 @@ pub enum Command {
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 31] = [
+pub const COMMANDS: &[&str] = &[
     "join",
     "claim",
     "heartbeat",
@@ -197,10 +197,11 @@ impl Command {
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
-            Command::Doctor => "doctor",
+            Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
+            Command::Plan(PlanCmd::Amend(_)) => "plan amend",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
             Command::Progress(_) => "progress",
@@ -383,6 +384,15 @@ pub struct CiLogArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Also run `hoist check` (120 s limit, BOSUN_HOIST_TIMEOUT_SECS): drift fails step 3 (github
+    /// settings and checks), 5 (release and environments) or 10 (npm and crates first publish);
+    /// unknown items and verify notes are listed in data.hoist
+    #[arg(long)]
+    pub remote: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct AskArgs {
     pub issue: u64,
     pub question: String,
@@ -409,6 +419,9 @@ pub struct LessonAddArgs {
     pub why: Option<String>,
     #[arg(long = "evidence", value_name = "REF")]
     pub evidence: Vec<String>,
+    /// File the lesson on keelstackhq/bosun (it is about bosun itself); no local change.
+    #[arg(long)]
+    pub upstream: bool,
 }
 
 #[derive(Debug, Args)]
@@ -476,6 +489,9 @@ pub struct ProgressArgs {
     /// Length of the window in days, ending now.
     #[arg(long, default_value_t = 7)]
     pub days: u32,
+    /// Show the lessons view instead: open, blocking, mechanized, hits per week (spec §6).
+    #[arg(long, conflicts_with = "days")]
+    pub lessons: bool,
 }
 
 #[derive(Debug, Args)]
@@ -497,6 +513,17 @@ pub enum PlanCmd {
     Check(PlanCheckArgs),
     /// Create the epics, plan tasks and tasks of a plan that do not exist yet.
     Import(PlanImportArgs),
+    /// Import, then close what the plan dropped and update changed tasks (after an amendment merged).
+    Amend(PlanAmendArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanAmendArgs {
+    /// The plan file, for example plans/bosun.md.
+    pub file: String,
+    /// Show what would be created, closed and updated; write nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
