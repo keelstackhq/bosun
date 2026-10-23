@@ -3,6 +3,7 @@
 
 pub mod adapters;
 pub mod integrity;
+pub mod main_open;
 pub mod packages;
 pub mod profile;
 pub mod ts;
