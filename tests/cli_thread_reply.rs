@@ -384,3 +384,21 @@ fn a_failing_issue_list_is_reported_not_empty() {
     assert_eq!(v["data"]["errors"][0]["kind"], "thread-result", "{v}");
     assert_eq!(v["data"]["pending"], json!([]));
 }
+
+#[test]
+fn a_later_normal_spawn_lease_ends_the_thread() {
+    // A thread spawn, then a normal spawn (a lease without thread_ts): the normal child's result
+    // is not a thread reply.
+    let e = env();
+    e.fake.issue(10, "epic", READY, "");
+    e.fake
+        .comment_at(10, "ada", &lease_rec(TS), "2026-10-22T08:00:00Z");
+    let plain = json!({"bosun": "lease", "session": "t", "origin": "spawned",
+        "expires": "2026-10-22T10:00:00Z", "touch": []})
+    .to_string();
+    e.fake.comment_at(10, "ada", &plain, "2026-10-22T08:20:00Z");
+    let res = json!({"bosun": "result", "session": "t", "outcome": "merged"}).to_string();
+    e.fake.comment_at(10, "ada", &res, "2026-10-22T08:30:00Z");
+    let (_, v) = e.notify(&[]);
+    assert_eq!(v["next"], json!([]), "{v}");
+}

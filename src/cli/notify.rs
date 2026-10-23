@@ -353,9 +353,11 @@ fn replies_of(gh: &dyn Github, trust: &mut Trust, issue: u64) -> Result<Vec<Repl
     let mut out = Vec::new();
     for c in gh.list_comments(issue)? {
         match parse_record(&c.body) {
-            Some(Record::Lease {
-                thread_ts: Some(t), ..
-            }) if valid_ts(&t) && trust.ok(&c.user)? => lease = Some(t),
+            // A trusted lease sets the current thread; one without a (valid) thread_ts, such as
+            // a later normal spawn, ends it, so that child's result is not a thread reply.
+            Some(Record::Lease { thread_ts, .. }) if trust.ok(&c.user)? => {
+                lease = thread_ts.filter(|t| valid_ts(t));
+            }
             Some(Record::Result { outcome, pr, .. }) if trust.ok(&c.user)? => {
                 if let Some(thread_ts) = &lease {
                     out.push(Reply {
