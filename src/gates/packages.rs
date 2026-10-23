@@ -1,4 +1,4 @@
-//! The `cargo-metadata` packages adapter: which workspace packages does a diff touch?
+//! The packages adapters (`cargo-metadata`): which workspace packages does a diff touch?
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,8 +35,33 @@ struct RawPackage {
     manifest_path: PathBuf,
 }
 
+/// The packages of the stack at `stack_dir`, found by the profile's packages adapter.
+pub fn load(adapter: &str, stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
+    match adapter {
+        "cargo-metadata" => load_cargo(stack_dir),
+        other => Err(BosunError::error(
+            format!("unknown packages adapter `{other}`"),
+            "set `packages` in the profile to a known adapter (`cargo-metadata`)",
+        )),
+    }
+}
+
+/// The packages a diff touches, by the profile's packages adapter. An adapter that `load` does
+/// not know cannot get here; if it does, everything is affected.
+pub fn affected(
+    adapter: &str,
+    stack_dir: &Path,
+    changed: &[String],
+    packages: &[Package],
+) -> Affected {
+    match adapter {
+        "cargo-metadata" => affected_cargo(stack_dir, changed, packages),
+        _ => Affected::All,
+    }
+}
+
 /// Run `cargo metadata --no-deps --format-version 1` in `stack_dir`.
-pub fn load(stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
+fn load_cargo(stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
     let out = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(stack_dir)
@@ -85,7 +110,7 @@ pub fn parse(json: &[u8]) -> Result<Vec<Package>, BosunError> {
 /// manifest-dir prefix. A change to the toolchain or workspace files, or to a Rust-relevant file
 /// (`.rs`, `.toml`, `.lock`) outside every package, means all packages; other files (docs) are
 /// not part of any package and are ignored.
-pub fn affected(stack_dir: &Path, changed: &[String], packages: &[Package]) -> Affected {
+pub fn affected_cargo(stack_dir: &Path, changed: &[String], packages: &[Package]) -> Affected {
     let mut hit: Vec<&str> = Vec::new();
     for rel in changed {
         let rel_path = Path::new(rel);
@@ -150,7 +175,7 @@ mod tests {
 
     fn aff(files: &[&str]) -> Affected {
         let files: Vec<String> = files.iter().map(|s| s.to_string()).collect();
-        affected(Path::new("/r"), &files, &pkgs())
+        affected_cargo(Path::new("/r"), &files, &pkgs())
     }
 
     #[test]
@@ -181,6 +206,13 @@ mod tests {
     #[test]
     fn docs_are_ignored() {
         assert_eq!(aff(&["docs/x.md", "README.md"]), Affected::None);
+    }
+
+    #[test]
+    fn unknown_adapter_is_an_error_with_a_fix() {
+        let e = load("nope", Path::new("/r")).unwrap_err();
+        assert!(e.message.contains("nope"), "{}", e.message);
+        assert!(!e.fix.is_empty());
     }
 
     #[test]

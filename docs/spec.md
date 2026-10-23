@@ -403,6 +403,8 @@ profile has three adapters:
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.
 - A profile may name its stack `manifest` (rust: `Cargo.toml`); a stack whose manifest is missing at the head and at the base skips each gate (exit 0, `skipped: true`, with a `reason`), so an empty repo after `bosun init` stays green.
+- A gate may name `requires = "<file>"` (a path in the stack directory); the gate is skipped (`skipped: true`, `reason: "no <file>"`) only when that file is missing at the head and at the base, also with `--all`, like `manifest`: a branch that deletes the file still runs the gate.
+- In a gate's `cmd`, an item that is exactly `{packages}` marks where the `each_package` (or `all`) arguments go, for tools whose filters must come first; without it they are appended. The profile's `packages` adapter (`cargo-metadata`) loads the packages and says which a diff affects; an unknown adapter name is an error with a fix.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
