@@ -69,6 +69,27 @@ impl Adapters {
                 ));
             }
         }
+        // The regex kit reads a whole stack, so a half-regex profile would lose its built-in
+        // half (fewer-asserts or new-skip could never fire); both sides need patterns.
+        if (self.pending == "regex") != (self.assertions == "regex") {
+            return Err((
+                "pending and assertions must both be `regex`, or neither".into(),
+                "set both `pending` and `assertions` in [adapters] to `regex`".into(),
+            ));
+        }
+        if self.uses_regex() {
+            for (key, list) in [
+                ("pending", &self.regex.pending),
+                ("assertions", &self.regex.assertions),
+            ] {
+                if list.is_empty() {
+                    return Err((
+                        format!("adapters.regex.{key} is empty: nothing would be checked"),
+                        format!("add at least one regex to [adapters.regex] {key}"),
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -222,6 +243,27 @@ impl Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_half_regex_profile_or_empty_patterns_are_refused() {
+        let base = "[adapters]\npackages = \"none\"\n";
+        let half = format!(
+            "{base}pending = \"regex\"\nassertions = \"rust\"\n[adapters.regex]\ntest_files = [\"t/*.py\"]\npending = [\"skip\"]\n[gates.x]\ncmd = [\"x\"]\n"
+        );
+        let a: Profile = toml::from_str(&half).unwrap();
+        assert!(a.adapters.validate().unwrap_err().0.contains("both"));
+        let empty = format!(
+            "{base}pending = \"regex\"\nassertions = \"regex\"\n[adapters.regex]\ntest_files = [\"t/*.py\"]\npending = [\"skip\"]\n[gates.x]\ncmd = [\"x\"]\n"
+        );
+        let b: Profile = toml::from_str(&empty).unwrap();
+        assert!(
+            b.adapters
+                .validate()
+                .unwrap_err()
+                .0
+                .contains("assertions is empty")
+        );
+    }
 
     #[test]
     fn built_in_rust_profile_parses() {

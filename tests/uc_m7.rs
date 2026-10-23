@@ -328,7 +328,7 @@ fn nested(inner: (&str, &str, &str), files: &[(&str, &str)]) -> Repo {
 }
 
 const ROOT_PY: &str = "[adapters]\npackages = \"none\"\npending = \"regex\"\nassertions = \"regex\"\n\
-                       [adapters.regex]\ntest_files = [\"**/test_*.py\"]\nassertions = ['\\bassert\\b']\n\
+                       [adapters.regex]\ntest_files = [\"**/test_*.py\"]\npending = ['pytest\\.mark\\.skip']\nassertions = ['\\bassert\\b']\n\
                        [gates.lint]\ncmd = [\"fakepy\", \"lint\"]\n";
 
 fn kinds(v: &Value) -> Vec<String> {
