@@ -157,3 +157,62 @@ fn risk_judges_from_the_base_and_never_runs_pr_code() {
     // Other comments must not cancel the run that judges a new head.
     assert!(yaml.contains("&& github.run_id || 'judge'"), "{yaml}");
 }
+
+#[test]
+fn verdict_runs_main_code_on_verdict_comments_only() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/verdict.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    let triggers = &yaml[yaml.find("\non:\n").unwrap()..yaml.find("\npermissions:").unwrap()];
+    assert!(
+        triggers.contains("  issue_comment:\n    types: [created]"),
+        "{triggers}"
+    );
+    for other in ["pull_request", "workflow_run", "push"] {
+        assert!(
+            !triggers.contains(other),
+            "verdict.yml must not run on {other}"
+        );
+    }
+    assert!(yaml.contains("contains(github.event.comment.body, '<!-- bosun:verdict -->')"));
+    let refs: Vec<&str> = yaml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("ref:"))
+        .collect();
+    assert_eq!(refs, ["          ref: ${{ github.sha }}"], "{yaml}");
+    assert_eq!(yaml.matches("actions/checkout@").count(), 1);
+    assert!(yaml.contains("persist-credentials: false"));
+    for bad in [
+        "head.sha",
+        "head.ref",
+        "head_ref",
+        "refs/pull",
+        "merge_commit_sha",
+    ] {
+        assert!(!yaml.contains(bad), "verdict.yml mentions {bad}");
+    }
+    let scripts = run_scripts(&yaml);
+    assert!(!scripts.is_empty());
+    for s in &scripts {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    assert_eq!(yaml.matches("permissions:").count(), 1);
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: write",
+            "  pull-requests: read",
+            "  statuses: write"
+        ]
+    );
+    assert!(yaml.contains("COMMENT: ${{ github.event.comment.id }}"));
+    // Other comments must not replace a pending verdict run.
+    assert!(yaml.contains("&& github.run_id || 'apply'"), "{yaml}");
+    assert!(yaml.contains("cancel-in-progress: false"));
+}

@@ -31,6 +31,11 @@ pub struct FakeComment {
     pub user: String,
     pub created_at: String,
     pub updated_at: String,
+    /// `None`: a plain user token (`null`); `Some(slug)`: written via that app.
+    pub via_app: Option<String>,
+    /// Leave `performed_via_github_app` out of the JSON.
+    pub no_app_field: bool,
+    pub association: String,
 }
 
 /// How the fake serves a job log.
@@ -304,6 +309,11 @@ impl FakeGithub {
         s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
     }
 
+    /// Change the last comment: `f` gets it mutably (app, association, edits).
+    pub fn last_comment(&self, f: impl FnOnce(&mut FakeComment)) {
+        f(self.state.lock().unwrap().comments.last_mut().unwrap());
+    }
+
     pub fn variable(&self, name: &str, value: &str) {
         self.state
             .lock()
@@ -394,6 +404,9 @@ pub fn add_comment(s: &mut State, issue: u64, body: &str) -> u64 {
         user: "octocat".into(),
         created_at: TS.into(),
         updated_at: TS.into(),
+        via_app: None,
+        no_app_field: false,
+        association: "MEMBER".into(),
     });
     id
 }
@@ -462,8 +475,17 @@ fn pull_pos(s: &State, n: &str) -> Option<usize> {
 }
 
 fn comment_json(c: &FakeComment) -> Value {
-    json!({"id": c.id, "body": c.body, "user": {"login": c.user},
-        "created_at": c.created_at, "updated_at": c.updated_at})
+    let mut v = json!({"id": c.id, "body": c.body, "user": {"login": c.user},
+        "created_at": c.created_at, "updated_at": c.updated_at,
+        "author_association": c.association,
+        "issue_url": format!("https://api.github.com/repos/o/r/issues/{}", c.issue),
+        "performed_via_github_app": c.via_app.as_ref().map(|s| json!({"slug": s, "id": 1}))});
+    if c.no_app_field {
+        v.as_object_mut()
+            .unwrap()
+            .remove("performed_via_github_app");
+    }
+    v
 }
 
 fn dec(s: &str) -> String {
@@ -684,6 +706,13 @@ fn route(
                 comment_json(s.comments.iter().find(|c| c.id == id).unwrap()),
                 vec![],
             )
+        }
+        ("GET", ["issues", "comments", id]) => {
+            let id: u64 = id.parse().unwrap_or(0);
+            match s.comments.iter().find(|c| c.id == id) {
+                Some(c) => ok(comment_json(c)),
+                None => msg(404, "Not Found"),
+            }
         }
         ("PATCH", ["issues", "comments", id]) => {
             let id: u64 = id.parse().unwrap_or(0);

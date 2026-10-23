@@ -71,6 +71,8 @@ pub trait Github {
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()>;
     fn list_comments(&self, number: u64) -> Result<Vec<Comment>>;
     fn add_comment(&self, number: u64, body: &str) -> Result<Comment>;
+    /// One issue or PR comment by id; `None` when it does not exist.
+    fn get_comment(&self, id: u64) -> Result<Option<Comment>>;
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
     /// A repository Actions variable.
     fn variable(&self, name: &str) -> Result<Variable>;
@@ -290,6 +292,16 @@ impl Github for LiveGithub {
         let path = self.path(&format!("/issues/{number}/comments"));
         let v = self.http.send_json("POST", &path, &json!({"body": body}))?;
         self.parse("comment", v)
+    }
+
+    fn get_comment(&self, id: u64) -> Result<Option<Comment>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/issues/comments/{id}")))?
+        {
+            Some(v) => Ok(Some(self.parse("comment", v)?)),
+            None => Ok(None),
+        }
     }
 
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment> {

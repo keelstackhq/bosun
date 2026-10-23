@@ -184,6 +184,8 @@ fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<O
         return Ok(Some(o.clone()));
     }
     let comments = gh.list_comments(pr)?;
+    // Only a comment written with a plain user token counts: agent sessions act as the same
+    // login through an app, and GitHub marks that in `performed_via_github_app` (spec §8).
     // An edited comment does not count: users with write access can edit others' comments. An
     // owner whose newest decisive review on `head` requests changes has withdrawn the approval.
     Ok(owners
@@ -192,7 +194,8 @@ fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<O
         .find(|o| {
             comments.iter().any(|c| {
                 c.user.eq_ignore_ascii_case(o)
-                    && c.created_at == c.updated_at
+                    && c.unedited()
+                    && c.by_user_token()
                     && comment_approves(&c.body, head)
             })
         })

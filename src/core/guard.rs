@@ -73,7 +73,7 @@ pub fn tool_rules(
 
 fn label_reason() -> String {
     "bosun:state/* labels change only through bosun commands (spec §4): use `bosun claim`, \
-     `bosun release`, `bosun pr` or `bosun verdict post`"
+     `bosun release`, `bosun pr` or `bosun verdict post|comment`"
         .to_string()
 }
 

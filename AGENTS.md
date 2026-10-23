@@ -17,7 +17,8 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    `bosun gate lint`, `bosun gate test`, `bosun gate deps`, `bosun test-integrity`.
 5. `bosun pr <issue>` — opens or reuses the PR and moves the task to review.
 6. Review: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON; post it
-   with `bosun verdict post --from -`. Fix request-changes findings, then review again.
+   with `bosun verdict post --from -` (in a cloud session, which cannot write statuses:
+   `bosun verdict comment --from -`). Fix request-changes findings, then review again.
 7. `bosun risk-check <pr>` runs in CI. A high-risk PR waits for an owner; ask with
    `bosun ask <issue> "<question>"`.
 8. `bosun wait --pr <n>` until the checks are green, then `bosun pr <issue> --auto-merge`.
