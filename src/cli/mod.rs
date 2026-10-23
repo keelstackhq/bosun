@@ -12,6 +12,7 @@ pub mod heartbeat;
 pub mod init;
 pub mod join;
 pub mod lesson;
+pub mod lesson_triage;
 pub mod main_triage;
 pub mod msg;
 pub mod plan;
@@ -21,6 +22,7 @@ pub mod reap;
 pub mod release;
 pub mod result;
 pub mod resume;
+pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -123,10 +125,12 @@ pub enum Command {
     MainTriage(MainTriageArgs),
     /// Set up this repo for bosun: add the splice channel and open the setup PR.
     Init(InitArgs),
+    /// Open a kind/mainfix PR that reverts a merged PR.
+    Revert(RevertArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 29] = [
+pub const COMMANDS: [&str; 30] = [
     "join",
     "claim",
     "heartbeat",
@@ -156,6 +160,7 @@ pub const COMMANDS: [&str; 29] = [
     "result",
     "main-triage",
     "init",
+    "revert",
 ];
 
 impl Command {
@@ -185,6 +190,7 @@ impl Command {
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
+            Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor(_) => "doctor",
@@ -198,6 +204,7 @@ impl Command {
             Command::Result(_) => "result",
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
+            Command::Revert(_) => "revert",
         }
     }
 }
@@ -393,6 +400,8 @@ pub enum LessonCmd {
     Hit(LessonHitArgs),
     /// Open a lesson issue for a failure, or add a hit to the one with the same signature.
     Capture(LessonCaptureArgs),
+    /// Triage a lesson issue: blocking, mechanizable or advice (spec §6).
+    Triage(LessonTriageArgs),
 }
 
 #[derive(Debug, Args)]
@@ -427,6 +436,27 @@ pub struct LessonCaptureArgs {
     /// The failure text: `-` for stdin, or a file.
     #[arg(long, default_value = "-")]
     pub from: String,
+}
+
+#[derive(Debug, Args)]
+pub struct LessonTriageArgs {
+    /// The lesson issue.
+    pub issue: u64,
+    /// blocking sets process-red, mechanizable opens a process-fix task, advice goes to the store.
+    #[arg(long = "as", value_parser = ["blocking", "mechanizable", "advice"])]
+    pub triage: String,
+    /// Paths the process-fix task touches (mechanizable; at least one).
+    #[arg(long = "touch", value_name = "GLOB")]
+    pub touch: Vec<String>,
+    /// Area label of the process-fix task.
+    #[arg(long)]
+    pub area: Option<String>,
+    /// The rule text (advice).
+    #[arg(long)]
+    pub rule: Option<String>,
+    /// Scope globs of the advice entry; none makes it global.
+    #[arg(long = "scope", value_name = "GLOB")]
+    pub scope: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -542,4 +572,10 @@ pub struct InitArgs {
     /// Commit on bosun/init but do not push or open a PR.
     #[arg(long)]
     pub no_pr: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RevertArgs {
+    /// The merged PR to revert.
+    pub pr: u64,
 }

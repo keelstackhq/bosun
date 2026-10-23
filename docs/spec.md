@@ -328,7 +328,11 @@ Triage (curator Routine, daily, Sonnet):
   `bosun:process-red` (a blocking lesson carries it). While one is open, `claim` and `spawn` refuse
   work other than `mainfix` and `process-fix` with exit 4, and `wave plan` returns exit 4, except
   for a mainfix or process-fix epic.
-- mechanizable: opens a kind/process-fix task, which runs before the features of the same area.
+- `bosun lesson triage <issue> --as blocking|mechanizable|advice` applies one of the labels
+  `bosun:lesson/blocking`, `bosun:lesson/mechanizable`, `bosun:lesson/advice`; a re-triage removes
+  the other two.
+- mechanizable: opens a kind/process-fix task (`bosun:kind/process-fix` + `bosun:state/ready`),
+  which runs before the features of the same area.
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
 
@@ -532,6 +536,13 @@ Main-health:
   is bad; the default is `bosun gate test --all`. It prints the first bad sha, subject and PR.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
+- `bosun revert <pr>` needs a merged PR (else exit 3). It reverts the merge commit (`-m 1` for a
+  merge) on the new branch `bosun/revert-<pr>` from the default branch, pushes that branch (never
+  the default branch, never with force), opens a PR "Revert #<pr>: <title>" with the body marker
+  `<!-- bosun:revert <pr> -->` and the main-red issue, and labels it `bosun:kind/mainfix`. Main-red
+  does not block it. It works in a temporary worktree, so the caller's checkout is never touched. A revert
+  conflict is exit 1: revert by hand or make a forward fix. `data.warning` flags a PR with more than
+  one commit whose merge commit has one parent (a possible rebase merge: only the last commit is reverted).
 - Each main-red opens a lesson.
 
 Cost:
