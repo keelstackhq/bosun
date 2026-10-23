@@ -5,7 +5,8 @@ use std::path::Path;
 use serde_json::json;
 
 use super::{EpicArg, WaveCmd};
-use crate::app::{App, active_issues, task_meta};
+use crate::app::{App, active_issues, main_red, task_meta};
+use crate::cli::status::process_red;
 use crate::core::lease::live_leases;
 use crate::core::state::{State, state_of};
 use crate::core::wave::{TaskInfo, plan};
@@ -16,10 +17,28 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     let WaveCmd::Plan(EpicArg { epic }) = cmd;
     let app = App::load(dir)?;
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
-    if gh.get_issue(*epic)?.is_none() {
+    let Some(epic_issue) = gh.get_issue(*epic)? else {
         return Err(BosunError::error(
             format!("issue #{epic} does not exist"),
             "check the epic number; `bosun status` lists the epics",
+        ));
+    };
+    let fixing = |kind: &str| epic_issue.labels.iter().any(|l| l == kind);
+    if let Some(red) = main_red(gh)?
+        && !fixing("bosun:kind/mainfix")
+    {
+        return Err(BosunError::halted(
+            format!("waves pause while main is red (#{red})"),
+            format!("wait for #{red} to close, or plan a mainfix epic"),
+        ));
+    }
+    if let Some(red) = process_red(gh)?
+        && !fixing("bosun:kind/mainfix")
+        && !fixing("bosun:kind/process-fix")
+    {
+        return Err(BosunError::halted(
+            format!("waves pause while process is red (#{red})"),
+            format!("close #{red} by merging its process-fix, or plan a process-fix epic"),
         ));
     }
     let mut merged: Vec<String> = Vec::new();
