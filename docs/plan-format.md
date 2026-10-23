@@ -46,6 +46,9 @@ The state machine, stop rules and resume.
    equal `project` in `.bosun/bosun.toml`.
 2. Each `## <ID>: <title>` heading is one item. The ID matches `^[A-Z][A-Z0-9]{0,7}$` (for example
    `M1`, `S10`) and is unique in the plan.
+   A `## ` heading whose first word is prose (no colon, no digit, a lowercase letter after the
+   first character, like `## Notes`) is ignored and ends the current item; any other `## `
+   heading that is not `## <ID>: <title>` is an error.
 3. Item fields are `key: value` lines directly after the heading:
    - `area:` (required) the area label, `^[a-z0-9-]+$`. One area has one orchestrator.
    - `depends:` (optional) comma-separated item IDs, or `seed`. Every ID must exist in the plan,
