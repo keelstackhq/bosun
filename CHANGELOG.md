@@ -13,7 +13,15 @@ bosun is unreleased, so every entry is under Unreleased.
 - Kill switch: an open issue labelled `bosun:halt` and opened by an owner halts bosun (exit 4).
   Create the label with `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
 
+- `bosun verdict comment` posts a verdict as a PR comment, and the `verdict` workflow runs
+  `bosun verdict apply <comment-id>` to check it and post the `review-verdict` status, so cloud
+  sessions (which cannot write statuses) can deliver verdicts.
+
 ### Changed
+
+- risk-check counts a `/bosun approve` comment only when GitHub says no app wrote it
+  (`performed_via_github_app` present and `null`). Agent sessions comment as the owner's login
+  through the Claude app, so before this an agent could approve its own PR.
 
 - The `risk` workflow runs on `pull_request_target` instead of `pull_request`: the judging job
   comes from the base branch, never checks out PR-head code, passes event data through `env`

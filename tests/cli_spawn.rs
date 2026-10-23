@@ -337,6 +337,9 @@ fn losing_the_epic_lease_race_ends_the_lease_and_exits_3() {
             user: "octocat".into(),
             created_at: "2026-10-22T09:59:59Z".into(),
             updated_at: "2026-10-22T09:59:59Z".into(),
+            via_app: None,
+            no_app_field: false,
+            association: "MEMBER".into(),
         });
     });
     let (code, v) = spawn(&fake, &[]);

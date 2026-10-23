@@ -122,6 +122,27 @@ pub fn closes_issue(body: &str) -> Option<u64> {
     linked_issues(body).first().copied()
 }
 
+/// Marks a PR comment that carries a verdict for `bosun verdict apply` (spec §7).
+pub const COMMENT_MARKER: &str = "<!-- bosun:verdict -->";
+
+/// The PR comment `bosun verdict comment` posts: a summary, the marker, the JSON.
+pub fn comment_body(v: &Verdict) -> String {
+    let json = serde_json::to_string(v).unwrap_or_default();
+    format!(
+        "Review verdict for {}: {}.\n\n{COMMENT_MARKER}\n```json\n{json}\n```",
+        v.head_sha,
+        v.summary()
+    )
+}
+
+/// The verdict JSON of a verdict comment: the text after the marker, without a code fence.
+pub fn comment_json(body: &str) -> Option<&str> {
+    let (_, rest) = body.split_once(COMMENT_MARKER)?;
+    let rest = rest.trim();
+    let rest = rest.strip_prefix("```json").unwrap_or(rest);
+    Some(rest.strip_suffix("```").unwrap_or(rest).trim())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +209,15 @@ mod tests {
         assert_eq!(closes_issue("Closes #12\n\nx"), Some(12));
         assert_eq!(closes_issue("this fixes #7."), Some(7));
         assert_eq!(closes_issue("no link"), None);
+    }
+
+    #[test]
+    fn a_verdict_comment_round_trips() {
+        let v = Verdict::parse(r#"{"pr":3,"head_sha":"abc","verdict":"approve","confidence":0.9}"#)
+            .unwrap();
+        let body = comment_body(&v);
+        assert!(body.contains(COMMENT_MARKER));
+        assert_eq!(Verdict::parse(comment_json(&body).unwrap()).unwrap(), v);
+        assert_eq!(comment_json("no marker"), None);
     }
 }

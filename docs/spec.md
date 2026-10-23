@@ -393,6 +393,18 @@ REVIEW.md). The reviewer returns:
 ```
 
 - `bosun verdict post` writes it as the review-verdict check on `head_sha`.
+- Cloud sessions cannot write commit statuses (the agent proxy answers 403), so a reviewer there
+  runs `bosun verdict comment --from -`. It validates the JSON, refuses a stale `head_sha`
+  (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
+  `verdict` workflow (`issue_comment` created, comments with the marker only) runs
+  `bosun verdict apply <comment-id>` built from the default branch, never PR code. `apply`
+  re-reads the comment and refuses it (exit 1) unless it is unedited, its author is an `OWNER`,
+  `MEMBER` or `COLLABORATOR`, it sits on the PR its JSON names, and the JSON is valid; a
+  `head_sha` that is no longer the head is exit 3. Then it does what `verdict post` does: the
+  status (as github-actions), the verdict record and the task state. A verdict may come through
+  the agent app: it is a reviewer's opinion, not an owner's approval. Permissions of the
+  workflow: `contents: read`, `pull-requests: read`, `issues: write` (record and state labels),
+  `statuses: write`; `tests/workflows.rs` asserts them.
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record when that sha has a successful `review-verdict` status, else it is a full review (statuses are per SHA, so they cannot carry it).
@@ -429,7 +441,11 @@ High-risk PRs:
   body, trimmed, is exactly `/bosun approve <head_sha>` with the full 40-character SHA. The
   comment path exists because GitHub forbids approving your own PR, and an owner may also be the
   account that opens the PRs. A comment binds to that SHA: a new push needs a new comment. An
-  edited comment does not count (users with write access can edit other users' comments). When
+  edited comment does not count (users with write access can edit other users' comments). Only a
+  comment written with a plain user token counts: its `performed_via_github_app` is present and
+  `null`. Agent sessions act as the same login through the Claude app, and GitHub stamps that
+  app on their comments, so an agent cannot approve; a response without the field does not
+  count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on

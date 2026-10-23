@@ -369,3 +369,23 @@ fn an_owner_comment_approves_exactly_the_head_sha() {
     fake.review(1, "ada", "CHANGES_REQUESTED", HEAD40);
     assert_eq!(check(&fake).0, 5, "request-changes withdraws the comment");
 }
+
+#[test]
+fn an_approval_written_through_an_app_or_without_the_app_field_does_not_count() {
+    let fake = high_pr();
+    fake.pull_set(
+        1,
+        "head",
+        serde_json::json!({"sha": HEAD40, "ref": "feature"}),
+    );
+    // Agent sessions act as the owner's login through the Claude app.
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD40}"));
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    assert_eq!(check(&fake).0, 5, "a comment via an app is not the owner");
+    // A response without the field is no proof of a user token: fail closed.
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD40}"));
+    fake.last_comment(|c| c.no_app_field = true);
+    assert_eq!(check(&fake).0, 5, "a missing app field does not count");
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD40}"));
+    assert_eq!(check(&fake).0, 0, "a plain user token counts");
+}
