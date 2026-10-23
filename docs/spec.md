@@ -172,6 +172,10 @@ Stop rules:
 - A fix round with 0 changed lines: the task goes to blocked.
 - On blocked, bosun escalates one model tier (haiku -> sonnet -> opus). When opus is used up, the
   task goes to needs-human.
+- `bosun fail <issue> --signature S [--changed-lines N] [--model M]` posts a `failure` record and
+  applies these rules. A stop sets `blocked` and posts an `escalate` record (`from`, `to`,
+  `reason`); an escalation restarts the count. With opus used up it sets `needs-human` (exit 5).
+  The signature is in `data` for the lessons.
 - Each stop rule opens or hits a lesson.
 - When main is red, feature work pauses; only mainfix tasks continue.
 

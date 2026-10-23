@@ -8,6 +8,7 @@ use serde_json::json;
 
 use super::PrArgs;
 use crate::app::{App, default_branch, kill_switch, set_state, sync_merged};
+use crate::core::meta::linked_issues;
 use crate::core::state::{State, state_of};
 use crate::github::{Github, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -86,7 +87,10 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let open = found.iter().position(|p| p.state == "open");
     if open.is_none() {
         // Lists do not say `merged`; read each closed PR.
-        for p in found.iter().filter(|p| p.state == "closed") {
+        for p in found
+            .iter()
+            .filter(|p| p.state == "closed" && linked_issues(&p.body).contains(&n))
+        {
             if gh.get_pull(p.number)?.is_some_and(|f| f.merged) {
                 let moved = sync_merged(gh, n, &issue, Some(&app.ctx.session))?;
                 let task_state = if moved {

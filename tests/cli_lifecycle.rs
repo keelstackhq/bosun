@@ -173,3 +173,58 @@ fn a_direct_label_edit_is_refused_by_the_hook() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
+
+#[test]
+fn a_merged_pr_of_another_task_on_the_same_branch_is_ignored() {
+    // The session merged task 6 on its branch, then claims task 7 on the same branch.
+    let fake = FakeGithub::start();
+    fake.issue(6, "old", &["bosun:state/merged"], BODY);
+    fake.issue(7, "the task", &["bosun:state/ready"], BODY);
+    fake.pull(20, "t", "claude/t7", "Closes #6");
+    fake.merge_pull(20, 6);
+    let dir = repo("claude/t7");
+    let (code, v) = run(&fake, dir.path(), &["claim", "7"]);
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = run(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["created"], true);
+    assert_eq!(fake.labels_of(7), vec!["bosun:state/review".to_string()]);
+    assert!(lease_ends(&fake).is_empty());
+}
+
+fn queued_with_lease(fake: &FakeGithub) {
+    fake.issue(7, "the task", &["bosun:state/queued"], BODY);
+    fake.comment(
+        7,
+        &common::lease_note(SESSION, "2026-10-22T10:20:00Z", "src/a.rs"),
+    );
+}
+
+#[test]
+fn reap_leaves_a_queued_task_with_an_open_pr_alone() {
+    // An old merged PR links #7 (the issue was reopened); the new PR 21 is open.
+    let fake = FakeGithub::start();
+    queued_with_lease(&fake);
+    fake.pull(20, "t", "someone/old", "Fixes #7");
+    fake.merge_pull(20, 99);
+    fake.pull(21, "t", "claude/t7", "Closes #7");
+    let dir = repo("claude/t7");
+    let (code, v) = run(&fake, dir.path(), &["reap"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["merged"], json!([]));
+    assert_eq!(fake.labels_of(7), vec!["bosun:state/queued".to_string()]);
+    assert!(lease_ends(&fake).is_empty());
+}
+
+#[test]
+fn reap_ignores_a_pr_merged_into_a_branch_other_than_the_default() {
+    let fake = FakeGithub::start();
+    queued_with_lease(&fake);
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.pull_set(20, "base", json!({"sha": "b", "ref": "feature-x"}));
+    fake.merge_pull(20, 7);
+    let dir = repo("claude/t7");
+    let (_, v) = run(&fake, dir.path(), &["reap"]);
+    assert_eq!(v["data"]["merged"], json!([]));
+    assert_eq!(fake.labels_of(7), vec!["bosun:state/queued".to_string()]);
+}
