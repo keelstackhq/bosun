@@ -22,6 +22,7 @@ pub mod reap;
 pub mod release;
 pub mod result;
 pub mod resume;
+pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -124,10 +125,12 @@ pub enum Command {
     MainTriage(MainTriageArgs),
     /// Set up this repo for bosun: add the splice channel and open the setup PR.
     Init(InitArgs),
+    /// Open a kind/mainfix PR that reverts a merged PR.
+    Revert(RevertArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 29] = [
+pub const COMMANDS: [&str; 30] = [
     "join",
     "claim",
     "heartbeat",
@@ -157,6 +160,7 @@ pub const COMMANDS: [&str; 29] = [
     "result",
     "main-triage",
     "init",
+    "revert",
 ];
 
 impl Command {
@@ -200,6 +204,7 @@ impl Command {
             Command::Result(_) => "result",
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
+            Command::Revert(_) => "revert",
         }
     }
 }
@@ -558,4 +563,10 @@ pub struct InitArgs {
     /// Commit on bosun/init but do not push or open a PR.
     #[arg(long)]
     pub no_pr: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct RevertArgs {
+    /// The merged PR to revert.
+    pub pr: u64,
 }
