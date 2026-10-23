@@ -73,7 +73,41 @@ fn an_empty_repo_reports_all_twelve_steps() {
 }
 
 #[test]
+fn a_slack_warning_leaves_doctor_at_exit_0() {
+    let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\n");
+    let (code, v) = doctor(&fake, tmp.path(), true);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(statuses(&v)[6], "warn");
+    assert_eq!(v["data"]["missing"], 0);
+}
+
+#[test]
+fn unparsable_owners_are_named_in_the_warning() {
+    let (tmp, fake) = full_repo("owners = [\"adam\"]\n");
+    let (_, v) = doctor(&fake, tmp.path(), true);
+    let item = &v["data"]["items"][6];
+    assert_eq!(item["status"], "warn", "{item}");
+    assert_eq!(
+        item["detail"],
+        "governance/owners.toml does not parse as [[owner]] tables"
+    );
+}
+
+#[test]
 fn a_fully_set_up_repo_is_ok() {
+    let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+    let d = tmp.path();
+    let (code, v) = doctor(&fake, d, true);
+    assert_eq!(code, 0, "{v}");
+    assert!(statuses(&v).iter().all(|s| s == "ok"));
+    // Without the Routines confirmation, only step 11 is missing.
+    let (code, v) = doctor(&fake, d, false);
+    assert_eq!(code, 5);
+    assert_eq!(v["error"]["message"], "1 checklist steps missing");
+    assert_eq!(statuses(&v)[10], "missing");
+}
+
+fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let d = tmp.path();
     fake.repo_set("allow_auto_merge", json!(true));
@@ -96,23 +130,12 @@ fn a_fully_set_up_repo_is_ok() {
         ".github/workflows/ci.yml",
         "jobs:\n  ci-ok:\n    runs-on: x\n",
     );
-    write(
-        d,
-        "governance/owners.toml",
-        "[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n",
-    );
+    write(d, "governance/owners.toml", owners);
     write(d, "docs/setup-script.sh", "#!/bin/sh\n");
     write(d, ".bosun/version", "unreleased\n");
     write(d, ".bosun/bosun.toml", "[slack]\nchannel = \"#bosun\"\n");
     write(d, "plans/bosun.md", "# plan\n");
-    let (code, v) = doctor(&fake, d, true);
-    assert_eq!(code, 0, "{v}");
-    assert!(statuses(&v).iter().all(|s| s == "ok"));
-    // Without the Routines confirmation, only step 11 is missing.
-    let (code, v) = doctor(&fake, d, false);
-    assert_eq!(code, 5);
-    assert_eq!(v["error"]["message"], "1 checklist steps missing");
-    assert_eq!(statuses(&v)[10], "missing");
+    (tmp, fake)
 }
 
 const FOUR: &str =

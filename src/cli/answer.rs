@@ -1,6 +1,7 @@
 //! `bosun answer <issue> --slack-user U... [--from -|FILE]`: an owner's answer from Slack
 //! (spec section 10). Only an owner Slack ID counts; the text is fenced as data and never
-//! becomes a flag, a label or a command.
+//! becomes a flag, a label or a command. The answer is recorded only: it never changes the
+//! task's state, the owner moves the task on GitHub.
 
 use std::io::Read;
 use std::path::Path;
@@ -8,10 +9,12 @@ use std::path::Path;
 use serde_json::json;
 
 use super::AnswerArgs;
-use crate::app::{App, default_branch, kill_switch, notes, set_state};
+use crate::app::{App, default_branch, kill_switch};
+use crate::cli::intake::fence_text;
 use crate::cli::risk_check::{OWNERS_PATH, owner_slack_ids};
 use crate::core::records::{Record, parse_record};
 use crate::core::state::{State, state_of};
+use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 fn valid_slack_id(id: &str) -> bool {
@@ -39,10 +42,28 @@ fn read_text(from: &str) -> Result<String, BosunError> {
     Ok(text)
 }
 
-/// The text made safe to fence: it cannot close the fence or forge a record line.
-fn neutralise(text: &str) -> String {
-    text.replace('`', "\u{02cb}")
-        .replace(r#"{"bosun""#, r#"{ "bosun""#)
+/// The newest ask by a collaborator with write access is open when no `answer`, `escalate` or
+/// `failure` record follows it. A forged ask by anyone else never counts.
+fn ask_is_open(gh: &dyn Github, n: u64) -> Result<bool, BosunError> {
+    let comments = gh.list_comments(n)?;
+    let mut newest_ask = None;
+    for (i, c) in comments.iter().enumerate() {
+        if matches!(parse_record(&c.body), Some(Record::Ask { .. })) {
+            let perm = gh.permission(&c.user)?.unwrap_or_default();
+            if matches!(perm.as_str(), "admin" | "write") {
+                newest_ask = Some(i);
+            }
+        }
+    }
+    let Some(ask) = newest_ask else {
+        return Ok(false);
+    };
+    Ok(!comments[ask + 1..].iter().any(|c| {
+        matches!(
+            parse_record(&c.body),
+            Some(Record::Answer { .. } | Record::Escalate { .. } | Record::Failure { .. })
+        )
+    }))
 }
 
 pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
@@ -78,13 +99,12 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
             ),
         ));
     }
-    let asked = notes(gh, n)?
-        .iter()
-        .any(|c| matches!(parse_record(&c.body), Some(Record::Ask { .. })));
-    if !asked {
+    if !ask_is_open(gh, n)? {
         return Err(BosunError::conflict(
-            format!("#{n} is needs-human but has no ask record"),
-            format!("#{n} was not set by `bosun ask`; the owner answers it on GitHub"),
+            format!("#{n} is needs-human but has no open ask"),
+            format!(
+                "no open ask on #{n}: the owner answers on GitHub, or a session runs `bosun ask`"
+            ),
         ));
     }
     let branch = default_branch(gh)?;
@@ -109,13 +129,13 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         at: app.ctx.now.to_string(),
     };
     let body = format!(
-        "Answer from the owner via Slack\n\n```text\n{}\n```\n\n{}",
-        neutralise(text.trim_end()),
+        "Answer from the owner via Slack (sender id not verified by bosun)\n\n```text\n{}\n```\n\n{}",
+        fence_text(text.trim_end()),
         record.to_line()
     );
     let comment = gh.add_comment(n, &body)?;
-    set_state(gh, n, &issue, State::Ready)?;
+    // The answer is data: the owner moves the task on GitHub.
     Ok(Outcome::data(
-        json!({"issue": n, "comment_id": comment.id, "state": "ready"}),
+        json!({"issue": n, "comment_id": comment.id, "state": "needs-human"}),
     ))
 }

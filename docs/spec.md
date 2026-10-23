@@ -607,9 +607,13 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
 - `bosun notify` refuses a channel that is externally shared or has guests.
 - `bosun answer <issue> --slack-user U… [--from -|FILE]`: on a needs-human task with an `ask`
   record, an owner Slack ID (`slack` in `governance/owners.toml` on the default branch) adds a
-  fenced comment and an `answer` record and moves the task to ready. Any other ID, or no owner
-  Slack ID, is exit 5 and nothing is written. `bosun doctor` warns when a channel is set and no
-  owner has a Slack ID.
+  fenced comment and an `answer` record. The answer is recorded as data and never changes the
+  task's state: the owner moves the task on GitHub. The ask counts as open only when a
+  collaborator with write access wrote the newest `ask` and no `answer`, `escalate` or `failure`
+  record follows it (else exit 3, "no open ask on #N"). Any other ID, or no owner Slack ID, is
+  exit 5 and nothing is written. `bosun doctor` warns when a channel is set and no owner has a
+  Slack ID. bosun cannot verify `--slack-user`: the Claude Tag thread passes it from the Slack
+  event, and any session holding the token could claim it.
 
 Intents:
 - ask: `bosun status`, explain, `bosun progress`.

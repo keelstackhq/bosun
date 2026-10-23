@@ -449,14 +449,15 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "create the channel, connect Claude Tag, and set [slack] channel in .bosun/bosun.toml",
     );
     // Without an owner Slack ID no answer counts and no thread may spawn: warn, not fail.
-    let has_slack_id = read(root, "governance/owners.toml")
-        .and_then(|t| crate::core::risk::parse_owners(&t).ok())
-        .is_some_and(|o| o.iter().any(|o| o.slack.is_some()));
+    let parsed = read(root, "governance/owners.toml").map(|t| crate::core::risk::parse_owners(&t));
+    let has_slack_id = matches!(&parsed, Some(Ok(o)) if o.iter().any(|o| o.slack.is_some()));
     if !channel.is_empty() && !has_slack_id {
         slack_item["status"] = json!("warn");
-        slack_item["detail"] = json!(
+        slack_item["detail"] = json!(if matches!(parsed, Some(Err(_))) {
+            "governance/owners.toml does not parse as [[owner]] tables"
+        } else {
             "[slack] channel is set but no owner in governance/owners.toml has a slack ID, so no Slack answer counts"
-        );
+        });
         slack_item["fix"] =
             json!("add `slack = \"U…\"` to your [[owner]] table in governance/owners.toml");
     }

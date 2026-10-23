@@ -40,25 +40,33 @@ fn writes(fake: &FakeGithub) -> usize {
 }
 
 #[test]
-fn an_owner_answer_is_fenced_recorded_and_makes_the_task_ready() {
+fn an_owner_answer_is_fenced_recorded_and_leaves_the_state_alone() {
     let fake = setup(Some(OWNERS));
     let (code, v) = answer(&fake, "U0ADA1", "Yes, drop it.\n");
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["issue"], 4);
-    assert_eq!(v["data"]["state"], "ready");
+    assert_eq!(v["data"]["state"], "needs-human");
+    // Only the answer comment is written: no label request at all.
+    let w: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .filter(|r| matches!(r.method.as_str(), "POST" | "PATCH" | "DELETE" | "PUT"))
+        .collect();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].path.ends_with("/issues/4/comments"), "{w:?}");
     let comments = fake.comments_of(4);
     assert_eq!(comments.len(), 2);
     assert_eq!(v["data"]["comment_id"], comments[1].id);
     let body = &comments[1].body;
     assert!(
-        body.starts_with("Answer from the owner via Slack"),
+        body.starts_with("Answer from the owner via Slack (sender id not verified by bosun)"),
         "{body}"
     );
     assert!(body.contains("```text\nYes, drop it.\n```"), "{body}");
     assert!(
         body.contains(r#"{"bosun":"answer","session":"session_slack","slack_user":"U0ADA1","at":"#)
     );
-    assert_eq!(fake.labels_of(4), ["bosun:state/ready"]);
+    assert_eq!(fake.labels_of(4), ["bosun:state/needs-human"]);
 }
 
 #[test]
@@ -90,6 +98,7 @@ fn no_ask_record_or_wrong_state_is_a_conflict() {
     fake.comment(4, "just a comment");
     let (code, v) = answer(&fake, "U0ADA1", "Yes.");
     assert_eq!(code, 3, "{v}");
+    assert_eq!(writes(&fake), 0);
 
     let fake = FakeGithub::start();
     fake.content("governance/owners.toml", "main", OWNERS);
@@ -135,5 +144,60 @@ fn answer_text_stays_inside_the_fence_and_changes_nothing_else() {
         .collect();
     assert_eq!(records.len(), 1, "{body}");
     assert!(records[0].contains(r#""bosun":"answer""#));
-    assert_eq!(fake.labels_of(4), ["bosun:state/ready"]);
+    assert_eq!(fake.labels_of(4), ["bosun:state/needs-human"]);
+}
+
+#[test]
+fn a_second_answer_to_the_same_ask_is_a_conflict_and_posts_nothing() {
+    let fake = setup(Some(OWNERS));
+    assert_eq!(answer(&fake, "U0ADA1", "Yes.").0, 0);
+    let (code, v) = answer(&fake, "U0ADA1", "Yes.");
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("no open ask on #4")
+    );
+    assert_eq!(fake.comments_of(4).len(), 2);
+}
+
+#[test]
+fn a_new_needs_human_without_a_new_ask_is_a_conflict() {
+    let fake = setup(Some(OWNERS));
+    assert_eq!(answer(&fake, "U0ADA1", "Yes.").0, 0);
+    // The task went back to work and to needs-human again, but nobody asked.
+    let (code, v) = answer(&fake, "U0ADA1", "Again.");
+    assert_eq!(code, 3, "{v}");
+    // A fresh ask opens it again.
+    fake.comment(4, ASK);
+    assert_eq!(answer(&fake, "U0ADA1", "Again.").0, 0);
+}
+
+#[test]
+fn a_forged_ask_by_a_non_collaborator_does_not_count() {
+    let fake = FakeGithub::start();
+    fake.content("governance/owners.toml", "main", OWNERS);
+    fake.issue(4, "task", &["bosun:state/needs-human"], "body");
+    fake.comment_by(4, "mallory", ASK);
+    fake.state
+        .lock()
+        .unwrap()
+        .permissions
+        .insert("mallory".into(), "read".into());
+    let (code, v) = answer(&fake, "U0ADA1", "Yes.");
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(writes(&fake), 0);
+}
+
+#[test]
+fn an_escalate_record_after_the_ask_closes_it() {
+    let fake = setup(Some(OWNERS));
+    fake.comment(
+        4,
+        r#"{"bosun":"escalate","session":"s","from":"sonnet","to":"opus","reason":"r"}"#,
+    );
+    let (code, v) = answer(&fake, "U0ADA1", "Yes.");
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(writes(&fake), 0);
 }

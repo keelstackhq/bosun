@@ -14,6 +14,17 @@ use crate::core::state::State;
 use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 
+/// Text made safe to fence as data: it cannot close the fence, open an HTML comment marker or
+/// forge a record line, and it is capped at 4000 characters.
+pub(crate) fn fence_text(text: &str) -> String {
+    text.chars()
+        .take(4000)
+        .collect::<String>()
+        .replace('`', "\u{02cb}")
+        .replace("<!--", "<!-\u{200b}-")
+        .replace(r#"{"bosun""#, r#"{ "bosun""#)
+}
+
 pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
     let text = a.text.trim();
     let app = App::load(dir)?;
