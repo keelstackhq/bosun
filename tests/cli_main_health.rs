@@ -103,7 +103,9 @@ fn success_with_no_red_issue_changes_nothing() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["closed"], false);
     assert_eq!(v["data"]["changed"], false);
-    assert!(fake.statuses_of("sha10").is_empty());
+    // The open PRs are still re-judged (idempotent), and pass.
+    assert_eq!(v["data"]["rejudged"], 2);
+    assert_eq!(main_open_state(&fake, "sha10"), "success");
 }
 
 #[test]
@@ -111,4 +113,45 @@ fn empty_result_is_usage() {
     let fake = FakeGithub::start();
     let (code, v) = health(&fake, "");
     assert_eq!(code, 2, "{v}");
+}
+
+#[test]
+fn success_closes_every_open_main_red_issue() {
+    let fake = FakeGithub::start();
+    fake.issue(3, "main is red", &["bosun:main-red"], "a");
+    fake.issue(4, "main is red", &["bosun:main-red"], "b");
+    let (code, v) = health(&fake, "success");
+    assert_eq!(code, 0, "{v}");
+    for n in [3, 4] {
+        assert_eq!(fake.issue_state(n).state, "closed");
+        assert!(fake.comments_of(n).iter().any(|c| c.body.contains(URL)));
+    }
+}
+
+#[test]
+fn failure_with_two_open_issues_keeps_the_oldest_and_opens_nothing() {
+    let fake = FakeGithub::start();
+    fake.issue(4, "main is red", &["bosun:main-red"], "b");
+    fake.issue(3, "main is red", &["bosun:main-red"], "a");
+    fake.pull(10, "feature", "feat", "No link.");
+    let (code, v) = health(&fake, "timed_out");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["main_red"], 3);
+    assert_eq!(v["data"]["opened"], false);
+    assert!(issues_with(&fake, "bosun:lesson").is_empty());
+}
+
+#[test]
+fn failure_rejudges_prs_even_when_the_issue_is_already_open() {
+    let fake = FakeGithub::start();
+    fake.issue(3, "main is red", &["bosun:main-red"], "a");
+    fake.pull(10, "feature", "feat", "No link.");
+    fake.state.lock().unwrap().statuses.insert(
+        "sha10".into(),
+        vec![json!({"context": "main-open", "state": "success", "description": "stale"})],
+    );
+    let (code, v) = health(&fake, "failure");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["rejudged"], 1);
+    assert_eq!(main_open_state(&fake, "sha10"), "failure");
 }

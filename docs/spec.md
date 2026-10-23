@@ -523,7 +523,7 @@ Main-health:
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
 - Each main-red opens a lesson.
-- `bosun main-health --result R [--run-url U]` does this: `failure` opens the main-red issue (if none is open) and captures a `main-red` lesson; `success` comments and closes it; any other result changes nothing. After a change it re-judges every open PR (`main-open` status), so queued PRs cannot auto-merge into a red main. It checks no kill switch: it starts no work.
+- `bosun main-health --result R [--run-url U]` does this: `failure` opens the main-red issue (if none is open) and captures a `main-red` lesson; `success` comments and closes it; `timed_out` and `startup_failure` count as `failure`; any other result changes nothing. `success` closes every open main-red issue; two parallel failures keep the oldest issue. On every success or failure it re-judges every open PR (`main-open` status; a failed re-judge makes the exit 1), so queued PRs cannot auto-merge into a red main. Repeated main-red episodes hit the same open lesson (same signature, §6 dedupe). It checks no kill switch: it starts no work.
 
 Cost:
 - Usage providers (D20): `claude-sessions` takes the `get_session` result of a session (asked for
