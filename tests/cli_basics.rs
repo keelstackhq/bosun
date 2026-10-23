@@ -34,6 +34,7 @@ const CALLS: &[&[&str]] = &[
     &["budget", "check"],
     &["result", "4", "--outcome", "merged"],
     &["init"],
+    &["revert", "3"],
 ];
 
 #[test]
