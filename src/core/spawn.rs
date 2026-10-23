@@ -1,14 +1,18 @@
 //! The 7 spawn checks of spec §5, in order. Check 7 (claim, then create_session) is the
 //! command's own work; this module decides checks 1-6.
 
+use super::budget::{BUDGET_STOP, no_new_work};
 use crate::output::Exit;
 
 /// Everything the checks need, gathered by the command.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpawnInput {
     pub main_red: bool,
+    pub process_red: bool,
     /// Mainfix work skips checks 1 and 2.
     pub mainfix: bool,
+    /// A process-fix epic is exempt from process-red, as mainfix is from main-red.
+    pub process_fix: bool,
     pub spent_today_usd: f64,
     pub daily_usd: f64,
     /// Depth of the spawning session (root is 1).
@@ -33,9 +37,6 @@ pub struct Refusal {
     pub fix: String,
 }
 
-/// Share of the daily budget at which new work stops (spec §9).
-pub const BUDGET_STOP: f64 = 0.8;
-
 /// Run checks 1-6 in order; the first failure is the refusal.
 pub fn check(i: &SpawnInput) -> Result<(), Refusal> {
     let refuse = |check, name, exit, message: String, fix: &str| {
@@ -56,7 +57,16 @@ pub fn check(i: &SpawnInput) -> Result<(), Refusal> {
             "wait for the main-red issue to close (`bosun wait --issue <n>`), or work on the mainfix task",
         );
     }
-    if !i.mainfix && i.daily_usd > 0.0 && i.spent_today_usd >= BUDGET_STOP * i.daily_usd {
+    if i.process_red && !i.mainfix && !i.process_fix {
+        return refuse(
+            1,
+            "process-red",
+            Exit::Halted,
+            "process is red; only mainfix and process-fix work may start".into(),
+            "close the process-red issue by merging its process-fix, or work on a process-fix task",
+        );
+    }
+    if !i.mainfix && no_new_work(i.spent_today_usd, i.daily_usd) {
         return refuse(
             2,
             "budget",
@@ -126,6 +136,8 @@ mod tests {
     fn ok_input() -> SpawnInput {
         SpawnInput {
             main_red: false,
+            process_red: false,
+            process_fix: false,
             mainfix: false,
             spent_today_usd: 10.0,
             daily_usd: 150.0,
@@ -156,6 +168,9 @@ mod tests {
         i.main_red = true;
         assert_eq!(refused(i), (1, Exit::Halted));
         let mut i = ok_input();
+        i.process_red = true;
+        assert_eq!(refused(i), (1, Exit::Halted));
+        let mut i = ok_input();
         i.spent_today_usd = 120.0; // exactly 80 %
         assert_eq!(refused(i), (2, Exit::Limit));
         let mut i = ok_input();
@@ -178,6 +193,26 @@ mod tests {
         i.main_red = true;
         i.children = 9;
         assert_eq!(refused(i).0, 1);
+    }
+
+    #[test]
+    fn process_red_exempts_mainfix_and_process_fix() {
+        let mut i = ok_input();
+        i.process_red = true;
+        i.process_fix = true;
+        assert_eq!(check(&i), Ok(()));
+        i.process_fix = false;
+        i.mainfix = true;
+        assert_eq!(check(&i), Ok(()));
+        // process-fix work does not skip main-red or the budget.
+        let mut i = ok_input();
+        i.process_fix = true;
+        i.main_red = true;
+        assert_eq!(refused(i), (1, Exit::Halted));
+        let mut i = ok_input();
+        i.process_fix = true;
+        i.spent_today_usd = 120.0;
+        assert_eq!(refused(i), (2, Exit::Limit));
     }
 
     #[test]

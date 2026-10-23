@@ -16,6 +16,9 @@ const RUST: &str = include_str!("../../profiles/rust.toml");
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
+    /// The stack manifest; a stack without it (at head and base) has nothing to check yet.
+    #[serde(default)]
+    pub manifest: Option<String>,
     pub adapters: Adapters,
     pub gates: BTreeMap<String, Gate>,
 }
@@ -143,6 +146,7 @@ mod tests {
     #[test]
     fn built_in_rust_profile_parses() {
         let p = Profile::load(Path::new("/nonexistent"), "rust").unwrap();
+        assert_eq!(p.manifest.as_deref(), Some("Cargo.toml"));
         assert_eq!(p.gates.len(), 6);
         assert_eq!(p.gates["test"].when_no_package, WhenNoPackage::Skip);
         assert_eq!(p.gates["fmt"].budget(), 480);
