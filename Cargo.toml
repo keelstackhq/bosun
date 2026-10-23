@@ -1,6 +1,6 @@
 [package]
 name = "keel-bosun"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 description = "Orchestration helper for repos where agents write all the code"
@@ -9,8 +9,9 @@ repository = "https://github.com/keelstackhq/bosun"
 readme = "README.md"
 keywords = ["ai-agents", "orchestration", "github", "cli", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
-publish = false
-include = ["/src/**", "/profiles/**", "/Cargo.toml", "/Cargo.lock", "/README.md"]
+# Only what builds the crate: no tests, fixtures, npm packages or docs in the .crate file.
+# profiles/ is embedded with include_str!.
+include = ["/src/**", "/profiles/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE"]
 
 [lib]
 name = "bosun"

@@ -8,3 +8,13 @@ required_checks = ["ci-ok", "risk-check", "review-verdict", "main-open"]
 merge_queue = false
 allow_auto_merge = true
 delete_branch_on_merge = true
+
+[release]
+# Defaults: per-package versioning, tags `v{version}` (the root crate is the package), and
+# publishing from the `release` environment (job `publish` in .github/workflows/release.yml).
+
+[publish]
+# crates.io (`keel-bosun`), the GitHub Release with five static binaries, and the npm launcher
+# in npm/bosun with its platform packages. docs/releasing.md has the flow and the owner steps.
+crates = {}
+github_release = { targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "aarch64-apple-darwin", "x86_64-pc-windows-msvc"], bin = "bosun" }

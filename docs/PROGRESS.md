@@ -94,6 +94,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-22 · Task 7c · S8 done: `src/hooks/session_start.rs`, `bosun hook session-start` (registry join, cache refresh, one-paragraph context: session, origin, own leases, BOSUN_HALT, main-red; a context that says how to fix GitHub access when unreachable) · an Edit on another session's claimed path is denied; `cargo nextest run --locked` 162/162
 - 2026-10-22 · Wrap-up · seed status, Blocked list with exact owner steps, all plan boxes ticked · review findings #20-#32 closed by fixes A-E
 - 2026-10-23 · Release 1/3 · npm launcher `npm/bosun` (`@keelstackhq/bosun`, five platform packages as optionalDependencies, as in berth); a launcher failure prints one error envelope with a fix · `node --test npm/bosun/test/*.test.js` 9/9
+- 2026-10-23 · Release 2/3 · crate `keel-bosun` 0.1.0 publishable (LICENSE, include), `hoist.toml [publish]` (crates.io, GitHub Release for five targets), the five platform packages, pnpm workspace; `tests/release_config.rs` keeps them in step · `cargo test --test release_config` 6/6, `cargo package` builds
 
 ## Blocked
 
