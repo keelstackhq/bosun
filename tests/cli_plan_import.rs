@@ -122,7 +122,7 @@ fn import_creates_epics_plan_tasks_and_tasks() {
     let em: Value = serde_json::from_str(epic_json).unwrap();
     assert_eq!(em["item"], "M1");
     assert_eq!(em["area"], "lifecycle");
-    assert_eq!(em["plan"], file.as_str());
+    assert_eq!(em["plan"], "plan.md");
     assert_eq!(em["ucs"], json!(["UC-M1-1"]));
     let m2 = fake.issue_state(find(&fake, "<!-- bosun:plan M2 -->"));
     assert!(m2.body.contains(r#""depends":["M1"]"#));

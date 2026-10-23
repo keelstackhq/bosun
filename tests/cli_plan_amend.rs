@@ -101,7 +101,7 @@ fn removing_an_item_closes_its_epic_tasks_and_plan_task() {
         assert_eq!(i.state_reason.as_deref(), Some("not_planned"), "{m}");
         let c = fake.comments_of(n);
         assert_eq!(c.len(), 1, "{m}");
-        assert_eq!(c[0].body, format!("Removed from {file} by an amendment."));
+        assert_eq!(c[0].body, "Removed from plan.md by an amendment.");
     }
     for m in ["M1", "M1/P", "M1/T1", "M1/T2"] {
         let n = find(&fake, &format!("<!-- bosun:plan {m} -->"));
@@ -273,6 +273,133 @@ fn amend_also_imports_new_items() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["epics"][2]["action"], "created");
     assert_eq!(v["data"]["epics"][0]["action"], "existing");
+}
+
+#[test]
+fn every_spelling_of_the_plan_path_reconciles_the_same() {
+    for spelling in ["plans/x.md", "./plans/x.md", "ABS"] {
+        let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+        std::fs::create_dir(tmp.path().join("plans")).unwrap();
+        let abs = tmp.path().join("plans/x.md");
+        std::fs::write(&abs, PLAN).unwrap();
+        let abs = std::fs::canonicalize(&abs).unwrap();
+        let spelling = if spelling == "ABS" {
+            abs.to_str().unwrap()
+        } else {
+            spelling
+        };
+        // Import with the spelling under test: the epic stores the relative form.
+        let (code, v) = plan(&fake, tmp.path(), &["import", spelling]);
+        assert_eq!(code, 0, "{spelling}: {v}");
+        let epic = fake.issue_state(find(&fake, "<!-- bosun:plan M2 -->"));
+        assert!(
+            epic.body.contains(r#""plan":"plans/x.md""#),
+            "{}",
+            epic.body
+        );
+        std::fs::write(&abs, plan_without_m2()).unwrap();
+        let (code, v) = plan(&fake, tmp.path(), &["amend", spelling]);
+        assert_eq!(code, 0, "{spelling}: {v}");
+        assert_eq!(
+            ids(&v["data"]["closed"]),
+            ["M2", "M2/P", "M2/T1"],
+            "{spelling}"
+        );
+        assert_eq!(v["data"]["warnings"], serde_json::json!([]), "{spelling}");
+    }
+}
+
+#[test]
+fn an_unknown_path_warns_and_reconciles_nothing() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    imported(&fake, tmp.path());
+    std::fs::write(tmp.path().join("other.md"), plan_without_m2()).unwrap();
+    let (code, v) = plan(&fake, tmp.path(), &["amend", "other.md"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["closed"], serde_json::json!([]));
+    let w = v["data"]["warnings"].to_string();
+    assert!(
+        w.contains("no epic names other.md; nothing reconciled"),
+        "{w}"
+    );
+}
+
+#[test]
+fn an_active_task_is_not_closed_and_keeps_its_epic_open() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let t = find(&fake, "<!-- bosun:plan M2/T1 -->");
+    let epic = find(&fake, "<!-- bosun:plan M2 -->");
+    {
+        let mut s = fake.state.lock().unwrap();
+        let i = s.issues.iter_mut().find(|i| i.number == t).unwrap();
+        i.labels.retain(|l| l != "bosun:state/planned");
+        i.labels.push("bosun:state/building".into());
+    }
+    write_plan(tmp.path(), &plan_without_m2());
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ids(&v["data"]["closed"]), ["M2/P"]);
+    assert_eq!(ids(&v["data"]["skipped"]), ["M2", "M2/T1"]);
+    assert_eq!(fake.issue_state(t).state, "open");
+    assert_eq!(fake.issue_state(epic).state, "open");
+    let w = v["data"]["warnings"].to_string();
+    assert!(
+        w.contains(&format!("M2/T1 #{t} is building; not closed")),
+        "{w}"
+    );
+    assert!(
+        w.contains(&format!("M2 #{epic} has active tasks; left open")),
+        "{w}"
+    );
+}
+
+#[test]
+fn a_task_with_a_live_lease_is_not_closed() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let t = find(&fake, "<!-- bosun:plan M1/T2 -->");
+    // Planned by label, but a live lease holds it.
+    fake.comment(
+        t,
+        &common::lease_note("session_other", "2026-10-23T11:00:00Z", "src/core/stop.rs"),
+    );
+    write_plan(
+        tmp.path(),
+        &PLAN.replace("- T2: Stop rules\n  touch: src/core/stop.rs\n", ""),
+    );
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ids(&v["data"]["skipped"]), ["M1/T2"]);
+    assert_eq!(fake.issue_state(t).state, "open");
+}
+
+#[test]
+fn a_re_added_item_reopens_its_epic_and_tasks() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    write_plan(tmp.path(), &plan_without_m2());
+    let (code, _) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0);
+    let epic = find(&fake, "<!-- bosun:plan M2 -->");
+    assert_eq!(fake.issue_state(epic).state, "closed");
+    let posts = |f: &FakeGithub| {
+        f.requests()
+            .iter()
+            .filter(|r| r.method == "POST" && r.path.ends_with("/issues"))
+            .count()
+    };
+    let before = posts(&fake);
+    write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ids(&v["data"]["reopened"]), ["M2", "M2/P", "M2/T1"]);
+    assert_eq!(posts(&fake), before);
+    assert_eq!(fake.issue_state(epic).state, "open");
+    let c = fake.comments_of(epic);
+    assert_eq!(c.last().unwrap().body, "Re-added by an amendment.");
+    let t = find(&fake, "<!-- bosun:plan M2/T1 -->");
+    assert_eq!(fake.issue_state(t).state, "open");
 }
 
 #[test]
