@@ -99,6 +99,8 @@ fn upstream(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
     let gh = LiveGithub::new(UPSTREAM.0, UPSTREAM.1)?;
     gh.ensure_label(LESSON_LABEL, "fbca04", "a failure the curator triages")?;
     gh.ensure_label("bosun:source/lesson", "ededed", "opened by lesson capture")?;
+    let first = a.text.lines().map(str::trim).find(|l| !l.is_empty());
+    let title: String = first.unwrap_or("").chars().take(120).collect();
     let why = a.why.as_deref().filter(|w| !w.is_empty());
     let body = format!(
         "{}\n\n{}Reported from {}/{} by {}.\n",
@@ -109,7 +111,7 @@ fn upstream(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
         app.ctx.session
     );
     let issue = gh.create_issue(
-        &format!("lesson: {}", a.text),
+        &format!("lesson: {}", title),
         &body,
         &[LESSON_LABEL, "bosun:source/lesson"],
     )?;
@@ -322,5 +324,9 @@ fn reopen_blocking(gh: &dyn Github, n: u64) -> Result<(), BosunError> {
         "a blocking lesson pauses waves",
     )?;
     gh.ensure_label(&blocking, "5319e7", "triage of a lesson issue")?;
-    gh.add_labels(n, &[&blocking, PROCESS_RED_LABEL])
+    gh.add_labels(n, &[&blocking, PROCESS_RED_LABEL])?;
+    for other in ["mechanizable", "advice"] {
+        gh.remove_label(n, &format!("{LESSON_LABEL}/{other}"))?;
+    }
+    Ok(())
 }

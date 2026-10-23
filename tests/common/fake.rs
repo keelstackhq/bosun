@@ -170,6 +170,17 @@ impl FakeGithub {
         i.state_reason = Some(reason.into());
     }
 
+    /// Put a label on an issue.
+    pub fn label(&self, number: u64, label: &str) {
+        let mut s = self.state.lock().unwrap();
+        let i = s
+            .issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .expect("issue");
+        i.labels.push(label.into());
+    }
+
     /// An entry in the issues list that is a pull request.
     pub fn pull_as_issue(&self, number: u64, title: &str) {
         self.issue(number, title, &[], "");

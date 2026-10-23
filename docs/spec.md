@@ -352,14 +352,15 @@ Prune:
 - At the cap, `bosun lesson add` refuses with exit 6. The curator must then mechanize a lesson,
   merge two lessons, or retire a lesson with no hits in 30 days.
 - A lesson that gets a hit after its mechanism merged reopens as blocking. A lesson is mechanized
-  when its issue is closed as `completed` and is not labelled `bosun:lesson/advice`. When
+  when its issue is labelled `bosun:lesson/mechanizable` and closed as `completed`. When
   `lesson capture` finds no open issue with the signature but a mechanized one, it reopens that
-  issue, adds `bosun:lesson/blocking` and `bosun:process-red`, and comments "The mechanism did not
+  issue, makes it `bosun:lesson/blocking` (the other triage labels go), adds `bosun:process-red`, and comments "The mechanism did not
   hold: seen again. Reopened as blocking" with the `lesson-seen` record; the output has
-  `reopened: true`. Issues closed as `not_planned` or `duplicate`, and advice lessons, are
-  ignored: a new lesson opens.
+  `reopened: true`. Issues closed as `not_planned` or `duplicate`, advice lessons and untriaged
+  lessons are ignored: a new lesson opens.
 - `bosun lesson add --upstream "<text>" [--why ...]` sends a lesson about bosun itself to
-  keelstackhq/bosun as an issue (`bosun:lesson`, `bosun:source/lesson`), not to the local store.
+  keelstackhq/bosun as an issue (`bosun:lesson`, `bosun:source/lesson`; title cut to 120
+  characters), not to the local store.
   It obeys the kill switch; data `{upstream: true, issue}`.
 - Metrics: `bosun progress --lessons` (open, mechanized, hits per week). data `lessons: {open,
   blocking, mechanized, advice, hits_last_7_days, hits_by_week: [{week_start, hits}]}` (4 weeks,

@@ -26,6 +26,7 @@ fn capture(fake: &FakeGithub, text: &str, issue: Option<&str>) -> Value {
 fn closed_lesson(reason: &str) -> (FakeGithub, u64) {
     let fake = FakeGithub::start();
     let n = capture(&fake, FAIL, None)["issue"].as_u64().unwrap();
+    fake.label(n, "bosun:lesson/mechanizable");
     fake.close_issue_as(n, "2026-10-20T09:00:00Z", reason);
     (fake, n)
 }
@@ -45,6 +46,7 @@ fn a_hit_on_a_completed_lesson_reopens_it_as_blocking() {
     }
     let c = fake.comments_of(n);
     assert_eq!(c.len(), 1);
+    assert!(!i.labels.contains(&"bosun:lesson/mechanizable".to_string()));
     assert!(c[0].body.starts_with(
         "The mechanism did not hold: seen again on #7. Reopened as blocking (spec §6)."
     ));
@@ -77,7 +79,11 @@ fn not_planned_and_advice_lessons_are_ignored() {
     fake.issue(
         60,
         "lesson: advice",
-        &["bosun:lesson", "bosun:lesson/advice"],
+        &[
+            "bosun:lesson",
+            "bosun:lesson/advice",
+            "bosun:lesson/mechanizable",
+        ],
         &body,
     );
     fake.close_issue_as(60, "2026-10-20T09:00:00Z", "completed");
@@ -139,7 +145,12 @@ fn progress_lessons_counts_open_blocking_mechanized_and_hits() {
         "",
     );
     fake.issue(2, "lesson: b", &["bosun:lesson"], "");
-    fake.issue(3, "lesson: c", &["bosun:lesson"], "");
+    fake.issue(
+        3,
+        "lesson: c",
+        &["bosun:lesson", "bosun:lesson/mechanizable"],
+        "",
+    );
     fake.close_issue_as(3, "2026-10-01T00:00:00Z", "completed");
     fake.issue(4, "lesson: d", &["bosun:lesson", "bosun:lesson/advice"], "");
     fake.close_issue_as(4, "2026-10-01T00:00:00Z", "completed");
@@ -171,4 +182,64 @@ fn progress_lessons_counts_open_blocking_mechanized_and_hits() {
     let counts: Vec<u64> = weeks.iter().map(|w| w["hits"].as_u64().unwrap()).collect();
     assert_eq!(counts, [0, 0, 1, 2]);
     assert_eq!(weeks[3]["week_start"], "2026-10-16T12:00:00Z");
+}
+
+#[test]
+fn an_untriaged_closed_lesson_is_not_mechanized() {
+    let fake = FakeGithub::start();
+    let n = capture(&fake, FAIL, None)["issue"].as_u64().unwrap();
+    fake.close_issue(n, "2026-10-20T09:00:00Z");
+    let d = capture(&fake, FAIL_AGAIN, None);
+    assert_eq!(d["created"], true);
+    assert_eq!(d["reopened"], false);
+    assert_eq!(fake.issue_state(n).state, "closed");
+}
+
+fn upstream_run(fake: &FakeGithub, text: &str) -> std::process::Output {
+    let tmp = tempfile::tempdir().unwrap();
+    bosun()
+        .arg("-C")
+        .arg(tmp.path())
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["lesson", "add", "--upstream", text])
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn upstream_while_halted_is_exit_4_and_files_nothing() {
+    let fake = FakeGithub::start();
+    fake.variable("BOSUN_HALT", "1");
+    let out = upstream_run(&fake, "bosun is slow");
+    assert_eq!(out.status.code(), Some(4));
+    assert!(
+        !fake
+            .requests()
+            .iter()
+            .any(|r| r.method == "POST" && r.path.starts_with("/repos/keelstackhq/bosun/"))
+    );
+}
+
+#[test]
+fn upstream_title_is_the_first_line_cut_to_120_characters() {
+    let fake = FakeGithub::start();
+    let text = format!("{}\nsecond line", "x".repeat(200));
+    let out = upstream_run(&fake, &text);
+    assert_eq!(out.status.code(), Some(0));
+    let n = one_object(&out.stdout)["data"]["issue"].as_u64().unwrap();
+    let i = fake.issue_state(n);
+    assert_eq!(i.title, format!("lesson: {}", "x".repeat(120)));
+    assert!(i.body.contains("second line"));
+}
+
+#[test]
+fn days_with_lessons_is_a_usage_error() {
+    let fake = FakeGithub::start();
+    let (code, _) = run(
+        &fake,
+        "s",
+        "2026-10-23T12:00:00Z",
+        &["progress", "--lessons", "--days", "3"],
+    );
+    assert_eq!(code, 2);
 }

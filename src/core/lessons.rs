@@ -126,11 +126,15 @@ pub fn matching<'a>(store: &'a Store, paths: &[String]) -> Vec<&'a Lesson> {
 /// Label of a lesson triaged as advice (spec §6).
 pub const ADVICE_LABEL: &str = "bosun:lesson/advice";
 
-/// A lesson issue is mechanized when it was closed as `completed` (its mechanism landed) and
-/// was not triaged as advice (spec §6).
+/// Label of a lesson triaged as mechanizable (spec §6).
+pub const MECHANIZABLE_LABEL: &str = "bosun:lesson/mechanizable";
+
+/// A lesson issue is mechanized when it was triaged as mechanizable and closed as `completed`
+/// (its mechanism landed). Advice and untriaged lessons never are (spec §6).
 pub fn is_mechanized(state: &str, state_reason: Option<&str>, labels: &[String]) -> bool {
     state == "closed"
         && state_reason == Some("completed")
+        && labels.iter().any(|l| l == MECHANIZABLE_LABEL)
         && !labels.iter().any(|l| l == ADVICE_LABEL)
 }
 
@@ -160,13 +164,15 @@ mod tests {
     #[test]
     fn mechanized_means_closed_completed_and_not_advice() {
         let none: Vec<String> = vec![];
-        assert!(is_mechanized("closed", Some("completed"), &none));
-        assert!(!is_mechanized("open", None, &none));
-        assert!(!is_mechanized("closed", Some("not_planned"), &none));
+        let mech = vec![MECHANIZABLE_LABEL.to_string()];
+        assert!(is_mechanized("closed", Some("completed"), &mech));
+        assert!(!is_mechanized("closed", Some("completed"), &none));
+        assert!(!is_mechanized("open", None, &mech));
+        assert!(!is_mechanized("closed", Some("not_planned"), &mech));
         assert!(!is_mechanized(
             "closed",
             Some("completed"),
-            &[ADVICE_LABEL.into()]
+            &[MECHANIZABLE_LABEL.into(), ADVICE_LABEL.into()]
         ));
     }
 

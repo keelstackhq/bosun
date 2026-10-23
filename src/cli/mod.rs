@@ -440,7 +440,7 @@ pub struct ProgressArgs {
     #[arg(long, default_value_t = 7)]
     pub days: u32,
     /// Show the lessons view instead: open, blocking, mechanized, hits per week (spec §6).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "days")]
     pub lessons: bool,
 }
 
