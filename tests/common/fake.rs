@@ -18,6 +18,8 @@ pub struct FakeIssue {
     pub title: String,
     pub body: String,
     pub state: String,
+    /// Left out of the issue list (GET by number still works): GitHub's list lags.
+    pub hidden: bool,
     pub labels: Vec<String>,
     pub is_pr: bool,
     pub user: String,
@@ -53,6 +55,8 @@ pub enum LogMode {
 /// Everything the fake knows.
 #[derive(Default)]
 pub struct State {
+    /// Issue numbers that GET answers with 410 (deleted).
+    pub gone: Vec<u64>,
     pub issues: Vec<FakeIssue>,
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
@@ -146,6 +150,7 @@ impl FakeGithub {
             title: title.into(),
             body: body.into(),
             state: "open".into(),
+            hidden: false,
             labels: labels.iter().map(|l| l.to_string()).collect(),
             is_pr: false,
             user: "octocat".into(),
@@ -170,6 +175,22 @@ impl FakeGithub {
         i.state = "closed".into();
         i.closed_at = Some(at.into());
         i.state_reason = Some(reason.into());
+    }
+
+    /// Make `number` a deleted issue: out of the list, GET answers 410.
+    pub fn gone(&self, number: u64) {
+        self.hide_from_list(number);
+        self.state.lock().unwrap().gone.push(number);
+    }
+
+    /// Leave an issue out of the list while GET by number still returns it.
+    pub fn hide_from_list(&self, number: u64) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .hidden = true;
     }
 
     /// An entry in the issues list that is a pull request.
@@ -205,6 +226,13 @@ impl FakeGithub {
         if let Some(i) = s.issues.iter_mut().find(|i| i.number == closes_issue) {
             i.state = "closed".into();
         }
+    }
+
+    /// Mark a pull request merged, with the sha of its merge commit.
+    pub fn pull_merged(&self, number: u64, merge_commit_sha: &str) {
+        self.pull_set(number, "merged", json!(true));
+        self.pull_set(number, "state", json!("closed"));
+        self.pull_set(number, "merge_commit_sha", json!(merge_commit_sha));
     }
 
     pub fn pull_file(
@@ -631,7 +659,8 @@ fn route(
                 .issues
                 .iter()
                 .filter(|i| {
-                    (state == "all" || i.state == state)
+                    !i.hidden
+                        && (state == "all" || i.state == state)
                         && want.iter().all(|w| i.labels.iter().any(|l| l == w))
                 })
                 .map(issue_json)
@@ -653,6 +682,7 @@ fn route(
                 title: body["title"].as_str().unwrap_or("").into(),
                 body: body["body"].as_str().unwrap_or("").into(),
                 state: "open".into(),
+                hidden: false,
                 labels,
                 is_pr: false,
                 user: "octocat".into(),
@@ -663,6 +693,7 @@ fn route(
             s.issues.push(issue);
             (201, v, vec![])
         }
+        ("GET", ["issues", n]) if n.parse().is_ok_and(|n| s.gone.contains(&n)) => msg(410, "Gone"),
         ("GET", ["issues", n]) => find(s, n)
             .map(|p| ok(issue_json(&s.issues[p])))
             .unwrap_or_else(|| msg(404, "Not Found")),
@@ -687,11 +718,25 @@ fn route(
                         .to_string()
                 });
             }
+            if let Some(r) = body["state_reason"].as_str() {
+                i.state_reason = Some(r.into());
+            }
             ok(issue_json(i))
         }
         ("POST", ["issues", n, "labels"]) => {
             let Some(p) = find(s, n) else {
-                return msg(404, "Not Found");
+                // A pull request is an issue on GitHub: label it in the pulls list.
+                let Some(q) = pull_pos(s, n) else {
+                    return msg(404, "Not Found");
+                };
+                for l in body["labels"].as_array().into_iter().flatten() {
+                    let want = l.as_str().unwrap_or("");
+                    let list = s.pulls[q]["labels"].as_array_mut().unwrap();
+                    if !list.iter().any(|x| x["name"] == want) {
+                        list.push(json!({"name": want}));
+                    }
+                }
+                return ok(s.pulls[q]["labels"].clone());
             };
             for l in body["labels"]
                 .as_array()
