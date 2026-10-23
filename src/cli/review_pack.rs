@@ -78,6 +78,6 @@ pub(crate) fn build(gh: &dyn Github, n: u64) -> Result<Value, BosunError> {
             "deletions": f.deletions, "patch": f.patch})).collect::<Vec<_>>(),
         "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
-        "instructions": INSTRUCTIONS,
+        "instructions": INSTRUCTIONS, "changed_files": pull.changed_files,
     }))
 }

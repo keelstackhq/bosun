@@ -53,7 +53,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let head_sha = pack["head_sha"].as_str().unwrap_or_default().to_string();
 
     // Fail closed: a diff the model cannot see is never approved.
-    let changed = gh.get_pull(n)?.map_or(0, |p| p.changed_files);
+    let changed = pack["changed_files"].as_u64().unwrap_or(0);
     if let Some(evidence) = unseen(&pack, changed) {
         let short: String = evidence.chars().take(MAX_REASON).collect();
         return Err(refuse(
@@ -61,6 +61,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             &head_sha,
             format!("unreviewable diff: {short}; review in a session (mode a)"),
             format!("the diff of PR #{n} cannot be seen in full: {evidence}"),
+            "review it in a session (`bosun review-pack`, then `bosun verdict post`)",
         )?);
     }
     let not_shown: Vec<Value> = pack["files"]
@@ -80,6 +81,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     if let Some(o) = pack.as_object_mut() {
         o.remove("instructions");
         o.remove("review_md");
+        o.remove("changed_files");
         o.insert("not_shown_binary".into(), Value::Array(not_shown));
     }
     let mut system = format!(
@@ -104,6 +106,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             &head_sha,
             format!("too large for CI review: {size} bytes > {cap}; review in a session (mode a)"),
             format!("the review of PR #{n} is too large for CI review: {size} bytes > {cap}"),
+            "review it in a session (`bosun review-pack`, then `bosun verdict post`), or raise review.max_diff_bytes in .bosun/bosun.toml",
         )?);
     }
 
@@ -222,12 +225,10 @@ fn refuse(
     head_sha: &str,
     description: String,
     message: String,
+    fix: &str,
 ) -> Result<BosunError, BosunError> {
     gh.create_status(head_sha, CONTEXT, "failure", &description, None)?;
-    Ok(BosunError::error(
-        message,
-        "review it in a session (`bosun review-pack`, then `bosun verdict post`), or raise review.max_diff_bytes in .bosun/bosun.toml",
-    ))
+    Ok(BosunError::error(message, fix))
 }
 
 /// The first `{` to the last `}` of the text, as a verdict for this PR and head.
@@ -252,6 +253,10 @@ fn flat(s: &str, max: usize) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .replace('`', "'")
+        // Nothing a verdict workflow or a command parser would act on survives.
+        .replace("<!--", "<! --")
+        .replace("-->", "-- >")
+        .replace("/bosun", "/ bosun")
         .chars()
         .take(max)
         .collect()
