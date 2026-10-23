@@ -165,4 +165,39 @@ test("commandName skips the value of the global -C <DIR> option", () => {
   assert.equal(launcher.commandName(["-C=/repo", "status"]), "status");
   assert.equal(launcher.commandName(["-C/repo", "wave", "plan", "3"]), "wave plan");
   assert.equal(launcher.commandName(["-v", "-C", "/repo"]), "");
+  assert.equal(launcher.commandName(["-vC", "/repo", "claim", "1"]), "claim");
+  assert.equal(launcher.commandName(["--", "claim"]), "claim");
+});
+
+test("the groups are the CLI's subcommand groups", () => {
+  const cli = fs.readFileSync(path.join(__dirname, "..", "..", "..", "src", "cli", "mod.rs"), "utf8");
+  const groups = [...cli.matchAll(/^\s+([A-Z][a-z]+)\((\1)Cmd\),?$/gm)]
+    .map((m) => m[1].toLowerCase())
+    .sort();
+  assert.ok(groups.length > 0, "no `Name(NameCmd)` variants found in src/cli/mod.rs");
+  assert.deepEqual([...launcher.GROUPS].sort(), groups);
+});
+
+test("a binary that cannot be spawned gives an error envelope", (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX paths");
+    return;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bosun-bin-"));
+  const pkg = path.join(dir, "node_modules", launcher.packageFor(process.platform, process.arch));
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+  // No bin/bosun: spawning it fails with ENOENT.
+  const r = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `process.exitCode = require(${JSON.stringify(LAUNCHER)}).run(process.argv.slice(1), ` +
+        `(id) => require.resolve(id, { paths: [${JSON.stringify(dir)}] }));`,
+      "status",
+    ],
+    { encoding: "utf8" },
+  );
+  const env = assertEnvelope(r, "status");
+  assert.match(env.error.message, /cannot run/);
 });

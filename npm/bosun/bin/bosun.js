@@ -29,16 +29,25 @@ function binaryPath(platform, arch, resolve = require.resolve) {
   return path.join(dir, "bin", platform === "win32" ? "bosun.exe" : "bosun");
 }
 
-/** Commands with a subcommand; their envelope names both words ("verdict post"). */
+/**
+ * Commands with a subcommand; their envelope names both words ("verdict post"). The same list
+ * as the `Name(NameCmd)` variants in src/cli/mod.rs; the launcher tests check that.
+ */
 const GROUPS = new Set(["wave", "verdict", "lesson", "hook", "budget"]);
 
 /** The envelope's `command` for `args`, as bosun names it; "" when there is none. */
 function commandName(args) {
   const words = [];
   for (let i = 0; i < args.length; i++) {
-    // `-C <DIR>` is bosun's one global option that takes a value (also `-C=DIR`, `-CDIR`).
-    if (args[i] === "-C") i++;
-    else if (!args[i].startsWith("-")) words.push(args[i]);
+    const a = args[i];
+    if (a === "--") {
+      words.push(...args.slice(i + 1));
+      break;
+    }
+    // `-C <DIR>` is bosun's one option that takes a value. A short-flag bundle that ends in C
+    // (`-C`, `-vC`) takes the next argument; `-C=DIR` and `-CDIR` carry it.
+    if (/^-[a-zA-Z]*C$/.test(a)) i++;
+    else if (!a.startsWith("-")) words.push(a);
   }
   if (words.length === 0) return "";
   return GROUPS.has(words[0]) && words.length > 1 ? `${words[0]} ${words[1]}` : words[0];
@@ -106,7 +115,7 @@ function run(args, resolve = require.resolve) {
   return result.status ?? 1;
 }
 
-module.exports = { PLATFORMS, packageFor, binaryPath, commandName, run };
+module.exports = { PLATFORMS, GROUPS, packageFor, binaryPath, commandName, run };
 
 if (require.main === module) {
   process.exitCode = run(process.argv.slice(2));
