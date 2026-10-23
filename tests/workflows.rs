@@ -58,3 +58,22 @@ fn ci_ok_needs_every_job() {
         );
     }
 }
+
+#[test]
+fn risk_runs_on_approval_comments_without_checking_out_the_pr() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/risk.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    assert!(
+        yaml.contains("  issue_comment:\n    types: [created]"),
+        "{yaml}"
+    );
+    assert!(yaml.contains("contains(github.event.comment.body, '/bosun approve')"));
+    assert!(yaml.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"));
+    assert!(
+        !yaml.contains("head.sha") && !yaml.contains("head.ref"),
+        "never the PR's code"
+    );
+    assert!(
+        yaml.contains("PR: ${{ github.event.pull_request.number || github.event.issue.number }}")
+    );
+}

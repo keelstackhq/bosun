@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::cache;
-use crate::app::{App, main_red};
+use crate::app::{App, halt_reason, main_red};
 use crate::registry::{self, JoinSpec};
 
 fn output(text: &str) -> String {
@@ -46,16 +46,16 @@ fn context(dir: Option<&Path>) -> Result<String, String> {
     } else {
         mine.join(", ")
     };
-    let halt = matches!(app.gh.variable("BOSUN_HALT"), Ok(Some(v)) if v.trim() == "1");
+    let halt = matches!(halt_reason(app.gh.as_ref()), Ok(Some(_)));
     let red = match main_red(app.gh.as_ref()).ok().flatten() {
         Some(n) => format!("Main is red: open main-red issue #{n}."),
         None => "No open main-red issue.".to_string(),
     };
     Ok(format!(
-        "bosun: you are session {} (origin {}). Own live leases: {own}. BOSUN_HALT: {}. {red} \
+        "bosun: you are session {} (origin {}). Own live leases: {own}. Kill switch: {}. {red} \
          Run `bosun status` for the full picture.",
         member.session,
         member.origin,
-        if halt { "1 (all work stopped)" } else { "off" },
+        if halt { "on (all work stopped)" } else { "off" },
     ))
 }

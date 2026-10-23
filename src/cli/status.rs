@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, active_issues, main_red};
+use crate::app::{App, active_issues, halt_reason, main_red};
 use crate::core::lease::{live_leases, members};
 use crate::core::records::spend_total;
 use crate::core::state::State;
@@ -22,7 +22,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let now = ctx.now;
 
-    let halted = matches!(gh.variable("BOSUN_HALT"), Ok(Some(v)) if v.trim() == "1");
+    let halted = matches!(halt_reason(gh), Ok(Some(_)));
     let process_red = gh
         .list_issues(&[PROCESS_RED_LABEL], IssueState::Open)?
         .first()

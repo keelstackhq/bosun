@@ -93,6 +93,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-22 · Task 7b · S8: `src/hooks/{mod,pre_tool_use,cache}.rs`, `bosun hook pre-tool-use` (hook protocol on stdout, no envelope; label-lock, merge-lock, edit-lock from a `<git common dir>/bosun/leases.json` cache, fails open) · `cargo nextest run --locked` 160/160
 - 2026-10-22 · Task 7c · S8 done: `src/hooks/session_start.rs`, `bosun hook session-start` (registry join, cache refresh, one-paragraph context: session, origin, own leases, BOSUN_HALT, main-red; a context that says how to fix GitHub access when unreachable) · an Edit on another session's claimed path is denied; `cargo nextest run --locked` 162/162
 - 2026-10-22 · Wrap-up · seed status, Blocked list with exact owner steps, all plan boxes ticked · review findings #20-#32 closed by fixes A-E
+- 2026-10-23 · Fix F · owner approval and kill switch: risk-check accepts an owner's unedited PR comment `/bosun approve <head sha>` and the `risk` workflow runs on it (`issue_comment`, from the default branch); the kill switch is an owner's open `bosun:halt` issue (read errors halt), `BOSUN_HALT` stays a second source with 404/403 as no signal; doctor step 5 checks the label · spec §8, README, CHANGELOG
 
 ## Blocked
 
@@ -103,10 +104,9 @@ Human-only items, in order. Each has the exact action.
    sets auto-merge, delete-branch-on-merge and the required checks `ci-ok`, `risk-check`,
    `review-verdict` and `main-open` from `hoist.toml` (no merge queue yet, see Status). From
    then on every PR needs a `review-verdict` status: post it with `bosun verdict post`.
-   hoist 0.2 has no repo-variable resource (checked in its source on 2026-10-22), so set the
-   kill switch by hand: `gh variable set BOSUN_HALT --body 0 --repo keelstackhq/bosun`. The
-   token the sessions use needs "Variables: read": bosun refuses work (exit 4) when it cannot
-   read `BOSUN_HALT`.
+   Create the kill-switch label: `gh label create bosun:halt --repo keelstackhq/bosun --color
+   B60205` (an owner's open issue with it halts bosun). `BOSUN_HALT` is optional; a token that
+   cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
    settings → setup script: paste `docs/setup-script.sh`.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
