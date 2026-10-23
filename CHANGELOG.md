@@ -33,7 +33,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - risk-check flags a file with changed lines and no patch whatever its name.
 - `bosun notify`: owner questions, halt, main-red, budget-halt and thread results as `slack_post` items in `next`, posted by Claude Tag or the notify Routine and acknowledged with `--ack`, so each post is made once; it refuses a channel that is shared or has guests (UC-M6-1, UC-M6-4). bosun holds no Slack token.
 - `bosun answer`: an owner answers an ask from Slack; only owner Slack IDs count and the answer never changes the task state (UC-M6-2).
-- `bosun spawn --slack-thread`: a Slack thread spawns a child through intake, with the same checks and budget as any spawn; the result is posted back into the thread (UC-M6-3, UC-M6-4).
+- `bosun spawn --slack-thread`: a Slack thread spawns a child (a new request goes through intake), with the same checks and budget as any spawn; the result is posted back into the thread (UC-M6-3, UC-M6-4).
 
 ## v0.1.0
 
