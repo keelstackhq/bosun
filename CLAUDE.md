@@ -66,3 +66,14 @@ Run the fast checks before every commit.
 
 - `TMPDIR` may be `/`; set it to a writable dir before `cargo test`.
 - The package is `keel-bosun`; the binary and the lib are `bosun`.
+
+<!-- splice:decisions:begin — managed by `splice update --channel decisions`; edit the source -->
+
+## Org decisions
+
+Cross-repo decisions from keelstackhq/decisions; follow them. To change one, open a PR there.
+`splice update --channel decisions` refreshes this snapshot; commit it alone as `chore: sync org decisions`.
+
+@docs/agents/org-decisions.md
+
+<!-- splice:decisions:end -->
