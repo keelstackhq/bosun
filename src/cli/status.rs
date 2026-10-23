@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, Result, active_issues, halt_reason, main_red};
+use crate::app::{App, Result, active_issues, halt_reason, limits_from_default, main_red};
 use crate::core::lease::{live_leases, members};
 use crate::core::records::spend_total;
 use crate::core::state::State;
@@ -64,7 +64,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         }
     }
 
-    let daily = ctx.limits.budget.daily_usd;
+    let daily = limits_from_default(gh, ctx)?.budget.daily_usd;
     let pct = if daily > 0.0 {
         spend / daily * 100.0
     } else {
@@ -83,6 +83,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         "leases": leases,
         "issues_by_state": by_state,
         "spend_today_usd": spend,
+        "daily_usd": daily,
         "budget_pct": pct,
         "integrity": if reduced.is_some() { "reduced" } else { "full" },
     });

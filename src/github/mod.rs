@@ -56,10 +56,21 @@ pub struct IssuePatch {
 /// Compare pages read at most (3000 files, GitHub's own cap).
 const MAX_COMPARE_PAGES: usize = 30;
 
+/// What `GET /issues/N` says about one number.
+pub enum Probe {
+    Issue(Issue),
+    /// 404: no such number (the numbers end here).
+    Missing,
+    /// Deleted (410) or transferred (301): the number is used but holds nothing for this repo.
+    Gone,
+}
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
     fn get_issue(&self, number: u64) -> Result<Option<Issue>>;
+    /// Like `get_issue`, but a deleted or transferred number is `Gone`, not an error.
+    fn probe_issue(&self, number: u64) -> Result<Probe>;
     fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
     fn update_issue(&self, number: u64, patch: IssuePatch) -> Result<Issue>;
     fn add_labels(&self, number: u64, labels: &[&str]) -> Result<()>;
@@ -114,6 +125,24 @@ pub trait Github {
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
+    /// Auto-merge through the Claude Code cloud route; `method` is `merge`, `squash` or `rebase`.
+    fn enable_auto_merge_rest(&self, number: u64, method: &str) -> Result<()>;
+}
+
+/// What the Claude Code cloud proxy says when it refuses GraphQL.
+pub const CCR_GRAPHQL_REFUSAL: &str = "GraphQL is not available from Claude Code sessions";
+
+/// Turn on squash auto-merge: GraphQL first, the CCR route when the proxy refuses GraphQL.
+/// Returns the route used: `graphql` or `ccr`.
+pub fn enable_auto_merge_any(gh: &dyn Github, pull: &Pull) -> Result<&'static str> {
+    match gh.enable_auto_merge(&pull.node_id, "SQUASH") {
+        Ok(()) => Ok("graphql"),
+        Err(e) if e.message.contains(" 403 ") && e.message.contains(CCR_GRAPHQL_REFUSAL) => {
+            gh.enable_auto_merge_rest(pull.number, "squash")?;
+            Ok("ccr")
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// A repository Actions variable as the token sees it.
@@ -226,6 +255,17 @@ impl Github for LiveGithub {
         {
             Some(v) => Ok(Some(self.parse("issue", v)?)),
             None => Ok(None),
+        }
+    }
+
+    fn probe_issue(&self, number: u64) -> Result<Probe> {
+        match self
+            .http
+            .get_json_or_gone(&self.path(&format!("/issues/{number}")))?
+        {
+            Ok(Some(v)) => Ok(Probe::Issue(self.parse("issue", v)?)),
+            Ok(None) => Ok(Probe::Missing),
+            Err(()) => Ok(Probe::Gone),
         }
     }
 
@@ -489,6 +529,19 @@ impl Github for LiveGithub {
             )),
             None => Ok(()),
         }
+    }
+
+    fn enable_auto_merge_rest(&self, number: u64, method: &str) -> Result<()> {
+        if !["merge", "squash", "rebase"].contains(&method) {
+            return Err(BosunError::error(
+                format!("merge method {method:?} is not one GitHub accepts"),
+                "use merge, squash or rebase",
+            ));
+        }
+        let path = self.path(&format!("/pulls/{number}/ccr/auto_merge"));
+        self.http
+            .send_json("PUT", &path, &json!({"merge_method": method}))?;
+        Ok(())
     }
 
     fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>> {
