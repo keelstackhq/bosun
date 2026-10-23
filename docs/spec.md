@@ -501,6 +501,11 @@ Main-health:
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
 - The default fix is `bosun revert <pr>` as a kind/mainfix PR. A forward fix is allowed only if it
   is smaller.
+- `bosun revert <pr>` needs a merged PR (else exit 3). It reverts the merge commit (`-m 1` for a
+  merge) on the new branch `bosun/revert-<pr>` from the default branch, pushes that branch (never
+  the default branch, never with force), opens a PR "Revert #<pr>: <title>" with the body marker
+  `<!-- bosun:revert <pr> -->` and the main-red issue, and labels it `bosun:kind/mainfix`. Main-red
+  does not block it. A revert conflict is exit 1: revert by hand or make a forward fix.
 - Each main-red opens a lesson.
 
 Cost:

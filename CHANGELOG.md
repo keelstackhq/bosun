@@ -2,6 +2,10 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+- `bosun revert <pr>` opens a kind/mainfix PR that reverts a merged PR (branch `bosun/revert-<pr>`).
+
 ## v0.1.0
 
 The first release: the seed (S1-S10, `docs/superpowers/plans/2026-10-22-bosun-seed.md`).

@@ -172,6 +172,13 @@ impl FakeGithub {
         p.unwrap_or_else(|| panic!("no pull {number}"))[key] = value;
     }
 
+    /// Mark a pull request merged, with the sha of its merge commit.
+    pub fn pull_merged(&self, number: u64, merge_commit_sha: &str) {
+        self.pull_set(number, "merged", json!(true));
+        self.pull_set(number, "state", json!("closed"));
+        self.pull_set(number, "merge_commit_sha", json!(merge_commit_sha));
+    }
+
     pub fn pull_file(
         &self,
         number: u64,
@@ -639,7 +646,18 @@ fn route(
         }
         ("POST", ["issues", n, "labels"]) => {
             let Some(p) = find(s, n) else {
-                return msg(404, "Not Found");
+                // A pull request is an issue on GitHub: label it in the pulls list.
+                let Some(q) = pull_pos(s, n) else {
+                    return msg(404, "Not Found");
+                };
+                for l in body["labels"].as_array().into_iter().flatten() {
+                    let want = l.as_str().unwrap_or("");
+                    let list = s.pulls[q]["labels"].as_array_mut().unwrap();
+                    if !list.iter().any(|x| x["name"] == want) {
+                        list.push(json!({"name": want}));
+                    }
+                }
+                return ok(s.pulls[q]["labels"].clone());
             };
             for l in body["labels"]
                 .as_array()

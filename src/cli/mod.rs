@@ -15,6 +15,7 @@ pub mod msg;
 pub mod pr;
 pub mod reap;
 pub mod release;
+pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -101,10 +102,12 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// Open a kind/mainfix PR that reverts a merged PR.
+    Revert(RevertArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 22] = [
+pub const COMMANDS: [&str; 23] = [
     "join",
     "claim",
     "heartbeat",
@@ -127,6 +130,7 @@ pub const COMMANDS: [&str; 22] = [
     "hook",
     "doctor",
     "budget",
+    "revert",
 ];
 
 impl Command {
@@ -159,6 +163,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Revert(_) => "revert",
         }
     }
 }
@@ -373,4 +378,10 @@ pub struct BudgetRecordArgs {
     pub turns: Option<u64>,
     #[arg(long)]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RevertArgs {
+    /// The merged PR to revert.
+    pub pr: u64,
 }
