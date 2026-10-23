@@ -3,7 +3,7 @@ mod common;
 use common::{TOKEN_CANARY, bosun, one_object};
 
 /// Minimal valid arguments for every command (S1 Done when).
-const CALLS: [&[&str]; 28] = [
+const CALLS: &[&[&str]] = &[
     &["join"],
     &["claim", "4"],
     &["heartbeat"],
@@ -57,7 +57,7 @@ fn every_command_prints_one_envelope() {
         }
         let out = bosun()
             .current_dir(empty.path())
-            .args(call)
+            .args(*call)
             .write_stdin("")
             .output()
             .unwrap();
@@ -140,4 +140,13 @@ fn no_command_is_usage_with_envelope() {
         let v = one_object(&out.stdout);
         assert_eq!(v["error"]["kind"], "usage");
     }
+}
+
+#[test]
+fn command_names_are_unique() {
+    let mut names: Vec<&str> = bosun::cli::COMMANDS.to_vec();
+    names.sort_unstable();
+    let before = names.len();
+    names.dedup();
+    assert_eq!(names.len(), before, "a command is listed twice");
 }
