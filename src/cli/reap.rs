@@ -4,10 +4,12 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, active_issues, end_lease, set_state};
+use crate::app::{App, active_issues, default_branch, end_lease, set_state, sync_merged};
 use crate::core::lease::{leases_of, members};
+use crate::core::meta::linked_issues;
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
+use crate::github::IssueState;
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
 
@@ -33,6 +35,35 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         }
     }
 
+    // Auto-merge closes the issue, so look at queued tasks in any issue state.
+    let mut merged = Vec::new();
+    let queued = gh.list_issues(&[&State::Queued.label()], IssueState::All)?;
+    if !queued.is_empty() {
+        let pulls = gh.list_pulls(None, IssueState::All)?;
+        let base = default_branch(gh)?;
+        for issue in queued {
+            let linked: Vec<_> = pulls
+                .iter()
+                .filter(|p| linked_issues(&p.body).contains(&issue.number))
+                .collect();
+            // A PR still open means the work is not done (an old merged PR may link the issue).
+            if linked.iter().any(|p| p.state == "open") {
+                continue;
+            }
+            for p in linked
+                .iter()
+                .filter(|p| p.state == "closed" && p.base_ref == base)
+            {
+                // Lists do not say `merged`; read the closed PR.
+                if gh.get_pull(p.number)?.is_some_and(|f| f.merged) {
+                    sync_merged(gh, issue.number, &issue, None)?;
+                    merged.push(issue.number);
+                    break;
+                }
+            }
+        }
+    }
+
     let mut left = Vec::new();
     if let Some((number, notes)) = registry::load(gh)? {
         for m in members(&notes).into_iter().filter(|m| m.expires <= now) {
@@ -44,5 +75,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             left.push(m.session);
         }
     }
-    Ok(Outcome::data(json!({"reaped": reaped, "left": left})))
+    Ok(Outcome::data(
+        json!({"reaped": reaped, "left": left, "merged": merged}),
+    ))
 }
