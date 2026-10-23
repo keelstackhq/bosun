@@ -6,7 +6,7 @@ pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{CheckRun, Comment, Issue, Job, Label, PrFile, Pull, Review, Status};
+pub use types::{CheckRun, Comment, Compare, Issue, Job, Label, PrFile, Pull, Review, Status};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -97,6 +97,8 @@ pub trait Github {
     fn pull_files(&self, number: u64) -> Result<Vec<PrFile>>;
     /// The files changed between two commits (`base...head`).
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>>;
+    /// Like `compare_files`, with the comparison's `status` (`ahead` when base is an ancestor).
+    fn compare(&self, base: &str, head: &str) -> Result<Compare>;
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
@@ -396,6 +398,11 @@ impl Github for LiveGithub {
     }
 
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>> {
+        Ok(self.compare(base, head)?.files)
+    }
+
+    fn compare(&self, base: &str, head: &str) -> Result<Compare> {
+        let mut status = String::new();
         // The endpoint pages its `files` array; read pages until one is short.
         let mut all: Vec<Value> = Vec::new();
         for page in 1..=MAX_COMPARE_PAGES {
@@ -410,6 +417,9 @@ impl Github for LiveGithub {
                     "check that both commits exist; a force-push may have removed the old one",
                 ));
             };
+            if page == 1 {
+                status = v["status"].as_str().unwrap_or_default().to_string();
+            }
             let files = v["files"].as_array().cloned().unwrap_or_default();
             let short = files.len() < 100;
             all.extend(files);
@@ -417,7 +427,10 @@ impl Github for LiveGithub {
                 break;
             }
         }
-        self.parse_all("compared file", all)
+        Ok(Compare {
+            status,
+            files: self.parse_all("compared file", all)?,
+        })
     }
 
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {

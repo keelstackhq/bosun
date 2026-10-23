@@ -58,6 +58,7 @@ fn uc_m8_2() {
     let v = pack(&fake);
     assert_eq!(v["data"]["since_sha"], "A");
     assert_eq!(names(&v), ["b.rs"]);
+    assert_eq!(v["data"].get("delta_fallback"), Some(&Value::Null), "{v}");
 }
 
 #[test]
@@ -71,7 +72,7 @@ fn since_is_the_newest_older_head_that_was_approved() {
     let v = pack(&fake);
     assert_eq!(v["data"]["since_sha"], "A", "{v}");
     assert_eq!(names(&v), ["b.rs"]);
-    assert!(v["data"].get("delta_fallback").is_none());
+    assert!(v["data"]["delta_fallback"].is_null());
 }
 
 #[test]
@@ -95,5 +96,68 @@ fn a_failed_compare_falls_back_to_a_full_review() {
     assert!(v["data"]["since_sha"].is_null(), "{v}");
     assert_eq!(names(&v), ["a.rs", "b.rs"]);
     let why = v["data"]["delta_fallback"].as_str().unwrap();
-    assert!(!why.is_empty() && why.len() < 120, "{why}");
+    assert!(
+        why.contains("A...B") && why.contains("cannot compare"),
+        "{why}"
+    );
+}
+
+fn assert_full_with_reason(v: &Value, sha: &str, status: &str) {
+    assert!(v["data"]["since_sha"].is_null(), "{v}");
+    assert_eq!(names(v), ["a.rs", "b.rs"]);
+    let why = v["data"]["delta_fallback"].as_str().unwrap();
+    assert!(
+        why.contains(sha) && why.contains("not an ancestor"),
+        "{why}"
+    );
+    assert!(why.contains(status), "{why}");
+}
+
+#[test]
+fn a_since_that_is_behind_the_head_gives_a_full_review() {
+    // head D approved, then a force-push back to D~1: D...D~1 is empty and `behind`
+    let fake = setup();
+    verdict_at(&fake, "D", "success");
+    set_head(&fake, "D1");
+    fake.compare_file("D", "D1", "a.rs", "@@ misleading");
+    fake.compare_status("D", "D1", "behind");
+    assert_full_with_reason(&pack(&fake), "D", "behind");
+}
+
+#[test]
+fn a_diverged_since_gives_a_full_review() {
+    let fake = setup();
+    verdict_at(&fake, "A", "success");
+    set_head(&fake, "B");
+    fake.compare_file("A", "B", "b.rs", "@@ misleading");
+    fake.compare_status("A", "B", "diverged");
+    assert_full_with_reason(&pack(&fake), "A", "diverged");
+}
+
+#[test]
+fn each_older_sha_is_asked_once_and_the_scan_is_capped() {
+    let fake = setup();
+    for _ in 0..25 {
+        verdict_at(&fake, "Z", "failure");
+    }
+    let v = pack(&fake);
+    assert!(v["data"]["since_sha"].is_null());
+    assert!(v["data"]["delta_fallback"].is_null(), "{v}");
+    let asked = |sha: &str| {
+        fake.requests()
+            .iter()
+            .filter(|r| r.path.contains(&format!("/commits/{sha}/")))
+            .count()
+    };
+    assert_eq!(asked("Z"), 1);
+    for i in 0..25 {
+        verdict_at(&fake, &format!("S{i:02}"), "failure");
+    }
+    let v = pack(&fake);
+    assert_eq!(
+        v["data"]["delta_fallback"], "too many verdict records",
+        "{v}"
+    );
+    assert_eq!(names(&v), ["a.rs", "b.rs"]);
+    assert_eq!(asked("S04"), 0, "the scan stopped at the cap");
 }

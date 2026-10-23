@@ -1,5 +1,6 @@
 //! `bosun review-pack <pr>`: everything a reviewer needs, as one JSON object (spec §7).
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -11,6 +12,9 @@ use crate::core::records::{Record, parse_record};
 use crate::core::review::use_cases;
 use crate::core::verdict::closes_issue;
 use crate::output::{BosunError, CmdResult, Outcome};
+
+/// Distinct older heads the delta scan asks about before it gives up.
+const MAX_SCAN: usize = 20;
 
 const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
 \"verdict\":\"approve\"|\"request-changes\",\"confidence\":0..1,\"findings\":[{\"severity\":\
@@ -29,27 +33,50 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     })?;
     // `since` is the newest older head with a verdict record and a successful `review-verdict`
     // status: the record is a comment anyone with write access can post, the status is not.
-    // Records on the current head and on heads without a success status are skipped.
+    // Records on the current head and on heads without a success status are skipped. Each sha
+    // is asked once, and at most MAX_SCAN of them.
     let mut since = None;
+    let mut delta_fallback = None;
+    let mut seen: HashSet<String> = HashSet::new();
     for c in notes(gh, n)?.iter().rev() {
         if let Some(Record::Verdict { head_sha, .. }) = parse_record(&c.body)
             && head_sha != pull.head_sha
-            && gh
+            && seen.insert(head_sha.clone())
+        {
+            if seen.len() > MAX_SCAN {
+                delta_fallback = Some("too many verdict records".to_string());
+                break;
+            }
+            if gh
                 .statuses(&head_sha)?
                 .iter()
                 .any(|s| s.context == "review-verdict" && s.state == "success")
-        {
-            since = Some(head_sha);
-            break;
+            {
+                since = Some(head_sha);
+                break;
+            }
         }
     }
-    // The old sha can be gone after a force-push: then the review is full, not an error.
-    let mut delta_fallback = None;
+    // A delta needs since to be an ancestor of the head (`ahead`: the three-dot compare of a
+    // behind or diverged sha is empty or misleading). The old sha can also be gone after a
+    // force-push. Any problem means a full review, the safe direction.
     let files = match &since {
-        Some(s) => match gh.compare_files(s, &pull.head_sha) {
-            Ok(f) => f,
-            Err(_) => {
-                delta_fallback = Some(format!("cannot compare {s}...{}", pull.head_sha));
+        Some(s) => match gh.compare(s, &pull.head_sha) {
+            Ok(c) if c.status == "ahead" => c.files,
+            other => {
+                let why = match other {
+                    Ok(c) => format!(
+                        "{s} is not an ancestor of the head ({})",
+                        if c.status.is_empty() {
+                            "unknown"
+                        } else {
+                            &c.status
+                        }
+                    ),
+                    Err(e) => format!("cannot compare {s}...{}: {}", pull.head_sha, e.message),
+                };
+                eprintln!("bosun: full review instead of a delta: {why}");
+                delta_fallback = Some(why);
                 since = None;
                 gh.pull_files(n)?
             }
@@ -74,17 +101,14 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
-    let mut data = json!({
+    let data = json!({
         "pr": n, "title": pull.title, "head_sha": pull.head_sha, "base_sha": pull.base_sha,
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,
             "deletions": f.deletions, "patch": f.patch})).collect::<Vec<_>>(),
         "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
-        "instructions": INSTRUCTIONS,
+        "instructions": INSTRUCTIONS, "delta_fallback": delta_fallback,
     });
-    if let Some(why) = delta_fallback {
-        data["delta_fallback"] = json!(why);
-    }
     Ok(Outcome::data(data))
 }
