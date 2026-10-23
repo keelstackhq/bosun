@@ -489,7 +489,7 @@ task and a lesson. A test is never skipped to get green.
 
 Rule evaluation:
 - risk-check unions the capabilities of every issue the PR body links (`Closes|Fixes|Resolves #N`, any case, and `<!-- bosun:task-pr N -->`), because the agent writes the body.
-- risk-check adds the built-in match `R-unseen` ("bosun could not see the whole diff", so high) when GitHub lists fewer files than the PR changed, or lists a changed text file without a patch.
+- risk-check adds the built-in match `R-unseen` ("bosun could not see the whole diff", so high) when GitHub lists fewer files than the PR changed, or lists a file with changed lines but without a patch (GitHub reports 0 changed lines for a binary file; the file name never exempts a file).
 - risk-check evaluates the rules from the base branch, never from the PR head. A PR cannot change
   the rules that judge it.
 - A rule only escalates; nothing de-escalates.
