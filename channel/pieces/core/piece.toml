@@ -1,0 +1,28 @@
+id = "core"
+description = "bosun governance, CI that runs `bosun gate`, the risk and verdict workflows, hooks"
+
+[files]
+# Owned: the bosun channel replaces them on update. A change goes to keelstackhq/bosun.
+owned = [
+  ".bosun/version",
+  "docs/setup-script.sh",
+]
+# Shared: merged key by key with the repo's own edits.
+shared = [".bosun/bosun.toml", ".claude/settings.json"]
+# Seed: written once, then the repo's own.
+seed = [
+  ".bosun/limits.toml",
+  ".bosun/risk.toml",
+  "governance/owners.toml",
+  ".github/CODEOWNERS",
+  "hoist.toml",
+]
+
+[merge]
+".bosun/bosun.toml" = "toml"
+".claude/settings.json" = "json"
+
+[sections]
+"AGENTS.md" = "sections/agents.md"
+"REVIEW.md" = "sections/review.md"
+"CLAUDE.md" = "sections/claude.md"

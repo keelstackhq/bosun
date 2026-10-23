@@ -136,6 +136,10 @@ REVIEW.md                 review rules for the verdict
 .splice/channels/bosun.toml   the channel record, kept fresh by the splice update bot
 ```
 
+A channel version is a bosun release tag (`v<x.y.z>`), and the channel writes that version into
+`.bosun/version`, so the update bot moves the channel files and the pinned binary in one R-gov PR.
+A branch or sha ref has no release version; such a consumer sets the template var `bosun_version`.
+
 ## 4. Work lifecycle and conflict avoidance
 
 Units: a plan has items. Each item becomes one epic issue. An item has tasks. A task is at most

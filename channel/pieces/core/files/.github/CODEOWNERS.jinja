@@ -1,0 +1,11 @@
+# Governance and CI need an owner review (spec §8, R-gov and R-ci). Code outside these paths
+# merges through auto-merge after the gates (spec D13).
+{% if owner %}/.bosun/              @{{ owner }}
+/governance/          @{{ owner }}
+/.github/             @{{ owner }}
+/.claude/             @{{ owner }}
+/.splice/             @{{ owner }}
+/hoist.toml           @{{ owner }}
+{% else %}# Add `/.bosun/ @<login>` and the same for /governance/, /.github/, /.claude/, /.splice/ and
+# /hoist.toml.
+{% endif %}
