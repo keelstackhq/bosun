@@ -219,3 +219,83 @@ fn bad_base_is_exit_1() {
     assert_eq!(code, 1);
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
 }
+
+/// A repo with only `.bosun/bosun.toml` (rust stack at `.`) and one commit on `work`.
+fn empty_repo() -> Repo {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap().join("repo");
+    fs::create_dir_all(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["config", "user.name", "t"]);
+    git(&root, &["config", "user.email", "t@example.com"]);
+    write(
+        &root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \".\"\nprofile = \"rust\"\n",
+    );
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "base"]);
+    git(&root, &["checkout", "-q", "-b", "work"]);
+    let bin = tmp.path().join("bin");
+    let log = tmp.path().join("cargo.log");
+    let r = Repo {
+        _tmp: tmp,
+        root,
+        bin,
+        log,
+    };
+    r.change("README.md");
+    r
+}
+
+#[test]
+fn stack_without_manifest_is_skipped() {
+    let r = empty_repo();
+    for extra in [&[][..], &["--all"][..]] {
+        let mut args = vec!["fmt", "--base", "main"];
+        args.extend_from_slice(extra);
+        let (code, v, _) = r.gate(&args, "0");
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(v["data"]["skipped"], true);
+        assert_eq!(v["data"]["exit_status"], 0);
+        assert!(v["data"]["reason"].as_str().unwrap().contains("Cargo.toml"));
+    }
+}
+
+#[test]
+fn deleting_the_manifest_still_runs_the_gate() {
+    let r = repo();
+    git(&r.root, &["rm", "-q", "Cargo.toml"]);
+    git(&r.root, &["commit", "-q", "-m", "delete manifest"]);
+    let (code, v, _) = r.gate(&["fmt", "--base", "main"], "1");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+    assert_eq!(r.calls(), vec!["fmt --check"]);
+    // The merge queue and main run with --all; the base still has the manifest.
+    let (code, v, _) = r.gate(&["fmt", "--base", "main", "--all"], "1");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+}
+
+#[test]
+fn a_stack_in_a_subdirectory_skips_until_its_manifest_exists() {
+    let r = repo();
+    write(
+        &r.root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \"web\"\nprofile = \"rust\"\n",
+    );
+    write(&r.root, "web/README.md", "x\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "web stack"]);
+    let (code, v, _) = r.gate(&["fmt", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["reason"], "no Cargo.toml in web");
+    write(&r.root, "web/Cargo.toml", "[package]\nname = \"web\"\n");
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "web crate"]);
+    let (code, v, _) = r.gate(&["fmt", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], false);
+    assert_eq!(r.calls(), vec!["fmt --check"]);
+}

@@ -21,6 +21,8 @@ pub struct FakeIssue {
     pub labels: Vec<String>,
     pub is_pr: bool,
     pub user: String,
+    pub closed_at: Option<String>,
+    pub state_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,7 +147,27 @@ impl FakeGithub {
             labels: labels.iter().map(|l| l.to_string()).collect(),
             is_pr: false,
             user: "octocat".into(),
+            closed_at: None,
+            state_reason: None,
         });
+    }
+
+    /// Close an issue as of `at` (RFC 3339), the way GitHub reports `closed_at`.
+    pub fn close_issue(&self, number: u64, at: &str) {
+        self.close_issue_as(number, at, "completed");
+    }
+
+    /// Close an issue as of `at` with a `state_reason` (`completed`, `not_planned`, `duplicate`).
+    pub fn close_issue_as(&self, number: u64, at: &str, reason: &str) {
+        let mut s = self.state.lock().unwrap();
+        let i = s
+            .issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .expect("issue");
+        i.state = "closed".into();
+        i.closed_at = Some(at.into());
+        i.state_reason = Some(reason.into());
     }
 
     /// An entry in the issues list that is a pull request.
@@ -431,7 +453,8 @@ fn issue_json(i: &FakeIssue) -> Value {
         .map(|n| json!({"name": n, "color": "ededed"}))
         .collect();
     let mut v = json!({"number": i.number, "title": i.title, "body": i.body, "state": i.state,
-        "labels": labels, "user": {"login": i.user}});
+        "labels": labels, "user": {"login": i.user}, "closed_at": i.closed_at,
+        "state_reason": i.state_reason});
     if i.is_pr {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
@@ -624,6 +647,8 @@ fn route(
                 labels,
                 is_pr: false,
                 user: "octocat".into(),
+                closed_at: None,
+                state_reason: None,
             };
             let v = issue_json(&issue);
             s.issues.push(issue);
@@ -645,6 +670,13 @@ fn route(
             }
             if let Some(st) = body["state"].as_str() {
                 i.state = st.into();
+                i.closed_at = (st == "closed").then(|| TS.to_string());
+                i.state_reason = (st == "closed").then(|| {
+                    body["state_reason"]
+                        .as_str()
+                        .unwrap_or("completed")
+                        .to_string()
+                });
             }
             ok(issue_json(i))
         }
