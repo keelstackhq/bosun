@@ -16,6 +16,7 @@ pub mod plan;
 pub mod pr;
 pub mod reap;
 pub mod release;
+pub mod resume;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
@@ -108,6 +109,8 @@ pub enum Command {
     Plan(PlanCmd),
     /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
     Fail(FailArgs),
+    /// After a container restart: renew this session's leases and list the PRs to continue.
+    Resume,
 }
 
 /// Top-level command names, in `--help` order.
@@ -136,6 +139,7 @@ pub const COMMANDS: [&str; 24] = [
     "budget",
     "plan",
     "fail",
+    "resume",
 ];
 
 impl Command {
@@ -164,6 +168,7 @@ impl Command {
             Command::Ask(_) => "ask",
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
+            Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
@@ -171,6 +176,7 @@ impl Command {
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
             Command::Fail(_) => "fail",
+            Command::Resume => "resume",
         }
     }
 }
@@ -340,6 +346,8 @@ pub enum LessonCmd {
     Add(LessonAddArgs),
     /// Record a hit on a lesson.
     Hit(LessonHitArgs),
+    /// Open a lesson issue for a failure, or add a hit to the one with the same signature.
+    Capture(LessonCaptureArgs),
 }
 
 #[derive(Debug, Args)]
@@ -358,6 +366,22 @@ pub struct LessonHitArgs {
     pub id: String,
     #[arg(long)]
     pub issue: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct LessonCaptureArgs {
+    /// What kind of failure this is.
+    #[arg(long, value_parser = ["stop-rule", "blocked", "flake", "review-ask", "budget", "gate-budget", "main-red"])]
+    pub kind: String,
+    /// The task where the failure was seen.
+    #[arg(long)]
+    pub issue: Option<u64>,
+    /// Issue title (default: the first line of the failure text).
+    #[arg(long)]
+    pub title: Option<String>,
+    /// The failure text: `-` for stdin, or a file.
+    #[arg(long, default_value = "-")]
+    pub from: String,
 }
 
 #[derive(Debug, Subcommand)]

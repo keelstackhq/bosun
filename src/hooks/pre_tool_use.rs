@@ -21,14 +21,20 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok())?;
-    let branch = git_out(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    // The branch where a git command acts: the hook's directory moved by the command's own
+    // `cd dir &&` and `git -C dir` (a worktree on a feature branch is not the default branch).
+    let branch_at = |opts: &[String]| {
+        let mut args: Vec<&str> = opts.iter().map(String::as_str).collect();
+        args.extend(["rev-parse", "--abbrev-ref", "HEAD"]);
+        git_out(&dir, &args)
+    };
     let default = git_out(
         &dir,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
     )
     .map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string())
     .unwrap_or_else(|| "main".into());
-    if let Some(why) = tool_rules(tool, &tool_input, branch.as_deref(), &default) {
+    if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
         return Some(deny(&why));
     }
     let path = edited_path(tool, &tool_input)?;

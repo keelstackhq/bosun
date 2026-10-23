@@ -261,3 +261,28 @@ fn edit_on_a_bracket_path_in_another_sessions_lease_is_denied() {
     let input = json!({"file_path": "app/[id]/page.tsx"});
     denied(&pre(&fake, tmp.path(), "Edit", input));
 }
+
+#[test]
+fn commit_in_a_feature_worktree_is_allowed_from_a_main_checkout() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let main = tmp.path().join("main");
+    std::fs::create_dir(&main).unwrap();
+    git(&main, &["init", "-q", "-b", "main"]);
+    let id = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    git(
+        &main,
+        &[&id[..], &["commit", "-q", "--allow-empty", "-m", "x"]].concat(),
+    );
+    let wt = tmp.path().join("wt");
+    let w = wt.to_str().unwrap();
+    git(&main, &["worktree", "add", "-q", "-b", "feature", w]);
+    let bash = |c: &str| pre(&fake, &main, "Bash", json!({"command": c}));
+    allowed(&bash(&format!("cd {w} && git commit -m x")));
+    allowed(&bash(&format!("git -C {w} commit -m x")));
+    allowed(&bash(&format!(
+        "git --git-dir={w}/.git --work-tree={w} commit -m x"
+    )));
+    // The main checkout itself, and a directory the hook cannot read, stay refused.
+    denied(&bash("git commit -m x"));
+    denied(&bash("cd $WT && git commit -m x"));
+}

@@ -1,4 +1,7 @@
 # Built-in rust profile (spec §7). Override per repo in .bosun/profiles/rust.toml.
+# A stack with no Cargo.toml yet (a repo right after `bosun init`) has nothing to check, so gates skip it.
+manifest = "Cargo.toml"
+
 [adapters]
 packages = "cargo-metadata"
 pending = "rust-ignore"
