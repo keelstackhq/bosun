@@ -88,8 +88,6 @@ pub struct State {
     pub fail: Option<(u16, u32)>,
     /// Repository permission by login; a login not listed has `write`.
     pub permissions: HashMap<String, String>,
-    /// The login of the token (`GET /user`); unset, that route is 404.
-    pub me: Option<String>,
     /// (path suffix, status) answered for every matching request.
     pub fail_paths: Vec<(String, u16)>,
     /// Scripted mutations; see `FakeGithub::after_requests`.
@@ -423,11 +421,6 @@ impl FakeGithub {
             .insert(login.into(), permission.into());
     }
 
-    /// The login `GET /user` reports for the token.
-    pub fn me(&self, login: &str) {
-        self.state.lock().unwrap().me = Some(login.into());
-    }
-
     pub fn variable(&self, name: &str, value: &str) {
         self.state
             .lock()
@@ -684,12 +677,6 @@ fn route(
             return msg(code, &m);
         }
         return graphql(s, body);
-    }
-    if method == "GET" && seg == ["user"] {
-        return match &s.me {
-            Some(l) => (200, json!({"login": l}), vec![]),
-            None => msg(404, "Not Found"),
-        };
     }
     let ["repos", _, _, rest @ ..] = seg.as_slice() else {
         return msg(404, "Not Found");

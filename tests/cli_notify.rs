@@ -554,14 +554,15 @@ fn an_ack_by_a_token_user_without_write_access_is_refused() {
     let e = env();
     e.registry();
     red(&e);
-    e.fake.me("routine");
-    e.fake.permission("routine", "read");
+    // The fake writes comments as "octocat".
+    e.fake.permission("octocat", "none");
     let (code, v) = e.run(&["notify", "--ack", "main-red:3"], "");
     assert_eq!(code, 5, "{v}");
     assert!(v["error"]["fix"].as_str().unwrap().contains("write access"));
-    assert!(e.fake.comments_of(1).is_empty());
-    e.fake.permission("routine", "write");
-    assert_eq!(e.run(&["notify", "--ack", "main-red:3"], "").0, 0);
+    // The ignored record leaves the key pending.
+    let (code, v) = e.run(&["notify"], "");
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["pending"], json!(["main-red:3"]));
 }
 
 #[test]

@@ -39,17 +39,6 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let found = collect(&app)?;
-    // The record must count: a writer's. With another login every ack would be ignored and the
-    // post would repeat forever. A token with no user (an installation token) cannot be checked.
-    if let Some(me) = gh.authenticated_user().ok().flatten() {
-        let p = gh.permission(&me)?.unwrap_or_default();
-        if !matches!(p.as_str(), "admin" | "write") {
-            return Err(BosunError::needs_human(
-                format!("{me} has {p} access, so its acks would be ignored"),
-                "the token's user needs write access, or acks are ignored and posts repeat",
-            ));
-        }
-    }
     if found.done.iter().any(|k| k == key) {
         return Ok(Outcome::data(json!({"acked": key, "already": true})));
     }
@@ -64,7 +53,20 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
         key: key.into(),
         at: app.ctx.now.to_string(),
     };
-    gh.add_comment(issue, &record.to_line())?;
+    let comment = gh.add_comment(issue, &record.to_line())?;
+    // The record counts only from a writer. Another login (a bot token, a read-only user)
+    // would have every ack ignored and the post repeated forever; there is no way to delete the
+    // comment, but an ignored record leaves the key pending.
+    let p = gh.permission(&comment.user)?.unwrap_or_default();
+    if !matches!(p.as_str(), "admin" | "write") {
+        return Err(BosunError::needs_human(
+            format!(
+                "the ack was written by {} with {p} access, so it is ignored",
+                comment.user
+            ),
+            "the token's user needs write access, or acks are ignored and posts repeat",
+        ));
+    }
     Ok(Outcome::data(json!({"acked": key, "already": false})))
 }
 
