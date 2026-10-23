@@ -66,7 +66,11 @@ fn a_fully_set_up_repo_is_ok() {
     let d = tmp.path();
     fake.repo_set("allow_auto_merge", json!(true));
     fake.release("v0.1.0");
-    fake.variable("BOSUN_HALT", "0");
+    fake.state
+        .lock()
+        .unwrap()
+        .labels
+        .push(("bosun:halt".into(), "B60205".into()));
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     fake.issue(2, "task", &[], "");
     fake.comment_by(2, "claude[bot]", "On it.");

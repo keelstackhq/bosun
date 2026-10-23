@@ -64,7 +64,7 @@ Fixed for all commands:
 | 1 | error | An unexpected failure (API, I/O, bad config file). The JSON has the error and its fix. |
 | 2 | usage | Bad arguments. |
 | 3 | conflict | A claim or a path overlaps a live lease, or another orchestrator owns the area. |
-| 4 | halted | `BOSUN_HALT=1`, main-red or process-red stops the command. |
+| 4 | halted | The kill switch (an owner's open `bosun:halt` issue, or `BOSUN_HALT=1`), main-red or process-red stops the command. |
 | 5 | needs-human | The command needs an owner decision. |
 | 6 | limit | A cap or a budget refuses the command. |
 
@@ -423,16 +423,49 @@ Rule evaluation:
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
 High-risk PRs:
-- A high PR needs a GitHub review on the head SHA by a user in `governance/owners.toml`, and
-  CODEOWNERS.
+- A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
+  CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
+  approve, request-changes or dismissed review on that SHA), or a PR comment by the owner whose
+  body, trimmed, is exactly `/bosun approve <head_sha>` with the full 40-character SHA. The
+  comment path exists because GitHub forbids approving your own PR, and an owner may also be the
+  account that opens the PRs. A comment binds to that SHA: a new push needs a new comment. An
+  edited comment does not count (users with write access can edit other users' comments). When
+  the owner's newest decisive review on the head SHA requests changes, their comment does not
+  count either.
+- The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
+  reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
+  comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
+  the workflow file from the base branch, so a PR cannot rewrite the job that judges it. The job
+  never checks out or runs PR-head code: it builds bosun from the PR's base SHA (on a comment,
+  the default branch) and reads the PR through the API. Event data reaches scripts through `env`
+  only. Permissions: `contents: read`, `issues: read`, `statuses: write`, and
+  `pull-requests: write` for the Risk note in the PR body. `tests/workflows.rs` asserts all of
+  this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
+  copy of the file; and a same-repo PR can add a workflow of its own that requests
+  `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
   check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
 - A risky task is small: the target is under 100 changed lines.
 
-Kill switch: the repo variable `BOSUN_HALT=1` stops all bosun commands that start or change work
-(exit 4), including `bosun pr`. A variable that is not set (404) means not halted; any other read error is exit 4 too (fail closed), with the fix "give the token Variables: read, or set BOSUN_HALT=0". Only the owner sets it.
+Kill switch: bosun is halted while either source says so, and then every command that starts or
+changes work (including `bosun pr` and `bosun verdict post`) is exit 4:
+- An open issue with the label `bosun:halt`, opened by a login in `governance/owners.toml` (read
+  from the default branch). An issue opened by anyone else is ignored. Any error reading the
+  issues or the owners is exit 4 (fail closed), and so is an open halt issue while no owners
+  are listed. Agents must never close a halt issue or remove its label; bosun does not yet
+  enforce that (a token with Issues: write can), so against a misbehaving agent the owner also
+  sets `BOSUN_HALT=1`, which agents cannot change. The owner creates the label once:
+  `gh label create bosun:halt --repo <owner>/<repo> --color B60205`. To halt:
+  `gh issue create --repo <owner>/<repo> --label bosun:halt --title "halt" --body "<why>"`; to
+  resume, close the issue.
+- The repo variable `BOSUN_HALT`, where the token can read it: `1` halts. 404 (unset) and 403 (not
+  readable from this token, as in cloud sessions behind the agent proxy) are no signal from this
+  source. Any other error reading it is exit 4. Only the owner sets it.
+
+`bosun status` and the SessionStart context show whether bosun is halted; `bosun doctor` step 5
+checks that the `bosun:halt` label exists and that the kill switch is readable.
 
 Audit: `bosun progress --risk` lists the high PRs, who approved them, and the time to approval.
 
@@ -514,7 +547,7 @@ Human checklist (12 steps):
 3. Run `hoist apply` for branch protection, auto-merge (the merge queue follows in M3: `risk-check` and `review-verdict` are statuses on the PR head, which a queue commit does not carry), and the required checks
    `ci-ok`, `risk-check`, `review-verdict` and `main-open` (D15, D17).
 4. Fill `governance/owners.toml`.
-5. Run `hoist apply` for the environments, secrets and the repo variable `BOSUN_HALT=0` (D17).
+5. Run `hoist apply` for the environments and secrets (D17), and create the kill-switch label: `gh label create bosun:halt --repo <owner>/<repo> --color B60205`. The repo variable `BOSUN_HALT=0` is optional.
 6. Create the cloud environment and its setup script (D23).
 7. Create the Slack channel and connect Claude Tag.
 8. Start the seed session with the seed brief.
