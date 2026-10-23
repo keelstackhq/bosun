@@ -42,6 +42,8 @@ pub struct Pending {
     pub key: String,
     pub kind: &'static str,
     pub text: String,
+    /// The Slack thread to post into (a thread-result), else `None`.
+    pub thread_ts: Option<String>,
 }
 
 /// A notification key: `^[a-z-]+:[0-9a-z:-]+$`.
