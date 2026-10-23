@@ -426,7 +426,20 @@ pub fn mentions_uc(text: &str, id: &str) -> bool {
         !text[i + id.len()..]
             .chars()
             .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric())
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Whether `text` defines `fn uc_<item>_<n>` for the use case `id` (`UC-M2-3` -> `fn uc_m2_3`),
+/// the name `uc_stub` would write.
+pub fn defines_uc_fn(text: &str, id: &str) -> bool {
+    let name = id.to_lowercase().replace('-', "_");
+    let pat = format!("fn {name}");
+    text.match_indices(&pat).any(|(i, _)| {
+        text[i + pat.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '(' || c.is_whitespace() || c == '<')
     })
 }
 
@@ -447,6 +460,9 @@ mod tests {
         assert!(mentions_uc("x UC-M2-1 y", "UC-M2-1"));
         assert!(mentions_uc("UC-M2-1", "UC-M2-1"));
         assert!(!mentions_uc("UC-M2-12", "UC-M2-1"));
+        assert!(!mentions_uc("UC-M2-1-x", "UC-M2-1"));
+        assert!(defines_uc_fn("fn uc_m2_1() {}", "UC-M2-1"));
+        assert!(!defines_uc_fn("fn uc_m2_12() {}", "UC-M2-1"));
         assert!(mentions_uc("UC-M2-12 UC-M2-1.", "UC-M2-1"));
     }
     const H: &str = "not `## <ID>: <title>`";

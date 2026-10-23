@@ -55,6 +55,8 @@ pub enum LogMode {
 /// Everything the fake knows.
 #[derive(Default)]
 pub struct State {
+    /// Issue numbers that GET answers with 410 (deleted).
+    pub gone: Vec<u64>,
     pub issues: Vec<FakeIssue>,
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
@@ -171,6 +173,12 @@ impl FakeGithub {
         i.state = "closed".into();
         i.closed_at = Some(at.into());
         i.state_reason = Some(reason.into());
+    }
+
+    /// Make `number` a deleted issue: out of the list, GET answers 410.
+    pub fn gone(&self, number: u64) {
+        self.hide_from_list(number);
+        self.state.lock().unwrap().gone.push(number);
     }
 
     /// Leave an issue out of the list while GET by number still returns it.
@@ -658,6 +666,7 @@ fn route(
             s.issues.push(issue);
             (201, v, vec![])
         }
+        ("GET", ["issues", n]) if n.parse().is_ok_and(|n| s.gone.contains(&n)) => msg(410, "Gone"),
         ("GET", ["issues", n]) => find(s, n)
             .map(|p| ok(issue_json(&s.issues[p])))
             .unwrap_or_else(|| msg(404, "Not Found")),

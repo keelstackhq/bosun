@@ -56,10 +56,21 @@ pub struct IssuePatch {
 /// Compare pages read at most (3000 files, GitHub's own cap).
 const MAX_COMPARE_PAGES: usize = 30;
 
+/// What `GET /issues/N` says about one number.
+pub enum Probe {
+    Issue(Issue),
+    /// 404: no such number (the numbers end here).
+    Missing,
+    /// Deleted (410) or transferred (301): the number is used but holds nothing for this repo.
+    Gone,
+}
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
     fn get_issue(&self, number: u64) -> Result<Option<Issue>>;
+    /// Like `get_issue`, but a deleted or transferred number is `Gone`, not an error.
+    fn probe_issue(&self, number: u64) -> Result<Probe>;
     fn create_issue(&self, title: &str, body: &str, labels: &[&str]) -> Result<Issue>;
     fn update_issue(&self, number: u64, patch: IssuePatch) -> Result<Issue>;
     fn add_labels(&self, number: u64, labels: &[&str]) -> Result<()>;
@@ -226,6 +237,17 @@ impl Github for LiveGithub {
         {
             Some(v) => Ok(Some(self.parse("issue", v)?)),
             None => Ok(None),
+        }
+    }
+
+    fn probe_issue(&self, number: u64) -> Result<Probe> {
+        match self
+            .http
+            .get_json_or_gone(&self.path(&format!("/issues/{number}")))?
+        {
+            Ok(Some(v)) => Ok(Probe::Issue(self.parse("issue", v)?)),
+            Ok(None) => Ok(Probe::Missing),
+            Err(()) => Ok(Probe::Gone),
         }
     }
 

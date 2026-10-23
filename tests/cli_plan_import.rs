@@ -618,3 +618,50 @@ fn issues_closed_as_duplicate_never_match_or_warn() {
         .unwrap();
     assert_ne!(row["issue"], 1);
 }
+
+#[test]
+fn a_uc_fn_by_name_counts_as_present_without_the_id() {
+    let (tmp, fake) = (rust_dir("rust"), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
+    std::fs::write(
+        tmp.path().join("tests/other.rs"),
+        "#[test]\nfn uc_m1_1() {}\n",
+    )
+    .unwrap();
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["stubs"],
+        json!([{"file": "tests/uc_m2.rs", "ucs": ["UC-M2-1"]}])
+    );
+    assert!(!tmp.path().join("tests/uc_m1.rs").exists());
+}
+
+#[test]
+fn the_probe_skips_deleted_numbers_and_pulls_and_stops_at_a_missing_one() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    fake.issue(1, "unrelated", &[], "");
+    fake.pull_as_issue(2, "a pull");
+    fake.issue(3, "deleted", &[], "");
+    fake.gone(3);
+    plan(&fake, tmp.path(), &["import", &file]);
+    let made = posts(&fake);
+    let top = fake
+        .state
+        .lock()
+        .unwrap()
+        .issues
+        .iter()
+        .map(|i| i.number)
+        .max()
+        .unwrap();
+    for n in 4..=top {
+        fake.hide_from_list(n);
+    }
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), made, "{v}");
+    assert!(v["data"]["warnings"].as_array().unwrap().is_empty(), "{v}");
+}

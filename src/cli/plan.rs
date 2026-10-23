@@ -12,7 +12,7 @@ use crate::app::{App, Result, kill_switch, set_state, task_meta};
 use crate::core::meta::TaskMeta;
 use crate::core::plan::{self, Item, Plan, PlanError, Task, Uc};
 use crate::core::state::{State, state_of};
-use crate::github::{Github, Issue, IssueState};
+use crate::github::{Github, Issue, IssueState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
@@ -273,7 +273,7 @@ impl Importer<'_> {
         let missing: Vec<&Uc> = item
             .ucs
             .iter()
-            .filter(|u| !plan::mentions_uc(&all, &u.id))
+            .filter(|u| !plan::mentions_uc(&all, &u.id) && !plan::defines_uc_fn(&all, &u.id))
             .collect();
         if missing.is_empty() {
             return Ok(());
@@ -439,14 +439,23 @@ fn import(dir: Option<&Path>, a: &PlanImportArgs) -> CmdResult {
 fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
     let mut issues = gh.list_issues(&[], IssueState::All)?;
     let first = issues.iter().map(|i| i.number).max().unwrap_or(0) + 1;
-    for next in (first..).take(50) {
-        match gh.get_issue(next)? {
-            Some(i) => {
+    let (mut found, mut probes) = (0, 0);
+    // Stop at the first number that does not exist. Pull requests and deleted or transferred
+    // numbers are skipped; only issues the list lacked count toward the cap of 50.
+    for next in first.. {
+        probes += 1;
+        if found >= 50 || probes > 1000 {
+            break;
+        }
+        match gh.probe_issue(next)? {
+            Probe::Issue(i) => {
                 if !i.pull_request && !issues.iter().any(|x| x.number == i.number) {
                     issues.push(i);
+                    found += 1;
                 }
             }
-            None => break,
+            Probe::Gone => {}
+            Probe::Missing => break,
         }
     }
     Ok(issues)
@@ -470,7 +479,8 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         let pid = format!("{}/P", item.id);
         let pslot = imp.slot(&pid, (&item.id, Some("P")), || {
             let intro = format!(
-                "Write each UC of {id} as a pending test (`#[ignore = \"UC-..\"]`) in tests/uc_{low}.rs; \
+                "Run `bosun plan import {file} --item {id}` to write each UC of {id} as a pending test \
+                 (`#[ignore = \"UC-..\"]`) into tests/uc_{low}.rs, then commit that file; \
                  the item's tasks become ready when this merges (run `bosun plan import` again).\n\n{}\n",
                 item.ucs
                     .iter()
@@ -478,6 +488,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                     .collect::<Vec<_>>()
                     .join("\n"),
                 id = item.id,
+                file = a.file,
                 low = item.id.to_lowercase()
             );
             (
