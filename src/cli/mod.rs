@@ -13,6 +13,7 @@ pub mod join;
 pub mod lesson;
 pub mod msg;
 pub mod pr;
+pub mod progress;
 pub mod reap;
 pub mod release;
 pub mod review_pack;
@@ -101,10 +102,12 @@ pub enum Command {
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
+    /// Cost per merged task over the last N days (read-only).
+    Progress(ProgressArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 22] = [
+pub const COMMANDS: [&str; 23] = [
     "join",
     "claim",
     "heartbeat",
@@ -127,6 +130,7 @@ pub const COMMANDS: [&str; 22] = [
     "hook",
     "doctor",
     "budget",
+    "progress",
 ];
 
 impl Command {
@@ -159,6 +163,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Progress(_) => "progress",
         }
     }
 }
@@ -360,6 +365,13 @@ pub enum HookCmd {
 pub enum BudgetCmd {
     /// Record the spend of a task (claude-sessions or generic provider).
     Record(BudgetRecordArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProgressArgs {
+    /// Length of the window in days, ending now.
+    #[arg(long, default_value_t = 7)]
+    pub days: u32,
 }
 
 #[derive(Debug, Args)]
