@@ -3,7 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-const OPEN: &str = "<!-- bosun:task";
+/// Opens the task metadata comment; the space keeps `<!-- bosun:task-pr N -->` out.
+pub const OPEN: &str = "<!-- bosun:task ";
 
 fn feature() -> String {
     "feature".into()
@@ -36,9 +37,10 @@ pub struct TaskMeta {
     pub capabilities: Vec<String>,
 }
 
-/// The task metadata of an issue body, if it has a valid marker.
+/// The task metadata of an issue body, if it has a valid marker. The LAST marker counts, so text
+/// quoted earlier in a body cannot override the real one.
 pub fn parse_task_meta(body: &str) -> Option<TaskMeta> {
-    let rest = &body[body.find(OPEN)? + OPEN.len()..];
+    let rest = &body[body.rfind(OPEN)? + OPEN.len()..];
     let json = &rest[..rest.find("-->")?];
     serde_json::from_str(json.trim()).ok()
 }
@@ -101,6 +103,14 @@ more"#;
         let m = parse_task_meta("<!-- bosun:task {} -->").unwrap();
         assert_eq!((m.kind.as_str(), m.risk.as_str()), ("feature", "normal"));
         assert!(m.touch.is_empty() && m.epic.is_none());
+    }
+
+    #[test]
+    fn the_last_marker_wins_and_task_pr_is_not_one() {
+        let body = r#"<!-- bosun:task {"kind":"fake"} -->
+x <!-- bosun:task {"kind":"real"} -->
+<!-- bosun:task-pr 9 -->"#;
+        assert_eq!(parse_task_meta(body).unwrap().kind, "real");
     }
 
     #[test]
