@@ -10,8 +10,8 @@ RUST_VERSION=1.97
 SPLICE_VERSION=0.2.0
 HOIST_VERSION=0.2.0
 BERTH_VERSION=0.1.0
-# bosun has no release yet (.bosun/version says "unreleased"): build it from this commit.
-BOSUN_BRANCH=main
+# The bosun release this repo pins in .bosun/version.
+BOSUN_VERSION=0.1.0
 
 # Node 24 from NodeSource, unless it is already there.
 if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
@@ -30,7 +30,6 @@ cargo install --locked cargo-nextest cargo-deny
 
 # The keelstackhq tools, pinned.
 npm install -g "@keelstackhq/splice@${SPLICE_VERSION}" "@keelstackhq/hoist@${HOIST_VERSION}" \
-  "@keelstackhq/berth@${BERTH_VERSION}"
-cargo install --locked --git https://github.com/keelstackhq/bosun --branch "${BOSUN_BRANCH}" keel-bosun
+  "@keelstackhq/berth@${BERTH_VERSION}" "@keelstackhq/bosun@${BOSUN_VERSION}"
 
 bosun --version

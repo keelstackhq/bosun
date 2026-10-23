@@ -5,8 +5,9 @@
 Seed complete: S1-S10 done, plan `docs/superpowers/plans/2026-10-22-bosun-seed.md` (Tasks 1-19,
 split into PRs of about 400 lines). The whole-branch review of the seed (2026-10-22) found 1
 blocker, 9 majors and 3 minors, tracked as issues #20-#32 (label `review-finding`); fixes A-E
-close all of them. bosun is unreleased (`.bosun/version` = `unreleased`); the gate CI builds
-bosun from each PR's base commit until the first release.
+close all of them. bosun v0.1.0 is released (npm `@keelstackhq/bosun` and its five platform
+packages, crates.io `keel-bosun`, GitHub Release) and pinned in `.bosun/version`; the gate CI
+installs the release pinned in each PR's base commit, and job `pin` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
 prompt has children post the record by hand); `wave` and `status` still read the local
@@ -99,6 +100,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Release 1/3 · npm launcher `npm/bosun` (`@keelstackhq/bosun`, five platform packages as optionalDependencies, as in berth); a launcher failure prints one error envelope with a fix (spec §1.2) · `node --test npm/bosun/test/*.test.js` 12/12
 - 2026-10-23 · Release 2/3 · crate `keel-bosun` 0.1.0 publishable (LICENSE, include), `hoist.toml [publish]` (crates.io, GitHub Release for five targets), the five platform packages, pnpm workspace; `tests/release_config.rs` keeps them in step · `cargo test --test release_config` 6/6, `cargo package` builds
 - 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
+- 2026-10-23 · Pin v0.1.0 · `.bosun/version` = 0.1.0; ci.yml `bosun-bin` installs the base's pinned release from npm (falls back to building the base while it says `unreleased`), new job `pin` checks a PR's pin installs and reports its version; setup script installs `@keelstackhq/bosun@0.1.0` · spec §11
 
 ## Blocked
 
@@ -113,23 +115,17 @@ Human-only items, in order. Each has the exact action.
    B60205` (an owner's open issue with it halts bosun). `BOSUN_HALT` is optional; a token that
    cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
-   settings → setup script: paste `docs/setup-script.sh`.
+   settings → setup script: paste `docs/setup-script.sh` (again after the v0.1.0 pin: it now
+   installs `@keelstackhq/bosun@0.1.0` from npm instead of building main).
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
    15 min, Haiku). Create them in claude.ai → Routines.
-4. **First publish (D24).** Everything is in place; nothing publishes until the variable is
-   set. Follow `docs/releasing.md` → One-time setup, in order: create the environment
-   `release` (branch `main`, owner as reviewer), optionally the secret `HOIST_RELEASE_TOKEN`,
-   then `gh variable set BOSUN_RELEASE --body enabled --repo keelstackhq/bosun`. After the
-   workflow tags v0.1.0: `hoist release bootstrap` locally, the crates.io trusted publisher
-   for `keel-bosun`, and the re-run of the failed `publish` job within 2 days. Then an agent
-   opens the R-gov PR that pins `.bosun/version` to 0.1.0.
-5. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
+4. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
    `splice/update` PR with `GITHUB_TOKEN` unless the secret `SPLICE_BOT_TOKEN` is set, and a PR
    opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
    token (keelstackhq/bosun, Contents and Pull requests: write), then
    `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
-6. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
+5. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
    github-actions app, so a same-repo PR can add or edit a workflow (also via the
    `pull_request_review` trigger, which runs the PR's copy of `risk.yml`) and post a forged
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
