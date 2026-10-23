@@ -10,9 +10,8 @@ packages, crates.io `keel-bosun`, GitHub Release) and pinned in `.bosun/version`
 installs the release pinned in each PR's base commit, and job `pin` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
-prompt has children post the record by hand); `wave` and `status` still read the local
-limits; plan import (M2) must give plan tasks `allow = ["skip"]` so their pending UC tests pass
-test-integrity; the merge queue comes with M3.
+prompt has children post the record by hand); plan import (M2) must give plan tasks
+`allow = ["skip"]` so their pending UC tests pass test-integrity; the merge queue comes with M3.
 
 ## Done
 
@@ -103,7 +102,12 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Pin v0.1.0 · `.bosun/version` = 0.1.0; ci.yml `bosun-bin` installs the base's pinned release from npm (falls back to building the base while it says `unreleased`), new job `pin` checks a PR's pin installs and reports its version; setup script installs `@keelstackhq/bosun@0.1.0` · spec §11
 - 2026-10-23 · M1 T5 · `tests/smoke_reap.rs`: UC-M1-3 smoke test with clock jumps (claim at 10:00, heartbeat at 10:20, janitor reaps at 10:31/10:49:59 nothing, at 10:50 the lease ends `reaped`, task ready, another session claims it, the old heartbeat extends nothing) · `cargo test --test smoke_reap` 1/1
 - 2026-10-23 · M1 T2 · `bosun fail` (src/cli/stop.rs, src/core/stop.rs), `failure` and `escalate` records, spec §4 · tests/cli_stop.rs 6/6, core::stop 5/5, cargo test all green
-- 2026-10-23 · M7 T1 (1/2) · splice channel `channel/` (pieces core, rust, ts-pnpm): governance seeds, AGENTS/REVIEW/CLAUDE sections; `.bosun/version` follows the channel version (a release tag) · `cargo test --test channel` 4/4, real splice 0.2.0 renders rust, ts-pnpm and mixed repos, a new version updates as one change
+- 2026-10-23 · M7 (UC-M7-1) · profiles may name a `manifest` (rust: `Cargo.toml`); a gate skips a stack whose manifest is missing at the head and at the base (also with `--all`), so the setup PR of an empty repo is green · `cargo test --test cli_gate` 13/13
+- 2026-10-23 · M4 T1 · spend guard in `bosun claim`: exit 6 at 80 % of `daily_usd` (registry spend since 00:00 UTC, limits from the default branch), mainfix and a re-claim of the own lease exempt, data `{check: 2, name: "budget", ..}` like spawn · UC-M4-1 · `tests/cli_spend_guard.rs` 7/7 · PR #126
+- 2026-10-23 · M4 T4 · `bosun progress [--days N]`: merged tasks (closed as completed in the window), registry spend in `[since, now]`, `cost_per_merged_task_usd`, `task_cost_avg_usd`; `src/core/cost.rs`, `Issue.closed_at`/`state_reason`, `Timestamp::minus_secs`, fake `close_issue(_as)` · UC-M4-4 · `tests/cli_progress.rs` 5/5, `core::cost` 3/3 · PR #127
+- 2026-10-23 · M4 T2 · `bosun budget check`: level normal/guard/stop, at stop one `interrupt_session` per live remote session in `next` (wave agents fold into their session, never the caller's, `local-*` skipped), no writes, works while halted; `src/core/budget.rs` · UC-M4-2 · `tests/cli_budget_check.rs` 7/7, `core::budget` 3/3 · PR #169
+- 2026-10-23 · Follow-up · `wave plan` and `status` read `.bosun/limits.toml` from the default branch; `status` reports `daily_usd` · `tests/cli_wave.rs` +2, `tests/cli_status.rs` +1 · PR #170
+- 2026-10-23 · M4 T3 · `budget record` opens (or hits) one `budget` lesson through `capture_lesson` when its record blocks a task over `per_task_usd`; a failed capture exits 0 with `lesson: {error, fix}` so the spend is not recorded twice · UC-M4-3 · `tests/cli_budget.rs` +5 · PR #171 · M4 done
 
 ## Blocked
 

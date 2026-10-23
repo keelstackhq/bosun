@@ -64,6 +64,10 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     if args.name == "test-integrity" {
         return crate::cli::test_integrity::check(dir, args.base.as_deref());
     }
+    // Not a profile gate: it reads GitHub, not the checkout.
+    if args.name == "main-open" {
+        return gates::main_open::run(dir, args.pr);
+    }
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
     let config = Config::load(&root)?;
