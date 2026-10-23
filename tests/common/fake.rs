@@ -25,6 +25,7 @@ pub struct FakeIssue {
     pub user: String,
     pub closed_at: Option<String>,
     pub state_reason: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +161,7 @@ impl FakeGithub {
             user: "octocat".into(),
             closed_at: None,
             state_reason: None,
+            updated_at: TS.into(),
         });
     }
 
@@ -407,6 +409,31 @@ impl FakeGithub {
         s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
     }
 
+    /// A comment written by `user` at `at` (RFC 3339); the issue's `updated_at` moves up to it.
+    pub fn comment_at(&self, issue: u64, user: &str, body: &str, at: &str) -> u64 {
+        let mut s = self.state.lock().unwrap();
+        let id = add_comment(&mut s, issue, body);
+        let c = s.comments.iter_mut().find(|c| c.id == id).unwrap();
+        c.user = user.into();
+        c.created_at = at.into();
+        c.updated_at = at.into();
+        let i = s.issues.iter_mut().find(|i| i.number == issue).unwrap();
+        if i.updated_at.as_str() < at || i.updated_at == TS {
+            i.updated_at = at.into();
+        }
+        id
+    }
+
+    /// Set the `updated_at` of an issue.
+    pub fn issue_updated(&self, number: u64, at: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .updated_at = at.into();
+    }
+
     /// Change the last comment: `f` gets it mutably (app, association, edits).
     pub fn last_comment(&self, f: impl FnOnce(&mut FakeComment)) {
         f(self.state.lock().unwrap().comments.last_mut().unwrap());
@@ -526,7 +553,7 @@ fn issue_json(i: &FakeIssue) -> Value {
         .collect();
     let mut v = json!({"number": i.number, "title": i.title, "body": i.body, "state": i.state,
         "labels": labels, "user": {"login": i.user}, "closed_at": i.closed_at,
-        "state_reason": i.state_reason});
+        "state_reason": i.state_reason, "updated_at": i.updated_at});
     if i.is_pr {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
@@ -687,6 +714,23 @@ fn route(
             .and_then(|n| s.issues.iter().position(|i| i.number == n))
     };
     match (method, rest) {
+        ("GET", ["issues"]) if query.get("sort").is_some_and(|s| s == "updated") => {
+            let since = query.get("since").cloned().unwrap_or_default();
+            let per: usize = query
+                .get("per_page")
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(30);
+            let mut hits: Vec<&FakeIssue> = s
+                .issues
+                .iter()
+                .filter(|i| !i.hidden && !i.is_pr && i.updated_at >= since)
+                .collect();
+            hits.sort_by(|a, b| (&b.updated_at, b.number).cmp(&(&a.updated_at, a.number)));
+            // One page only: no Link header, as the caller reads a single page.
+            ok(Value::Array(
+                hits.into_iter().take(per).map(issue_json).collect(),
+            ))
+        }
         ("GET", ["issues"]) => {
             let want: Vec<&str> = query
                 .get("labels")
@@ -726,6 +770,7 @@ fn route(
                 user: "octocat".into(),
                 closed_at: None,
                 state_reason: None,
+                updated_at: TS.into(),
             };
             let v = issue_json(&issue);
             s.issues.push(issue);

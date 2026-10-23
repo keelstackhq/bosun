@@ -138,7 +138,8 @@ fn uc_m6_3() {
 /// UC-M6-4: a child result produces exactly one thread reply, also when the thread ended.
 #[test]
 fn uc_m6_4() {
-    const TS: &str = "1700000000.000200";
+    const LIVE: &str = "1700000000.000200";
+    const ENDED: &str = "1700000001.000100";
     let good =
         r#"{"id":"C1","is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":0}"#;
     let dir = tempfile::tempdir().unwrap();
@@ -150,20 +151,20 @@ fn uc_m6_4() {
     .unwrap();
     let gh = FakeGithub::start();
     gh.issue(1, "bosun registry", &["bosun:registry"], "");
-    let lease = json!({"bosun": "lease", "session": "s", "origin": "slack",
-        "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": TS});
     // Epic 10: the thread is live. Epic 11: the thread ended without acking.
-    for n in [10, 11] {
+    for (n, ts) in [(10, LIVE), (11, ENDED)] {
         gh.issue(n, "epic", &["bosun:state/merged"], "");
-        gh.comment(n, &lease.to_string());
-        gh.comment(
-            n,
-            &json!({"bosun": "result", "session": "s", "outcome": "merged", "pr": n}).to_string(),
-        );
+        let lease = json!({"bosun": "lease", "session": "s", "origin": "slack",
+            "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": ts});
+        gh.comment_at(n, "ada", &lease.to_string(), "2026-10-22T09:00:00Z");
+        let res = json!({"bosun": "result", "session": "s", "outcome": "merged", "pr": n});
+        gh.comment_at(n, "ada", &res.to_string(), "2026-10-22T09:30:00Z");
     }
-    gh.comment(
+    gh.comment_at(
         11,
+        "ada",
         &json!({"bosun": "lease-end", "session": "s", "reason": "result"}).to_string(),
+        "2026-10-22T09:31:00Z",
     );
     let run = |args: &[&str]| {
         let out = bosun()
@@ -177,17 +178,41 @@ fn uc_m6_4() {
             .unwrap();
         (out.status.code().unwrap(), one_object(&out.stdout))
     };
-    let first = run(&["--channel-info", "-"]).1;
-    let posts = first["next"].as_array().unwrap();
-    assert_eq!(posts.len(), 2, "one reply per result: {first}");
-    assert!(posts.iter().all(|p| p["args"]["thread_ts"] == TS));
-    for p in first["data"]["pending"].as_array().unwrap() {
-        let (code, v) = run(&["--ack", p["key"].as_str().unwrap()]);
-        assert_eq!(code, 0, "{v}");
-        assert_eq!(v["data"]["already"], false);
+    let posts = |v: &serde_json::Value| -> Vec<(String, String)> {
+        v["data"]["pending"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                (
+                    p["key"].as_str().unwrap().to_string(),
+                    p["thread_ts"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    // The live thread session lists and acks its own reply.
+    let live = run(&["--channel-info", "-", "--thread", LIVE]).1;
+    let live = posts(&live);
+    assert_eq!(live.len(), 1, "{live:?}");
+    assert!(live[0].0.starts_with("result:10:") && live[0].1 == LIVE);
+    let (code, v) = run(&["--ack", &live[0].0]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], false);
+    // The Routine run lists only the ended thread's reply.
+    let routine = run(&["--channel-info", "-"]).1;
+    let routine = posts(&routine);
+    assert_eq!(routine.len(), 1, "{routine:?}");
+    assert!(routine[0].0.starts_with("result:11:") && routine[0].1 == ENDED);
+    let (code, v) = run(&["--ack", &routine[0].0]);
+    assert_eq!(code, 0, "{v}");
+    // Nothing is left, for either run.
+    for args in [
+        vec!["--channel-info", "-"],
+        vec!["--channel-info", "-", "--thread", LIVE],
+    ] {
+        assert_eq!(run(&args).1["next"], json!([]));
     }
-    let again = run(&["--channel-info", "-", "--thread", TS]).1;
-    assert_eq!(again["next"], json!([]), "exactly once: {again}");
     let acks = gh
         .requests()
         .iter()

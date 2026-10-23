@@ -13,8 +13,7 @@ use super::spawn::valid_ts;
 use crate::app::{App, HALT_LABEL, default_branch, limits_from_default, main_red};
 use crate::cli::risk_check::owner_logins;
 use crate::core::budget::{Level, level};
-use crate::core::lease::thread_of;
-use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::records::{Record, parse_record, spend_total};
 use crate::core::state::State;
 use crate::github::{Github, IssueState, Variable};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -26,11 +25,28 @@ use crate::time::{Timestamp, parse_rfc3339};
 const MAX_ASKS: usize = 5;
 /// At most this many pending thread replies per run.
 const MAX_RESULTS: usize = 10;
-/// How many of the newest bosun issues are searched for results.
-const MAX_EPICS: usize = 100;
+/// Issues updated within this many seconds (7 days) are searched for results.
+const WINDOW_SECS: i64 = 7 * 86_400;
+/// Without `--thread`, a result younger than this is left to the live thread (15 minutes).
+const GRACE_SECS: i64 = 900;
+
+/// Where `collect` looks for thread replies.
+#[derive(Clone, Copy, PartialEq)]
+enum Results {
+    /// Not at all.
+    Off,
+    /// The recently updated issues.
+    Scan,
+    /// One issue (for `--ack` of a `result:<issue>:<comment>` key).
+    Issue(u64),
+}
 
 pub fn run(dir: Option<&Path>, args: &NotifyArgs) -> CmdResult {
     match &args.ack {
+        Some(_) if args.thread.is_some() => Err(BosunError::usage(
+            "--thread and --ack cannot be used together",
+            "list with `bosun notify --thread TS`, then ack a key with `bosun notify --ack KEY`",
+        )),
         Some(key) => ack(dir, key),
         None => {
             if let Some(ts) = &args.thread
@@ -55,7 +71,17 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
     }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    let found = collect(&app, None)?;
+    // A result key is checked on its own issue: the capped list may not hold it, but
+    // `--thread` can list it.
+    let mode = match key
+        .strip_prefix("result:")
+        .and_then(|r| r.split_once(':'))
+        .and_then(|(n, _)| n.parse().ok())
+    {
+        Some(n) => Results::Issue(n),
+        None => Results::Off,
+    };
+    let found = collect(&app, None, mode)?;
     if found.done.iter().any(|k| k == key) {
         return Ok(Outcome::data(json!({"acked": key, "already": true})));
     }
@@ -125,11 +151,12 @@ fn push(pending: &mut Vec<Pending>, key: String, kind: &'static str, text: Strin
 /// The pending posts. Halt and main-red come first; a later section that fails is reported in
 /// `errors` and does not hide them. A `notified`, `ask`, `result` or thread-carrying lease record
 /// counts only from a writer. With `only_thread`, only the thread-results of that thread.
-fn collect(app: &App, only_thread: Option<&str>) -> Result<Found, BosunError> {
+fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Found, BosunError> {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let slack = ctx.config.slack.clone().unwrap_or_default();
     let listed = |kind: &str| slack.notify.is_empty() || slack.notify.iter().any(|k| k == kind);
-    let wants = |kind: &str| only_thread.is_none() && listed(kind);
+    let wants =
+        |kind: &str| only_thread.is_none() && !matches!(results, Results::Issue(_)) && listed(kind);
     let url = |n: u64| {
         format!(
             "https://github.com/{}/{}/issues/{n}",
@@ -286,7 +313,15 @@ fn collect(app: &App, only_thread: Option<&str>) -> Result<Found, BosunError> {
     }
 
     if listed("thread-result") && notified_ok {
-        let r = thread_results(gh, ctx, &mut trust, &done, only_thread, &mut pending);
+        let r = thread_results(
+            gh,
+            ctx,
+            &mut trust,
+            &done,
+            only_thread,
+            results,
+            &mut pending,
+        );
         if let Err(e) = r {
             errors.push(json!({"kind": "thread-result", "message": e.message}));
         }
@@ -300,72 +335,98 @@ fn collect(app: &App, only_thread: Option<&str>) -> Result<Found, BosunError> {
     })
 }
 
-/// The unacked `result` records of epics that came from a thread. The newest `MAX_EPICS` bosun
-/// issues are searched (a result older than that is dropped). A lease's `thread_ts` and a result
-/// count only from a writer; the cap counts only results still pending.
+/// One `result` record that counts: by a writer, on an issue with a writer's thread lease, and
+/// written after that lease.
+struct Reply {
+    id: u64,
+    outcome: String,
+    pr: Option<u64>,
+    at: Timestamp,
+    thread_ts: String,
+}
+
+/// The counting results of one issue, oldest first. The thread is that of the newest lease with
+/// a valid `thread_ts` by a writer; a result before that lease belongs to an earlier spawn.
+fn replies_of(gh: &dyn Github, trust: &mut Trust, issue: u64) -> Result<Vec<Reply>, BosunError> {
+    let mut lease: Option<(String, Timestamp)> = None;
+    let mut results = Vec::new();
+    for c in gh.list_comments(issue)? {
+        let at = parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0));
+        match parse_record(&c.body) {
+            Some(Record::Lease {
+                thread_ts: Some(t), ..
+            }) if valid_ts(&t) && trust.ok(&c.user)? => lease = Some((t, at)),
+            Some(Record::Result { outcome, pr, .. }) if trust.ok(&c.user)? => {
+                results.push((c.id, outcome, pr, at));
+            }
+            _ => {}
+        }
+    }
+    let Some((thread_ts, since)) = lease else {
+        return Ok(Vec::new());
+    };
+    Ok(results
+        .into_iter()
+        .filter(|(.., at)| *at > since)
+        .map(|(id, outcome, pr, at)| Reply {
+            id,
+            outcome,
+            pr,
+            at,
+            thread_ts: thread_ts.clone(),
+        })
+        .collect())
+}
+
+/// The unacked thread replies. `Results::Scan` reads one page of the issues updated in the last
+/// 7 days (newest 100) and the comments of those with a state label; without `only_thread` a
+/// result younger than the grace period is left to the live thread. `Results::Issue` checks one
+/// issue, for `--ack`. The cap counts only results still pending.
 fn thread_results(
     gh: &dyn Github,
     ctx: &crate::ctx::Ctx,
     trust: &mut Trust,
     done: &[String],
     only_thread: Option<&str>,
+    mode: Results,
     pending: &mut Vec<Pending>,
 ) -> Result<(), BosunError> {
-    let mut issues: Vec<_> = gh
-        .list_issues(&[], IssueState::All)?
-        .into_iter()
-        .filter(|i| i.labels.iter().any(|l| l.starts_with("bosun:state/")))
-        .collect();
-    issues.sort_by_key(|i| std::cmp::Reverse(i.number));
+    let issues: Vec<u64> = match mode {
+        Results::Off => return Ok(()),
+        Results::Issue(n) => vec![n],
+        Results::Scan => gh
+            .recent_issues(&ctx.now.minus_secs(WINDOW_SECS).to_string())?
+            .into_iter()
+            .filter(|i| i.labels.iter().any(|l| l.starts_with("bosun:state/")))
+            .map(|i| i.number)
+            .collect(),
+    };
+    let base = format!("https://github.com/{}/{}", ctx.repo.owner, ctx.repo.name);
     let mut count = 0;
-    for i in issues.into_iter().take(MAX_EPICS) {
-        if count >= MAX_RESULTS {
-            break;
-        }
-        let mut leases: Vec<Note> = Vec::new();
-        let mut results: Vec<(u64, String, Option<u64>)> = Vec::new();
-        for c in gh.list_comments(i.number)? {
-            match parse_record(&c.body) {
-                Some(Record::Lease {
-                    thread_ts: Some(_), ..
-                }) if trust.ok(&c.user)? => leases.push(Note {
-                    id: c.id,
-                    body: c.body,
-                    created_at: parse_rfc3339(&c.created_at).unwrap_or(Timestamp(0)),
-                }),
-                Some(Record::Result { outcome, pr, .. }) if trust.ok(&c.user)? => {
-                    results.push((c.id, outcome, pr));
-                }
-                _ => {}
-            }
-        }
-        let Some(ts) = thread_of(&leases) else {
-            continue;
-        };
-        if only_thread.is_some_and(|t| t != ts) {
-            continue;
-        }
-        let base = format!("https://github.com/{}/{}", ctx.repo.owner, ctx.repo.name);
-        for (id, outcome, pr) in results {
-            let key = format!("result:{}:{id}", i.number);
-            if done.contains(&key) {
+    for n in issues {
+        for r in replies_of(gh, trust, n)? {
+            let key = format!("result:{n}:{}", r.id);
+            let young = ctx.now.0 - r.at.0 < GRACE_SECS;
+            if done.contains(&key)
+                || only_thread.is_some_and(|t| t != r.thread_ts)
+                || (mode == Results::Scan && only_thread.is_none() && young)
+            {
                 continue;
             }
-            if count >= MAX_RESULTS {
-                break;
+            if mode == Results::Scan && count >= MAX_RESULTS {
+                return Ok(());
             }
-            let pr_text = pr.map_or(String::new(), |p| format!(" PR {base}/pull/{p}"));
+            let pr_text =
+                r.pr.map_or(String::new(), |p| format!(" PR {base}/pull/{p}"));
             let text = format!(
-                "result of #{}: {}. {base}/issues/{}{pr_text}",
-                i.number,
-                neutralise(&outcome),
-                i.number
+                "result of #{n}: {}. {base}/issues/{n}{pr_text}",
+                neutralise(&r.outcome)
             );
             pending.push(Pending {
                 key,
                 kind: "thread-result",
                 text,
-                thread_ts: Some(ts.clone()),
+                thread_ts: Some(r.thread_ts),
             });
             count += 1;
         }
@@ -401,7 +462,7 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) ->
     }
     let Found {
         pending, errors, ..
-    } = collect(&app, thread)?;
+    } = collect(&app, thread, Results::Scan)?;
 
     if !pending.is_empty() {
         let keys: Vec<&str> = pending.iter().map(|p| p.key.as_str()).collect();

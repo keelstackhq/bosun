@@ -9,6 +9,8 @@ const NOW: &str = "2026-10-22T10:00:00Z";
 const TS: &str = "1700000000.000200";
 const GOOD: &str =
     r#"{"id":"C1","is_ext_shared":false,"is_org_shared":false,"is_shared":false,"guests":0}"#;
+const LEASE_AT: &str = "2026-10-22T09:00:00Z";
+const RESULT_AT: &str = "2026-10-22T09:30:00Z";
 const READY: &[&str] = &["bosun:state/merged"];
 
 struct Env {
@@ -58,16 +60,28 @@ impl Env {
 
     /// An epic spawned from `ts` by `user`, with a result by `rby`; returns the result comment id.
     fn epic(&self, n: u64, ts: Option<&str>, user: &str, rby: &str, outcome: &str) -> u64 {
+        self.epic_at(n, ts, user, rby, outcome, [LEASE_AT, RESULT_AT])
+    }
+
+    /// Like `epic`, with the creation times of the lease and the result.
+    fn epic_at(
+        &self,
+        n: u64,
+        ts: Option<&str>,
+        user: &str,
+        rby: &str,
+        outcome: &str,
+        [lease_at, result_at]: [&str; 2],
+    ) -> u64 {
         self.fake.issue(n, "epic", READY, "");
         let mut lease = json!({"bosun": "lease", "session": "s", "origin": "slack",
             "expires": "2026-10-22T09:00:00Z", "touch": []});
         if let Some(ts) = ts {
             lease["thread_ts"] = json!(ts);
         }
-        self.fake.comment_by(n, user, &lease.to_string());
+        self.fake.comment_at(n, user, &lease.to_string(), lease_at);
         let res = json!({"bosun": "result", "session": "s", "outcome": outcome, "pr": 7});
-        self.fake.comment_by(n, rby, &res.to_string());
-        self.fake.comments_of(n).last().unwrap().id
+        self.fake.comment_at(n, rby, &res.to_string(), result_at)
     }
 
     fn keys(v: &Value) -> Vec<String> {
@@ -188,6 +202,7 @@ fn the_cap_counts_only_pending_results() {
     let (_, v) = e.notify(&[]);
     assert_eq!(Env::keys(&v).len(), 10, "{v}");
     assert!(!Env::keys(&v).iter().any(|k| k.starts_with("result:20:")));
+    assert!(!Env::keys(&v).iter().any(|k| k.starts_with("result:21:")));
 }
 
 #[test]
@@ -222,4 +237,89 @@ fn without_channel_info_it_exits_5() {
     let (code, v) = e.run(&["notify"], "");
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["reason"], "no channel info");
+}
+
+#[test]
+fn a_thread_listed_key_beyond_the_global_cap_can_be_acked() {
+    let e = env();
+    let b = "1700000001.000100";
+    // Ten pending results of thread A hide the oldest one (thread B) from a global run.
+    let id = e.epic(10, Some(b), "ada", "ada", "merged");
+    for n in 11..21 {
+        e.epic(n, Some(TS), "ada", "ada", "merged");
+    }
+    let (_, v) = e.notify(&[]);
+    assert!(!Env::keys(&v).contains(&format!("result:10:{id}")));
+    let (_, v) = e.notify(&["--thread", b]);
+    assert_eq!(Env::keys(&v), [format!("result:10:{id}")]);
+    let (code, v) = e.run(&["notify", "--ack", &format!("result:10:{id}")], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], false);
+}
+
+#[test]
+fn a_result_older_than_the_thread_lease_is_stale() {
+    let e = env();
+    // A "blocked" result from before this thread spawned the epic again.
+    e.epic_at(
+        10,
+        Some(TS),
+        "ada",
+        "ada",
+        "blocked",
+        ["2026-10-22T09:00:00Z", "2026-10-22T08:00:00Z"],
+    );
+    let (code, v) = e.notify(&["--thread", TS]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"], json!([]));
+    let (_, v) = e.notify(&[]);
+    assert_eq!(v["data"]["pending"], json!([]));
+}
+
+#[test]
+fn an_old_numbered_epic_with_a_recent_result_is_found() {
+    let e = env();
+    let id = e.epic(2, Some(TS), "ada", "ada", "merged");
+    // More than 100 newer-numbered issues, none updated within seven days.
+    for n in 3..110 {
+        e.fake.issue(n, "old", READY, "");
+        e.fake.issue_updated(n, "2026-09-01T00:00:00Z");
+    }
+    let (code, v) = e.notify(&[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [format!("result:2:{id}")]);
+}
+
+#[test]
+fn a_young_result_is_left_to_the_live_thread() {
+    let e = env();
+    let id = e.epic_at(
+        10,
+        Some(TS),
+        "ada",
+        "ada",
+        "merged",
+        [LEASE_AT, "2026-10-22T09:50:00Z"],
+    );
+    let (code, v) = e.notify(&[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"], json!([]));
+    let (_, v) = e.notify(&["--thread", TS]);
+    assert_eq!(Env::keys(&v), [format!("result:10:{id}")]);
+}
+
+#[test]
+fn an_invalid_lease_thread_ts_is_skipped() {
+    let e = env();
+    e.epic(10, Some("1.2<!channel>"), "ada", "ada", "merged");
+    let (code, v) = e.notify(&[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"], json!([]));
+}
+
+#[test]
+fn thread_and_ack_together_are_a_usage_error() {
+    let e = env();
+    let (code, v) = e.run(&["notify", "--thread", TS, "--ack", "halt:1"], "");
+    assert_eq!(code, 2, "{v}");
 }
