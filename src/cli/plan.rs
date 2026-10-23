@@ -469,7 +469,7 @@ fn epic_plan(body: &str) -> Option<String> {
 
 /// Replace the task metadata comment of `body`, keeping every other byte.
 fn replace_task_meta(body: &str, meta: &TaskMeta) -> Option<String> {
-    let start = body.find("<!-- bosun:task")?;
+    let start = body.rfind(crate::core::meta::OPEN)?;
     let end = start + body[start..].find("-->")? + "-->".len();
     let json = serde_json::to_string(meta).expect("meta serializes");
     Some(format!(

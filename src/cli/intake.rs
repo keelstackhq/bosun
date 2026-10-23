@@ -16,21 +16,26 @@ use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
     let text = a.text.trim();
+    let app = App::load(dir)?;
+    kill_switch(app.gh.as_ref())?;
     if text.is_empty() {
         return Err(BosunError::usage(
             "the intake text is empty",
             "pass what is wanted as the first argument: bosun intake \"<text>\" --source human",
         ));
     }
-    let app = App::load(dir)?;
-    kill_switch(app.gh.as_ref())?;
     let file = a
         .plan
         .clone()
         .unwrap_or_else(|| format!("plans/{}.md", app.ctx.config.project));
     let area = plan_area(&app.ctx.dir, &file, a.item.as_deref())?;
     let first = text.lines().next().unwrap_or(text).trim();
-    let title_text = a.title.as_deref().map_or(first, str::trim);
+    let title_text = a
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or(first);
     let title = format!(
         "intake: {}",
         title_text.chars().take(80).collect::<String>()
@@ -54,10 +59,13 @@ pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
         allow: vec!["skip".into()],
         capabilities: vec![],
     };
+    // The metadata marker comes first and the request text cannot carry a marker or close its
+    // fence; readers also take the last marker (core::meta).
+    let quoted = text.replace("```", "'''").replace("<!--", "<!-\u{200b}-");
     let body = format!(
-        "{text}\n\nAmend {file}: add or change an item/task for this request (docs/plan-format.md), \
+        "<!-- bosun:task {} -->\n\n```text\n{quoted}\n```\n\nAmend {file}: add or change an item/task for this request (docs/plan-format.md), \
          open a kind/plan PR that closes this issue, and run `bosun plan amend {file}` after it \
-         merges; only then do the new tasks become ready (spec §4).\n\n<!-- bosun:task {} -->\n",
+         merges; only then do the new tasks become ready (spec §4).\n",
         serde_json::to_string(&meta).expect("meta serializes")
     );
     let ready = State::Ready.label();
