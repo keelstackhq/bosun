@@ -39,6 +39,17 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let found = collect(&app)?;
+    // The record must count: a writer's. With another login every ack would be ignored and the
+    // post would repeat forever. A token with no user (an installation token) cannot be checked.
+    if let Some(me) = gh.authenticated_user().ok().flatten() {
+        let p = gh.permission(&me)?.unwrap_or_default();
+        if !matches!(p.as_str(), "admin" | "write") {
+            return Err(BosunError::needs_human(
+                format!("{me} has {p} access, so its acks would be ignored"),
+                "the token's user needs write access, or acks are ignored and posts repeat",
+            ));
+        }
+    }
     if found.done.iter().any(|k| k == key) {
         return Ok(Outcome::data(json!({"acked": key, "already": true})));
     }
@@ -106,7 +117,31 @@ fn collect(app: &App) -> Result<Found, BosunError> {
     };
     let mut pending: Vec<Pending> = Vec::new();
     let mut errors: Vec<Value> = Vec::new();
-    let reg = registry::load(gh)?;
+    // The `notified` records come first: acked asks must not use up the cap. When they cannot
+    // be read, halt and main-red stay pending (a repeat beats silence) and the rest is dropped.
+    let mut done: Vec<String> = Vec::new();
+    let mut reg = None;
+    let read = (|| -> Result<_, BosunError> {
+        let r = registry::load(gh)?;
+        if let Some((n, _)) = &r {
+            for c in gh.list_comments(*n)? {
+                if let Some(Record::Notified { key, .. }) = parse_record(&c.body)
+                    && trust.ok(&c.user)?
+                {
+                    done.push(key);
+                }
+            }
+        }
+        Ok(r)
+    })();
+    let notified_ok = read.is_ok();
+    match read {
+        Ok(r) => reg = r,
+        Err(e) => {
+            done.clear();
+            errors.push(json!({"kind": "notified", "message": e.message}));
+        }
+    }
 
     // No kill switch here on purpose: notify announces the halt (spec §10). The owner logic is
     // that of `app::halt_reason`: the first halt issue by an owner, the first one when no
@@ -124,10 +159,18 @@ fn collect(app: &App) -> Result<Found, BosunError> {
                         .find(|i| owners.iter().any(|o| o.eq_ignore_ascii_case(&i.user)))
                 };
                 if let Some(i) = hit {
-                    let text = format!(
-                        "bosun is halted: the owner stopped all work. {}",
-                        url(i.number)
-                    );
+                    let text = if owners.is_empty() {
+                        format!(
+                            "bosun is halted: halt issue #{} is open and no owners are listed to judge it. {}",
+                            i.number,
+                            url(i.number)
+                        )
+                    } else {
+                        format!(
+                            "bosun is halted: the owner stopped all work. {}",
+                            url(i.number)
+                        )
+                    };
                     push(&mut pending, format!("halt:{}", i.number), "halt", text);
                     return Ok(());
                 }
@@ -155,6 +198,7 @@ fn collect(app: &App) -> Result<Found, BosunError> {
         }
     }
     if wants("budget-halt")
+        && notified_ok
         && let Some((reg_issue, reg_notes)) = &reg
     {
         match limits_from_default(gh, ctx) {
@@ -177,12 +221,13 @@ fn collect(app: &App) -> Result<Found, BosunError> {
             Err(e) => errors.push(json!({"kind": "budget-halt", "message": e.message})),
         }
     }
-    if wants("owner-question") {
+    if wants("owner-question") && notified_ok {
         let r = (|| -> Result<(), BosunError> {
             let mut issues = gh.list_issues(&[&State::NeedsHuman.label()], IssueState::Open)?;
             issues.sort_by_key(|i| i.number);
             let mut count = 0;
             for i in issues {
+                // Only asks still pending count toward the cap.
                 if count >= MAX_ASKS {
                     break;
                 }
@@ -191,18 +236,17 @@ fn collect(app: &App) -> Result<Found, BosunError> {
                     if let Some(Record::Ask { question, .. }) = parse_record(&c.body)
                         && trust.ok(&c.user)?
                     {
+                        let key = format!("ask:{}:{}", i.number, c.id);
+                        if done.contains(&key) {
+                            break;
+                        }
                         let text = format!(
                             "question for the owner on #{}: {} {}",
                             i.number,
                             neutralise(&question),
                             url(i.number)
                         );
-                        push(
-                            &mut pending,
-                            format!("ask:{}:{}", i.number, c.id),
-                            "owner-question",
-                            text,
-                        );
+                        push(&mut pending, key, "owner-question", text);
                         count += 1;
                         break;
                     }
@@ -215,16 +259,6 @@ fn collect(app: &App) -> Result<Found, BosunError> {
         }
     }
 
-    let mut done = Vec::new();
-    if let Some((n, _)) = &reg {
-        for c in gh.list_comments(*n)? {
-            if let Some(Record::Notified { key, .. }) = parse_record(&c.body)
-                && trust.ok(&c.user)?
-            {
-                done.push(key);
-            }
-        }
-    }
     pending.retain(|p| !done.contains(&p.key));
     Ok(Found {
         pending,

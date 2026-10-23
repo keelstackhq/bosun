@@ -85,6 +85,8 @@ pub trait Github {
     /// A user's permission on the repository (`admin`, `write`, `read` or `none`; maintain
     /// reads as `write`); `None` when GitHub does not know the user.
     fn permission(&self, user: &str) -> Result<Option<String>>;
+    /// The login the token belongs to; `None` when it has no user (an app token).
+    fn authenticated_user(&self) -> Result<Option<String>>;
     /// One issue or PR comment by id; `None` when it does not exist.
     fn get_comment(&self, id: u64) -> Result<Option<Comment>>;
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
@@ -347,6 +349,13 @@ impl Github for LiveGithub {
             .http
             .get_json(&path)?
             .and_then(|v| v["permission"].as_str().map(str::to_string)))
+    }
+
+    fn authenticated_user(&self) -> Result<Option<String>> {
+        Ok(self
+            .http
+            .get_json("/user")?
+            .and_then(|v| v["login"].as_str().map(str::to_string)))
     }
 
     fn get_comment(&self, id: u64) -> Result<Option<Comment>> {

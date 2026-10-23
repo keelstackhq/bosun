@@ -514,3 +514,63 @@ fn the_budget_halt_key_follows_the_day() {
         assert_eq!(Env::keys(&v), [key], "{v}");
     }
 }
+
+#[test]
+fn acked_asks_do_not_use_up_the_cap() {
+    let e = env();
+    e.registry();
+    for n in 4..9 {
+        e.fake.issue(n, "task", NEEDS, "");
+        let id = ask_by(&e, n, "ada", "old?");
+        e.fake.comment(
+            1,
+            &format!(r#"{{"bosun":"notified","key":"ask:{n}:{id}","at":"2026-10-22T09:00:00Z"}}"#),
+        );
+    }
+    e.fake.issue(20, "task", NEEDS, "");
+    let new = ask_by(&e, 20, "ada", "new?");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [format!("ask:20:{new}")]);
+}
+
+#[test]
+fn an_unreadable_notified_list_keeps_halt_and_main_red() {
+    let e = env();
+    e.registry();
+    red(&e);
+    e.halt();
+    e.fake.issue(4, "task", NEEDS, "");
+    ask_by(&e, 4, "ada", "q?");
+    e.fake.fail_path("/issues/1/comments", 500);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), ["halt:2", "main-red:3"]);
+    assert_eq!(v["data"]["errors"][0]["kind"], "notified");
+}
+
+#[test]
+fn an_ack_by_a_token_user_without_write_access_is_refused() {
+    let e = env();
+    e.registry();
+    red(&e);
+    e.fake.me("routine");
+    e.fake.permission("routine", "read");
+    let (code, v) = e.run(&["notify", "--ack", "main-red:3"], "");
+    assert_eq!(code, 5, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("write access"));
+    assert!(e.fake.comments_of(1).is_empty());
+    e.fake.permission("routine", "write");
+    assert_eq!(e.run(&["notify", "--ack", "main-red:3"], "").0, 0);
+}
+
+#[test]
+fn a_halt_with_no_owners_has_its_own_text() {
+    let e = env();
+    e.fake.content("governance/owners.toml", "main", "");
+    e.fake.issue(2, "halt", &["bosun:halt"], "");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    let text = v["next"][0]["args"]["text"].as_str().unwrap();
+    assert!(text.contains("no owners are listed"), "{text}");
+}
