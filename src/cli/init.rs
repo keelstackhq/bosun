@@ -82,7 +82,7 @@ fn run_splice(argv: &[String]) -> Result<Value, BosunError> {
     };
     Err(BosunError::error(
         format!("splice failed (exit {:?}): {detail}", out.status.code()),
-        "fix the splice error above, then `git switch -` and `git branch -D bosun/init` before rerunning",
+        "fix the splice error above, then rerun `bosun init`",
     )
     .with_data(json!({ "splice": parsed })))
 }
@@ -153,20 +153,19 @@ fn setup(
     Ok((changes, plan))
 }
 
-/// Undo a failed init: drop what splice wrote and the branch, and go back to where it started.
-/// The tree was clean before, so nothing of the user's is lost.
-fn rollback(root: &Path, start: &str) {
-    // `start` is a branch name, or a commit sha when init began on a detached HEAD.
-    let detached = start.len() == 40 && start.bytes().all(|b| b.is_ascii_hexdigit());
+/// Undo a failed init: drop what splice wrote and the branch, and go back to where it started
+/// (a branch, or a commit when HEAD was detached). The tree was clean before, so nothing of the
+/// user's is lost. False when a step failed.
+fn rollback(root: &Path, start: &str, detached: bool) -> bool {
     let back = if detached { "--detach" } else { "--no-guess" };
-    for args in [
+    [
         vec!["reset", "-q", "--hard"],
         vec!["clean", "-q", "-fd"],
         vec!["switch", "-q", back, start],
         vec!["branch", "-q", "-D", BRANCH],
-    ] {
-        let _ = git(root, &args);
-    }
+    ]
+    .iter()
+    .all(|args| git(root, args).is_ok())
 }
 
 pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
@@ -290,7 +289,8 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         Some((app, base))
     };
     let start = git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let start = if start == "HEAD" {
+    let detached = start == "HEAD";
+    let start = if detached {
         git(&root, &["rev-parse", "HEAD"])?
     } else {
         start
@@ -306,8 +306,15 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     let (changes, plan) = match local {
         Ok(v) => v,
         Err(e) => {
-            rollback(&root, &start);
-            let fix = format!("bosun init rolled back to {start}; {}", e.fix);
+            let fix = if rollback(&root, &start, detached) {
+                format!("bosun init rolled back to {start}; {}", e.fix)
+            } else {
+                format!(
+                    "bosun init could not roll back fully: check `git status`, switch to {start} and \
+                     delete bosun/init; then: {}",
+                    e.fix
+                )
+            };
             return Err(BosunError { fix, ..e });
         }
     };
@@ -320,7 +327,10 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             .gh
             .create_pull("chore: set up bosun", BRANCH, base, &body)
             .map_err(|e| BosunError {
-                fix: "bosun/init is pushed: open its PR by hand, or retry with `bosun pr`".into(),
+                fix: format!(
+                    "bosun/init is pushed: open its PR by hand with \
+                     `gh pr create --head bosun/init --base {base} --title \"chore: set up bosun\"`"
+                ),
                 ..e
             })?;
         pr = Some(json!({"number": pull.number, "head_sha": pull.head_sha}));

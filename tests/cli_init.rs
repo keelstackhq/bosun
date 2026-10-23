@@ -215,11 +215,10 @@ fn a_splice_failure_is_an_error_with_its_messages() {
     );
     assert_eq!(v["data"]["splice"]["ok"], false);
     // Rolled back: on main, clean, no init branch, so a rerun works.
+    let fix = v["error"]["fix"].as_str().unwrap();
     assert!(
-        v["error"]["fix"]
-            .as_str()
-            .unwrap()
-            .contains("rolled back to main")
+        fix.contains("rolled back to main") && !fix.contains("git switch -"),
+        "{fix}"
     );
     assert_eq!(git_out(e.repo.path(), &["status", "--porcelain"]), "");
     assert_eq!(
