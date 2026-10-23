@@ -53,6 +53,31 @@ fn strip(text: &str) -> String {
                 i += 2;
                 out.push(' ');
             }
+            '/' if regex_can_start(&out) => {
+                // A regex literal: blank it, so quotes inside it open no string.
+                out.push('/');
+                i += 1;
+                let mut class = false;
+                while i < c.len() && c[i] != '\n' && (class || c[i] != '/') {
+                    match c[i] {
+                        '\\' => {
+                            out.push(' ');
+                            i += 1;
+                        }
+                        '[' => class = true,
+                        ']' => class = false,
+                        _ => {}
+                    }
+                    if i < c.len() && c[i] != '\n' {
+                        out.push(' ');
+                        i += 1;
+                    }
+                }
+                if at(i) == Some('/') {
+                    out.push('/');
+                    i += 1;
+                }
+            }
             q @ ('\'' | '"' | '`') => {
                 out.push(q);
                 i += 1;
@@ -83,6 +108,19 @@ fn strip(text: &str) -> String {
         }
     }
     out
+}
+
+/// Can a `/` after `out` start a regex literal? After `(`, `,`, `=`, `:`, `[`, `!`, `&`, `|`,
+/// `?`, `{`, `}`, `;`, the word `return`, or at the start of a line; elsewhere it divides.
+fn regex_can_start(out: &str) -> bool {
+    let t = out.trim_end_matches([' ', '\t']);
+    match t.chars().last() {
+        None | Some('\n') => true,
+        Some(c) if "(,=:[!&|?{};".contains(c) => true,
+        _ => t.strip_suffix("return").is_some_and(|r| {
+            !r.ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        }),
+    }
 }
 
 fn is_ident(b: u8) -> bool {
@@ -138,7 +176,8 @@ fn calls(text: &str) -> Vec<Call> {
     ];
     let src = strip(text);
     let mut out = Vec::new();
-    for (n, line) in src.lines().enumerate() {
+    let lines: Vec<&str> = src.lines().collect();
+    for (n, line) in lines.iter().copied().enumerate() {
         let b = line.as_bytes();
         let mut i = 0;
         while i < b.len() {
@@ -174,6 +213,23 @@ fn calls(text: &str) -> Vec<Call> {
             let opens = j < b.len() && (b[j] == b'(' || b[j] == b'`');
             if !opens || mods.iter().any(|m| !MODS.contains(m)) {
                 continue;
+            }
+            // `function fit(x) {}` declares a helper; it is not a test.
+            if line[..start].trim_end().ends_with("function") {
+                continue;
+            }
+            // `fit` and `fdescribe` are common names: they count only when called with a title
+            // (a string or template literal, possibly on the next line).
+            if matches!(word, "fit" | "fdescribe") && mods.is_empty() {
+                let rest = line[j..].trim_start_matches('(').trim_start();
+                let next = if rest.is_empty() {
+                    lines.get(n + 1).map_or("", |l| l.trim_start())
+                } else {
+                    rest
+                };
+                if b[j] != b'`' && !next.starts_with(['\'', '"', '`']) {
+                    continue;
+                }
             }
             out.push(Call {
                 line: n + 1,
@@ -309,6 +365,26 @@ mod tests {
                     fdescribe('e', f);\ndescribe.only.each([1])('f', f);\nit('g', f);\n";
         assert_eq!(only_count(text), 6);
         assert!(pending_markers(text).is_empty());
+    }
+
+    #[test]
+    fn fit_helpers_are_not_focused_tests() {
+        let text = "function fit(x) { return x; }\nconst a = fit(width);\nfit(width, 2);\n\
+                    export async function fdescribe(n) {}\nit('t', f);\n";
+        assert_eq!(only_count(text), 0);
+        assert_eq!(test_count(text), 1);
+        let titled = "fit('a', f);\nfdescribe(\n  `b`, f);\nfit(\n\"c\", f);\n";
+        assert_eq!(only_count(titled), 3);
+        assert_eq!(test_count("function it(x) {}\n"), 0);
+    }
+
+    #[test]
+    fn regex_literals_do_not_open_strings() {
+        let text = "const r = /`/;\nit.skip('a', f);\nconst q = x.replace(/[\"']/g, '');\n\
+                    it.skip('b', f);\nconst d = a / b; it.skip('c', f); const e = c / 2;\n";
+        assert_eq!(pending_markers(text).len(), 3);
+        assert_eq!(pending_markers("x = /\\//; it.skip('a', f);\n").len(), 1);
+        assert_eq!(pending_markers("x = /[/]`/; it.skip('a', f);\n").len(), 1);
     }
 
     #[test]

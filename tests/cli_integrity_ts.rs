@@ -192,6 +192,24 @@ fn added_only_is_refused_unless_allowed() {
 }
 
 #[test]
+fn fit_helper_and_regex_quotes_are_handled() {
+    let r = repo();
+    r.edit(
+        "src/a.test.ts",
+        &format!("function fit(x) {{ return x; }}\nconst w = fit(3);\n{TEST_TS}"),
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 0, "{v}");
+    r.edit(
+        "src/a.test.ts",
+        &format!("const r = /`/;\nit.skip('b', f);\nconst s = 'x';\n{TEST_TS}"),
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["new-skip"]);
+}
+
+#[test]
 fn unchanged_ts_tests_pass() {
     let r = repo();
     r.edit("src/a.ts", "export const a = 2;\n");
