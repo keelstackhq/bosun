@@ -28,7 +28,11 @@ const CALLS: [&[&str]; 25] = [
     &["hook", "session-start"],
     &["doctor"],
     &["budget", "record", "4", "--provider", "generic"],
+<<<<<<< HEAD
     &["revert", "3"],
+=======
+    &["fail", "4", "--signature", "E0308"],
+>>>>>>> origin/main
 ];
 
 #[test]
