@@ -6,6 +6,7 @@ pub mod integrity;
 pub mod main_open;
 pub mod packages;
 pub mod profile;
+pub mod ts;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -64,24 +65,27 @@ fn git_has(root: &Path, spec: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// The profile's manifest when the stack has none in the working tree and none at the base
-/// either, also with `--all`: a stack that never had one has nothing to check yet.
+/// Is `file` missing in the stack's working tree and at the base too? Also with `--all`: a
+/// merge-queue run after a PR deleted the file must still run (and fail), so a file the base had
+/// is never "missing".
+fn missing_file(req: &Request, stack: &Stack, file: &str) -> bool {
+    let rel = stack_rel(&stack.path);
+    if req.root.join(rel).join(file).exists() {
+        return false;
+    }
+    let path = Path::new(rel).join(file);
+    !git_has(req.root, &format!("{}:{}", req.base, path.display()))
+}
+
+/// The profile's manifest when the stack has none, head or base: a stack that never had one has
+/// nothing to check yet.
 fn missing_manifest<'a>(req: &Request, stack: &Stack, profile: &'a Profile) -> Option<&'a str> {
     let manifest = profile.manifest.as_deref()?;
-    let rel = stack_rel(&stack.path);
-    if req.root.join(rel).join(manifest).exists() {
-        return None;
-    }
-    // Also with --all: a merge-queue run after a PR deleted the manifest must still fail.
-    let in_base = {
-        let path = Path::new(rel).join(manifest);
-        git_has(req.root, &format!("{}:{}", req.base, path.display()))
-    };
-    (!in_base).then_some(manifest)
+    missing_file(req, stack, manifest).then_some(manifest)
 }
 
 /// A stack path as a clean relative path; `.` and empty mean the repo root.
-fn stack_rel(path: &str) -> &str {
+pub(crate) fn stack_rel(path: &str) -> &str {
     let p = path.trim_start_matches("./").trim_end_matches('/');
     if p == "." { "" } else { p }
 }
@@ -131,13 +135,24 @@ pub fn run(req: &Request) -> CmdResult {
     let mut failed: Option<i64> = None;
     for (stack, profile, files) in &plan {
         let gate = profile.gate(req.gate)?;
+        let lacks = gate
+            .requires
+            .as_deref()
+            .filter(|f| missing_file(req, stack, f));
         let run = match missing_manifest(req, stack, profile) {
             Some(manifest) => json!({
                 "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
                 "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
                 "reason": format!("no {manifest} in {}", stack.path),
             }),
-            None => execute(req, stack, gate, files)?,
+            None => match lacks {
+                Some(file) => json!({
+                    "gate": req.gate, "stack": stack.path, "command": [], "packages": [],
+                    "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+                    "reason": format!("no {file}"),
+                }),
+                None => execute(req, stack, &profile.adapters.packages, gate, files)?,
+            },
         };
         let status = run["exit_status"].as_i64().unwrap_or(0);
         runs.push(run);
@@ -166,16 +181,17 @@ pub fn run(req: &Request) -> CmdResult {
 fn execute(
     req: &Request,
     stack: &Stack,
+    adapter: &str,
     gate: &Gate,
     files: &[String],
 ) -> Result<Value, BosunError> {
     let dir: PathBuf = req.root.join(stack_rel(&stack.path));
     let (names, extra): (Vec<String>, Vec<String>) = if gate.is_per_package() {
-        let pkgs = packages::load(&dir)?;
+        let pkgs = packages::load(adapter, &dir)?;
         let affected = if req.all {
             Affected::All
         } else {
-            packages::affected(&dir, files, &pkgs)
+            packages::affected(adapter, &dir, files, &pkgs)
         };
         match affected {
             Affected::None if gate.when_no_package == WhenNoPackage::Skip => {
@@ -212,8 +228,7 @@ fn execute(
         None
     };
     let diff_str = diff.as_ref().map(|d| d.to_string_lossy().into_owned());
-    let mut argv = gate.expand_cmd(files, diff_str.as_deref());
-    argv.extend(extra);
+    let argv = gate.expand_packages(gate.expand_cmd(files, diff_str.as_deref()), extra);
 
     let result = spawn(&argv, &dir);
     if let Some(d) = &diff {

@@ -4,8 +4,8 @@ name: risk
 # comments `/bosun approve <head sha>`, so an approval on the head SHA turns the status green.
 #
 # pull_request_target and issue_comment run this file from the base (default) branch, so a PR
-# cannot rewrite the job that judges it. The job never checks out or runs PR-head code: it builds
-# bosun from the PR's base commit (on a comment: the default branch) and reads the PR through the
+# cannot rewrite the job that judges it. The job never checks out or runs PR-head code: it runs
+# the bosun release pinned in the PR's base commit (on a comment: the default branch) and reads the PR through the
 # API only. Event data reaches `run:` lines through `env:` only, never as `${{ }}` in a script.
 on:
   pull_request_target:
@@ -46,13 +46,41 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      # The release pinned in .bosun/version of this checkout (spec §11), as ci.yml's bosun-bin:
+      # a main that does not compile cannot block its own mainfix. `unreleased` builds instead.
+      - name: pinned release
+        id: pin
+        run: |
+          v="$(tr -d '[:space:]' < .bosun/version 2>/dev/null || true)"
+          case "$v" in ""|unreleased) v="";; esac
+          # An exact x.y.z only: never a dist-tag, range, URL or path.
+          if [ -n "$v" ] && ! printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::.bosun/version must be 'unreleased' or an exact x.y.z, not '$v'"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - if: steps.pin.outputs.version != ''
+        name: install the pinned release
+        env:
+          VERSION: ${{ steps.pin.outputs.version }}
+        run: |
+          npm install -g --ignore-scripts "@keelstackhq/bosun@${VERSION}"
+          dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+          mkdir -p target/release
+          cp "$dir/bin/bosun" target/release/bosun
+          got="$(target/release/bosun --version)"
+          echo "$got"
+          test "$got" = "bosun ${VERSION}"
+      - if: steps.pin.outputs.version == ''
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97"
-      - uses: Swatinem/rust-cache@v2
+      - if: steps.pin.outputs.version == ''
+        uses: Swatinem/rust-cache@v2
         with:
           shared-key: bosun-bin
-      - run: cargo build --release --locked --bin bosun
+      - if: steps.pin.outputs.version == ''
+        run: cargo build --release --locked --bin bosun
       - name: bosun risk-check
         env:
           GITHUB_TOKEN: ${{ github.token }}
