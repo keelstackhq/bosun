@@ -605,6 +605,11 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
 - A Claude Tag thread is a bosun session with origin slack. The environment setup script installs
   the pinned bosun (D23).
 - `bosun notify` refuses a channel that is externally shared or has guests.
+- `bosun answer <issue> --slack-user U… [--from -|FILE]`: on a needs-human task with an `ask`
+  record, an owner Slack ID (`slack` in `governance/owners.toml` on the default branch) adds a
+  fenced comment and an `answer` record and moves the task to ready. Any other ID, or no owner
+  Slack ID, is exit 5 and nothing is written. `bosun doctor` warns when a channel is set and no
+  owner has a Slack ID.
 
 Intents:
 - ask: `bosun status`, explain, `bosun progress`.

@@ -33,6 +33,20 @@ pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
     Ok(owners.into_iter().map(|o| o.github).collect())
 }
 
+/// Slack IDs of the owners in `governance/owners.toml` at `git_ref`; empty when none is set.
+pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
+    let Some(text) = gh.file_at(OWNERS_PATH, git_ref)? else {
+        return Ok(Vec::new());
+    };
+    let owners = parse_owners(&text).map_err(|e| {
+        BosunError::error(
+            e,
+            format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
+        )
+    })?;
+    Ok(owners.into_iter().filter_map(|o| o.slack).collect())
+}
+
 fn is_manifest(path: &str) -> bool {
     matches!(path.rsplit('/').next(), Some("Cargo.toml" | "package.json"))
 }

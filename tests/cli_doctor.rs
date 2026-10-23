@@ -96,7 +96,11 @@ fn a_fully_set_up_repo_is_ok() {
         ".github/workflows/ci.yml",
         "jobs:\n  ci-ok:\n    runs-on: x\n",
     );
-    write(d, "governance/owners.toml", "owners = [\"adam\"]\n");
+    write(
+        d,
+        "governance/owners.toml",
+        "[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n",
+    );
     write(d, "docs/setup-script.sh", "#!/bin/sh\n");
     write(d, ".bosun/version", "unreleased\n");
     write(d, ".bosun/bosun.toml", "[slack]\nchannel = \"#bosun\"\n");
@@ -176,4 +180,32 @@ fn step_3_reads_jobs_not_other_keys_and_accepts_comments_and_yaml() {
         "jobs: # gates\n  ci-ok: # aggregate\n    runs-on: x\n",
     );
     assert_eq!(step3(d)["status"], "ok");
+}
+
+fn slack_step(owners: &str) -> Value {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    write(tmp.path(), "governance/owners.toml", owners);
+    write(
+        tmp.path(),
+        ".bosun/bosun.toml",
+        "[slack]\nchannel = \"#bosun\"\n",
+    );
+    let (_, v) = doctor(&fake, tmp.path(), false);
+    v["data"]["items"][6].clone()
+}
+
+#[test]
+fn doctor_warns_when_no_owner_has_a_slack_id() {
+    let item = slack_step("[[owner]]\ngithub = \"adam\"\n");
+    assert_eq!(item["status"], "warn", "{item}");
+    assert_eq!(
+        item["fix"],
+        "add `slack = \"U…\"` to your [[owner]] table in governance/owners.toml"
+    );
+}
+
+#[test]
+fn doctor_does_not_warn_when_an_owner_has_a_slack_id() {
+    let item = slack_step("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+    assert_eq!(item["status"], "ok", "{item}");
 }

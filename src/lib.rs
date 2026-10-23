@@ -40,6 +40,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::CiLog(a) => cli::ci_log::run(dir, a),
         Command::Status => cli::status::run(dir),
         Command::Ask(a) => cli::ask::run(dir, a),
+        Command::Answer(a) => cli::answer::run(dir, a),
         Command::Lesson(a) => cli::lesson::run(dir, a),
         Command::Hook(a) => hooks::dispatch(dir, a),
         Command::Doctor(a) => cli::doctor::run(dir, a.remote),

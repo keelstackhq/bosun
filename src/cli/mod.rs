@@ -3,6 +3,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+pub mod answer;
 pub mod ask;
 pub mod budget;
 pub mod ci_log;
@@ -102,6 +103,8 @@ pub enum Command {
     Status,
     /// Ask the owner a question on an issue (sets needs-human).
     Ask(AskArgs),
+    /// Record an owner's answer from Slack on a needs-human task and make it ready.
+    Answer(AnswerArgs),
     /// Lesson commands.
     #[command(subcommand)]
     Lesson(LessonCmd),
@@ -173,6 +176,7 @@ pub const COMMANDS: &[&str] = &[
     "intake",
     "main-health",
     "review-ci",
+    "answer",
 ];
 
 impl Command {
@@ -199,6 +203,7 @@ impl Command {
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
             Command::Ask(_) => "ask",
+            Command::Answer(_) => "answer",
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
@@ -415,6 +420,18 @@ pub struct DoctorArgs {
 pub struct AskArgs {
     pub issue: u64,
     pub question: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AnswerArgs {
+    /// The task issue number.
+    pub issue: u64,
+    /// The Slack user ID of the answerer, from the Claude Tag event (an owner's `slack` ID).
+    #[arg(long)]
+    pub slack_user: String,
+    /// The answer text: `-` for stdin, or a file.
+    #[arg(long, default_value = "-")]
+    pub from: String,
 }
 
 #[derive(Debug, Subcommand)]

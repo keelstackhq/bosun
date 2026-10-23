@@ -439,7 +439,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .as_ref()
         .map(|s| s.channel.trim().to_string())
         .unwrap_or_default();
-    items.push(item(
+    let mut slack_item = item(
         7,
         "Slack channel",
         channel
@@ -447,7 +447,20 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             .then(|| "[slack] channel is not set in .bosun/bosun.toml".into()),
         format!("[slack] channel = {channel}"),
         "create the channel, connect Claude Tag, and set [slack] channel in .bosun/bosun.toml",
-    ));
+    );
+    // Without an owner Slack ID no answer counts and no thread may spawn: warn, not fail.
+    let has_slack_id = read(root, "governance/owners.toml")
+        .and_then(|t| crate::core::risk::parse_owners(&t).ok())
+        .is_some_and(|o| o.iter().any(|o| o.slack.is_some()));
+    if !channel.is_empty() && !has_slack_id {
+        slack_item["status"] = json!("warn");
+        slack_item["detail"] = json!(
+            "[slack] channel is set but no owner in governance/owners.toml has a slack ID, so no Slack answer counts"
+        );
+        slack_item["fix"] =
+            json!("add `slack = \"U…\"` to your [[owner]] table in governance/owners.toml");
+    }
+    items.push(slack_item);
 
     let reg = registry::load(gh);
     items.push(item(
