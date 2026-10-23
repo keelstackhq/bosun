@@ -1,6 +1,11 @@
 //! The rust test adapters (spec §7): which files are tests, which tests are pending, and how many
 //! assertions a file holds. Pure functions on text, so test-integrity can compare base and head.
 
+use regex::Regex;
+
+use super::profile::RegexKeys;
+use crate::core::glob::Glob;
+
 /// A `#[ignore` line. `uc` is set when the reason is a use-case id (`#[ignore = "UC-M1-2"]`):
 /// that marks a pending test written by the plan, not a skip.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,9 +100,132 @@ pub fn assertions(text: &str) -> usize {
     count
 }
 
+/// The generic `regex` adapters (spec §7), for stacks without built-in adapters. The patterns come
+/// from the profile's `[adapters.regex]`. They match raw text: `//` comments are not stripped (the
+/// patterns know the language), and there is no test counter, so `fewer-tests` never fires.
+#[derive(Debug)]
+pub struct RegexKit {
+    /// Repo-relative stack directory with a trailing `/`, or empty for the repo root.
+    prefix: String,
+    test_files: Vec<Glob>,
+    pending: Vec<Regex>,
+    assertions: Vec<Regex>,
+    uc: Regex,
+}
+
+impl RegexKit {
+    /// Compile the profile's patterns; the error names the bad key. `stack_dir` is the stack path
+    /// relative to the repo (`py`, `py/` or empty); test file globs are relative to it.
+    pub fn new(keys: &RegexKeys, stack_dir: &str) -> Result<RegexKit, String> {
+        let compile = |key: &str, list: &[String]| -> Result<Vec<Regex>, String> {
+            list.iter()
+                .map(|p| Regex::new(p).map_err(|e| format!("adapters.regex.{key} `{p}`: {e}")))
+                .collect()
+        };
+        let test_files = keys
+            .test_files
+            .iter()
+            .map(|g| Glob::parse(g).map_err(|e| format!("adapters.regex.test_files: {e}")))
+            .collect::<Result<Vec<_>, _>>()?;
+        if test_files.is_empty() {
+            return Err("adapters.regex.test_files is empty: no file would count as a test".into());
+        }
+        let dir = stack_dir.trim_start_matches("./").trim_end_matches('/');
+        Ok(RegexKit {
+            prefix: if dir == "." || dir.is_empty() {
+                String::new()
+            } else {
+                format!("{dir}/")
+            },
+            test_files,
+            pending: compile("pending", &keys.pending)?,
+            assertions: compile("assertions", &keys.assertions)?,
+            uc: Regex::new(r"UC-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*").expect("static pattern"),
+        })
+    }
+
+    /// A repo-relative path under the stack that one of the `test_files` globs matches.
+    pub fn is_test_file(&self, path: &str) -> bool {
+        path.strip_prefix(&self.prefix)
+            .is_some_and(|rel| self.test_files.iter().any(|g| g.matches(rel)))
+    }
+
+    /// Every line that matches a `pending` regex; a `UC-…` id on the line makes it a plan marker.
+    pub fn pending_markers(&self, text: &str) -> Vec<Marker> {
+        text.lines()
+            .enumerate()
+            .filter(|(_, l)| self.pending.iter().any(|r| r.is_match(l)))
+            .map(|(i, l)| Marker {
+                line: i + 1,
+                uc: self.uc.find(l).map(|m| m.as_str().to_string()),
+            })
+            .collect()
+    }
+
+    /// The number of matches of all `assertions` regexes.
+    pub fn assertions(&self, text: &str) -> usize {
+        self.assertions
+            .iter()
+            .map(|r| r.find_iter(text).count())
+            .sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn py_kit(dir: &str) -> RegexKit {
+        let keys = RegexKeys {
+            test_files: vec!["**/test_*.py".into(), "tests/**".into()],
+            pending: vec![r"@pytest\.mark\.skip".into(), r"^\s*@unittest\.skip".into()],
+            assertions: vec![r"\bassert\b".into(), r"self\.assert\w+".into()],
+        };
+        RegexKit::new(&keys, dir).unwrap()
+    }
+
+    #[test]
+    fn regex_test_files_are_relative_to_the_stack() {
+        let k = py_kit("py/");
+        assert!(k.is_test_file("py/test_a.py"));
+        assert!(k.is_test_file("py/pkg/test_b.py"));
+        assert!(k.is_test_file("py/tests/data.txt"));
+        assert!(!k.is_test_file("py/app.py"));
+        assert!(!k.is_test_file("other/test_a.py"));
+        assert!(py_kit("").is_test_file("test_a.py"));
+        assert!(py_kit(".").is_test_file("x/test_a.py"));
+    }
+
+    #[test]
+    fn regex_pending_markers_carry_a_uc_id() {
+        let text = "@pytest.mark.skip\ndef a(): pass\n@pytest.mark.skip(reason=\"UC-M7-3\")\n  @unittest.skip('x')\n# pytest.mark.skipif is not it\n";
+        let m = py_kit("py").pending_markers(text);
+        let lines: Vec<(usize, Option<&str>)> =
+            m.iter().map(|m| (m.line, m.uc.as_deref())).collect();
+        assert_eq!(lines, [(1, None), (3, Some("UC-M7-3")), (4, None)]);
+    }
+
+    #[test]
+    fn regex_assertions_count_every_match() {
+        let text = "assert a\nassert b and assert c\nself.assertEqual(1, 1)\nassertion = 1\n";
+        assert_eq!(py_kit("py").assertions(text), 4);
+    }
+
+    #[test]
+    fn bad_regex_keys_are_errors_naming_the_key() {
+        let mut keys = RegexKeys {
+            test_files: vec!["*.py".into()],
+            ..RegexKeys::default()
+        };
+        keys.assertions = vec!["(".into()];
+        let e = RegexKit::new(&keys, "").unwrap_err();
+        assert!(e.contains("adapters.regex.assertions"), "{e}");
+        keys.assertions.clear();
+        keys.test_files = vec!["a/../b".into()];
+        assert!(RegexKit::new(&keys, "").is_err());
+        keys.test_files.clear();
+        assert!(RegexKit::new(&keys, "").unwrap_err().contains("test_files"));
+    }
 
     #[test]
     fn test_files() {

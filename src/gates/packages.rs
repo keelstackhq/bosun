@@ -41,9 +41,11 @@ pub fn load(adapter: &str, stack_dir: &Path) -> Result<Vec<Package>, BosunError>
     match adapter {
         "cargo-metadata" => load_cargo(stack_dir),
         "pnpm-workspace" => load_pnpm(stack_dir),
+        // The generic adapter: the stack has no packages, so a per-package gate runs once.
+        "none" | "generic" => Ok(Vec::new()),
         other => Err(BosunError::error(
             format!("unknown packages adapter `{other}`"),
-            "set `packages` in the profile to `cargo-metadata` or `pnpm-workspace`",
+            "set `packages` in the profile to a known adapter (`cargo-metadata`, `pnpm-workspace`, `none`)",
         )),
     }
 }
@@ -56,10 +58,10 @@ pub fn affected(
     changed: &[String],
     packages: &[Package],
 ) -> Affected {
-    if adapter == "pnpm-workspace" {
-        affected_pnpm(stack_dir, changed, packages)
-    } else {
-        affected_cargo(stack_dir, changed, packages)
+    match adapter {
+        "cargo-metadata" => affected_cargo(stack_dir, changed, packages),
+        "pnpm-workspace" => affected_pnpm(stack_dir, changed, packages),
+        _ => Affected::All,
     }
 }
 
@@ -432,6 +434,15 @@ mod tests {
     #[test]
     fn docs_are_ignored() {
         assert_eq!(aff(&["docs/x.md", "README.md"]), Affected::None);
+    }
+
+    #[test]
+    fn the_generic_adapter_has_no_packages_and_affects_everything() {
+        for name in ["none", "generic"] {
+            assert_eq!(load(name, Path::new("/r")).unwrap(), vec![]);
+            let files = vec!["a.py".to_string()];
+            assert_eq!(affected(name, Path::new("/r"), &files, &[]), Affected::All);
+        }
     }
 
     #[test]

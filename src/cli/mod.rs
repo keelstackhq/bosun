@@ -106,7 +106,7 @@ pub enum Command {
     #[command(subcommand)]
     Hook(HookCmd),
     /// Report each checklist step as ok or missing.
-    Doctor,
+    Doctor(DoctorArgs),
     /// Budget commands.
     #[command(subcommand)]
     Budget(BudgetCmd),
@@ -193,7 +193,7 @@ impl Command {
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
-            Command::Doctor => "doctor",
+            Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
@@ -376,6 +376,15 @@ pub struct CiLogArgs {
     pub pr: u64,
     #[arg(long, default_value_t = 80)]
     pub tail: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Also run `hoist check` (120 s limit, BOSUN_HOIST_TIMEOUT_SECS): drift fails step 3 (github
+    /// settings and checks), 5 (release and environments) or 10 (npm and crates first publish);
+    /// unknown items and verify notes are listed in data.hoist
+    #[arg(long)]
+    pub remote: bool,
 }
 
 #[derive(Debug, Args)]

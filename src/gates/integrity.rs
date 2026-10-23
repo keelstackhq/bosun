@@ -8,13 +8,16 @@ use serde_json::{Value, json};
 
 use std::collections::BTreeMap;
 
-use super::adapters::{self as rs, Marker};
-use super::git;
+use super::adapters::{self as rs, Marker, RegexKit};
+use super::profile::Profile;
 use super::ts;
+use super::{git, stack_rel};
+use crate::config::Stack;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub struct Request<'a> {
     pub root: &'a Path,
+    pub stacks: &'a [Stack],
     pub base: &'a str,
     /// The PR body, searched for `snapshot-change: <reason>`.
     pub body: &'a str,
@@ -75,8 +78,15 @@ fn base_text(root: &Path, base: &str, path: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The adapters for a path: ts for TypeScript and JavaScript files, rust for `.rs`; any other
-/// file is not a test file.
+/// The adapters of one stack: the built-in ones (chosen by file extension: rust for `.rs`, ts for
+/// TypeScript and JavaScript, anything else is not a test) or the profile's generic regex ones.
+#[derive(Debug)]
+enum Kit {
+    Builtin,
+    Regex(RegexKit),
+}
+
+/// The built-in adapter family of a path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Rust,
@@ -94,44 +104,112 @@ fn kind(path: &str) -> Kind {
     }
 }
 
-fn is_test_file(path: &str, text: &str) -> bool {
-    match kind(path) {
-        Kind::Rust => rs::is_test_file(path, text),
-        Kind::Ts => ts::is_test_file(path),
-        Kind::Other => false,
+impl Kit {
+    fn is_test_file(&self, path: &str, text: &str) -> bool {
+        match (self, kind(path)) {
+            (Kit::Regex(k), _) => k.is_test_file(path),
+            (_, Kind::Rust) => rs::is_test_file(path, text),
+            (_, Kind::Ts) => ts::is_test_file(path),
+            _ => false,
+        }
+    }
+
+    fn pending_markers(&self, path: &str, text: &str) -> Vec<Marker> {
+        match (self, kind(path)) {
+            (Kit::Regex(k), _) => k.pending_markers(text),
+            (_, Kind::Rust) => rs::pending_markers(text),
+            (_, Kind::Ts) => ts::pending_markers(text),
+            _ => Vec::new(),
+        }
+    }
+
+    fn test_count(&self, path: &str, text: &str) -> usize {
+        match (self, kind(path)) {
+            (Kit::Regex(_), _) => 0,
+            (_, Kind::Rust) => rs::test_count(text),
+            (_, Kind::Ts) => ts::test_count(text),
+            _ => 0,
+        }
+    }
+
+    fn assertions(&self, path: &str, text: &str) -> usize {
+        match (self, kind(path)) {
+            (Kit::Regex(k), _) => k.assertions(text),
+            (_, Kind::Rust) => rs::assertions(text),
+            (_, Kind::Ts) => ts::assertions(text),
+            _ => 0,
+        }
+    }
+
+    /// Focused tests (`it.only`): only the ts adapters know them.
+    fn only_count(&self, path: &str, text: &str) -> usize {
+        match (self, kind(path)) {
+            (Kit::Builtin, Kind::Ts) => ts::only_count(text),
+            _ => 0,
+        }
     }
 }
 
-fn pending_markers(path: &str, text: &str) -> Vec<Marker> {
-    match kind(path) {
-        Kind::Rust => rs::pending_markers(text),
-        Kind::Ts => ts::pending_markers(text),
-        Kind::Other => Vec::new(),
+/// One kit per stack, keyed by the stack's repo-relative prefix (`py/`, or empty for the root).
+/// Every stack gets one, so the innermost stack wins: a regex stack at the root does not claim
+/// the files of a rust or ts stack below it.
+fn kits(root: &Path, stacks: &[Stack]) -> Result<Vec<(String, Kit)>, BosunError> {
+    let mut out = Vec::new();
+    for stack in stacks {
+        let profile = Profile::load(root, &stack.profile)?;
+        let rel = stack_rel(&stack.path);
+        let prefix = if rel.is_empty() {
+            String::new()
+        } else {
+            format!("{rel}/")
+        };
+        let kit = if profile.adapters.uses_regex() {
+            Kit::Regex(
+                RegexKit::new(&profile.adapters.regex, &stack.path).map_err(|e| {
+                    BosunError::error(
+                        format!("profile {}: {e}", stack.profile),
+                        format!(
+                            "fix [adapters.regex] in .bosun/profiles/{}.toml",
+                            stack.profile
+                        ),
+                    )
+                })?,
+            )
+        } else {
+            Kit::Builtin
+        };
+        out.push((prefix, kit));
     }
+    Ok(out)
 }
 
-fn test_count(path: &str, text: &str) -> usize {
-    match kind(path) {
-        Kind::Rust => rs::test_count(text),
-        Kind::Ts => ts::test_count(text),
-        Kind::Other => 0,
-    }
+/// The kit of the innermost stack that holds the path; files in no stack use the built-in ones.
+fn kit_for<'a>(kits: &'a [(String, Kit)], path: &str) -> &'a Kit {
+    static BUILTIN: Kit = Kit::Builtin;
+    kits.iter()
+        .filter(|(prefix, _)| path.starts_with(prefix.as_str()))
+        .max_by_key(|(prefix, _)| prefix.len())
+        .map_or(&BUILTIN, |(_, kit)| kit)
 }
 
-fn assertions(path: &str, text: &str) -> usize {
-    match kind(path) {
-        Kind::Rust => rs::assertions(text),
-        Kind::Ts => ts::assertions(text),
-        Kind::Other => 0,
+/// Why integrity is reduced, if it is. Each stack (by path, once) whose profile uses a generic
+/// adapter, or whose profile cannot be loaded (a typo in an adapter name, say), is named, for
+/// example "stack py/ uses regex adapters". Shown by `bosun status` and in the test-integrity data.
+pub fn reduced_reason(root: &Path, stacks: &[Stack]) -> Option<String> {
+    let mut reasons: Vec<String> = Vec::new();
+    for s in stacks {
+        let why = match Profile::load(root, &s.profile) {
+            Ok(p) => match p.adapters.generic_kind() {
+                Some(k) => format!("stack {} uses {k} adapters", s.path),
+                None => continue,
+            },
+            Err(e) => format!("stack {} has an unusable profile: {}", s.path, e.message),
+        };
+        if !reasons.contains(&why) {
+            reasons.push(why);
+        }
     }
-}
-
-/// Focused tests (`it.only`): only the ts adapters know them.
-fn only_count(path: &str, text: &str) -> usize {
-    match kind(path) {
-        Kind::Ts => ts::only_count(text),
-        _ => 0,
-    }
+    (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
 fn has_reason(body: &str) -> bool {
@@ -161,6 +239,13 @@ pub fn run(req: &Request) -> CmdResult {
         req.root,
         &["diff", "--name-status", "-M", &merge_base, "HEAD"],
     )?;
+    let kits = kits(req.root, req.stacks)?;
+    // Each side is read with the kit of the innermost stack holding its own path.
+    let is_test_file = |p: &str, t: &str| kit_for(&kits, p).is_test_file(p, t);
+    let pending_markers = |p: &str, t: &str| kit_for(&kits, p).pending_markers(p, t);
+    let test_count = |p: &str, t: &str| kit_for(&kits, p).test_count(p, t);
+    let assertions = |p: &str, t: &str| kit_for(&kits, p).assertions(p, t);
+    let only_count = |p: &str, t: &str| kit_for(&kits, p).only_count(p, t);
     let allows = |name: &str| req.allow.iter().any(|a| a == name);
     let mut findings: Vec<Value> = Vec::new();
     let mut files_checked = 0;
@@ -287,7 +372,14 @@ pub fn run(req: &Request) -> CmdResult {
     }
 
     let refused = findings.iter().filter(|f| f["allowed"] == false).count();
-    let data = json!({"base": req.base, "files_checked": files_checked, "findings": findings});
+    let mut data = json!({"base": req.base, "files_checked": files_checked, "findings": findings});
+    match reduced_reason(req.root, req.stacks) {
+        Some(why) => {
+            data["integrity"] = json!("reduced");
+            data["integrity_reason"] = json!(why);
+        }
+        None => data["integrity"] = json!("full"),
+    }
     if refused > 0 {
         return Err(BosunError::error(
             format!("test-integrity: {refused} findings"),
