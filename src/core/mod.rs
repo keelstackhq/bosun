@@ -3,6 +3,7 @@
 
 pub mod bisect;
 pub mod budget;
+pub mod checks;
 pub mod cost;
 pub mod glob;
 pub mod guard;

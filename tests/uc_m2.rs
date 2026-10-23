@@ -118,3 +118,34 @@ fn uc_m2_3() {
     assert_eq!(code, 0);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 }
+
+/// UC-M2-4: an amendment that removes an item closes its epic as not planned.
+#[test]
+fn uc_m2_4() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = tmp.path().join("plan.md");
+    let two = format!(
+        "{ONE}\n## M2: Two\n\narea: core\n\n### Tasks\n\n- T1: Other\n  touch: src/b.rs\n\n### Done when\n\n- UC-M2-1: it also works.\n"
+    );
+    std::fs::write(&file, two).unwrap();
+    let run = |cmd: &str| {
+        let args = [
+            "-C",
+            tmp.path().to_str().unwrap(),
+            "plan",
+            cmd,
+            file.to_str().unwrap(),
+        ];
+        common::run(&fake, "session_test", "2026-10-23T10:00:00Z", &args)
+    };
+    let (code, v) = run("import");
+    assert_eq!(code, 0, "{v}");
+    let epic = v["data"]["epics"][1]["issue"].as_u64().unwrap();
+    std::fs::write(&file, ONE).unwrap();
+    let (code, v) = run("amend");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["closed"][0], "M2");
+    let i = fake.issue_state(epic);
+    assert_eq!(i.state, "closed");
+    assert_eq!(i.state_reason.as_deref(), Some("not_planned"));
+}
