@@ -152,7 +152,7 @@ State machine:
 
 | From | To | When |
 | ---- | -- | ---- |
-| planned | ready | only when its plan task merged |
+| planned | ready | only when its plan task merged (`bosun plan import` moves it) |
 | ready | claimed | `bosun claim`; lease written |
 | claimed | building | first commit pushed |
 | building | review | `bosun pr`; gates green |
