@@ -107,6 +107,68 @@ fn pr_body(pieces: &[String], changes: &Value, kept: &[&str]) -> String {
     s
 }
 
+/// Splice, the plan and the commit on the init branch: `(splice changes, plan path)`.
+fn setup(
+    root: &Path,
+    args: &InitArgs,
+    argv: &[String],
+) -> Result<(Value, Option<String>), BosunError> {
+    let splice = run_splice(argv)?;
+    let changes = splice.get("changes").cloned().unwrap_or_else(|| json!([]));
+    let mut plan = None;
+    if let Some(src) = &args.plan {
+        let rel = format!(
+            "plans/{}",
+            src.file_name().unwrap_or_default().to_string_lossy()
+        );
+        let dest = root.join(&rel);
+        // A plan already at plans/<name> stays as it is (copying a file onto itself empties it).
+        let same =
+            dest.exists() && std::fs::canonicalize(src).ok() == std::fs::canonicalize(&dest).ok();
+        if !same {
+            std::fs::create_dir_all(root.join("plans"))
+                .and_then(|()| std::fs::copy(src, &dest))
+                .map_err(|e| {
+                    BosunError::error(
+                        format!("cannot copy the plan to {rel}: {e}"),
+                        "check that plans/ is writable",
+                    )
+                })?;
+        }
+        plan = Some(rel);
+    }
+    git(root, &["add", "-A"])?;
+    // A runner with no git identity still commits, as bosun.
+    let mut commit: Vec<&str> = Vec::new();
+    if git(root, &["config", "user.email"]).is_err() {
+        commit.extend([
+            "-c",
+            "user.name=bosun",
+            "-c",
+            "user.email=bosun@users.noreply.github.com",
+        ]);
+    }
+    commit.extend(["commit", "-q", "-m", "chore: set up bosun (bosun init)"]);
+    git(root, &commit)?;
+    Ok((changes, plan))
+}
+
+/// Undo a failed init: drop what splice wrote and the branch, and go back to where it started.
+/// The tree was clean before, so nothing of the user's is lost.
+fn rollback(root: &Path, start: &str) {
+    // `start` is a branch name, or a commit sha when init began on a detached HEAD.
+    let detached = start.len() == 40 && start.bytes().all(|b| b.is_ascii_hexdigit());
+    let back = if detached { "--detach" } else { "--no-guess" };
+    for args in [
+        vec!["reset", "-q", "--hard"],
+        vec!["clean", "-q", "-fd"],
+        vec!["switch", "-q", back, start],
+        vec!["branch", "-q", "-D", BRANCH],
+    ] {
+        let _ = git(root, &args);
+    }
+}
+
 pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     for (i, s) in args.stack.iter().enumerate() {
         if args.stack[..i].contains(s) {
@@ -126,6 +188,22 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         return Err(BosunError::usage(
             format!("plan file {} does not exist", p.display()),
             "pass --plan with the path of an existing file",
+        ));
+    }
+    if let Some(o) = args
+        .owner
+        .as_deref()
+        .filter(|o| o.is_empty() || !o.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    {
+        return Err(BosunError::usage(
+            format!("--owner {o:?} is not a GitHub login"),
+            "pass the owner's login, such as --owner octocat",
+        ));
+    }
+    if args.source.starts_with('-') {
+        return Err(BosunError::usage(
+            format!("--source {:?} looks like a flag", args.source),
+            "pass a splice source, such as gh:keelstackhq/bosun//channel",
         ));
     }
     let root =
@@ -202,47 +280,49 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     argv.extend(["--yes", "--json", "-C"].map(String::from));
     argv.push(root.display().to_string());
 
+    // Read the token and the base branch before changing anything, so a missing token fails
+    // before the branch exists. No kill-switch check: a fresh repo has no labels yet.
+    let github = if args.no_pr {
+        None
+    } else {
+        let app = App::load(Some(&root))?;
+        let base = default_branch(app.gh.as_ref())?;
+        Some((app, base))
+    };
+    let start = git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let start = if start == "HEAD" {
+        git(&root, &["rev-parse", "HEAD"])?
+    } else {
+        start
+    };
+
     git(&root, &["switch", "-q", "-c", BRANCH])?;
-    let splice = run_splice(&argv)?;
-    let changes = splice.get("changes").cloned().unwrap_or_else(|| json!([]));
-
-    let mut plan = None;
-    if let Some(src) = &args.plan {
-        let rel = format!(
-            "plans/{}",
-            src.file_name().unwrap_or_default().to_string_lossy()
-        );
-        std::fs::create_dir_all(root.join("plans"))
-            .and_then(|()| std::fs::copy(src, root.join(&rel)))
-            .map_err(|e| {
-                BosunError::error(
-                    format!("cannot copy the plan to {rel}: {e}"),
-                    "check that plans/ is writable",
-                )
-            })?;
-        plan = Some(rel);
-    }
-
-    git(&root, &["add", "-A"])?;
-    git(
-        &root,
-        &["commit", "-q", "-m", "chore: set up bosun (bosun init)"],
-    )?;
+    let local = setup(&root, args, &argv).and_then(|(changes, plan)| {
+        if github.is_some() {
+            git(&root, &["push", "-q", "-u", "origin", BRANCH])?;
+        }
+        Ok((changes, plan))
+    });
+    let (changes, plan) = match local {
+        Ok(v) => v,
+        Err(e) => {
+            rollback(&root, &start);
+            let fix = format!("bosun init rolled back to {start}; {}", e.fix);
+            return Err(BosunError { fix, ..e });
+        }
+    };
     let commit = git(&root, &["rev-parse", "HEAD"])?;
 
     let mut pr = None;
-    if !args.no_pr {
-        git(&root, &["push", "-q", "-u", "origin", BRANCH])?;
-        // No kill-switch check: a fresh repo has no labels yet.
-        let app = App::load(Some(&root))?;
-        let gh = app.gh.as_ref();
-        let base = default_branch(gh)?;
-        let pull = gh.create_pull(
-            "chore: set up bosun",
-            BRANCH,
-            &base,
-            &pr_body(&args.stack, &changes, &kept),
-        )?;
+    if let Some((app, base)) = &github {
+        let body = pr_body(&args.stack, &changes, &kept);
+        let pull = app
+            .gh
+            .create_pull("chore: set up bosun", BRANCH, base, &body)
+            .map_err(|e| BosunError {
+                fix: "bosun/init is pushed: open its PR by hand, or retry with `bosun pr`".into(),
+                ..e
+            })?;
         pr = Some(json!({"number": pull.number, "head_sha": pull.head_sha}));
     }
 

@@ -22,6 +22,16 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(st.success(), "git {args:?}");
 }
 
+fn git_out(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 struct Env {
     repo: tempfile::TempDir,
     origin: tempfile::TempDir,
@@ -74,9 +84,24 @@ impl Env {
     }
 
     fn run(&self, fake: &FakeGithub, splice: &Path, args: &[&str]) -> (i32, Value) {
-        let out = bosun()
-            .env("BOSUN_GITHUB_API", fake.url())
+        self.run_with(fake, splice, args, |_| {})
+    }
+
+    /// Like `run`, with no host git identity (bosun must commit anyway) and an env hook.
+    fn run_with(
+        &self,
+        fake: &FakeGithub,
+        splice: &Path,
+        args: &[&str],
+        env: impl FnOnce(&mut assert_cmd::Command),
+    ) -> (i32, Value) {
+        let mut cmd = bosun();
+        cmd.env("BOSUN_GITHUB_API", fake.url())
             .env("BOSUN_SPLICE", splice)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+        env(&mut cmd);
+        let out = cmd
             .arg("-C")
             .arg(self.repo.path())
             .arg("init")
@@ -148,7 +173,11 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
         .collect();
     assert_eq!(posts.len(), 1);
     let body = posts[0].body.as_deref().unwrap_or("");
-    assert!(body.contains("bosun/init"), "{body}");
+    assert!(body.contains(r#""base":"main""#), "{body}");
+    assert!(
+        body.contains("R-gov") && body.contains("hoist apply"),
+        "{body}"
+    );
 }
 
 #[test]
@@ -162,6 +191,8 @@ fn bad_arguments_are_usage_errors() {
         vec!["--stack", "rust", "--stack", "rust"],
         vec!["--stack", "rust", "--bosun-version", "1.2"],
         vec!["--stack", "rust", "--plan", "/no/such/plan.md"],
+        vec!["--stack", "rust", "--owner", "a b"],
+        vec!["--stack", "rust", "--source=-x"],
     ] {
         let (code, v) = e.run(&fake, &splice, &args);
         assert_eq!(code, 2, "{args:?}: {v}");
@@ -183,6 +214,60 @@ fn a_splice_failure_is_an_error_with_its_messages() {
             .contains("no such piece")
     );
     assert_eq!(v["data"]["splice"]["ok"], false);
+    // Rolled back: on main, clean, no init branch, so a rerun works.
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("rolled back to main")
+    );
+    assert_eq!(git_out(e.repo.path(), &["status", "--porcelain"]), "");
+    assert_eq!(
+        git_out(e.repo.path(), &["branch", "--show-current"]),
+        "main"
+    );
+    let ok = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &ok, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn no_token_fails_before_anything_changes() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run_with(&fake, &splice, &["--stack", "rust"], |c| {
+        c.env_remove("GITHUB_TOKEN");
+    });
+    assert_eq!(code, 1, "{v}");
+    assert!(e.argv().is_empty());
+    assert_eq!(
+        git_out(e.repo.path(), &["branch", "--show-current"]),
+        "main"
+    );
+    assert!(!e.origin_has_branch());
+}
+
+#[test]
+fn a_plan_already_in_plans_is_kept() {
+    let e = Env::new();
+    std::fs::create_dir_all(e.repo.path().join("plans")).unwrap();
+    std::fs::write(e.repo.path().join("plans/p.md"), "# plan\n").unwrap();
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "plan"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let plan = e.repo.path().join("plans/p.md");
+    let args = [
+        "--stack",
+        "rust",
+        "--no-pr",
+        "--plan",
+        plan.to_str().unwrap(),
+    ];
+    let (code, v) = e.run(&fake, &splice, &args);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(std::fs::read_to_string(&plan).unwrap(), "# plan\n");
 }
 
 /// A branch ref has no release version, so init names the pin; a repo's own settings file is
