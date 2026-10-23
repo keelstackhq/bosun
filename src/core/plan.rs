@@ -2,7 +2,7 @@
 //! rule reported with its line and a fix.
 
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -105,6 +105,53 @@ fn csv(v: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// A cycle in a graph given as adjacency lists, as node indexes in order.
+fn find_cycle(adj: &[Vec<usize>]) -> Option<Vec<usize>> {
+    fn visit(
+        n: usize,
+        adj: &[Vec<usize>],
+        st: &mut [u8],
+        path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        st[n] = 1;
+        path.push(n);
+        for &m in &adj[n] {
+            if st[m] == 1 {
+                let at = path.iter().position(|&p| p == m).unwrap_or(0);
+                return Some(path[at..].to_vec());
+            }
+            if st[m] == 0
+                && let Some(c) = visit(m, adj, st, path)
+            {
+                return Some(c);
+            }
+        }
+        path.pop();
+        st[n] = 2;
+        None
+    }
+    let mut st = vec![0u8; adj.len()];
+    (0..adj.len()).find_map(|n| {
+        if st[n] == 0 {
+            visit(n, adj, &mut st, &mut Vec::new())
+        } else {
+            None
+        }
+    })
+}
+
+/// Longest chain (in nodes) starting at `n` of an acyclic graph.
+fn longest(n: usize, adj: &[Vec<usize>], memo: &mut [usize]) -> usize {
+    if memo[n] == 0 {
+        memo[n] = 1 + adj[n]
+            .iter()
+            .map(|&m| longest(m, adj, memo))
+            .max()
+            .unwrap_or(0);
+    }
+    memo[n]
 }
 
 fn flush(items: &mut [Item], desc: &mut Vec<&str>, open: bool) {
@@ -339,22 +386,28 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
         bad!(errs, 1; "start the file with `# Plan: <name>`" => "the plan has no `# ` title");
     }
 
-    let ids: HashSet<&str> = items.iter().map(|x| x.id.as_str()).collect();
+    let ids: HashMap<&str, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, x)| (x.id.as_str(), i))
+        .collect();
     let all: HashSet<String> = items
         .iter()
         .flat_map(|i| i.tasks.iter().map(|t| t.plan_id(&i.id)))
         .collect();
+    let mut item_adj = vec![Vec::new(); items.len()];
     for (k, it) in items.iter().enumerate() {
         let (l, id) = (it.line, &it.id);
         if it.area.is_empty() {
             bad!(errs, l; "add `area: <label>` right after the heading" => "{id} has no `area:` field");
         }
-        for d in it
-            .depends
-            .iter()
-            .filter(|d| *d != "seed" && !ids.contains(d.as_str()))
-        {
-            bad!(errs, l; "depend on an item id of this plan or `seed`" => "{id} depends on `{d}`, which is not an item");
+        for d in it.depends.iter().filter(|d| *d != "seed") {
+            match ids.get(d.as_str()) {
+                Some(&j) => item_adj[k].push(j),
+                None => {
+                    bad!(errs, l; "depend on an item id of this plan or `seed`" => "{id} depends on `{d}`, which is not an item")
+                }
+            }
         }
         if it.tasks.is_empty() {
             let m = if has_tasks[k] {
@@ -368,9 +421,25 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
             bad!(errs, l; "add `### Done when` with `- UC-<item>-1: ...`" => "{id} has no UC under `### Done when`");
         }
     }
+    if let Some(c) = find_cycle(&item_adj) {
+        let names: Vec<_> = c
+            .iter()
+            .chain(&c[..1])
+            .map(|&i| items[i].id.as_str())
+            .collect();
+        bad!(errs, items[c[0]].line; "remove one of these `depends:` links" => "item dependency cycle: {}", names.join(" -> "));
+    }
 
+    let mut adjs: Vec<Vec<Vec<usize>>> = Vec::new();
     for it in &mut items {
-        for t in &mut it.tasks {
+        let own: HashMap<String, usize> = it
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id.clone(), i))
+            .collect();
+        let mut adj = vec![Vec::new(); it.tasks.len()];
+        for (k, t) in it.tasks.iter_mut().enumerate() {
             let (me, l) = (t.plan_id(&it.id), t.line);
             if t.touch.is_empty() {
                 bad!(errs, l; "add an indented `touch: path, path` line" => "{me} has no `touch:` paths");
@@ -384,10 +453,56 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
                 } else {
                     format!("{}/{d}", it.id)
                 };
-                if !all.contains(&full) {
-                    bad!(errs, l; "use a task id of this item or `<item>/<task>` of an existing task" => "{me} depends on `{d}`, which is not a task");
+                match (
+                    all.contains(&full),
+                    full.strip_prefix(&format!("{}/", it.id))
+                        .and_then(|s| own.get(s)),
+                ) {
+                    (false, _) => {
+                        bad!(errs, l; "use a task id of this item or `<item>/<task>` of an existing task" => "{me} depends on `{d}`, which is not a task")
+                    }
+                    (true, Some(&j)) => adj[k].push(j),
+                    _ => {}
                 }
                 t.depends.push(full);
+            }
+        }
+        adjs.push(adj);
+    }
+    // One cycle check over every `<item>/<task>` node, same-item and cross-item edges alike.
+    let flat: Vec<(String, usize)> = items
+        .iter()
+        .flat_map(|i| i.tasks.iter().map(|t| (t.plan_id(&i.id), t.line)))
+        .collect();
+    let gi: HashMap<&str, usize> = flat
+        .iter()
+        .enumerate()
+        .map(|(k, (id, _))| (id.as_str(), k))
+        .collect();
+    let gadj: Vec<Vec<usize>> = items
+        .iter()
+        .flat_map(|i| i.tasks.iter())
+        .map(|t| {
+            t.depends
+                .iter()
+                .filter_map(|d| gi.get(d.as_str()).copied())
+                .collect()
+        })
+        .collect();
+    if let Some(c) = find_cycle(&gadj) {
+        let names: Vec<_> = c
+            .iter()
+            .chain(&c[..1])
+            .map(|&i| flat[i].0.as_str())
+            .collect();
+        bad!(errs, flat[c[0]].1; "remove one of these `depends:` links" => "task dependency cycle: {}", names.join(" -> "));
+    } else {
+        // The critical path counts same-item chains only.
+        for (it, adj) in items.iter().zip(&adjs) {
+            let mut memo = vec![0; adj.len()];
+            let deepest = (0..adj.len()).max_by_key(|&k| longest(k, adj, &mut memo));
+            if let Some(d) = deepest.filter(|&d| memo[d] > 4) {
+                bad!(errs, it.tasks[d].line; "cut the dependency chain to at most 4 tasks" => "critical path of {} is {} tasks, over 4", it.id, memo[d]);
             }
         }
     }
@@ -403,6 +518,46 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
     }
 }
 
+/// The head of a new `tests/uc_<item>.rs` that `bosun plan import` writes.
+pub fn uc_file_header(item: &Item) -> String {
+    format!(
+        "//! Use cases of {} (spec \u{a7}12): {}.\n\
+         //! Written by `bosun plan import`; the build task removes the ignore and makes each test pass.\n",
+        item.id, item.title
+    )
+}
+
+/// One pending test for a use case, preceded by a blank line.
+pub fn uc_stub(id: &str, text: &str) -> String {
+    let name = id.to_lowercase().replace('-', "_");
+    format!(
+        "\n/// {id}: {text}\n#[test]\n#[ignore = \"{id}\"]\nfn {name}() {{\n    todo!(\"{id}\")\n}}\n"
+    )
+}
+
+/// Whether `id` (`UC-M2-3`) occurs in `text` as a whole id: `UC-M2-1` is not in `UC-M2-12`.
+pub fn mentions_uc(text: &str, id: &str) -> bool {
+    text.match_indices(id).any(|(i, _)| {
+        !text[i + id.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Whether `text` defines `fn uc_<item>_<n>` for the use case `id` (`UC-M2-3` -> `fn uc_m2_3`),
+/// the name `uc_stub` would write.
+pub fn defines_uc_fn(text: &str, id: &str) -> bool {
+    let name = id.to_lowercase().replace('-', "_");
+    let pat = format!("fn {name}");
+    text.match_indices(&pat).any(|(i, _)| {
+        text[i + pat.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == '(' || c.is_whitespace() || c == '<')
+    })
+}
+
 #[cfg(test)]
 #[rustfmt::skip]
 mod tests {
@@ -414,6 +569,17 @@ mod tests {
         "- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n\n",
         "### Done when\n\n- UC-M1-1: it works.\n"
     );
+    #[test]
+    fn uc_stub_text_and_whole_id_matching() {
+        assert_eq!(uc_stub("UC-M2-3", "t."), "\n/// UC-M2-3: t.\n#[test]\n#[ignore = \"UC-M2-3\"]\nfn uc_m2_3() {\n    todo!(\"UC-M2-3\")\n}\n");
+        assert!(mentions_uc("x UC-M2-1 y", "UC-M2-1"));
+        assert!(mentions_uc("UC-M2-1", "UC-M2-1"));
+        assert!(!mentions_uc("UC-M2-12", "UC-M2-1"));
+        assert!(!mentions_uc("UC-M2-1-x", "UC-M2-1"));
+        assert!(defines_uc_fn("fn uc_m2_1() {}", "UC-M2-1"));
+        assert!(!defines_uc_fn("fn uc_m2_12() {}", "UC-M2-1"));
+        assert!(mentions_uc("UC-M2-12 UC-M2-1.", "UC-M2-1"));
+    }
     const H: &str = "not `## <ID>: <title>`";
 
     /// OK with the first `from` replaced by `to`.
@@ -491,6 +657,27 @@ mod tests {
         let hi = parse(&w("size: 100", "size: 101\n  risk: high")).unwrap();
         assert!(hi.warnings[0].message.contains("risk high") && !hi.warnings[0].fix.is_empty());
         assert_eq!(hi.items[0].tasks[0].risk, "high");
+    }
+
+    #[test]
+    fn cycles_and_critical_path() {
+        let m2 = OK.replace("M1", "M2").replace("depends: seed", "depends: M1").replace("# Plan: x\n\nproject: x\n", "");
+        at(&format!("{}\n{m2}", w("depends: seed", "depends: M2")), 5, "cycle: M1 -> M2 -> M1");
+        chk("size: 100", "size: 100\n  depends: T2", 14, "cycle: M1/T1 -> M1/T2 -> M1/T1");
+        chk("size: 100", "size: 100\n  depends: T1", 14, "cycle: M1/T1 -> M1/T1");
+        let two = |d1: &str, d2: &str| format!("# P\n## M1: A\narea: a\n### Tasks\n- T1: t\n  touch: a\n{d1}### Done when\n- UC-M1-1: ok\n## M2: B\narea: b\n### Tasks\n- T1: t\n  touch: a\n{d2}### Done when\n- UC-M2-1: ok\n");
+        at(&two("  depends: M2/T1\n", "  depends: M1/T1\n"), 5, "cycle: M1/T1 -> M2/T1 -> M1/T1");
+        at(&two("  depends: M2/T1\n  size: ten\n", "  depends: M1/T1\n"), 5, "cycle: M1/T1");
+        at(&two("  depends: M2/T1\n  size: ten\n", "  depends: M1/T1\n"), 8, "not an integer");
+        assert!(parse(&two("  depends: M2/T1\n", "")).is_ok());
+        let diamond = "# P\n## M1: A\narea: a\n### Tasks\n- T1: t\n  touch: a\n- T2: t\n  touch: a\n  depends: T1\n- T3: t\n  touch: a\n  depends: T1\n- T4: t\n  touch: a\n  depends: T2, T3\n### Done when\n- UC-M1-1: ok\n";
+        assert!(parse(diamond).is_ok());
+        let chain = |n: usize| {
+            let tasks: String = (1..=n).map(|k| format!("- T{k}: t\n  touch: a\n{}", if k > 1 { format!("  depends: T{}\n", k - 1) } else { String::new() })).collect();
+            format!("# P\n## M1: One\narea: a\n### Tasks\n{tasks}### Done when\n- UC-M1-1: ok\n")
+        };
+        assert!(parse(&chain(4)).is_ok());
+        at(&chain(5), 16, "critical path of M1 is 5");
     }
 
     #[test]
