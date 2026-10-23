@@ -35,6 +35,7 @@ use std::path::PathBuf;
 
 pub mod gate;
 pub mod main_health;
+pub mod review_ci;
 pub mod stop;
 pub mod test_integrity;
 
@@ -133,6 +134,8 @@ pub enum Command {
     Intake(IntakeArgs),
     /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
     MainHealth(MainHealthArgs),
+    /// Review mode b: ask the Anthropic API for the verdict of a PR and record it (no session).
+    ReviewCi(PrArg),
 }
 
 /// Top-level command names, in `--help` order.
@@ -169,6 +172,7 @@ pub const COMMANDS: &[&str] = &[
     "revert",
     "intake",
     "main-health",
+    "review-ci",
 ];
 
 impl Command {
@@ -216,6 +220,7 @@ impl Command {
             Command::Revert(_) => "revert",
             Command::Intake(_) => "intake",
             Command::MainHealth(_) => "main-health",
+            Command::ReviewCi(_) => "review-ci",
         }
     }
 }

@@ -80,6 +80,28 @@ fn config_defaults_and_full_file() {
         (1, ".", "rust")
     );
     assert_eq!(c.review.mode, ReviewMode::Subagent);
+    assert_eq!(
+        (
+            c.review.model.as_str(),
+            c.review.max_tokens,
+            c.review.max_diff_bytes
+        ),
+        ("claude-opus-5-5", 8192, 200_000)
+    );
+    let r = Config::parse("[review]\nmode = \"ci\"\n", "r")
+        .unwrap()
+        .review;
+    assert_eq!((r.max_tokens, r.max_diff_bytes), (8192, 200_000));
+    let r = Config::parse(
+        "[review]\nmodel = \"m\"\nmax_tokens = 100\nmax_diff_bytes = 5\n",
+        "r",
+    )
+    .unwrap()
+    .review;
+    assert_eq!(
+        (r.model.as_str(), r.max_tokens, r.max_diff_bytes),
+        ("m", 100, 5)
+    );
     assert!(c.slack.is_none() && c.prices.is_empty());
     let c = Config::parse(
         "project = \"p\"\n[[stack]]\npath = \"web\"\nprofile = \"ts-pnpm\"\n[review]\nmode = \"ci\"\n\
@@ -99,4 +121,17 @@ fn config_defaults_and_full_file() {
         ("C1", true, false, 1)
     );
     assert_eq!(c.prices["opus"].output_per_mtok, 75.0);
+}
+
+#[test]
+fn review_limits_of_zero_are_refused() {
+    for text in [
+        "[review]\nmax_tokens = 0\n",
+        "[review]\nmax_diff_bytes = 0\n",
+    ] {
+        let err = Config::parse(text, ".bosun/bosun.toml").unwrap_err();
+        assert_eq!(err.exit.code(), 1);
+        assert!(err.message.contains("review."), "{}", err.message);
+        assert!(!err.fix.is_empty());
+    }
 }

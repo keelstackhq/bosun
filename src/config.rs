@@ -57,10 +57,26 @@ pub enum ReviewMode {
     Ci,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Review {
     pub mode: ReviewMode,
+    /// Model of `bosun review-ci` (mode b).
+    pub model: String,
+    pub max_tokens: u32,
+    /// `review-ci` refuses a diff with more patch bytes than this; it never truncates.
+    pub max_diff_bytes: u64,
+}
+
+impl Default for Review {
+    fn default() -> Self {
+        Review {
+            mode: ReviewMode::default(),
+            model: "claude-opus-5-5".into(),
+            max_tokens: 8192,
+            max_diff_bytes: 200_000,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -216,7 +232,19 @@ fn read_optional(path: &Path, label: &str) -> Result<Option<String>, BosunError>
 impl Config {
     /// Parse the text of `.bosun/bosun.toml`; `file` is the name used in errors.
     pub fn parse(text: &str, file: &str) -> Result<Config, BosunError> {
-        parse_toml(text, file)
+        let c: Config = parse_toml(text, file)?;
+        for (key, zero) in [
+            ("max_tokens", c.review.max_tokens == 0),
+            ("max_diff_bytes", c.review.max_diff_bytes == 0),
+        ] {
+            if zero {
+                return Err(BosunError::error(
+                    format!("{file}: review.{key} must be at least 1"),
+                    format!("edit {file}: set review.{key} to a positive number, or remove it"),
+                ));
+            }
+        }
+        Ok(c)
     }
 
     /// Read `<root>/.bosun/bosun.toml`; a missing file gives the defaults.

@@ -67,7 +67,7 @@ fn parse(text: &str) -> Result<Verdict, BosunError> {
 }
 
 /// The verdict's PR; exit 3 when the verdict is for another head than the current one.
-fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, BosunError> {
+pub(crate) fn current_pull(gh: &dyn Github, verdict: &Verdict) -> Result<Pull, BosunError> {
     let n = verdict.pr;
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
@@ -135,7 +135,7 @@ fn apply(app: &App, id: u64) -> CmdResult {
 }
 
 /// Post the review-verdict status and the verdict record, and move the linked task.
-fn record(app: &App, pull: &Pull, verdict: &Verdict, session: &str) -> CmdResult {
+pub(crate) fn record(app: &App, pull: &Pull, verdict: &Verdict, session: &str) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = verdict.pr;
     let mut eff = effective(verdict);
