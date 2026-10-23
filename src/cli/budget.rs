@@ -5,15 +5,19 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
+use super::lesson::capture_lesson;
 use super::{BudgetCmd, BudgetRecordArgs};
 use crate::app::{App, Result, kill_switch, limits_from_default, notes, set_state};
 use crate::core::budget::{level, to_stop};
 use crate::core::lease::members;
 use crate::core::records::{Record, spend_total};
-use crate::core::state::State;
+use crate::core::state::{State, state_of};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 use crate::sessions::usage;
+
+const LESSON_TITLE: &str = "a task went over per_task_usd";
+const LESSON_TEXT: &str = "a task went over its per_task_usd cap and was blocked";
 
 pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     match cmd {
@@ -96,11 +100,41 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
 
     let total = spend_total(&notes(gh, n)?, None);
     let over = total > limits.budget.per_task_usd;
+    let was_blocked = state_of(&issue.labels) == Some(State::Blocked);
     let blocked = over && set_state(gh, n, &issue, State::Blocked).is_ok();
-    // Lesson capture for a task over budget is M5; until then only the state changes.
+    // One lesson for "a task went over its cap" (the amounts and the task number do not enter
+    // the signature: each task adds a hit). Only the record that blocks the task captures, so
+    // later records on a blocked task add no hit; a task blocked for another reason first, or
+    // one that cannot move to blocked, gets no budget lesson; two records racing on one task can
+    // both capture (one extra hit). The spend is already recorded, so a failed capture must not
+    // fail the command: a retry would record the spend twice.
+    let lesson = if blocked && !was_blocked {
+        match capture_lesson(
+            gh,
+            &ctx.session,
+            "budget",
+            LESSON_TITLE,
+            LESSON_TEXT,
+            Some(n),
+        ) {
+            Ok(c) => json!({"issue": c.issue, "created": c.created, "hits": c.hits}),
+            Err(e) => {
+                eprintln!(
+                    "bosun: warning: the budget lesson for #{n} was not captured: {}",
+                    e.message
+                );
+                json!({"error": e.message, "fix": format!(
+                    "run `bosun lesson capture --kind budget --issue {n} --title '{LESSON_TITLE}'` with the text '{LESSON_TEXT}' on stdin; do not record the spend again"
+                )})
+            }
+        }
+    } else {
+        Value::Null
+    };
     Ok(Outcome::data(json!({
         "issue": n, "usd": usd, "provider": a.provider,
         "task_total_usd": total, "over_task_cap": over, "blocked": blocked,
+        "lesson": lesson,
     })))
 }
 
