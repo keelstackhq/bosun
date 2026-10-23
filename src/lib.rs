@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! bosun: orchestration helper for repos where agents write all the code. See `docs/spec.md`.
 
+pub mod anthropic;
 pub mod app;
 pub mod cli;
 pub mod config;
@@ -53,5 +54,6 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Revert(a) => cli::revert::run(dir, a),
         Command::Intake(a) => cli::intake::run(dir, a),
         Command::MainHealth(a) => cli::main_health::run(dir, a),
+        Command::ReviewCi(a) => cli::review_ci::run(dir, a),
     }
 }
