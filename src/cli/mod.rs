@@ -159,6 +159,7 @@ impl Command {
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Doctor => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
+            Command::Budget(BudgetCmd::Check) => "budget check",
         }
     }
 }
@@ -360,6 +361,8 @@ pub enum HookCmd {
 pub enum BudgetCmd {
     /// Record the spend of a task (claude-sessions or generic provider).
     Record(BudgetRecordArgs),
+    /// Compare today's spend with the daily budget; at 100 % return the sessions to stop.
+    Check,
 }
 
 #[derive(Debug, Args)]
