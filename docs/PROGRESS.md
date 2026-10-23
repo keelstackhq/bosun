@@ -102,6 +102,7 @@ test-integrity; the merge queue comes with M3.
 - 2026-10-23 · Release 3/3 · `.github/workflows/release.yml` (hoist 0.2.0 from npm, gated by `vars.BOSUN_RELEASE`), launcher tests in CI, `CHANGELOG.md` `## v0.1.0`, `docs/releasing.md` with the owner steps · `cargo test --test release_config` 10/10, static musl build prints `bosun 0.1.0`
 - 2026-10-23 · Pin v0.1.0 · `.bosun/version` = 0.1.0; ci.yml `bosun-bin` installs the base's pinned release from npm (falls back to building the base while it says `unreleased`), new job `pin` checks a PR's pin installs and reports its version; setup script installs `@keelstackhq/bosun@0.1.0` · spec §11
 - 2026-10-23 · M2/T1a · `src/core/plan.rs`: plan-format parser (rules 1-5, 7, 8; all errors with line and fix, warnings, depends targets exist) · `cargo test --locked plan` 5 unit + 2 integration tests pass, `plans/bosun.md` parses
+- 2026-10-23 · M2/T1b · `src/core/plan.rs`: item and task dependency cycles reported, critical path of at most 4 tasks (rules 3, 5, 6) · `cargo test --locked plan` 6 unit + 2 integration tests pass
 
 ## Blocked
 
