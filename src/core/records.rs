@@ -203,6 +203,18 @@ mod tests {
     }
 
     #[test]
+    fn a_lease_without_thread_ts_still_parses() {
+        let old = r#"{"bosun":"lease","session":"s","origin":"local","expires":"2026-10-22T10:30:00Z","touch":["a"]}"#;
+        assert!(matches!(
+            parse_record(old),
+            Some(Record::Lease {
+                thread_ts: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn lesson_seen_round_trips() {
         let r = Record::LessonSeen {
             session: "s".into(),

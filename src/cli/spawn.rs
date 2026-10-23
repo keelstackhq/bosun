@@ -7,12 +7,15 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{IntakeArgs, SpawnArgs, intake};
+use crate::app::trusted_notes;
 use crate::app::{
     App, default_branch, end_lease, kill_switch, limits_from_default, main_red, notes, set_state,
     settle_race, task_meta,
 };
+use crate::cli::plan::epic_item;
 use crate::cli::risk_check::owner_slack_ids;
 use crate::cli::status::process_red;
+use crate::config::{CONFIG_FILE, Config, Slack};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members, thread_of};
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, spend_total};
@@ -145,8 +148,9 @@ fn spawn_on(app: &App, n: u64, args: &SpawnArgs, thread: Option<&str>) -> CmdRes
         area,
     } = gather(app, args, n, Some(&epic), thread.is_some())?;
     let depth = input.parent_depth + 1;
-    // A plan task from a thread has the request's first line in its title: not in the prompt.
-    let plan_task = thread.is_some() && task_meta(&epic).is_some_and(|m| m.kind == "plan");
+    // A plan task from Slack has the request's first line in its title: not in the prompt.
+    let plan_task = task_meta(&epic).is_some_and(|m| m.kind == "plan")
+        && epic.labels.iter().any(|l| l == "bosun:source/slack");
     let prompt = match &args.prompt_file {
         Some(f) => std::fs::read_to_string(f).map_err(|e| {
             BosunError::error(
@@ -220,6 +224,12 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
             "pass an ID such as U0ADA1 (capital U or W, then capitals and digits)",
         ));
     }
+    if args.epic.is_some() && args.request.is_some() {
+        return Err(BosunError::usage(
+            "--request asks for new work and cannot go with an epic",
+            "pass the epic to spawn it, or --request without an epic to open a plan task",
+        ));
+    }
     if args.record {
         return Err(BosunError::usage(
             "--record does not take --slack-thread",
@@ -227,7 +237,14 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
         ));
     }
     let gh = app.gh.as_ref();
-    let slack = app.ctx.config.slack.clone().unwrap_or_default();
+    // The gate reads the default branch, never the working tree.
+    let branch = default_branch(gh)?;
+    let slack = match gh.file_at(CONFIG_FILE, &branch)? {
+        Some(t) => Config::parse(&t, &format!("{CONFIG_FILE} on {branch}"))?
+            .slack
+            .unwrap_or_default(),
+        None => Slack::default(),
+    };
     if !slack.may_spawn {
         return Err(BosunError::needs_human(
             "a Slack thread may not start sessions: [slack] may_spawn is false",
@@ -241,7 +258,7 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
             "set `spawners = \"owners\"`: only owners may start sessions from Slack",
         ));
     }
-    let ids = owner_slack_ids(gh, &default_branch(gh)?)?;
+    let ids = owner_slack_ids(gh, &branch)?;
     if !ids.iter().any(|i| i == user) {
         return Err(BosunError::needs_human(
             "the spawn does not count: not an owner Slack ID",
@@ -260,28 +277,46 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
         .with_data(json!({"reason": "origin is not slack"})));
     }
 
-    let (n, intake) = match args.epic {
-        Some(n) => (n, None),
-        None => {
+    let (n, intake) = match (args.epic, args.request.is_some()) {
+        (Some(n), _) => (n, None),
+        // New work: always intake, never a guess among what is ready.
+        (None, true) => {
+            let text = read_request(args)?;
+            // Checks 1-6 as far as they can run without an issue: a refused spawn must not
+            // leave an orphan intake issue.
+            gather(app, args, 0, None, true)?;
+            let a = IntakeArgs {
+                text,
+                source: "slack".into(),
+                item: None,
+                title: None,
+                plan: None,
+            };
+            let out = intake::open(app, &a)?;
+            let n = out.data["issue"].as_u64().ok_or_else(|| {
+                BosunError::error("intake returned no issue", "run `bosun intake` by hand")
+            })?;
+            // A reused issue (same title) must still be ready work.
+            let ready = gh
+                .get_issue(n)?
+                .is_some_and(|i| state_of(&i.labels) == Some(State::Ready));
+            if !ready {
+                return Err(BosunError::conflict(
+                    format!("the intake issue #{n} for this request exists but is not ready"),
+                    format!("see #{n}; close it or wait for it, then ask again"),
+                )
+                .with_data(json!({"intake": n})));
+            }
+            (n, Some(n))
+        }
+        (None, false) => {
             let ready = ready_work(gh)?;
             match ready.as_slice() {
                 [] => {
-                    let text = read_request(args)?;
-                    // Checks 1-6 as far as they can run without an issue: a refused spawn
-                    // must not leave an orphan intake issue.
-                    gather(app, args, 0, None, true)?;
-                    let a = IntakeArgs {
-                        text,
-                        source: "slack".into(),
-                        item: None,
-                        title: None,
-                        plan: None,
-                    };
-                    let out = intake::open(app, &a)?;
-                    let n = out.data["issue"].as_u64().ok_or_else(|| {
-                        BosunError::error("intake returned no issue", "run `bosun intake` by hand")
-                    })?;
-                    (n, Some(n))
+                    return Err(BosunError::usage(
+                        "no epic is ready and no --request",
+                        "pass the request on stdin: bosun spawn --slack-thread <ts> --slack-user <U...> --request -",
+                    ));
                 }
                 [one] => (one["issue"].as_u64().unwrap_or_default(), None),
                 many => {
@@ -294,7 +329,15 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
             }
         }
     };
-    let mut out = spawn_on(app, n, args, Some(ts))?;
+    // A refusal after intake leaves the new plan issue ready; say which one.
+    let mut out = spawn_on(app, n, args, Some(ts)).map_err(|mut e| {
+        if let Some(i) = intake {
+            let mut d = e.data.take().unwrap_or_else(|| json!({}));
+            d["intake"] = json!(i);
+            e.data = Some(d);
+        }
+        e
+    })?;
     if let Some(i) = intake {
         out.data["intake"] = json!(i);
     }
@@ -305,7 +348,7 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
 fn ready_work(gh: &dyn Github) -> Result<Vec<Value>, BosunError> {
     let mut out = Vec::new();
     for i in gh.list_issues(&[&State::Ready.label()], IssueState::Open)? {
-        let kind = if i.body_text().contains("<!-- bosun:epic") {
+        let kind = if epic_item(i.body_text()).is_some() {
             "epic"
         } else if task_meta(&i).is_some_and(|m| m.kind == "plan") {
             "plan"
@@ -473,20 +516,22 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
+    // The thread is the one in this spawner's own live lease, written by a writer; read it
+    // before the lease ends.
+    let thread_ts = thread_of(n, me, now, &trusted_notes(gh, n)?);
     if leases_of(n, &notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me)
     {
         end_lease(gh, n, me, "spawned")?;
     }
-    let epic_notes = notes(gh, n)?;
     let lease = Record::Lease {
         session: child.clone(),
         origin: "spawned".into(),
         expires: expires.to_string(),
         touch: vec![],
         // The child's lease keeps the thread that asked for the work.
-        thread_ts: thread_of(&epic_notes),
+        thread_ts,
     };
     gh.add_comment(n, &format!("Handed to {child}.\n\n{}", lease.to_line()))?;
     Ok(Outcome::data(json!({"epic": n, "child": child})))

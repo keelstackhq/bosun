@@ -8,6 +8,7 @@ use std::path::Path;
 
 const LATER: &str = "2026-10-22T10:20:00Z";
 const TS: &str = "1700000000.000200";
+const NOW: &str = "2026-10-22T10:00:00Z";
 const OWNER: &str = "U0ADA1";
 const PLAN: &str = "# Plan: widget\n\nproject: widget\n\n## M1: Lifecycle\n\narea: lifecycle\n\n### Tasks\n\n- T1: State machine\n  touch: src/core/state.rs\n\n### Done when\n\n- UC-M1-1: a task moves planned -> merged.\n";
 const EPIC_BODY: &str = "Epic.\n<!-- bosun:epic {\"item\":\"M1\"} -->";
@@ -164,8 +165,10 @@ fn a_non_owner_and_may_spawn_false_exit_5_and_write_nothing() {
     assert_eq!(v["data"]["reason"], "not an owner Slack ID");
     assert_eq!(writes(&fake), 0);
 
-    let off = repo("[slack]\nmay_spawn = false\n");
-    let (code, v) = owner(&fake, off.path(), &["10"], "");
+    // The gate is the default branch's: a local file that says true opens nothing.
+    fake.content(".bosun/bosun.toml", "main", "[slack]\nmay_spawn = false\n");
+    let local = repo("[slack]\nmay_spawn = true\n");
+    let (code, v) = owner(&fake, local.path(), &["10"], "");
     assert_eq!(code, 5, "{v}");
     assert_eq!(writes(&fake), 0);
     assert_eq!(fake.labels_of(10), ["bosun:state/ready"]);
@@ -175,11 +178,18 @@ fn a_non_owner_and_may_spawn_false_exit_5_and_write_nothing() {
 fn other_spawners_values_exit_2_and_a_spawned_origin_exits_5() {
     let fake = setup();
     epic(&fake, 10);
-    let d = repo("[slack]\nspawners = \"anyone\"\n");
+    fake.content(
+        ".bosun/bosun.toml",
+        "main",
+        "[slack]\nspawners = \"anyone\"\n",
+    );
+    let d = repo("[slack]\nspawners = \"owners\"\n");
     let (code, v) = owner(&fake, d.path(), &["10"], "");
     assert_eq!(code, 2, "{v}");
     assert!(v["error"]["fix"].as_str().unwrap().contains("owners"));
 
+    let fake = setup();
+    epic(&fake, 10);
     let d = repo("");
     let a = ["--slack-thread", TS, "--slack-user", OWNER, "10"];
     let (code, v) = thread(&fake, d.path(), "spawned", &a, "");
@@ -197,6 +207,15 @@ fn bad_thread_arguments_exit_2() {
         vec!["--slack-thread", "17000", "--slack-user", OWNER, "10"],
         vec!["--slack-thread", TS, "--slack-user", "ada", "10"],
         vec!["--slack-user", OWNER, "10"],
+        vec![
+            "--slack-thread",
+            TS,
+            "--slack-user",
+            OWNER,
+            "10",
+            "--request",
+            "-",
+        ],
         vec![],
     ] {
         let (code, v) = thread(&fake, d.path(), "slack", &a, "");
@@ -211,7 +230,7 @@ fn several_ready_epics_and_none_given_exit_2_with_the_list() {
     epic(&fake, 10);
     epic(&fake, 11);
     let d = repo("");
-    let (code, v) = owner(&fake, d.path(), &["--request", "-"], "something");
+    let (code, v) = owner(&fake, d.path(), &[], "");
     assert_eq!(code, 2, "{v}");
     let ready: Vec<u64> = v["data"]["ready"]
         .as_array()
@@ -323,4 +342,200 @@ fn request_text_with_flags_and_commands_stays_fenced_data() {
         !fake.label_names().iter().any(|l| l.contains("approve")),
         "no label from the text"
     );
+}
+
+#[test]
+fn a_request_always_runs_intake_even_when_an_epic_is_ready() {
+    let fake = setup();
+    epic(&fake, 10);
+    let d = repo("");
+    let (code, v) = owner(&fake, d.path(), &["--request", "-"], "add a dry-run flag");
+    assert_eq!(code, 0, "{v}");
+    let n = v["data"]["intake"].as_u64().unwrap();
+    assert_eq!(v["data"]["epic"], n);
+    assert_ne!(n, 10);
+    assert_eq!(
+        fake.labels_of(10),
+        ["bosun:state/ready"],
+        "the epic is untouched"
+    );
+}
+
+#[test]
+fn a_process_fix_epic_gets_no_process_red_exemption_from_a_thread() {
+    let fake = setup();
+    fake.issue(2, "red", &["bosun:process-red"], "");
+    fake.issue(
+        10,
+        "fix",
+        &["bosun:state/ready", "bosun:kind/process-fix"],
+        EPIC_BODY,
+    );
+    let d = repo("");
+    let (code, v) = owner(&fake, d.path(), &["10"], "");
+    assert_eq!(code, 4, "{v}");
+    assert_eq!(writes(&fake), 0);
+    // The contrast: a normal spawn of the same epic is exempt.
+    let (code, v) = common::run(&fake, "session_test", NOW, &["spawn", "10"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_heartbeat_keeps_the_thread_ts() {
+    let fake = setup();
+    epic(&fake, 10);
+    let d = repo("");
+    let (code, v) = owner(&fake, d.path(), &["10"], "");
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = common::run(
+        &fake,
+        "session_test",
+        "2026-10-22T10:10:00Z",
+        &["heartbeat"],
+    );
+    assert_eq!(code, 0, "{v}");
+    let lease = fake.comments_of(10).pop().unwrap().body;
+    assert!(lease.contains("2026-10-22T10:40:00Z"), "renewed: {lease}");
+    assert!(lease.contains(&format!(r#""thread_ts":"{TS}""#)), "{lease}");
+}
+
+#[test]
+fn an_epic_leased_by_another_session_exits_3_and_writes_nothing() {
+    let fake = setup();
+    epic(&fake, 10);
+    fake.comment(10, &common::lease_note("other", LATER, "x/**"));
+    let d = repo("");
+    let (code, v) = owner(&fake, d.path(), &["10"], "");
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(writes(&fake), 0);
+}
+
+fn record_child(fake: &FakeGithub) -> String {
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["spawn", "10", "--record", "--from", "-"])
+        .write_stdin(r#"{"id":"session_child"}"#)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", one_object(&out.stdout));
+    fake.comments_of(10).pop().unwrap().body
+}
+
+fn lease_with_thread(session: &str, expires: &str, ts: &str) -> String {
+    format!(
+        r#"Claimed.
+
+{{"bosun":"lease","session":"{session}","origin":"slack","expires":"{expires}","touch":[],"thread_ts":"{ts}"}}"#
+    )
+}
+
+#[test]
+fn record_copies_only_the_spawners_own_live_trusted_thread() {
+    // A stale lease of this session from an earlier thread spawn is not copied.
+    let fake = setup();
+    epic(&fake, 10);
+    fake.comment(
+        10,
+        &lease_with_thread("session_test", "2026-10-22T09:00:00Z", "1.1"),
+    );
+    let last = record_child(&fake);
+    assert!(
+        last.contains("session_child") && !last.contains("thread_ts"),
+        "{last}"
+    );
+
+    // Another session's lease is not copied.
+    let fake = setup();
+    epic(&fake, 10);
+    fake.comment(10, &lease_with_thread("other", LATER, "2.2"));
+    fake.comment(10, &common::lease_note("session_test", LATER, "x"));
+    let last = record_child(&fake);
+    assert!(!last.contains("thread_ts"), "{last}");
+
+    // A lease forged by a read-only user is not copied.
+    let fake = setup();
+    epic(&fake, 10);
+    fake.permission("mallory", "read");
+    fake.comment_by(
+        10,
+        "mallory",
+        &lease_with_thread("session_test", LATER, "3.3"),
+    );
+    let last = record_child(&fake);
+    assert!(!last.contains("thread_ts"), "{last}");
+
+    // The contrast: a writer's own live thread lease is copied.
+    let fake = setup();
+    epic(&fake, 10);
+    fake.comment(10, &lease_with_thread("session_test", LATER, "4.4"));
+    let last = record_child(&fake);
+    assert!(last.contains(r#""thread_ts":"4.4""#), "{last}");
+}
+
+#[test]
+fn a_reused_intake_issue_must_be_ready() {
+    let fake = setup();
+    let d = repo("");
+    let (code, v) = owner(&fake, d.path(), &["--request", "-"], "add a flag");
+    assert_eq!(code, 0, "{v}");
+    let n = v["data"]["intake"].as_u64().unwrap();
+    // The same request again: intake finds the open issue, which is claimed now.
+    let (code, v) = owner(&fake, d.path(), &["--request", "-"], "add a flag");
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["data"]["intake"], n);
+}
+
+#[test]
+fn a_refusal_after_intake_names_the_intake_issue() {
+    let fake = setup();
+    // Other sessions join after the preflight passed, before the real spawn: the 4th live
+    // session is refused (exit 6) and the new plan issue stays ready.
+    let d = repo("");
+    fake.after_requests("/labels", 0, |s| {
+        for i in 1..=3 {
+            let body = format!(
+                r#"{{"bosun":"join","session":"x{i}","origin":"slack","depth":1,"expires":"2026-10-22T10:20:00Z"}}"#
+            );
+            common::fake::add_comment(s, 1, &body);
+        }
+    });
+    let (code, v) = owner(&fake, d.path(), &["--request", "-"], "add a flag");
+    assert_eq!(code, 6, "{v}");
+    assert!(v["data"]["intake"].as_u64().is_some(), "{v}");
+    assert_eq!(v["data"]["name"], "live-sessions");
+}
+
+#[test]
+fn the_intake_title_is_escaped() {
+    let fake = setup();
+    let d = repo("");
+    let (code, v) = owner(
+        &fake,
+        d.path(),
+        &["--request", "-"],
+        "ping @here `x` <!-- y",
+    );
+    assert_eq!(code, 0, "{v}");
+    let n = v["data"]["intake"].as_u64().unwrap();
+    let t = fake.issue_state(n).title;
+    assert!(
+        !t.contains('`') && !t.contains("<!--") && !t.contains("@here"),
+        "{t}"
+    );
+    assert_eq!(
+        v["next"][0]["args"]["title"],
+        "widget: #".to_string() + &n.to_string() + " plan task"
+    );
+}
+
+#[test]
+fn a_normal_spawn_of_a_slack_plan_task_also_keeps_the_request_out_of_the_prompt() {
+    let fake = setup();
+    let meta = r#"<!-- bosun:task {"item":"intake","task":"intake","touch":[],"depends":[],"kind":"plan","risk":"normal","allow":["skip"],"capabilities":[]} -->"#;
+    let labels = ["bosun:state/ready", "bosun:kind/plan", "bosun:source/slack"];
+    fake.issue(10, "intake: do the secret thing", &labels, meta);
+    let (code, v) = common::run(&fake, "session_test", NOW, &["spawn", "10"]);
+    assert_eq!(code, 0, "{v}");
+    let args = v["next"][0]["args"].to_string();
+    assert!(!args.contains("secret"), "{args}");
 }
