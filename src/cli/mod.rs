@@ -26,6 +26,7 @@ pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
+pub mod stop;
 pub mod test_integrity;
 
 #[derive(Debug, Parser)]
@@ -105,10 +106,12 @@ pub enum Command {
     /// Plan commands.
     #[command(subcommand)]
     Plan(PlanCmd),
+    /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
+    Fail(FailArgs),
 }
 
 /// Top-level command names, in `--help` order.
-pub const COMMANDS: [&str; 23] = [
+pub const COMMANDS: [&str; 24] = [
     "join",
     "claim",
     "heartbeat",
@@ -132,6 +135,7 @@ pub const COMMANDS: [&str; 23] = [
     "doctor",
     "budget",
     "plan",
+    "fail",
 ];
 
 impl Command {
@@ -166,6 +170,7 @@ impl Command {
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
+            Command::Fail(_) => "fail",
         }
     }
 }
@@ -406,4 +411,19 @@ pub struct PlanImportArgs {
     /// Import only this item (repeatable); default all.
     #[arg(long = "item", value_name = "ID")]
     pub item: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct FailArgs {
+    /// The task issue number.
+    pub issue: u64,
+    /// A short stable text for the failure, for example `E0308 in src/x.rs`.
+    #[arg(long)]
+    pub signature: String,
+    /// Lines the fix round changed; 0 blocks the task at once.
+    #[arg(long)]
+    pub changed_lines: Option<u64>,
+    /// The model tier in use (default: the newest escalation, else the build model).
+    #[arg(long)]
+    pub model: Option<String>,
 }
