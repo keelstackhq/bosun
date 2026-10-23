@@ -293,6 +293,12 @@ fn text_file_without_a_patch_is_high_but_binary_is_not() {
     let (code, v) = check(&fake);
     assert_eq!((code, rule_ids(&v)), (5, vec!["R-unseen".to_string()]));
 
+    // The name is the author's choice: changed lines without a patch are unseen.
+    let fake = pr("");
+    fake.pull_file(1, "payload.bin", "added", 5000, 0, None);
+    let (code, v) = check(&fake);
+    assert_eq!((code, rule_ids(&v)), (5, vec!["R-unseen".to_string()]));
+
     let fake = pr("");
     fake.pull_file(1, "logo.png", "added", 0, 0, None);
     fake.pull_set(1, "changed_files", serde_json::json!(1));
