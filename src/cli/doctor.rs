@@ -84,15 +84,17 @@ fn claude_app_seen(gh: &dyn Github) -> Result<bool, BosunError> {
 
 const HOIST_INSTALL_FIX: &str =
     "install hoist (`npm install -g @keelstackhq/hoist`) or set BOSUN_HOIST";
+const HOIST_RERUN_FIX: &str = "run `hoist check` by hand and fix what it reports";
+const HOIST_TIMEOUT_SECS: u64 = 120;
 
-/// The step `hoist check` covers for an item (D17): 3 = branch protection, auto-merge and
-/// required checks; 5 = environments, secrets, variables and the release area.
-fn hoist_step(area: &str, kind: &str) -> usize {
-    let settings = matches!(kind, "environment" | "secret" | "variable");
-    if area == "release" || (area == "github" && settings) {
-        5
-    } else {
-        3
+/// The step and `hoist apply` area for a `hoist check` item (D17): 3 = repo settings, rulesets,
+/// required checks; 5 = environments, secrets, variables; 10 = first publish of npm/crates.
+fn hoist_step(area: &str, kind: &str) -> (usize, String) {
+    match (area, kind) {
+        ("npm" | "crates", _) => (10, area.into()),
+        ("release", _) => (5, "release".into()),
+        (_, "environment" | "secret" | "variable") => (5, "github".into()),
+        _ => (3, "github".into()),
     }
 }
 
@@ -108,75 +110,164 @@ fn describe(it: &Value) -> String {
     )
 }
 
+/// Add hoist's finding to a step, keeping the step's own problem and fix.
+fn append_problem(it: &mut Value, problem: &str, fix: &str) {
+    let (detail, fix) = if it["status"] == "missing" {
+        (
+            format!("{}; {problem}", it["detail"].as_str().unwrap_or("")),
+            format!("{}; then {fix}", it["fix"].as_str().unwrap_or("")),
+        )
+    } else {
+        (problem.to_string(), fix.to_string())
+    };
+    it["status"] = json!("missing");
+    it["detail"] = json!(detail);
+    it["fix"] = json!(fix);
+}
+
 fn hoist_failed(items: &mut [Value], detail: &str, fix: &str, exit_code: Value) -> Value {
     for step in [3, 5] {
-        items[step - 1]["status"] = json!("missing");
-        items[step - 1]["detail"] = json!(detail);
-        items[step - 1]["fix"] = json!(fix);
+        append_problem(&mut items[step - 1], detail, fix);
     }
     json!({"exit_code": exit_code, "drift": [], "unknown": [], "error": detail})
 }
 
-/// Run `hoist check --json` and fold its items into steps 3 and 5. Returns `data.hoist`.
+type HoistRun = Result<(Option<i32>, Vec<u8>), Option<std::io::Error>>;
+
+/// Run hoist with stdout captured and a deadline; `Err(None)` means it timed out.
+fn run_hoist(bin: &str, root: &Path, secs: u64) -> HoistRun {
+    use std::io::Read;
+    // The token reaches hoist through the inherited environment, never argv.
+    let mut child = std::process::Command::new(bin)
+        .args(["check", "--json", "-C"])
+        .arg(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(Some)?;
+    let mut pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = pipe.as_mut() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait().map_err(Some)? {
+            Some(s) => break s,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(None);
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    };
+    Ok((status.code(), reader.join().unwrap_or_default()))
+}
+
+#[derive(Default)]
+struct StepFindings {
+    drift: Vec<String>,
+    unknown: Vec<String>,
+    areas: Vec<String>,
+}
+
+/// Run `hoist check --json` and fold its items into steps 3, 5 and 10. Returns `data.hoist`.
 fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
     let bin = std::env::var("BOSUN_HOIST")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "hoist".into());
-    // The token reaches hoist through the inherited environment, never argv.
-    let child = std::process::Command::new(&bin)
-        .args(["check", "--json", "-C"])
-        .arg(root)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
-        .output();
-    let Ok(out) = child else {
-        return hoist_failed(
-            items,
-            "hoist is not installed",
-            HOIST_INSTALL_FIX,
-            Value::Null,
-        );
+    let secs = std::env::var("BOSUN_HOIST_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(HOIST_TIMEOUT_SECS);
+    let (code, stdout) = match run_hoist(&bin, root, secs) {
+        Ok(r) => r,
+        Err(None) => {
+            let detail = format!("hoist check timed out after {secs}s");
+            return hoist_failed(items, &detail, HOIST_RERUN_FIX, Value::Null);
+        }
+        Err(Some(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            let d = "hoist is not installed";
+            return hoist_failed(items, d, HOIST_INSTALL_FIX, Value::Null);
+        }
+        Err(Some(e)) => {
+            let detail = format!("cannot run {bin}: {e}");
+            return hoist_failed(items, &detail, HOIST_INSTALL_FIX, Value::Null);
+        }
     };
-    let code = out.status.code();
     let exit_json = code.map_or(Value::Null, |c| json!(c));
-    let report = serde_json::from_slice::<Value>(&out.stdout)
+    let report = serde_json::from_slice::<Value>(&stdout)
         .ok()
         .filter(|v| v["items"].is_array());
-    let (Some(report), true) = (report, code.is_some_and(|c| c <= 1)) else {
+    let Some(report) = report else {
         let detail = format!("hoist check failed (exit {exit_json}): no JSON report on stdout");
-        let fix = "run `hoist check` by hand and fix what it reports";
-        return hoist_failed(items, &detail, fix, exit_json);
+        return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
     };
+    if !code.is_some_and(|c| c <= 1) {
+        let detail = format!("hoist check exited with {exit_json} (expected 0 or 1)");
+        return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
+    }
     let (mut drift, mut unknown) = (Vec::new(), Vec::new());
-    let mut per_step: [Vec<String>; 2] = [Vec::new(), Vec::new()];
+    let mut per_step: std::collections::BTreeMap<usize, StepFindings> = [3, 5, 10]
+        .into_iter()
+        .map(|s| (s, StepFindings::default()))
+        .collect();
     for it in report["items"].as_array().into_iter().flatten() {
-        let line = describe(it);
-        match it["action"].as_str().unwrap_or("") {
-            "ok" => {}
-            "unknown" => unknown.push(line),
-            _ => {
-                let step = hoist_step(
-                    it["area"].as_str().unwrap_or(""),
-                    it["kind"].as_str().unwrap_or(""),
-                );
-                per_step[usize::from(step == 5)].push(line.clone());
-                drift.push(line);
+        let s = |k: &str| it[k].as_str().unwrap_or("").to_string();
+        let (step, area) = hoist_step(&s("area"), &s("kind"));
+        let entry = per_step.entry(step).or_default();
+        let action = s("action");
+        let verify_bad = it["verify"]["ok"] == false;
+        if action == "unknown" {
+            unknown.push(describe(it));
+            entry.unknown.push(format!("{}/{}", s("kind"), s("key")));
+        } else if action != "ok" || verify_bad {
+            let line = if action == "ok" {
+                format!(
+                    "{}/{}/{}: verify failed ({})",
+                    s("area"),
+                    s("kind"),
+                    s("key"),
+                    it["verify"]["detail"].as_str().unwrap_or("")
+                )
+            } else {
+                describe(it)
+            };
+            if !entry.areas.contains(&area) {
+                entry.areas.push(area);
             }
+            entry.drift.push(line.clone());
+            drift.push(line);
         }
     }
-    for (step, lines) in [3, 5].into_iter().zip(per_step) {
+    for (step, f) in per_step {
         let it = &mut items[step - 1];
-        if !lines.is_empty() {
-            it["status"] = json!("missing");
-            it["detail"] = json!(format!("hoist check drift: {}", lines.join("; ")));
-            it["fix"] = json!(HOIST_FIX);
+        if !f.drift.is_empty() {
+            let fix = f
+                .areas
+                .iter()
+                .map(|a| format!("`hoist apply --area {a} --yes`"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            let problem = format!("hoist check drift: {}", f.drift.join("; "));
+            append_problem(it, &problem, &format!("run {fix}"));
         } else if it["status"] == "ok" {
-            let detail = format!(
-                "{}; hoist check: no drift",
-                it["detail"].as_str().unwrap_or("")
-            );
-            it["detail"] = json!(detail);
+            let note = if f.unknown.is_empty() {
+                "hoist check: no drift".to_string()
+            } else {
+                format!(
+                    "hoist could not read {} item(s): {}",
+                    f.unknown.len(),
+                    f.unknown.join(", ")
+                )
+            };
+            it["detail"] = json!(format!("{}; {note}", it["detail"].as_str().unwrap_or("")));
         }
     }
     json!({"exit_code": exit_json, "drift": drift, "unknown": unknown})
