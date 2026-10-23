@@ -1,7 +1,6 @@
 //! The spend guard of spec §9: the level for today's spend, and which sessions to stop.
 
 use super::lease::{Member, orchestrator_of};
-use super::spawn::BUDGET_STOP;
 use crate::time::Timestamp;
 
 /// How much of the daily budget is used.
@@ -25,13 +24,22 @@ impl Level {
     }
 }
 
+/// Share of the daily budget at which new work stops (spec §9).
+pub const BUDGET_STOP: f64 = 0.8;
+
+/// The one 80 % rule: at or over `BUDGET_STOP` of a daily budget, no new work starts. A budget
+/// of 0 or less is off.
+pub fn no_new_work(spent: f64, daily: f64) -> bool {
+    daily > 0.0 && spent >= BUDGET_STOP * daily
+}
+
 /// The level of `spent` against `daily`. A budget of 0 or less is off: always normal.
 pub fn level(spent: f64, daily: f64) -> Level {
     if daily <= 0.0 {
         Level::Normal
     } else if spent >= daily {
         Level::Stop
-    } else if spent >= BUDGET_STOP * daily {
+    } else if no_new_work(spent, daily) {
         Level::Guard
     } else {
         Level::Normal
@@ -82,6 +90,25 @@ mod tests {
         assert_eq!(level(149.9, 150.0), Level::Guard);
         assert_eq!(level(150.0, 150.0), Level::Stop);
         assert_eq!(level(900.0, 0.0), Level::Normal);
+    }
+
+    #[test]
+    fn no_new_work_agrees_with_level() {
+        for (spent, daily) in [
+            (0.0, 150.0),
+            (119.9, 150.0),
+            (120.0, 150.0),
+            (150.0, 150.0),
+            (900.0, 0.0),
+            (5.0, -1.0),
+        ] {
+            assert_eq!(
+                no_new_work(spent, daily),
+                level(spent, daily) != Level::Normal
+            );
+        }
+        assert!(!no_new_work(79.9, 100.0));
+        assert!(no_new_work(80.0, 100.0));
     }
 
     #[test]

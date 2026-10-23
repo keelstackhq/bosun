@@ -58,6 +58,18 @@ fn an_empty_repo_reports_all_twelve_steps() {
     assert!(st[1..].iter().all(|s| s == "missing"), "{st:?}");
     assert_eq!(v["error"]["message"], "11 checklist steps missing");
     assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 3);
+    let janitor = v["data"]["routines"][0]["prompt"].as_str().unwrap();
+    for part in [
+        "bosun reap",
+        "bosun budget check",
+        "`next`",
+        "interrupt_session",
+    ] {
+        assert!(
+            janitor.contains(part),
+            "janitor prompt lacks {part}: {janitor}"
+        );
+    }
 }
 
 #[test]
