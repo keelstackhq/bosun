@@ -140,6 +140,14 @@ A channel version is a bosun release tag (`v<x.y.z>`), and the channel writes th
 `.bosun/version`, so the update bot moves the channel files and the pinned binary in one R-gov PR.
 A branch or sha ref has no release version; such a consumer sets the template var `bosun_version`.
 
+The channel's workflows run the release pinned in `.bosun/version` from npm, never bosun built
+from the change: ci.yml reads the pin of the PR's base commit (the setup PR, whose base has no
+pin yet, uses its own and says so in a warning); risk.yml and verdict.yml read it from the base
+or the default branch and never check out PR code. main-health's nightly calls ci.yml
+(`workflow_call`), so it runs `bosun gate <name> --all` for any stack. Consumers inherit the
+residual of PROGRESS Blocked item 5: a same-repo PR can add a workflow that posts a forged
+status; such a PR is R-ci and needs the owner.
+
 ## 4. Work lifecycle and conflict avoidance
 
 Units: a plan has items. Each item becomes one epic issue. An item has tasks. A task is at most
