@@ -13,7 +13,7 @@ use crate::core::risk::{
     comment_approves, evaluate, lease_sessions, new_dependencies, parse_owners, replace_note,
     requirement, risk_note, two_verdicts, unseen_diff,
 };
-use crate::github::{Comment, Github};
+use crate::github::{Comment, Github, Review};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const RULES_PATH: &str = ".bosun/risk.toml";
@@ -233,23 +233,26 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     .with_data(data))
 }
 
+/// The state of `owner`'s newest approve, request-changes or dismissed review on `head`.
+pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<String> {
+    reviews
+        .iter()
+        .rev()
+        .filter(|r| r.user.eq_ignore_ascii_case(owner) && r.commit_id == head)
+        .find(|r| {
+            matches!(
+                r.state.as_str(),
+                "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
+            )
+        })
+        .map(|r| r.state.clone())
+}
+
 /// The owner who approved `head`: by a GitHub review (their newest decisive review on `head` is
 /// an approval) or by an unedited PR comment `/bosun approve <head>`.
 fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
-    let decisive = |o: &str| {
-        reviews
-            .iter()
-            .rev()
-            .filter(|r| r.user.eq_ignore_ascii_case(o) && r.commit_id == head)
-            .find(|r| {
-                matches!(
-                    r.state.as_str(),
-                    "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
-                )
-            })
-            .map(|r| r.state.clone())
-    };
+    let decisive = |o: &str| decisive_review(&reviews, o, head);
     let by_review = owners
         .iter()
         .find(|o| decisive(o).as_deref() == Some("APPROVED"));

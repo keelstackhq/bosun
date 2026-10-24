@@ -10,14 +10,14 @@ use serde_json::{Value, json};
 
 use super::ApproveArgs;
 use crate::app::{Result, kill_switch, main_red};
-use crate::cli::risk_check::{owner_comment, owner_logins};
+use crate::cli::risk_check::{decisive_review, owner_comment, owner_logins};
 use crate::core::approve::{
     Readiness, Run, Stat, api_url_ok, approve_command, in_cloud, parse_target, readiness,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
 use crate::gates::main_open::{is_mainfix, judge};
-use crate::github::{Github, IssueState, LiveGithub};
+use crate::github::{Github, IssueState, LiveGithub, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -39,6 +39,22 @@ const COMPARE_FILES_CAP: usize = 300;
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
+const WITHDRAWN: &str =
+    "your review requests changes on this head; approve with a review or dismiss it";
+
+/// An owner's newest decisive review on the head requests changes: that withdraws their
+/// approval comment, so approving again here would not count.
+fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<bool> {
+    let owners = owner_logins(gh, &p.base_sha)?;
+    if owners.is_empty() {
+        return Ok(false);
+    }
+    let reviews = gh.list_reviews(p.number)?;
+    Ok(owners
+        .iter()
+        .any(|o| decisive_review(&reviews, o, &p.head_sha).as_deref() == Some("CHANGES_REQUESTED")))
+}
+
 /// What to do instead in a Claude cloud session.
 const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/bosun approve <sha>` in the GitHub web or mobile app";
 
@@ -83,6 +99,9 @@ fn board(gh: &dyn Github) -> Result<Board> {
         match readiness(&statuses, &runs) {
             Readiness::NotWaiting => {}
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
+            Readiness::Ready(_) if withdrawn(gh, &p)? => {
+                board.waiting.push((p.number, WITHDRAWN));
+            }
             Readiness::Ready(risk) => board.ready.push(Ready {
                 pr: p.number,
                 title: p.title.clone(),
@@ -216,11 +235,12 @@ fn exec(
             .expect("checked above")
             .base_sha;
         match approve_one(gh, pr, &sha, base) {
-            Ok((id, true)) => {
-                approved.push(json!({"pr": pr, "head_sha": sha, "comment_id": id, "already": true}))
-            }
-            Ok((id, false)) => {
-                approved.push(json!({"pr": pr, "head_sha": sha, "comment_id": id}));
+            Ok((id, repost)) => {
+                let mut entry = json!({"pr": pr, "head_sha": sha, "comment_id": id});
+                if repost {
+                    entry["repost"] = json!(true);
+                }
+                approved.push(entry);
                 heads.push(PrHead { pr, head_sha: sha });
             }
             Err(e) => {
@@ -242,19 +262,16 @@ fn exec(
     Ok(Outcome::data(json!({"approved": approved})))
 }
 
-/// Post `/bosun approve <sha>` unless an approval that counts for risk-check is already there.
-/// Returns the comment id and whether it was already there.
+/// Post `/bosun approve <sha>`, also when one that counts already exists: the new comment
+/// re-runs risk-check if its run was lost. Returns the new comment's id and whether one existed.
 fn approve_one(gh: &dyn Github, pr: u64, sha: &str, base: &str) -> Result<(u64, bool)> {
     let comments = gh.list_comments(pr)?;
-    let existing = owner_logins(gh, base)?
+    let existed = owner_logins(gh, base)?
         .iter()
-        .find_map(|o| owner_comment(&comments, o, sha).map(|c| c.id));
-    if let Some(id) = existing {
-        return Ok((id, true));
-    }
+        .any(|o| owner_comment(&comments, o, sha).is_some());
     Ok((
         gh.add_comment(pr, &format!("/bosun approve {sha}"))?.id,
-        false,
+        existed,
     ))
 }
 

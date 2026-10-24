@@ -621,67 +621,104 @@ fn list_works_in_a_cloud_session_and_says_so() {
     assert_eq!(v["data"]["cloud"], false);
 }
 
+const WITHDRAWN: &str =
+    "your review requests changes on this head; approve with a review or dismiss it";
+
+fn repost_of(v: &Value, i: usize) -> Option<&Value> {
+    v["data"]["approved"][i].get("repost")
+}
+
 #[test]
-fn an_approval_that_already_counts_is_not_posted_again() {
+fn a_counting_comment_is_posted_again_to_rerun_risk() {
     let fake = board();
     owners(&fake);
     let existing = fake.comment(1, &format!("/bosun approve {}", sha(1)));
     let (code, v) = approve(&fake, &[&at(1), &at(3)]);
     assert_eq!(code, 0, "{v}");
-    let a = v["data"]["approved"].as_array().unwrap();
-    assert_eq!(a[0]["pr"], 1);
-    assert_eq!(a[0]["already"], true);
-    assert_eq!(a[0]["comment_id"], existing);
-    assert_eq!(a[1]["pr"], 3);
-    assert!(a[1].get("already").is_none());
+    assert_eq!(repost_of(&v, 0), Some(&json!(true)));
+    assert_ne!(v["data"]["approved"][0]["comment_id"], existing);
+    assert!(repost_of(&v, 1).is_none());
     let posts = comment_posts(&fake);
-    assert!(posts.iter().all(|p| !p.0.ends_with("/issues/1/comments")));
-    assert_eq!(
+    let on = |n: u64| {
         posts
             .iter()
-            .filter(|p| p.0.ends_with("/issues/3/comments"))
-            .count(),
-        1
-    );
-    // The record lists only what was posted.
-    assert_eq!(
-        records(&fake)[0]["prs"],
-        json!([{"pr": 3, "head_sha": sha(3)}])
-    );
-    // All already counted: nothing posted, no record.
-    let fake = board();
-    owners(&fake);
-    fake.comment(1, &format!("/bosun approve {}", sha(1)));
-    let (code, v) = approve(&fake, &[&at(1)]);
-    assert_eq!(code, 0, "{v}");
-    assert!(comment_posts(&fake).is_empty() && records(&fake).is_empty());
+            .filter(|p| p.0.ends_with(&format!("/issues/{n}/comments")))
+            .count()
+    };
+    assert_eq!((on(1), on(3)), (1, 1));
+    assert_eq!(records(&fake)[0]["prs"].as_array().unwrap().len(), 2);
 }
 
 #[test]
-fn look_alike_comments_do_not_count_as_existing() {
+fn an_owner_login_in_another_case_still_counts_as_existing() {
+    let fake = board();
+    fake.content(
+        "governance/owners.toml",
+        "base0000",
+        "[[owner]]\ngithub = \"OctoCat\"\n",
+    );
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    let (_, v) = approve(&fake, &[&at(1)]);
+    assert_eq!(repost_of(&v, 0), Some(&json!(true)));
+}
+
+#[test]
+fn without_owners_no_comment_counts_as_existing() {
+    let fake = board();
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    let (code, v) = approve(&fake, &[&at(1)]);
+    assert_eq!(code, 0, "{v}");
+    assert!(repost_of(&v, 0).is_none());
+    assert_eq!(comment_posts(&fake).len(), 2, "the comment and the record");
+}
+
+#[test]
+fn look_alike_comments_are_not_reposts() {
     let fake = board();
     owners(&fake);
-    // PR 1: edited since it was written. PR 3: written through an app. Another login on a
-    // third PR's behalf, and a comment for another head, do not count either.
+    // PR 1: edited since it was written. PR 3: written through an app.
     fake.comment(1, &format!("/bosun approve {}", sha(1)));
     fake.last_comment(|c| c.updated_at = "2026-10-22T11:00:00Z".into());
     fake.comment(3, &format!("/bosun approve {}", sha(3)));
     fake.last_comment(|c| c.via_app = Some("claude".into()));
     let (code, v) = approve(&fake, &[&at(1), &at(3)]);
     assert_eq!(code, 0, "{v}");
-    for a in v["data"]["approved"].as_array().unwrap() {
-        assert!(a.get("already").is_none(), "{a}");
-    }
-    assert_eq!(
-        comment_posts(&fake).len(),
-        3,
-        "two approvals and the record"
-    );
+    assert!(repost_of(&v, 0).is_none() && repost_of(&v, 1).is_none());
     let fake = board();
     owners(&fake);
     fake.comment_by(1, "mallory", &format!("/bosun approve {}", sha(1)));
     fake.comment(3, &format!("/bosun approve {}", sha(1)));
     let (_, v) = approve(&fake, &[&at(1), &at(3)]);
-    assert!(v["data"]["approved"][0].get("already").is_none());
-    assert!(v["data"]["approved"][1].get("already").is_none());
+    assert!(repost_of(&v, 0).is_none() && repost_of(&v, 1).is_none());
+}
+
+#[test]
+fn an_owner_review_requesting_changes_withdraws_the_approval() {
+    let fake = board();
+    owners(&fake);
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    fake.review(1, "octocat", "CHANGES_REQUESTED", &sha(1));
+    let (_, v) = approve(&fake, &["--list"]);
+    let ready: Vec<u64> = v["data"]["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["pr"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ready, [3]);
+    assert!(
+        v["data"]["waiting"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"pr": 1, "why": WITHDRAWN}))
+    );
+    let before = comment_posts(&fake).len();
+    let (code, v) = approve(&fake, &[&at(1), &at(3)]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["data"]["not_ready"], json!([{"pr": 1, "why": WITHDRAWN}]));
+    assert_eq!(comment_posts(&fake).len(), before, "nothing posted");
+    // A later approving review, or a review of an older head, does not withdraw it.
+    fake.review(1, "octocat", "APPROVED", &sha(1));
+    let (_, v) = approve(&fake, &["--list"]);
+    assert_eq!(v["data"]["ready"][0]["pr"], 1);
 }
