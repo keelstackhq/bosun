@@ -31,6 +31,9 @@ struct Ready {
     files: Vec<String>,
 }
 
+/// GitHub's compare API lists at most this many files and does not say when it cut the list.
+const COMPARE_FILES_CAP: usize = 300;
+
 struct Board {
     ready: Vec<Ready>,
     waiting: Vec<(u64, &'static str)>,
@@ -202,7 +205,8 @@ fn exec(
 
 fn ready_json(r: &Ready) -> Value {
     json!({"pr": r.pr, "title": r.title, "head_sha": r.head_sha,
-        "risk_from_status": r.risk, "files": r.files})
+        "risk_from_status": r.risk, "files": r.files,
+        "files_truncated": r.files.len() >= COMPARE_FILES_CAP})
 }
 
 /// Why `n` is not in the ready list.
@@ -279,6 +283,8 @@ fn redact(token: &str, result: CmdResult) -> CmdResult {
     let scrub_json = |v: Value| serde_json::from_str(&scrub(&v.to_string())).unwrap_or(Value::Null);
     match result {
         Ok(mut o) => {
+            // `next` is not scrubbed: approve never sets it.
+            debug_assert!(o.next.is_empty(), "approve returns no next items");
             o.data = scrub_json(o.data);
             Ok(o)
         }

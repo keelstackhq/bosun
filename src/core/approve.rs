@@ -4,7 +4,9 @@
 /// The start of the `risk-check` description while a high-risk PR waits for an owner.
 pub const WAITING_PREFIX: &str = "high risk, owner approval needed";
 /// The only creator whose `risk-check` and `review-verdict` statuses count: the Actions token.
-/// Anyone with write access (an agent) can post a status under any context, but not as this.
+/// Anyone with write access (an agent) can post a status under any context. Posting as this
+/// creator needs a workflow run in the repo, which raises the bar but is not a guarantee: a
+/// pushed branch with an `on: push` workflow and `statuses: write` can post as it too.
 pub const TRUSTED_CREATOR: &str = "github-actions[bot]";
 /// The only app whose `ci-ok` check run counts.
 pub const TRUSTED_APP: &str = "github-actions";

@@ -125,6 +125,7 @@ fn list_shows_ready_and_waiting_sorted_with_the_command() {
     assert_eq!(ready[0]["head_sha"], sha(1));
     assert_eq!(ready[0]["risk_from_status"], json!(["R-gov", "R-ci"]));
     assert_eq!(ready[0]["files"], json!(["governance/f1.toml"]));
+    assert_eq!(ready[0]["files_truncated"], json!(false));
     assert_eq!(ready[1]["pr"], 3);
     assert_eq!(
         v["data"]["approve_command"],

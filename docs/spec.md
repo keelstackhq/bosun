@@ -529,10 +529,13 @@ High-risk PRs:
   open PR whose `risk-check` status is `failure` with a description that starts `high risk,
   owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
   statuses created by `github-actions[bot]` count (anyone with write access can post a status
-  under any context, an agent included; the newest such status per context decides), and only
+  under any context, an agent included; the newest such status per context decides; this raises
+  the bar, it is no guarantee: a workflow on a pushed branch with `statuses: write` posts as
+  `github-actions[bot]` too, see Limits), and only
   a `ci-ok` check run of the `github-actions` app (no commit status). The rule ids come from
   the status text and are printed as `risk_from_status` (advisory); `files` is the comparison
-  of base and the listed head, so statuses, files and head describe one commit. PRs that wait
+  of base and the listed head, so statuses, files and head describe one commit
+  (`files_truncated` is true at GitHub's compare cap of 300 files: review the PR on GitHub then). PRs that wait
   for an owner but are not ready are listed under `waiting`. A bare PR number is a usage
   error: each argument names the head the owner saw. The command recomputes the list and
   posts `/bosun approve <head>` on each PR only if every named PR is ready at exactly that
