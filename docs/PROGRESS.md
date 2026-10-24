@@ -139,6 +139,17 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-23 · M6 T2 · `bosun answer <issue> --slack-user U… [--from -|FILE]`: an `answer` record (text fenced) for an open ask on a needs-human task (else exit 3), only from an owner Slack ID in `governance/owners.toml` (else exit 5, nothing written); it never changes the task state, the owner moves the task on GitHub; `bosun doctor` warns when `[slack] channel` is set and no owner has a `slack` ID · UC-M6-2 · `tests/cli_answer.rs` 13/13 · PR #194
 - 2026-10-23 · M6 T3 · `bosun spawn [<epic>] --slack-thread TS --slack-user U… [--request -|FILE]`: needs `[slack] channel` on the default branch, `may_spawn`, `spawners = "owners"`, an owner Slack ID and origin slack or local; with `--request` and no epic, intake runs after the checks that need no issue (a refused spawn leaves no intake issue); without it, the one ready epic or plan task is taken; the same 7 checks and budget as any spawn, no exemption from halt, process-red or main-red; the thread ts is stored in the child's lease · UC-M6-3 · `tests/cli_thread_spawn.rs` 23/23 · PR #195
 - 2026-10-23 · M6 T4 · a `result` by a trusted author that follows a trusted thread-spawn lease on its epic is a pending `thread-result` post into that thread; `bosun notify --thread TS` lists it for the live thread at once, the Routine posts it after a 15 minute grace; a later normal spawn ends the thread; the `bosun:state/*` issues updated in the last 7 days are scanned (up to 500, overflow in data.errors), at most 10 replies per run · UC-M6-4 · `tests/cli_thread_reply.rs` 21/21 · PR #196 · M6 done: UC-M6-1..4 pass (`tests/uc_m6.rs` 4/4)
+- 2026-10-23 · M7 T1 · splice channel `channel/` (D16, spec §3): `splice.toml` (vars project, owner, bosun_version, rust_path, ts_path, own_ci), pieces core, rust, ts-pnpm and claude-md; consumer workflows in `bosun.yml` (aggregate `ci-ok`, `bosun-ok` with `own_ci`), risk, verdict, main-open, main-health (fork guard; with `own_ci` closes main-red only when bosun.yml and ci.yml are green on main), splice · `tests/channel.rs` 7/7, real splice 0.2.0 renders · PRs #107, #109, #131
+- 2026-10-23 · M7 risk · `.bosun/risk.toml`: `channel/**` is R-ci · PR #121
+- 2026-10-23 · M7 T2 · `bosun init --stack .. [--plan] [--owner] [--source] [--ref] [--bosun-version] [--no-pr]`: `splice channel add` on `bosun/init`, plan copy, one R-gov setup PR with owner steps, rollback on failure · UC-M7-1 rehearsed on an empty repo (all gates exit 0) · `tests/cli_init.rs` · PR #112
+- 2026-10-23 · M7 T2b · init beside a hull template: `own_ci` from an existing `ci-ok` job, `claude-md` unless a lock owns CLAUDE.md, excludes for existing seeds and `.claude/settings.json`, hoist.toml text merge (dry run, re-parse) · end-to-end on hull template-rust: no splice refusal, `splice check` no drift · `tests/cli_init.rs` · PR #157
+- 2026-10-23 · M7 T4 · `bosun doctor --remote`: `hoist check --json` with a deadline, drift folded into steps 3, 5 and 10 · `tests/cli_doctor_remote.rs` · PR #118
+- 2026-10-23 · Follow-up · required checks = defaults ∪ hoist.toml `[github] required_checks` (default branch); `BOSUN_REQUIRED_CHECKS` replaces all; doctor finds `ci-ok` in any workflow (`core::checks`) · `tests/cli_pr.rs`, `tests/cli_doctor.rs` · PR #158
+- 2026-10-23 · M7 T3 1a · gate runner keys `{packages}` and `requires` (head and base), packages adapter dispatch · `tests/cli_gate.rs` · PR #167
+- 2026-10-23 · M7 T3 1b · `profiles/ts-pnpm.toml` and the `pnpm-workspace` packages adapter (`--filter ...pkg`, `-r --include-workspace-root`) · toward UC-M7-2 · `tests/cli_gate_ts.rs` · PR #122
+- 2026-10-23 · M7 T3 2 · test-integrity adapters `ts-skip` and `ts` (lexer-aware: strings, comments, regex literals, template literals) · `tests/cli_integrity_ts.rs` · PR #123
+- 2026-10-23 · M7 T3 3 · generic `regex` adapters (both sides or neither, non-empty patterns), reduced integrity reported, one kit per stack (innermost wins), closed adapter names · UC-M7-3, UC-M7-5 · `tests/uc_m7.rs` · PR #168
+- 2026-10-23 · M7 status · UC-M7-3 and UC-M7-5 pass (`tests/uc_m7.rs`); UC-M7-1 rehearsed by hand (empty repo, `bosun init`, every gate exits 0), no automated test; UC-M7-2 (a ts-pnpm repo's first PR is green) and UC-M7-4 (a new channel version reaches a consumer as one R-gov PR) are open: both need a released channel version
 
 ## Blocked
 
@@ -207,3 +218,13 @@ Human-only items, in order. Each has the exact action.
    PRs"; Claude runs `bosun approve --list`, shows the ready list (PR, title, risk, files), then
    runs exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`). A PR whose head
    moved in between is refused (exit 3) and needs a new `--list`.
+10. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one commit
+    and the Claude GitHub App; in a session with splice, bosun and a `GITHUB_TOKEN` (push and
+    pull requests), `bosun init --stack rust --owner <login> [--plan plan.md]`; review and merge
+    the setup PR by hand (its base has no bosun workflows, so risk-check and review-verdict
+    cannot post: a one-time bootstrap); `hoist apply --area github --yes` from a checkout of main
+    with an admin token; `gh label create bosun:halt --color B60205`; the secret
+    `SPLICE_BOT_TOKEN`; check `governance/owners.toml` and `.github/CODEOWNERS`; paste
+    `docs/setup-script.sh` into the cloud environment; create the Routines from `bosun doctor`.
+    In a hull template-rust repo, the two bosun hooks come from hull's `.claude/settings.json`
+    (hull#22); until then init lists them as an owner step.
