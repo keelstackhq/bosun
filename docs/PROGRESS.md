@@ -172,7 +172,8 @@ Human-only items, in order. Each has the exact action.
 6. **Review mode b (M8): off, no API key.** The owner decided (2026-10-24) not to add an Anthropic
    API key. Reviews stay mode a: a session runs `bosun review-pack`, posts the verdict with `bosun
    verdict comment`, and `verdict.yml` applies it. `.github/workflows/review.yml` (PR #183) stays
-   dormant: `review-ci` does nothing while `[review] mode = "subagent"`. There is no owner step.
+   dormant: the job still runs on eligible PRs and skips, setting no status and making no API call,
+   while `[review] mode = "subagent"`. There is no owner step.
    UC-M8-3 (#145) stays blocked and is not planned: recording mode b needs the key.
 7. **Pending UC tests in CI (owner decision, #179).** Plan tasks allow `skip`, but CI never
    passes the task's allow list to `gate-test-integrity`, so P2's pending UC tests cannot land.
