@@ -35,7 +35,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D12 | Generated files | No reference to the source playbook in generated files. Each comment states its own reason. The evidence for the defaults is in `docs/defaults.md`. |
 | D13 | Merging and tags (A1) | Agents never merge, tag or force-push. Merges go through the GitHub merge queue or auto-merge, which `bosun pr --auto-merge` turns on after all gates are green. Releases run through `hoist release` in a workflow; tags come from workflows only. |
 | D14 | Waiting (A2) | `bosun wait` polls GitHub state with backoff inside one call. It never depends on send_later or send_message. Child-to-parent results go through issue comments. |
-| D15 | Required checks (A3) | `ci-ok` aggregates every `gate-*` job (the org convention). `risk-check`, `review-verdict` and `main-open` stay separate required checks. |
+| D15 | Required checks (A3) | `ci-ok` aggregates every `gate-*` job (the org convention). `risk-check`, `review-verdict` and `main-open` stay separate required checks. In a repo whose own ci.yml already has `ci-ok` (a hull template), bosun's gates aggregate as `bosun-ok`, a fifth required check. |
 | D16 | Init and upgrade (A4) | `bosun init` runs `splice channel add gh:keelstackhq/bosun//channel` (pieces `core`, `rust`, `ts-pnpm`). There is no `bosun upgrade`: the splice update bot (`keelstackhq/splice/action@v1`) keeps the channel fresh. |
 | D17 | Repo settings (A5) | Checklist steps 3 and 5 (branch protection, environments, secrets, variables) are done with `hoist apply`. `bosun doctor --remote` calls `hoist check`. |
 | D18 | Workspaces (A6) | Wave agents get isolated workspaces from `berth up` (worktree, env files, port block, database per agent). `berth gc` cleans up after merge. |
@@ -141,12 +141,21 @@ A channel version is a bosun release tag (`v<x.y.z>`), and the channel writes th
 A branch or sha ref has no release version; such a consumer sets the template var `bosun_version`.
 
 The channel's workflows run the release pinned in `.bosun/version` from npm, never bosun built
-from the change: ci.yml reads the pin of the PR's base commit (the setup PR, whose base has no
+from the change: bosun.yml reads the pin of the PR's base commit (the setup PR, whose base has no
 pin yet, uses its own and says so in a warning); risk.yml and verdict.yml read it from the base
-or the default branch and never check out PR code. main-health's nightly calls ci.yml
+or the default branch and never check out PR code. main-health's nightly calls bosun.yml
 (`workflow_call`), so it runs `bosun gate <name> --all` for any stack. Consumers inherit the
 residual of PROGRESS Blocked item 5: a same-repo PR can add a workflow that posts a forged
 status; such a PR is R-ci and needs the owner.
+
+The channel never needs a file another template owns (a hull template owns ci.yml, CLAUDE.md
+and .claude/settings.json): its gates run in `.github/workflows/bosun.yml`, whose aggregate job is
+`ci-ok`, or `bosun-ok` (one more required check) when the repo has its own ci.yml (`own_ci`);
+with `own_ci`, main-health watches both workflows and closes `bosun:main-red` only when the
+latest push run on main of each is green; the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
+`bosun init` sets `own_ci`, adds `claude-md` unless the main template owns CLAUDE.md, merges the
+required checks into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
+the owner then adds the two bosun hooks there (an owner step), since only one source may own it.
 
 ## 4. Work lifecycle and conflict avoidance
 

@@ -1,8 +1,8 @@
-{% raw %}name: ci
+{% raw %}name: bosun
 
 # Written by the bosun splice channel (owned: `splice update --channel bosun` replaces it, so a
 # local edit is drift). Every gate runs `bosun gate <name>`; change a gate's command in
-# .bosun/profiles/<profile>.toml, and add other checks in a workflow of your own.
+# .bosun/profiles/<profile>.toml. The repo's own ci.yml, if any, is never touched.
 on:
   pull_request:
     branches: [main]
@@ -16,7 +16,7 @@ on:
 
 # A new push to the same PR or branch cancels its older run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: bosun-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -148,10 +148,11 @@ jobs:
           echo "$got"
           test "$got" = "bosun ${v}"
 
-  # The one required CI check (spec D15): it fails unless every job above succeeded, also when
-  # one was skipped or cancelled.
-  ci-ok:
-    needs: [bosun-bin, gate, pin]
+  # The required CI check (spec D15): it fails unless every job above succeeded, also when one
+  # was skipped or cancelled. Beside a repo's own ci.yml and its ci-ok, it is called bosun-ok.
+{% endraw %}{% if own_ci %}  bosun-ok:
+{% else %}  ci-ok:
+{% endif %}{% raw %}    needs: [bosun-bin, gate, pin]
     if: always()
     runs-on: ubuntu-latest
     steps:
