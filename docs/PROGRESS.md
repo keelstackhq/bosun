@@ -161,7 +161,7 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-24 · Approvals · `bosun approve --list` (open PRs whose `risk-check` waits for an owner, with workflow-posted `review-verdict` and the Actions `ci-ok` green, files of that head) and `bosun approve <pr>@<sha>...` (posts `/bosun approve <sha>` with `BOSUN_OWNER_TOKEN`, refuses a moved head, posts nothing unless every PR is ready); `--main-open` for the bootstrap case; an `approve` record; the token is never printed (canary tests) · `tests/cli_approve.rs` · PR #201; `data.hint` that approvals through the Claude GitHub tool never count · PR #206
 - 2026-10-24 · Risk 4a · rule field `approval = "owner"|"two-verdicts"`; the two-verdict class passes on two verdict-workflow records from distinct sessions (approve >= 0.9) on the head, not from a lease holder of the linked task; an unlinked PR needs the owner; verdict records carry the confidence; `verdict.yml` re-runs risk-check · `tests/cli_risk_two_verdicts.rs` 18/18 · PR #202
 - 2026-10-24 · Pin v0.2.0 · `.bosun/version` and `docs/setup-script.sh` at 0.2.0 · PR #205
-- 2026-10-24 · Risk 4b · owner: all workflows, `deny.toml`, both toolchain files, `Cargo.toml`, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); two verdicts: `channel/**` only; built-in and repo rules identical (test) · `tests/governance.rs`, `tests/cli_risk_repo_rules.rs` · PR #207; build inputs (`build.rs`, `.cargo/**`, `.config/**`, `Cargo.lock`) and the review feeders join R-gate · PR #208
+- 2026-10-24 · Risk 4b · owner: all workflows, `deny.toml`, both toolchain files, `Cargo.toml`, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); two verdicts: `channel/**` only; built-in and repo rules identical (test) · `tests/governance.rs` 8/8, `tests/cli_risk_repo_rules.rs` 4/4 · PR #207; build inputs (`build.rs`, `.cargo/**`, `.config/**`, `Cargo.lock`) and the review feeders join R-gate · PR #208
 - 2026-10-24 · Approvals · `bosun approve` refuses to post in a Claude cloud session (`CCR_AGENT_PROXY_ENABLED`, `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud*`; the agent proxy rewrites GitHub writes, so no approval from there counts), `--list` still works there; an owner review requesting changes on the head makes the PR not ready; a counting approval while risk-check is red is re-posted to re-run it · `tests/cli_approve.rs` 28/28 · PR #209
 
 ## Blocked
@@ -221,18 +221,24 @@ Human-only items, in order. Each has the exact action.
      data.routines from the new release, and attach the Slack connector to it: the Routine reads
      the channel facts and posts with its Slack tool.
 9. **Owner approvals.** An approval counts only as the owner's own comment
-   `/bosun approve <head sha>` (typed exactly, nothing else) or a GitHub review on that head,
-   sent with the owner's own credentials. Two ways work:
-   - the GitHub web or mobile app: type the comment on the PR, or approve with a review;
-   - `bosun approve` on the owner's own machine (a local shell, or a local Claude Code session
-     with Remote Control), with `BOSUN_OWNER_TOKEN` set there: a fine-grained PAT of the owner
-     for keelstackhq/bosun with Pull requests and Issues read/write (Commit statuses read/write
-     only for `--main-open`). Run `bosun approve --list`, check the ready list (PR, title,
-     risk, files), then run exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`).
-     A PR whose head moved in between is refused (exit 3) and needs a new `--list`.
+   `/bosun approve <head sha>` (the full 40-character SHA, typed exactly, nothing else, never
+   edited: an edited comment never counts, post a new one) or a GitHub review approving that
+   head, sent with the owner's own credentials. A newer review of yours requesting changes on
+   that head cancels the comment. Two ways work:
+   - the GitHub web or mobile app: type the comment on the PR (a review works only on a PR you
+     did not open; agent PRs are opened as your login, so use the comment);
+   - `bosun approve` on the owner's own machine (a local shell or a local Claude Code session,
+     also when driven through Remote Control), with `BOSUN_OWNER_TOKEN` set there: a
+     fine-grained PAT of the owner for keelstackhq/bosun with Pull requests and Issues
+     read/write (Commit statuses read/write only for `--main-open`; reads of this public repo
+     need nothing more, a private repo also needs Contents, Commit statuses and Checks read).
+     Run `bosun approve --list`, check the ready list (PR, title, risk, files), then run
+     exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`). A PR whose head
+     moved in between is refused (exit 3) and needs a new `--list`.
    Never from a Claude cloud session, not even with a PAT: its agent proxy rewrites every GitHub
-   write (app attribution and a Claude footer), so risk-check ignores it. The Claude GitHub tool
-   does the same. Never put the PAT in a cloud environment.
+   write (app attribution and a Claude footer), so risk-check ignores it, and `bosun approve`
+   refuses there (exit 5). The Claude GitHub tool does the same. Never put the PAT in a cloud
+   environment.
 10. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one commit
     and the Claude GitHub App; in a session with splice, bosun and a `GITHUB_TOKEN` (push and
     pull requests), `bosun init --stack rust --owner <login> [--plan plan.md]`; review and merge

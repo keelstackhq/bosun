@@ -542,7 +542,7 @@ High-risk PRs:
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
 - `bosun approve` is the owner's shortcut, run on the owner's own machine (a local shell or a
-  local Claude Code session), never in a Claude cloud session: the cloud agent proxy rewrites
+  local Claude Code session, also through Remote Control), never in a Claude cloud session: the cloud agent proxy rewrites
   every GitHub write (app attribution and a footer), so an approval sent from there never counts,
   whatever the token. It
   reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
