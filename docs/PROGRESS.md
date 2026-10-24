@@ -219,17 +219,19 @@ Human-only items, in order. Each has the exact action.
    - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor`
      data.routines from the new release, and attach the Slack connector to it: the Routine reads
      the channel facts and posts with its Slack tool.
-9. **Owner approvals from a Claude Code session.** Create a fine-grained PAT of the owner for
-   keelstackhq/bosun with Pull requests and Issues read/write (Commit statuses read/write only
-   if you use `bosun approve --main-open`; Metadata read is implied). Put it in a separate
-   Claude Code environment (claude.ai/code → environment settings) as the variable
-   `BOSUN_OWNER_TOKEN`, with the normal setup script. Never spawn agents from that environment
-   and never put the token in an agent environment. There the owner says "approve the ready
-   PRs"; Claude runs `bosun approve --list`, shows the ready list (PR, title, risk, files), then
-   runs exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`). A PR whose head
-   moved in between is refused (exit 3) and needs a new `--list`. Never approve through the
-   Claude GitHub tool: it posts through an app and adds a footer, so risk-check ignores it.
-   Only `bosun approve`, the comment typed in the GitHub UI, or a GitHub review count.
+9. **Owner approvals.** An approval counts only as the owner's own comment
+   `/bosun approve <head sha>` (typed exactly, nothing else) or a GitHub review on that head,
+   sent with the owner's own credentials. Two ways work:
+   - the GitHub web or mobile app: type the comment on the PR, or approve with a review;
+   - `bosun approve` on the owner's own machine (a local shell, or a local Claude Code session
+     with Remote Control), with `BOSUN_OWNER_TOKEN` set there: a fine-grained PAT of the owner
+     for keelstackhq/bosun with Pull requests and Issues read/write (Commit statuses read/write
+     only for `--main-open`). Run `bosun approve --list`, check the ready list (PR, title,
+     risk, files), then run exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`).
+     A PR whose head moved in between is refused (exit 3) and needs a new `--list`.
+   Never from a Claude cloud session, not even with a PAT: its agent proxy rewrites every GitHub
+   write (app attribution and a Claude footer), so risk-check ignores it. The Claude GitHub tool
+   does the same. Never put the PAT in a cloud environment.
 10. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one commit
     and the Claude GitHub App; in a session with splice, bosun and a `GITHUB_TOKEN` (push and
     pull requests), `bosun init --stack rust --owner <login> [--plan plan.md]`; review and merge
