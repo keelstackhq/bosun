@@ -202,6 +202,15 @@ impl LiveGithub {
         })
     }
 
+    /// The given token (not the `GITHUB_TOKEN` of the environment) against `BOSUN_GITHUB_API`.
+    pub fn with_token(token: &str, owner: &str, repo: &str) -> Self {
+        LiveGithub {
+            http: Http::with_env_url(token),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        }
+    }
+
     /// Explicit settings, for tests.
     pub fn with(base_url: &str, token: &str, owner: &str, repo: &str, max_sleep_ms: u64) -> Self {
         LiveGithub {

@@ -520,6 +520,21 @@ High-risk PRs:
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
+- `bosun approve` is the owner's shortcut, run in the owner's own Claude Code environment. It
+  reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
+  never with `GITHUB_TOKEN`; without it the command is exit 5. The token is never printed.
+  `--list` shows each open PR on whose head `risk-check` is `failure` with a description that
+  starts `high risk, owner approval needed`, `review-verdict` is `success` and `ci-ok` is green
+  (the newest `ci-ok` check run succeeded, else a `ci-ok` commit status did), with the rule ids
+  and changed files; PRs that wait for an owner but are not ready are listed under `waiting`.
+  `bosun approve <pr>...` and `--all-ready` recompute the list and post `/bosun approve <head>`
+  on each; if any named PR is not ready, nothing is posted (exit 3, `data.not_ready`). Both are
+  exit 4 while bosun is halted. One `approve` record (`prs`, `at`, no session) goes on the
+  registry issue. `--main-open <pr>` posts the `main-open` status with the decision of
+  `bosun gate main-open` for a PR that changes `main-open.yml` (the base workflow cannot judge
+  it), exit 4 when main is red and the PR is no mainfix, and records it as `main_open`. The
+  comment still counts only for an owner in `governance/owners.toml`, on an unedited comment of
+  a plain user token.
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
   reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
   comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run

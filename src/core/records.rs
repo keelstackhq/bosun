@@ -79,12 +79,26 @@ pub enum Record {
     },
     /// A Slack post for `key` was made (spec §10, `bosun notify --ack`).
     Notified { key: String, at: String },
+    /// An owner approved PRs (and posted `main-open`) with `bosun approve`; no session id.
+    Approve {
+        prs: Vec<PrHead>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        main_open: Vec<PrHead>,
+        at: String,
+    },
     /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
     Answer {
         session: String,
         slack_user: String,
         at: String,
     },
+}
+
+/// A PR and the head sha an owner acted on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrHead {
+    pub pr: u64,
+    pub head_sha: String,
 }
 
 impl Record {
@@ -96,7 +110,7 @@ impl Record {
     /// The session that wrote the record; `""` for a `notified` record, which has none.
     pub fn session(&self) -> &str {
         match self {
-            Record::Notified { .. } => "",
+            Record::Notified { .. } | Record::Approve { .. } => "",
             Record::Lease { session, .. }
             | Record::LeaseEnd { session, .. }
             | Record::Join { session, .. }
@@ -224,6 +238,23 @@ mod tests {
         assert_eq!(
             r.to_line(),
             r#"{"bosun":"lesson-seen","session":"s","signature":"00ff00ff00ff00ff","issue":7}"#
+        );
+        assert_eq!(parse_record(&r.to_line()), Some(r));
+    }
+
+    #[test]
+    fn approve_record_has_no_session() {
+        let r = Record::Approve {
+            prs: vec![PrHead {
+                pr: 4,
+                head_sha: "abc".into(),
+            }],
+            main_open: vec![],
+            at: "2026-10-22T10:00:00Z".into(),
+        };
+        assert_eq!(
+            r.to_line(),
+            r#"{"bosun":"approve","prs":[{"pr":4,"head_sha":"abc"}],"at":"2026-10-22T10:00:00Z"}"#
         );
         assert_eq!(parse_record(&r.to_line()), Some(r));
     }

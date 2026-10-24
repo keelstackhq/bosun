@@ -4,6 +4,7 @@
 use clap::{Args, Parser, Subcommand};
 
 pub mod answer;
+pub mod approve;
 pub mod ask;
 pub mod budget;
 pub mod ci_log;
@@ -87,6 +88,8 @@ pub enum Command {
     Msg(MsgArgs),
     /// Run one gate of the stack's profile (fmt, lint, test, deps, ...).
     Gate(GateArgs),
+    /// Owner only (BOSUN_OWNER_TOKEN): list the PRs that wait for an owner and approve them.
+    Approve(ApproveArgs),
     /// Judge a PR with the risk rules of its base branch.
     RiskCheck(PrArg),
     /// Refuse deleted tests, new skips and fewer assertions.
@@ -156,6 +159,7 @@ pub const COMMANDS: &[&str] = &[
     "wait",
     "msg",
     "gate",
+    "approve",
     "risk-check",
     "test-integrity",
     "review-pack",
@@ -197,6 +201,7 @@ impl Command {
             Command::Wait(_) => "wait",
             Command::Msg(_) => "msg",
             Command::Gate(_) => "gate",
+            Command::Approve(_) => "approve",
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
@@ -361,6 +366,22 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct ApproveArgs {
+    /// PRs to approve; each must be in `--list`, else nothing is posted (exit 3).
+    #[arg(conflicts_with_all = ["list", "all_ready", "main_open"])]
+    pub prs: Vec<u64>,
+    /// List the open PRs that wait for an owner and are ready; writes nothing.
+    #[arg(long, conflicts_with_all = ["all_ready", "main_open"])]
+    pub list: bool,
+    /// Approve every PR in `--list`.
+    #[arg(long, conflicts_with = "main_open")]
+    pub all_ready: bool,
+    /// Post the `main-open` status on this PR (bootstrap: the PR changes main-open.yml).
+    #[arg(long, value_name = "PR")]
+    pub main_open: Option<u64>,
 }
 
 #[derive(Debug, Args)]

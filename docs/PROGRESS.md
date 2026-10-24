@@ -200,3 +200,10 @@ Human-only items, in order. Each has the exact action.
    - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor`
      data.routines from the new release, and attach the Slack connector to it: the Routine reads
      the channel facts and posts with its Slack tool.
+9. **Owner approvals from a Claude Code session.** Create a fine-grained PAT of the owner for
+   keelstackhq/bosun with Pull requests and Issues read/write (Commit statuses read/write only
+   if you use `bosun approve --main-open`; Metadata read is implied). Put it in a separate
+   Claude Code environment (claude.ai/code → environment settings) as the variable
+   `BOSUN_OWNER_TOKEN`, with the normal setup script. Never spawn agents from that environment
+   and never put the token in an agent environment. In a session there run `bosun approve
+   --list`, then `bosun approve <pr>...` or `bosun approve --all-ready`.

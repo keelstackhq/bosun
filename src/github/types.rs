@@ -199,6 +199,12 @@ pub struct CheckRun {
     /// `None` until the run completes.
     #[serde(default)]
     pub conclusion: Option<String>,
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
 }
 
 /// A job of an Actions workflow run.
