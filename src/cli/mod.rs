@@ -370,15 +370,13 @@ pub struct PrArg {
 
 #[derive(Debug, Args)]
 pub struct ApproveArgs {
-    /// PRs to approve; each must be in `--list`, else nothing is posted (exit 3).
-    #[arg(conflicts_with_all = ["list", "all_ready", "main_open"])]
-    pub prs: Vec<u64>,
+    /// `<pr>@<40-hex head sha>`, copied from `data.approve_command` of `--list`; nothing is
+    /// posted (exit 3) unless every PR is ready and still at that head.
+    #[arg(value_name = "PR@HEAD", conflicts_with_all = ["list", "main_open"])]
+    pub prs: Vec<String>,
     /// List the open PRs that wait for an owner and are ready; writes nothing.
-    #[arg(long, conflicts_with_all = ["all_ready", "main_open"])]
-    pub list: bool,
-    /// Approve every PR in `--list`.
     #[arg(long, conflicts_with = "main_open")]
-    pub all_ready: bool,
+    pub list: bool,
     /// Post the `main-open` status on this PR (bootstrap: the PR changes main-open.yml).
     #[arg(long, value_name = "PR")]
     pub main_open: Option<u64>,

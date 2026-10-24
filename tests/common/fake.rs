@@ -91,6 +91,8 @@ pub struct State {
     pub permissions: HashMap<String, String>,
     /// (path suffix, status) answered for every matching request.
     pub fail_paths: Vec<(String, u16)>,
+    /// `fail_paths` answers carry the request's Authorization header as the message.
+    pub echo_auth: bool,
     /// Scripted mutations; see `FakeGithub::after_requests`.
     pub hooks: Vec<Hook>,
     /// `base...head` -> `status` of the comparison (default `ahead`).
@@ -330,6 +332,21 @@ impl FakeGithub {
         );
     }
 
+    /// A commit status posted by `creator` (statuses default to `github-actions[bot]`).
+    pub fn status_by(
+        &self,
+        sha: &str,
+        context: &str,
+        state: &str,
+        description: &str,
+        creator: &str,
+    ) {
+        let mut s = self.state.lock().unwrap();
+        add_status(&mut s, sha, context, state, description);
+        let last = s.statuses.get_mut(sha).unwrap().last_mut().unwrap();
+        last["creator"] = json!({"login": creator});
+    }
+
     /// Every status ever posted to `sha`, oldest first.
     pub fn statuses_of(&self, sha: &str) -> Vec<Value> {
         let s = self.state.lock().unwrap();
@@ -342,8 +359,22 @@ impl FakeGithub {
         let id = list.len() + 1;
         list.push(
             json!({"id": id, "name": name, "status": status, "conclusion": conclusion,
-            "head_sha": sha}),
+            "head_sha": sha, "app": {"slug": "github-actions"}}),
         );
+    }
+
+    /// A check run created by the GitHub App `app` (check runs default to `github-actions`).
+    pub fn check_run_by(&self, sha: &str, name: &str, conclusion: &str, app: &str) {
+        self.check_run(sha, name, "completed", Some(conclusion));
+        let mut s = self.state.lock().unwrap();
+        let last = s.check_runs.get_mut(sha).unwrap().last_mut().unwrap();
+        last["app"] = json!({"slug": app});
+    }
+
+    /// Answer failing requests (`fail_path`) with a message that echoes the Authorization header,
+    /// as a hostile server would.
+    pub fn echo_auth_on_fail(&self) {
+        self.state.lock().unwrap().echo_auth = true;
     }
 
     /// A file at a ref; the contents API serves it base64-encoded.
@@ -573,7 +604,8 @@ fn pull_json(number: u64, title: &str, head_ref: &str, base_ref: &str, body: &st
 fn add_status(s: &mut State, sha: &str, context: &str, state: &str, description: &str) -> Value {
     let list = s.statuses.entry(sha.into()).or_default();
     let v = json!({"id": list.len() + 1, "context": context, "state": state,
-        "description": description, "created_at": TS});
+        "description": description, "created_at": TS,
+        "creator": {"login": "github-actions[bot]"}});
     list.push(v.clone());
     v
 }
@@ -1061,6 +1093,17 @@ fn route(
                 "statuses": newest}),
             )
         }
+        ("GET", ["commits", sha, "statuses"]) => {
+            let items = s
+                .statuses
+                .get(*sha)
+                .into_iter()
+                .flatten()
+                .rev()
+                .cloned()
+                .collect();
+            page(items, &query, base, path, raw_query)
+        }
         ("GET", ["commits", sha, "check-runs"]) => {
             let items = s.check_runs.get(*sha).cloned().unwrap_or_default();
             let total = items.len();
@@ -1200,6 +1243,7 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
         ]
         .map(get);
         let authed = headers[0].is_some();
+        let auth = headers[0].clone().unwrap_or_default();
         let mut raw = String::new();
         let _ = std::io::Read::read_to_string(req.as_reader(), &mut raw);
         let body: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
@@ -1216,7 +1260,12 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             s.fail = Some((code, left - 1));
             msg(code, "fake failure")
         } else if let Some((_, code)) = s.fail_paths.iter().find(|f| path.ends_with(&f.0)) {
-            msg(*code, "fake path failure")
+            let code = *code;
+            if s.echo_auth {
+                msg(code, auth.as_str())
+            } else {
+                msg(code, "fake path failure")
+            }
         } else {
             let mut hooks = std::mem::take(&mut s.hooks);
             for h in hooks.iter_mut().filter(|h| path.ends_with(&h.suffix)) {

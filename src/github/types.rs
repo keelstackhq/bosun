@@ -190,6 +190,9 @@ pub struct Status {
     pub state: String,
     #[serde(default, deserialize_with = "text_or_empty")]
     pub description: String,
+    /// Login of the user or app that posted the status; `""` when GitHub did not say.
+    #[serde(default, deserialize_with = "login")]
+    pub creator: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -205,6 +208,9 @@ pub struct CheckRun {
     pub started_at: Option<String>,
     #[serde(default)]
     pub completed_at: Option<String>,
+    /// Slug of the GitHub App that created the run (`github-actions` for Actions); `""` if unknown.
+    #[serde(default, deserialize_with = "app_slug_name")]
+    pub app: String,
 }
 
 /// A job of an Actions workflow run.
@@ -235,6 +241,17 @@ fn app_slug<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D
         slug: String,
     }
     Ok(Some(Option::<App>::deserialize(d)?.map(|a| a.slug)))
+}
+
+fn app_slug_name<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    struct App {
+        #[serde(default)]
+        slug: String,
+    }
+    Ok(Option::<App>::deserialize(d)?
+        .map(|a| a.slug)
+        .unwrap_or_default())
 }
 
 fn login<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {

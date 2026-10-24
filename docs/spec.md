@@ -522,19 +522,31 @@ High-risk PRs:
   count either.
 - `bosun approve` is the owner's shortcut, run in the owner's own Claude Code environment. It
   reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
-  never with `GITHUB_TOKEN`; without it the command is exit 5. The token is never printed.
-  `--list` shows each open PR on whose head `risk-check` is `failure` with a description that
-  starts `high risk, owner approval needed`, `review-verdict` is `success` and `ci-ok` is green
-  (the newest `ci-ok` check run succeeded, else a `ci-ok` commit status did), with the rule ids
-  and changed files; PRs that wait for an owner but are not ready are listed under `waiting`.
-  `bosun approve <pr>...` and `--all-ready` recompute the list and post `/bosun approve <head>`
-  on each; if any named PR is not ready, nothing is posted (exit 3, `data.not_ready`). Both are
-  exit 4 while bosun is halted. One `approve` record (`prs`, `at`, no session) goes on the
-  registry issue. `--main-open <pr>` posts the `main-open` status with the decision of
-  `bosun gate main-open` for a PR that changes `main-open.yml` (the base workflow cannot judge
-  it), exit 4 when main is red and the PR is no mainfix, and records it as `main_open`. The
-  comment still counts only for an owner in `governance/owners.toml`, on an unedited comment of
-  a plain user token.
+  never with `GITHUB_TOKEN`; without it the command is exit 5. It sends the token only to
+  `https://` or a loopback `BOSUN_GITHUB_API` (else exit 1) and redacts it from every message.
+  Flow: the owner says "approve the ready PRs"; Claude runs `bosun approve --list`, shows the
+  owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one
+  line `bosun approve 199@<head> 200@<head>` (null when nothing is ready). `--list` shows each
+  open PR whose `risk-check` status is `failure` with a description that starts `high risk,
+  owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
+  statuses created by `github-actions[bot]` count (anyone with write access can post a status
+  under any context, an agent included; the newest such status per context decides), and only
+  a `ci-ok` check run of the `github-actions` app (no commit status). The rule ids come from
+  the status text and are printed as `risk_from_status` (advisory); `files` is the comparison
+  of base and the listed head, so statuses, files and head describe one commit. PRs that wait
+  for an owner but are not ready are listed under `waiting`. A bare PR number is a usage
+  error: each argument names the head the owner saw. The command recomputes the list and
+  posts `/bosun approve <head>` on each PR only if every named PR is ready at exactly that
+  head; otherwise nothing is posted (exit 3, `data.not_ready`, for example `head changed`) and
+  the owner needs a new `--list`. If a later comment fails, the ones posted stay recorded and
+  `data.approved` lists them (exit 1). Both are exit 4 while bosun is halted. One `approve`
+  record (`prs`, `at`, no session) goes on the registry issue; it is an audit hint, never
+  authority: risk-check derives approval only from the owner's PR comment or review.
+  `--main-open <pr>` is for a PR that changes `.github/workflows/main-open.yml` (the base
+  workflow cannot judge it; any other PR is exit 3). It posts the `main-open` status with the
+  decision of `bosun gate main-open`, exit 4 when main is red and the PR is no mainfix, and
+  records it as `main_open`. The comment still counts only for an owner in
+  `governance/owners.toml`, on an unedited comment of a plain user token.
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
   reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
   comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run

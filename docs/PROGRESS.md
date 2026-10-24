@@ -203,5 +203,7 @@ Human-only items, in order. Each has the exact action.
    if you use `bosun approve --main-open`; Metadata read is implied). Put it in a separate
    Claude Code environment (claude.ai/code → environment settings) as the variable
    `BOSUN_OWNER_TOKEN`, with the normal setup script. Never spawn agents from that environment
-   and never put the token in an agent environment. In a session there run `bosun approve
-   --list`, then `bosun approve <pr>...` or `bosun approve --all-ready`.
+   and never put the token in an agent environment. There the owner says "approve the ready
+   PRs"; Claude runs `bosun approve --list`, shows the ready list (PR, title, risk, files), then
+   runs exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`). A PR whose head
+   moved in between is refused (exit 3) and needs a new `--list`.
