@@ -17,5 +17,6 @@ Real recordings go directly in this directory, one file per PR, at the head both
 `synthetic/` holds made-up files that test the harness only; they never count.
 
 UC-M8-3 ("on 20 recorded PRs, mode b agrees with mode a on at least 18") stays OPEN until 20
-real recorded runs exist here. A real `uc_m8_3` test lands with them. Until then
+real recorded runs exist here. Recording needs an Anthropic API key, which the owner decided
+not to add (2026-10-24), so it is not planned for now. A real `uc_m8_3` test lands with them. Until then
 `recorded_reviews_parse_and_pass_once_twenty_exist` only checks that recordings parse.
