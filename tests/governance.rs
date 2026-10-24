@@ -34,17 +34,60 @@ fn risk_rules_cover_the_defaults() {
 }
 
 #[test]
-fn shipped_rules_are_all_owner_rules() {
-    // The pinned release must accept the `approval` key before a rule here may use
-    // `approval = "two-verdicts"` (plan 4b): until then every shipped rule is an owner rule.
+fn shipped_rules_have_the_decided_approval_class() {
     use bosun::core::risk::Approval;
     for rules in [
         Rules::parse(&read(".bosun/risk.toml")).unwrap(),
         Rules::defaults(),
     ] {
+        let ids: Vec<&str> = rules.rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "R-gov",
+                "R-ci",
+                "R-gate",
+                "R-ci-review",
+                "R-secrets",
+                "R-deps",
+                "R-prod-write"
+            ]
+        );
         for r in &rules.rules {
-            assert_eq!(r.approval, Approval::Owner, "{}", r.id);
+            let want = if r.id == "R-ci-review" {
+                Approval::TwoVerdicts
+            } else {
+                Approval::Owner
+            };
+            assert_eq!(r.approval, want, "{}", r.id);
         }
+    }
+}
+
+#[test]
+fn builtin_rules_equal_the_repo_rules() {
+    let repo = Rules::parse(&read(".bosun/risk.toml")).unwrap();
+    let built = Rules::defaults();
+    assert_eq!(repo.rules.len(), built.rules.len());
+    for (a, b) in repo.rules.iter().zip(&built.rules) {
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.why, b.why, "{}", a.id);
+        let paths = |r: &bosun::core::risk::Rule| {
+            r.paths
+                .iter()
+                .map(|g| g.as_str().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(paths(a), paths(b), "{}", a.id);
+        assert_eq!(
+            a.content.as_ref().map(|c| c.as_str()),
+            b.content.as_ref().map(|c| c.as_str()),
+            "{}",
+            a.id
+        );
+        assert_eq!(a.new_dependency, b.new_dependency, "{}", a.id);
+        assert_eq!(a.capability, b.capability, "{}", a.id);
+        assert_eq!(a.approval, b.approval, "{}", a.id);
     }
 }
 

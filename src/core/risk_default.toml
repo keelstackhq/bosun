@@ -4,12 +4,56 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what."
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**"]
+# REVIEW.md is what the reviewers apply.
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "REVIEW.md"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**"]
+paths = [".github/workflows/**", "deny.toml"]
+
+[[rule]]
+id = "R-gate"
+why = "The gate code decides what passes."
+# A file and its module directory: `x.rs` and `x/**`.
+paths = [
+    "src/core/risk.rs",
+    "src/core/risk_default.toml",
+    "src/core/verdict.rs",
+    "src/core/verdict/**",
+    "src/core/records.rs",
+    "src/core/records/**",
+    "src/core/meta.rs",
+    "src/core/meta/**",
+    "src/core/glob.rs",
+    "src/core/glob/**",
+    "src/core/approve.rs",
+    "src/core/approve/**",
+    "src/core/mod.rs",
+    "src/cli/risk_check.rs",
+    "src/cli/risk_check/**",
+    "src/cli/verdict.rs",
+    "src/cli/verdict/**",
+    "src/cli/approve.rs",
+    "src/cli/approve/**",
+    "src/cli/test_integrity.rs",
+    "src/cli/test_integrity/**",
+    "src/cli/mod.rs",
+    "src/gates/**",
+    "src/github/**",
+    "src/app.rs",
+    "src/output.rs",
+    "src/lib.rs",
+    "src/main.rs",
+    "profiles/**",
+    "npm/**",
+]
+
+[[rule]]
+id = "R-ci-review"
+why = "Shipped CI and the toolchain; two independent reviews instead of the owner."
+approval = "two-verdicts"
+paths = ["channel/**", "rust-toolchain.toml"]
 
 [[rule]]
 id = "R-secrets"

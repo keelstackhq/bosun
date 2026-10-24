@@ -1,0 +1,92 @@
+//! This repo's own `.bosun/risk.toml`, put on the fake's base branch: which PRs need the owner
+//! and which need two verdicts (spec section 8).
+
+mod common;
+
+use common::fake::FakeGithub;
+use common::run;
+use serde_json::Value;
+use std::fs;
+use std::path::Path;
+
+const NOW: &str = "2026-10-22T10:00:00Z";
+const BASE: &str = "base0000";
+const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
+
+fn rules() -> String {
+    fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(".bosun/risk.toml")).unwrap()
+}
+
+fn pr_touching(path: &str, previous: Option<&str>) -> FakeGithub {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "Closes #7");
+    fake.issue(7, "task", &[], "");
+    fake.content("governance/owners.toml", BASE, OWNERS);
+    fake.content(".bosun/risk.toml", BASE, &rules());
+    let status = if previous.is_some() {
+        "renamed"
+    } else {
+        "modified"
+    };
+    fake.pull_file(1, path, status, 1, 0, Some("@@ -0,0 +1,1 @@\n+x"));
+    if let Some(p) = previous {
+        fake.renamed_from(1, p);
+    }
+    fake
+}
+
+fn check(fake: &FakeGithub) -> (i32, Value) {
+    run(fake, "session_test", NOW, &["risk-check", "1"])
+}
+
+fn requirement(path: &str, previous: Option<&str>) -> String {
+    let fake = pr_touching(path, previous);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{path}: {v}");
+    v["data"]["requirement"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn channel_and_toolchain_need_two_verdicts() {
+    for path in [
+        "channel/x",
+        "channel/pieces/a/b.toml",
+        "rust-toolchain.toml",
+    ] {
+        assert_eq!(requirement(path, None), "two-verdicts", "{path}");
+    }
+}
+
+#[test]
+fn workflows_gate_code_and_governance_need_the_owner() {
+    for path in [
+        ".github/workflows/ci.yml",
+        ".github/workflows/risk.yml",
+        ".github/workflows/other.yaml",
+        "deny.toml",
+        "REVIEW.md",
+        "src/github/http.rs",
+        "src/cli/mod.rs",
+        "src/core/records.rs",
+        "src/core/risk.rs",
+        "src/core/risk_default.toml",
+        "src/gates/runner.rs",
+        "profiles/rust.toml",
+        "npm/bosun/package.json",
+        ".bosun/risk.toml",
+    ] {
+        assert_eq!(requirement(path, None), "owner", "{path}");
+    }
+}
+
+#[test]
+fn a_rename_out_of_gate_code_into_channel_needs_the_owner() {
+    assert_eq!(requirement("channel/x.rs", Some("src/gates/x.rs")), "owner");
+}
+
+#[test]
+fn ordinary_code_is_normal_risk() {
+    let fake = pr_touching("src/cli/claim.rs", None);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+}
