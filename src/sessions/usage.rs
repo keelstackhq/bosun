@@ -60,6 +60,22 @@ pub fn generic(
     Ok(turns as f64 * per_turn / 1_000_000.0)
 }
 
+/// The cost of one call: its input and output tokens at the model's price.
+pub(crate) fn from_tokens(
+    input_tokens: u64,
+    output_tokens: u64,
+    model: &str,
+    prices: &BTreeMap<String, Price>,
+) -> Result<f64, BosunError> {
+    let (input, output) = price_of(model, prices).ok_or_else(|| {
+        BosunError::error(
+            format!("no price for model `{model}`"),
+            "add it to [prices] in .bosun/bosun.toml (input_per_mtok, output_per_mtok), or use haiku, sonnet or opus",
+        )
+    })?;
+    Ok((input_tokens as f64 * input + output_tokens as f64 * output) / 1_000_000.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

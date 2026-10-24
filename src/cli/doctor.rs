@@ -28,7 +28,7 @@ fn routines() -> Value {
         {"name": "curator", "schedule": "daily", "model": "sonnet",
          "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add`; at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
         {"name": "notify", "schedule": "every 15 minutes", "model": "haiku",
-         "prompt": "Run `bosun notify` and post what it prints to the Slack channel from .bosun/bosun.toml."},
+         "prompt": "Run `bosun notify --channel-info -` with the channel facts read by your Slack tool (conversations.info; guests are the members whose users.info has is_restricted or is_ultra_restricted) as JSON on stdin: {\"id\", \"is_ext_shared\", \"is_org_shared\", \"is_shared\", \"guests\"}. Post each `slack_post` in `next` with `args.text` verbatim (into args.thread_ts when it is set), then run `bosun notify --ack <key>` only after that post succeeded. Report data.errors when it is not empty. On exit 5, post nothing and report data.reason."},
     ])
 }
 
@@ -439,7 +439,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .as_ref()
         .map(|s| s.channel.trim().to_string())
         .unwrap_or_default();
-    items.push(item(
+    let mut slack_item = item(
         7,
         "Slack channel",
         channel
@@ -447,7 +447,21 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             .then(|| "[slack] channel is not set in .bosun/bosun.toml".into()),
         format!("[slack] channel = {channel}"),
         "create the channel, connect Claude Tag, and set [slack] channel in .bosun/bosun.toml",
-    ));
+    );
+    // Without an owner Slack ID no answer counts and no thread may spawn: warn, not fail.
+    let parsed = read(root, "governance/owners.toml").map(|t| crate::core::risk::parse_owners(&t));
+    let has_slack_id = matches!(&parsed, Some(Ok(o)) if o.iter().any(|o| o.slack.is_some()));
+    if !channel.is_empty() && !has_slack_id {
+        slack_item["status"] = json!("warn");
+        slack_item["detail"] = json!(if matches!(parsed, Some(Err(_))) {
+            "governance/owners.toml does not parse as [[owner]] tables"
+        } else {
+            "[slack] channel is set but no owner in governance/owners.toml has a slack ID, so no Slack answer counts"
+        });
+        slack_item["fix"] =
+            json!("add `slack = \"U…\"` to your [[owner]] table in governance/owners.toml");
+    }
+    items.push(slack_item);
 
     let reg = registry::load(gh);
     items.push(item(

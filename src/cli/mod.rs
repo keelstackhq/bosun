@@ -3,6 +3,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+pub mod answer;
 pub mod ask;
 pub mod budget;
 pub mod ci_log;
@@ -10,11 +11,13 @@ pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
 pub mod init;
+pub mod intake;
 pub mod join;
 pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
 pub mod msg;
+pub mod notify;
 pub mod plan;
 pub mod pr;
 pub mod progress;
@@ -33,6 +36,8 @@ pub mod wave;
 use std::path::PathBuf;
 
 pub mod gate;
+pub mod main_health;
+pub mod review_ci;
 pub mod stop;
 pub mod test_integrity;
 
@@ -99,6 +104,8 @@ pub enum Command {
     Status,
     /// Ask the owner a question on an issue (sets needs-human).
     Ask(AskArgs),
+    /// Record an owner's answer from Slack on a needs-human task and make it ready.
+    Answer(AnswerArgs),
     /// Lesson commands.
     #[command(subcommand)]
     Lesson(LessonCmd),
@@ -127,6 +134,14 @@ pub enum Command {
     Init(InitArgs),
     /// Open a kind/mainfix PR that reverts a merged PR.
     Revert(RevertArgs),
+    /// Open a kind/plan issue that asks for a plan amendment (the only way new work enters).
+    Intake(IntakeArgs),
+    /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
+    MainHealth(MainHealthArgs),
+    /// Review mode b: ask the Anthropic API for the verdict of a PR and record it (no session).
+    ReviewCi(ReviewCiArgs),
+    /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
+    Notify(NotifyArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -161,6 +176,11 @@ pub const COMMANDS: &[&str] = &[
     "main-triage",
     "init",
     "revert",
+    "intake",
+    "main-health",
+    "review-ci",
+    "notify",
+    "answer",
 ];
 
 impl Command {
@@ -187,6 +207,7 @@ impl Command {
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
             Command::Ask(_) => "ask",
+            Command::Answer(_) => "answer",
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
@@ -206,6 +227,10 @@ impl Command {
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
             Command::Revert(_) => "revert",
+            Command::Intake(_) => "intake",
+            Command::MainHealth(_) => "main-health",
+            Command::ReviewCi(_) => "review-ci",
+            Command::Notify(_) => "notify",
         }
     }
 }
@@ -258,8 +283,8 @@ pub struct ResultArgs {
 
 #[derive(Debug, Args)]
 pub struct SpawnArgs {
-    /// The epic issue number.
-    pub epic: u64,
+    /// The epic issue number (optional only with --slack-thread).
+    pub epic: Option<u64>,
     /// Model of the new session (never a [1m] model).
     #[arg(long)]
     pub model: Option<String>,
@@ -272,6 +297,15 @@ pub struct SpawnArgs {
     /// Read a tool result from this file, or `-` for stdin.
     #[arg(long)]
     pub from: Option<String>,
+    /// The Slack thread ts that asked for this work (needs --slack-user); stored in the lease.
+    #[arg(long, value_name = "TS")]
+    pub slack_thread: Option<String>,
+    /// The Slack user ID of the requester, from the Claude Tag event (an owner's `slack` ID).
+    #[arg(long, value_name = "U...")]
+    pub slack_user: Option<String>,
+    /// With --slack-thread and nothing ready: the request for intake, `-` for stdin, or a file.
+    #[arg(long, value_name = "FILE")]
+    pub request: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -327,6 +361,15 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct ReviewCiArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// Run up to the parsed verdict and write nothing to GitHub; print the verdict in data.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -391,6 +434,18 @@ pub struct DoctorArgs {
 pub struct AskArgs {
     pub issue: u64,
     pub question: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AnswerArgs {
+    /// The task issue number.
+    pub issue: u64,
+    /// The Slack user ID of the answerer, from the Claude Tag event (an owner's `slack` ID).
+    #[arg(long)]
+    pub slack_user: String,
+    /// The answer text: `-` for stdin, or a file.
+    #[arg(long, default_value = "-")]
+    pub from: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -540,6 +595,24 @@ pub struct PlanImportArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct IntakeArgs {
+    /// What is wanted.
+    pub text: String,
+    /// Where the request came from.
+    #[arg(long, value_parser = ["slack", "lesson", "flake", "human"])]
+    pub source: String,
+    /// The plan item the request belongs to (sets the area label).
+    #[arg(long, value_name = "ID")]
+    pub item: Option<String>,
+    /// Issue title after `intake: ` (default: the first line of the text).
+    #[arg(long)]
+    pub title: Option<String>,
+    /// The plan file to amend (default plans/<project>.md).
+    #[arg(long, value_name = "FILE")]
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Args)]
 pub struct FailArgs {
     /// The task issue number.
     pub issue: u64,
@@ -596,4 +669,30 @@ pub struct InitArgs {
 pub struct RevertArgs {
     /// The merged PR to revert.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct MainHealthArgs {
+    /// The CI conclusion: success, failure, cancelled, skipped, ...
+    #[arg(long)]
+    pub result: String,
+    /// The URL of the run, for the issue and the comment.
+    #[arg(long)]
+    pub run_url: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct NotifyArgs {
+    /// The channel facts read with the Slack tool, as JSON: `-` for stdin or a file.
+    #[arg(long, value_name = "FILE")]
+    pub channel_info: Option<String>,
+    /// Record that the post with this key was made.
+    #[arg(long, value_name = "KEY")]
+    pub ack: Option<String>,
+    /// List only the thread-results of this Slack thread (`^[0-9]+\.[0-9]+$`).
+    #[arg(long, value_name = "TS")]
+    pub thread: Option<String>,
+    /// Accepted for symmetry; the output is always JSON.
+    #[arg(long)]
+    pub json: bool,
 }
