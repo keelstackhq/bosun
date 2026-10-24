@@ -97,11 +97,14 @@ publishers that step 4 registers expire when they are not used for 2 days (D24).
 Until then, `npm i -g @keelstackhq/bosun`, `cargo install keel-bosun` and the GitHub Release
 download do not work. Build from source with `cargo install --path .`.
 
-## After v0.1.0: pin the release (R-gov PR)
+## After a release: pin it (R-gov PR)
 
-Done for v0.1.0. For a later release, the same PR moves the pin.
+Done for v0.1.0 (the first pin also switched `ci.yml` and the setup script to npm, see below)
+and for v0.2.0 (#205). For a later release, the PR sets `.bosun/version` and `BOSUN_VERSION` in
+`docs/setup-script.sh` to the new version and updates the Status in `docs/PROGRESS.md`; the
+owner then pastes the setup script again.
 
-An agent opens one PR, and the owner approves it on its head SHA (R-gov, R-ci). The PR:
+For v0.1.0, an agent opened one PR, and the owner approved it on its head SHA (R-gov, R-ci). It:
 
 - sets `.bosun/version` to `0.1.0`;
 - changes job `bosun-bin` in `ci.yml` to install the pinned release
