@@ -518,7 +518,8 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
     }
 }
 
-/// The head of a new `tests/uc_<item>.rs` that `bosun plan import` writes.
+/// The head of a `tests/uc_<item>.rs` of pending UC tests. Legacy: `bosun plan import` no longer
+/// writes these files (#179, option b); kept for repos that still have them.
 pub fn uc_file_header(item: &Item) -> String {
     format!(
         "//! Use cases of {} (spec \u{a7}12): {}.\n\
@@ -546,7 +547,7 @@ pub fn mentions_uc(text: &str, id: &str) -> bool {
 }
 
 /// Whether `text` defines `fn uc_<item>_<n>` for the use case `id` (`UC-M2-3` -> `fn uc_m2_3`),
-/// the name `uc_stub` would write.
+/// the name `uc_stub` gives (legacy, see `uc_file_header`).
 pub fn defines_uc_fn(text: &str, id: &str) -> bool {
     let name = id.to_lowercase().replace('-', "_");
     let pat = format!("fn {name}");

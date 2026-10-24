@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::core::glob::{Glob, parse_all};
+use crate::core::records::{Record, parse_record};
 
 /// The built-in rules, used when the base branch has no `.bosun/risk.toml`.
 pub const DEFAULT_RULES: &str = include_str!("risk_default.toml");
@@ -24,6 +25,27 @@ struct RawRule {
     new_dependency: bool,
     #[serde(default)]
     capability: Option<String>,
+    #[serde(default)]
+    approval: Option<String>,
+}
+
+/// Who may approve a high risk PR (spec section 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Approval {
+    /// An owner from `governance/owners.toml`.
+    Owner,
+    /// Two independent review verdicts, or an owner.
+    TwoVerdicts,
+}
+
+impl Approval {
+    pub fn name(self) -> &'static str {
+        match self {
+            Approval::Owner => "owner",
+            Approval::TwoVerdicts => "two-verdicts",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +64,7 @@ pub struct Rule {
     pub content: Option<Regex>,
     pub new_dependency: bool,
     pub capability: Option<String>,
+    pub approval: Approval,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,6 +90,15 @@ impl Rules {
                     "rule {id} has no condition (paths, content, new_dependency or capability)"
                 ));
             }
+            let approval = match r.approval.as_deref() {
+                None | Some("owner") => Approval::Owner,
+                Some("two-verdicts") => Approval::TwoVerdicts,
+                Some(other) => {
+                    return Err(format!(
+                        "rule {id}: unknown approval `{other}` (use \"owner\" or \"two-verdicts\")"
+                    ));
+                }
+            };
             rules.push(Rule {
                 id,
                 why: r.why,
@@ -74,6 +106,7 @@ impl Rules {
                 content,
                 new_dependency: r.new_dependency,
                 capability: r.capability,
+                approval,
             });
         }
         Ok(Rules { rules })
@@ -105,6 +138,7 @@ pub fn added_lines(patch: &str) -> Vec<String> {
 pub struct Match {
     pub rule: String,
     pub why: String,
+    pub approval: Approval,
     pub evidence: Vec<String>,
 }
 
@@ -146,6 +180,7 @@ pub fn evaluate(
             out.push(Match {
                 rule: rule.id.clone(),
                 why: rule.why.clone(),
+                approval: rule.approval,
                 evidence,
             });
         }
@@ -183,6 +218,7 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
     (!evidence.is_empty()).then(|| Match {
         rule: "R-unseen".into(),
         why: "bosun could not see the whole diff".into(),
+        approval: Approval::Owner,
         evidence,
     })
 }
@@ -190,6 +226,95 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
 /// `high` when any rule matched, else `normal`.
 pub fn level(matches: &[Match]) -> &'static str {
     if matches.is_empty() { "normal" } else { "high" }
+}
+
+/// What a high risk PR needs: the owner when any match needs the owner (R-unseen always does),
+/// else two verdicts. No match at all is a normal PR; the caller does not ask then.
+pub fn requirement(matches: &[Match]) -> Approval {
+    if matches.iter().any(|m| m.approval == Approval::Owner) || matches.is_empty() {
+        Approval::Owner
+    } else {
+        Approval::TwoVerdicts
+    }
+}
+
+/// A verdict counts only from this author: the verdict workflow writes the record comment with
+/// its own token. A record an agent session posts directly is not a verdict (spec section 8).
+pub const VERDICT_AUTHOR: &str = "github-actions[bot]";
+/// The confidence a verdict needs to count toward two verdicts.
+pub const VERDICT_MIN_CONFIDENCE: f64 = 0.9;
+/// How many verdicts of distinct sessions the two-verdicts class needs.
+pub const VERDICTS_NEEDED: usize = 2;
+
+/// The verdict record of a comment with exactly the shape `bosun verdict apply` writes: the
+/// first line starts with `Review verdict: `, the record is the last non-empty line, and no
+/// other line is a record. Anything else (a comment that merely contains a record) is `None`.
+pub fn apply_record(body: &str) -> Option<Record> {
+    let lines: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    let (last, rest) = lines.split_last()?;
+    let first_ok = rest
+        .first()
+        .is_some_and(|l| l.starts_with("Review verdict: "));
+    let one_record = !rest.iter().any(|l| l.starts_with(r#"{"bosun":"#));
+    if !(first_ok && one_record) {
+        return None;
+    }
+    match serde_json::from_str::<Record>(last) {
+        Ok(r @ Record::Verdict { .. }) => Some(r),
+        _ => None,
+    }
+}
+
+/// Sessions that hold or held a lease on a task: they did the work, so their verdict is not
+/// independent. Over-counting here is safe (it only excludes), so any commenter's record counts.
+pub fn lease_sessions<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    bodies
+        .into_iter()
+        .filter_map(|b| match parse_record(b) {
+            Some(Record::Lease { session, .. } | Record::LeaseEnd { session, .. }) => Some(session),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sessions with an approving verdict on `head`, sorted. `comments` are `(author, body)`
+/// oldest first. Only comments by [`VERDICT_AUTHOR`] in the shape of [`apply_record`] count; a
+/// session's newest record for `head` decides, so a later disapproval (or a record without a
+/// confidence) withdraws its approval. The sessions `unknown` and empty, and every session in
+/// `excluded` (the task's lease holders), never count.
+pub fn two_verdicts<'a>(
+    comments: impl IntoIterator<Item = (&'a str, &'a str)>,
+    head: &str,
+    excluded: &[String],
+) -> Vec<String> {
+    let mut newest: std::collections::BTreeMap<String, bool> = Default::default();
+    for (author, body) in comments {
+        if !author.eq_ignore_ascii_case(VERDICT_AUTHOR) {
+            continue;
+        }
+        if let Some(Record::Verdict {
+            session,
+            head_sha,
+            approved,
+            confidence,
+        }) = apply_record(body)
+            && head_sha == head
+            && !session.is_empty()
+            && session != "unknown"
+            && !excluded.contains(&session)
+        {
+            let counts = approved && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE);
+            newest.insert(session, counts);
+        }
+    }
+    newest
+        .into_iter()
+        .filter_map(|(s, ok)| ok.then_some(s))
+        .collect()
 }
 
 const CARGO_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
@@ -293,9 +418,15 @@ pub fn risk_note(matches: &[Match], head_sha: &str) -> String {
             s.push_str(&format!("  - {e}\n"));
         }
     }
-    s.push_str(&format!(
-        "\nOwner: review the head SHA {head_sha} and approve. An approval on an older commit does not count.\n{NOTE_CLOSE}"
-    ));
+    let ask = match requirement(matches) {
+        Approval::Owner => format!(
+            "Owner: review the head SHA {head_sha} and approve. An approval on an older commit does not count."
+        ),
+        Approval::TwoVerdicts => format!(
+            "Needed: two independent review verdicts (different sessions, approve with confidence >= {VERDICT_MIN_CONFIDENCE}) on the head SHA {head_sha}, or an owner approval. Verdicts on an older commit do not count."
+        ),
+    };
+    s.push_str(&format!("\n{ask}\n{NOTE_CLOSE}"));
     s
 }
 
@@ -465,6 +596,200 @@ libc = "0"
         assert_eq!(twice.matches(NOTE_OPEN).count(), 1);
         assert!(twice.starts_with("Closes #1") && twice.contains("SHA def"));
         assert_eq!(replace_note(&twice, None), "Closes #1");
+    }
+
+    /// Rules with both classes; the repo's own rules do not use two verdicts yet.
+    const CLASSES: &str = r#"
+[[rule]]
+id = "R-gate"
+why = "g"
+paths = ["src/gates/**", ".github/workflows/ci.yml"]
+
+[[rule]]
+id = "R-ci-review"
+why = "r"
+approval = "two-verdicts"
+paths = ["channel/**", ".github/workflows/**", "deny.toml"]
+"#;
+
+    fn classed(files: &[&str]) -> Vec<Match> {
+        let files: Vec<ChangedFile> = files.iter().map(|f| file(f, &[])).collect();
+        evaluate(&Rules::parse(CLASSES).unwrap(), &files, &[], &[])
+    }
+
+    fn approvals(files: &[&str]) -> Approval {
+        requirement(&classed(files))
+    }
+
+    #[test]
+    fn owner_gated_and_two_verdict_paths() {
+        for p in ["src/gates/runner.rs", ".github/workflows/ci.yml"] {
+            assert_eq!(approvals(&[p]), Approval::Owner, "{p}");
+        }
+        for p in ["channel/x.toml", "deny.toml", ".github/workflows/other.yml"] {
+            assert_eq!(approvals(&[p]), Approval::TwoVerdicts, "{p}");
+        }
+        // A mix needs the owner: any owner match wins.
+        assert_eq!(approvals(&["deny.toml", "src/gates/x.rs"]), Approval::Owner);
+        // A file matching both classes needs the owner.
+        assert_eq!(approvals(&[".github/workflows/ci.yml"]), Approval::Owner);
+    }
+
+    #[test]
+    fn requirement_owner_wins_over_other_matches_and_unseen() {
+        let review = classed(&["deny.toml"]);
+        assert_eq!(requirement(&review), Approval::TwoVerdicts);
+        let mut mixed = review.clone();
+        mixed.extend(unseen_diff(&[], 5));
+        assert_eq!(requirement(&mixed), Approval::Owner);
+        let deps = evaluate(&Rules::defaults(), &[], &["x".into()], &[]);
+        assert_eq!(requirement(&deps), Approval::Owner);
+    }
+
+    #[test]
+    fn approval_field_parses_and_rejects_unknown_values() {
+        let ok = |a: &str| {
+            Rules::parse(&format!(
+                "[[rule]]\nid=\"R-a\"\nwhy=\"w\"\npaths=[\"a\"]\n{a}"
+            ))
+        };
+        assert_eq!(ok("").unwrap().rules[0].approval, Approval::Owner);
+        assert_eq!(
+            ok("approval = \"owner\"").unwrap().rules[0].approval,
+            Approval::Owner
+        );
+        assert_eq!(
+            ok("approval = \"two-verdicts\"").unwrap().rules[0].approval,
+            Approval::TwoVerdicts
+        );
+        let e = ok("approval = \"anyone\"").unwrap_err();
+        assert!(e.contains("R-a") && e.contains("anyone"), "{e}");
+    }
+
+    #[test]
+    fn the_note_names_what_each_class_needs() {
+        let owner = risk_note(&classed(&["src/gates/a.rs"]), "abc");
+        assert!(owner.contains("Owner: review the head SHA abc and approve"));
+        let two = risk_note(&classed(&["deny.toml"]), "abc");
+        assert!(two.contains("two independent review verdicts"), "{two}");
+        assert!(two.contains("head SHA abc") && two.contains("owner approval"));
+    }
+
+    fn rec_line(session: &str, head: &str, approved: bool, conf: Option<f64>) -> String {
+        Record::Verdict {
+            session: session.into(),
+            head_sha: head.into(),
+            approved,
+            confidence: conf,
+        }
+        .to_line()
+    }
+
+    /// A comment as `bosun verdict apply` writes it.
+    fn rec(session: &str, head: &str, approved: bool, conf: Option<f64>) -> String {
+        format!(
+            "Review verdict: approve 0.95.\n\n{}",
+            rec_line(session, head, approved, conf)
+        )
+    }
+
+    fn count(items: &[(&str, String)], head: &str) -> Vec<String> {
+        two_verdicts(items.iter().map(|(a, b)| (*a, b.as_str())), head, &[])
+    }
+
+    #[test]
+    fn two_verdicts_counts_distinct_bot_sessions_on_the_head() {
+        let bot = VERDICT_AUTHOR;
+        let ok = |s: &str| (bot, rec(s, "h", true, Some(0.9)));
+        assert_eq!(count(&[ok("b"), ok("a")], "h"), ["a", "b"]);
+        assert_eq!(count(&[ok("a"), ok("a")], "h"), ["a"]);
+        assert!(count(&[ok("a")], "other").is_empty());
+        // Below the bar, without a confidence, or not an approval.
+        for r in [
+            rec("c", "h", true, Some(0.89)),
+            rec("c", "h", true, None),
+            rec("c", "h", false, Some(0.99)),
+        ] {
+            assert!(count(&[(bot, r)], "h").is_empty());
+        }
+        // Not written by the verdict workflow.
+        assert!(count(&[("some-agent", rec("c", "h", true, Some(1.0)))], "h").is_empty());
+    }
+
+    #[test]
+    fn unknown_empty_and_excluded_sessions_never_count() {
+        let bot = VERDICT_AUTHOR;
+        let all = [
+            (bot, rec("unknown", "h", true, Some(1.0))),
+            (bot, rec("", "h", true, Some(1.0))),
+            (bot, rec("worker", "h", true, Some(1.0))),
+            (bot, rec("rev", "h", true, Some(1.0))),
+        ];
+        let got = two_verdicts(
+            all.iter().map(|(a, b)| (*a, b.as_str())),
+            "h",
+            &["worker".to_string()],
+        );
+        assert_eq!(got, ["rev"]);
+    }
+
+    #[test]
+    fn lease_sessions_lists_past_and_live_leases() {
+        let lease = r#"{"bosun":"lease","session":"a","origin":"local","expires":"2026-10-22T10:30:00Z","touch":["x"]}"#;
+        let end = r#"{"bosun":"lease-end","session":"b","reason":"released"}"#;
+        let got = lease_sessions([
+            lease,
+            end,
+            "plain text",
+            r#"{"bosun":"leave","session":"c","reason":"x"}"#,
+        ]);
+        assert_eq!(got, ["a", "b"]);
+    }
+
+    #[test]
+    fn only_the_shape_apply_writes_counts() {
+        let line = rec_line("s", "h", true, Some(0.95));
+        let good = format!("Review verdict: approve 0.95.\n\n{line}");
+        assert!(apply_record(&good).is_some());
+        assert!(apply_record(&format!("{good}\n")).is_some());
+        for bad in [
+            line.clone(),
+            format!("hello\n\n{line}"),
+            format!("Review verdict: x.\n\n{line}\n\ntrailing text"),
+            format!("Review verdict: x.\n{line}\n{line}"),
+            format!(
+                "Review verdict: x.\n{}\n\n{line}",
+                rec_line("o", "h", true, Some(1.0))
+            ),
+            "Review verdict: x.".to_string(),
+            format!(
+                "Review verdict: x.\n\n{}",
+                r#"{"bosun":"leave","session":"s","reason":"x"}"#
+            ),
+        ] {
+            assert!(apply_record(&bad).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_newest_record_of_a_session_decides() {
+        let bot = VERDICT_AUTHOR;
+        let withdrawn = [
+            (bot, rec("a", "h", true, Some(0.95))),
+            (bot, rec("a", "h", false, Some(0.95))),
+        ];
+        assert!(count(&withdrawn, "h").is_empty());
+        let restored = [
+            (bot, rec("a", "h", false, Some(0.95))),
+            (bot, rec("a", "h", true, Some(0.95))),
+        ];
+        assert_eq!(count(&restored, "h"), ["a"]);
+        // A record on another head does not touch the head's verdict.
+        let other = [
+            (bot, rec("a", "h", true, Some(0.95))),
+            (bot, rec("a", "old", false, Some(0.95))),
+        ];
+        assert_eq!(count(&other, "h"), ["a"]);
     }
 
     #[test]

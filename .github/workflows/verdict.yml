@@ -82,3 +82,15 @@ jobs:
           BOSUN_SESSION: verdict-workflow
           COMMENT: ${{ github.event.comment.id }}
         run: ./target/release/bosun verdict apply "$COMMENT"
+      # A verdict record written with GITHUB_TOKEN starts no other workflow, so judge the PR
+      # again here: two verdicts can turn `risk-check` green (spec §8). Exit 5 (needs-human) is
+      # the verdict, carried by the status; other non-zero exits fail the job.
+      - name: bosun risk-check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          rc=0
+          ./target/release/bosun risk-check "$PR" || rc=$?
+          [ "$rc" = 0 ] || [ "$rc" = 5 ]

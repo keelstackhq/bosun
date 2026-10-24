@@ -53,7 +53,7 @@ The plan-format parser, import, amend and intake.
 - T1: Plan-format parser with line-numbered errors
   touch: src/plan/**, tests/plan_parse.rs
   size: 380
-- T2: bosun plan import (epics, tasks, UC pending tests), idempotent by marker
+- T2: bosun plan import (epics, tasks), idempotent by marker
   touch: src/cli/plan.rs, tests/cli_plan_import.rs
   depends: T1
   size: 380
@@ -70,7 +70,7 @@ The plan-format parser, import, amend and intake.
 
 - UC-M2-1: importing the same plan twice creates no duplicate issues.
 - UC-M2-2: a task becomes ready only after its plan task merged.
-- UC-M2-3: each "Done when" line has a pending UC test after import.
+- UC-M2-3: each "Done when" line is listed in its epic, and import writes no test files.
 - UC-M2-4: an amendment that removes an item closes its epic as not planned.
 
 ## M3: Main-health
