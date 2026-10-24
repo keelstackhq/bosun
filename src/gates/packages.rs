@@ -579,6 +579,7 @@ mod tests {
         );
         write(r, "tools/x/y/package.json", "{\"name\":\"y\"}");
         // A symlink loop must neither hang nor add packages.
+        #[cfg(unix)]
         std::os::unix::fs::symlink(r, r.join("packages/a/loop")).unwrap();
         let got = load_pnpm(r).unwrap();
         let names: Vec<_> = got.iter().map(|p| p.name.as_str()).collect();
