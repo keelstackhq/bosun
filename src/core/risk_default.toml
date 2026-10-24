@@ -9,7 +9,34 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**"]
+# Only the workflows that produce required checks.
+paths = [
+  ".github/workflows/ci.yml",
+  ".github/workflows/risk.yml",
+  ".github/workflows/verdict.yml",
+  ".github/workflows/main-open.yml",
+  ".github/workflows/review.yml",
+]
+
+[[rule]]
+id = "R-gate"
+why = "The gate code decides what passes."
+paths = [
+  "src/core/risk.rs",
+  "src/core/verdict*",
+  "src/cli/risk_check.rs",
+  "src/cli/verdict*",
+  "src/cli/approve.rs",
+  "src/gates/**",
+  "src/cli/test_integrity*",
+]
+
+[[rule]]
+id = "R-ci-review"
+why = "Other CI and shipped config; two independent reviews instead of the owner."
+approval = "two-verdicts"
+# channel/ is the CI and governance that `bosun init` ships to other repos.
+paths = [".github/workflows/**", "channel/**", "deny.toml", "rust-toolchain.toml"]
 
 [[rule]]
 id = "R-secrets"

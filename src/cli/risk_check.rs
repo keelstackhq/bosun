@@ -9,8 +9,9 @@ use super::PrArg;
 use crate::app::{App, Result, task_meta};
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
-    self, ChangedFile, FileView, Rules, added_lines, capability_labels, comment_approves, evaluate,
-    new_dependencies, parse_owners, replace_note, risk_note, unseen_diff,
+    self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, capability_labels,
+    comment_approves, evaluate, new_dependencies, parse_owners, replace_note, requirement,
+    risk_note, two_verdicts, unseen_diff,
 };
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -141,28 +142,65 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     } else {
         None
     };
-    let passed = !high || approved_by.is_some();
+    let requirement = requirement(&matches);
+    // Two verdicts only matter when the owner has not approved and the class allows them.
+    let verdicts = if high && approved_by.is_none() && requirement == Approval::TwoVerdicts {
+        let mut comments = gh.list_comments(n)?;
+        comments.sort_by_key(|c| c.id);
+        two_verdicts(
+            comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+            head,
+        )
+    } else {
+        Vec::new()
+    };
+    let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
+    let passed = !high || approved_by.is_some() || by_verdicts;
 
     let ids: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
     let description = match (&approved_by, high) {
         (_, false) => "normal risk".to_string(),
         (Some(who), _) => format!("high risk ({}), approved by {who}", ids.join(", ")),
+        (None, _) if by_verdicts => format!(
+            "high risk ({}), approved by two verdicts: {}",
+            ids.join(", "),
+            verdicts.join(", ")
+        ),
+        (None, _) if requirement == Approval::TwoVerdicts => format!(
+            "high risk, two verdicts needed ({}/{VERDICTS_NEEDED}): {}",
+            verdicts.len(),
+            ids.join(", ")
+        ),
         (None, _) => format!("high risk, owner approval needed: {}", ids.join(", ")),
     };
     let state = if passed { "success" } else { "failure" };
     gh.create_status(head, CONTEXT, state, &description, None)?;
 
-    let data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
+    let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by});
+    if high {
+        data["requirement"] = json!(requirement.name());
+        if requirement == Approval::TwoVerdicts {
+            data["verdicts"] = json!(verdicts);
+        }
+    }
     if passed {
         return Ok(Outcome::data(data));
     }
-    let fix = if owners.is_empty() {
+    let owner_fix = if owners.is_empty() {
         format!("fill {OWNERS_PATH} on the base branch, then an owner must approve head {head}")
     } else {
         format!(
             "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review, or the PR comment `/bosun approve {head}`"
         )
+    };
+    let fix = if requirement == Approval::TwoVerdicts {
+        format!(
+            "get a second review verdict from a different session (approve, confidence >= {}) on head {head}, or an owner approval: {owner_fix}",
+            risk::VERDICT_MIN_CONFIDENCE
+        )
+    } else {
+        owner_fix
     };
     Err(BosunError::needs_human(
         format!(

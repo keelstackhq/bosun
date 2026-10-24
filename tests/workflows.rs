@@ -236,6 +236,21 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
         ]
     );
     assert!(yaml.contains("COMMENT: ${{ github.event.comment.id }}"));
+    // After the verdict, risk-check judges the PR again (spec section 8): the verdict record
+    // starts no workflow. Exit 5 is the verdict; other failures fail the job.
+    assert!(
+        yaml.contains("PR: ${{ github.event.issue.number }}"),
+        "{yaml}"
+    );
+    let apply = yaml.find("bosun verdict apply \"$COMMENT\"").unwrap();
+    let again = yaml
+        .find("./target/release/bosun risk-check \"$PR\" || rc=$?")
+        .unwrap();
+    assert!(apply < again, "risk-check must run after verdict apply");
+    assert!(
+        yaml.contains("[ \"$rc\" = 0 ] || [ \"$rc\" = 5 ]"),
+        "{yaml}"
+    );
     // Other comments must not replace a pending verdict run.
     assert!(yaml.contains("&& github.run_id || 'apply'"), "{yaml}");
     assert!(yaml.contains("cancel-in-progress: false"));
