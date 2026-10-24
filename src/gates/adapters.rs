@@ -7,7 +7,7 @@ use super::profile::RegexKeys;
 use crate::core::glob::Glob;
 
 /// A `#[ignore` line. `uc` is set when the reason is a use-case id (`#[ignore = "UC-M1-2"]`):
-/// that marks a pending test written by the plan, not a skip.
+/// that marks a pending UC test (legacy plan stubs, #179), not a skip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Marker {
     pub line: usize,
