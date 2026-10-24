@@ -75,8 +75,8 @@ The state machine, stop rules and resume.
 | --------- | ------ | ------ |
 | item | one epic issue, title `<ID>: <title>` | `bosun:kind/feature`, `bosun:area/<area>`, `bosun:source/plan`, `bosun:state/planned` |
 | task | one issue linked to its epic, title `<item>/<task>: <title>` | as the item, plus its `kind` |
-| plan task | one issue per item, `<item>/P: pending UC tests`; `ready` at once, `kind: plan`, `allow: ["skip"]`, touches `tests/uc_<item>.rs` | `bosun:kind/plan`, area, `bosun:source/plan`, `bosun:state/ready` |
-| UC line | one pending test per UC (spec §7), written by `bosun plan import` into `tests/uc_<item>.rs` (rust profile) and committed by the plan task; tasks become ready on the import run after the plan task merged | — |
+| plan task | one issue per item, `<item>/P: plan`; `ready` at once, `kind: plan`, `allow: []`, touches the plan file | `bosun:kind/plan`, area, `bosun:source/plan`, `bosun:state/ready` |
+| UC line | listed in the epic; the UC test lands passing with the task that implements it, no pending tests (spec §7); `bosun plan import` writes no test files; tasks become ready on the import run after the plan task merged | — |
 
 Each issue body starts with a hidden marker `<!-- bosun:plan <item>/<task> -->`. Import finds
 existing issues by that marker, so a second import of the same plan creates nothing new (UC-M2-1).

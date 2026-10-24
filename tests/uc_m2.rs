@@ -88,7 +88,7 @@ fn uc_m2_2() {
     assert_eq!(state(900), ["bosun:state/planned"]);
 }
 
-/// UC-M2-3: each "Done when" line has a pending UC test after import.
+/// UC-M2-3: each "Done when" line is listed in its epic, and import writes no test files.
 #[test]
 fn uc_m2_3() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
@@ -109,14 +109,27 @@ fn uc_m2_3() {
     ];
     let (code, v) = common::run(&fake, "session_test", "2026-10-23T10:00:00Z", &args);
     assert_eq!(code, 0, "{v}");
-    let path = tmp.path().join("tests/uc_m1.rs");
-    let text = std::fs::read_to_string(&path).unwrap();
+    let epic = v["data"]["epics"][0]["issue"].as_u64().unwrap();
+    let body = fake.issue_state(epic).body;
     for uc in ["UC-M1-1", "UC-M1-2"] {
-        assert!(text.contains(&format!("#[ignore = \"{uc}\"]")), "{uc}");
+        assert!(body.contains(uc), "{uc} in the epic");
     }
+    assert!(!tmp.path().join("tests").exists());
+    let pid = v["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "M1/P")
+        .unwrap()["issue"]
+        .as_u64()
+        .unwrap();
+    let meta = bosun::core::meta::parse_task_meta(&fake.issue_state(pid).body).unwrap();
+    assert!(meta.allow.is_empty());
+    let count = fake.state.lock().unwrap().issues.len();
     let (code, _) = common::run(&fake, "session_test", "2026-10-23T10:00:00Z", &args);
     assert_eq!(code, 0);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    assert_eq!(fake.state.lock().unwrap().issues.len(), count);
+    assert!(!tmp.path().join("tests").exists());
 }
 
 /// UC-M2-4: an amendment that removes an item closes its epic as not planned.

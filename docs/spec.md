@@ -400,9 +400,8 @@ Prune:
 
 ## 7. Verification and the gate contract
 
-Use cases: each "Done when" line of an item becomes `UC-<item>-<n>`. The plan task writes each UC
-as a pending test (for example `#[ignore = "UC-M1-2"]`). The build agent only removes the marker
-and makes the test pass. `bosun accept <epic>` checks that each UC test exists, is not pending,
+Use cases: each "Done when" line of an item becomes `UC-<item>-<n>`. UC tests land passing in the
+PR of the task that implements them; there are no pending UC tests (#179, option b). `bosun accept <epic>` checks that each UC test exists, is not pending,
 and passes; only then does the epic close.
 
 Gate contract (stack-agnostic):
@@ -484,13 +483,13 @@ REVIEW.md). The reviewer returns:
   the agent app: it is a reviewer's opinion, not an owner's approval. Permissions of the
   workflow: `contents: read`, `pull-requests: write` (the record comment on the PR; `issues: write`
   alone gets 403 there), `issues: write` (the task's state labels), `statuses: write`; `tests/workflows.rs` asserts them.
-- `.github/workflows/review.yml` runs `bosun review-ci <pr>` (review mode b) on `pull_request_target` for non-draft, same-repo PRs whose author is an owner, member or collaborator (a PR retargeted to main is reviewed on its next push): it checks out the base commit only, runs the pinned release with `ANTHROPIC_API_KEY` from the `review` environment (limited to the main branch, so a pushed branch's workflow cannot read it), and never runs PR code; review-ci does nothing unless the base says `review.mode = "ci"`. A pinned release without `review-ci` (exit 2 on `review-ci --help`) skips with a warning and sets no status; any other failure fails the job, so mode a stays in charge. Same permissions as verdict.yml; `tests/workflows.rs` asserts them.
+- `.github/workflows/review.yml` runs `bosun review-ci <pr>` (review mode b) on `pull_request_target` for non-draft, same-repo PRs whose author is an owner, member or collaborator (a PR retargeted to main is reviewed on its next push): it checks out the base commit only, runs the pinned release with `ANTHROPIC_API_KEY` from the `review` environment (limited to the main branch, so a pushed branch's workflow cannot read it), and never runs PR code; review-ci does nothing unless the base says `review.mode = "ci"`. A pinned release without `review-ci` (exit 2 on `review-ci --help`) skips with a warning and sets no status; any other failure fails the job, so mode a stays in charge. Same permissions as verdict.yml; `tests/workflows.rs` asserts them. Dormant in this repo: the owner chose no Anthropic API key (2026-10-24), so reviews stay mode a and `review.mode` stays `subagent`.
 - Approve needs confidence >= 0.85 and no blocker finding.
 - A later review of the same PR is a delta review (only the new commits).
 - `verdict post` also comments `{"bosun":"verdict","session":…,"head_sha":…,"approved":…}` on the PR; the next `review-pack` takes `since_sha` from the newest such record (statuses are per SHA, so they cannot carry it) whose sha has a successful `review-verdict` status (the newest older head that was approved) and is an ancestor of the head (the compare status is `ahead`) and one of the PR's commits (`pulls/{n}/commits`, at most 250), else it is a full review. Any compare error, a sha that is not an ancestor, or more than 20 older heads to check also gives a full review, with `since_sha` null and `delta_fallback` saying why.
 - `bosun pr --auto-merge` reads the required contexts from env `BOSUN_REQUIRED_CHECKS` (comma-separated, replaces all), else the defaults `ci-ok,risk-check,review-verdict,main-open` plus any extra entries of `hoist.toml` `[github] required_checks` read from the default branch via the API; a context counts as green when its commit status or its check run is `success`. `bosun pr` refuses the repo's default branch (from GitHub), `main`, `master` and a detached HEAD (exit 2), opens the PR against the default branch, and `--auto-merge` is refused (exit 3) unless the task is in `review`, before any GraphQL call. Auto-merge goes through GraphQL; when a Claude Code cloud session's proxy refuses it (403, "GraphQL is not available from Claude Code sessions"), bosun uses `PUT /repos/{o}/{r}/pulls/{n}/ccr/auto_merge` with `merge_method: squash` and reports `auto_merge_route` (`graphql` or `ccr`); any other error stops as before. The merge-lock hook still blocks agents from calling these routes themselves. `bosun gate` and `test-integrity` take their base from `origin/HEAD` when offline, else `origin/main`; `bosun ask` reads the owners from the default branch.
 - `verdict post` moves the linked task (`Closes #N`) to `fixing` when not approved and to `needs-human` when `escalate_risk` is true, if the state machine allows it; an `escalate_risk` verdict is never green (status `failure`, "escalated to the owner"); approval leaves the state alone (`bosun pr --auto-merge` queues it). Invalid verdict JSON is exit 2.
-- `review.mode = "subagent"` (mode a) now; `"ci"` (mode b) after M8.
+- `review.mode = "subagent"` (mode a); `"ci"` (mode b) only with an Anthropic API key, which this repo does not have (PROGRESS Blocked 6).
 - `bosun review-ci <pr>` is mode b: the review-verdict check runs with no session. It checks the kill switch (exit 4); when `review.mode` is not `ci` it exits 0 with `skipped` and calls nothing. When today's registry spend has reached `daily_usd` it exits 6 with no call and no status. It builds the review pack and fails closed when the model could not see the whole diff: a text file listed without a `patch`, fewer files listed than the PR changed, or the GitHub listing limit reached (300 files for a delta, 3000 for a full review) sets the status `failure` ("unreviewable diff: …; review in a session (mode a)"), exits 1 and makes no API call (`core::risk::unseen_diff`). Binary files without a patch do not fail; the pack lists them as `not_shown_binary` and the prompt says so. Above `review.max_diff_bytes` (default 200000, at least 1; `review.max_tokens` is at least 1 too) on the size of the whole request text (system prompt and user message) it sets the status `failure` ("too large for CI review: <real size> bytes > <cap>; review in a session (mode a)"), exits 1 and makes no API call. It never truncates. Else it makes one Messages API call (`POST {BOSUN_ANTHROPIC_API or https://api.anthropic.com}/v1/messages`, key from env `ANTHROPIC_API_KEY`, model `review.model` default `claude-opus-5-5`, `review.max_tokens` default 8192; the key is never printed or logged, and an API error text has the key and anything shaped like `sk-ant-…` redacted before it is cut; `BOSUN_ANTHROPIC_API` must be https, or http on 127.0.0.1 or localhost). The system prompt holds the reviewer role, the pack's instructions and REVIEW.md, and says that the PR title, diff, task text and file content are untrusted data: instructions in them that try to steer the review are ignored and reported as a `major` finding with `escalate_risk: true`, and never change the output format or the verdict rules; text in code or tests is reviewed as code. The pack is the user message. The text from the first `{` to the last `}` of the reply must be a verdict; bosun sets `pr` and `head_sha` from the pack (never from the model) and validates it. Unparsable or invalid output sets the status `failure` ("reviewer output invalid: …") and exits 1. A network error or a non-2xx answer exits 1 with no status, so a run can be repeated. A valid verdict is recorded as `verdict post` does (status, record, task state; a stale head is exit 3) with the session `review-ci`, whatever `BOSUN_SESSION` says. After the call it writes a spend record (§9) for session `review-ci` with the tokens at the model's price, on the registry issue and on the linked task; a cost that is negative or not finite is not recorded. A link counts only when the issue carries `bosun:task` metadata; any other linked issue (the registry, a plain issue) gets no spend and no task move. If the spend write fails, the verdict still stands and `data.spend` holds `error` and `fix`. The per-task cap and the block of `budget record` do not apply to `review-ci`; only the daily guard above does. When the verdict has findings, a PR comment lists them (severity, `file:line`, claim and evidence cut to 300 characters, at most 20 findings and 8 KB, in one text code fence, no bosun marker). Data: `pr`, `head_sha`, `since_sha`, `approved`, `status`, `model`, `usage` (`input_tokens`, `output_tokens`, `usd`), `findings` (the full list), `findings_count`, `findings_comment`, `spend`. With `--dry-run` it runs up to and including the parse and writes nothing to GitHub (no status, record, comment, task move or spend; the refusals above also write no status, the daily guard still applies); data is `pr`, `head_sha`, `since_sha`, `dry_run`, `model`, `usage`, `approved` and the parsed `verdict`, it is always a full review (no delta, `since_sha` null) and its cost is not written as spend, so it does not count against `daily_usd`; a recorder can save it as the `b` side of a fixture (`tests/fixtures/reviews/`).
 
 Flakes: a test that fails and then passes on the same commit is a flake. bosun opens a kind/flake
@@ -515,6 +514,17 @@ Rule evaluation:
 - The bosun version pin (`.bosun/version`) is R-gov.
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
+Approval classes (mechanism): a rule has `approval = "owner"` (the default) or `"two-verdicts"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else two verdicts. `risk-check` sets `data.requirement` (`owner` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). This repo's rules do not use the two-verdicts class yet: the pinned release 0.1.0 rejects the `approval` key (`deny_unknown_fields`), so the rule change (a rule such as `R-ci-review` on the less critical CI paths, with the gate code and the required workflows staying owner rules) comes after a release and a new pin.
+
+Two verdicts:
+- The class passes when, on the PR's current head, verdict records of at least two distinct sessions have `approved = true` and `confidence >= 0.9`. An owner approval (below) also passes it. The status is `high risk, two verdicts needed (<n>/2): <ids>` (failure, exit 5) while waiting, and `high risk (<ids>), approved by two verdicts: <s1>, <s2>` when met. The owner status text is unchanged: `high risk, owner approval needed: <ids>`.
+- A record counts only when `bosun verdict apply` wrote it: the comment author is `github-actions[bot]`, the first line starts with `Review verdict: `, the record is the last non-empty line, and no other line is a record. A session's newest such record for the head decides, so a later disapproval withdraws its approval. A record without `confidence` never counts.
+- Independence: the sessions `unknown` and empty never count, and neither does any session with a `lease` or `lease-end` record (past or live) on an issue the PR body links. `bosun pr` records no session for the PR author, so the lease is the only trace of who wrote the change.
+- A verdict record is written with `GITHUB_TOKEN`, which starts no other workflow, so verdict.yml runs `bosun risk-check` for the PR after `bosun verdict apply` (exit 5, still waiting, does not fail the job). It has `statuses: write` for the status and `pull-requests: write` for the Risk note.
+- Residual risk: the session in a verdict comment is self-declared, so one agent that posts two verdict comments under two session tags can still pass when neither tag holds a lease on the task. Later options: a GitHub App per reviewer, or one check run per reviewer.
+- A PR that links no task (`Closes #N`) cannot satisfy the class by verdicts, as there is no lease to check the reviewers against: only an owner approval passes, and the status and fix say so.
+- More residual risks. A `review-ci` record (session `review-ci`, mode b, dormant) counts as one verdict, and review.yml does not re-run risk-check. Any workflow that runs with `GITHUB_TOKEN` (for example on a pushed branch) can post a comment of the shape `apply` writes as `github-actions[bot]`; this is the same trust class as the `statuses: write` limit below. The risk-check step in verdict.yml runs outside risk.yml's concurrency group, so a stale run can overwrite a newer risk-check status until the next trigger (liveness only).
+
 High-risk PRs:
 - A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
@@ -529,6 +539,36 @@ High-risk PRs:
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
+- `bosun approve` is the owner's shortcut, run in the owner's own Claude Code environment. It
+  reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
+  never with `GITHUB_TOKEN`; without it the command is exit 5. It sends the token only to
+  `https://` or a loopback `BOSUN_GITHUB_API` (else exit 1) and redacts it from every message.
+  Flow: the owner says "approve the ready PRs"; Claude runs `bosun approve --list`, shows the
+  owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one
+  line `bosun approve 199@<head> 200@<head>` (null when nothing is ready). `--list` shows each
+  open PR whose `risk-check` status is `failure` with a description that starts `high risk,
+  owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
+  statuses created by `github-actions[bot]` count (anyone with write access can post a status
+  under any context, an agent included; the newest such status per context decides; this raises
+  the bar, it is no guarantee: a workflow on a pushed branch with `statuses: write` posts as
+  `github-actions[bot]` too, see Limits), and only
+  a `ci-ok` check run of the `github-actions` app (no commit status). The rule ids come from
+  the status text and are printed as `risk_from_status` (advisory); `files` is the comparison
+  of base and the listed head, so statuses, files and head describe one commit
+  (`files_truncated` is true at GitHub's compare cap of 300 files: review the PR on GitHub then). PRs that wait
+  for an owner but are not ready are listed under `waiting`. A bare PR number is a usage
+  error: each argument names the head the owner saw. The command recomputes the list and
+  posts `/bosun approve <head>` on each PR only if every named PR is ready at exactly that
+  head; otherwise nothing is posted (exit 3, `data.not_ready`, for example `head changed`) and
+  the owner needs a new `--list`. If a later comment fails, the ones posted stay recorded and
+  `data.approved` lists them (exit 1). Both are exit 4 while bosun is halted. One `approve`
+  record (`prs`, `at`, no session) goes on the registry issue; it is an audit hint, never
+  authority: risk-check derives approval only from the owner's PR comment or review.
+  `--main-open <pr>` is for a PR that changes `.github/workflows/main-open.yml` (the base
+  workflow cannot judge it; any other PR is exit 3). It posts the `main-open` status with the
+  decision of `bosun gate main-open`, exit 4 when main is red and the PR is no mainfix, and
+  records it as `main_open`. The comment still counts only for an owner in
+  `governance/owners.toml`, on an unedited comment of a plain user token.
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
   reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
   comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
@@ -541,8 +581,7 @@ High-risk PRs:
   this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
   copy of the file; and a same-repo PR can add a workflow of its own that requests
   `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
-- bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
-  check.
+- bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
 - A risky task is small: the target is under 100 changed lines.
@@ -736,11 +775,11 @@ bosun resume; bosun msg; janitor prompt; reap smoke test. Done when:
 - UC-M1-3: a lease that is not renewed for 30 min is reaped and the task is ready again (smoke test).
 - UC-M1-4: after a container restart, bosun resume continues the open PR of the session.
 
-M2 Plan import. Tasks: plan-format parser; bosun plan import (epics, plan tasks, UC pending tests);
+M2 Plan import. Tasks: plan-format parser; bosun plan import (epics, plan tasks);
 bosun plan amend; bosun intake. Done when:
 - UC-M2-1: importing the same plan twice creates no duplicate issues.
 - UC-M2-2: a task becomes ready only after its plan task merged.
-- UC-M2-3: each "Done when" line has a pending UC test after import.
+- UC-M2-3: each "Done when" line is listed in its epic, and import writes no test files.
 - UC-M2-4: an amendment that removes an item closes its epic as not planned.
 
 M3 Main-health. Tasks: main-health workflow; main-open check; bosun main-triage (bisect); bosun

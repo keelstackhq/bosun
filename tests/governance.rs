@@ -34,6 +34,21 @@ fn risk_rules_cover_the_defaults() {
 }
 
 #[test]
+fn shipped_rules_are_all_owner_rules() {
+    // The pinned release must accept the `approval` key before a rule here may use
+    // `approval = "two-verdicts"` (plan 4b): until then every shipped rule is an owner rule.
+    use bosun::core::risk::Approval;
+    for rules in [
+        Rules::parse(&read(".bosun/risk.toml")).unwrap(),
+        Rules::defaults(),
+    ] {
+        for r in &rules.rules {
+            assert_eq!(r.approval, Approval::Owner, "{}", r.id);
+        }
+    }
+}
+
+#[test]
 fn owners_name_the_repo_owner() {
     let owners = parse_owners(&read("governance/owners.toml")).unwrap();
     assert_eq!(owners[0].github, "urbanisierung");
