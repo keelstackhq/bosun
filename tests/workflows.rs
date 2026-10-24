@@ -286,6 +286,114 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
     }
 }
 
+#[test]
+fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/review.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    let triggers = &yaml[yaml.find("\non:\n").unwrap()..yaml.find("\nconcurrency:").unwrap()];
+    assert!(
+        triggers.contains("\n  pull_request_target:\n"),
+        "{triggers}"
+    );
+    for other in [
+        "pull_request:",
+        "pull_request_review",
+        "issue_comment",
+        "workflow_run",
+        "push",
+    ] {
+        assert!(
+            !triggers.contains(other),
+            "review.yml must not run on {other}"
+        );
+    }
+    // One checkout, of the base commit, without a stored token.
+    let refs: Vec<&str> = yaml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("ref:"))
+        .collect();
+    assert_eq!(
+        refs,
+        ["          ref: ${{ github.event.pull_request.base.sha }}"],
+        "{yaml}"
+    );
+    assert_eq!(yaml.matches("actions/checkout@").count(), 1);
+    assert!(yaml.contains("persist-credentials: false"));
+    for bad in [
+        "head.sha",
+        "head.ref",
+        "head_ref",
+        "refs/pull",
+        "merge_commit_sha",
+        "/head",
+        "git fetch",
+    ] {
+        assert!(!yaml.contains(bad), "review.yml mentions {bad}");
+    }
+    // Non-draft, same-repo PRs by the repo's own people: exactly these three conditions.
+    let cond = &yaml[yaml.find("    if: >-\n").unwrap()..yaml.find("    environment:").unwrap()];
+    let terms: Vec<&str> = cond
+        .lines()
+        .skip(1)
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .map(|l| l.trim().trim_end_matches(" &&"))
+        .collect();
+    assert_eq!(
+        terms,
+        [
+            "github.event.pull_request.draft == false",
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            "contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.pull_request.author_association)",
+        ],
+        "{cond}"
+    );
+    // The key lives in an environment limited to main.
+    assert!(yaml.contains("\n    environment: review\n"), "{yaml}");
+    assert_eq!(yaml.matches("permissions:").count(), 1);
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  ") && !l.trim_start().starts_with('#'))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: write",
+            "  pull-requests: write",
+            "  statuses: write"
+        ]
+    );
+    // The secret appears once, in the env of the step that runs review-ci.
+    assert_eq!(yaml.matches("secrets.").count(), 1, "{yaml}");
+    let step = &yaml[yaml.find("- name: bosun review-ci").unwrap()..];
+    assert!(step.contains("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}"));
+    let scripts = run_scripts(&yaml);
+    assert!(!scripts.is_empty());
+    for s in &scripts {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    // Without review-ci in the pinned release: a warning, exit 0 and no status at all, never a
+    // success; with it, review-ci posts the status.
+    let review = scripts
+        .iter()
+        .find(|s| s.contains("review-ci \"$PR\""))
+        .expect("a script runs review-ci");
+    let skip = &review[..review.find("fi\n").expect("an if block")];
+    assert!(review.contains("review-ci --help"), "{review}");
+    assert!(skip.contains("-eq 2"), "only exit 2 skips: {review}");
+    assert!(skip.contains("::warning::"), "{review}");
+    assert!(skip.contains("exit 0"), "{review}");
+    for bad in ["statuses", "curl", "gh ", "verdict post", "verdict comment"] {
+        assert!(
+            !skip.contains(bad),
+            "the skip path must post nothing: {bad}"
+        );
+    }
+    runs_the_pinned_release(&yaml);
+}
+
 /// The install step has the shape of ci.yml's `bosun-bin` job; the job builds nothing.
 fn assert_pinned_install_with_fallback(yaml: &str) {
     assert!(yaml.contains("@keelstackhq/bosun@${VERSION}"), "{yaml}");

@@ -12,6 +12,9 @@ pub enum Record {
         origin: String,
         expires: String,
         touch: Vec<String>,
+        /// The Slack thread that started this work (`bosun spawn --slack-thread`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_ts: Option<String>,
     },
     /// The end of a session's lease on this issue: `released` or `reaped`.
     LeaseEnd { session: String, reason: String },
@@ -74,6 +77,14 @@ pub enum Record {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         issue: Option<u64>,
     },
+    /// A Slack post for `key` was made (spec §10, `bosun notify --ack`).
+    Notified { key: String, at: String },
+    /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
+    Answer {
+        session: String,
+        slack_user: String,
+        at: String,
+    },
 }
 
 impl Record {
@@ -82,8 +93,10 @@ impl Record {
         serde_json::to_string(self).expect("records serialize")
     }
 
+    /// The session that wrote the record; `""` for a `notified` record, which has none.
     pub fn session(&self) -> &str {
         match self {
+            Record::Notified { .. } => "",
             Record::Lease { session, .. }
             | Record::LeaseEnd { session, .. }
             | Record::Join { session, .. }
@@ -95,7 +108,8 @@ impl Record {
             | Record::Verdict { session, .. }
             | Record::Failure { session, .. }
             | Record::Escalate { session, .. }
-            | Record::LessonSeen { session, .. } => session,
+            | Record::LessonSeen { session, .. }
+            | Record::Answer { session, .. } => session,
         }
     }
 }
@@ -179,12 +193,25 @@ mod tests {
             origin: "spawned".into(),
             expires: "2026-10-22T10:30:00Z".into(),
             touch: vec!["src/core/lease.rs".into()],
+            thread_ts: None,
         };
         assert_eq!(
             r.to_line(),
             r#"{"bosun":"lease","session":"session_1","origin":"spawned","expires":"2026-10-22T10:30:00Z","touch":["src/core/lease.rs"]}"#
         );
         assert_eq!(parse_record(&r.to_line()), Some(r));
+    }
+
+    #[test]
+    fn a_lease_without_thread_ts_still_parses() {
+        let old = r#"{"bosun":"lease","session":"s","origin":"local","expires":"2026-10-22T10:30:00Z","touch":["a"]}"#;
+        assert!(matches!(
+            parse_record(old),
+            Some(Record::Lease {
+                thread_ts: None,
+                ..
+            })
+        ));
     }
 
     #[test]

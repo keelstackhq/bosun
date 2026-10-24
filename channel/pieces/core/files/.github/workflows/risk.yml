@@ -1,0 +1,63 @@
+# Written by the bosun splice channel (owned).
+name: risk
+
+# Posts the required `risk-check` status (spec §8, D32). It runs again when an owner reviews or
+# comments `/bosun approve <head sha>`, so an approval on the head SHA turns the status green.
+#
+# pull_request_target and issue_comment run this file from the base (default) branch, so a PR
+# cannot rewrite the job that judges it. The job never checks out or runs PR-head code: it
+# installs the bosun release pinned in the PR's base commit (on a comment: the default branch)
+# and reads the PR through the API only. Event data reaches `run:` lines through `env:` only, never as `${{ }}` in a script.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]
+  # GitHub has no base-branch variant of this event: it runs the PR's copy of this file.
+  pull_request_review:
+    types: [submitted, dismissed]
+  issue_comment:
+    types: [created]
+
+# A comment that is not an approval gets a group of its own: its run is skipped and must never
+# cancel the run that judges a new head.
+concurrency:
+  group: >-
+    risk-${{ github.event.pull_request.number || github.event.issue.number }}-${{
+    (github.event_name == 'issue_comment' && !contains(github.event.comment.body, '/bosun approve'))
+    && github.run_id || 'judge' }}
+  cancel-in-progress: true
+
+# Least privilege: statuses for the verdict; pull-requests: write only because risk-check writes
+# the Risk note into the PR body (spec §8); read for the base files, comments and linked issues.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  risk:
+    # On a comment: only PR comments that ask for an approval.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, '/bosun approve'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      # The bosun release pinned on the base branch (on a comment: the default branch).
+      - name: install the pinned bosun
+        run: |
+          v="$(tr -d '[:space:]' < .bosun/version)"
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::bad .bosun/version '$v'"; exit 1; }
+          npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
+          bosun --version
+      - name: bosun risk-check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        # Exit 5 (needs-human) is the verdict, carried by the status; only errors fail the job.
+        run: bosun risk-check "$PR" || test $? -eq 5

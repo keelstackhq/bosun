@@ -162,21 +162,10 @@ pub struct FileView {
     pub changes: u64,
 }
 
-const BINARY_EXTENSIONS: [&str; 16] = [
-    "png", "jpg", "jpeg", "gif", "ico", "webp", "pdf", "zip", "gz", "tar", "woff", "woff2", "ttf",
-    "wasm", "so", "bin",
-];
-
-fn obviously_binary(f: &FileView) -> bool {
-    f.changes == 0
-        || f.path
-            .rsplit_once('.')
-            .is_some_and(|(_, e)| BINARY_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
-}
-
 /// `R-unseen` when bosun could not see the whole diff: GitHub listed fewer files than the PR
-/// changed (it lists at most 3000), or a text file it lists has no patch (large diffs).
-/// Built in, not a rule file: a PR must not be able to hide behind a missing diff.
+/// changed (it lists at most 3000), or a file with changed lines has no patch (large diffs).
+/// GitHub reports 0 changed lines for a binary file; the file name is the author's choice, so
+/// it never exempts a file. Built in, not a rule file: a PR must not hide behind a missing diff.
 pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
     let mut evidence = Vec::new();
     if (files.len() as u64) < changed_files {
@@ -186,12 +175,8 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
         ));
     }
     for f in files {
-        if matches!(
-            f.status.as_str(),
-            "added" | "modified" | "renamed" | "changed"
-        ) && !f.has_patch
-            && !obviously_binary(f)
-        {
+        // A deny-list on purpose: a status GitHub adds later counts as unseen, not as safe.
+        if !matches!(f.status.as_str(), "removed" | "unchanged") && !f.has_patch && f.changes > 0 {
             evidence.push(format!("no patch for {}", f.path));
         }
     }
@@ -500,8 +485,14 @@ libc = "0"
         let m = unseen_diff(&[f("big.rs", "modified", false, 900)], 1).unwrap();
         assert_eq!(m.rule, "R-unseen");
         assert!(m.evidence[0].contains("big.rs"));
-        assert!(unseen_diff(&[f("img.PNG", "added", false, 5)], 1).is_none());
+        // GitHub reports 0 added and 0 deleted lines for a binary file.
+        assert!(unseen_diff(&[f("img.PNG", "added", false, 0)], 1).is_none());
         assert!(unseen_diff(&[f("gone.rs", "removed", false, 5)], 1).is_none());
+        // The extension is the author's choice: a file with changed lines and no patch is unseen.
+        let m = unseen_diff(&[f("payload.bin", "added", false, 5000)], 1).unwrap();
+        assert!(m.evidence[0].contains("payload.bin"));
+        assert!(unseen_diff(&[f("lib.so", "modified", false, 12)], 1).is_some());
+        assert!(unseen_diff(&[f("copy.rs", "copied", false, 40)], 1).is_some());
         assert_eq!(
             capability_labels(&["bug", "bosun:capability/prod-write"]),
             ["prod-write"]

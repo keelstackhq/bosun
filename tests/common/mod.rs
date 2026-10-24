@@ -19,6 +19,8 @@ pub fn bosun() -> Command {
         .env("BOSUN_REPO", "acme/widget")
         .env("BOSUN_SESSION", "session_test")
         .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env("BOSUN_ANTHROPIC_API", "http://127.0.0.1:9")
         .env_remove("BOSUN_HALT")
         .env_remove("BOSUN_ORIGIN")
         .env_remove("CLAUDE_CODE_CHILD_SESSION")
@@ -78,3 +80,5 @@ pub fn empty_dir() -> std::path::PathBuf {
     })
     .clone()
 }
+
+pub mod anthropic;

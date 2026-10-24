@@ -129,6 +129,15 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-23 · M5 T4 · a hit on a mechanized lesson (closed as completed, labelled `bosun:lesson/mechanizable`) reopens it as blocking; `lesson add --upstream` files the lesson on keelstackhq/bosun; `bosun progress --lessons` (open, blocking, mechanized, hits per week) · UC-M5-5 · `tests/cli_lesson_reopen.rs` 9/9 · PR #166 · M5 done: UC-M5-1..5 pass (`tests/uc_m5.rs`)
 - 2026-10-23 · Follow-up · `risk.yml` and `verdict.yml` run the release pinned in `.bosun/version` (build only while it says `unreleased`), so a main that does not compile cannot block its own mainfix; `COMMANDS` is a slice · `tests/workflows.rs` · PR #159
 - 2026-10-23 · M2 T4 · `bosun intake "<text>" --source slack|lesson|flake|human [--item ID] [--title T] [--plan FILE]`: one kind/plan issue (ready, `bosun:source/<source>`) that asks for a plan amendment; the text is fenced and cannot forge metadata; an open issue of the same source and title is returned instead · `tests/cli_intake.rs` 8/8 · PR #165 · M2 done: UC-M2-1..4 pass (`tests/uc_m2.rs`)
+- 2026-10-23 · M8 T2 · `review-pack` takes `since_sha` from the newest older head that has a verdict record and a successful `review-verdict` status, is an ancestor of the head (compare `ahead`) and is one of the PR's commits; anything else, any compare error or more than 20 older heads is a full review with `delta_fallback` saying why · UC-M8-2 · `tests/cli_review_delta.rs` 8/8 · PR #180
+- 2026-10-23 · Fix · risk-check's `R-unseen` flags every listed file with changed lines and no patch, whatever its name (no extension exemption) and whatever its status but removed or unchanged · `core::risk`, `tests/cli_risk.rs` · PR #181
+- 2026-10-23 · M8 T1a · `bosun review-ci <pr>` (review mode b): kill switch, `review.mode = "ci"` only, daily budget (exit 6); fails closed before any call on an unseen diff or a request over `review.max_diff_bytes`; one Anthropic Messages API call (`ANTHROPIC_API_KEY`, never printed; `[review] model`, `max_tokens`); untrusted-data prompt; `pr` and `head_sha` from the pack; status, record and task move as `verdict post` with session `review-ci`; findings in data and a neutralised PR comment; spend for `review-ci` · UC-M8-1 · `tests/cli_review_ci.rs` 31/31, fake Anthropic server in `tests/common` · PR #182
+- 2026-10-23 · M8 T3 · `core::agreement` (same effective outcome; passes at 20 or more pairs and 90 % or more), the recorded-review fixture format (`tests/fixtures/reviews/`), and `review-ci --dry-run` (always a full review, writes nothing) for recording; UC-M8-3 stays open until 20 real recordings exist · `tests/review_agreement.rs` 3/3, `tests/cli_review_ci.rs` +6 · PR #184
+- 2026-10-23 · M6 P · Slack plan `docs/superpowers/plans/2026-10-23-m6.md`: no Slack app and no token (S1), posts returned in `next` as `slack_post`, decisions S1-S8 and the residual risk · PR #186
+- 2026-10-23 · M6 T1 · `bosun notify [--channel-info -|FILE] [--ack KEY]`: pending owner questions, halt, main-red and budget-halt as `slack_post` items in `next`; with posts due, refuses (exit 5) unless the caller's channel facts are `[slack] channel`, not shared and without guests; `--ack` writes a `notified` record for a pending key only, so each post is made once; the doctor's notify Routine prompt · UC-M6-1 · `tests/cli_notify.rs` 30/30 · PR #193
+- 2026-10-23 · M6 T2 · `bosun answer <issue> --slack-user U… [--from -|FILE]`: an `answer` record (text fenced) for an open ask on a needs-human task (else exit 3), only from an owner Slack ID in `governance/owners.toml` (else exit 5, nothing written); it never changes the task state, the owner moves the task on GitHub; `bosun doctor` warns when `[slack] channel` is set and no owner has a `slack` ID · UC-M6-2 · `tests/cli_answer.rs` 13/13 · PR #194
+- 2026-10-23 · M6 T3 · `bosun spawn [<epic>] --slack-thread TS --slack-user U… [--request -|FILE]`: needs `[slack] channel` on the default branch, `may_spawn`, `spawners = "owners"`, an owner Slack ID and origin slack or local; with `--request` and no epic, intake runs after the checks that need no issue (a refused spawn leaves no intake issue); without it, the one ready epic or plan task is taken; the same 7 checks and budget as any spawn, no exemption from halt, process-red or main-red; the thread ts is stored in the child's lease · UC-M6-3 · `tests/cli_thread_spawn.rs` 23/23 · PR #195
+- 2026-10-23 · M6 T4 · a `result` by a trusted author that follows a trusted thread-spawn lease on its epic is a pending `thread-result` post into that thread; `bosun notify --thread TS` lists it for the live thread at once, the Routine posts it after a 15 minute grace; a later normal spawn ends the thread; the `bosun:state/*` issues updated in the last 7 days are scanned (up to 500, overflow in data.errors), at most 10 replies per run · UC-M6-4 · `tests/cli_thread_reply.rs` 21/21 · PR #196 · M6 done: UC-M6-1..4 pass (`tests/uc_m6.rs` 4/4)
 
 ## Blocked
 
@@ -159,3 +168,35 @@ Human-only items, in order. Each has the exact action.
    `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
    check run) and that source required in the `main` ruleset. Until then it is an accepted
    residual: such a PR is R-ci, so it needs an owner's look anyway.
+6. **Review mode b (M8).** The code is on main; three steps turn it on.
+   - Approve `.github/workflows/review.yml` (PR #183, R-ci): `/bosun approve <head sha>` on it.
+   - Create the environment `review` (Settings → Environments, deployment branches: `main` only)
+     and its secret: `gh secret set ANTHROPIC_API_KEY --env review --repo keelstackhq/bosun`.
+   - Cut a release that contains `review-ci` and pin it in `.bosun/version`. Until then the job
+     skips with a warning and sets no status.
+   - UC-M8-3 is open: record mode b on 20 merged PRs with `bosun review-ci <pr> --dry-run` and
+     add each as a fixture next to its mode-a verdict (`tests/fixtures/reviews/README.md`); the
+     `uc_m8_3` test lands with them. Then switch with an R-gov PR: `[review] mode = "ci"`.
+7. **Pending UC tests in CI (owner decision, #179).** Plan tasks allow `skip`, but CI never
+   passes the task's allow list to `gate-test-integrity`, so P2's pending UC tests cannot land.
+   Choose (a) `bosun test-integrity --pr` reads `allow` only from a source agents cannot write,
+   or (b) drop P2's pending-test step. M8 used (b) meanwhile.
+8. **Slack (M6).** The code is on main; bosun holds no Slack token (S1). These steps turn it on.
+   - Cut a release that contains `notify`, `answer` and `spawn --slack-thread` and pin it in
+     `.bosun/version`, and set `BOSUN_VERSION` in `docs/setup-script.sh` to the same version in
+     that PR (the script does not read the pin); then paste the script again (item 2). The pinned
+     v0.1.0 has none of them.
+   - Create a private Slack channel that is not shared with another workspace or organisation and
+     has no guests. bosun refuses to post when the caller's channel facts say otherwise, but it
+     cannot prove them (accepted residual, spec §10).
+   - Connect Claude Tag (Claude in Slack) to the workspace and invite it to that channel. Its
+     cloud environment needs the setup script, a `GITHUB_TOKEN` with write access (records from
+     other authors are ignored) and `BOSUN_ORIGIN=slack` (thread spawn needs origin slack).
+   - Set `[slack] channel = "C…"` in `.bosun/bosun.toml` with an R-gov PR. The defaults are
+     `spawners = "owners"` and `may_spawn = true`; set `may_spawn = false` if threads must not
+     spawn, and `notify = [...]` to post only some kinds (empty means all).
+   - Add `slack = "U…"` to your `[[owner]]` table in `governance/owners.toml` (R-gov). Without it
+     no answer counts and no thread may spawn; `bosun doctor` warns.
+   - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor`
+     data.routines from the new release, and attach the Slack connector to it: the Routine reads
+     the channel facts and posts with its Slack tool.
