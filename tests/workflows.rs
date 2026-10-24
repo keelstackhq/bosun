@@ -393,3 +393,225 @@ fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
     }
     runs_the_pinned_release(&yaml);
 }
+
+/// The install step has the shape of ci.yml's `bosun-bin` job; the job builds nothing.
+fn assert_pinned_install_with_fallback(yaml: &str) {
+    assert!(yaml.contains("@keelstackhq/bosun@${VERSION}"), "{yaml}");
+    assert!(yaml.contains("npm install -g --ignore-scripts"));
+    assert!(yaml.contains("grep -Eqx '[0-9]+\\.[0-9]+\\.[0-9]+'"));
+    assert!(yaml.contains("test \"$got\" = \"bosun ${VERSION}\""));
+    assert!(yaml.contains("steps.has.outputs.supported != 'true'"));
+    assert!(!yaml.contains("cargo build"), "no build from main");
+    // A failed install must still reach the fallback.
+    assert!(yaml.contains("id: install\n        continue-on-error: true"));
+    assert!(yaml.contains("INSTALL: ${{ steps.install.outcome }}"));
+    assert!(yaml.contains("[ \"$INSTALL\" = success ] && [ -x target/release/bosun ]"));
+    assert!(
+        !yaml.contains("exit 4"),
+        "the fallback exits 0; the status carries the verdict"
+    );
+    for line in yaml.lines().filter(|l| l.contains("::warning::")) {
+        assert!(!line.contains('`'), "backtick in a shell string: {line}");
+    }
+    assert_eq!(
+        pin_script(yaml),
+        pin_script(&ci_yaml()),
+        "pin step differs from ci.yml"
+    );
+}
+
+fn ci_yaml() -> String {
+    fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/workflows/ci.yml"
+    ))
+    .unwrap()
+}
+
+/// The dedented `run:` script of the step with `id: pin`.
+fn pin_script(yaml: &str) -> String {
+    let at = yaml
+        .find("        id: pin\n        run: |\n")
+        .expect("a step with id: pin");
+    let body = &yaml[at..];
+    let body = &body[body.find("run: |\n").unwrap() + "run: |\n".len()..];
+    let mut out = String::new();
+    for line in body.lines() {
+        if !line.is_empty() && !line.starts_with("          ") {
+            break;
+        }
+        out.push_str(line.get(10..).unwrap_or(""));
+        out.push('\n');
+    }
+    out
+}
+
+/// Run the pin script of each workflow under bash with a fake `.bosun/version`.
+#[test]
+fn pin_step_accepts_exact_versions_only() {
+    if std::process::Command::new("bash")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("bash is missing: skipped");
+        return;
+    }
+    let ci = ci_yaml();
+    let mut scripts = vec![pin_script(&ci)];
+    for f in ["main-open.yml", "main-health.yml"] {
+        let path = format!("{}/.github/workflows/{f}", env!("CARGO_MANIFEST_DIR"));
+        scripts.push(pin_script(&fs::read_to_string(path).unwrap()));
+    }
+    for script in &scripts {
+        for (version, ok, want) in [
+            ("1.2.3\n", true, "version=1.2.3"),
+            ("unreleased\n", true, "version="),
+            ("1.2\n", false, ""),
+            ("latest\n", false, ""),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::create_dir(dir.path().join(".bosun")).unwrap();
+            fs::write(dir.path().join(".bosun/version"), version).unwrap();
+            let out_file = dir.path().join("out");
+            let status = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(script)
+                .current_dir(dir.path())
+                .env("GITHUB_OUTPUT", &out_file)
+                .output()
+                .unwrap();
+            assert_eq!(status.status.success(), ok, "{version:?}: {status:?}");
+            if ok {
+                let out = fs::read_to_string(&out_file).unwrap();
+                assert_eq!(out.trim(), want, "{version:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn main_open_judges_from_the_base_and_never_runs_pr_code() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/workflows/main-open.yml"
+    );
+    let yaml = fs::read_to_string(path).unwrap();
+    assert!(yaml.contains("\n  pull_request_target:\n"), "{yaml}");
+    assert!(!yaml.contains("\n  pull_request:\n"));
+    let refs: Vec<&str> = yaml
+        .lines()
+        .filter(|l| l.trim_start().starts_with("ref:"))
+        .collect();
+    assert_eq!(
+        refs,
+        ["          ref: ${{ github.event.pull_request.base.sha }}"],
+        "{yaml}"
+    );
+    assert_eq!(yaml.matches("actions/checkout@").count(), 1);
+    assert!(yaml.contains("persist-credentials: false"));
+    for bad in ["head.ref", "head_ref", "refs/pull", "merge_commit_sha"] {
+        assert!(!yaml.contains(bad), "main-open.yml mentions {bad}");
+    }
+    // The head sha appears once, read through the API, and is used only as the status target.
+    let heads: Vec<&str> = yaml.lines().filter(|l| l.contains("head.sha")).collect();
+    assert_eq!(heads.len(), 1, "{heads:?}");
+    assert!(heads[0].contains("sha=$(gh api \"repos/$GITHUB_REPOSITORY/pulls/$PR\""));
+    let uses: Vec<&str> = yaml.lines().filter(|l| l.contains("$sha")).collect();
+    assert_eq!(uses.len(), 1, "{uses:?}");
+    assert!(
+        uses[0].contains("repos/$GITHUB_REPOSITORY/statuses/$sha"),
+        "{uses:?}"
+    );
+    assert!(job_ids(&yaml) == ["judge"], "{:?}", job_ids(&yaml));
+    assert_pinned_install_with_fallback(&yaml);
+    let scripts = run_scripts(&yaml);
+    assert!(
+        scripts
+            .iter()
+            .any(|s| s.contains("bosun gate main-open --pr \"$PR\"")),
+        "{scripts:?}"
+    );
+    assert!(
+        scripts.iter().any(|s| s.contains("context=main-open")),
+        "the fallback must post the main-open status"
+    );
+    for s in &scripts {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    assert_eq!(yaml.matches("permissions:").count(), 1);
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: read",
+            "  pull-requests: read",
+            "  statuses: write"
+        ]
+    );
+    assert!(yaml.contains("cancel-in-progress: true"));
+}
+
+#[test]
+fn main_health_reports_with_bosun_built_from_the_default_branch() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/.github/workflows/main-health.yml"
+    );
+    let yaml = fs::read_to_string(path).unwrap();
+    let report = &yaml[yaml.find("\n  report:\n").unwrap()..];
+    assert!(report.contains("always()"));
+    assert!(report.contains("github.event.workflow_run.event == 'push'"));
+    assert!(
+        report.contains("github.event.workflow_run.head_repository.full_name == github.repository")
+    );
+    assert!(report.contains("persist-credentials: false"));
+    assert!(report.contains("ref: ${{ github.sha }}"));
+    assert_pinned_install_with_fallback(report);
+    assert!(
+        run_scripts(report)
+            .iter()
+            .any(|s| s.contains("gh issue create"))
+    );
+    let scripts = run_scripts(report);
+    assert!(
+        scripts
+            .iter()
+            .any(|s| s.contains("bosun main-health --result \"$RESULT\" --run-url \"$RUN_URL\"")),
+        "{scripts:?}"
+    );
+    for s in run_scripts(&yaml) {
+        assert!(!s.contains("${{"), "expression in a run script: {s}");
+    }
+    for bad in ["head.sha", "head.ref", "head_ref", "refs/pull"] {
+        assert!(!yaml.contains(bad), "main-health.yml mentions {bad}");
+    }
+    let perms = &yaml[yaml.find("\npermissions:\n").unwrap()..yaml.find("\njobs:").unwrap()];
+    let granted: Vec<&str> = perms
+        .lines()
+        .skip(2)
+        .filter(|l| l.starts_with("  "))
+        .collect();
+    assert_eq!(
+        granted,
+        [
+            "  contents: read",
+            "  issues: write",
+            "  pull-requests: read",
+            "  statuses: write"
+        ]
+    );
+}
+
+#[test]
+fn splice_pins_its_version() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/splice.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    assert!(yaml.contains("          version: \"0.2.0\"\n"), "{yaml}");
+}
