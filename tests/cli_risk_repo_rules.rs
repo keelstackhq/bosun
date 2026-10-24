@@ -47,12 +47,8 @@ fn requirement(path: &str, previous: Option<&str>) -> String {
 }
 
 #[test]
-fn channel_and_toolchain_need_two_verdicts() {
-    for path in [
-        "channel/x",
-        "channel/pieces/a/b.toml",
-        "rust-toolchain.toml",
-    ] {
+fn channel_needs_two_verdicts() {
+    for path in ["channel/x", "channel/pieces/a/b.toml"] {
         assert_eq!(requirement(path, None), "two-verdicts", "{path}");
     }
 }
@@ -64,6 +60,11 @@ fn workflows_gate_code_and_governance_need_the_owner() {
         ".github/workflows/risk.yml",
         ".github/workflows/other.yaml",
         "deny.toml",
+        "rust-toolchain.toml",
+        "rust-toolchain",
+        "Cargo.toml",
+        "docs/lessons.toml",
+        "src/cli/review_pack.rs",
         "REVIEW.md",
         "src/github/http.rs",
         "src/cli/mod.rs",

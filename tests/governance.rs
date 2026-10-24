@@ -127,3 +127,68 @@ fn settings_hooks_run_bosun_hook_commands() {
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
+
+#[test]
+fn every_shipped_path_glob_matches_a_concrete_path_with_its_class() {
+    use bosun::core::risk::Approval;
+    for rules in [
+        Rules::parse(&read(".bosun/risk.toml")).unwrap(),
+        Rules::defaults(),
+    ] {
+        for rule in &rules.rules {
+            for g in &rule.paths {
+                let text = g.as_str();
+                let concrete = match text.strip_suffix("/**") {
+                    Some(dir) if dir == ".github/workflows" => format!("{dir}/nested/x.yml"),
+                    Some(dir) => format!("{dir}/inner.rs"),
+                    None => text.to_string(),
+                };
+                assert!(g.matches(&concrete), "{} / {text}: {concrete}", rule.id);
+                // No other rule may match it with a different class: the strictest wins.
+                let want = if rule.id == "R-ci-review" {
+                    Approval::TwoVerdicts
+                } else {
+                    Approval::Owner
+                };
+                assert_eq!(rule.approval, want, "{}", rule.id);
+                for other in &rules.rules {
+                    if other.paths.iter().any(|o| o.matches(&concrete)) && other.id != rule.id {
+                        assert_eq!(other.approval, Approval::Owner, "{concrete}: {}", other.id);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn review_inputs_and_legacy_toolchain_name_are_covered() {
+    let rules = Rules::parse(&read(".bosun/risk.toml")).unwrap();
+    let id_of = |path: &str| {
+        rules
+            .rules
+            .iter()
+            .find(|r| r.paths.iter().any(|g| g.matches(path)))
+            .map(|r| r.id.clone())
+    };
+    assert_eq!(id_of("docs/lessons.toml").as_deref(), Some("R-gov"));
+    assert_eq!(id_of("rust-toolchain").as_deref(), Some("R-ci"));
+    assert_eq!(id_of("rust-toolchain.toml").as_deref(), Some("R-ci"));
+    assert_eq!(id_of("Cargo.toml").as_deref(), Some("R-gate"));
+    for f in [
+        "src/cli/gate.rs",
+        "src/config.rs",
+        "src/cli/review_ci.rs",
+        "src/cli/review_pack.rs",
+        "src/core/review.rs",
+        "src/core/agreement.rs",
+        "src/core/state.rs",
+        "src/core/lease.rs",
+        "src/ctx.rs",
+        "src/registry.rs",
+        "src/time.rs",
+        "src/time/x.rs",
+    ] {
+        assert_eq!(id_of(f).as_deref(), Some("R-gate"), "{f}");
+    }
+}

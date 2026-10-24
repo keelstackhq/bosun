@@ -499,10 +499,10 @@ task and a lesson. A test is never skipped to get green.
 
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
-  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` (the reviewers apply it).
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**` and `deny.toml`.
-- R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity command, `src/gates/**`, `src/github/**`, `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
-- R-ci-review (`approval = "two-verdicts"`): "Shipped CI and the toolchain; two independent reviews instead of the owner." Paths `channel/**` (the CI and governance `bosun init` ships) and `rust-toolchain.toml`.
+  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
+- R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
+- R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Content `(?i)(api[_-]?key|secret|token)\s*=`.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.

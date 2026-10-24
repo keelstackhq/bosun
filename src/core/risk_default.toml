@@ -4,13 +4,13 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what."
-# REVIEW.md is what the reviewers apply.
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "REVIEW.md"]
+# REVIEW.md and docs/lessons.toml are read into every review pack.
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "REVIEW.md", "docs/lessons.toml"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", "deny.toml"]
+paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"
@@ -39,6 +39,29 @@ paths = [
     "src/cli/test_integrity.rs",
     "src/cli/test_integrity/**",
     "src/cli/mod.rs",
+    "src/cli/gate.rs",
+    "src/cli/gate/**",
+    "src/cli/review_ci.rs",
+    "src/cli/review_ci/**",
+    "src/cli/review_pack.rs",
+    "src/cli/review_pack/**",
+    "src/core/review.rs",
+    "src/core/review/**",
+    "src/core/agreement.rs",
+    "src/core/agreement/**",
+    "src/core/state.rs",
+    "src/core/state/**",
+    "src/core/lease.rs",
+    "src/core/lease/**",
+    "src/config.rs",
+    "src/config/**",
+    "src/ctx.rs",
+    "src/ctx/**",
+    "src/registry.rs",
+    "src/registry/**",
+    "src/time.rs",
+    "src/time/**",
+    "Cargo.toml",
     "src/gates/**",
     "src/github/**",
     "src/app.rs",
@@ -51,9 +74,9 @@ paths = [
 
 [[rule]]
 id = "R-ci-review"
-why = "Shipped CI and the toolchain; two independent reviews instead of the owner."
+why = "Shipped CI for other repos; two independent reviews instead of the owner."
 approval = "two-verdicts"
-paths = ["channel/**", "rust-toolchain.toml"]
+paths = ["channel/**"]
 
 [[rule]]
 id = "R-secrets"
