@@ -557,3 +557,127 @@ fn the_probe_skips_deleted_numbers_and_pulls_and_stops_at_a_missing_one() {
     assert_eq!(posts(&fake), made, "{v}");
     assert!(v["data"]["warnings"].as_array().unwrap().is_empty(), "{v}");
 }
+
+fn with_profile(profile: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/bosun.toml"),
+        format!("project = \"widget\"\n\n[[stack]]\npath = \".\"\nprofile = \"{profile}\"\n"),
+    )
+    .unwrap();
+    tmp
+}
+
+fn tree(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = walk(dir, dir);
+    out.sort();
+    out
+}
+
+fn walk(root: &Path, dir: &Path) -> Vec<String> {
+    let mut out = vec![];
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(root, &p));
+        } else {
+            out.push(p.strip_prefix(root).unwrap().to_str().unwrap().to_string());
+        }
+    }
+    out
+}
+
+#[test]
+fn a_dry_run_writes_no_files_and_no_issues() {
+    let (tmp, fake) = (with_profile("rust"), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let files = tree(tmp.path());
+    let before = writes(&fake);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["dry_run"], true);
+    assert!(v["data"].get("would_write").is_none(), "{v}");
+    assert!(v["data"].get("stubs").is_none(), "{v}");
+    assert_eq!(v["data"]["would_promote"], json!([]));
+    assert!(!tmp.path().join("tests").exists());
+    assert_eq!(tree(tmp.path()), files);
+    assert_eq!(writes(&fake), before);
+}
+
+#[test]
+fn existing_uc_files_stay_byte_identical_across_imports() {
+    let (tmp, fake) = (with_profile("rust"), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
+    let with_id = "// UC-M1-1 done\n#[test]\nfn it() {}\n";
+    let without_id = "#[test]\nfn other() {}";
+    std::fs::write(tmp.path().join("tests/uc_m1.rs"), with_id).unwrap();
+    std::fs::write(tmp.path().join("tests/uc_m2.rs"), without_id).unwrap();
+    for _ in 0..2 {
+        let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("tests/uc_m1.rs")).unwrap(),
+            with_id
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("tests/uc_m2.rs")).unwrap(),
+            without_id
+        );
+        assert_eq!(tree(&tmp.path().join("tests")), ["uc_m1.rs", "uc_m2.rs"]);
+    }
+}
+
+#[test]
+fn other_profiles_import_without_files_or_a_stub_warning() {
+    let (tmp, fake) = (with_profile("pnpm"), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert!(!tmp.path().join("tests").exists());
+    assert_eq!(v["data"]["warnings"], json!([]));
+    assert_eq!(posts(&fake), 7);
+}
+
+#[test]
+fn a_rerun_creates_no_issues_and_no_files() {
+    let (tmp, fake) = (with_profile("rust"), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, _) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0);
+    let (made, files) = (posts(&fake), tree(tmp.path()));
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(posts(&fake), made);
+    assert_eq!(tree(tmp.path()), files);
+    assert!(
+        v["data"]["epics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["action"] != "created")
+    );
+}
+
+#[test]
+fn each_plan_task_touches_the_plan_and_lists_its_ucs() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    for (item, uc, text) in [
+        ("M1", "UC-M1-1", "a task moves planned -> merged."),
+        ("M2", "UC-M2-1", "importing twice creates no duplicates."),
+    ] {
+        let p = fake.issue_state(find(&fake, &format!("<!-- bosun:plan {item}/P -->")));
+        assert_eq!(p.title, format!("{item}/P: plan"));
+        assert!(p.body.contains(&format!("- {uc}: {text}")), "{}", p.body);
+        assert!(p.body.contains("passing tests"), "{}", p.body);
+        assert!(p.body.contains("plan.md"), "{}", p.body);
+        let meta = bosun::core::meta::parse_task_meta(&p.body).unwrap();
+        assert_eq!(meta.task, "P");
+        assert_eq!(meta.touch, ["plan.md"]);
+        assert!(meta.allow.is_empty());
+    }
+}

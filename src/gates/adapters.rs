@@ -259,6 +259,15 @@ mod tests {
     }
 
     #[test]
+    fn plan_import_stubs_are_uc_pending_markers() {
+        let text = crate::core::plan::uc_stub("UC-M2-3", "each line has a test.");
+        let m = pending_markers(&text);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].uc.as_deref(), Some("UC-M2-3"));
+        assert_eq!(test_count(&text), 1);
+    }
+
+    #[test]
     fn counts_test_attributes() {
         let text = "#[test]\nfn a() {}\n  #[tokio::test(flavor = \"x\")]\nasync fn b() {}\n#[rstest]\n// #[test]\n#[testing]\n";
         assert_eq!(test_count(text), 3);
