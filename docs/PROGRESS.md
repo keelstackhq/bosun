@@ -156,6 +156,13 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-23 · M3 T4 · `bosun main-health --result <conclusion> [--run-url]`: on failure (also timed_out, startup_failure) one `bosun:main-red` issue (a racing duplicate closes itself) and a `main-red` lesson; on success it closes every open main-red issue; it re-posts `main-open` on every open PR on each run (exit 1 if one fails) · UC-M3-1 · `tests/cli_main_health.rs` 7/7 · PR #155
 - 2026-10-24 · M3 workflows · `main-open.yml` (pull_request_target job `judge`, base checkout only) and `main-health.yml` (report job, fork-branch guard) run the pinned npm release with a shell fallback until it has the commands, in bosun and in the channel copies; `splice.yml` pins splice 0.2.0; `bosun init`'s owner step names main-open; guards in `tests/workflows.rs` incl. a bash run of the pin step · high risk, owner-approved · PR #161 · M3 done: UC-M3-1..4 pass (`uc_m3_1_*` .. `uc_m3_4_*`); the merge queue (plan M3 summary) stays with the owner (`hoist.toml`, spec §11)
 - 2026-10-24 · Release v0.2.0 · release PR from a session (release.yml `prepare` cannot open PRs without HOIST_RELEASE_TOKEN): hoist's own release commit, hoist's `## 0.2.0 (date)` heading kept so `hoist release publish` finds the notes (`tests/release_config.rs` accepts it) · PR #200 · the Windows build of `main-triage` fixed (stderr handle instead of a unix fd; checked with `cargo check --target x86_64-pc-windows-msvc`) · PR #203 · v0.2.0 on npm and crates.io
+- 2026-10-24 · Decision · no Anthropic API key: review mode b stays off (reviews stay mode a, `review.yml` runs and skips), UC-M8-3 (#145) not planned · PR #198
+- 2026-10-24 · #179 (b) · `bosun plan import` writes no UC test stubs and gives the P task `<item>/P: plan` (touch: the plan file, allow: none); UC tests land passing with their code; UC-M2-3 reworded · `tests/cli_plan_import.rs` 23/23, `tests/uc_m2.rs` · PR #199
+- 2026-10-24 · Approvals · `bosun approve --list` (open PRs whose `risk-check` waits for an owner, with workflow-posted `review-verdict` and the Actions `ci-ok` green, files of that head) and `bosun approve <pr>@<sha>...` (posts `/bosun approve <sha>` with `BOSUN_OWNER_TOKEN`, refuses a moved head, posts nothing unless every PR is ready); `--main-open` for the bootstrap case; an `approve` record; the token is never printed (canary tests) · `tests/cli_approve.rs` · PR #201; `data.hint` that approvals through the Claude GitHub tool never count · PR #206
+- 2026-10-24 · Risk 4a · rule field `approval = "owner"|"two-verdicts"`; the two-verdict class passes on two verdict-workflow records from distinct sessions (approve >= 0.9) on the head, not from a lease holder of the linked task; an unlinked PR needs the owner; verdict records carry the confidence; `verdict.yml` re-runs risk-check · `tests/cli_risk_two_verdicts.rs` 18/18 · PR #202
+- 2026-10-24 · Pin v0.2.0 · `.bosun/version` and `docs/setup-script.sh` at 0.2.0 · PR #205
+- 2026-10-24 · Risk 4b · owner: all workflows, `deny.toml`, both toolchain files, `Cargo.toml`, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); two verdicts: `channel/**` only; built-in and repo rules identical (test) · `tests/governance.rs` 8/8, `tests/cli_risk_repo_rules.rs` 4/4 · PR #207; build inputs (`build.rs`, `.cargo/**`, `.config/**`, `Cargo.lock`) and the review feeders join R-gate · PR #208
+- 2026-10-24 · Approvals · `bosun approve` refuses to post in a Claude cloud session (`CCR_AGENT_PROXY_ENABLED`, `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud*`; the agent proxy rewrites GitHub writes, so no approval from there counts), `--list` still works there; an owner review requesting changes on the head makes the PR not ready; a counting approval while risk-check is red is re-posted to re-run it · `tests/cli_approve.rs` 28/28 · PR #209
 
 ## Blocked
 
@@ -170,8 +177,8 @@ Human-only items, in order. Each has the exact action.
    B60205` (an owner's open issue with it halts bosun). `BOSUN_HALT` is optional; a token that
    cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
-   settings → setup script: paste `docs/setup-script.sh` (again after the v0.1.0 pin: it now
-   installs `@keelstackhq/bosun@0.1.0` from npm instead of building main).
+   settings → setup script: paste `docs/setup-script.sh` (again after each pin bump: it now
+   installs `@keelstackhq/bosun@0.2.0` from npm), in every environment, the owner's included.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
    15 min, Haiku). Create them in claude.ai → Routines.
@@ -192,10 +199,8 @@ Human-only items, in order. Each has the exact action.
    dormant: the job still runs on eligible PRs and skips, setting no status and making no API call,
    while `[review] mode = "subagent"`. There is no owner step.
    UC-M8-3 (#145) stays blocked and is not planned: recording mode b needs the key.
-7. **Pending UC tests in CI (owner decision, #179).** Plan tasks allow `skip`, but CI never
-   passes the task's allow list to `gate-test-integrity`, so P2's pending UC tests cannot land.
-   Choose (a) `bosun test-integrity --pr` reads `allow` only from a source agents cannot write,
-   or (b) drop P2's pending-test step. M8 used (b) meanwhile.
+7. **Pending UC tests in CI (#179): done.** The owner chose (b): no pending UC tests; UC tests
+   land with their code (PR #199). Nothing left to do.
 8. **Slack (M6).** The code is on main; bosun holds no Slack token (S1). These steps turn it on.
    - Cut a release that contains `notify`, `answer` and `spawn --slack-thread` and pin it in
      `.bosun/version`, and set `BOSUN_VERSION` in `docs/setup-script.sh` to the same version in
@@ -215,15 +220,25 @@ Human-only items, in order. Each has the exact action.
    - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor`
      data.routines from the new release, and attach the Slack connector to it: the Routine reads
      the channel facts and posts with its Slack tool.
-9. **Owner approvals from a Claude Code session.** Create a fine-grained PAT of the owner for
-   keelstackhq/bosun with Pull requests and Issues read/write (Commit statuses read/write only
-   if you use `bosun approve --main-open`; Metadata read is implied). Put it in a separate
-   Claude Code environment (claude.ai/code → environment settings) as the variable
-   `BOSUN_OWNER_TOKEN`, with the normal setup script. Never spawn agents from that environment
-   and never put the token in an agent environment. There the owner says "approve the ready
-   PRs"; Claude runs `bosun approve --list`, shows the ready list (PR, title, risk, files), then
-   runs exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`). A PR whose head
-   moved in between is refused (exit 3) and needs a new `--list`.
+9. **Owner approvals.** An approval counts only as the owner's own comment
+   `/bosun approve <head sha>` (the full 40-character SHA, typed exactly, nothing else, never
+   edited: an edited comment never counts, post a new one) or a GitHub review approving that
+   head, sent with the owner's own credentials. A newer review of yours requesting changes on
+   that head cancels the comment. Two ways work:
+   - the GitHub web or mobile app: type the comment on the PR (a review works only on a PR you
+     did not open; agent PRs are opened as your login, so use the comment);
+   - `bosun approve` on the owner's own machine (a local shell or a local Claude Code session,
+     also when driven through Remote Control), with `BOSUN_OWNER_TOKEN` set there: a
+     fine-grained PAT of the owner for keelstackhq/bosun with Pull requests and Issues
+     read/write (Commit statuses read/write only for `--main-open`; reads of this public repo
+     need nothing more, a private repo also needs Contents, Commit statuses and Checks read).
+     Run `bosun approve --list`, check the ready list (PR, title, risk, files), then run
+     exactly `data.approve_command` (`bosun approve 199@<sha> 200@<sha>`). A PR whose head
+     moved in between is refused (exit 3) and needs a new `--list`.
+   Never from a Claude cloud session, not even with a PAT: its agent proxy rewrites every GitHub
+   write (app attribution and a Claude footer), so risk-check ignores it, and `bosun approve`
+   refuses there (exit 5). The Claude GitHub tool does the same. Never put the PAT in a cloud
+   environment.
 10. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one commit
     and the Claude GitHub App; in a session with splice, bosun and a `GITHUB_TOKEN` (push and
     pull requests), `bosun init --stack rust --owner <login> [--plan plan.md]`; review and merge

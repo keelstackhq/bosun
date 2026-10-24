@@ -541,7 +541,10 @@ High-risk PRs:
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
-- `bosun approve` is the owner's shortcut, run in the owner's own Claude Code environment. It
+- `bosun approve` is the owner's shortcut, run on the owner's own machine (a local shell or a
+  local Claude Code session, also through Remote Control), never in a Claude cloud session: the cloud agent proxy rewrites
+  every GitHub write (app attribution and a footer), so an approval sent from there never counts,
+  whatever the token. It
   reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
   never with `GITHUB_TOKEN`; without it the command is exit 5. It sends the token only to
   `https://` or a loopback `BOSUN_GITHUB_API` (else exit 1) and redacts it from every message.
