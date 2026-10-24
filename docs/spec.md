@@ -501,7 +501,7 @@ task and a lesson. A test is never skipped to get green.
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
 - R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
-- R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
+- R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**`, `.config/**` (build inputs), `src/anthropic.rs`, `src/core/lessons.rs`, `src/core/budget.rs`, `src/sessions/**` (review feeders), `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
 - R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Content `(?i)(api[_-]?key|secret|token)\s*=`.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
@@ -568,7 +568,17 @@ High-risk PRs:
   posts `/bosun approve <head>` on each PR only if every named PR is ready at exactly that
   head; otherwise nothing is posted (exit 3, `data.not_ready`, for example `head changed`) and
   the owner needs a new `--list`. If a later comment fails, the ones posted stay recorded and
-  `data.approved` lists them (exit 1). Both are exit 4 while bosun is halted. One `approve`
+  `data.approved` lists them (exit 1). A PR whose owner has a review on that head that requests
+  changes (the newest decisive review withdraws an approval comment) is not ready: it is in
+  `waiting` and refused with exit 3. Otherwise the comment is always posted, also when one that
+  counts (the owner test of risk-check: unedited, plain user token, exact text) already exists,
+  because the new comment re-runs risk-check if its run was lost; `data.approved` marks that
+  entry `"repost": true`. In a Claude cloud session (`CCR_AGENT_PROXY_ENABLED` is `1`, `true`,
+  `yes` or `on`, or `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`, any case) the
+  agent proxy rewrites every GitHub write (app attribution, a footer), so no token
+  yields a counting approval there: the posting modes are exit 5 before any call (run it on
+  your own machine, or comment in the GitHub app), and `--list` still works with
+  `data.cloud: true`. Both are exit 4 while bosun is halted. One `approve`
   record (`prs`, `at`, no session) goes on the registry issue; it is an audit hint, never
   authority: risk-check derives approval only from the owner's PR comment or review.
   `--main-open <pr>` is for a PR that changes `.github/workflows/main-open.yml` (the base
