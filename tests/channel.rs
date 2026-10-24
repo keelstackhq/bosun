@@ -276,6 +276,10 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     let gate = health.find(both).expect("own_ci checks both workflows");
     assert!(gate < health.find("gh issue close").unwrap());
     assert!(health[..gate].rfind("{% if own_ci %}") > health[..gate].rfind("{% endif %}"));
+    // Both report paths (bosun main-health and the shell fallback) read that judged result.
+    let judged = "RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}";
+    assert_eq!(health.matches(judged).count(), 2, "both report paths");
+    assert!(health.find(judged).unwrap() > gate);
     assert!(health.contains("github.event.workflow_run.event == 'push'"));
     assert!(health.contains("workflow_run.head_repository.full_name == github.repository"));
     // The update bot can write: its splice is pinned.
