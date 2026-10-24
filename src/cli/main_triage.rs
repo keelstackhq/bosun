@@ -1,7 +1,6 @@
 //! `bosun main-triage --good REV [--bad REV] [--run CMD]`. Bisects the first-parent commits
 //! (merged PRs) between two revs in temporary worktrees. Works offline on the local checkout.
 
-use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -75,11 +74,29 @@ fn candidates(root: &Path, good: &str, bad: &str) -> Result<Vec<Candidate>, Bosu
 }
 
 /// Child output goes to stderr: stdout stays one JSON object.
+#[cfg(unix)]
 fn to_stderr() -> Stdio {
+    use std::os::fd::AsFd;
     std::io::stderr()
         .as_fd()
         .try_clone_to_owned()
         .map_or_else(|_| Stdio::null(), Stdio::from)
+}
+
+/// Child output goes to stderr: stdout stays one JSON object.
+#[cfg(windows)]
+fn to_stderr() -> Stdio {
+    use std::os::windows::io::AsHandle;
+    std::io::stderr()
+        .as_handle()
+        .try_clone_to_owned()
+        .map_or_else(|_| Stdio::null(), Stdio::from)
+}
+
+/// Elsewhere child output is dropped: it must never reach stdout.
+#[cfg(not(any(unix, windows)))]
+fn to_stderr() -> Stdio {
+    Stdio::null()
 }
 
 /// Run `cmd` in a detached worktree at `sha`; the worktree is always removed. True = bad.
