@@ -50,6 +50,12 @@ fn approve_at_threshold_sets_success() {
     let rec = fake.comments_of(42);
     assert!(rec[0].body.contains(r#""bosun":"verdict""#));
     assert!(rec[0].body.contains(r#""head_sha":"sha42""#));
+    // The record carries the confidence: two verdicts count only at >= 0.9 (spec section 8).
+    assert!(
+        rec[0].body.contains(r#""confidence":0.85"#),
+        "{}",
+        rec[0].body
+    );
 }
 
 #[test]

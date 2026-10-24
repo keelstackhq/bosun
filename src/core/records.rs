@@ -55,6 +55,9 @@ pub enum Record {
         session: String,
         head_sha: String,
         approved: bool,
+        /// The verdict's confidence; a record without it never counts toward two verdicts.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confidence: Option<f64>,
     },
     /// A failed fix round: the failure signature and the lines it changed (spec §4 stop rules).
     Failure {
@@ -223,6 +226,29 @@ mod tests {
             parse_record(old),
             Some(Record::Lease {
                 thread_ts: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn verdict_confidence_is_optional_and_old_records_parse() {
+        let r = Record::Verdict {
+            session: "s".into(),
+            head_sha: "h".into(),
+            approved: true,
+            confidence: Some(0.95),
+        };
+        assert_eq!(
+            r.to_line(),
+            r#"{"bosun":"verdict","session":"s","head_sha":"h","approved":true,"confidence":0.95}"#
+        );
+        assert_eq!(parse_record(&r.to_line()), Some(r));
+        let old = r#"{"bosun":"verdict","session":"s","head_sha":"h","approved":true}"#;
+        assert!(matches!(
+            parse_record(old),
+            Some(Record::Verdict {
+                confidence: None,
                 ..
             })
         ));
