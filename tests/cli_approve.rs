@@ -4,7 +4,8 @@ use common::fake::FakeGithub;
 use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
-const HINT: &str = "post approvals only with this command; comments from Claude's GitHub tool never count";
+const HINT: &str =
+    "post approvals only with this command; comments from Claude's GitHub tool never count";
 
 const OWNER_TOKEN: &str = "canary-owner-token-7f3a";
 const WAITING: &str = "high risk, owner approval needed: R-gov, R-ci";
