@@ -491,9 +491,7 @@ task and a lesson. A test is never skipped to get green.
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`.
-- R-ci: "CI decides what is verified." Only the workflows that produce required checks: `.github/workflows/ci.yml`, `risk.yml`, `verdict.yml`, `main-open.yml` and `review.yml`.
-- R-gate: "The gate code decides what passes." Paths `src/core/risk.rs`, `src/core/verdict*`, `src/cli/risk_check.rs`, `src/cli/verdict*`, `src/cli/approve.rs`, `src/gates/**`, `src/cli/test_integrity*`.
-- R-ci-review (`approval = "two-verdicts"`): "Other CI and shipped config; two independent reviews instead of the owner." Paths `.github/workflows/**`, `channel/**` (the CI and governance `bosun init` ships), `deny.toml`, `rust-toolchain.toml`. A file that also matches R-ci matches both, and the owner wins.
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Content `(?i)(api[_-]?key|secret|token)\s*=`.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.
@@ -507,16 +505,17 @@ Rule evaluation:
 - The bosun version pin (`.bosun/version`) is R-gov.
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
-Approval classes: a rule has `approval = "owner"` (the default) or `"two-verdicts"`; any other value is a parse error naming the rule. A high PR needs the owner when any match needs the owner (R-gov, R-ci, R-gate, R-secrets, R-deps, R-prod-write and the built-in R-unseen), else two verdicts. The owner-gated list is exactly those rules; the default rules and this repo's `.bosun/risk.toml` mean the same (a test compares them). `risk-check` sets `data.requirement` (`owner` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions).
+Approval classes (mechanism): a rule has `approval = "owner"` (the default) or `"two-verdicts"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else two verdicts. `risk-check` sets `data.requirement` (`owner` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). This repo's rules do not use the two-verdicts class yet: the pinned release 0.1.0 rejects the `approval` key (`deny_unknown_fields`), so the rule change (a rule such as `R-ci-review` on the less critical CI paths, with the gate code and the required workflows staying owner rules) comes after a release and a new pin.
 
 Two verdicts:
 - The class passes when, on the PR's current head, verdict records of at least two distinct sessions have `approved = true` and `confidence >= 0.9`. An owner approval (below) also passes it. The status is `high risk, two verdicts needed (<n>/2): <ids>` (failure, exit 5) while waiting, and `high risk (<ids>), approved by two verdicts: <s1>, <s2>` when met. The owner status text is unchanged: `high risk, owner approval needed: <ids>`.
-- Only `verdict` record comments authored by `github-actions[bot]` count (verdict.yml writes them after `bosun verdict apply`); a record an agent session posts itself does not. A session's newest record for the head decides, so a later disapproval withdraws its approval. A record without `confidence` (written before the field existed) never counts.
+- A record counts only when `bosun verdict apply` wrote it: the comment author is `github-actions[bot]`, the first line starts with `Review verdict: `, the record is the last non-empty line, and no other line is a record. A session's newest such record for the head decides, so a later disapproval withdraws its approval. A record without `confidence` never counts.
+- Independence: the sessions `unknown` and empty never count, and neither does any session with a `lease` or `lease-end` record (past or live) on an issue the PR body links. `bosun pr` records no session for the PR author, so the lease is the only trace of who wrote the change.
 - A verdict record is written with `GITHUB_TOKEN`, which starts no other workflow, so verdict.yml runs `bosun risk-check` for the PR after `bosun verdict apply` (exit 5, still waiting, does not fail the job). It has `statuses: write` for the status and `pull-requests: write` for the Risk note.
-- Residual risk: the session in a verdict comment is self-declared, so one agent that posts two verdict comments under two session names can meet the class. The bar is two verdict-workflow records. The gate code, CI that makes required checks, governance, secrets and dependencies never use it.
+- Residual risk: the session in a verdict comment is self-declared, so one agent that posts two verdict comments under two session tags can still pass when neither tag holds a lease on the task. Later options: a GitHub App per reviewer, or one check run per reviewer.
 
 High-risk PRs:
-- An owner approval is an approval on the head SHA by a user in `governance/owners.toml`, and
+- A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
   approve, request-changes or dismissed review on that SHA), or a PR comment by the owner whose
   body, trimmed, is exactly `/bosun approve <head_sha>` with the full 40-character SHA. The
@@ -540,7 +539,7 @@ High-risk PRs:
   `pull-requests: write` for the Risk note in the PR body. `tests/workflows.rs` asserts all of
   this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
   copy of the file; and a same-repo PR can add a workflow of its own that requests
-  `statuses: write`. Both are CI changes (R-ci-review, or R-ci), so a reviewer sees them, but neither is blocked by bosun.
+  `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.

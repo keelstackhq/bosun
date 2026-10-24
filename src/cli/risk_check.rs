@@ -10,8 +10,8 @@ use crate::app::{App, Result, task_meta};
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, capability_labels,
-    comment_approves, evaluate, new_dependencies, parse_owners, replace_note, requirement,
-    risk_note, two_verdicts, unseen_diff,
+    comment_approves, evaluate, lease_sessions, new_dependencies, parse_owners, replace_note,
+    requirement, risk_note, two_verdicts, unseen_diff,
 };
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -147,9 +147,18 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let verdicts = if high && approved_by.is_none() && requirement == Approval::TwoVerdicts {
         let mut comments = gh.list_comments(n)?;
         comments.sort_by_key(|c| c.id);
+        // The reviewer must not be a session that worked on the task: every session with a
+        // lease record (past or live) on a linked issue is out. `bosun pr` records no session
+        // for the PR author, so the lease is the only trace of who wrote the change.
+        let mut excluded = Vec::new();
+        for i in linked_issues(&pull.body) {
+            let notes = gh.list_comments(i)?;
+            excluded.extend(lease_sessions(notes.iter().map(|c| c.body.as_str())));
+        }
         two_verdicts(
             comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
             head,
+            &excluded,
         )
     } else {
         Vec::new()
