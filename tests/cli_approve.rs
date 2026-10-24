@@ -4,6 +4,8 @@ use common::fake::FakeGithub;
 use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
+const HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
+
 const OWNER_TOKEN: &str = "canary-owner-token-7f3a";
 const WAITING: &str = "high risk, owner approval needed: R-gov, R-ci";
 const MAIN_OPEN_YML: &str = ".github/workflows/main-open.yml";
@@ -126,6 +128,7 @@ fn list_shows_ready_and_waiting_sorted_with_the_command() {
     assert_eq!(ready[0]["risk_from_status"], json!(["R-gov", "R-ci"]));
     assert_eq!(ready[0]["files"], json!(["governance/f1.toml"]));
     assert_eq!(ready[0]["files_truncated"], json!(false));
+    assert_eq!(v["data"]["hint"], HINT);
     assert_eq!(ready[1]["pr"], 3);
     assert_eq!(
         v["data"]["approve_command"],
