@@ -122,6 +122,8 @@ pub trait Github {
     ) -> Result<()>;
     /// The combined status of `sha`: the newest status per context.
     fn statuses(&self, sha: &str) -> Result<Vec<Status>>;
+    /// Every status of `sha`, newest first (not only the newest per context), with its creator.
+    fn status_history(&self, sha: &str) -> Result<Vec<Status>>;
     fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>>;
     /// A file at a ref; `None` when it is missing or is a directory.
     fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>>;
@@ -200,6 +202,15 @@ impl LiveGithub {
             owner: owner.to_string(),
             repo: repo.to_string(),
         })
+    }
+
+    /// The given token (not the `GITHUB_TOKEN` of the environment) against `BOSUN_GITHUB_API`.
+    pub fn with_token(token: &str, owner: &str, repo: &str) -> Self {
+        LiveGithub {
+            http: Http::with_env_url(token),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+        }
     }
 
     /// Explicit settings, for tests.
@@ -518,6 +529,11 @@ impl Github for LiveGithub {
             ),
             None => Ok(vec![]),
         }
+    }
+
+    fn status_history(&self, sha: &str) -> Result<Vec<Status>> {
+        let path = self.path(&format!("/commits/{}/statuses?per_page=100", enc(sha)));
+        self.parse_all("status", self.http.get_all(&path)?)
     }
 
     fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>> {
