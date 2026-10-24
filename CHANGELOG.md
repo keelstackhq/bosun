@@ -2,6 +2,18 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.3.0 (2026-10-24)
+
+### Features
+
+- build inputs and review feeders need the owner (#208) (b29cbda)
+- owner gate for gate code and all CI; two verdicts for channel/** only (4b) (#207) (a9685b3)
+- --list says comments from the Claude GitHub tool never count (#206) (0b3812b)
+
+### Fixes
+
+- refuse in Claude cloud sessions; a withdrawn approval is refused, a counting one is re-posted (#209) (c00a7ff)
+
 ## Unreleased
 
 - Risk rules: the owner approves all workflows, `deny.toml`, the toolchain files, `Cargo.toml`, `Cargo.lock`, build inputs, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); `channel/**` passes with two independent verdicts instead.
