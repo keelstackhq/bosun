@@ -183,8 +183,9 @@ Human-only items, in order. Each has the exact action.
    or (b) drop P2's pending-test step. M8 used (b) meanwhile.
 8. **Slack (M6).** The code is on main; bosun holds no Slack token (S1). These steps turn it on.
    - Cut a release that contains `notify`, `answer` and `spawn --slack-thread` and pin it in
-     `.bosun/version`; then paste `docs/setup-script.sh` again (item 2). The pinned v0.1.0 has none
-     of them.
+     `.bosun/version`, and set `BOSUN_VERSION` in `docs/setup-script.sh` to the same version in
+     that PR (the script does not read the pin); then paste the script again (item 2). The pinned
+     v0.1.0 has none of them.
    - Create a private Slack channel that is not shared with another workspace or organisation and
      has no guests. bosun refuses to post when the caller's channel facts say otherwise, but it
      cannot prove them (accepted residual, spec §10).
