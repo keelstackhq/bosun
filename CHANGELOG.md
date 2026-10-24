@@ -6,6 +6,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 - Risk rules: the owner approves all workflows, `deny.toml`, the toolchain files, `Cargo.toml`, `Cargo.lock`, build inputs, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); `channel/**` passes with two independent verdicts instead.
 - `bosun approve --list` returns a hint: approvals posted through the Claude GitHub tool never count.
+- `bosun approve` refuses to post from a Claude cloud session (its proxy rewrites GitHub writes); a PR whose owner review requests changes is not ready; a counting approval is re-posted when risk-check is still red.
 
 ## 0.2.0 (2026-10-24)
 

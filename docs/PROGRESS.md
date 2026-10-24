@@ -162,6 +162,7 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-24 · Risk 4a · rule field `approval = "owner"|"two-verdicts"`; the two-verdict class passes on two verdict-workflow records from distinct sessions (approve >= 0.9) on the head, not from a lease holder of the linked task; an unlinked PR needs the owner; verdict records carry the confidence; `verdict.yml` re-runs risk-check · `tests/cli_risk_two_verdicts.rs` 18/18 · PR #202
 - 2026-10-24 · Pin v0.2.0 · `.bosun/version` and `docs/setup-script.sh` at 0.2.0 · PR #205
 - 2026-10-24 · Risk 4b · owner: all workflows, `deny.toml`, both toolchain files, `Cargo.toml`, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); two verdicts: `channel/**` only; built-in and repo rules identical (test) · `tests/governance.rs`, `tests/cli_risk_repo_rules.rs` · PR #207; build inputs (`build.rs`, `.cargo/**`, `.config/**`, `Cargo.lock`) and the review feeders join R-gate · PR #208
+- 2026-10-24 · Approvals · `bosun approve` refuses to post in a Claude cloud session (`CCR_AGENT_PROXY_ENABLED`, `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud*`; the agent proxy rewrites GitHub writes, so no approval from there counts), `--list` still works there; an owner review requesting changes on the head makes the PR not ready; a counting approval while risk-check is red is re-posted to re-run it · `tests/cli_approve.rs` 28/28 · PR #209
 
 ## Blocked
 
