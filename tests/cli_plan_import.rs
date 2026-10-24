@@ -640,7 +640,6 @@ fn other_profiles_import_without_files_or_a_stub_warning() {
     assert_eq!(posts(&fake), 7);
 }
 
-
 #[test]
 fn each_plan_task_touches_the_plan_and_lists_its_ucs() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
