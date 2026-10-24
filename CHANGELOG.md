@@ -4,9 +4,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
-## v0.2.0
-
-Released 2026-10-24.
+## 0.2.0 (2026-10-24)
 
 - `bosun fail`: stop rules (3 equal failures or 0 changed lines block the task) and tier escalation, with `failure` and `escalate` records.
 - `bosun claim` refuses new work with exit 6 at 80 % of the daily budget, like `spawn` check 2; mainfix tasks and a re-claim of your own lease are exempt (UC-M4-1).
@@ -21,7 +19,7 @@ Released 2026-10-24.
 - `bosun pr --auto-merge` works in Claude Code cloud sessions: it falls back to the CCR auto-merge route when GraphQL is refused; the merge-lock also blocks `gh api` auto-merge calls.
 - The janitor Routine prompt (`bosun doctor`) runs `bosun budget check` and makes its `interrupt_session` calls.
 - `bosun plan check <file>` and `bosun plan import <file>`: epics, tasks and one plan task per item from a plan file; a second import creates nothing (UC-M2-1).
-- `bosun plan import` moves an item's tasks to ready once its plan task merged and writes stubs for missing UC tests (UC-M2-2, UC-M2-3).
+- `bosun plan import` moves an item's tasks to ready once its plan task merged (UC-M2-2); it writes no UC test stubs, the UC tests land with their code (#199).
 - `bosun plan amend <file>`: items and tasks gone from the plan close as not planned; changed ones update in place (UC-M2-4).
 - `bosun intake "<text>" --source ..`: opens a kind/plan issue that asks for a plan amendment.
 - `bosun lesson capture`: a failure opens a lesson issue, or adds a hit to the open lesson with the same signature (UC-M5-1).

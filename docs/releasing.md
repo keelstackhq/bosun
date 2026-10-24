@@ -28,7 +28,7 @@ So a merge to `main` never tags, releases or publishes until the owner sets the 
 ## Normal flow (after the one-time setup)
 
 1. Change the version in `Cargo.toml` and in all six `npm/*/package.json` files (including the
-   launcher's `optionalDependencies`). Add a `## v<version>` section to `CHANGELOG.md`, then run
+   launcher's `optionalDependencies`). Add a `## <version> (<date>)` section to `CHANGELOG.md` (the heading hoist writes and reads the release notes from), then run
    `pnpm install --lockfile-only`. `hoist release prepare` does this in a release PR (branch
    `hoist/release`). `tests/release_config.rs` fails when the files disagree.
 2. Merge to `main`. In `release.yml`, `detect` finds a version without a tag and `build` makes
