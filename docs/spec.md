@@ -391,9 +391,8 @@ Prune:
 
 ## 7. Verification and the gate contract
 
-Use cases: each "Done when" line of an item becomes `UC-<item>-<n>`. The plan task writes each UC
-as a pending test (for example `#[ignore = "UC-M1-2"]`). The build agent only removes the marker
-and makes the test pass. `bosun accept <epic>` checks that each UC test exists, is not pending,
+Use cases: each "Done when" line of an item becomes `UC-<item>-<n>`. UC tests land passing in the
+PR of the task that implements them; there are no pending UC tests (#179, option b). `bosun accept <epic>` checks that each UC test exists, is not pending,
 and passes; only then does the epic close.
 
 Gate contract (stack-agnostic):
@@ -726,11 +725,11 @@ bosun resume; bosun msg; janitor prompt; reap smoke test. Done when:
 - UC-M1-3: a lease that is not renewed for 30 min is reaped and the task is ready again (smoke test).
 - UC-M1-4: after a container restart, bosun resume continues the open PR of the session.
 
-M2 Plan import. Tasks: plan-format parser; bosun plan import (epics, plan tasks, UC pending tests);
+M2 Plan import. Tasks: plan-format parser; bosun plan import (epics, plan tasks);
 bosun plan amend; bosun intake. Done when:
 - UC-M2-1: importing the same plan twice creates no duplicate issues.
 - UC-M2-2: a task becomes ready only after its plan task merged.
-- UC-M2-3: each "Done when" line has a pending UC test after import.
+- UC-M2-3: each "Done when" line is listed in its epic, and import writes no test files.
 - UC-M2-4: an amendment that removes an item closes its epic as not planned.
 
 M3 Main-health. Tasks: main-health workflow; main-open check; bosun main-triage (bisect); bosun

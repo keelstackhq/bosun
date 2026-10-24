@@ -128,18 +128,21 @@ fn import_creates_epics_plan_tasks_and_tasks() {
     assert!(m2.body.contains(r#""depends":["M1"]"#));
 
     let p = fake.issue_state(find(&fake, "<!-- bosun:plan M1/P -->"));
-    assert_eq!(p.title, "M1/P: pending UC tests");
+    assert_eq!(p.title, "M1/P: plan");
     assert!(p.labels.contains(&"bosun:kind/plan".to_string()));
     assert!(p.labels.contains(&"bosun:state/ready".to_string()));
-    assert!(p.body.contains("#[ignore = \"UC-..\"]"));
+    assert!(!p.body.contains("#[ignore"));
     assert!(p.body.contains("UC-M1-1"));
     let meta = bosun::core::meta::parse_task_meta(&p.body).unwrap();
     assert_eq!(meta.epic, Some(epic));
-    assert_eq!(meta.touch, ["tests/uc_m1.rs"]);
-    assert_eq!(
-        (meta.kind.as_str(), meta.allow),
-        ("plan", vec!["skip".to_string()])
+    assert_eq!(meta.touch, ["plan.md"]);
+    assert_eq!(meta.kind, "plan");
+    assert!(meta.allow.is_empty());
+    assert!(
+        !tmp.path().join("tests").exists(),
+        "import writes no test files"
     );
+    assert!(v["data"].get("stubs").is_none());
 
     let t = fake.issue_state(find(&fake, "<!-- bosun:plan M1/T2 -->"));
     assert_eq!(t.title, "M1/T2: Stop rules");
@@ -481,98 +484,6 @@ fn a_plan_task_closed_as_not_planned_promotes_nothing() {
     assert_eq!(v["data"]["promoted"], json!([]));
 }
 
-fn rust_dir(profile: &str) -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
-    std::fs::write(
-        tmp.path().join(".bosun/bosun.toml"),
-        format!("project = \"widget\"\n\n[[stack]]\npath = \".\"\nprofile = \"{profile}\"\n"),
-    )
-    .unwrap();
-    tmp
-}
-
-#[test]
-fn uc_stubs_are_written_once_and_not_duplicated() {
-    let (tmp, fake) = (rust_dir("rust"), FakeGithub::start());
-    let file = write_plan(tmp.path(), PLAN);
-    // UC-M2-1 already exists in another test file.
-    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
-    std::fs::write(
-        tmp.path().join("tests/other.rs"),
-        "#[test]\nfn uc_m2_1() {} // UC-M2-1\n",
-    )
-    .unwrap();
-    let before = writes(&fake);
-    let (dry_code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
-    assert_eq!(dry_code, 0, "{v}");
-    assert_eq!(
-        v["data"]["would_write"],
-        json!([{"file": "tests/uc_m1.rs", "ucs": ["UC-M1-1"]}])
-    );
-    assert!(!tmp.path().join("tests/uc_m1.rs").exists());
-    assert_eq!(writes(&fake), before);
-
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(
-        v["data"]["stubs"],
-        json!([{"file": "tests/uc_m1.rs", "ucs": ["UC-M1-1"]}])
-    );
-    let text = std::fs::read_to_string(tmp.path().join("tests/uc_m1.rs")).unwrap();
-    assert_eq!(
-        text,
-        "//! Use cases of M1 (spec \u{a7}12): Lifecycle.\n\
-         //! Written by `bosun plan import`; the build task removes the ignore and makes each test pass.\n\
-         \n/// UC-M1-1: a task moves planned -> merged.\n#[test]\n#[ignore = \"UC-M1-1\"]\nfn uc_m1_1() {\n    todo!(\"UC-M1-1\")\n}\n"
-    );
-    assert!(!tmp.path().join("tests/uc_m2.rs").exists());
-
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
-    assert_eq!(v["data"]["stubs"], json!([]));
-    assert_eq!(
-        std::fs::read_to_string(tmp.path().join("tests/uc_m1.rs")).unwrap(),
-        text
-    );
-}
-
-#[test]
-fn uc_stubs_append_to_an_existing_file() {
-    let (tmp, fake) = (rust_dir("rust"), FakeGithub::start());
-    let file = write_plan(
-        tmp.path(),
-        &PLAN.replace(
-            "- UC-M1-1: a task moves planned -> merged.\n",
-            "- UC-M1-1: a task moves planned -> merged.\n- UC-M1-2: two.\n",
-        ),
-    );
-    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
-    std::fs::write(tmp.path().join("tests/uc_m1.rs"), "// UC-M1-1 done\n").unwrap();
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--item", "M1"]);
-    assert_eq!(v["data"]["stubs"][0]["ucs"], json!(["UC-M1-2"]));
-    let text = std::fs::read_to_string(tmp.path().join("tests/uc_m1.rs")).unwrap();
-    assert!(
-        text.starts_with("// UC-M1-1 done\n\n/// UC-M1-2: two.\n#[test]"),
-        "{text}"
-    );
-}
-
-#[test]
-fn other_profiles_get_no_stubs_and_a_warning() {
-    let (tmp, fake) = (rust_dir("pnpm"), FakeGithub::start());
-    let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
-    assert_eq!(code, 0, "{v}");
-    assert!(!tmp.path().join("tests").exists());
-    assert!(
-        v["data"]["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|w| w == "UC stubs are only written for the rust profile")
-    );
-}
-
 #[test]
 fn issues_missing_from_the_lagging_list_are_still_found() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
@@ -617,25 +528,6 @@ fn issues_closed_as_duplicate_never_match_or_warn() {
         .find(|t| t["id"] == "M1/T1")
         .unwrap();
     assert_ne!(row["issue"], 1);
-}
-
-#[test]
-fn a_uc_fn_by_name_counts_as_present_without_the_id() {
-    let (tmp, fake) = (rust_dir("rust"), FakeGithub::start());
-    let file = write_plan(tmp.path(), PLAN);
-    std::fs::create_dir_all(tmp.path().join("tests")).unwrap();
-    std::fs::write(
-        tmp.path().join("tests/other.rs"),
-        "#[test]\nfn uc_m1_1() {}\n",
-    )
-    .unwrap();
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(
-        v["data"]["stubs"],
-        json!([{"file": "tests/uc_m2.rs", "ucs": ["UC-M2-1"]}])
-    );
-    assert!(!tmp.path().join("tests/uc_m1.rs").exists());
 }
 
 #[test]

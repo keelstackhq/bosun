@@ -518,46 +518,6 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
     }
 }
 
-/// The head of a new `tests/uc_<item>.rs` that `bosun plan import` writes.
-pub fn uc_file_header(item: &Item) -> String {
-    format!(
-        "//! Use cases of {} (spec \u{a7}12): {}.\n\
-         //! Written by `bosun plan import`; the build task removes the ignore and makes each test pass.\n",
-        item.id, item.title
-    )
-}
-
-/// One pending test for a use case, preceded by a blank line.
-pub fn uc_stub(id: &str, text: &str) -> String {
-    let name = id.to_lowercase().replace('-', "_");
-    format!(
-        "\n/// {id}: {text}\n#[test]\n#[ignore = \"{id}\"]\nfn {name}() {{\n    todo!(\"{id}\")\n}}\n"
-    )
-}
-
-/// Whether `id` (`UC-M2-3`) occurs in `text` as a whole id: `UC-M2-1` is not in `UC-M2-12`.
-pub fn mentions_uc(text: &str, id: &str) -> bool {
-    text.match_indices(id).any(|(i, _)| {
-        !text[i + id.len()..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
-    })
-}
-
-/// Whether `text` defines `fn uc_<item>_<n>` for the use case `id` (`UC-M2-3` -> `fn uc_m2_3`),
-/// the name `uc_stub` would write.
-pub fn defines_uc_fn(text: &str, id: &str) -> bool {
-    let name = id.to_lowercase().replace('-', "_");
-    let pat = format!("fn {name}");
-    text.match_indices(&pat).any(|(i, _)| {
-        text[i + pat.len()..]
-            .chars()
-            .next()
-            .is_some_and(|c| c == '(' || c.is_whitespace() || c == '<')
-    })
-}
-
 #[cfg(test)]
 #[rustfmt::skip]
 mod tests {
@@ -569,17 +529,6 @@ mod tests {
         "- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n\n",
         "### Done when\n\n- UC-M1-1: it works.\n"
     );
-    #[test]
-    fn uc_stub_text_and_whole_id_matching() {
-        assert_eq!(uc_stub("UC-M2-3", "t."), "\n/// UC-M2-3: t.\n#[test]\n#[ignore = \"UC-M2-3\"]\nfn uc_m2_3() {\n    todo!(\"UC-M2-3\")\n}\n");
-        assert!(mentions_uc("x UC-M2-1 y", "UC-M2-1"));
-        assert!(mentions_uc("UC-M2-1", "UC-M2-1"));
-        assert!(!mentions_uc("UC-M2-12", "UC-M2-1"));
-        assert!(!mentions_uc("UC-M2-1-x", "UC-M2-1"));
-        assert!(defines_uc_fn("fn uc_m2_1() {}", "UC-M2-1"));
-        assert!(!defines_uc_fn("fn uc_m2_12() {}", "UC-M2-1"));
-        assert!(mentions_uc("UC-M2-12 UC-M2-1.", "UC-M2-1"));
-    }
     const H: &str = "not `## <ID>: <title>`";
 
     /// OK with the first `from` replaced by `to`.

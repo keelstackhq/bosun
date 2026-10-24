@@ -11,7 +11,7 @@ use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, kill_switch, notes, set_state, task_meta};
 use crate::core::lease::leases_of;
 use crate::core::meta::TaskMeta;
-use crate::core::plan::{self, Item, Plan, PlanError, Task, Uc};
+use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -147,9 +147,7 @@ struct Importer<'a> {
     tasks: Vec<Slot>,
     warnings: Vec<String>,
     dir: PathBuf,
-    rust: bool,
     promoted: Vec<String>,
-    stubs: Vec<Value>,
     /// The plan path as stored in epics: relative to the repo root.
     plan_path: String,
     roots: Vec<PathBuf>,
@@ -230,10 +228,10 @@ impl Importer<'_> {
 
     /// What was found or made so far: the output, and the data of an error part-way through.
     fn data(&self, file: &str) -> Value {
-        let (promote, write) = if self.dry {
-            ("would_promote", "would_write")
+        let promote = if self.dry {
+            "would_promote"
         } else {
-            ("promoted", "stubs")
+            "promoted"
         };
         json!({
             "file": file,
@@ -241,7 +239,6 @@ impl Importer<'_> {
             "epics": self.epics.iter().map(|s| s.json(false)).collect::<Vec<_>>(),
             "tasks": self.tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
             promote: self.promoted,
-            write: self.stubs,
             "warnings": self.warnings,
         })
     }
@@ -273,60 +270,6 @@ impl Importer<'_> {
         }
         Ok(())
     }
-
-    /// Write the UCs of `item` that no file under `tests/` mentions yet (rust profile only).
-    fn stub(&mut self, item: &Item) -> Result<()> {
-        let all = tests_text(&self.dir.join("tests"));
-        let missing: Vec<&Uc> = item
-            .ucs
-            .iter()
-            .filter(|u| !plan::mentions_uc(&all, &u.id) && !plan::defines_uc_fn(&all, &u.id))
-            .collect();
-        if missing.is_empty() {
-            return Ok(());
-        }
-        let rel = format!("tests/uc_{}.rs", item.id.to_lowercase());
-        if !self.dry {
-            let path = self.dir.join(&rel);
-            let mut text = match std::fs::read_to_string(&path) {
-                Ok(t) if t.ends_with('\n') || t.is_empty() => t,
-                Ok(t) => t + "\n",
-                Err(_) => plan::uc_file_header(item),
-            };
-            for u in &missing {
-                text.push_str(&plan::uc_stub(&u.id, &u.text));
-            }
-            let io = |e: std::io::Error| {
-                BosunError::error(
-                    format!("cannot write {rel}: {e}"),
-                    "make `tests/` writable, then run `bosun plan import` again",
-                )
-            };
-            std::fs::create_dir_all(path.parent().expect("has a parent")).map_err(io)?;
-            std::fs::write(&path, text).map_err(io)?;
-        }
-        let ucs: Vec<&str> = missing.iter().map(|u| u.id.as_str()).collect();
-        self.stubs.push(json!({"file": rel, "ucs": ucs}));
-        Ok(())
-    }
-}
-
-/// Every file under `dir`, concatenated; unreadable files are skipped.
-fn tests_text(dir: &Path) -> String {
-    let mut out = String::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let path = e.path();
-        if path.is_dir() {
-            out.push_str(&tests_text(&path));
-        } else if let Ok(t) = std::fs::read_to_string(&path) {
-            out.push_str(&t);
-            out.push('\n');
-        }
-    }
-    out
 }
 
 fn labels(kind: &str, area: &str, state: &str) -> Vec<String> {
@@ -364,16 +307,16 @@ fn task_body(id: &str, intro: &str, meta: &TaskMeta) -> String {
     format!("{}\n\n{intro}<!-- bosun:task {json} -->", marker(id))
 }
 
-fn plan_task_meta(item: &Item, epic: Option<u64>) -> TaskMeta {
+fn plan_task_meta(item: &Item, plan_path: &str, epic: Option<u64>) -> TaskMeta {
     TaskMeta {
         item: item.id.clone(),
         task: "P".into(),
         epic,
-        touch: vec![format!("tests/uc_{}.rs", item.id.to_lowercase())],
+        touch: vec![plan_path.to_string()],
         depends: vec![],
         kind: "plan".into(),
         risk: "normal".into(),
-        allow: vec!["skip".into()],
+        allow: vec![],
         capabilities: vec![],
     }
 }
@@ -444,10 +387,8 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         epics: vec![],
         tasks: vec![],
         warnings: vec![],
-        rust: app.ctx.config.stack.iter().any(|s| s.profile == "rust"),
         dir: app.ctx.dir.clone(),
         promoted: vec![],
-        stubs: vec![],
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
         now: app.ctx.now,
@@ -765,14 +706,12 @@ fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
 }
 
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
-    let mut imported = false;
     let plan_path = imp.plan_path.clone();
     for item in p
         .items
         .iter()
         .filter(|i| a.item.is_empty() || a.item.contains(&i.id))
     {
-        imported = true;
         let epic = imp.slot(&item.id, (&item.id, None), || {
             (
                 format!("{}: {}", item.id, item.title),
@@ -783,21 +722,20 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         let pid = format!("{}/P", item.id);
         let pslot = imp.slot(&pid, (&item.id, Some("P")), || {
             let intro = format!(
-                "Run `bosun plan import {file} --item {id}` to write each UC of {id} as a pending test \
-                 (`#[ignore = \"UC-..\"]`) into tests/uc_{low}.rs, then commit that file; \
-                 the item's tasks become ready when this merges (run `bosun plan import` again).\n\n{}\n",
+                "Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
+                 with the code of the tasks that implement them; there are no pending tests. \
+                 The item's tasks become ready when this merges (run `bosun plan import` again).\n\n{}\n",
                 item.ucs
                     .iter()
                     .map(|u| format!("- {}: {}", u.id, u.text))
                     .collect::<Vec<_>>()
                     .join("\n"),
                 id = item.id,
-                file = plan_path,
-                low = item.id.to_lowercase()
+                file = plan_path
             );
             (
-                format!("{pid}: pending UC tests"),
-                task_body(&pid, &intro, &plan_task_meta(item, epic.issue)),
+                format!("{pid}: plan"),
+                task_body(&pid, &intro, &plan_task_meta(item, &plan_path, epic.issue)),
                 labels("plan", &item.area, "ready"),
             )
         })?;
@@ -813,13 +751,6 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             })?);
         }
         imp.promote(&epic, &pslot, &slots)?;
-        if imp.rust {
-            imp.stub(item)?;
-        }
-    }
-    if imported && !imp.rust {
-        imp.warnings
-            .push("UC stubs are only written for the rust profile".into());
     }
     Ok(())
 }
