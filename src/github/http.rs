@@ -66,13 +66,18 @@ impl Http {
                     "export GITHUB_TOKEN (a token with repo and workflow scopes)",
                 )
             })?;
+        Ok(Http::with_env_url(&token))
+    }
+
+    /// Base URL and sleep cap from the environment, with this token.
+    pub fn with_env_url(token: &str) -> Http {
         let base = std::env::var("BOSUN_GITHUB_API")
             .unwrap_or_else(|_| "https://api.github.com".to_string());
         let max_sleep = std::env::var("BOSUN_HTTP_MAX_SLEEP_MS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_MAX_SLEEP_MS);
-        Ok(Http::new(&base, &token, max_sleep))
+        Http::new(&base, token, max_sleep)
     }
 
     pub fn new(base: &str, token: &str, max_sleep_ms: u64) -> Http {

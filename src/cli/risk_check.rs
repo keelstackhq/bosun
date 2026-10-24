@@ -9,8 +9,9 @@ use super::PrArg;
 use crate::app::{App, Result, task_meta};
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
-    self, ChangedFile, FileView, Rules, added_lines, capability_labels, comment_approves, evaluate,
-    new_dependencies, parse_owners, replace_note, risk_note, unseen_diff,
+    self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, capability_labels,
+    comment_approves, evaluate, lease_sessions, new_dependencies, parse_owners, replace_note,
+    requirement, risk_note, two_verdicts, unseen_diff,
 };
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -141,28 +142,86 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     } else {
         None
     };
-    let passed = !high || approved_by.is_some();
+    let requirement = requirement(&matches);
+    // Two verdicts only matter when the owner has not approved and the class allows them.
+    let linked = linked_issues(&pull.body);
+    // Without a linked task there is no lease to check the reviewers against: fail closed.
+    let unlinked = linked.is_empty() && requirement == Approval::TwoVerdicts;
+    let verdicts =
+        if high && approved_by.is_none() && requirement == Approval::TwoVerdicts && !unlinked {
+            let mut comments = gh.list_comments(n)?;
+            comments.sort_by_key(|c| c.id);
+            // The reviewer must not be a session that worked on the task: every session with a
+            // lease record (past or live) on a linked issue is out. `bosun pr` records no session
+            // for the PR author, so the lease is the only trace of who wrote the change.
+            let mut excluded = Vec::new();
+            for i in linked {
+                let notes = gh.list_comments(i)?;
+                excluded.extend(lease_sessions(notes.iter().map(|c| c.body.as_str())));
+            }
+            two_verdicts(
+                comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+                head,
+                &excluded,
+            )
+        } else {
+            Vec::new()
+        };
+    let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
+    let passed = !high || approved_by.is_some() || by_verdicts;
 
     let ids: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
     let description = match (&approved_by, high) {
         (_, false) => "normal risk".to_string(),
         (Some(who), _) => format!("high risk ({}), approved by {who}", ids.join(", ")),
+        (None, _) if by_verdicts => format!(
+            "high risk ({}), approved by two verdicts: {}",
+            ids.join(", "),
+            verdicts.join(", ")
+        ),
+        (None, _) if unlinked => format!(
+            "high risk, PR links no task so verdicts cannot count, owner approval needed: {}",
+            ids.join(", ")
+        ),
+        (None, _) if requirement == Approval::TwoVerdicts => format!(
+            "high risk, two verdicts needed ({}/{VERDICTS_NEEDED}): {}",
+            verdicts.len(),
+            ids.join(", ")
+        ),
         (None, _) => format!("high risk, owner approval needed: {}", ids.join(", ")),
     };
     let state = if passed { "success" } else { "failure" };
     gh.create_status(head, CONTEXT, state, &description, None)?;
 
-    let data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
+    let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by});
+    if high {
+        data["requirement"] = json!(requirement.name());
+        if requirement == Approval::TwoVerdicts {
+            data["verdicts"] = json!(verdicts);
+        }
+    }
     if passed {
         return Ok(Outcome::data(data));
     }
-    let fix = if owners.is_empty() {
+    let owner_fix = if owners.is_empty() {
         format!("fill {OWNERS_PATH} on the base branch, then an owner must approve head {head}")
     } else {
         format!(
             "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review, or the PR comment `/bosun approve {head}`"
         )
+    };
+    let fix = if unlinked {
+        format!(
+            "the PR links no task (`Closes #N`), so verdicts cannot be checked for independence: link the task, or get an owner approval: {owner_fix}"
+        )
+    } else if requirement == Approval::TwoVerdicts {
+        format!(
+            "get a second review verdict from a different session (approve, confidence >= {}) on head {head}, or an owner approval: {owner_fix}",
+            risk::VERDICT_MIN_CONFIDENCE
+        )
+    } else {
+        owner_fix
     };
     Err(BosunError::needs_human(
         format!(

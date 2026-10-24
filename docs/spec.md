@@ -505,6 +505,17 @@ Rule evaluation:
 - The bosun version pin (`.bosun/version`) is R-gov.
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
+Approval classes (mechanism): a rule has `approval = "owner"` (the default) or `"two-verdicts"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else two verdicts. `risk-check` sets `data.requirement` (`owner` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). This repo's rules do not use the two-verdicts class yet: the pinned release 0.1.0 rejects the `approval` key (`deny_unknown_fields`), so the rule change (a rule such as `R-ci-review` on the less critical CI paths, with the gate code and the required workflows staying owner rules) comes after a release and a new pin.
+
+Two verdicts:
+- The class passes when, on the PR's current head, verdict records of at least two distinct sessions have `approved = true` and `confidence >= 0.9`. An owner approval (below) also passes it. The status is `high risk, two verdicts needed (<n>/2): <ids>` (failure, exit 5) while waiting, and `high risk (<ids>), approved by two verdicts: <s1>, <s2>` when met. The owner status text is unchanged: `high risk, owner approval needed: <ids>`.
+- A record counts only when `bosun verdict apply` wrote it: the comment author is `github-actions[bot]`, the first line starts with `Review verdict: `, the record is the last non-empty line, and no other line is a record. A session's newest such record for the head decides, so a later disapproval withdraws its approval. A record without `confidence` never counts.
+- Independence: the sessions `unknown` and empty never count, and neither does any session with a `lease` or `lease-end` record (past or live) on an issue the PR body links. `bosun pr` records no session for the PR author, so the lease is the only trace of who wrote the change.
+- A verdict record is written with `GITHUB_TOKEN`, which starts no other workflow, so verdict.yml runs `bosun risk-check` for the PR after `bosun verdict apply` (exit 5, still waiting, does not fail the job). It has `statuses: write` for the status and `pull-requests: write` for the Risk note.
+- Residual risk: the session in a verdict comment is self-declared, so one agent that posts two verdict comments under two session tags can still pass when neither tag holds a lease on the task. Later options: a GitHub App per reviewer, or one check run per reviewer.
+- A PR that links no task (`Closes #N`) cannot satisfy the class by verdicts, as there is no lease to check the reviewers against: only an owner approval passes, and the status and fix say so.
+- More residual risks. A `review-ci` record (session `review-ci`, mode b, dormant) counts as one verdict, and review.yml does not re-run risk-check. Any workflow that runs with `GITHUB_TOKEN` (for example on a pushed branch) can post a comment of the shape `apply` writes as `github-actions[bot]`; this is the same trust class as the `statuses: write` limit below. The risk-check step in verdict.yml runs outside risk.yml's concurrency group, so a stale run can overwrite a newer risk-check status until the next trigger (liveness only).
+
 High-risk PRs:
 - A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
@@ -519,6 +530,36 @@ High-risk PRs:
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
+- `bosun approve` is the owner's shortcut, run in the owner's own Claude Code environment. It
+  reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
+  never with `GITHUB_TOKEN`; without it the command is exit 5. It sends the token only to
+  `https://` or a loopback `BOSUN_GITHUB_API` (else exit 1) and redacts it from every message.
+  Flow: the owner says "approve the ready PRs"; Claude runs `bosun approve --list`, shows the
+  owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one
+  line `bosun approve 199@<head> 200@<head>` (null when nothing is ready). `--list` shows each
+  open PR whose `risk-check` status is `failure` with a description that starts `high risk,
+  owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
+  statuses created by `github-actions[bot]` count (anyone with write access can post a status
+  under any context, an agent included; the newest such status per context decides; this raises
+  the bar, it is no guarantee: a workflow on a pushed branch with `statuses: write` posts as
+  `github-actions[bot]` too, see Limits), and only
+  a `ci-ok` check run of the `github-actions` app (no commit status). The rule ids come from
+  the status text and are printed as `risk_from_status` (advisory); `files` is the comparison
+  of base and the listed head, so statuses, files and head describe one commit
+  (`files_truncated` is true at GitHub's compare cap of 300 files: review the PR on GitHub then). PRs that wait
+  for an owner but are not ready are listed under `waiting`. A bare PR number is a usage
+  error: each argument names the head the owner saw. The command recomputes the list and
+  posts `/bosun approve <head>` on each PR only if every named PR is ready at exactly that
+  head; otherwise nothing is posted (exit 3, `data.not_ready`, for example `head changed`) and
+  the owner needs a new `--list`. If a later comment fails, the ones posted stay recorded and
+  `data.approved` lists them (exit 1). Both are exit 4 while bosun is halted. One `approve`
+  record (`prs`, `at`, no session) goes on the registry issue; it is an audit hint, never
+  authority: risk-check derives approval only from the owner's PR comment or review.
+  `--main-open <pr>` is for a PR that changes `.github/workflows/main-open.yml` (the base
+  workflow cannot judge it; any other PR is exit 3). It posts the `main-open` status with the
+  decision of `bosun gate main-open`, exit 4 when main is red and the PR is no mainfix, and
+  records it as `main_open`. The comment still counts only for an owner in
+  `governance/owners.toml`, on an unedited comment of a plain user token.
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
   reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
   comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
@@ -531,8 +572,7 @@ High-risk PRs:
   this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
   copy of the file; and a same-repo PR can add a workflow of its own that requests
   `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
-- bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner must
-  check.
+- bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
 - A risky task is small: the target is under 100 changed lines.
@@ -563,6 +603,7 @@ Main-health:
 - The main-health workflow runs on each push to main and nightly. It opens one main-red issue on
   failure and closes it on recovery.
 - The required check main-open fails every non-mainfix PR while main is red.
+- Both workflows run the bosun release pinned in `.bosun/version` of the base commit (main-open, `pull_request_target`) or the default branch head (main-health), never PR code; while the pin lacks the command they run a shell fallback that posts the same status or issue. The main-open fallback is stricter than `bosun gate main-open`: it reads only the PR's own labels from the event, not linked issues. The main-open job is named `judge`; `bosun gate main-open` posts the `main-open` status. main-health ignores `workflow_run` events that are not pushes of this repo.
 - `bosun gate main-open --pr N` posts the `main-open` status on the PR head: success while main is open or for a mainfix PR; else failure and exit 4. Only the label `bosun:kind/mainfix` makes a mainfix: on the PR, or on a linked issue that is open and not a pull request. A task marker in a body is never trusted (labels need triage rights, bodies do not).
 - `bosun main-triage` bisects the merged PRs in code and names the first bad one.
   `bosun main-triage --good REV [--bad REV] [--run CMD]` bisects the first-parent commits between

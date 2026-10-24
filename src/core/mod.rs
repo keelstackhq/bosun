@@ -2,6 +2,7 @@
 //! `tests/core_is_pure.rs` enforces it.
 
 pub mod agreement;
+pub mod approve;
 pub mod bisect;
 pub mod budget;
 pub mod checks;
