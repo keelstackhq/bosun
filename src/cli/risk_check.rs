@@ -13,7 +13,7 @@ use crate::core::risk::{
     comment_approves, evaluate, lease_sessions, new_dependencies, parse_owners, replace_note,
     requirement, risk_note, two_verdicts, unseen_diff,
 };
-use crate::github::Github;
+use crate::github::{Comment, Github};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const RULES_PATH: &str = ".bosun/risk.toml";
@@ -264,13 +264,17 @@ fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<O
     Ok(owners
         .iter()
         .filter(|o| decisive(o).as_deref() != Some("CHANGES_REQUESTED"))
-        .find(|o| {
-            comments.iter().any(|c| {
-                c.user.eq_ignore_ascii_case(o)
-                    && c.unedited()
-                    && c.by_user_token()
-                    && comment_approves(&c.body, head)
-            })
-        })
+        .find(|o| owner_comment(&comments, o, head).is_some())
         .cloned())
+}
+
+/// The comment that approves `head` for `owner`: unedited, written with a plain user token and
+/// exactly `/bosun approve <head>`.
+pub fn owner_comment<'a>(comments: &'a [Comment], owner: &str, head: &str) -> Option<&'a Comment> {
+    comments.iter().find(|c| {
+        c.user.eq_ignore_ascii_case(owner)
+            && c.unedited()
+            && c.by_user_token()
+            && comment_approves(&c.body, head)
+    })
 }

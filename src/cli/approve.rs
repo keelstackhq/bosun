@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 
 use super::ApproveArgs;
 use crate::app::{Result, kill_switch, main_red};
+use crate::cli::risk_check::{owner_comment, owner_logins};
 use crate::core::approve::{
-    Readiness, Run, Stat, api_url_ok, approve_command, parse_target, readiness,
+    Readiness, Run, Stat, api_url_ok, approve_command, in_cloud, parse_target, readiness,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
@@ -27,6 +28,7 @@ struct Ready {
     pr: u64,
     title: String,
     head_sha: String,
+    base_sha: String,
     risk: Vec<String>,
     files: Vec<String>,
 }
@@ -37,6 +39,9 @@ const COMPARE_FILES_CAP: usize = 300;
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
+/// What to do instead in a Claude cloud session.
+const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/bosun approve <sha>` in the GitHub web or mobile app";
+
 const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
 
 struct Board {
@@ -87,6 +92,7 @@ fn board(gh: &dyn Github) -> Result<Board> {
                     .map(|f| f.filename)
                     .collect(),
                 head_sha: p.head_sha,
+                base_sha: p.base_sha,
                 risk,
             }),
         }
@@ -110,6 +116,18 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             )
         })?);
     }
+    let cloud = in_cloud(
+        std::env::var("CCR_AGENT_PROXY_ENABLED").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
+            .ok()
+            .as_deref(),
+    );
+    if cloud && !args.list {
+        return Err(BosunError::needs_human(
+            "a Claude cloud session's agent proxy rewrites GitHub writes (app attribution and a footer), so an approval from here never counts",
+            CLOUD_FIX,
+        ));
+    }
     let token = std::env::var(TOKEN_VAR)
         .ok()
         .filter(|t| !t.trim().is_empty())
@@ -132,7 +150,7 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     let ctx = Ctx::load(dir)?;
     let gh = LiveGithub::with_token(&token, &ctx.repo.owner, &ctx.repo.name);
     let now = ctx.now.to_string();
-    redact(&token, exec(&gh, args, targets, &now))
+    redact(&token, exec(&gh, args, targets, &now, cloud))
 }
 
 fn exec(
@@ -140,6 +158,7 @@ fn exec(
     args: &ApproveArgs,
     mut targets: Vec<(u64, String)>,
     now: &str,
+    cloud: bool,
 ) -> CmdResult {
     if args.list {
         let b = board(gh)?;
@@ -150,7 +169,12 @@ fn exec(
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
             "approve_command": approve_command(&heads),
-            "hint": LIST_HINT,
+            "cloud": cloud,
+            "hint": if cloud {
+                format!("{LIST_HINT}; in a Claude cloud session an approval posted here never counts: {CLOUD_FIX}")
+            } else {
+                LIST_HINT.to_string()
+            },
         })));
     }
     kill_switch(gh)?;
@@ -185,9 +209,18 @@ fn exec(
     let mut heads = Vec::new();
     let mut failed = None;
     for (pr, sha) in targets {
-        match gh.add_comment(pr, &format!("/bosun approve {sha}")) {
-            Ok(c) => {
-                approved.push(json!({"pr": pr, "head_sha": sha, "comment_id": c.id}));
+        let base = &b
+            .ready
+            .iter()
+            .find(|r| r.pr == pr)
+            .expect("checked above")
+            .base_sha;
+        match approve_one(gh, pr, &sha, base) {
+            Ok((id, true)) => {
+                approved.push(json!({"pr": pr, "head_sha": sha, "comment_id": id, "already": true}))
+            }
+            Ok((id, false)) => {
+                approved.push(json!({"pr": pr, "head_sha": sha, "comment_id": id}));
                 heads.push(PrHead { pr, head_sha: sha });
             }
             Err(e) => {
@@ -207,6 +240,22 @@ fn exec(
     }
     recorded.map_err(|e| e.with_data(json!({"approved": approved})))?;
     Ok(Outcome::data(json!({"approved": approved})))
+}
+
+/// Post `/bosun approve <sha>` unless an approval that counts for risk-check is already there.
+/// Returns the comment id and whether it was already there.
+fn approve_one(gh: &dyn Github, pr: u64, sha: &str, base: &str) -> Result<(u64, bool)> {
+    let comments = gh.list_comments(pr)?;
+    let existing = owner_logins(gh, base)?
+        .iter()
+        .find_map(|o| owner_comment(&comments, o, sha).map(|c| c.id));
+    if let Some(id) = existing {
+        return Ok((id, true));
+    }
+    Ok((
+        gh.add_comment(pr, &format!("/bosun approve {sha}"))?.id,
+        false,
+    ))
 }
 
 fn ready_json(r: &Ready) -> Value {
