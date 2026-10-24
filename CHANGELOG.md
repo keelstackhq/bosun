@@ -18,6 +18,13 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun result <epic> --outcome .. [--pr N]`: a child posts its result, ends its epic lease and leaves the registry; the spawn prompt uses it.
 - `bosun pr --auto-merge` works in Claude Code cloud sessions: it falls back to the CCR auto-merge route when GraphQL is refused; the merge-lock also blocks `gh api` auto-merge calls.
 - The janitor Routine prompt (`bosun doctor`) runs `bosun budget check` and makes its `interrupt_session` calls.
+- `bosun gate main-open --pr N`: posts the required `main-open` status; while main is red only PRs labelled `bosun:kind/mainfix` (or linked to an open issue with that label) pass (UC-M3-2).
+- `bosun main-triage --good <rev>`: bisects the merged PRs on main and names the first bad one (UC-M3-3).
+- `bosun revert <pr>`: opens a `bosun:kind/mainfix` PR that reverts a merged PR, without touching your checkout (UC-M3-4).
+- `bosun main-health --result <conclusion>`: opens or closes the `bosun:main-red` issue, opens a `main-red` lesson, and re-posts `main-open` on every open PR (UC-M3-1).
+- CI: `main-open` and `main-health` (bosun's and the channel's) run the pinned bosun release, with a shell fallback until it has the commands; main-health ignores fork runs from a branch named main; splice is pinned to 0.2.0.
+- `bosun approve --list` and `bosun approve <pr>@<sha>...`: the owner approves ready high-risk PRs from their own Claude Code session, posting the same `/bosun approve <sha>` comment risk-check already counts.
+- risk-check: a two-verdict approval class (mechanism only; the rules are unchanged).
 - `bosun plan check <file>` and `bosun plan import <file>`: epics, tasks and one plan task per item from a plan file; a second import creates nothing (UC-M2-1).
 - `bosun plan import` moves an item's tasks to ready once its plan task merged (UC-M2-2); it writes no UC test stubs, the UC tests land with their code (#199).
 - `bosun plan amend <file>`: items and tasks gone from the plan close as not planned; changed ones update in place (UC-M2-4).
