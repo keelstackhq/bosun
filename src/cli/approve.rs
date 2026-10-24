@@ -34,6 +34,11 @@ struct Ready {
 /// GitHub's compare API lists at most this many files and does not say when it cut the list.
 const COMPARE_FILES_CAP: usize = 300;
 
+/// Shown with every list: an approval counts only as a plain owner comment, which this command
+/// posts. The Claude GitHub tool posts through an app and adds a footer, so its comments never count.
+const LIST_HINT: &str =
+    "post approvals only with this command; comments from Claude's GitHub tool never count";
+
 struct Board {
     ready: Vec<Ready>,
     waiting: Vec<(u64, &'static str)>,
@@ -145,6 +150,7 @@ fn exec(
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
             "approve_command": approve_command(&heads),
+            "hint": LIST_HINT,
         })));
     }
     kill_switch(gh)?;

@@ -545,7 +545,9 @@ High-risk PRs:
   `https://` or a loopback `BOSUN_GITHUB_API` (else exit 1) and redacts it from every message.
   Flow: the owner says "approve the ready PRs"; Claude runs `bosun approve --list`, shows the
   owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one
-  line `bosun approve 199@<head> 200@<head>` (null when nothing is ready). `--list` shows each
+  line `bosun approve 199@<head> 200@<head>` (null when nothing is ready), and `data.hint` says
+  to post approvals only with this command: a `/bosun approve` comment posted through the Claude
+  GitHub tool goes through an app and carries a footer, so it never counts. `--list` shows each
   open PR whose `risk-check` status is `failure` with a description that starts `high risk,
   owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
   statuses created by `github-actions[bot]` count (anyone with write access can post a status
