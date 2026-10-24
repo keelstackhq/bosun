@@ -184,13 +184,17 @@ fn crate_is_keel_bosun_and_ships_what_the_binary_embeds() {
     );
 }
 
+/// `## v<version>` (written by hand, as v0.1.0) or `## <version> (<date>)`, the heading
+/// `hoist release prepare` writes and `hoist release publish` reads the release notes from.
 #[test]
 fn changelog_has_the_cargo_version() {
     let text = fs::read_to_string(root().join("CHANGELOG.md")).unwrap();
-    let heading = format!("## v{}", cargo_version());
+    let v = cargo_version();
+    let (plain, dated) = (format!("## v{v}"), format!("## {v} ("));
     assert!(
-        text.lines().any(|l| l.trim_end() == heading),
-        "CHANGELOG.md has no `{heading}`"
+        text.lines()
+            .any(|l| l.trim_end() == plain || l.starts_with(&dated)),
+        "CHANGELOG.md has no `{plain}` or `{dated}<date>)`"
     );
 }
 

@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.2.0 (2026-10-24)
+
 - `bosun fail`: stop rules (3 equal failures or 0 changed lines block the task) and tier escalation, with `failure` and `escalate` records.
 - `bosun claim` refuses new work with exit 6 at 80 % of the daily budget, like `spawn` check 2; mainfix tasks and a re-claim of your own lease are exempt (UC-M4-1).
 - `bosun budget check`: the level (normal, guard, stop) of today's spend; at 100 % one `interrupt_session` per live remote session in `next`, for the janitor (UC-M4-2).
@@ -16,8 +18,15 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun result <epic> --outcome .. [--pr N]`: a child posts its result, ends its epic lease and leaves the registry; the spawn prompt uses it.
 - `bosun pr --auto-merge` works in Claude Code cloud sessions: it falls back to the CCR auto-merge route when GraphQL is refused; the merge-lock also blocks `gh api` auto-merge calls.
 - The janitor Routine prompt (`bosun doctor`) runs `bosun budget check` and makes its `interrupt_session` calls.
+- `bosun gate main-open --pr N`: posts the required `main-open` status; while main is red only PRs labelled `bosun:kind/mainfix` (or linked to an open issue with that label) pass (UC-M3-2).
+- `bosun main-triage --good <rev>`: bisects the merged PRs on main and names the first bad one (UC-M3-3).
+- `bosun revert <pr>`: opens a `bosun:kind/mainfix` PR that reverts a merged PR, without touching your checkout (UC-M3-4).
+- `bosun main-health --result <conclusion>`: opens or closes the `bosun:main-red` issue, opens a `main-red` lesson, and re-posts `main-open` on every open PR (UC-M3-1).
+- CI: `main-open` and `main-health` (bosun's and the channel's) run the pinned bosun release, with a shell fallback until it has the commands; main-health ignores fork runs from a branch named main; splice is pinned to 0.2.0.
+- `bosun approve --list` and `bosun approve <pr>@<sha>...`: the owner approves ready high-risk PRs from their own Claude Code session, posting the same `/bosun approve <sha>` comment risk-check already counts.
+- risk-check: a two-verdict approval class (mechanism only; the rules are unchanged).
 - `bosun plan check <file>` and `bosun plan import <file>`: epics, tasks and one plan task per item from a plan file; a second import creates nothing (UC-M2-1).
-- `bosun plan import` moves an item's tasks to ready once its plan task merged and writes stubs for missing UC tests (UC-M2-2, UC-M2-3).
+- `bosun plan import` moves an item's tasks to ready once its plan task merged (UC-M2-2); it writes no UC test stubs, the UC tests land with their code (#199).
 - `bosun plan amend <file>`: items and tasks gone from the plan close as not planned; changed ones update in place (UC-M2-4).
 - `bosun intake "<text>" --source ..`: opens a kind/plan issue that asks for a plan amendment.
 - `bosun lesson capture`: a failure opens a lesson issue, or adds a hit to the open lesson with the same signature (UC-M5-1).
@@ -41,6 +50,62 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun pr --auto-merge` and `bosun doctor` read the required checks as the defaults plus hoist.toml `[github] required_checks` from the default branch; doctor finds `ci-ok` in any workflow.
 - `bosun doctor --remote` runs `hoist check` and folds its drift into steps 3, 5 and 10.
 - `.bosun/risk.toml`: `channel/**` is R-ci.
+
+### Features
+
+- plan import writes no UC stubs; UC tests land with their code (#179) (#199) (b0e0d48)
+- channel workflows run the pinned bosun (2/2) (#109) (cebf97b)
+- one thread reply per child result (M6/T4) (#196) (c23a253)
+- thread spawn with intake first, no exemptions (M6/T3) (#195) (8b69b49)
+- bosun answer counts only owner Slack IDs (M6/T2) (#194) (63b60b3)
+- bosun notify with the channel check (M6/T1) (#193) (36ec948)
+- agreement harness and review-ci --dry-run (M8/T3) (#184) (d2d7565)
+- bosun review-ci, review mode (b) with no session (M8/T1a) (#182) (28f12e0)
+- delta since the newest approved head of this PR (M8/T2) (#180) (cdf576b)
+- bosun main-health opens and closes main-red, opens a lesson (M3 T4) (#155) (0b49fcf)
+- bosun intake (M2/T4) (#165) (377f31b)
+- splice channel with pieces core, rust and ts-pnpm (1/2) (#107) (d3e50a2)
+- ts-pnpm profile with the pnpm-workspace packages adapter (M7 T3 1b) (#122) (ee753f9)
+- generic regex adapters, reduced integrity in status, mixed stacks (UC-M7-3, UC-M7-5) (#168) (d90fa30)
+- --remote runs hoist check for steps 3 and 5 (#118) (cb277bc)
+- work beside a hull template (own_ci, claude-md, excludes, hoist checks) (#157) (a69bb22)
+- reopen mechanized lessons as blocking, --upstream, progress --lessons (M5/T4) (#166) (747a579)
+- ts-skip and ts assertion adapters for test-integrity (M7 T3 2/2) (#123) (9e931d2)
+- runner keys {packages} and requires; packages adapter dispatch (M7 T3 1a) (#167) (79ab011)
+- required checks follow hoist.toml; doctor finds ci-ok in any workflow (#158) (8285d9f)
+- bosun plan amend (M2/T3) (#163) (0627b7d)
+- bosun revert opens a mainfix PR (M3 T3) (#111) (f7a126d)
+- lesson triage and the curator prompt (M5/T3) (#154) (80a4c75)
+- bosun init adds the splice channel and opens the setup PR (#112) (701bf2b)
+- ready after the plan task merged, UC stubs, list-lag guard (M2/T2b) (#153) (b98a709)
+- critical path and dependency cycles (M2/T1b) (#151) (b8bae91)
+- janitor prompt runs bosun budget check (M1 janitor, UC-M4-2) (#174) (0bd9015)
+- bosun main-triage bisects merged PRs (M3 T2) (#108) (5c50abd)
+- bosun result for child results (M1 T4) (#116) (b2748d5)
+- a task over per_task_usd opens a budget lesson (UC-M4-3) (#171) (adb980d)
+- bosun budget check stops the live sessions at 100 % (UC-M4-2) (#169) (d50dc05)
+- fall back to the CCR auto-merge route when GraphQL is refused (#164) (33f2a1f)
+- a stop rule opens or hits a lesson (M1 T2b) (#149) (35082e9)
+- bosun pr sets building, pr and reap set merged (M1 T1) (#115) (6747ffc)
+- cost per merged task over the last N days (UC-M4-4) (#127) (1b3fe20)
+- spend guard at 80 % of the daily budget (UC-M4-1) (#126) (569c846)
+- bosun plan check and import (M2/T2a) (#124) (7817c6c)
+- bosun gate main-open (M3 T1) (#117) (81c8824)
+- plan-format parser, rules 1-5, 7, 8 (M2/T1a) (#113) (274b418)
+- skip a stack whose manifest does not exist yet (#110) (f3f61ba)
+- bosun resume after a container restart (M1 T3) (#105) (c0462f6)
+- process-red pauses claim, spawn and waves (M5/T2) (#102) (012629d)
+- capture lessons by failure signature (M5/T1) (#103) (6b7bf7e)
+- bosun fail — stop rules and tier escalation (M1 T2) (#104) (7b3a42a)
+
+### Fixes
+
+- a file with changed lines and no patch is unseen, whatever its name (#181) (3d3d87e)
+- the label-lock reads label fields, not prose (#162) (7e5efbb)
+- wave plan and status read the limits from the default branch (#170) (8dbcc5d)
+- COMMANDS holds 26 entries (plan and progress both merged) (#152) (ca13968)
+- follow next-page links by owner/repo, not repository id (#120) (6a6b556)
+- merge-lock reads the branch where git acts (#101) (f182f14)
 
 ## v0.1.0
 
