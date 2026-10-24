@@ -102,9 +102,19 @@ fn bad_base_rules_are_an_error_naming_the_rule() {
     assert!(v["error"]["message"].as_str().unwrap().contains("R-bad"));
 }
 
+/// Only the dependency rule: Cargo.toml is also gate code under the repo's own rules.
+fn deps_only(fake: &FakeGithub) {
+    fake.content(
+        ".bosun/risk.toml",
+        BASE,
+        "[[rule]]\nid = \"R-deps\"\nwhy = \"d\"\nnew_dependency = true\n",
+    );
+}
+
 #[test]
 fn new_crate_matches_r_deps() {
     let fake = pr("");
+    deps_only(&fake);
     fake.pull_file(1, "Cargo.toml", "modified", 1, 0, Some(&plus("x")));
     fake.content("Cargo.toml", BASE, "[dependencies]\nserde = \"1\"\n");
     fake.content(
@@ -124,6 +134,7 @@ fn new_crate_matches_r_deps() {
 #[test]
 fn version_bump_of_an_existing_crate_is_normal() {
     let fake = pr("");
+    deps_only(&fake);
     fake.pull_file(
         1,
         "Cargo.toml",

@@ -157,6 +157,9 @@ mod tests {
             ["R-gov", "R-ci"]
         );
         assert!(risk_ids("high risk, owner approval needed").is_empty());
+        let unlinked = "high risk, owner approval needed (links no task, so verdicts cannot count): R-gov, R-ci-review";
+        assert!(unlinked.starts_with(WAITING_PREFIX));
+        assert_eq!(risk_ids(unlinked), ["R-gov", "R-ci-review"]);
     }
 
     #[test]

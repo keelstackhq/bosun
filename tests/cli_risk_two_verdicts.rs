@@ -12,8 +12,8 @@ const BASE: &str = "base0000";
 const HEAD: &str = "sha1";
 const BOT: &str = "github-actions[bot]";
 const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
-/// The base rules. The repo's own rules do not use the two-verdicts class yet, so the tests
-/// bring a rule file with both classes.
+/// The base rules: a small rule file with both classes (the repo's own rules are tested in
+/// `cli_risk_repo_rules.rs`).
 const RULES: &str = r#"
 [[rule]]
 id = "R-gov"
@@ -358,7 +358,10 @@ fn a_pr_that_links_no_task_needs_the_owner_even_with_two_verdicts() {
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["requirement"], "two-verdicts");
     assert_eq!(v["data"]["verdicts"], serde_json::json!([]));
-    assert!(last_description(&fake).contains("links no task"));
+    assert_eq!(
+        last_description(&fake),
+        "high risk, owner approval needed (links no task, so verdicts cannot count): R-ci-review"
+    );
     assert!(
         v["error"]["fix"]
             .as_str()

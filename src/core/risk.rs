@@ -480,12 +480,20 @@ mod tests {
     }
 
     #[test]
-    fn defaults_have_the_five_spec_rules() {
+    fn defaults_have_the_spec_rules() {
         let r = Rules::defaults();
         let got: Vec<&str> = r.rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             got,
-            ["R-gov", "R-ci", "R-secrets", "R-deps", "R-prod-write"]
+            [
+                "R-gov",
+                "R-ci",
+                "R-gate",
+                "R-ci-review",
+                "R-secrets",
+                "R-deps",
+                "R-prod-write"
+            ]
         );
         assert_eq!(r.rules[0].why, "Governance files decide who approves what.");
     }

@@ -180,7 +180,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             verdicts.join(", ")
         ),
         (None, _) if unlinked => format!(
-            "high risk, PR links no task so verdicts cannot count, owner approval needed: {}",
+            "high risk, owner approval needed (links no task, so verdicts cannot count): {}",
             ids.join(", ")
         ),
         (None, _) if requirement == Approval::TwoVerdicts => format!(

@@ -4,13 +4,80 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what."
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**"]
+# REVIEW.md and docs/lessons.toml are read into every review pack.
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "REVIEW.md", "docs/lessons.toml"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
+paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
+
+[[rule]]
+id = "R-gate"
+why = "The gate code decides what passes."
+# A file and its module directory: `x.rs` and `x/**`.
+paths = [
+    "src/core/risk.rs",
+    "src/core/risk_default.toml",
+    "src/core/verdict.rs",
+    "src/core/verdict/**",
+    "src/core/records.rs",
+    "src/core/records/**",
+    "src/core/meta.rs",
+    "src/core/meta/**",
+    "src/core/glob.rs",
+    "src/core/glob/**",
+    "src/core/approve.rs",
+    "src/core/approve/**",
+    "src/core/mod.rs",
+    "src/cli/risk_check.rs",
+    "src/cli/risk_check/**",
+    "src/cli/verdict.rs",
+    "src/cli/verdict/**",
+    "src/cli/approve.rs",
+    "src/cli/approve/**",
+    "src/cli/test_integrity.rs",
+    "src/cli/test_integrity/**",
+    "src/cli/mod.rs",
+    "src/cli/gate.rs",
+    "src/cli/gate/**",
+    "src/cli/review_ci.rs",
+    "src/cli/review_ci/**",
+    "src/cli/review_pack.rs",
+    "src/cli/review_pack/**",
+    "src/core/review.rs",
+    "src/core/review/**",
+    "src/core/agreement.rs",
+    "src/core/agreement/**",
+    "src/core/state.rs",
+    "src/core/state/**",
+    "src/core/lease.rs",
+    "src/core/lease/**",
+    "src/config.rs",
+    "src/config/**",
+    "src/ctx.rs",
+    "src/ctx/**",
+    "src/registry.rs",
+    "src/registry/**",
+    "src/time.rs",
+    "src/time/**",
+    "Cargo.toml",
+    "src/gates/**",
+    "src/github/**",
+    "src/app.rs",
+    "src/output.rs",
+    "src/lib.rs",
+    "src/main.rs",
+    "profiles/**",
+    "npm/**",
+]
+
+[[rule]]
+id = "R-ci-review"
+why = "Shipped CI for other repos; two independent reviews instead of the owner."
+approval = "two-verdicts"
 # channel/ is the CI and governance that `bosun init` ships to other repos.
-paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "channel/**"]
+paths = ["channel/**"]
 
 [[rule]]
 id = "R-secrets"
