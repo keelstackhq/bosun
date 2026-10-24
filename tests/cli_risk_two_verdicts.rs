@@ -53,7 +53,8 @@ fn plus() -> String {
 /// A PR that changes `path` only.
 fn pr_with(path: &str) -> FakeGithub {
     let fake = FakeGithub::start();
-    fake.pull(1, "change", "feature", "");
+    fake.pull(1, "change", "feature", "Closes #7");
+    fake.issue(7, "task", &[], "");
     fake.content("governance/owners.toml", BASE, OWNERS);
     fake.content(".bosun/risk.toml", BASE, RULES);
     fake.pull_file(1, path, "modified", 1, 0, Some(&plus()));
@@ -341,5 +342,48 @@ fn only_the_comment_shape_apply_writes_counts() {
     assert_eq!(
         last_description(&fake),
         "high risk, two verdicts needed (1/2): R-ci-review"
+    );
+}
+
+#[test]
+fn a_pr_that_links_no_task_needs_the_owner_even_with_two_verdicts() {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "no link");
+    fake.content("governance/owners.toml", BASE, OWNERS);
+    fake.content(".bosun/risk.toml", BASE, RULES);
+    fake.pull_file(1, "channel/x.toml", "modified", 1, 0, Some(&plus()));
+    verdict(&fake, "s1", HEAD, true, 0.99);
+    verdict(&fake, "s2", HEAD, true, 0.99);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["requirement"], "two-verdicts");
+    assert_eq!(v["data"]["verdicts"], serde_json::json!([]));
+    assert!(last_description(&fake).contains("links no task"));
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("links no task")
+    );
+    fake.review(1, "ada", "APPROVED", HEAD);
+    assert_eq!(check(&fake).0, 0, "an owner still approves it");
+}
+
+#[test]
+fn a_review_ci_verdict_counts_as_one_session() {
+    // Documents the residual risk: review-ci (mode b, dormant) is a session like any other.
+    let fake = review_pr();
+    verdict(&fake, "review-ci", HEAD, true, 0.95);
+    assert_eq!(check(&fake).0, 5);
+    assert_eq!(
+        last_description(&fake),
+        "high risk, two verdicts needed (1/2): R-ci-review"
+    );
+    verdict(&fake, "s1", HEAD, true, 0.95);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["verdicts"],
+        serde_json::json!(["review-ci", "s1"])
     );
 }
