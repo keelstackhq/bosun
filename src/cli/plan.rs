@@ -724,7 +724,9 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             let intro = format!(
                 "Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
                  with the code of the tasks that implement them; there are no pending tests. \
-                 The item's tasks become ready when this merges (run `bosun plan import` again).\n\n{}\n",
+                 The item's tasks become ready when this merges (run `bosun plan import` again); \
+                 if the plan is already on the default branch, there is nothing to commit: \
+                 close this issue as completed instead.\n\n{}\n",
                 item.ucs
                     .iter()
                     .map(|u| format!("- {}: {}", u.id, u.text))

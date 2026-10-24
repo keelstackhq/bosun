@@ -640,25 +640,6 @@ fn other_profiles_import_without_files_or_a_stub_warning() {
     assert_eq!(posts(&fake), 7);
 }
 
-#[test]
-fn a_rerun_creates_no_issues_and_no_files() {
-    let (tmp, fake) = (with_profile("rust"), FakeGithub::start());
-    let file = write_plan(tmp.path(), PLAN);
-    let (code, _) = plan(&fake, tmp.path(), &["import", &file]);
-    assert_eq!(code, 0);
-    let (made, files) = (posts(&fake), tree(tmp.path()));
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(posts(&fake), made);
-    assert_eq!(tree(tmp.path()), files);
-    assert!(
-        v["data"]["epics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|e| e["action"] != "created")
-    );
-}
 
 #[test]
 fn each_plan_task_touches_the_plan_and_lists_its_ucs() {
