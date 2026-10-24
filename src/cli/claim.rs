@@ -170,6 +170,8 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         origin: app.ctx.origin.as_str().into(),
         expires: expires.clone(),
         touch: touch_raw.clone(),
+
+        thread_ts: None,
     };
     let body = format!("Claimed by {session}.\n\n{}", record.to_line());
     let comment = gh.add_comment(n, &body)?;

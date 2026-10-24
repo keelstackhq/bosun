@@ -36,7 +36,7 @@ fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
     plan::parse(&text).map_err(|errs| plan_errors(file, &errs))
 }
 
-fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
+pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
     let first = &errs[0];
     BosunError::error(
         format!("{} errors in {file}", errs.len()),
@@ -88,7 +88,7 @@ fn marker(id: &str) -> String {
     format!("<!-- bosun:plan {id} -->")
 }
 
-fn epic_item(body: &str) -> Option<String> {
+pub(crate) fn epic_item(body: &str) -> Option<String> {
     let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
     let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
     v["item"].as_str().map(str::to_string)
@@ -483,7 +483,7 @@ fn epic_plan(body: &str) -> Option<String> {
 
 /// Replace the task metadata comment of `body`, keeping every other byte.
 fn replace_task_meta(body: &str, meta: &TaskMeta) -> Option<String> {
-    let start = body.find("<!-- bosun:task")?;
+    let start = body.rfind(crate::core::meta::OPEN)?;
     let end = start + body[start..].find("-->")? + "-->".len();
     let json = serde_json::to_string(meta).expect("meta serializes");
     Some(format!(

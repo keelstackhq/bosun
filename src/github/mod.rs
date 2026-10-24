@@ -6,7 +6,7 @@ pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{CheckRun, Comment, Issue, Job, Label, PrFile, Pull, Review, Status};
+pub use types::{CheckRun, Comment, Compare, Issue, Job, Label, PrFile, Pull, Review, Status};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -65,9 +65,15 @@ pub enum Probe {
     Gone,
 }
 
+/// Pages (of 100) that `recent_issues` reads.
+pub const RECENT_PAGES: usize = 5;
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
+    /// Issues (never pull requests) updated since `since` (RFC 3339), newest update first, at
+    /// most `RECENT_PAGES` pages of 100; the flag says that more pages were left.
+    fn recent_issues(&self, since: &str) -> Result<(Vec<Issue>, bool)>;
     fn get_issue(&self, number: u64) -> Result<Option<Issue>>;
     /// Like `get_issue`, but a deleted or transferred number is `Gone`, not an error.
     fn probe_issue(&self, number: u64) -> Result<Probe>;
@@ -97,6 +103,10 @@ pub trait Github {
     fn pull_files(&self, number: u64) -> Result<Vec<PrFile>>;
     /// The files changed between two commits (`base...head`).
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>>;
+    /// Like `compare_files`, with the comparison's `status` (`ahead` when base is an ancestor).
+    fn compare(&self, base: &str, head: &str) -> Result<Compare>;
+    /// The shas of the pull request's commits (GitHub lists at most 250).
+    fn pull_commits(&self, number: u64) -> Result<Vec<String>>;
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
@@ -248,6 +258,19 @@ impl Github for LiveGithub {
         Ok(issues.into_iter().filter(|i| !i.pull_request).collect())
     }
 
+    fn recent_issues(&self, since: &str) -> Result<(Vec<Issue>, bool)> {
+        let path = self.path(&format!(
+            "/issues?state=all&sort=updated&direction=desc&since={}&per_page=100",
+            enc(since)
+        ));
+        let (items, more) = self.http.get_pages(&path, RECENT_PAGES)?;
+        let issues: Vec<Issue> = self.parse_all("issue", items)?;
+        Ok((
+            issues.into_iter().filter(|i| !i.pull_request).collect(),
+            more,
+        ))
+    }
+
     fn get_issue(&self, number: u64) -> Result<Option<Issue>> {
         match self
             .http
@@ -396,6 +419,21 @@ impl Github for LiveGithub {
     }
 
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>> {
+        Ok(self.compare(base, head)?.files)
+    }
+
+    fn pull_commits(&self, number: u64) -> Result<Vec<String>> {
+        let path = self.path(&format!("/pulls/{number}/commits?per_page=100"));
+        Ok(self
+            .http
+            .get_all(&path)?
+            .iter()
+            .filter_map(|c| c["sha"].as_str().map(String::from))
+            .collect())
+    }
+
+    fn compare(&self, base: &str, head: &str) -> Result<Compare> {
+        let mut status = String::new();
         // The endpoint pages its `files` array; read pages until one is short.
         let mut all: Vec<Value> = Vec::new();
         for page in 1..=MAX_COMPARE_PAGES {
@@ -410,6 +448,9 @@ impl Github for LiveGithub {
                     "check that both commits exist; a force-push may have removed the old one",
                 ));
             };
+            if page == 1 {
+                status = v["status"].as_str().unwrap_or_default().to_string();
+            }
             let files = v["files"].as_array().cloned().unwrap_or_default();
             let short = files.len() < 100;
             all.extend(files);
@@ -417,7 +458,10 @@ impl Github for LiveGithub {
                 break;
             }
         }
-        self.parse_all("compared file", all)
+        Ok(Compare {
+            status,
+            files: self.parse_all("compared file", all)?,
+        })
     }
 
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {

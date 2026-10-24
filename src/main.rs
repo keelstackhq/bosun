@@ -65,7 +65,11 @@ fn command_from_args(args: &[String]) -> &'static str {
         if arg == "-C" {
             iter.next();
         } else if !arg.starts_with('-') {
-            return COMMANDS.into_iter().find(|c| c == arg).unwrap_or("unknown");
+            return COMMANDS
+                .iter()
+                .copied()
+                .find(|c| c == arg)
+                .unwrap_or("unknown");
         }
     }
     "unknown"

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [{ "type": "command", "command": "bosun hook session-start" }]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__github__.*",
+        "hooks": [{ "type": "command", "command": "bosun hook pre-tool-use" }]
+      }
+    ]
+  }
+}

@@ -25,6 +25,7 @@ pub struct FakeIssue {
     pub user: String,
     pub closed_at: Option<String>,
     pub state_reason: Option<String>,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +93,10 @@ pub struct State {
     pub fail_paths: Vec<(String, u16)>,
     /// Scripted mutations; see `FakeGithub::after_requests`.
     pub hooks: Vec<Hook>,
+    /// `base...head` -> `status` of the comparison (default `ahead`).
+    pub compare_statuses: HashMap<String, String>,
+    /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
+    pub pull_commits: HashMap<u64, Vec<String>>,
 }
 
 type Mutation = Box<dyn FnOnce(&mut State) + Send>;
@@ -156,6 +161,7 @@ impl FakeGithub {
             user: "octocat".into(),
             closed_at: None,
             state_reason: None,
+            updated_at: TS.into(),
         });
     }
 
@@ -282,6 +288,20 @@ impl FakeGithub {
             .push(f);
     }
 
+    /// The `status` GitHub reports for the comparison `base...head` (`behind`, `diverged`, ...).
+    pub fn compare_status(&self, base: &str, head: &str, status: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.compare_statuses
+            .insert(format!("{base}...{head}"), status.into());
+    }
+
+    /// The commits of PR `number` (`GET /pulls/{n}/commits`).
+    pub fn pull_commit_shas(&self, number: u64, shas: &[&str]) {
+        let mut s = self.state.lock().unwrap();
+        s.pull_commits
+            .insert(number, shas.iter().map(|x| x.to_string()).collect());
+    }
+
     pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
         let mut s = self.state.lock().unwrap();
         let list = s.reviews.entry(number).or_default();
@@ -389,9 +409,45 @@ impl FakeGithub {
         s.comments.iter_mut().find(|c| c.id == id).unwrap().user = user.into();
     }
 
+    /// A comment written by `user` at `at` (RFC 3339); the issue's `updated_at` moves up to it.
+    pub fn comment_at(&self, issue: u64, user: &str, body: &str, at: &str) -> u64 {
+        let mut s = self.state.lock().unwrap();
+        let id = add_comment(&mut s, issue, body);
+        let c = s.comments.iter_mut().find(|c| c.id == id).unwrap();
+        c.user = user.into();
+        c.created_at = at.into();
+        c.updated_at = at.into();
+        let i = s.issues.iter_mut().find(|i| i.number == issue).unwrap();
+        // `updated_at` starts at the sentinel `TS` (the fake's "now"), which any explicit time
+        // replaces, even an earlier one; after that it only moves forward.
+        if i.updated_at.as_str() < at || i.updated_at == TS {
+            i.updated_at = at.into();
+        }
+        id
+    }
+
+    /// Set the `updated_at` of an issue.
+    pub fn issue_updated(&self, number: u64, at: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .updated_at = at.into();
+    }
+
     /// Change the last comment: `f` gets it mutably (app, association, edits).
     pub fn last_comment(&self, f: impl FnOnce(&mut FakeComment)) {
         f(self.state.lock().unwrap().comments.last_mut().unwrap());
+    }
+
+    /// The repository permission `login` has (default `write`).
+    pub fn permission(&self, login: &str, permission: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .permissions
+            .insert(login.into(), permission.into());
     }
 
     pub fn variable(&self, name: &str, value: &str) {
@@ -499,7 +555,7 @@ fn issue_json(i: &FakeIssue) -> Value {
         .collect();
     let mut v = json!({"number": i.number, "title": i.title, "body": i.body, "state": i.state,
         "labels": labels, "user": {"login": i.user}, "closed_at": i.closed_at,
-        "state_reason": i.state_reason});
+        "state_reason": i.state_reason, "updated_at": i.updated_at});
     if i.is_pr {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
@@ -660,6 +716,46 @@ fn route(
             .and_then(|n| s.issues.iter().position(|i| i.number == n))
     };
     match (method, rest) {
+        ("GET", ["issues"]) if query.get("sort").is_some_and(|s| s == "updated") => {
+            // `fail_path("recent", status)` fails only this updated-since listing.
+            if let Some((_, code)) = s.fail_paths.iter().find(|f| f.0 == "recent") {
+                return msg(*code, "fake recent failure");
+            }
+            let since = query.get("since").cloned().unwrap_or_default();
+            let per: usize = query
+                .get("per_page")
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(30);
+            let mut hits: Vec<&FakeIssue> = s
+                .issues
+                .iter()
+                .filter(|i| !i.hidden && !i.is_pr && i.updated_at >= since)
+                .collect();
+            hits.sort_by(|a, b| (&b.updated_at, b.number).cmp(&(&a.updated_at, a.number)));
+            // Paged by `per_page` (not the fake's PAGE_SIZE), with a Link header.
+            let n: usize = query.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+            let items: Vec<Value> = hits
+                .iter()
+                .skip((n - 1) * per)
+                .take(per)
+                .map(|i| issue_json(i))
+                .collect();
+            let mut r = ok(Value::Array(items));
+            if n * per < hits.len() {
+                let rest: Vec<&str> = raw_query
+                    .split('&')
+                    .filter(|p| !p.is_empty() && !p.starts_with("page="))
+                    .collect();
+                let q = [rest, vec![&format!("page={}", n + 1)[..]]]
+                    .concat()
+                    .join("&");
+                r.2.push((
+                    "Link".to_string(),
+                    format!("<{base}{path}?{q}>; rel=\"next\""),
+                ));
+            }
+            r
+        }
         ("GET", ["issues"]) => {
             let want: Vec<&str> = query
                 .get("labels")
@@ -699,6 +795,7 @@ fn route(
                 user: "octocat".into(),
                 closed_at: None,
                 state_reason: None,
+                updated_at: TS.into(),
             };
             let v = issue_json(&issue);
             s.issues.push(issue);
@@ -911,13 +1008,28 @@ fn route(
             let items = n.parse().ok().and_then(|n: u64| s.files.get(&n)).cloned();
             page(items.unwrap_or_default(), &query, base, path, raw_query)
         }
+        ("GET", ["pulls", n, "commits"]) => {
+            let n: u64 = n.parse().unwrap_or(0);
+            let shas: Vec<String> = s.pull_commits.get(&n).cloned().unwrap_or_else(|| {
+                s.compares
+                    .keys()
+                    .flat_map(|k| k.split("...").map(String::from))
+                    .collect()
+            });
+            let items = shas.iter().map(|x| json!({"sha": x})).collect();
+            page(items, &query, base, path, raw_query)
+        }
         ("GET", ["compare", range]) => match s.compares.get(*range) {
             Some(files) => {
                 let num =
                     |k: &str, d: usize| query.get(k).and_then(|p| p.parse().ok()).unwrap_or(d);
                 let (n, per) = (num("page", 1), num("per_page", 300));
                 let chunk: Vec<&Value> = files.iter().skip((n - 1) * per).take(per).collect();
-                ok(json!({"files": chunk}))
+                let status = s
+                    .compare_statuses
+                    .get(*range)
+                    .map_or("ahead", |x| x.as_str());
+                ok(json!({"status": status, "files": chunk}))
             }
             None => msg(404, "Not Found"),
         },

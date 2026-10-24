@@ -297,3 +297,10 @@ mod tests {
         assert_eq!((l.name.as_str(), l.color.as_str()), ("bug", "f29513"));
     }
 }
+
+/// A comparison of two commits: `status` is `ahead`, `behind`, `identical` or `diverged`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compare {
+    pub status: String,
+    pub files: Vec<PrFile>,
+}

@@ -156,9 +156,29 @@ impl Http {
     }
 
     fn pages(&self, path: &str, key: Option<&str>) -> Result<Vec<Value>> {
+        self.pages_capped(path, key, usize::MAX)
+            .map(|(items, _)| items)
+    }
+
+    /// Like `get_all`, but reads at most `max` pages; the flag says that a next page was left.
+    pub fn get_pages(&self, path: &str, max: usize) -> Result<(Vec<Value>, bool)> {
+        self.pages_capped(path, None, max)
+    }
+
+    fn pages_capped(
+        &self,
+        path: &str,
+        key: Option<&str>,
+        max: usize,
+    ) -> Result<(Vec<Value>, bool)> {
         let mut items = Vec::new();
         let mut next = Some(path.to_string());
+        let mut read = 0;
         while let Some(path) = next {
+            if read >= max {
+                return Ok((items, true));
+            }
+            read += 1;
             let r = self.request("GET", &path, None)?;
             if !(200..=299).contains(&r.status) {
                 return Err(self.fail("GET", &path, &r));
@@ -188,7 +208,7 @@ impl Http {
                 None => None,
             };
         }
-        Ok(items)
+        Ok((items, false))
     }
 
     /// GET a text body (a job log). GitHub answers with one redirect to a signed URL on another

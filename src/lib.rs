@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! bosun: orchestration helper for repos where agents write all the code. See `docs/spec.md`.
 
+pub mod anthropic;
 pub mod app;
 pub mod cli;
 pub mod config;
@@ -12,6 +13,7 @@ pub mod hooks;
 pub mod output;
 pub mod registry;
 pub mod sessions;
+pub mod slack;
 pub mod time;
 
 pub use cli::{Cli, Command};
@@ -39,6 +41,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::CiLog(a) => cli::ci_log::run(dir, a),
         Command::Status => cli::status::run(dir),
         Command::Ask(a) => cli::ask::run(dir, a),
+        Command::Answer(a) => cli::answer::run(dir, a),
         Command::Lesson(a) => cli::lesson::run(dir, a),
         Command::Hook(a) => hooks::dispatch(dir, a),
         Command::Doctor(a) => cli::doctor::run(dir, a.remote),
@@ -51,5 +54,9 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::MainTriage(a) => cli::main_triage::run(dir, a),
         Command::Init(a) => cli::init::run(dir, a),
         Command::Revert(a) => cli::revert::run(dir, a),
+        Command::Intake(a) => cli::intake::run(dir, a),
+        Command::MainHealth(a) => cli::main_health::run(dir, a),
+        Command::ReviewCi(a) => cli::review_ci::run(dir, a),
+        Command::Notify(a) => cli::notify::run(dir, a),
     }
 }
