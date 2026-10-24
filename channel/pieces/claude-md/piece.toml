@@ -1,0 +1,6 @@
+id = "claude-md"
+description = "A bosun section in CLAUDE.md that points to AGENTS.md (skip it when another template owns CLAUDE.md)"
+requires = ["core"]
+
+[sections]
+"CLAUDE.md" = "sections/claude.md"

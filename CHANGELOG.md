@@ -43,6 +43,13 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun notify`: owner questions, halt, main-red, budget-halt and thread results as `slack_post` items in `next`, posted by Claude Tag or the notify Routine and acknowledged with `--ack`, so each post is made once; it refuses a channel that is shared or has guests (UC-M6-1, UC-M6-4). bosun holds no Slack token.
 - `bosun answer`: an owner answers an ask from Slack; only owner Slack IDs count and the answer never changes the task state (UC-M6-2).
 - `bosun spawn --slack-thread`: a Slack thread spawns a child (a new request goes through intake), with the same checks and budget as any spawn; the result is posted back into the thread (UC-M6-3, UC-M6-4).
+- The splice channel `gh:keelstackhq/bosun//channel` (D16): pieces `core` (governance seeds, the `bosun`, `risk`, `verdict`, `main-open`, `main-health` and `splice` workflows, the AGENTS.md and REVIEW.md sections), `rust`, `ts-pnpm` and the optional `claude-md`. The gates run in `.github/workflows/bosun.yml` (aggregate `ci-ok`, or `bosun-ok` beside a repo's own ci.yml); consumer workflows run the release pinned in `.bosun/version`, never PR code.
+- `bosun init --stack <rust|ts-pnpm>... [--plan FILE] [--owner LOGIN] [--source SRC] [--ref REF] [--bosun-version X.Y.Z] [--no-pr]`: adds the channel on branch `bosun/init` and opens one R-gov setup PR with the owner steps. Beside a hull template it sets `own_ci`, skips `claude-md` when the template owns CLAUDE.md, excludes existing seeds and `.claude/settings.json`, and merges the required checks into an existing hoist.toml.
+- Gate profiles: `manifest` (a stack whose manifest is missing at the head and the base is skipped, so an empty repo's setup PR is green), `requires`, the `{packages}` placeholder and a closed set of packages adapters (`cargo-metadata`, `pnpm-workspace`, `none`, `generic`).
+- The `ts-pnpm` profile (root `package.json` scripts, `pnpm --filter`), the `ts-skip` and `ts` test-integrity adapters, and generic `regex` adapters for any stack, reported as reduced integrity; mixed stacks get one kit per stack.
+- `bosun pr --auto-merge` and `bosun doctor` read the required checks as the defaults plus hoist.toml `[github] required_checks` from the default branch; doctor finds `ci-ok` in any workflow.
+- `bosun doctor --remote` runs `hoist check` and folds its drift into steps 3, 5 and 10.
+- `.bosun/risk.toml`: `channel/**` is R-ci.
 
 ### Features
 
