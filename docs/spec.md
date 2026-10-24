@@ -565,7 +565,17 @@ High-risk PRs:
   posts `/bosun approve <head>` on each PR only if every named PR is ready at exactly that
   head; otherwise nothing is posted (exit 3, `data.not_ready`, for example `head changed`) and
   the owner needs a new `--list`. If a later comment fails, the ones posted stay recorded and
-  `data.approved` lists them (exit 1). Both are exit 4 while bosun is halted. One `approve`
+  `data.approved` lists them (exit 1). A PR whose owner has a review on that head that requests
+  changes (the newest decisive review withdraws an approval comment) is not ready: it is in
+  `waiting` and refused with exit 3. Otherwise the comment is always posted, also when one that
+  counts (the owner test of risk-check: unedited, plain user token, exact text) already exists,
+  because the new comment re-runs risk-check if its run was lost; `data.approved` marks that
+  entry `"repost": true`. In a Claude cloud session (`CCR_AGENT_PROXY_ENABLED` is `1`, `true`,
+  `yes` or `on`, or `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`, any case) the
+  agent proxy rewrites every GitHub write (app attribution, a footer), so no token
+  yields a counting approval there: the posting modes are exit 5 before any call (run it on
+  your own machine, or comment in the GitHub app), and `--list` still works with
+  `data.cloud: true`. Both are exit 4 while bosun is halted. One `approve`
   record (`prs`, `at`, no session) goes on the registry issue; it is an audit hint, never
   authority: risk-check derives approval only from the owner's PR comment or review.
   `--main-open <pr>` is for a PR that changes `.github/workflows/main-open.yml` (the base

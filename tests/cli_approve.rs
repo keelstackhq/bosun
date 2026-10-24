@@ -571,3 +571,153 @@ fn a_server_that_echoes_the_token_in_an_error_does_not_leak_it() {
             .contains("[redacted]")
     );
 }
+
+fn owners(fake: &FakeGithub) {
+    fake.content(
+        "governance/owners.toml",
+        "base0000",
+        "[[owner]]\ngithub = \"octocat\"\n",
+    );
+}
+
+#[test]
+fn a_claude_cloud_session_cannot_post_an_approval() {
+    for (var, val) in [
+        ("CCR_AGENT_PROXY_ENABLED", "1"),
+        ("CCR_AGENT_PROXY_ENABLED", "true"),
+        ("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default"),
+    ] {
+        let fake = board();
+        changes_main_open(&fake, 1);
+        let one = at(1);
+        for args in [&[one.as_str()][..], &["--main-open", "1"]] {
+            let (code, v) = finish(approve_cmd(&fake).env(var, val).args(args));
+            assert_eq!(code, 5, "{var}={val} {args:?} {v}");
+            assert!(v["error"]["message"].as_str().unwrap().contains("cloud"));
+            assert!(v["error"]["fix"].as_str().unwrap().contains("own machine"));
+        }
+        assert!(fake.requests().is_empty(), "{var}={val}: no request at all");
+    }
+}
+
+#[test]
+fn list_works_in_a_cloud_session_and_says_so() {
+    let fake = board();
+    let (code, v) = finish(
+        approve_cmd(&fake)
+            .env("CCR_AGENT_PROXY_ENABLED", "1")
+            .arg("--list"),
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["cloud"], true);
+    assert!(v["data"]["hint"].as_str().unwrap().contains("own machine"));
+    let (_, v) = approve(&fake, &["--list"]);
+    assert_eq!(v["data"]["cloud"], false);
+    let (_, v) = finish(
+        approve_cmd(&fake)
+            .env("CCR_AGENT_PROXY_ENABLED", "0")
+            .arg("--list"),
+    );
+    assert_eq!(v["data"]["cloud"], false);
+}
+
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
+
+fn repost_of(v: &Value, i: usize) -> Option<&Value> {
+    v["data"]["approved"][i].get("repost")
+}
+
+#[test]
+fn a_counting_comment_is_posted_again_to_rerun_risk() {
+    let fake = board();
+    owners(&fake);
+    let existing = fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    let (code, v) = approve(&fake, &[&at(1), &at(3)]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(repost_of(&v, 0), Some(&json!(true)));
+    assert_ne!(v["data"]["approved"][0]["comment_id"], existing);
+    assert!(repost_of(&v, 1).is_none());
+    let posts = comment_posts(&fake);
+    let on = |n: u64| {
+        posts
+            .iter()
+            .filter(|p| p.0.ends_with(&format!("/issues/{n}/comments")))
+            .count()
+    };
+    assert_eq!((on(1), on(3)), (1, 1));
+    assert_eq!(records(&fake)[0]["prs"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn an_owner_login_in_another_case_still_counts_as_existing() {
+    let fake = board();
+    fake.content(
+        "governance/owners.toml",
+        "base0000",
+        "[[owner]]\ngithub = \"OctoCat\"\n",
+    );
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    let (_, v) = approve(&fake, &[&at(1)]);
+    assert_eq!(repost_of(&v, 0), Some(&json!(true)));
+}
+
+#[test]
+fn without_owners_no_comment_counts_as_existing() {
+    let fake = board();
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    let (code, v) = approve(&fake, &[&at(1)]);
+    assert_eq!(code, 0, "{v}");
+    assert!(repost_of(&v, 0).is_none());
+    assert_eq!(comment_posts(&fake).len(), 2, "the comment and the record");
+}
+
+#[test]
+fn look_alike_comments_are_not_reposts() {
+    let fake = board();
+    owners(&fake);
+    // PR 1: edited since it was written. PR 3: written through an app.
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    fake.last_comment(|c| c.updated_at = "2026-10-22T11:00:00Z".into());
+    fake.comment(3, &format!("/bosun approve {}", sha(3)));
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = approve(&fake, &[&at(1), &at(3)]);
+    assert_eq!(code, 0, "{v}");
+    assert!(repost_of(&v, 0).is_none() && repost_of(&v, 1).is_none());
+    let fake = board();
+    owners(&fake);
+    fake.comment_by(1, "mallory", &format!("/bosun approve {}", sha(1)));
+    fake.comment(3, &format!("/bosun approve {}", sha(1)));
+    let (_, v) = approve(&fake, &[&at(1), &at(3)]);
+    assert!(repost_of(&v, 0).is_none() && repost_of(&v, 1).is_none());
+}
+
+#[test]
+fn an_owner_review_requesting_changes_withdraws_the_approval() {
+    let fake = board();
+    owners(&fake);
+    fake.comment(1, &format!("/bosun approve {}", sha(1)));
+    fake.review(1, "octocat", "CHANGES_REQUESTED", &sha(1));
+    let (_, v) = approve(&fake, &["--list"]);
+    let ready: Vec<u64> = v["data"]["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["pr"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ready, [3]);
+    assert!(
+        v["data"]["waiting"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"pr": 1, "why": WITHDRAWN}))
+    );
+    let before = comment_posts(&fake).len();
+    let (code, v) = approve(&fake, &[&at(1), &at(3)]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["data"]["not_ready"], json!([{"pr": 1, "why": WITHDRAWN}]));
+    assert_eq!(comment_posts(&fake).len(), before, "nothing posted");
+    // A later approving review, or a review of an older head, does not withdraw it.
+    fake.review(1, "octocat", "APPROVED", &sha(1));
+    let (_, v) = approve(&fake, &["--list"]);
+    assert_eq!(v["data"]["ready"][0]["pr"], 1);
+}

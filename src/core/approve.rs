@@ -103,6 +103,19 @@ pub fn approve_command(ready: &[(u64, String)]) -> Option<String> {
     Some(format!("bosun approve {}", args.join(" ")))
 }
 
+/// Whether this is a Claude cloud session, whose agent proxy rewrites GitHub writes (app
+/// attribution and a footer): `CCR_AGENT_PROXY_ENABLED` is `1`/`true`, or
+/// `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`.
+pub fn in_cloud(proxy_enabled: Option<&str>, environment_type: Option<&str>) -> bool {
+    let proxy = proxy_enabled.map(str::trim);
+    proxy.is_some_and(|v| {
+        v == "1"
+            || ["true", "yes", "on"]
+                .iter()
+                .any(|t| v.eq_ignore_ascii_case(t))
+    }) || environment_type.is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("cloud"))
+}
+
 /// The owner token only goes to https, or to a loopback host (the tests' fake).
 pub fn api_url_ok(url: &str) -> bool {
     let loopback = |host: &str| {
@@ -274,6 +287,20 @@ mod tests {
             approve_command(&[(1, "a".into()), (2, "b".into())]).as_deref(),
             Some("bosun approve 1@a 2@b")
         );
+    }
+
+    #[test]
+    fn cloud_sessions_are_told_by_two_variables() {
+        assert!(in_cloud(Some("1"), None));
+        for v in ["True", "YES", "on", " 1 "] {
+            assert!(in_cloud(Some(v), None), "{v}");
+        }
+        assert!(in_cloud(None, Some("Cloud_default")));
+        assert!(!in_cloud(Some("off"), Some("local")));
+        assert!(in_cloud(None, Some("cloud_default")));
+        assert!(!in_cloud(Some("0"), Some("local")));
+        assert!(!in_cloud(Some(""), Some("")));
+        assert!(!in_cloud(None, None));
     }
 
     #[test]

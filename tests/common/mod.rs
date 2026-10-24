@@ -23,6 +23,8 @@ pub fn bosun() -> Command {
         .env("BOSUN_ANTHROPIC_API", "http://127.0.0.1:9")
         .env_remove("BOSUN_HALT")
         .env_remove("BOSUN_ORIGIN")
+        .env_remove("CCR_AGENT_PROXY_ENABLED")
+        .env_remove("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
         .env_remove("CLAUDE_CODE_CHILD_SESSION")
         .env_remove("CLAUDE_CODE_REMOTE_SESSION_ID");
     cmd

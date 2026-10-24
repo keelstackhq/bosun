@@ -10,13 +10,14 @@ use serde_json::{Value, json};
 
 use super::ApproveArgs;
 use crate::app::{Result, kill_switch, main_red};
+use crate::cli::risk_check::{decisive_review, owner_comment, owner_logins};
 use crate::core::approve::{
-    Readiness, Run, Stat, api_url_ok, approve_command, parse_target, readiness,
+    Readiness, Run, Stat, api_url_ok, approve_command, in_cloud, parse_target, readiness,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
 use crate::gates::main_open::{is_mainfix, judge};
-use crate::github::{Github, IssueState, LiveGithub};
+use crate::github::{Github, IssueState, LiveGithub, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -27,12 +28,32 @@ struct Ready {
     pr: u64,
     title: String,
     head_sha: String,
+    base_sha: String,
     risk: Vec<String>,
     files: Vec<String>,
 }
 
 /// GitHub's compare API lists at most this many files and does not say when it cut the list.
 const COMPARE_FILES_CAP: usize = 300;
+
+/// Why a PR is not ready when an owner's newest decisive review on the head requests changes.
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
+
+/// An owner's newest decisive review on the head requests changes: that withdraws their
+/// approval comment, so approving again here would not count.
+fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<bool> {
+    let owners = owner_logins(gh, &p.base_sha)?;
+    if owners.is_empty() {
+        return Ok(false);
+    }
+    let reviews = gh.list_reviews(p.number)?;
+    Ok(owners
+        .iter()
+        .any(|o| decisive_review(&reviews, o, &p.head_sha).as_deref() == Some("CHANGES_REQUESTED")))
+}
+
+/// What to do instead in a Claude cloud session.
+const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/bosun approve <sha>` in the GitHub web or mobile app";
 
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
@@ -78,6 +99,9 @@ fn board(gh: &dyn Github) -> Result<Board> {
         match readiness(&statuses, &runs) {
             Readiness::NotWaiting => {}
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
+            Readiness::Ready(_) if withdrawn(gh, &p)? => {
+                board.waiting.push((p.number, WITHDRAWN));
+            }
             Readiness::Ready(risk) => board.ready.push(Ready {
                 pr: p.number,
                 title: p.title.clone(),
@@ -87,6 +111,7 @@ fn board(gh: &dyn Github) -> Result<Board> {
                     .map(|f| f.filename)
                     .collect(),
                 head_sha: p.head_sha,
+                base_sha: p.base_sha,
                 risk,
             }),
         }
@@ -110,6 +135,18 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             )
         })?);
     }
+    let cloud = in_cloud(
+        std::env::var("CCR_AGENT_PROXY_ENABLED").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
+            .ok()
+            .as_deref(),
+    );
+    if cloud && !args.list {
+        return Err(BosunError::needs_human(
+            "a Claude cloud session's agent proxy rewrites GitHub writes (app attribution and a footer), so an approval from here never counts",
+            CLOUD_FIX,
+        ));
+    }
     let token = std::env::var(TOKEN_VAR)
         .ok()
         .filter(|t| !t.trim().is_empty())
@@ -132,7 +169,7 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     let ctx = Ctx::load(dir)?;
     let gh = LiveGithub::with_token(&token, &ctx.repo.owner, &ctx.repo.name);
     let now = ctx.now.to_string();
-    redact(&token, exec(&gh, args, targets, &now))
+    redact(&token, exec(&gh, args, targets, &now, cloud))
 }
 
 fn exec(
@@ -140,6 +177,7 @@ fn exec(
     args: &ApproveArgs,
     mut targets: Vec<(u64, String)>,
     now: &str,
+    cloud: bool,
 ) -> CmdResult {
     if args.list {
         let b = board(gh)?;
@@ -150,7 +188,12 @@ fn exec(
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
             "approve_command": approve_command(&heads),
-            "hint": LIST_HINT,
+            "cloud": cloud,
+            "hint": if cloud {
+                format!("{LIST_HINT}; in a Claude cloud session an approval posted here never counts: {CLOUD_FIX}")
+            } else {
+                LIST_HINT.to_string()
+            },
         })));
     }
     kill_switch(gh)?;
@@ -185,9 +228,19 @@ fn exec(
     let mut heads = Vec::new();
     let mut failed = None;
     for (pr, sha) in targets {
-        match gh.add_comment(pr, &format!("/bosun approve {sha}")) {
-            Ok(c) => {
-                approved.push(json!({"pr": pr, "head_sha": sha, "comment_id": c.id}));
+        let base = &b
+            .ready
+            .iter()
+            .find(|r| r.pr == pr)
+            .expect("checked above")
+            .base_sha;
+        match approve_one(gh, pr, &sha, base) {
+            Ok((id, repost)) => {
+                let mut entry = json!({"pr": pr, "head_sha": sha, "comment_id": id});
+                if repost {
+                    entry["repost"] = json!(true);
+                }
+                approved.push(entry);
                 heads.push(PrHead { pr, head_sha: sha });
             }
             Err(e) => {
@@ -207,6 +260,19 @@ fn exec(
     }
     recorded.map_err(|e| e.with_data(json!({"approved": approved})))?;
     Ok(Outcome::data(json!({"approved": approved})))
+}
+
+/// Post `/bosun approve <sha>`, also when one that counts already exists: the new comment
+/// re-runs risk-check if its run was lost. Returns the new comment's id and whether one existed.
+fn approve_one(gh: &dyn Github, pr: u64, sha: &str, base: &str) -> Result<(u64, bool)> {
+    let comments = gh.list_comments(pr)?;
+    let existed = owner_logins(gh, base)?
+        .iter()
+        .any(|o| owner_comment(&comments, o, sha).is_some());
+    Ok((
+        gh.add_comment(pr, &format!("/bosun approve {sha}"))?.id,
+        existed,
+    ))
 }
 
 fn ready_json(r: &Ready) -> Value {
