@@ -571,7 +571,8 @@ High-risk PRs:
   counts (the owner test of risk-check: unedited, plain user token, exact text) already exists,
   because the new comment re-runs risk-check if its run was lost; `data.approved` marks that
   entry `"repost": true`. In a Claude cloud session (`CCR_AGENT_PROXY_ENABLED` is `1`, `true`,
-  `yes` or `on`, or `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`, any case) the agent proxy rewrites every GitHub write (app attribution, a footer), so no token
+  `yes` or `on`, or `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`, any case) the
+  agent proxy rewrites every GitHub write (app attribution, a footer), so no token
   yields a counting approval there: the posting modes are exit 5 before any call (run it on
   your own machine, or comment in the GitHub app), and `--list` still works with
   `data.cloud: true`. Both are exit 4 while bosun is halted. One `approve`

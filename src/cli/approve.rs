@@ -36,11 +36,8 @@ struct Ready {
 /// GitHub's compare API lists at most this many files and does not say when it cut the list.
 const COMPARE_FILES_CAP: usize = 300;
 
-/// Shown with every list: an approval comment counts only when posted with a plain user token, as
-/// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
-/// adds a footer, so its comments never count.
-const WITHDRAWN: &str =
-    "your review requests changes on this head; approve with a review or dismiss it";
+/// Why a PR is not ready when an owner's newest decisive review on the head requests changes.
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
 
 /// An owner's newest decisive review on the head requests changes: that withdraws their
 /// approval comment, so approving again here would not count.
@@ -58,6 +55,9 @@ fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<bool> {
 /// What to do instead in a Claude cloud session.
 const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/bosun approve <sha>` in the GitHub web or mobile app";
 
+/// Shown with every list: an approval comment counts only when posted with a plain user token, as
+/// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
+/// adds a footer, so its comments never count.
 const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
 
 struct Board {
