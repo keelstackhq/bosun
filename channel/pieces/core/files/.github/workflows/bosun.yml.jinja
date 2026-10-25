@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   # Docs-only fast path (pull requests only): when every changed file is a *.md under docs/ or
-  # plans/ or at the root, bosun-bin, gate and pin are skipped and the aggregate accepts that.
+  # plans/ or at the root (not README.md), bosun-bin, gate and pin are skipped and the aggregate accepts that.
   # Not for the ts-pnpm stack: its fmt gate (prettier) checks Markdown too, so the channel renders
   # a `changes` job that always outputs docs_only=false there.
   # Any other event, an empty diff or a diff that cannot be computed gives docs_only=false
@@ -58,7 +58,9 @@ jobs:
           if files="$(git diff --name-only --no-renames "$BASE...$HEAD")" && [ -n "$files" ]; then
             docs_only=true
             while IFS= read -r f; do
+              # README.md may hold doctests (`include_str!`), so it runs the gates.
               case "$f" in
+                README.md) docs_only=false ;;
                 docs/*.md|plans/*.md) ;;
                 */*) docs_only=false ;;
                 *.md) ;;
@@ -140,14 +142,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-{% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install, the one rust-toolchain.toml names (`rustup toolchain
-      # install` with no argument looks in the working directory and its parents, so a rust_path
-      # below the repo root finds the seeded root file). Without a toolchain file the install
-      # fails and the old pin is used.
+{% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
+      # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
+      # old pin: a bare `rustup toolchain install` would install the runner's default (stable).
       - name: rust toolchain
         working-directory: {{ rust_path }}
         run: |
-          if ! rustup toolchain install; then
+          d="$PWD"; found=""
+          while :; do
+            if [ -f "$d/rust-toolchain.toml" ] || [ -f "$d/rust-toolchain" ]; then found=1; break; fi
+            if [ "$d" = "$GITHUB_WORKSPACE" ] || [ "$d" = / ]; then break; fi
+            d="$(dirname "$d")"
+          done
+          if [ -n "$found" ]; then
+            rustup toolchain install
+          else
             rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
             rustup default 1.97
           fi

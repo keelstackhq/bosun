@@ -380,7 +380,6 @@ fn rust_gates_install_the_toolchain_file_once() {
         let wf = file(&files, BOSUN_YML);
         assert!(!wf.contains("dtolnay/rust-toolchain"), "{wf}");
         assert!(!wf.contains("\"1.97\""), "{wf}");
-        assert!(wf.contains("! rustup toolchain install;"), "{wf}");
         assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
         // The seeded toolchain file sits at the repo root, so a rust_path below it finds it in a
         // parent directory; only a failed install falls back to the old pin, never to `stable`.
@@ -497,8 +496,10 @@ fn docs_only_detection_fails_closed() {
     if yaml_json("a: 1").is_none() {
         return;
     }
-    let all = ["docs/new/a.md", "plans/p.md", "README.md"];
+    let all = ["docs/new/a.md", "plans/p.md", "CHANGELOG.md"];
     assert_eq!(docs_only(&all), "docs_only=true");
+    // A crate may run README.md examples as doctests (`include_str!`), so it runs the gates.
+    assert_eq!(docs_only(&["README.md"]), "docs_only=false");
     assert_eq!(docs_only(&["docs/a.md", "src/x.rs"]), "docs_only=false");
     assert_eq!(docs_only(&["src/a.md"]), "docs_only=false");
     // Only markdown is docs: code or data under docs/ still runs the gates.
@@ -581,6 +582,70 @@ fn the_renderer_refuses_tags_outside_the_subset() {
     ] {
         let r = std::panic::catch_unwind(|| render(bad, &vars, &[], "t"));
         assert!(r.is_err(), "{bad} rendered");
+    }
+}
+
+/// Runs the gate job's rust toolchain step in `cwd` under the workspace `root`, with a fake
+/// `rustup` on PATH; returns the rustup calls it made.
+fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
+    let files = variant(&["rust"], "");
+    let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
+    let steps = j["jobs"]["gate"]["steps"].as_array().unwrap();
+    let run = steps
+        .iter()
+        .find(|s| s["name"] == "rust toolchain")
+        .unwrap()["run"]
+        .as_str()
+        .unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let log = bin.path().join("log");
+    let fake = bin.path().join("rustup");
+    fs::write(
+        &fake,
+        format!("#!/bin/sh\necho \"$*\" >> {}\n", log.display()),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let ok = Command::new("bash")
+        .args(["-eo", "pipefail", "-c", run])
+        .current_dir(cwd)
+        .env("PATH", path)
+        .env("GITHUB_WORKSPACE", root)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "the toolchain step failed");
+    fs::read_to_string(log).unwrap_or_default()
+}
+
+#[test]
+fn the_toolchain_step_installs_the_file_or_the_old_pin() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let sub = root.path().join("crates/core");
+    fs::create_dir_all(&sub).unwrap();
+    // No toolchain file anywhere: the old pin, never the runner's default (stable).
+    let calls = toolchain_calls(root.path(), &sub);
+    assert!(calls.starts_with("toolchain install 1.97 "), "{calls}");
+    assert!(calls.contains("default 1.97"), "{calls}");
+    // The seeded root file, found from a rust_path below it: rustup installs what it names.
+    fs::write(
+        root.path().join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.99.1\"\n",
+    )
+    .unwrap();
+    for cwd in [root.path(), sub.as_path()] {
+        let calls = toolchain_calls(root.path(), cwd);
+        assert!(calls.starts_with("toolchain install\n"), "{calls}");
+        assert!(!calls.contains("1.97"), "{calls}");
     }
 }
 

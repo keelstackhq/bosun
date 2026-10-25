@@ -154,11 +154,11 @@ and .claude/settings.json): its gates run in `.github/workflows/bosun.yml`, whos
 with `own_ci`, main-health watches both workflows and closes `bosun:main-red` only when the
 latest push run on main of each is green; with `own_ci` a pull request runs only the `test-integrity`
 gate and relies on the repo's own `ci-ok` for fmt, lint, test and deps (if that CI lacks one, such as cargo-deny, set the repo
-variable `BOSUN_ALL_GATES=1`); push, merge queue and the nightly run still run all five; a pull request whose files are all `*.md` under `docs/` or `plans/` or at the root (never with the ts-pnpm stack: prettier checks Markdown)
+variable `BOSUN_ALL_GATES=1`); push, merge queue and the nightly run still run all five; a pull request whose files are all `*.md` under `docs/` or `plans/` or at the root except README.md (doctests; never with the ts-pnpm stack: prettier checks Markdown)
 skips bosun-bin, gate and pin (job `changes`, fail closed; the aggregate accepts `skipped` only then and needs `changes` to
 succeed); a PR-body edit that keeps the base runs in its own concurrency group, so it never cancels or is cancelled by the
-push run and is not skipped; the rust gates install the toolchain of the repo's `rust-toolchain.toml` once (rustup finds it in `rust_path` or a parent; no
-dtolnay step; the old 1.97 pin only if there is no toolchain file), and the setup script reads its `channel` too (1.97 is the fallback); the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
+push run and is not skipped; the rust gates install the toolchain of the repo's `rust-toolchain.toml` once (the step looks in `rust_path` and its parents up to the repo root; no
+dtolnay step; the old 1.97 pin when there is no toolchain file, never the runner's stable), and the setup script reads its `channel` too (1.97 is the fallback); the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
 `bosun init` sets `own_ci`, adds `claude-md` unless the main template owns CLAUDE.md, merges the
 required checks into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
 the owner then adds the two bosun hooks there (an owner step), since only one source may own it.
