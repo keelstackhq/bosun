@@ -484,6 +484,33 @@ fn a_ci_ok_job_in_another_workflow_sets_own_ci() {
     assert!(step.contains("bosun-ok"), "{step}");
 }
 
+/// own_ci follows the check context, as GitHub names it: a job's `name:`, else its key, at any
+/// indentation (the parse of `core::checks::workflow_checks`).
+#[test]
+fn own_ci_reads_the_check_context_not_the_job_key() {
+    for (yaml, own) in [
+        (
+            "on: push\njobs:\n    gate:\n        name: ci-ok\n        runs-on: x\n",
+            true,
+        ),
+        (
+            "on: push\njobs:\n  ci-ok:\n    name: all green\n    runs-on: x\n",
+            false,
+        ),
+    ] {
+        let e = Env::new();
+        commit_file(&e, ".github/workflows/ci.yml", yaml);
+        git(e.repo.path(), &["add", "-A"]);
+        git(e.repo.path(), &["commit", "-q", "-m", "ci"]);
+        let fake = FakeGithub::start();
+        let splice = e.splice(OK_JSON, 0);
+        let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(v["data"]["own_ci"], own, "{yaml}");
+        assert_eq!(e.argv().contains("--data own_ci=1"), own, "{}", e.argv());
+    }
+}
+
 /// A channel lock's [files] counts as ownership of CLAUDE.md too; the piece is then left out.
 #[test]
 fn a_channel_lock_owning_claude_md_skips_the_piece() {
