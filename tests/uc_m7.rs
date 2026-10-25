@@ -1,4 +1,6 @@
 //! M7 use cases: mixed stacks (UC-M7-3) and reduced integrity for generic adapters (UC-M7-5).
+//! Unix only: the fakes are shell scripts made executable with unix permissions.
+#![cfg(unix)]
 mod common;
 
 use common::fake::FakeGithub;
