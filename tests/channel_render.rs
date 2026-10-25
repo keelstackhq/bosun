@@ -381,11 +381,22 @@ fn rust_gates_install_the_toolchain_file_once() {
         assert!(!wf.contains("dtolnay/rust-toolchain"), "{wf}");
         assert!(!wf.contains("\"1.97\""), "{wf}");
         assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
-        // The seeded toolchain file sits at the repo root, so a rust_path below it finds it in a
-        // parent directory; only a failed install falls back to the old pin, never to `stable`.
-        assert!(wf.contains("rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy"));
-        assert!(!wf.contains("install stable"), "{wf}");
+        // Without a toolchain file in rust_path or a parent, the old pin, never `stable`; the
+        // gates and the setup script fall back to the same pin.
         let setup = file(&files, "docs/setup-script.sh");
+        let pin = setup
+            .lines()
+            .find_map(|l| l.strip_prefix("RUST_VERSION="))
+            .and_then(|l| l.split_whitespace().next())
+            .unwrap();
+        assert!(
+            wf.contains(&format!(
+                "rustup toolchain install {pin} --profile minimal -c rustfmt,clippy"
+            )),
+            "{wf}"
+        );
+        assert!(wf.contains(&format!("rustup default {pin}")), "{wf}");
+        assert!(!wf.contains("install stable"), "{wf}");
         assert!(setup.contains("rust-toolchain.toml"), "{setup}");
         assert!(
             setup.contains("RUST_VERSION=1.97"),

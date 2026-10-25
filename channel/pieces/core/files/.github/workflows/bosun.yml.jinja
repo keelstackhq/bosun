@@ -144,7 +144,8 @@ jobs:
           persist-credentials: false
 {% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
       # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
-      # old pin: a bare `rustup toolchain install` would install the runner's default (stable).
+      # old pin (the RUST_VERSION fallback of docs/setup-script.sh; a test keeps them equal): a bare
+      # `rustup toolchain install` would install the runner's default (stable).
       - name: rust toolchain
         working-directory: {{ rust_path }}
         run: |
