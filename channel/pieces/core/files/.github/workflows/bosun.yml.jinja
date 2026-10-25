@@ -14,18 +14,69 @@ on:
   # main-health runs the same gates nightly on all of main.
   workflow_call:
 
-# A new push to the same PR or branch cancels its older run.
+# A new push to the same PR or branch cancels its older run. A body edit that did not retarget
+# the PR gets a group of its own (`-edit-<run_id>`): it neither cancels the run of the latest
+# push nor is cancelled by it, so editing a PR body never leaves a cancelled run and a red
+# aggregate check behind. It is not skipped either: it runs every job, so its aggregate result on
+# the head is as true as any other run's (a skipped, green aggregate posted after a red one on
+# the same head would let a body edit turn a failed head green). A retarget (`changes.base`) keeps
+# the shared group: the new run supersedes the old.
 concurrency:
-  group: bosun-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  group: bosun-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edit-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  # Docs-only fast path (pull requests only): when every changed file is a *.md under docs/ or
+  # plans/ or at the root (not README.md), bosun-bin, gate and pin are skipped and the aggregate accepts that.
+  # Not for the ts-pnpm stack: its fmt gate (prettier) checks Markdown too, so the channel renders
+  # a `changes` job that always outputs docs_only=false there.
+  # Any other event, an empty diff or a diff that cannot be computed gives docs_only=false
+  # (fail closed). risk.yml and verdict.yml are separate workflows and still judge such a PR.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only || 'false' }}
+    steps:
+{% endraw %}{% if "ts-pnpm" in pieces %}{% raw %}      - id: diff
+        run: echo "docs_only=false" >> "$GITHUB_OUTPUT"
+{% endraw %}{% else %}{% raw %}      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - if: github.event_name == 'pull_request'
+        id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          docs_only=false
+          # --no-renames lists both sides of a move, so a file moved out of src/ counts.
+          if files="$(git diff --name-only --no-renames "$BASE...$HEAD")" && [ -n "$files" ]; then
+            docs_only=true
+            while IFS= read -r f; do
+              # README.md may hold doctests (`include_str!`), so it runs the gates.
+              case "$f" in
+                README.md) docs_only=false ;;
+                docs/*.md|plans/*.md) ;;
+                */*) docs_only=false ;;
+                *.md) ;;
+                *) docs_only=false ;;
+              esac
+            done <<EOF
+          $files
+          EOF
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+{% endraw %}{% endif %}{% raw %}
   # The gates run the bosun release pinned in the base commit's .bosun/version, so a change to
   # the pin takes effect only after it merges. (A change to this file runs at once: R-ci.)
   bosun-bin:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -72,23 +123,45 @@ jobs:
 
   gate:
     name: gate-${{ matrix.gate }}
-    needs: bosun-bin
+    needs: [changes, bosun-bin]
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     strategy:
       fail-fast: false
       matrix:
-        gate: [fmt, lint, test, deps, test-integrity]
-    steps:
+{% endraw %}{% if own_ci %}{% raw %}        # The repo's own ci.yml already runs fmt, lint, test and deps; only test-integrity is unique
+        # to bosun. So a pull request runs just that and relies on the repo's own ci-ok for the
+        # rest; if that CI lacks one (cargo-deny, say), set the repo variable BOSUN_ALL_GATES to
+        # '1' to run all five on pull requests too. Every other event (push to main, merge queue, the nightly run main-health calls,
+        # where github.event_name is the caller's, e.g. schedule) runs all five gates.
+        gate: ${{ fromJSON((vars.BOSUN_ALL_GATES == '1' || github.event_name != 'pull_request') && '["fmt","lint","test","deps","test-integrity"]' || '["test-integrity"]') }}
+{% endraw %}{% else %}{% raw %}        gate: [fmt, lint, test, deps, test-integrity]
+{% endraw %}{% endif %}{% raw %}    steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
-{% endraw %}{% if "rust" in pieces %}      # rust stack: the toolchain of rust-toolchain.toml (rustup switches if the repo changed it).
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97"
-          components: rustfmt, clippy
+{% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
+      # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
+      # old pin (the RUST_VERSION fallback of docs/setup-script.sh; a test keeps them equal): a bare
+      # `rustup toolchain install` would install the runner's default (stable).
+      - name: rust toolchain
+        working-directory: {{ rust_path }}
+        run: |
+          d="$PWD"; found=""
+          while :; do
+            if [ -f "$d/rust-toolchain.toml" ] || [ -f "$d/rust-toolchain" ]; then found=1; break; fi
+            if [ "$d" = "$GITHUB_WORKSPACE" ] || [ "$d" = / ]; then break; fi
+            d="$(dirname "$d")"
+          done
+          if [ -n "$found" ]; then
+            rustup toolchain install
+          else
+            rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
+            rustup default 1.97
+          fi
+          rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: {{ rust_path }}
@@ -131,6 +204,8 @@ jobs:
 
   # The pin a change sets must be a published release that reports its own version.
   pin:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -152,18 +227,25 @@ jobs:
   # was skipped or cancelled. Beside a repo's own ci.yml and its ci-ok, it is called bosun-ok.
 {% endraw %}{% if own_ci %}  bosun-ok:
 {% else %}  ci-ok:
-{% endif %}{% raw %}    needs: [bosun-bin, gate, pin]
+{% endif %}{% raw %}    needs: [changes, bosun-bin, gate, pin]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
         env:
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           BIN: ${{ needs.bosun-bin.result }}
           GATE: ${{ needs.gate.result }}
           PIN: ${{ needs.pin.result }}
         run: |
-          echo "bosun-bin: $BIN, gate: $GATE, pin: $PIN"
-          test "$BIN" = success
-          test "$GATE" = success
-          test "$PIN" = success
+          echo "changes: $CHANGES (docs_only=$DOCS_ONLY), bosun-bin: $BIN, gate: $GATE, pin: $PIN"
+          # `changes` must have succeeded: a failed or cancelled one never lets the rest skip.
+          test "$CHANGES" = success
+          # The other jobs may be skipped only on the docs-only fast path.
+          for r in "$BIN" "$GATE" "$PIN"; do
+            if [ "$r" != success ] && ! { [ "$DOCS_ONLY" = true ] && [ "$r" = skipped ]; }; then
+              exit 1
+            fi
+          done
 {% endraw %}

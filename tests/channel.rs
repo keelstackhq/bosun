@@ -168,16 +168,18 @@ fn the_aggregate_job_needs_every_job() {
         .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.ends_with(':'))
         .map(|l| l.trim().trim_end_matches(':'))
         .collect();
-    assert_eq!(ids, ["bosun-bin", "gate", "pin"]);
+    assert_eq!(ids, ["changes", "bosun-bin", "gate", "pin"]);
     // The aggregate: ci-ok, or bosun-ok beside the repo's own ci-ok.
     let head = "{% if own_ci %}  bosun-ok:\n{% else %}  ci-ok:\n{% endif %}";
     let ci_ok = &body[body.find(head).expect("aggregate job")..];
-    assert!(ci_ok.contains("needs: [bosun-bin, gate, pin]"));
+    assert!(ci_ok.contains("needs: [changes, bosun-bin, gate, pin]"));
     assert!(ci_ok.contains("if: always()"));
     for (var, id) in [("BIN", "bosun-bin"), ("GATE", "gate"), ("PIN", "pin")] {
         assert!(ci_ok.contains(&format!("{var}: ${{{{ needs.{id}.result }}}}")));
-        assert!(ci_ok.contains(&format!("test \"${var}\" = success")));
     }
+    // `changes` must succeed; the others may be skipped only when docs_only is true.
+    assert!(ci_ok.contains("test \"$CHANGES\" = success"));
+    assert!(ci_ok.contains("[ \"$DOCS_ONLY\" = true ] && [ \"$r\" = skipped ]"));
 }
 
 /// The `run:` scripts of a workflow: the `run:` line and its indented block.
