@@ -1,3 +1,6 @@
+//! Unix only: the fakes are shell scripts made executable with unix permissions.
+#![cfg(unix)]
+
 mod common;
 
 use common::{bosun, one_object};
