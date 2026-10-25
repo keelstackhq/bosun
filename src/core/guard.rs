@@ -1240,6 +1240,79 @@ mod tests {
         assert!(wrong.is_empty(), "{}:\n{}", wrong.len(), wrong.join("\n"));
     }
 
+    /// The label-lock parser never panics: a seeded xorshift glues tokens (quotes, heredocs,
+    /// substitutions, separators, multibyte and zero-width chars) into a few thousand commands.
+    #[test]
+    fn the_bash_rules_never_panic() {
+        const TOKENS: &[&str] = &[
+            "bosun:state/x",
+            "'",
+            "\"",
+            "`",
+            "\\",
+            "$(",
+            ")",
+            "(",
+            "${",
+            "}",
+            "<<",
+            "<<-",
+            "'EOF'",
+            "\"EOF\"",
+            "EOF",
+            "\n",
+            "\r",
+            ";",
+            "&",
+            "|",
+            "#",
+            ">&",
+            "&>",
+            ">|",
+            "<",
+            ">",
+            "<<<",
+            "$'",
+            "é",
+            "✓",
+            "🦀",
+            "\u{200d}",
+            "👩\u{200d}💻",
+            " ",
+            " ",
+            "\t",
+            "gh",
+            "issue",
+            "edit",
+            "list",
+            "git",
+            "-C",
+            "log",
+            "grep",
+            "cat",
+            "bosun",
+            "cd",
+            "x=1",
+            "-",
+            "\tEOF",
+        ];
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..5000 {
+            let len = (next() % 24) as usize;
+            let cmd: String = (0..len)
+                .map(|_| TOKENS[(next() % TOKENS.len() as u64) as usize])
+                .collect();
+            let caught = std::panic::catch_unwind(|| bash(&cmd, "x"));
+            assert!(caught.is_ok(), "panicked on {cmd:?}");
+        }
+    }
+
     #[test]
     fn label_lock() {
         assert!(bash("gh issue edit 4 --add-label bosun:state/merged", "x").is_some());
