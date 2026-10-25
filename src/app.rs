@@ -294,16 +294,20 @@ pub fn renew_lease(
     Ok(())
 }
 
-/// GitHub merged the PR of `number`: move a `queued` task to `merged` and end the leases on the
-/// issue (only the one of `only_session` when given) with reason `merged`. Any other state is
-/// left alone. Returns whether the state moved. GitHub merges, never an agent (spec D13).
+/// The PR of `number` merged (auto-merge, or a human): move a `building`, `review`, `fixing` or
+/// `queued` task to `merged` and end the leases on the issue (only the one of `only_session` when
+/// given) with reason `merged`. Any other state is left alone. Returns whether the state moved.
+/// GitHub or a human merges, never an agent (spec D13).
 pub fn sync_merged(
     gh: &dyn Github,
     number: u64,
     issue: &Issue,
     only_session: Option<&str>,
 ) -> Result<bool> {
-    if state_of(&issue.labels) != Some(State::Queued) {
+    if !matches!(
+        state_of(&issue.labels),
+        Some(State::Building | State::Review | State::Fixing | State::Queued)
+    ) {
         return Ok(false);
     }
     set_state(gh, number, issue, State::Merged)?;

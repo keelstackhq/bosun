@@ -5,8 +5,9 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ResultArgs;
-use crate::app::{App, end_lease, notes, set_state};
+use crate::app::{App, end_lease, notes, set_state, sync_merged};
 use crate::core::lease::{leases_of, members};
+use crate::core::meta::linked_issues;
 use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -52,6 +53,22 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         state = Some(to);
     }
 
+    // A merged PR moves the tasks it closes (the merge moves state, D13); an unmerged one is a report.
+    let mut tasks_merged = Vec::new();
+    if args.outcome == "merged"
+        && let Some(pr) = args.pr
+        && let Some(pull) = gh.get_pull(pr)?
+        && pull.merged
+    {
+        for task in linked_issues(&pull.body) {
+            if let Some(issue) = gh.get_issue(task)?
+                && sync_merged(gh, task, &issue, Some(session))?
+            {
+                tasks_merged.push(task);
+            }
+        }
+    }
+
     let lease_ended = leases_of(n, &notes(gh, n)?)
         .iter()
         .any(|l| &l.session == session);
@@ -73,6 +90,6 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     Ok(Outcome::data(json!({
         "epic": n, "outcome": args.outcome, "pr": args.pr,
         "comment_id": comment_id, "lease_ended": lease_ended, "left": left,
-        "task_state": state.map(State::name),
+        "task_state": state.map(State::name), "tasks_merged": tasks_merged,
     })))
 }
