@@ -99,7 +99,8 @@ impl Env {
         cmd.env("BOSUN_GITHUB_API", fake.url())
             .env("BOSUN_SPLICE", splice)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1");
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE");
         env(&mut cmd);
         let out = cmd
             .arg("-C")
@@ -116,10 +117,19 @@ impl Env {
     }
 
     fn origin_has_branch(&self) -> bool {
+        self.origin_has("bosun/init")
+    }
+
+    fn origin_has(&self, branch: &str) -> bool {
         Command::new("git")
             .arg("-C")
             .arg(self.origin.path())
-            .args(["rev-parse", "--verify", "-q", "refs/heads/bosun/init"])
+            .args([
+                "rev-parse",
+                "--verify",
+                "-q",
+                &format!("refs/heads/{branch}"),
+            ])
             .status()
             .unwrap()
             .success()
@@ -153,7 +163,7 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     assert_eq!(d["plan"], "plans/my-plan.md");
     assert_eq!(d["pieces"][0], "rust");
     assert_eq!(d["changes"][0]["path"], ".bosun/bosun.toml");
-    assert_eq!(d["owner_steps"].as_array().unwrap().len(), 6);
+    assert_eq!(d["owner_steps"].as_array().unwrap().len(), 7);
     assert!(d["pr"]["number"].as_u64().is_some());
     assert!(v["next"].as_array().unwrap().is_empty());
     assert!(e.repo.path().join("plans/my-plan.md").exists());
@@ -193,6 +203,9 @@ fn bad_arguments_are_usage_errors() {
         vec!["--stack", "rust", "--plan", "/no/such/plan.md"],
         vec!["--stack", "rust", "--owner", "a b"],
         vec!["--stack", "rust", "--source=-x"],
+        vec!["--stack", "rust", "--branch=-x"],
+        vec!["--stack", "rust", "--branch", "a b"],
+        vec!["--stack", "rust", "--branch", "x..y"],
     ] {
         let (code, v) = e.run(&fake, &splice, &args);
         assert_eq!(code, 2, "{args:?}: {v}");
@@ -333,7 +346,7 @@ fn a_plain_repo_gets_claude_md_and_no_own_ci() {
     assert!(!argv.contains("--exclude"), "{argv}");
     assert_eq!(v["data"]["own_ci"], false);
     assert_eq!(v["data"]["hoist_checks_added"].as_array().unwrap().len(), 0);
-    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 7);
 }
 
 fn commit_file(e: &Env, path: &str, body: &str) {
@@ -422,7 +435,7 @@ fn settings_with_the_hooks_need_no_owner_step() {
     let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
     assert_eq!(code, 0, "{v}");
     assert!(e.argv().contains("--exclude .claude/settings.json"));
-    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 7);
 }
 
 /// An invalid hoist.toml fails before splice runs, so there is nothing to roll back.
@@ -567,5 +580,50 @@ fn a_failed_pr_after_the_push_names_the_command() {
     assert!(
         fix.contains("gh pr create --head bosun/init --base main"),
         "{fix}"
+    );
+}
+
+/// `--branch` names the branch everywhere; a cloud session defaults to a `claude/` branch.
+#[test]
+fn branch_flag_and_cloud_default() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--branch", "claude/x"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["branch"], "claude/x");
+    assert!(e.origin_has("claude/x") && !e.origin_has_branch());
+
+    let e = Env::new();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run_with(&fake, &splice, &["--stack", "rust"], |c| {
+        c.env("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default");
+    });
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["branch"], "claude/bosun-init");
+    assert!(e.origin_has("claude/bosun-init"));
+}
+
+/// A failed PR names the chosen branch; `--no-pr` returns the title and body for a hand PR.
+#[test]
+fn custom_branch_in_fix_text_and_no_pr_returns_the_body() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    fake.fail_path("/pulls", 422);
+    let splice = e.splice(OK_JSON, 0);
+    let (_, v) = e.run(&fake, &splice, &["--stack", "rust", "--branch", "claude/y"]);
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("--head claude/y --base main"), "{fix}");
+
+    let e = Env::new();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pr_title"], "chore: set up bosun");
+    assert!(
+        v["data"]["pr_body"]
+            .as_str()
+            .unwrap()
+            .contains("Sets up bosun")
     );
 }
