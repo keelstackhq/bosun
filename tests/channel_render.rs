@@ -15,16 +15,23 @@ fn channel() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("channel")
 }
 
-/// One `{% if %}` level: was the enclosing text rendered, and did the condition hold.
+/// One `{% if %}` level: was the enclosing text rendered, did the condition hold, and was its
+/// `{% else %}` seen.
 struct Frame {
     outer: bool,
     cond: bool,
+    in_else: bool,
 }
 
 fn eval(expr: &str, vars: &BTreeMap<&str, String>, pieces: &[&str], at: &str) -> bool {
     if let Some((lit, rest)) = expr.split_once(" in ") {
         assert_eq!(rest.trim(), "pieces", "{at}: unknown `in` target {expr:?}");
         let piece = lit.trim().trim_matches('"');
+        // A misspelt piece would be false in every variant and drop its branch unseen.
+        assert!(
+            channel().join("pieces").join(piece).is_dir(),
+            "{at}: no piece {piece:?}"
+        );
         return pieces.contains(&piece);
     }
     let v = vars
@@ -88,6 +95,8 @@ fn render(src: &str, vars: &BTreeMap<&str, String>, pieces: &[&str], at: &str) -
                 let f = stack
                     .last_mut()
                     .unwrap_or_else(|| panic!("{at}: else outside if"));
+                assert!(!f.in_else, "{at}: a second else in one if");
+                f.in_else = true;
                 f.cond = !f.cond;
             }
             "endif" => {
@@ -101,7 +110,11 @@ fn render(src: &str, vars: &BTreeMap<&str, String>, pieces: &[&str], at: &str) -
                     .unwrap_or_else(|| panic!("{at}: tag outside the channel subset: {s:?}"));
                 let outer = active(&stack);
                 let cond = eval(expr.trim(), vars, pieces, at);
-                stack.push(Frame { outer, cond });
+                stack.push(Frame {
+                    outer,
+                    cond,
+                    in_else: false,
+                });
             }
         }
     }
@@ -324,6 +337,8 @@ fn the_renderer_refuses_tags_outside_the_subset() {
         "{{ y }}",
         "{% if x %}",
         "{{ x | upper }}",
+        "{% if x %}a{% else %}b{% else %}c{% endif %}",
+        "{% if \"rsut\" in pieces %}{% endif %}",
     ] {
         let r = std::panic::catch_unwind(|| render(bad, &vars, &[], "t"));
         assert!(r.is_err(), "{bad} rendered");
