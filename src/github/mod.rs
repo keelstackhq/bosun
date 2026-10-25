@@ -137,6 +137,8 @@ pub trait Github {
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
     /// The newest published release; `None` when there is none.
     fn latest_release(&self) -> Result<Option<Release>>;
+    /// The status checks the default branch enforces: rulesets plus classic branch protection.
+    fn required_status_checks(&self, branch: &str) -> Result<Live>;
     /// Auto-merge through the Claude Code cloud route; `method` is `merge`, `squash` or `rebase`.
     fn enable_auto_merge_rest(&self, number: u64, method: &str) -> Result<()>;
 }
@@ -155,6 +157,16 @@ pub fn enable_auto_merge_any(gh: &dyn Github, pull: &Pull) -> Result<&'static st
         }
         Err(e) => Err(e),
     }
+}
+
+/// The required status checks of a branch as the token sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Live {
+    /// The contexts enforced (empty: nothing is, or the branch has no rule).
+    Checks(Vec<String>),
+    /// Both endpoints answered 403: a private repo on a free plan has no rulesets, or the token
+    /// lacks Administration: read.
+    Forbidden,
 }
 
 /// A repository Actions variable as the token sees it.
@@ -395,6 +407,51 @@ impl Github for LiveGithub {
             .http
             .send_json("PATCH", &path, &json!({"body": body}))?;
         self.parse("comment", v)
+    }
+
+    fn required_status_checks(&self, branch: &str) -> Result<Live> {
+        let b = enc(branch);
+        let rules = self
+            .http
+            .get_json_or_forbidden(&self.path(&format!("/rules/branches/{b}")))?;
+        let classic = self.http.get_json_or_forbidden(
+            &self.path(&format!("/branches/{b}/protection/required_status_checks")),
+        )?;
+        if rules.is_err() && classic.is_err() {
+            return Ok(Live::Forbidden);
+        }
+        let mut out: Vec<String> = Vec::new();
+        for rule in rules
+            .ok()
+            .flatten()
+            .iter()
+            .flat_map(|v| v.as_array())
+            .flatten()
+        {
+            if rule["type"] == "required_status_checks" {
+                let list = rule["parameters"]["required_status_checks"].as_array();
+                out.extend(
+                    list.into_iter()
+                        .flatten()
+                        .filter_map(|c| c["context"].as_str().map(String::from)),
+                );
+            }
+        }
+        if let Some(c) = classic.ok().flatten() {
+            let ctx = c["contexts"].as_array().into_iter().flatten();
+            let checks = c["checks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|x| &x["context"]);
+            out.extend(
+                ctx.chain(checks)
+                    .filter_map(|x| x.as_str().map(String::from)),
+            );
+        }
+        out.sort();
+        out.dedup();
+        Ok(Live::Checks(out))
     }
 
     fn variable(&self, name: &str) -> Result<Variable> {

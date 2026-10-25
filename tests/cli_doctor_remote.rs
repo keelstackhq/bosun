@@ -44,6 +44,7 @@ fn repo_with_checks() -> tempfile::TempDir {
 
 fn run(hoist: &Path, repo: &Path, remote: bool) -> (i32, Value) {
     let fake = FakeGithub::start();
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     let mut cmd = bosun();
     cmd.env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_HOIST", hoist)
@@ -292,6 +293,7 @@ fn a_hung_hoist_is_killed_after_the_timeout() {
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let repo = repo_with_checks();
     let fake = FakeGithub::start();
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     let started = std::time::Instant::now();
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
@@ -344,6 +346,7 @@ fn a_timeout_kills_the_whole_process_group() {
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let repo = repo_with_checks();
     let fake = FakeGithub::start();
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_HOIST", &bin)
@@ -376,6 +379,7 @@ fn a_zero_or_invalid_timeout_uses_the_default() {
     let h = fake_hoist(tmp.path(), &report(OK_ITEM, true, 0), 0);
     let repo = repo_with_checks();
     let fake = FakeGithub::start();
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     for bad in ["0", "soon"] {
         let out = bosun()
             .env("BOSUN_GITHUB_API", fake.url())

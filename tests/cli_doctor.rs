@@ -120,6 +120,7 @@ fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     fake.issue(2, "task", &[], "");
     fake.comment_by(2, "claude[bot]", "On it.");
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     write(
         d,
         "hoist.toml",
@@ -143,7 +144,19 @@ const FOUR: &str =
 const FIVE: &str = "[github]\nrequired_checks = [\"ci-ok\", \"bosun-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]\n";
 
 fn step3(dir: &Path) -> Value {
-    let (_, v) = doctor(&FakeGithub::start(), dir, false);
+    let fake = FakeGithub::start();
+    fake.enforce_checks(&[
+        "ci-ok",
+        "bosun-ok",
+        "risk-check",
+        "review-verdict",
+        "main-open",
+    ]);
+    step3_on(&fake, dir)
+}
+
+fn step3_on(fake: &FakeGithub, dir: &Path) -> Value {
+    let (_, v) = doctor(fake, dir, false);
     v["data"]["items"][2].clone()
 }
 
@@ -258,4 +271,61 @@ fn step_2_sees_the_app_through_performed_via_github_app() {
     fake.issue(2, "task", &[], "");
     fake.issue_via_app(2, "dependabot");
     assert_eq!(step2(&fake)["status"], "missing");
+}
+
+fn step3_repo() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "hoist.toml", FOUR);
+    write(
+        tmp.path(),
+        ".github/workflows/ci.yml",
+        "jobs:\n  ci-ok:\n    runs-on: x\n",
+    );
+    tmp
+}
+
+/// hoist.toml only says what hoist would apply; step 3 also reads what the branch enforces.
+#[test]
+fn step_3_checks_what_the_default_branch_enforces() {
+    let tmp = step3_repo();
+    let fake = FakeGithub::start();
+    // Nothing enforced.
+    let item = step3_on(&fake, tmp.path());
+    assert_eq!(item["status"], "missing", "{item}");
+    assert!(
+        item["detail"].as_str().unwrap().contains("risk-check"),
+        "{item}"
+    );
+    assert!(
+        item["fix"]
+            .as_str()
+            .unwrap()
+            .contains("hoist apply --area github"),
+        "{item}"
+    );
+    // Partly, through a ruleset.
+    fake.enforce_checks(&["ci-ok"]);
+    let item = step3_on(&fake, tmp.path());
+    assert_eq!(item["status"], "missing", "{item}");
+    assert!(
+        !item["detail"].as_str().unwrap().contains("ci-ok,"),
+        "{item}"
+    );
+    // The rest through classic protection: the union counts.
+    fake.enforce_classic(&["risk-check", "review-verdict", "main-open"]);
+    assert_eq!(step3_on(&fake, tmp.path())["status"], "ok");
+}
+
+/// A 403 on both endpoints is no evidence of drift: the step keeps its local verdict and says
+/// what it could not verify.
+#[test]
+fn step_3_notes_when_the_enforced_checks_cannot_be_read() {
+    let tmp = step3_repo();
+    let fake = FakeGithub::start();
+    fake.fail_path("/rules/branches/main", 403);
+    fake.fail_path("/protection/required_status_checks", 403);
+    let item = step3_on(&fake, tmp.path());
+    assert_eq!(item["status"], "ok", "{item}");
+    let d = item["detail"].as_str().unwrap();
+    assert!(d.contains("cannot verify the enforced checks (403"), "{d}");
 }

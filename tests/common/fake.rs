@@ -64,6 +64,10 @@ pub struct State {
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
     pub variables: HashMap<String, String>,
+    /// Contexts a ruleset on the default branch requires (`GET /rules/branches/<b>`).
+    pub ruleset_checks: Vec<String>,
+    /// Contexts classic branch protection requires; empty answers 404.
+    pub classic_checks: Vec<String>,
     pub pulls: Vec<Value>,
     pub files: HashMap<u64, Vec<Value>>,
     pub statuses: HashMap<String, Vec<Value>>,
@@ -500,6 +504,16 @@ impl FakeGithub {
             .unwrap()
             .variables
             .insert(name.into(), value.into());
+    }
+
+    /// Checks the default branch enforces through a ruleset.
+    pub fn enforce_checks(&self, checks: &[&str]) {
+        self.state.lock().unwrap().ruleset_checks = checks.iter().map(|c| c.to_string()).collect();
+    }
+
+    /// Checks the default branch enforces through classic branch protection.
+    pub fn enforce_classic(&self, checks: &[&str]) {
+        self.state.lock().unwrap().classic_checks = checks.iter().map(|c| c.to_string()).collect();
     }
 
     /// Answer the next `times` requests with `status` and a JSON message.
@@ -1200,6 +1214,22 @@ fn route(
             Some(t) => ok(json!({"tag_name": t})),
             None => msg(404, "Not Found"),
         },
+        ("GET", ["rules", "branches", _]) => ok(if s.ruleset_checks.is_empty() {
+            json!([{"type": "deletion"}])
+        } else {
+            let list: Vec<Value> = (s.ruleset_checks.iter())
+                .map(|c| json!({"context": c}))
+                .collect();
+            json!([{"type": "required_status_checks",
+                "parameters": {"required_status_checks": list}}])
+        }),
+        ("GET", ["branches", _, "protection", "required_status_checks"]) => {
+            if s.classic_checks.is_empty() {
+                msg(404, "Branch not protected")
+            } else {
+                ok(json!({"contexts": s.classic_checks, "checks": []}))
+            }
+        }
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),

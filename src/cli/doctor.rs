@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
 use crate::core::checks;
-use crate::github::{Github, IssueState};
+use crate::github::{Github, IssueState, Live};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -18,6 +18,13 @@ fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &
         Some(p) => ("missing", p),
     };
     json!({"step": step, "name": name, "status": status, "detail": detail, "fix": fix})
+}
+
+fn join_note(detail: String, note: &Option<String>) -> String {
+    match note {
+        Some(n) => format!("{detail}; {n}"),
+        None => detail,
+    }
 }
 
 /// The Routine prompts the owner creates by hand (step 11).
@@ -371,7 +378,28 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         absent.push("bosun-ok");
     }
     absent.retain(|c| !listed.iter().any(|l| l == c));
-    let step3_fix = if absent.is_empty() {
+    // What the default branch enforces. A 403 proves nothing (a private repo on a free plan has
+    // no rulesets), so it only adds a note, like the `unknown` items of `hoist check`.
+    let live = match &repo {
+        Ok(Some(info)) => Some(gh.required_status_checks(&info.default_branch)),
+        _ => None,
+    };
+    let unenforced: Vec<&String> = match &live {
+        Some(Ok(Live::Checks(on))) => listed.iter().filter(|c| !on.contains(c)).collect(),
+        _ => Vec::new(),
+    };
+    let live_note = match &live {
+        Some(Ok(Live::Forbidden)) => Some(
+            "cannot verify the enforced checks (403: a private repo on a free plan has no \
+             rulesets; make it public or use a paid plan, or give the token Administration: read)"
+                .to_string(),
+        ),
+        Some(Err(e)) => Some(format!("cannot verify the enforced checks: {}", e.message)),
+        _ => None,
+    };
+    let step3_fix = if absent.is_empty() && !unenforced.is_empty() {
+        format!("run `hoist apply --area github` (an admin) so the ruleset requires {unenforced:?}")
+    } else if absent.is_empty() {
         HOIST_FIX.to_string()
     } else {
         format!("add {absent:?} to hoist.toml [github] required_checks, then {HOIST_FIX}")
@@ -387,10 +415,19 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             ))
         } else if !has_job("ci-ok") {
             Some("no .github/workflows/*.yml has a `ci-ok` job".into())
+        } else if !unenforced.is_empty() {
+            Some(format!(
+                "hoist.toml lists {unenforced:?}, but the default branch does not require them"
+            ))
         } else {
             None
-        },
-        "hoist.toml lists the required checks and a workflow has the ci-ok job".into(),
+        }
+        .map(|p| join_note(p, &live_note)),
+        join_note(
+            "hoist.toml lists the required checks, a workflow has the ci-ok job and the default branch enforces them"
+                .into(),
+            &live_note,
+        ),
         &step3_fix,
     ));
 
