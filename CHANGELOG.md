@@ -8,7 +8,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - A human merge moves a building, review or fixing task to merged: `bosun pr`, `bosun reap` (also for closed issues) and `bosun result --outcome merged --pr N` see it; leases end with reason `merged`.
 - `bosun init --branch <name>`; in a Claude cloud session the default is `claude/bosun-init`; `--no-pr` returns the PR title and body. The owner steps say each weekly splice update PR needs `/bosun approve <sha>`.
 - `bosun doctor` sees the Claude GitHub App through `performed_via_github_app`, and step 3 reads the checks the default branch enforces (403: "cannot verify").
-- The label-lock hook lets read-only commands that mention a state label pass (grep, git show, heredoc prose, `gh issue list --label`); any other command naming one is refused.
+- The label-lock hook lets read-only commands that mention a state label pass (grep, git show, heredoc prose, `gh issue list --label`); any other command naming one is refused. The hook denies a call when its guard panics.
 - `verdict apply`: a newer verdict comment replaces only one of the same session, so two reviewers posting close together both count.
 - A PR body edit no longer cancels the running CI of the same head (bosun's ci.yml and the channel's bosun.yml).
 - Channel: the gates install the toolchain of `rust-toolchain.toml` (else the 1.97 pin); with own_ci a PR runs only test-integrity unless `BOSUN_ALL_GATES=1`; a docs-only PR (Markdown, not README.md, not with ts-pnpm) skips the gates; `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` are R-gov.
