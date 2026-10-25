@@ -181,8 +181,8 @@ State machine:
 | fixing | review | fix pushed |
 | review | queued | verdict approve; risk ok; `bosun pr --auto-merge` turned auto-merge on |
 | queued | merged | the merge queue or auto-merge merged it (GitHub, never an agent: D13) |
-| any | blocked | stop rule, conflict, budget |
-| any | needs-human | risk high, owner question, tier escalation used up |
+| any | blocked | stop rule, conflict, budget, a child's `bosun result --outcome blocked` |
+| any | needs-human | risk high, owner question, tier escalation used up, a child's `bosun result --outcome needs-human` |
 
 Only bosun commands change the state label. A hook refuses a direct label edit.
 
