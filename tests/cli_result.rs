@@ -131,3 +131,19 @@ fn a_halted_child_can_still_report() {
     );
     assert_eq!(code, 0, "{v}");
 }
+
+/// A result is a report, not a transition (spec §5): the epic's state comes from GitHub and the
+/// commands that act (`pr`/`reap` on a merge, `fail` and the stop rules), so it stays as it was.
+#[test]
+fn a_result_leaves_the_epic_state_alone() {
+    for outcome in ["merged", "blocked", "needs-human"] {
+        let fake = FakeGithub::start();
+        fake.issue(9, "Epic", &["bosun:state/review"], "");
+        fake.comment(9, &lease_note(CHILD, LATER, "src/**"));
+        let (code, v) = run(&fake, CHILD, NOW, &["result", "9", "--outcome", outcome]);
+        assert_eq!(code, 0, "{v}");
+        let s = fake.state.lock().unwrap();
+        let epic = s.issues.iter().find(|i| i.number == 9).unwrap();
+        assert_eq!(epic.labels, ["bosun:state/review"], "{outcome}");
+    }
+}

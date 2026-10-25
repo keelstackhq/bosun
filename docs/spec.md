@@ -323,7 +323,10 @@ Janitor, resume, results:
   It posts an issue comment on the epic with the record
   `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
   (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
-  parent sees the result with `bosun wait --child`.
+  parent sees the result with `bosun wait --child`. It leaves the epic's state label alone: a
+  result reports a state that the acting commands already set (`bosun pr` or `reap` once GitHub
+  merged, `bosun fail` and the stop rules for blocked and needs-human), and a self-reported
+  `merged` must never move a task (D13).
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
