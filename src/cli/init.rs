@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use super::InitArgs;
 use crate::app::{App, default_branch};
+use crate::core::checks;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// Files the channel seeds (written once, never overwritten); init excludes those that exist.
@@ -121,8 +122,8 @@ fn main_owns_claude_md(root: &Path) -> bool {
     })
 }
 
-/// Does a workflow under `.github/workflows` define the job `ci-ok` (a two-space key under the
-/// top-level `jobs:`)? Then the repo has its own required-check gate.
+/// Does a workflow under `.github/workflows` report the check `ci-ok` (a job named so, or keyed
+/// so without a `name:`)? Then the repo has its own required-check gate.
 fn has_ci_ok_job(root: &Path) -> bool {
     let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
         return false;
@@ -134,21 +135,7 @@ fn has_ci_ok_job(root: &Path) -> bool {
                 .is_some_and(|x| x == "yml" || x == "yaml")
         })
         .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-        .any(|t| {
-            let mut in_jobs = false;
-            t.lines().any(|l| {
-                let l = l.trim_end();
-                if !l.starts_with([' ', '\t', '#']) && !l.is_empty() {
-                    in_jobs = l
-                        .strip_prefix("jobs:")
-                        .is_some_and(|r| r.trim().is_empty() || r.trim_start().starts_with('#'));
-                    return false;
-                }
-                in_jobs
-                    && l.strip_prefix("  ci-ok:")
-                        .is_some_and(|r| r.trim().is_empty() || r.trim_start().starts_with('#'))
-            })
-        })
+        .any(|t| checks::workflow_checks(&t).iter().any(|c| c == "ci-ok"))
 }
 
 /// Span of the `[...]` array value found at or after `from`: `(open, close, end of last element)`.
