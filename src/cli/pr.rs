@@ -110,6 +110,19 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         }
     }
     let (pull, created) = match open.map(|i| found.swap_remove(i)) {
+        Some(p) if !linked_issues(&p.body).contains(&n) => {
+            // Before any state change, record or auto-merge: this PR belongs to something else.
+            return Err(BosunError::conflict(
+                format!(
+                    "PR #{} on branch {branch} does not link task #{n}",
+                    p.number
+                ),
+                format!(
+                    "switch to the task's branch, or add `Closes #{n}` to the PR body and rerun"
+                ),
+            )
+            .with_data(json!({"pr": p.number})));
+        }
         Some(p) => (p, false),
         None => {
             let title = args.title.clone().unwrap_or_else(|| issue.title.clone());
