@@ -320,6 +320,257 @@ fn every_variant_renders_to_files_that_parse() {
     }
 }
 
+/// One variant of the channel, rendered: `(path, text)`.
+fn variant(stack: &[&str], own_ci: &str) -> Vec<(String, String)> {
+    let mut pieces = vec!["core"];
+    pieces.extend_from_slice(stack);
+    let vars: BTreeMap<&str, String> = [
+        ("project", "app"),
+        ("owner", ""),
+        ("bosun_version", ""),
+        ("template.version", "1.2.3"),
+        ("rust_path", "."),
+        ("ts_path", "."),
+        ("own_ci", own_ci),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k, v.to_string()))
+    .collect();
+    render_channel(&pieces, &vars)
+}
+
+fn file<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
+    &files.iter().find(|(n, _)| n == name).unwrap().1
+}
+
+/// The workflow as JSON through PyYAML; `None` without it (a failure in CI).
+fn yaml_json(text: &str) -> Option<serde_json::Value> {
+    let child = Command::new("python3")
+        .args([
+            "-c",
+            "import sys, yaml, json; print(json.dumps(yaml.safe_load(sys.stdin)))",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let out = child.ok().and_then(|mut c| {
+        std::io::Write::write_all(&mut c.stdin.take().unwrap(), text.as_bytes()).ok()?;
+        c.wait_with_output().ok()
+    });
+    match out {
+        Some(o) if o.status.success() => Some(serde_json::from_slice(&o.stdout).unwrap()),
+        _ => {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI needs python3 with PyYAML"
+            );
+            None
+        }
+    }
+}
+
+const ALL_GATES: [&str; 5] = ["fmt", "lint", "test", "deps", "test-integrity"];
+const BOSUN_YML: &str = ".github/workflows/bosun.yml";
+
+#[test]
+fn rust_gates_install_the_toolchain_file_once() {
+    for own_ci in ["", "1"] {
+        let files = variant(&["rust"], own_ci);
+        let wf = file(&files, BOSUN_YML);
+        assert!(!wf.contains("dtolnay/rust-toolchain"), "{wf}");
+        assert!(!wf.contains("\"1.97\""), "{wf}");
+        assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
+        // Without a toolchain file in rust_path or a parent, the old pin, never `stable`; the
+        // gates and the setup script fall back to the same pin.
+        let setup = file(&files, "docs/setup-script.sh");
+        let pin = setup
+            .lines()
+            .find_map(|l| l.strip_prefix("RUST_VERSION="))
+            .and_then(|l| l.split_whitespace().next())
+            .unwrap();
+        assert!(
+            wf.contains(&format!(
+                "rustup toolchain install {pin} --profile minimal -c rustfmt,clippy"
+            )),
+            "{wf}"
+        );
+        assert!(wf.contains(&format!("rustup default {pin}")), "{wf}");
+        assert!(!wf.contains("install stable"), "{wf}");
+        assert!(setup.contains("rust-toolchain.toml"), "{setup}");
+        assert!(
+            setup.contains("RUST_VERSION=1.97"),
+            "the fallback pin stays"
+        );
+    }
+    let files = variant(&["ts-pnpm"], "");
+    assert!(!file(&files, BOSUN_YML).contains("rustup"));
+}
+
+#[test]
+fn own_ci_gate_matrix_is_test_integrity_unless_opted_in() {
+    for stack in [&["rust"][..], &["ts-pnpm"], &["rust", "ts-pnpm"]] {
+        let plain = variant(stack, "");
+        let wf = file(&plain, BOSUN_YML);
+        assert!(!wf.contains("BOSUN_ALL_GATES"), "{wf}");
+        let own = variant(stack, "1");
+        let wf = file(&own, BOSUN_YML);
+        assert!(wf.contains("vars.BOSUN_ALL_GATES == '1'"), "{wf}");
+        let Some(j) = yaml_json(wf) else { return };
+        let m = &j["jobs"]["gate"]["strategy"]["matrix"]["gate"];
+        let expr = m.as_str().expect("own_ci matrix is an expression");
+        assert!(expr.contains("fromJSON(") && expr.contains("github.event_name != 'pull_request'"));
+        assert!(expr.contains("'[\"test-integrity\"]'"), "{expr}");
+        assert!(
+            expr.contains(&serde_json::to_string(&ALL_GATES).unwrap()),
+            "{expr}"
+        );
+        let j = yaml_json(file(&plain, BOSUN_YML)).unwrap();
+        let m = &j["jobs"]["gate"]["strategy"]["matrix"]["gate"];
+        assert_eq!(m, &serde_json::json!(ALL_GATES));
+    }
+}
+
+#[test]
+fn docs_only_fast_path_skips_work_and_the_aggregate_stays_strict() {
+    for (own_ci, agg) in [("", "ci-ok"), ("1", "bosun-ok")] {
+        let files = variant(&["rust"], own_ci);
+        let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+            return;
+        };
+        let jobs = &j["jobs"];
+        assert!(jobs["changes"].is_object());
+        let skip = "needs.changes.outputs.docs_only != 'true'";
+        for job in ["bosun-bin", "gate", "pin"] {
+            assert_eq!(jobs[job]["if"].as_str(), Some(skip), "{job}");
+            assert!(jobs[job]["needs"].to_string().contains("changes"), "{job}");
+        }
+        let needs = jobs[agg]["needs"].to_string();
+        for n in ["changes", "bosun-bin", "gate", "pin"] {
+            assert!(needs.contains(n), "{agg} needs {n}");
+        }
+        let run = jobs[agg]["steps"][0]["run"].as_str().unwrap();
+        assert!(run.contains("test \"$CHANGES\" = success"), "{run}");
+        assert!(run.contains("DOCS_ONLY"), "{run}");
+    }
+}
+
+/// Runs the `changes` job's script in a real git repo whose PR changes `changed` (`a->b`: a move).
+fn docs_only(changed: &[&str]) -> String {
+    docs_only_in(&["rust"], changed)
+}
+
+fn docs_only_in(stack: &[&str], changed: &[&str]) -> String {
+    let files = variant(stack, "");
+    let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
+    let steps = j["jobs"]["changes"]["steps"].as_array().unwrap();
+    let script = steps.iter().find(|s| s["id"] == "diff").unwrap()["run"]
+        .as_str()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let sh = |cmd: &str, base: &str, head: &str| {
+        let o = Command::new("sh")
+            .current_dir(dir.path())
+            .env("GITHUB_OUTPUT", dir.path().join("out"))
+            .env("BASE", base)
+            .env("HEAD", head)
+            .args(["-c", cmd])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let git = |cmd: &str| sh(cmd, "", "");
+    git(
+        "git init -q -b main && git config user.email a@b.c && git config user.name n \
+        && mkdir docs src && echo a > docs/old.md && echo a > src/old.rs \
+        && git add . && git commit -qm base",
+    );
+    let base = git("git rev-parse HEAD").trim().to_string();
+    for c in changed {
+        if let Some((from, to)) = c.split_once("->") {
+            git(&format!("mkdir -p $(dirname {to}) && git mv {from} {to}"));
+        } else {
+            git(&format!("mkdir -p $(dirname {c}) && echo x >> {c}"));
+        }
+    }
+    git("git add -A && git commit -qm pr --allow-empty");
+    let head = git("git rev-parse HEAD").trim().to_string();
+    sh(script, &base, &head);
+    fs::read_to_string(dir.path().join("out"))
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn docs_only_detection_fails_closed() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    let all = ["docs/new/a.md", "plans/p.md", "CHANGELOG.md"];
+    assert_eq!(docs_only(&all), "docs_only=true");
+    // A crate may run README.md examples as doctests (`include_str!`), so it runs the gates.
+    assert_eq!(docs_only(&["README.md"]), "docs_only=false");
+    assert_eq!(docs_only(&["docs/a.md", "src/x.rs"]), "docs_only=false");
+    assert_eq!(docs_only(&["src/a.md"]), "docs_only=false");
+    // Only markdown is docs: code or data under docs/ still runs the gates.
+    assert_eq!(docs_only(&["docs/x.rs"]), "docs_only=false");
+    assert_eq!(docs_only(&["docs/a.md", "docs/b.json"]), "docs_only=false");
+    // ts-pnpm: prettier checks markdown, so there is no fast path at all.
+    for stack in [&["ts-pnpm"][..], &["rust", "ts-pnpm"]] {
+        assert_eq!(docs_only_in(stack, &["docs/a.md"]), "docs_only=false");
+    }
+    // A move out of src/ into docs/ still touches src/.
+    assert_eq!(docs_only(&["src/old.rs->docs/old.rs"]), "docs_only=false");
+    assert_eq!(docs_only(&[]), "docs_only=false", "an empty diff");
+}
+
+#[test]
+fn a_body_edit_gets_its_own_concurrency_group() {
+    let files = variant(&["rust"], "1");
+    let wf = file(&files, BOSUN_YML);
+    let Some(j) = yaml_json(wf) else { return };
+    let g = j["concurrency"]["group"].as_str().unwrap();
+    assert!(
+        g.contains("github.event.action == 'edited' && !github.event.changes.base"),
+        "{g}"
+    );
+    assert!(
+        g.contains("-edit-{0}") && g.contains("github.run_id"),
+        "{g}"
+    );
+    assert!(g.contains("github.event_name"), "{g}");
+    // The edit run must still run its jobs: nothing is skipped on `edited`.
+    assert!(!wf.contains("action != 'edited'"), "{wf}");
+}
+
+#[test]
+fn risk_rules_put_every_agent_rule_file_under_r_gov() {
+    use bosun::core::risk::{ChangedFile, Rules, evaluate};
+    let files = variant(&["rust"], "");
+    let rules = Rules::parse(file(&files, ".bosun/risk.toml")).unwrap();
+    let hit = |p: &str| {
+        let f = ChangedFile {
+            path: p.into(),
+            ..Default::default()
+        };
+        evaluate(&rules, &[f], &[], &[])
+            .iter()
+            .any(|m| m.rule == "R-gov")
+    };
+    for p in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "REVIEW.md",
+        "docs/agents/project.md",
+        "crates/foo/AGENTS.md",
+        "crates/foo/CLAUDE.md",
+    ] {
+        assert!(hit(p), "{p} is not R-gov");
+    }
+    assert!(!hit("crates/foo/src/lib.rs") && !hit("docs/guide.md"));
+}
+
 #[test]
 fn the_renderer_refuses_tags_outside_the_subset() {
     let vars: BTreeMap<&str, String> = [("x", String::from("1"))].into_iter().collect();
@@ -342,5 +593,112 @@ fn the_renderer_refuses_tags_outside_the_subset() {
     ] {
         let r = std::panic::catch_unwind(|| render(bad, &vars, &[], "t"));
         assert!(r.is_err(), "{bad} rendered");
+    }
+}
+
+/// Runs the gate job's rust toolchain step in `cwd` under the workspace `root`, with a fake
+/// `rustup` on PATH; returns the rustup calls it made.
+fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
+    let files = variant(&["rust"], "");
+    let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
+    let steps = j["jobs"]["gate"]["steps"].as_array().unwrap();
+    let run = steps
+        .iter()
+        .find(|s| s["name"] == "rust toolchain")
+        .unwrap()["run"]
+        .as_str()
+        .unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let log = bin.path().join("log");
+    let fake = bin.path().join("rustup");
+    fs::write(
+        &fake,
+        format!("#!/bin/sh\necho \"$*\" >> {}\n", log.display()),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let ok = Command::new("bash")
+        .args(["-eo", "pipefail", "-c", run])
+        .current_dir(cwd)
+        .env("PATH", path)
+        .env("GITHUB_WORKSPACE", root)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "the toolchain step failed");
+    fs::read_to_string(log).unwrap_or_default()
+}
+
+#[test]
+fn the_toolchain_step_installs_the_file_or_the_old_pin() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let sub = root.path().join("crates/core");
+    fs::create_dir_all(&sub).unwrap();
+    // No toolchain file anywhere: the old pin, never the runner's default (stable).
+    let calls = toolchain_calls(root.path(), &sub);
+    assert!(calls.starts_with("toolchain install 1.97 "), "{calls}");
+    assert!(calls.contains("default 1.97"), "{calls}");
+    // The seeded root file, found from a rust_path below it: rustup installs what it names.
+    fs::write(
+        root.path().join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.99.1\"\n",
+    )
+    .unwrap();
+    for cwd in [root.path(), sub.as_path()] {
+        let calls = toolchain_calls(root.path(), cwd);
+        assert!(calls.starts_with("toolchain install\n"), "{calls}");
+        assert!(!calls.contains("1.97"), "{calls}");
+    }
+}
+
+/// Runs the aggregate job's script with the given needs results; true when it exits 0.
+fn aggregate_passes(own_ci: &str, changes: &str, docs_only: &str, rest: [&str; 3]) -> bool {
+    let name = if own_ci.is_empty() {
+        "ci-ok"
+    } else {
+        "bosun-ok"
+    };
+    let files = variant(&["rust"], own_ci);
+    let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
+    let run = j["jobs"][name]["steps"][0]["run"].as_str().unwrap();
+    // The shell a `run:` step gets on a runner.
+    Command::new("bash")
+        .args(["-eo", "pipefail", "-c", run])
+        .env("CHANGES", changes)
+        .env("DOCS_ONLY", docs_only)
+        .env("BIN", rest[0])
+        .env("GATE", rest[1])
+        .env("PIN", rest[2])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+#[test]
+fn the_aggregate_script_skips_only_on_the_docs_only_path() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    for own_ci in ["", "1"] {
+        let ok = ["success"; 3];
+        let skipped = ["skipped"; 3];
+        assert!(aggregate_passes(own_ci, "success", "false", ok));
+        assert!(aggregate_passes(own_ci, "success", "true", skipped));
+        let one_failed = ["skipped", "failure", "skipped"];
+        assert!(!aggregate_passes(own_ci, "success", "true", one_failed));
+        assert!(!aggregate_passes(own_ci, "success", "", skipped));
+        assert!(!aggregate_passes(own_ci, "success", "false", skipped));
+        assert!(!aggregate_passes(own_ci, "cancelled", "true", skipped));
+        assert!(!aggregate_passes(own_ci, "failure", "true", ok));
     }
 }

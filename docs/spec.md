@@ -152,7 +152,13 @@ The channel never needs a file another template owns (a hull template owns ci.ym
 and .claude/settings.json): its gates run in `.github/workflows/bosun.yml`, whose aggregate job is
 `ci-ok`, or `bosun-ok` (one more required check) when the repo has its own ci.yml (`own_ci`);
 with `own_ci`, main-health watches both workflows and closes `bosun:main-red` only when the
-latest push run on main of each is green; the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
+latest push run on main of each is green; with `own_ci` a pull request runs only the `test-integrity`
+gate and relies on the repo's own `ci-ok` for fmt, lint, test and deps (if that CI lacks one, such as cargo-deny, set the repo
+variable `BOSUN_ALL_GATES=1`); push, merge queue and the nightly run still run all five; a pull request whose files are all `*.md` under `docs/` or `plans/` or at the root except README.md (doctests; never with the ts-pnpm stack: prettier checks Markdown)
+skips bosun-bin, gate and pin (job `changes`, fail closed; the aggregate accepts `skipped` only then and needs `changes` to
+succeed); a PR-body edit that keeps the base runs in its own concurrency group, so it never cancels or is cancelled by the
+push run and is not skipped; the rust gates install the toolchain of the repo's `rust-toolchain.toml` once (the step looks in `rust_path` and its parents up to the repo root; no
+dtolnay step; the old 1.97 pin when there is no toolchain file, never the runner's stable), and the setup script reads its `channel` too (1.97 is the fallback); the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
 `bosun init` sets `own_ci`, adds `claude-md` unless the main template owns CLAUDE.md, merges the
 required checks into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
 the owner then adds the two bosun hooks there (an owner step), since only one source may own it.
@@ -504,6 +510,7 @@ task and a lesson. A test is never skipped to get green.
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
+- Consumer repos (`channel/pieces/core/files/.bosun/risk.toml.jinja`): R-gov also lists `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` (a nested agent-rule file is read by every later agent; `**/` matches the root file too).
 - R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
 - R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**`, `.config/**` (build inputs), `src/anthropic.rs`, `src/core/lessons.rs`, `src/core/budget.rs`, `src/sessions/**` (review feeders), `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
 - R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
