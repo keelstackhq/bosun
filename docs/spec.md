@@ -323,7 +323,11 @@ Janitor, resume, results:
   It posts an issue comment on the epic with the record
   `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
   (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
-  parent sees the result with `bosun wait --child`.
+  parent sees the result with `bosun wait --child`. `blocked` and `needs-human` also set that
+  state on the epic (unless it is merged; `data.task_state` is the state after), because the
+  result ends the lease, so `reap` never sends the epic back to ready and it would stay claimed.
+  `merged` leaves the state alone: only the merge itself moves a task (D13), through `bosun pr`
+  or `reap`. Closing an orchestrator epic whose tasks all merged is not part of `result`.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 

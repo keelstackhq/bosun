@@ -131,3 +131,31 @@ fn a_halted_child_can_still_report() {
     );
     assert_eq!(code, 0, "{v}");
 }
+
+/// `merged` is a report only: the merge moves the state, never a session's word (D13).
+/// `blocked` and `needs-human` set that state, since the result ends the lease and nothing else
+/// would (reap acts only on expired leases); a merged epic stays merged.
+#[test]
+fn a_result_sets_blocked_or_needs_human_and_never_merged() {
+    for (from, outcome, to) in [
+        ("claimed", "merged", "claimed"),
+        ("review", "merged", "review"),
+        ("claimed", "blocked", "blocked"),
+        ("building", "needs-human", "needs-human"),
+        ("merged", "blocked", "merged"),
+    ] {
+        let fake = FakeGithub::start();
+        fake.issue(9, "Epic", &[&format!("bosun:state/{from}")], "");
+        fake.comment(9, &lease_note(CHILD, LATER, "src/**"));
+        let (code, v) = run(&fake, CHILD, NOW, &["result", "9", "--outcome", outcome]);
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(v["data"]["task_state"], to, "{from} {outcome}");
+        let s = fake.state.lock().unwrap();
+        let epic = s.issues.iter().find(|i| i.number == 9).unwrap();
+        assert_eq!(
+            epic.labels,
+            [format!("bosun:state/{to}")],
+            "{from} {outcome}"
+        );
+    }
+}
