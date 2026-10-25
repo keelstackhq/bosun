@@ -627,3 +627,29 @@ fn custom_branch_in_fix_text_and_no_pr_returns_the_body() {
             .contains("Sets up bosun")
     );
 }
+
+/// A failed init on a custom branch rolls back and deletes that branch, so a rerun works.
+#[test]
+fn a_failed_init_on_a_custom_branch_deletes_it() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(FAIL_JSON, 3);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--branch", "custom/x"]);
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("rolled back to main"), "{fix}");
+    assert_eq!(git_out(e.repo.path(), &["status", "--porcelain"]), "");
+    assert_eq!(
+        git_out(e.repo.path(), &["branch", "--show-current"]),
+        "main"
+    );
+    assert_eq!(
+        git_out(e.repo.path(), &["branch", "--list", "custom/x"]),
+        ""
+    );
+    assert!(!e.origin_has("custom/x"));
+    let ok = e.splice(OK_JSON, 0);
+    let args = ["--stack", "rust", "--branch", "custom/x", "--no-pr"];
+    let (code, v) = e.run(&fake, &ok, &args);
+    assert_eq!(code, 0, "{v}");
+}

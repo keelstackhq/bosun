@@ -77,8 +77,10 @@ pub fn tool_rules(
         } else {
             label_fields(input)
         };
-        if set.contains("bosun:state/") {
-            return Some(label_reason());
+        if set.contains(STATE) {
+            return Some(format!(
+                "`{tool}` sets a {STATE}* label and is refused: {LABEL_FIX}"
+            ));
         }
     }
     None
@@ -102,18 +104,23 @@ fn label_fields(v: &Value) -> String {
     }
 }
 
+const STATE: &str = "bosun:state/";
+const LABEL_FIX: &str = "state labels change only through bosun commands (spec §4); use \
+    `bosun claim`, `bosun release`, `bosun pr` or `bosun verdict post|comment`";
+
 fn label_reason() -> String {
-    "a command that names a bosun:state/* label and can write labels (gh, curl, an interpreter, \
-     a /labels path) is refused: those labels change only through bosun commands (spec §4); use `bosun claim`, \
-     `bosun release`, `bosun pr` or `bosun verdict post|comment`"
-        .to_string()
+    format!(
+        "a command that names a {STATE}* label may run only read-only commands (grep, rg, cat, \
+         jq, git show|log|diff, gh issue|pr list|view, gh search, bosun ...): {LABEL_FIX}"
+    )
 }
 
-/// Nested commands are checked first (label-lock and merge-lock both), to this depth.
+/// Nested commands are checked first (merge-lock; the label-lock judges them too), to this depth.
 const MAX_DEPTH: usize = 3;
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
     check(command, branch_at, default_branch, 0)
+        .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
 }
 
 fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
@@ -134,7 +141,6 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
     // or a `( .. )` group. `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` make it unknown.
     let mut dir: Option<Vec<String>> = Some(Vec::new());
     let (mut prev, mut chained) = ("", false);
-    let (mut names_label, mut writes_labels) = (false, false);
     for (segment, sep) in segments_with_sep(command) {
         let words: Vec<&str> = segment.split_whitespace().collect();
         if ["GIT_DIR", "GIT_WORK_TREE", "core.worktree"]
@@ -142,13 +148,6 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
             .any(|v| segment.contains(v))
         {
             dir = None;
-        }
-        // A `bosun` segment is exempt from the label-lock only; its nested commands were
-        // checked above and the merge rules see no `gh` or `git` in it. The lock judges the
-        // whole command: a label named in one segment may be written by another.
-        if words.first() != Some(&"bosun") {
-            names_label |= segment.contains("bosun:state/");
-            writes_labels |= label_writer(&words, segment);
         }
         if words.first() == Some(&"cd") {
             let start = segment.as_ptr() as usize - command.as_ptr() as usize;
@@ -185,47 +184,329 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         }
         prev = sep;
     }
-    (names_label && writes_labels).then(label_reason)
+    None
 }
 
-/// Whether a segment can write labels: `gh` except its read-only subcommands, HTTP clients,
-/// any interpreter (inline code cannot be told from a script that reads the text), and
-/// anything with a label REST path or GraphQL label mutation in it.
-fn label_writer(words: &[&str], segment: &str) -> bool {
-    if ["/labels", "abelsTo", "abelsFrom", "Labelable"]
-        .iter()
-        .any(|m| segment.contains(m))
-    {
-        return true;
-    }
-    let mut words: Vec<&str> = words
-        .iter()
-        .copied()
-        .skip_while(|w| (w.contains('=') && !w.starts_with('-')) || WRAPPERS.contains(w))
-        .collect();
-    if words.first() == Some(&"xargs") {
-        words.remove(0);
-        while words.first().is_some_and(|w| w.starts_with('-')) {
-            words.remove(0);
-        }
-        words.retain(|w| !WRAPPERS.contains(w));
-    }
-    let Some(first) = words.first() else {
+/// Label-lock (spec §4): a command that names a state label must be read-only throughout, and
+/// the lock fails closed. Every command in it, at every nesting level, must be on the allowlist
+/// (`segment_ro`); a `bosun` command is on it, so `bosun claim 3 # bosun:state/x` passes.
+///
+/// A plain command (no `$( )`, backticks, `${ }`, `$'..'`; see `plain_segments`) is split with
+/// shell quoting, so a quoted `|` or `(` in a grep or jq argument is data, and quoted-delimiter
+/// heredoc bodies are data. Anything else is split at every `; & |` and newline, quoted or not,
+/// and every `( )` group and backtick span is judged on its own too: stricter, never looser.
+///
+/// Known misses (the old rule missed them too): a label split by quotes or escapes
+/// (`"bosun:"state/x`, `bosun:state\/x`), a label built at run time (`printf`), and a label
+/// written to a file in one call and read in another.
+fn read_only(text: &str, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
         return false;
+    }
+    if let Some(segments) = plain_segments(text) {
+        return segments.iter().all(|s| !s.grouped && segment_ro(&s.words));
+    }
+    // Backticks nest only when escaped; unescaped, every real span is a gap between two
+    // consecutive backticks. An odd count is an unterminated span.
+    let ticks: Vec<&str> = text.split('`').collect();
+    if text.contains("\\`") || ticks.len().is_multiple_of(2) {
+        return false;
+    }
+    let gaps = ticks.get(1..ticks.len() - 1).unwrap_or_default();
+    gaps.iter().all(|g| read_only(g, depth + 1))
+        && nested(text).iter().all(|n| read_only(n, depth + 1))
+        && rough_segments(text).iter().all(|seg| {
+            let words: Vec<String> = shell_words(seg).into_iter().filter(|w| w != SEP).collect();
+            !seg.contains("()") && segment_ro(&words)
+        })
+}
+
+/// Split at every `;`, `|`, `&` and newline, quoted or not; `>&`, `<&`, `&>` and `>|` are
+/// redirections, not separators.
+fn rough_segments(text: &str) -> Vec<&str> {
+    let b = text.as_bytes();
+    let (mut out, mut start) = (Vec::new(), 0);
+    for i in 0..b.len() {
+        let redirect = match b[i] {
+            b'&' => (i > 0 && matches!(b[i - 1], b'<' | b'>')) || b.get(i + 1) == Some(&b'>'),
+            b'|' => i > 0 && b[i - 1] == b'>',
+            b';' | b'\n' => false,
+            _ => continue,
+        };
+        if !redirect {
+            out.push(&text[start..i]);
+            start = i + 1;
+        }
+    }
+    out.push(&text[start..]);
+    out
+}
+
+/// One simple command of a plain command line: its words with quotes removed, and whether an
+/// unquoted `(` or `)` appeared (a subshell, a function, `case`: never read-only).
+#[derive(Default)]
+struct PlainSegment {
+    words: Vec<String>,
+    grouped: bool,
+}
+
+/// The simple commands of a plain command line, split the way bash splits it: `'..'`, `".."`
+/// and `\` quoting, `#` comments, `\`-newline joins, redirections (`>&`, `&>`, `>|`) are not
+/// separators, and heredoc bodies are skipped. `None` for anything this does not model
+/// exactly (command or parameter substitution, `$'..'`, an unterminated quote or heredoc, an
+/// unquoted heredoc body with `$(` or a backtick): the caller then splits more roughly.
+fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
+    let c: Vec<char> = text.chars().collect();
+    let (mut out, mut seg) = (Vec::new(), PlainSegment::default());
+    let (mut word, mut started) = (String::new(), false);
+    // Pending heredocs on this line: delimiter, `<<-` (strip tabs), quoted delimiter.
+    let mut heredocs: Vec<(String, bool, bool)> = Vec::new();
+    let flush = |word: &mut String, started: &mut bool, seg: &mut PlainSegment| {
+        if *started {
+            seg.words.push(std::mem::take(word));
+            *started = false;
+        }
     };
-    let name = first.rsplit('/').next().unwrap_or(first);
-    match name {
-        "gh" => !matches!(
-            &words[1..],
+    let mut i = 0;
+    while i < c.len() {
+        let ch = c[i];
+        match ch {
+            '\'' => {
+                let end = c[i + 1..].iter().position(|&x| x == '\'')? + i + 1;
+                word.extend(&c[i + 1..end]);
+                started = true;
+                i = end + 1;
+                continue;
+            }
+            '"' => {
+                let mut j = i + 1;
+                loop {
+                    match *c.get(j)? {
+                        '"' => break,
+                        '`' => return None,
+                        '$' if matches!(c.get(j + 1), Some('(' | '{')) => return None,
+                        '\\' => {
+                            match *c.get(j + 1)? {
+                                '\n' => {}
+                                n @ ('$' | '`' | '"' | '\\') => word.push(n),
+                                n => word.extend(['\\', n]),
+                            }
+                            j += 2;
+                            continue;
+                        }
+                        x => word.push(x),
+                    }
+                    j += 1;
+                }
+                started = true;
+                i = j + 1;
+                continue;
+            }
+            '\\' => {
+                let n = *c.get(i + 1)?;
+                if n != '\n' {
+                    word.push(n);
+                    started = true;
+                }
+                i += 2;
+                continue;
+            }
+            '`' => return None,
+            '$' if matches!(c.get(i + 1), Some('(' | '{' | '\'' | '"')) => return None,
+            '#' if !started => {
+                while i < c.len() && c[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            '\n' => {
+                flush(&mut word, &mut started, &mut seg);
+                out.push(std::mem::take(&mut seg));
+                i += 1;
+                for (delim, tabs, quoted) in std::mem::take(&mut heredocs) {
+                    loop {
+                        if i >= c.len() {
+                            return None;
+                        }
+                        let end = c[i..]
+                            .iter()
+                            .position(|&x| x == '\n')
+                            .map_or(c.len(), |p| p + i);
+                        let line: String = c[i..end].iter().collect();
+                        i = (end + 1).min(c.len());
+                        let bare = if tabs {
+                            line.trim_start_matches('\t')
+                        } else {
+                            &line
+                        };
+                        if bare == delim {
+                            break;
+                        }
+                        if !quoted && (line.contains("$(") || line.contains('`')) {
+                            return None;
+                        }
+                    }
+                }
+                continue;
+            }
+            ';' | '|' => {
+                flush(&mut word, &mut started, &mut seg);
+                out.push(std::mem::take(&mut seg));
+            }
+            '&' if c.get(i + 1) == Some(&'>') => flush(&mut word, &mut started, &mut seg),
+            '&' => {
+                flush(&mut word, &mut started, &mut seg);
+                out.push(std::mem::take(&mut seg));
+            }
+            '(' | ')' => {
+                flush(&mut word, &mut started, &mut seg);
+                seg.grouped = true;
+            }
+            '<' | '>' => {
+                flush(&mut word, &mut started, &mut seg);
+                let rest: String = c[i..c.len().min(i + 3)].iter().collect();
+                if rest == "<<<" {
+                    seg.words.push(rest);
+                    i += 3;
+                    continue;
+                }
+                if rest.starts_with("<<") {
+                    i += 2;
+                    let tabs = c.get(i) == Some(&'-');
+                    i += usize::from(tabs);
+                    while matches!(c.get(i), Some(' ' | '\t')) {
+                        i += 1;
+                    }
+                    let (mut delim, mut quoted) = (String::new(), false);
+                    while let Some(&x) = c.get(i) {
+                        match x {
+                            '\'' | '"' => {
+                                let end = c[i + 1..].iter().position(|&y| y == x)? + i + 1;
+                                delim.extend(&c[i + 1..end]);
+                                quoted = true;
+                                i = end + 1;
+                                continue;
+                            }
+                            '\\' => {
+                                delim.push(*c.get(i + 1)?);
+                                quoted = true;
+                                i += 2;
+                                continue;
+                            }
+                            x if x.is_whitespace() || ";&|<>()`$".contains(x) => break,
+                            x => delim.push(x),
+                        }
+                        i += 1;
+                    }
+                    if delim.is_empty() {
+                        return None;
+                    }
+                    seg.words.extend(["<<".to_string(), delim.clone()]);
+                    heredocs.push((delim, tabs, quoted));
+                    continue;
+                }
+                // `>`, `>>`, `>&`, `>|`, `<`, `<&`, `<>`: one operator word.
+                let mut op = ch.to_string();
+                if let Some(&n) = c.get(i + 1)
+                    && (n == ch || matches!(n, '&' | '|') || (ch == '<' && n == '>'))
+                {
+                    op.push(n);
+                }
+                i += op.len();
+                seg.words.push(op);
+                continue;
+            }
+            x if x.is_whitespace() => flush(&mut word, &mut started, &mut seg),
+            x => {
+                word.push(x);
+                started = true;
+            }
+        }
+        i += 1;
+    }
+    if !heredocs.is_empty() {
+        return None;
+    }
+    flush(&mut word, &mut started, &mut seg);
+    out.push(seg);
+    Some(out)
+}
+
+/// Variables an assignment-only segment may not set: they change which program runs, or make
+/// an allowlisted command run one.
+fn risky_var(name: &str) -> bool {
+    matches!(
+        name,
+        "PATH" | "IFS" | "ENV" | "CDPATH" | "PAGER" | "MANPAGER" | "PROMPT_COMMAND" | "PS4"
+    ) || ["LD_", "GIT_", "GH_", "LESS", "BASH"]
+        .iter()
+        .any(|p| name.starts_with(p))
+}
+
+/// The variable a `NAME=value` (or `NAME+=value`) word assigns.
+fn assigned(word: &str) -> Option<&str> {
+    let (name, _) = word.split_once('=')?;
+    let name = name.strip_suffix('+').unwrap_or(name);
+    let mut cs = name.chars();
+    let first = cs.next()?;
+    ((first.is_ascii_alphabetic() || first == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_'))
+    .then_some(name)
+}
+
+/// The label-lock allowlist. A segment is read-only when its command (quotes removed, no
+/// path) is `bosun`, a text tool (grep, cat, jq, ...), `git show|log|diff|grep|blame|status`
+/// (only `-C dir` and `--no-pager` before it, no `--ext-diff` or `-O`), or read-only `gh`
+/// (`issue|pr list|view|status`, `pr diff|checks`, `search`, `label list`). Assignments
+/// before a command are allowed only for `bosun`; a segment of assignments alone is read-only
+/// unless it sets a `risky_var`. Keywords, groups, functions, `xargs`, `less` (its `!`) and
+/// every other command are not.
+fn segment_ro(words: &[String]) -> bool {
+    if words
+        .iter()
+        .any(|w| w.contains("/dev/tcp/") || w.contains("/dev/udp/"))
+    {
+        return false;
+    }
+    let n = words.iter().take_while(|w| assigned(w).is_some()).count();
+    let Some(cmd) = words.get(n) else {
+        return !words.iter().filter_map(|w| assigned(w)).any(risky_var);
+    };
+    if n > 0 && cmd != "bosun" {
+        return false;
+    }
+    let args: Vec<&str> = words[n + 1..].iter().map(String::as_str).collect();
+    match cmd.as_str() {
+        "bosun" | "grep" | "egrep" | "fgrep" | "cat" | "head" | "tail" | "wc" | "uniq" | "cut"
+        | "tr" | "jq" | "diff" | "ls" | "test" | "[" | "true" | "false" | "echo" | "printf" => true,
+        "sort" => !args.iter().any(|a| a.starts_with("--compress")),
+        "rg" => !args.iter().any(|a| a.starts_with("--pre")),
+        "git" => {
+            let mut i = 0;
+            loop {
+                match args.get(i) {
+                    Some(&"-C") => i += 2,
+                    Some(&"--no-pager") => i += 1,
+                    _ => break,
+                }
+            }
+            matches!(
+                args.get(i),
+                Some(&("show" | "log" | "diff" | "grep" | "blame" | "status"))
+            ) && !args[i + 1..].iter().any(|a| {
+                a.starts_with("--ext-diff")
+                    || a.starts_with("-O")
+                    || a.starts_with("--open-files-in-pager")
+            })
+        }
+        "gh" => matches!(
+            args.as_slice(),
             ["issue", "list" | "view" | "status", ..]
                 | ["pr", "list" | "view" | "status" | "diff" | "checks", ..]
                 | ["search", ..]
                 | ["label", "list", ..]
         ),
-        "curl" | "wget" | "http" | "https" | "xh" | "httpie" => true,
-        _ => ["python", "node", "ruby", "perl", "deno", "bun"]
-            .iter()
-            .any(|i| name.starts_with(i)),
+        _ => false,
     }
 }
 
@@ -779,6 +1060,184 @@ mod tests {
         ] {
             assert!(bash(cmd, "x").is_some(), "{cmd}");
         }
+    }
+
+    /// The label-lock fails closed: a command that names a state label passes only when every
+    /// command in it, at every nesting level, is on the read-only allowlist. MUST rows are the
+    /// F13 review probes (every one the old rule refused that can write a label) and our own.
+    /// Known misses, also missed by the old rule and accepted: a label split by quotes or
+    /// escapes (`"bosun:"state/x`, `bosun:sta""te/x`, `bosun:state\/x`, `$'bosun:state\x2fx'`),
+    /// a label built at run time (`printf 'bosun:%s/x' state`), and a label written to a file
+    /// in one call and read in another (`echo bosun:state/x > l.txt`, later `$(cat l.txt)`).
+    #[test]
+    fn label_lock_allows_only_read_only_commands() {
+        const MUST: &[&str] = &[
+            "gh issue edit 1 --add-label bosun:state/merged",
+            "gh pr edit 1 --remove-label bosun:state/merged",
+            "gh issue create -t x --label bosun:state/merged",
+            "gh pr create --label bosun:state/merged",
+            "gh label create bosun:state/merged",
+            "gh label edit bosun:state/merged --name y",
+            "gh label delete bosun:state/merged --yes",
+            "gh label clone o/r # bosun:state/merged",
+            "gh api repos/o/r/issues/1/labels -f labels[]=bosun:state/merged",
+            "gh api -X DELETE repos/o/r/issues/1/labels/bosun:state/merged",
+            "gh api graphql -f query='mutation{addLabelsToLabelable(input:{labelIds:[\"bosun:state/merged\"]})}'",
+            "gh api graphql -f query='mutation{removeLabelsFromLabelable(input:{labelIds:[\"bosun:state/merged\"]})}'",
+            "gh api --method POST repos/o/r/issues/1 -f labels[]=bosun:state/merged",
+            "gh api -X PATCH repos/o/r/issues/1 -f 'labels[]=bosun:state/merged'",
+            "gh -R o/r issue edit 1 --add-label bosun:state/merged",
+            "GH_TOKEN=x gh issue edit 1 --add-label bosun:state/merged",
+            "env gh issue edit 1 --add-label bosun:state/merged",
+            "sudo gh issue edit 1 --add-label bosun:state/merged",
+            "command gh issue edit 1 --add-label bosun:state/merged",
+            "echo bosun:state/merged | xargs gh issue edit 1 --add-label",
+            "nohup gh issue edit 1 --add-label bosun:state/merged",
+            "time gh issue edit 1 --add-label bosun:state/merged",
+            "exec gh issue edit 1 --add-label bosun:state/merged",
+            "/usr/bin/gh issue edit 1 --add-label bosun:state/merged",
+            "./gh issue edit 1 --add-label bosun:state/merged",
+            "\"gh\" issue edit 1 --add-label bosun:state/merged",
+            "'gh' issue edit 1 --add-label bosun:state/merged",
+            "\\gh issue edit 1 --add-label bosun:state/merged",
+            "g\\h issue edit 1 --add-label bosun:state/merged",
+            "g''h issue edit 1 --add-label bosun:state/merged",
+            "timeout 30 gh issue edit 1 --add-label bosun:state/merged",
+            "nice -n 5 gh issue edit 1 --add-label bosun:state/merged",
+            "stdbuf -o0 gh issue edit 1 --add-label bosun:state/merged",
+            "watch -n1 gh issue edit 1 --add-label bosun:state/merged",
+            "find . -maxdepth 0 -exec gh issue edit 1 --add-label bosun:state/merged \\;",
+            "awk 'BEGIN{system(\"gh issue edit 1 --add-label bosun:state/merged\")}'",
+            "parallel gh issue edit 1 --add-label ::: bosun:state/merged",
+            "script -qc 'gh issue edit 1 --add-label bosun:state/merged' /dev/null",
+            "ssh localhost gh issue edit 1 --add-label bosun:state/merged",
+            "git -c alias.x='!gh issue edit 1 --add-label bosun:state/merged' x",
+            "make -f /dev/stdin <<< 'a:; gh issue edit 1 --add-label bosun:state/merged'",
+            "npx gh-cli issue edit 1 --add-label bosun:state/merged",
+            "php -r 'system(\"gh issue edit 1 --add-label bosun:state/merged\");'",
+            "lua -e 'os.execute(\"gh issue edit 1 --add-label bosun:state/merged\")'",
+            "pwsh -c 'gh issue edit 1 --add-label bosun:state/merged'",
+            "fish -c 'gh issue edit 1 --add-label bosun:state/merged'",
+            "busybox sh -c 'gh issue edit 1 --add-label bosun:state/merged'",
+            "curl -X POST -H 'Authorization: token x' https://api.github.com/repos/o/r/issues/1/labels -d '[\"bosun:state/merged\"]'",
+            "wget --post-data='[\"bosun:state/merged\"]' https://api.github.com/repos/o/r/issues/1/labels",
+            "http POST api.github.com/repos/o/r/issues/1/labels labels:='[\"bosun:state/merged\"]'",
+            "xh POST api.github.com/repos/o/r/issues/1/labels labels:='[\"bosun:state/merged\"]'",
+            "curl -X PATCH https://api.github.com/repos/o/r/issues/1 -d '{\"labels\":[\"bosun:state/merged\"]}'",
+            "python3 -c \"import os; os.system('gh issue edit 1 --add-label bosun:state/merged')\"",
+            "node -e \"require('child_process').execSync('gh issue edit 1 --add-label bosun:state/merged')\"",
+            "ruby -e 'system(\"gh issue edit 1 --add-label bosun:state/merged\")'",
+            "perl -e 'system(\"gh issue edit 1 --add-label bosun:state/merged\")'",
+            "deno eval 'new Deno.Command(\"gh\",{args:[\"issue\",\"edit\",\"1\",\"--add-label\",\"bosun:state/merged\"]}).outputSync()'",
+            "bun -e 'Bun.spawnSync([\"gh\",\"issue\",\"edit\",\"1\",\"--add-label\",\"bosun:state/merged\"])'",
+            "bash -c 'gh issue edit 1 --add-label bosun:state/merged'",
+            "sh -c 'gh issue edit 1 --add-label bosun:state/merged'",
+            "eval 'gh issue edit 1 --add-label bosun:state/merged'",
+            "echo $(gh issue edit 1 --add-label bosun:state/merged)",
+            "echo `gh issue edit 1 --add-label bosun:state/merged`",
+            "(gh issue edit 1 --add-label bosun:state/merged)",
+            "{ gh issue edit 1 --add-label bosun:state/merged; }",
+            "if true; then gh issue edit 1 --add-label bosun:state/merged; fi",
+            "for l in bosun:state/merged; do gh issue edit 1 --add-label $l; done",
+            "while true; do gh issue edit 1 --add-label bosun:state/merged; break; done",
+            "f(){ gh issue edit 1 --add-label bosun:state/merged; }; f",
+            "f(){ gh issue edit 1 --add-label \"$1\"; }; f bosun:state/merged",
+            "echo bosun:state/merged | gh issue edit 1 --add-label \"$(cat)\"",
+            "true && gh issue edit 1 --add-label bosun:state/merged",
+            "false || gh issue edit 1 --add-label bosun:state/merged",
+            "true; gh issue edit 1 --add-label bosun:state/merged",
+            "true\ngh issue edit 1 --add-label bosun:state/merged",
+            "bash <<EOF\ngh issue edit 1 --add-label bosun:state/merged\nEOF",
+            "bash <<< 'gh issue edit 1 --add-label bosun:state/merged'",
+            "echo 'gh issue edit 1 --add-label bosun:state/merged' | bash",
+            "echo 'gh issue edit 1 --add-label bosun:state/merged' | sh",
+            "L=bosun:state/merged; gh issue edit 1 --add-label \"$L\"",
+            "export L=bosun:state/merged; bash -c 'gh issue edit 1 --add-label \"$L\"'",
+            "L=bosun:state/merged; bash -c \"gh issue edit 1 --add-label $L\"",
+            "L=bosun:state/merged; eval \"gh issue edit 1 --add-label $L\"",
+            "L=bosun:state/merged; echo $(gh issue edit 1 --add-label $L)",
+            "L=bosun:state/merged; (gh issue edit 1 --add-label $L)",
+            "L=bosun:state/merged bash -c 'gh issue edit 1 --add-label $L'",
+            "L=bosun:state/merged; xargs gh issue edit 1 --add-label <<< $L",
+            "L=bosun:state/merged; find . -maxdepth 0 -exec gh issue edit 1 --add-label $L \\;",
+            "L=bosun:state/merged; timeout 9 gh issue edit 1 --add-label $L",
+            "L=bosun:state/merged; \"gh\" issue edit 1 --add-label $L",
+            "echo bosun:state/merged > /tmp/l; gh issue edit 1 --add-label $(cat /tmp/l)",
+            "echo bosun:state/merged > /tmp/l\ngh issue edit 1 --add-label \"$(< /tmp/l)\"",
+            "gh issue edit 1 --add-label $'bosun:state/merged'",
+            // Our own probes: quoting desyncs, options that run programs, hidden commands.
+            "echo \"`printf '\"'`\"; gh issue edit 1 --add-label bosun:state/merged",
+            "echo \"$(printf ')\"')\"; gh issue edit 1 --add-label bosun:state/merged",
+            "echo '`' `gh issue edit 1 --add-label bosun:state/merged`",
+            "echo $'a\\'b'; gh issue edit 1 --add-label bosun:state/merged",
+            "echo x # it's\ngh issue edit 1 --add-label bosun:state/merged",
+            "echo '<<EOF'\ngh issue edit 1 --add-label bosun:state/merged\nEOF",
+            "cat <<EOF\n$(gh issue edit 1 --add-label bosun:state/merged)\nEOF",
+            "cat <<EOF\n`gh issue edit 1 --add-label bosun:state/merged`\nEOF",
+            "cat <<'EOF'\nbosun:state/merged\nEOF\ngh issue edit 1 --add-label bosun:state/merged",
+            "cat <<'EOF'\nbosun:state/merged\nE0F\ngh issue edit 1 --add-label bosun:state/merged",
+            "grep () ( gh issue edit 1 --add-label \"$1\" ); grep bosun:state/merged",
+            "grep () { gh issue edit 1 --add-label \"$1\"; }; grep bosun:state/merged",
+            "./grep bosun:state/merged",
+            "/tmp/x/cat bosun:state/merged",
+            "PATH=/tmp/x; grep bosun:state/merged",
+            "GIT_EXTERNAL_DIFF=./x git diff # bosun:state/merged",
+            "PAGER=./x git log # bosun:state/merged",
+            "git -c core.pager=./x log # bosun:state/merged",
+            "git --exec-path=/tmp log # bosun:state/merged",
+            "git grep -O./x bosun:state/merged",
+            "git grep --open-files-in-pager=./x bosun:state/merged",
+            "git diff --ext-diff # bosun:state/merged",
+            "rg --pre ./x bosun:state/merged",
+            "sort --compress-program=./x f # bosun:state/merged",
+            "echo bosun:state/merged > /dev/tcp/127.0.0.1/80",
+            "gh --repo o/r issue list # bosun:state/merged; gh issue close 1",
+            "gh issue list --label bosun:state/review && gh issue close 1",
+            "grep bosun:state/x f | xargs gh issue edit 1 --add-label",
+            "cat <(gh issue edit 1 --add-label bosun:state/merged)",
+            "grep x >(gh issue edit 1 --add-label bosun:state/merged)",
+            "[[ x ]] && gh issue edit 1 --add-label bosun:state/merged",
+            "case x in x) gh issue edit 1 --add-label bosun:state/merged;; esac",
+            "! gh issue edit 1 --add-label bosun:state/merged",
+            "coproc gh issue edit 1 --add-label bosun:state/merged",
+            "alias g=gh; g issue edit 1 --add-label bosun:state/merged",
+            "source x.sh # bosun:state/merged",
+            ". x.sh # bosun:state/merged",
+            "less '+!gh issue edit 1 --add-label bosun:state/merged' f",
+            "bosun status $(gh issue edit 1 --add-label bosun:state/merged)",
+            "ech\\\no x; gh issue edit 1 --add-label bosun:state/merged",
+            "echo ${x:-$(gh issue edit 1 --add-label bosun:state/merged)}",
+        ];
+        let mut wrong: Vec<String> = MUST
+            .iter()
+            .filter(|c| bash(c, "x").is_none())
+            .map(|c| format!("allowed: {c:?}"))
+            .collect();
+        for cmd in [
+            "grep -rn 'bosun:state/' src",
+            "rg bosun:state/ docs",
+            "git show HEAD:docs/spec.md | grep bosun:state/review",
+            "git --no-pager -C sub log --oneline | grep -c bosun:state/",
+            "cat > docs/x.md <<'EOF'\nThe bosun:state/review label is set by bosun pr.\nEOF",
+            "cat > docs/x.md <<-\"EOF\"\n\tIt's bosun:state/review (see `bosun pr`); a | b; $(x)\n\tEOF\ngit diff --stat",
+            "cat <<EOF > docs/x.md\nIt's bosun:state/review (see spec)\nEOF",
+            "gh issue list --label bosun:state/review",
+            "gh pr view 3",
+            "gh pr view 3 --json labels | grep bosun:state/",
+            "gh pr view 3 --json labels | jq -r '.labels[] | select(.name == \"bosun:state/review\") | .name'",
+            "gh search issues label:bosun:state/review",
+            "gh label list --search bosun:state/ 2>&1 | head -5",
+            "bosun claim 3",
+            "bosun claim 3 # bosun:state/claimed",
+            "L=bosun:state/review; gh issue list --label \"$L\"",
+            "test -f x && echo 'bosun:state/review' || printf '%s\\n' none",
+            "grep -c bosun:state/ docs/spec.md; wc -l docs/spec.md",
+        ] {
+            if let Some(why) = bash(cmd, "x") {
+                wrong.push(format!("refused: {cmd:?}: {why}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}:\n{}", wrong.len(), wrong.join("\n"));
     }
 
     #[test]
