@@ -10,6 +10,7 @@ use super::PrArgs;
 use crate::app::{App, default_branch, kill_switch, set_state, sync_merged};
 use crate::core::checks;
 use crate::core::meta::linked_issues;
+use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::github::{Github, IssueState, enable_auto_merge_any};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -154,6 +155,19 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     .collect::<Vec<_>>(),
             })));
         }
+        // Before auto-merge: a failed write leaves nothing turned on, so a rerun is clean.
+        let record = Record::TaskPr {
+            session: app.ctx.session.clone(),
+            pr: pull.number,
+        };
+        gh.add_comment(
+            n,
+            &format!(
+                "PR #{} queued for auto-merge\n\n{}",
+                pull.number,
+                record.to_line()
+            ),
+        )?;
         route = Some(enable_auto_merge_any(gh, &pull)?);
         let fresh = gh.get_issue(n)?.unwrap_or(issue);
         set_state(gh, n, &fresh, State::Queued)?;

@@ -154,7 +154,7 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             BosunError::needs_human(
                 format!("the owner's token is missing: {TOKEN_VAR} is not set"),
                 format!(
-                    "bosun approve runs only in the owner's own Claude Code environment with {TOKEN_VAR} set (see docs/PROGRESS.md, Blocked: Owner approvals); it never uses GITHUB_TOKEN"
+                    "run bosun approve on your own machine (a local shell or a local Claude Code session) with {TOKEN_VAR} set; see docs/PROGRESS.md, Blocked 9. It never uses GITHUB_TOKEN"
                 ),
             )
         })?;

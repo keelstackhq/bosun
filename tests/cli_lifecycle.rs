@@ -228,3 +228,75 @@ fn reap_ignores_a_pr_merged_into_a_branch_other_than_the_default() {
     assert_eq!(v["data"]["merged"], json!([]));
     assert_eq!(fake.labels_of(7), vec!["bosun:state/queued".to_string()]);
 }
+
+/// `GET /pulls` lists (every PR of the repo) made after the first `skip` requests.
+fn pull_lists_after(fake: &FakeGithub, skip: usize) -> usize {
+    fake.requests()
+        .iter()
+        .skip(skip)
+        .filter(|r| r.method == "GET" && r.path.ends_with("/pulls"))
+        .count()
+}
+
+/// `pr --auto-merge` records the task's PR, so reap reads that PR instead of listing them all.
+#[test]
+fn reap_reads_the_recorded_pr_without_listing_all_pulls() {
+    let fake = FakeGithub::start();
+    fake.issue(7, "the task", &["bosun:state/ready"], BODY);
+    let dir = repo("claude/t7");
+    assert_eq!(run(&fake, dir.path(), &["claim", "7"]).0, 0);
+    let (code, v) = run(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    let pr = v["data"]["pr"].as_u64().unwrap();
+    green(&fake, v["data"]["head_sha"].as_str().unwrap());
+    let (code, v) = run(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
+    let record = format!(r#"{{"bosun":"task-pr","session":"{SESSION}","pr":{pr}}}"#);
+    assert!(
+        fake.comments_of(7).iter().any(|c| c.body.contains(&record)),
+        "no {record}"
+    );
+
+    // Still open: reap leaves it, without a sweep.
+    let before = fake.requests().len();
+    let (_, v) = run(&fake, dir.path(), &["reap"]);
+    assert_eq!(v["data"]["merged"], json!([]));
+    assert_eq!(pull_lists_after(&fake, before), 0);
+
+    fake.merge_pull(pr, 7);
+    let before = fake.requests().len();
+    let (code, v) = run(&fake, dir.path(), &["reap"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["merged"], json!([7]));
+    assert_eq!(fake.labels_of(7), vec!["bosun:state/merged".to_string()]);
+    assert_eq!(pull_lists_after(&fake, before), 0);
+    assert_nobody_merged(&fake);
+}
+
+/// A task without the record (written before it existed) still gets the sweep.
+#[test]
+fn reap_sweeps_for_a_task_without_a_recorded_pr() {
+    let fake = FakeGithub::start();
+    queued_with_lease(&fake);
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.merge_pull(20, 7);
+    let dir = repo("claude/t7");
+    let (_, v) = run(&fake, dir.path(), &["reap"]);
+    assert_eq!(v["data"]["merged"], json!([7]));
+    assert_eq!(pull_lists_after(&fake, 0), 1);
+}
+
+/// A recorded PR that does not link the task is not trusted; the sweep decides.
+#[test]
+fn a_recorded_pr_that_does_not_link_the_task_falls_back_to_the_sweep() {
+    let fake = FakeGithub::start();
+    queued_with_lease(&fake);
+    fake.comment(7, r#"{"bosun":"task-pr","session":"session_a","pr":30}"#);
+    fake.pull(30, "other", "claude/x", "Closes #8");
+    fake.merge_pull(30, 8);
+    let dir = repo("claude/t7");
+    let (_, v) = run(&fake, dir.path(), &["reap"]);
+    assert_eq!(v["data"]["merged"], json!([]));
+    assert_eq!(fake.labels_of(7), vec!["bosun:state/queued".to_string()]);
+    assert_eq!(pull_lists_after(&fake, 0), 1);
+}
