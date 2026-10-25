@@ -478,7 +478,7 @@ REVIEW.md). The reviewer returns:
   admin) permission on the repo (`GET collaborators/{user}/permission`; `author_association` is no
   proof, since a workflow token sees an org member as `CONTRIBUTOR`), it sits on the PR its JSON names, and the JSON is valid; a
   `head_sha` that is no longer the head is exit 3, and a comment is refused when a newer verdict
-  comment for the same head exists (the workflow also runs one comment per PR at a time). The
+  comment for the same head from the same reviewer session exists (another session's is a second verdict, not a replacement) (the workflow also runs one comment per PR at a time). The
   verdict record names the reviewer session from the comment's `<!-- bosun:reviewer … -->` tag,
   which the session writes, so it is an audit hint, not proof. Any member session can post a
   verdict, the PR's author session included, as with `verdict post`. Then it does what
