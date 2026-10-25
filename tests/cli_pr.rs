@@ -374,3 +374,50 @@ fn a_pr_cannot_change_the_checks_that_judge_it() {
     let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
     assert_eq!(code, 0, "{v}");
 }
+
+#[test]
+fn an_open_branch_pr_that_does_not_link_the_task_is_refused() {
+    for (body, flag) in [
+        ("Closes #9", None),
+        ("no link at all", None),
+        ("Closes #9", Some("--auto-merge")),
+        ("no link at all", Some("--auto-merge")),
+    ] {
+        let fake = FakeGithub::start();
+        task(&fake, "bosun:state/building");
+        fake.pull(12, "other", "claude/t7", body);
+        for c in ["ci-ok", "risk-check", "review-verdict", "main-open"] {
+            fake.status("sha12", c, "success", "");
+        }
+        let dir = repo("claude/t7");
+        let mut args = vec!["pr", "7"];
+        args.extend(flag);
+        let (code, v) = bosun_in(&fake, dir.path(), &args);
+        assert_eq!(code, 3, "{body} {flag:?}: {v}");
+        assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+        assert_eq!(v["data"]["pr"], 12, "{v}");
+        assert_eq!(fake.labels_of(7), vec!["bosun:state/building".to_string()]);
+        assert!(fake.comments_of(7).is_empty());
+        assert_eq!(fake.auto_merge_enabled(12), None);
+        assert_eq!(graphql_calls(&fake), 0);
+        assert_eq!(merge_calls(&fake), 0);
+    }
+}
+
+#[test]
+fn an_open_branch_pr_that_links_the_task_in_any_form_is_used() {
+    for body in [
+        "Fixes #7",
+        "resolves: #7\n\nmore",
+        "<!-- bosun:task-pr 7 -->",
+    ] {
+        let fake = FakeGithub::start();
+        task(&fake, "bosun:state/building");
+        fake.pull(12, "t", "claude/t7", body);
+        let dir = repo("claude/t7");
+        let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+        assert_eq!(code, 0, "{body}: {v}");
+        assert_eq!(v["data"]["pr"], 12);
+        assert_eq!(v["data"]["created"], false);
+    }
+}
