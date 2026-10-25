@@ -8,6 +8,12 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun approve --list` returns a hint: approvals posted through the Claude GitHub tool never count.
 - `bosun approve` refuses to post from a Claude cloud session (its proxy rewrites GitHub writes); a PR whose owner review requests changes is not ready; a counting approval is re-posted when risk-check is still red.
 
+- `bosun reap` reads the PR that `bosun pr --auto-merge` recorded on the task (a `task-pr` record) instead of listing every PR; tasks queued before this keep the old sweep.
+- `bosun result --outcome blocked|needs-human` sets that state on the epic; `merged` stays a report.
+- `bosun init` detects a repo's own `ci-ok` check by the job's name (or key without a name), at any indentation.
+- `bosun approve`: the missing-token fix says to run it on your own machine.
+- The channel's main-open and main-health comments name bosun.yml; a test renders every channel variant and parses the output.
+
 ## 0.2.0 (2026-10-24)
 
 - `bosun fail`: stop rules (3 equal failures or 0 changed lines block the task) and tier escalation, with `failure` and `escalate` records.
