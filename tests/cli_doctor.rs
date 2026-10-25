@@ -232,3 +232,30 @@ fn doctor_does_not_warn_when_an_owner_has_a_slack_id() {
     let item = slack_step("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
     assert_eq!(item["status"], "ok", "{item}");
 }
+
+fn step2(fake: &FakeGithub) -> Value {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, v) = doctor(fake, tmp.path(), false);
+    v["data"]["items"][1].clone()
+}
+
+/// The app acts as the owner's login: only `performed_via_github_app` shows it.
+#[test]
+fn step_2_sees_the_app_through_performed_via_github_app() {
+    let fake = FakeGithub::start();
+    fake.issue(2, "task", &[], "");
+    assert_eq!(step2(&fake)["status"], "missing");
+    fake.issue_via_app(2, "claude");
+    assert_eq!(step2(&fake)["status"], "ok");
+
+    let fake = FakeGithub::start();
+    fake.issue(2, "task", &[], "");
+    fake.comment_by(2, "adam", "On it.");
+    fake.last_comment(|c| c.via_app = Some("Claude".into()));
+    assert_eq!(step2(&fake)["status"], "ok");
+
+    let fake = FakeGithub::start();
+    fake.issue(2, "task", &[], "");
+    fake.issue_via_app(2, "dependabot");
+    assert_eq!(step2(&fake)["status"], "missing");
+}

@@ -58,7 +58,7 @@ const MAX_COMPARE_PAGES: usize = 30;
 
 /// What `GET /issues/N` says about one number.
 pub enum Probe {
-    Issue(Issue),
+    Issue(Box<Issue>),
     /// 404: no such number (the numbers end here).
     Missing,
     /// Deleted (410) or transferred (301): the number is used but holds nothing for this repo.
@@ -297,7 +297,7 @@ impl Github for LiveGithub {
             .http
             .get_json_or_gone(&self.path(&format!("/issues/{number}")))?
         {
-            Ok(Some(v)) => Ok(Probe::Issue(self.parse("issue", v)?)),
+            Ok(Some(v)) => Ok(Probe::Issue(Box::new(self.parse("issue", v)?))),
             Ok(None) => Ok(Probe::Missing),
             Err(()) => Ok(Probe::Gone),
         }

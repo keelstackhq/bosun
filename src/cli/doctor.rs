@@ -77,7 +77,11 @@ fn app_user(login: &str) -> bool {
 fn claude_app_seen(gh: &dyn Github) -> Result<bool, BosunError> {
     let mut issues = gh.list_issues(&[], IssueState::All)?;
     issues.truncate(50);
-    if issues.iter().any(|i| app_user(&i.user)) {
+    // The app acts as the owner's login, so GitHub's `performed_via_github_app` is the sign.
+    if issues
+        .iter()
+        .any(|i| app_user(&i.user) || app_user(&i.via_app))
+    {
         return Ok(true);
     }
     let mut pulls = gh.list_pulls(None, IssueState::All)?;
@@ -91,7 +95,11 @@ fn claude_app_seen(gh: &dyn Github) -> Result<bool, BosunError> {
         .chain(pulls.iter().map(|p| p.number))
         .take(10);
     for n in numbers {
-        if gh.list_comments(n)?.iter().any(|c| app_user(&c.user)) {
+        if gh
+            .list_comments(n)?
+            .iter()
+            .any(|c| app_user(&c.user) || c.via_app.iter().flatten().any(|a| app_user(a)))
+        {
             return Ok(true);
         }
     }
@@ -338,7 +346,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         match &seen {
             Ok(true) => None,
             Ok(false) => Some(
-                "no PR, issue or comment by a `claude` login in the last 50 issues and PRs".into(),
+                "no PR, issue or comment by a `claude` login or via the `claude` app in the last 50 issues and PRs".into(),
             ),
             Err(e) => Some(e.message.clone()),
         },

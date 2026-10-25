@@ -26,6 +26,8 @@ pub struct FakeIssue {
     pub closed_at: Option<String>,
     pub state_reason: Option<String>,
     pub updated_at: String,
+    /// Slug of the app the issue was written via (`performed_via_github_app`).
+    pub via_app: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +166,7 @@ impl FakeGithub {
             closed_at: None,
             state_reason: None,
             updated_at: TS.into(),
+            via_app: None,
         });
     }
 
@@ -433,6 +436,16 @@ impl FakeGithub {
             .user = user.into();
     }
 
+    /// An issue or pull entry written through the GitHub App `slug`.
+    pub fn issue_via_app(&self, number: u64, slug: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .via_app = Some(slug.into());
+    }
+
     /// A comment written by `user`.
     pub fn comment_by(&self, issue: u64, user: &str, body: &str) {
         let mut s = self.state.lock().unwrap();
@@ -587,6 +600,9 @@ fn issue_json(i: &FakeIssue) -> Value {
     let mut v = json!({"number": i.number, "title": i.title, "body": i.body, "state": i.state,
         "labels": labels, "user": {"login": i.user}, "closed_at": i.closed_at,
         "state_reason": i.state_reason, "updated_at": i.updated_at});
+    if let Some(slug) = &i.via_app {
+        v["performed_via_github_app"] = json!({"slug": slug});
+    }
     if i.is_pr {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
@@ -828,6 +844,7 @@ fn route(
                 closed_at: None,
                 state_reason: None,
                 updated_at: TS.into(),
+                via_app: None,
             };
             let v = issue_json(&issue);
             s.issues.push(issue);
