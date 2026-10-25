@@ -371,7 +371,12 @@ fn missing_or_blank_owner_token_is_needs_human_and_never_falls_back() {
         let v = one_object(&out.stdout);
         assert!(v["error"]["message"].as_str().unwrap().contains("owner"));
         let fix = v["error"]["fix"].as_str().unwrap();
-        assert!(fix.contains("BOSUN_OWNER_TOKEN") && fix.contains("Claude Code"));
+        assert!(
+            fix.contains("BOSUN_OWNER_TOKEN") && fix.contains("own machine"),
+            "{fix}"
+        );
+        // A claude.ai cloud environment is never the place (#211).
+        assert!(!fix.contains("environment"), "{fix}");
     }
     assert!(fake.requests().is_empty(), "no request without the token");
 }

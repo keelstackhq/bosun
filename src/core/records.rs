@@ -89,6 +89,8 @@ pub enum Record {
         main_open: Vec<PrHead>,
         at: String,
     },
+    /// The PR that `bosun pr --auto-merge` queued for this task; `reap` reads it directly.
+    TaskPr { session: String, pr: u64 },
     /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
     Answer {
         session: String,
@@ -126,7 +128,8 @@ impl Record {
             | Record::Failure { session, .. }
             | Record::Escalate { session, .. }
             | Record::LessonSeen { session, .. }
-            | Record::Answer { session, .. } => session,
+            | Record::Answer { session, .. }
+            | Record::TaskPr { session, .. } => session,
         }
     }
 }

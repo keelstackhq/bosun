@@ -4,10 +4,10 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, active_issues, default_branch, end_lease, set_state, sync_merged};
+use crate::app::{App, active_issues, default_branch, end_lease, notes, set_state, sync_merged};
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::linked_issues;
-use crate::core::records::Record;
+use crate::core::records::{Record, parse_record};
 use crate::core::state::{State, state_of};
 use crate::github::IssueState;
 use crate::output::{CmdResult, Outcome};
@@ -39,9 +39,39 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let mut merged = Vec::new();
     let queued = gh.list_issues(&[&State::Queued.label()], IssueState::All)?;
     if !queued.is_empty() {
-        let pulls = gh.list_pulls(None, IssueState::All)?;
         let base = default_branch(gh)?;
+        // Listed only for tasks without a usable `task-pr` record (older ones).
+        let mut all_pulls = None;
         for issue in queued {
+            let recorded =
+                notes(gh, issue.number)?
+                    .iter()
+                    .rev()
+                    .find_map(|n| match parse_record(&n.body) {
+                        Some(Record::TaskPr { pr, .. }) => Some(pr),
+                        _ => None,
+                    });
+            // The record is trusted like any other; the PR must still link the task.
+            let pull = match recorded {
+                Some(pr) => gh
+                    .get_pull(pr)?
+                    .filter(|p| linked_issues(&p.body).contains(&issue.number)),
+                None => None,
+            };
+            match pull {
+                Some(p) if p.state == "open" => continue,
+                Some(p) if p.merged && p.base_ref == base => {
+                    sync_merged(gh, issue.number, &issue, None)?;
+                    merged.push(issue.number);
+                    continue;
+                }
+                // Closed unmerged, or no usable record: the sweep decides.
+                _ => {}
+            }
+            let pulls = match &all_pulls {
+                Some(p) => p,
+                None => all_pulls.insert(gh.list_pulls(None, IssueState::All)?),
+            };
             let linked: Vec<_> = pulls
                 .iter()
                 .filter(|p| linked_issues(&p.body).contains(&issue.number))
