@@ -186,7 +186,7 @@ State machine:
 
 Only bosun commands change the state label. A hook refuses a direct label edit.
 
-`bosun pr` sets claimed -> building -> review (a PR exists only after the first push). `bosun pr` or `bosun reap` sets queued -> merged once GitHub merged the PR, and ends the leases on the issue with reason `merged`; `reap` also looks at queued tasks whose issue is closed. Before it turns on auto-merge, `bosun pr --auto-merge` posts `{"bosun":"task-pr","session":..,"pr":N}` on the task; `reap` reads the newest such record and that one PR (it must link the task: open means wait, merged into the default branch means merged). Only a task without a usable record (older records, a PR that does not link the task, or one closed unmerged) costs the list of all PRs.
+`bosun pr` sets claimed -> building -> review (a PR exists only after the first push). `bosun pr` or `bosun reap` sets queued -> merged once GitHub merged the PR, and ends the leases on the issue with reason `merged`; `reap` also looks at queued tasks whose issue is closed. Before it turns on auto-merge, `bosun pr --auto-merge` posts `{"bosun":"task-pr","session":..,"pr":N}` on the task; `reap` reads the newest such record and that one PR (it must link the task: open means wait, merged into the default branch means merged). Only a task without a usable record (none, as for older tasks; a PR that is gone, does not link the task, is closed unmerged or merged into another branch) costs the list of all PRs.
 
 Stop rules:
 - The same failure signature 3 times in a row: the task goes to blocked.

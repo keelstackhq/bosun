@@ -300,3 +300,27 @@ fn a_recorded_pr_that_does_not_link_the_task_falls_back_to_the_sweep() {
     assert_eq!(fake.labels_of(7), vec!["bosun:state/queued".to_string()]);
     assert_eq!(pull_lists_after(&fake, 0), 1);
 }
+
+/// A recorded PR closed unmerged, or merged into another branch, is no answer: the sweep decides.
+#[test]
+fn a_recorded_pr_closed_unmerged_or_off_the_default_branch_falls_back_to_the_sweep() {
+    for off_default in [false, true] {
+        let fake = FakeGithub::start();
+        queued_with_lease(&fake);
+        fake.comment(7, r#"{"bosun":"task-pr","session":"session_a","pr":30}"#);
+        fake.pull(30, "first", "claude/t7", "Closes #7");
+        if off_default {
+            fake.pull_set(30, "base", json!({"sha": "b", "ref": "feature-x"}));
+            fake.merge_pull(30, 7);
+        } else {
+            fake.pull_set(30, "state", json!("closed"));
+        }
+        // The replacement PR, opened by hand, merged into the default branch.
+        fake.pull(31, "second", "claude/t7b", "Closes #7");
+        fake.merge_pull(31, 7);
+        let dir = repo("claude/t7");
+        let (_, v) = run(&fake, dir.path(), &["reap"]);
+        assert_eq!(v["data"]["merged"], json!([7]), "off_default={off_default}");
+        assert_eq!(pull_lists_after(&fake, 0), 1);
+    }
+}
