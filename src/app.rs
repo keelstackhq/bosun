@@ -294,6 +294,13 @@ pub fn renew_lease(
     Ok(())
 }
 
+/// Whether a merged PR may move this task: a `queued` task always (auto-merge), a `building`,
+/// `review` or `fixing` one only when its issue is closed (GitHub closes it when a `Closes #N`
+/// PR merges into the default branch; an open issue means the work is not done).
+pub fn merge_counts(issue: &Issue) -> bool {
+    state_of(&issue.labels) == Some(State::Queued) || issue.state == "closed"
+}
+
 /// The PR of `number` merged (auto-merge, or a human): move a `building`, `review`, `fixing` or
 /// `queued` task to `merged` and end the leases on the issue (only the one of `only_session` when
 /// given) with reason `merged`. Any other state is left alone. Returns whether the state moved.

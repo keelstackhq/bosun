@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ResultArgs;
-use crate::app::{App, end_lease, notes, set_state, sync_merged};
+use crate::app::{App, default_branch, end_lease, merge_counts, notes, set_state, sync_merged};
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::linked_issues;
 use crate::core::records::Record;
@@ -59,9 +59,11 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         && let Some(pr) = args.pr
         && let Some(pull) = gh.get_pull(pr)?
         && pull.merged
+        && pull.base_ref == default_branch(gh)?
     {
         for task in linked_issues(&pull.body) {
             if let Some(issue) = gh.get_issue(task)?
+                && merge_counts(&issue)
                 && sync_merged(gh, task, &issue, Some(session))?
             {
                 tasks_merged.push(task);

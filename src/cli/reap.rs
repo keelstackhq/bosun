@@ -5,7 +5,9 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, active_issues, default_branch, end_lease, notes, set_state, sync_merged};
+use crate::app::{
+    App, active_issues, default_branch, end_lease, merge_counts, notes, set_state, sync_merged,
+};
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::linked_issues;
 use crate::core::records::{Record, parse_record};
@@ -24,6 +26,9 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let mut open_work: Vec<Issue> = Vec::new();
     for st in [State::Building, State::Review, State::Fixing, State::Queued] {
         for issue in gh.list_issues(&[&st.label()], IssueState::All)? {
+            if !merge_counts(&issue) {
+                continue;
+            }
             if !open_work.iter().any(|i| i.number == issue.number) {
                 open_work.push(issue);
             }
