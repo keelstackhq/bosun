@@ -24,10 +24,17 @@ npm install -g "pnpm@${PNPM_VERSION}"
 (cd "$(npm root -g)/pnpm" && node install.js) || true
 {% endif %}{% if "rust" in pieces %}
 # Rust and the cargo tools the gates run. The version is the `channel` of the repo's
-# rust-toolchain.toml when the script runs in a checkout, so gates and sessions share a toolchain.
-if v="$(sed -n 's/^channel *= *"\(.*\)".*/\1/p' "{{ rust_path }}/rust-toolchain.toml" 2>/dev/null | head -n1)" && [ -n "$v" ]; then
-  RUST_VERSION="$v"
-fi
+# rust-toolchain.toml (or the legacy rust-toolchain file) when the script runs in a checkout, so gates and sessions share a toolchain.
+for f in "{{ rust_path }}/rust-toolchain.toml" rust-toolchain.toml rust-toolchain; do
+  [ -f "$f" ] || continue
+  v="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" "$f" | head -n1)"
+  # The legacy `rust-toolchain` file may hold just the channel on its first line.
+  if [ -z "$v" ] && [ "$f" = rust-toolchain ]; then
+    v="$(head -n1 "$f" | tr -d '[:space:]')"
+    printf '%s' "$v" | grep -Eqx '[A-Za-z0-9._-]+' || v=""
+  fi
+  if [ -n "$v" ]; then RUST_VERSION="$v"; break; fi
+done
 rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
 rustup default "${RUST_VERSION}"
 cargo install --locked cargo-nextest cargo-deny

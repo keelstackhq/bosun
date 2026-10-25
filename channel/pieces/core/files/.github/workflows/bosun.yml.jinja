@@ -29,8 +29,10 @@ permissions:
   contents: read
 
 jobs:
-  # Docs-only fast path (pull requests only): when every changed file is under docs/ or plans/ or
-  # is a root-level *.md, bosun-bin, gate and pin are skipped and the aggregate accepts that.
+  # Docs-only fast path (pull requests only): when every changed file is a *.md under docs/ or
+  # plans/ or at the root, bosun-bin, gate and pin are skipped and the aggregate accepts that.
+  # Not for the ts-pnpm stack: its fmt gate (prettier) checks Markdown too, so the channel renders
+  # a `changes` job that always outputs docs_only=false there.
   # Any other event, an empty diff or a diff that cannot be computed gives docs_only=false
   # (fail closed). risk.yml and verdict.yml are separate workflows and still judge such a PR.
   changes:
@@ -38,7 +40,9 @@ jobs:
     outputs:
       docs_only: ${{ steps.diff.outputs.docs_only || 'false' }}
     steps:
-      - if: github.event_name == 'pull_request'
+{% endraw %}{% if "ts-pnpm" in pieces %}{% raw %}      - id: diff
+        run: echo "docs_only=false" >> "$GITHUB_OUTPUT"
+{% endraw %}{% else %}{% raw %}      - if: github.event_name == 'pull_request'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -55,7 +59,7 @@ jobs:
             docs_only=true
             while IFS= read -r f; do
               case "$f" in
-                docs/*|plans/*) ;;
+                docs/*.md|plans/*.md) ;;
                 */*) docs_only=false ;;
                 *.md) ;;
                 *) docs_only=false ;;
@@ -65,7 +69,7 @@ jobs:
           EOF
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
-
+{% endraw %}{% endif %}{% raw %}
   # The gates run the bosun release pinned in the base commit's .bosun/version, so a change to
   # the pin takes effect only after it merges. (A change to this file runs at once: R-ci.)
   bosun-bin:
@@ -125,8 +129,9 @@ jobs:
       fail-fast: false
       matrix:
 {% endraw %}{% if own_ci %}{% raw %}        # The repo's own ci.yml already runs fmt, lint, test and deps; only test-integrity is unique
-        # to bosun. So a pull request runs just that, unless the repo variable BOSUN_ALL_GATES is
-        # '1'. Every other event (push to main, merge queue, the nightly run main-health calls,
+        # to bosun. So a pull request runs just that and relies on the repo's own ci-ok for the
+        # rest; if that CI lacks one (cargo-deny, say), set the repo variable BOSUN_ALL_GATES to
+        # '1' to run all five on pull requests too. Every other event (push to main, merge queue, the nightly run main-health calls,
         # where github.event_name is the caller's, e.g. schedule) runs all five gates.
         gate: ${{ fromJSON((vars.BOSUN_ALL_GATES == '1' || github.event_name != 'pull_request') && '["fmt","lint","test","deps","test-integrity"]' || '["test-integrity"]') }}
 {% endraw %}{% else %}{% raw %}        gate: [fmt, lint, test, deps, test-integrity]
@@ -136,17 +141,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 {% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install, the one rust-toolchain.toml names (`rustup toolchain
-      # install` with no argument reads it from the working directory).
+      # install` with no argument looks in the working directory and its parents, so a rust_path
+      # below the repo root finds the seeded root file). Without a toolchain file the install
+      # fails and the old pin is used.
       - name: rust toolchain
         working-directory: {{ rust_path }}
         run: |
-          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
-            rustup toolchain install
-            rustup component add rustfmt clippy
-          else
-            rustup toolchain install stable --profile minimal -c rustfmt,clippy
-            rustup default stable
+          if ! rustup toolchain install; then
+            rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
+            rustup default 1.97
           fi
+          rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: {{ rust_path }}

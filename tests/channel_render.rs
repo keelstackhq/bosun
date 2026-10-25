@@ -380,9 +380,12 @@ fn rust_gates_install_the_toolchain_file_once() {
         let wf = file(&files, BOSUN_YML);
         assert!(!wf.contains("dtolnay/rust-toolchain"), "{wf}");
         assert!(!wf.contains("\"1.97\""), "{wf}");
-        assert!(wf.contains("rustup toolchain install\n"), "{wf}");
+        assert!(wf.contains("! rustup toolchain install;"), "{wf}");
         assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
-        assert!(wf.contains("rustup toolchain install stable --profile minimal -c rustfmt,clippy"));
+        // The seeded toolchain file sits at the repo root, so a rust_path below it finds it in a
+        // parent directory; only a failed install falls back to the old pin, never to `stable`.
+        assert!(wf.contains("rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy"));
+        assert!(!wf.contains("install stable"), "{wf}");
         let setup = file(&files, "docs/setup-script.sh");
         assert!(setup.contains("rust-toolchain.toml"), "{setup}");
         assert!(
@@ -444,7 +447,11 @@ fn docs_only_fast_path_skips_work_and_the_aggregate_stays_strict() {
 
 /// Runs the `changes` job's script in a real git repo whose PR changes `changed` (`a->b`: a move).
 fn docs_only(changed: &[&str]) -> String {
-    let files = variant(&["rust"], "");
+    docs_only_in(&["rust"], changed)
+}
+
+fn docs_only_in(stack: &[&str], changed: &[&str]) -> String {
+    let files = variant(stack, "");
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
     let steps = j["jobs"]["changes"]["steps"].as_array().unwrap();
     let script = steps.iter().find(|s| s["id"] == "diff").unwrap()["run"]
@@ -494,7 +501,13 @@ fn docs_only_detection_fails_closed() {
     assert_eq!(docs_only(&all), "docs_only=true");
     assert_eq!(docs_only(&["docs/a.md", "src/x.rs"]), "docs_only=false");
     assert_eq!(docs_only(&["src/a.md"]), "docs_only=false");
-    assert_eq!(docs_only(&["docs/x.rs"]), "docs_only=true");
+    // Only markdown is docs: code or data under docs/ still runs the gates.
+    assert_eq!(docs_only(&["docs/x.rs"]), "docs_only=false");
+    assert_eq!(docs_only(&["docs/a.md", "docs/b.json"]), "docs_only=false");
+    // ts-pnpm: prettier checks markdown, so there is no fast path at all.
+    for stack in [&["ts-pnpm"][..], &["rust", "ts-pnpm"]] {
+        assert_eq!(docs_only_in(stack, &["docs/a.md"]), "docs_only=false");
+    }
     // A move out of src/ into docs/ still touches src/.
     assert_eq!(docs_only(&["src/old.rs->docs/old.rs"]), "docs_only=false");
     assert_eq!(docs_only(&[]), "docs_only=false", "an empty diff");
@@ -568,5 +581,48 @@ fn the_renderer_refuses_tags_outside_the_subset() {
     ] {
         let r = std::panic::catch_unwind(|| render(bad, &vars, &[], "t"));
         assert!(r.is_err(), "{bad} rendered");
+    }
+}
+
+/// Runs the aggregate job's script with the given needs results; true when it exits 0.
+fn aggregate_passes(own_ci: &str, changes: &str, docs_only: &str, rest: [&str; 3]) -> bool {
+    let name = if own_ci.is_empty() {
+        "ci-ok"
+    } else {
+        "bosun-ok"
+    };
+    let files = variant(&["rust"], own_ci);
+    let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
+    let run = j["jobs"][name]["steps"][0]["run"].as_str().unwrap();
+    // The shell a `run:` step gets on a runner.
+    Command::new("bash")
+        .args(["-eo", "pipefail", "-c", run])
+        .env("CHANGES", changes)
+        .env("DOCS_ONLY", docs_only)
+        .env("BIN", rest[0])
+        .env("GATE", rest[1])
+        .env("PIN", rest[2])
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+#[test]
+fn the_aggregate_script_skips_only_on_the_docs_only_path() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    for own_ci in ["", "1"] {
+        let ok = ["success"; 3];
+        let skipped = ["skipped"; 3];
+        assert!(aggregate_passes(own_ci, "success", "false", ok));
+        assert!(aggregate_passes(own_ci, "success", "true", skipped));
+        let one_failed = ["skipped", "failure", "skipped"];
+        assert!(!aggregate_passes(own_ci, "success", "true", one_failed));
+        assert!(!aggregate_passes(own_ci, "success", "", skipped));
+        assert!(!aggregate_passes(own_ci, "success", "false", skipped));
+        assert!(!aggregate_passes(own_ci, "cancelled", "true", skipped));
+        assert!(!aggregate_passes(own_ci, "failure", "true", ok));
     }
 }
