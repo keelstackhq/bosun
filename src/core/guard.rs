@@ -103,7 +103,8 @@ fn label_fields(v: &Value) -> String {
 }
 
 fn label_reason() -> String {
-    "bosun:state/* labels change only through bosun commands (spec §4): use `bosun claim`, \
+    "a command that names a bosun:state/* label and can write labels (gh, curl, an interpreter, \
+     a /labels path) is refused: those labels change only through bosun commands (spec §4); use `bosun claim`, \
      `bosun release`, `bosun pr` or `bosun verdict post|comment`"
         .to_string()
 }
@@ -133,6 +134,7 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
     // or a `( .. )` group. `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` make it unknown.
     let mut dir: Option<Vec<String>> = Some(Vec::new());
     let (mut prev, mut chained) = ("", false);
+    let (mut names_label, mut writes_labels) = (false, false);
     for (segment, sep) in segments_with_sep(command) {
         let words: Vec<&str> = segment.split_whitespace().collect();
         if ["GIT_DIR", "GIT_WORK_TREE", "core.worktree"]
@@ -142,9 +144,11 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
             dir = None;
         }
         // A `bosun` segment is exempt from the label-lock only; its nested commands were
-        // checked above and the merge rules see no `gh` or `git` in it.
-        if words.first() != Some(&"bosun") && segment.contains("bosun:state/") {
-            return Some(label_reason());
+        // checked above and the merge rules see no `gh` or `git` in it. The lock judges the
+        // whole command: a label named in one segment may be written by another.
+        if words.first() != Some(&"bosun") {
+            names_label |= segment.contains("bosun:state/");
+            writes_labels |= label_writer(&words, segment);
         }
         if words.first() == Some(&"cd") {
             let start = segment.as_ptr() as usize - command.as_ptr() as usize;
@@ -181,7 +185,48 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         }
         prev = sep;
     }
-    None
+    (names_label && writes_labels).then(label_reason)
+}
+
+/// Whether a segment can write labels: `gh` except its read-only subcommands, HTTP clients,
+/// any interpreter (inline code cannot be told from a script that reads the text), and
+/// anything with a label REST path or GraphQL label mutation in it.
+fn label_writer(words: &[&str], segment: &str) -> bool {
+    if ["/labels", "abelsTo", "abelsFrom", "Labelable"]
+        .iter()
+        .any(|m| segment.contains(m))
+    {
+        return true;
+    }
+    let mut words: Vec<&str> = words
+        .iter()
+        .copied()
+        .skip_while(|w| (w.contains('=') && !w.starts_with('-')) || WRAPPERS.contains(w))
+        .collect();
+    if words.first() == Some(&"xargs") {
+        words.remove(0);
+        while words.first().is_some_and(|w| w.starts_with('-')) {
+            words.remove(0);
+        }
+        words.retain(|w| !WRAPPERS.contains(w));
+    }
+    let Some(first) = words.first() else {
+        return false;
+    };
+    let name = first.rsplit('/').next().unwrap_or(first);
+    match name {
+        "gh" => !matches!(
+            &words[1..],
+            ["issue", "list" | "view" | "status", ..]
+                | ["pr", "list" | "view" | "status" | "diff" | "checks", ..]
+                | ["search", ..]
+                | ["label", "list", ..]
+        ),
+        "curl" | "wget" | "http" | "https" | "xh" | "httpie" => true,
+        _ => ["python", "node", "ruby", "perl", "deno", "bun"]
+            .iter()
+            .any(|i| name.starts_with(i)),
+    }
 }
 
 /// The commands inside `$(...)`, backticks, `( ... )` groups, `sh|bash|zsh -c STR` and
@@ -697,6 +742,42 @@ mod tests {
             "git merge origin/main",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn label_lock_judges_writes_not_mentions() {
+        for cmd in [
+            "grep -rn 'bosun:state/' src",
+            "git show HEAD:x | grep bosun:state/review",
+            "cat > docs/x.md <<'EOF'\nThe bosun:state/review label ...\nEOF",
+            "gh issue list --label bosun:state/review",
+            "gh pr view 3 --json labels | grep bosun:state/",
+            "gh search issues bosun:state/review",
+            "gh label list --search bosun:state/",
+            "rg bosun:state/ docs",
+            "bosun claim 3 # bosun:state/claimed",
+        ] {
+            assert_eq!(bash(cmd, "x"), None, "{cmd}");
+        }
+        for cmd in [
+            "gh issue edit 3 --add-label bosun:state/merged",
+            "gh pr edit 3 --remove-label bosun:state/review",
+            "gh api repos/o/r/issues/3/labels -f labels[]=bosun:state/merged",
+            "curl -X POST https://api.github.com/repos/o/r/issues/3/labels -d '{\"labels\":[\"bosun:state/merged\"]}'",
+            "L=bosun:state/merged; gh issue edit 1 --add-label \"$L\"",
+            "echo bosun:state/x | xargs gh issue edit 1 --add-label",
+            "echo bosun:state/x | xargs -n1 gh issue edit 1 --add-label",
+            "FOO=1 sudo gh issue edit 1 --add-label bosun:state/x",
+            "bash -c \"gh issue edit 1 --add-label bosun:state/merged\"",
+            "$(gh issue edit 1 --add-label bosun:state/merged)",
+            "python3 -c \"import x; x.f('bosun:state/merged')\"",
+            "node -e \"f('bosun:state/merged')\"",
+            "gh label create bosun:state/x",
+            "gh issue create --label bosun:state/ready",
+            "gh api graphql -f query='mutation{addLabelsToLabelable(input:{labelIds:[\"bosun:state/x\"]})}'",
+        ] {
+            assert!(bash(cmd, "x").is_some(), "{cmd}");
         }
     }
 
