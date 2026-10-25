@@ -5,9 +5,10 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ResultArgs;
-use crate::app::{App, end_lease, notes};
+use crate::app::{App, end_lease, notes, set_state};
 use crate::core::lease::{leases_of, members};
 use crate::core::records::Record;
+use crate::core::state::{State, state_of, transition_allowed};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -15,12 +16,12 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     // No kill switch check: reporting a result is how a halted child hands back.
     let app = App::load(dir)?;
     let (gh, n, session) = (app.gh.as_ref(), args.epic, &app.ctx.session);
-    if gh.get_issue(n)?.is_none() {
+    let Some(epic) = gh.get_issue(n)? else {
         return Err(BosunError::error(
             format!("epic #{n} does not exist"),
             "check the epic number; it is the issue in your prompt",
         ));
-    }
+    };
 
     let pr_text = args.pr.map_or(String::new(), |p| format!(", PR #{p}"));
     let record = Record::Result {
@@ -34,6 +35,22 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         record.to_line()
     );
     let comment_id = gh.add_comment(n, &body)?.id;
+
+    // `merged` is only a report: the merge itself moves the state (D13). The other outcomes set
+    // their state, as this ends the lease and nothing else would move the epic (spec §5).
+    let mut state = state_of(&epic.labels);
+    let to = match args.outcome.as_str() {
+        "blocked" => Some(State::Blocked),
+        "needs-human" => Some(State::NeedsHuman),
+        _ => None,
+    };
+    if let Some(to) = to
+        && state != Some(to)
+        && state.is_none_or(|from| transition_allowed(from, to))
+    {
+        set_state(gh, n, &epic, to)?;
+        state = Some(to);
+    }
 
     let lease_ended = leases_of(n, &notes(gh, n)?)
         .iter()
@@ -56,5 +73,6 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     Ok(Outcome::data(json!({
         "epic": n, "outcome": args.outcome, "pr": args.pr,
         "comment_id": comment_id, "lease_ended": lease_ended, "left": left,
+        "task_state": state.map(State::name),
     })))
 }
