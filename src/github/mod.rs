@@ -164,6 +164,9 @@ pub fn enable_auto_merge_any(gh: &dyn Github, pull: &Pull) -> Result<&'static st
 pub enum Live {
     /// The contexts enforced (empty: nothing is, or the branch has no rule).
     Checks(Vec<String>),
+    /// One endpoint answered 403 (named): the contexts the other one enforces, which may be
+    /// only part of them (classic protection is often unreadable while rulesets are not).
+    Partial(Vec<String>, &'static str),
     /// Both endpoints answered 403: a private repo on a free plan has no rulesets, or the token
     /// lacks Administration: read.
     Forbidden,
@@ -420,6 +423,7 @@ impl Github for LiveGithub {
         if rules.is_err() && classic.is_err() {
             return Ok(Live::Forbidden);
         }
+        let (rules_403, classic_403) = (rules.is_err(), classic.is_err());
         let mut out: Vec<String> = Vec::new();
         for rule in rules
             .ok()
@@ -451,7 +455,13 @@ impl Github for LiveGithub {
         }
         out.sort();
         out.dedup();
-        Ok(Live::Checks(out))
+        Ok(if rules_403 {
+            Live::Partial(out, "rulesets (/rules/branches)")
+        } else if classic_403 {
+            Live::Partial(out, "classic branch protection")
+        } else {
+            Live::Checks(out)
+        })
     }
 
     fn variable(&self, name: &str) -> Result<Variable> {

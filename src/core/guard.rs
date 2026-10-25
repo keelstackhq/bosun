@@ -110,8 +110,9 @@ const LABEL_FIX: &str = "state labels change only through bosun commands (spec �
 
 fn label_reason() -> String {
     format!(
-        "a command that names a {STATE}* label may run only read-only commands (grep, rg, cat, \
-         jq, git show|log|diff, gh issue|pr list|view, gh search, bosun ...): {LABEL_FIX}"
+        "a command that names a {STATE}* label may run only read-only commands (grep, cat, jq, \
+         git show|log|diff, gh issue|pr list|view, gh search, bosun ...) and no `$` expansion: \
+         {LABEL_FIX}"
     )
 }
 
@@ -187,24 +188,30 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
     None
 }
 
-/// Label-lock (spec §4): a command that names a state label must be read-only throughout, and
-/// the lock fails closed. Every command in it, at every nesting level, must be on the allowlist
-/// (`segment_ro`); a `bosun` command is on it, so `bosun claim 3 # bosun:state/x` passes.
+/// Label-lock (spec §4): a guard against accidental or casual state-label edits, not a
+/// sandbox. A command that names a state label must be read-only throughout, and the lock
+/// fails closed: every command in it, at every nesting level, must be on the allowlist
+/// (`segment_ro`), with no `$` expansion outside single quotes; `bosun` is on it, so
+/// `bosun claim 3 # bosun:state/x` passes.
 ///
 /// A plain command (no `$( )`, backticks, `${ }`, `$'..'`; see `plain_segments`) is split with
-/// shell quoting, so a quoted `|` or `(` in a grep or jq argument is data, and quoted-delimiter
-/// heredoc bodies are data. Anything else is split at every `; & |` and newline, quoted or not,
-/// and every `( )` group and backtick span is judged on its own too: stricter, never looser.
+/// shell quoting, so a quoted `|` or `(` in a grep or jq argument is data, and the body of a
+/// heredoc with a quoted delimiter is data. Anything else is split at every `; & |` and
+/// newline, quoted or not, any segment with `$` or a backtick is refused, and every `( )` group
+/// and backtick span is judged on its own too: stricter, never looser.
 ///
-/// Known misses (the old rule missed them too): a label split by quotes or escapes
-/// (`"bosun:"state/x`, `bosun:state\/x`), a label built at run time (`printf`), and a label
-/// written to a file in one call and read in another.
+/// Known misses: a label split by quotes or escapes (`"bosun:"state/x`, `bosun:state\/x`), a
+/// label built at run time (`printf`), a label written to a file in one call and read in
+/// another, and repo config or files set up by an earlier call (a git pager, diff driver or
+/// fsmonitor, a script on `PATH`).
 fn read_only(text: &str, depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
     }
     if let Some(segments) = plain_segments(text) {
-        return segments.iter().all(|s| !s.grouped && segment_ro(&s.words));
+        return segments
+            .iter()
+            .all(|s| !s.grouped && !s.dollar && segment_ro(&s.words, s.glob));
     }
     // Backticks nest only when escaped; unescaped, every real span is a gap between two
     // consecutive backticks. An odd count is an unterminated span.
@@ -217,7 +224,9 @@ fn read_only(text: &str, depth: usize) -> bool {
         && nested(text).iter().all(|n| read_only(n, depth + 1))
         && rough_segments(text).iter().all(|seg| {
             let words: Vec<String> = shell_words(seg).into_iter().filter(|w| w != SEP).collect();
-            !seg.contains("()") && segment_ro(&words)
+            !seg.contains(['$', '`'])
+                && !seg.contains("()")
+                && segment_ro(&words, seg.contains(['*', '?', '[', '{']))
         })
 }
 
@@ -242,19 +251,24 @@ fn rough_segments(text: &str) -> Vec<&str> {
     out
 }
 
-/// One simple command of a plain command line: its words with quotes removed, and whether an
-/// unquoted `(` or `)` appeared (a subshell, a function, `case`: never read-only).
+/// One simple command of a plain command line: its words with quotes removed; whether an
+/// unquoted `(` or `)` appeared (a subshell, a function, `case`: never read-only); whether a
+/// `$` appeared outside single quotes (a variable, `$[..]`: never read-only); and whether an
+/// argument has an unquoted glob or brace character (it may expand to an option).
 #[derive(Default)]
 struct PlainSegment {
     words: Vec<String>,
     grouped: bool,
+    dollar: bool,
+    glob: bool,
 }
 
 /// The simple commands of a plain command line, split the way bash splits it: `'..'`, `".."`
 /// and `\` quoting, `#` comments, `\`-newline joins, redirections (`>&`, `&>`, `>|`) are not
 /// separators, and heredoc bodies are skipped. `None` for anything this does not model
 /// exactly (command or parameter substitution, `$'..'`, an unterminated quote or heredoc, an
-/// unquoted heredoc body with `$(` or a backtick): the caller then splits more roughly.
+/// unquoted-delimiter heredoc body with `$` or a backtick): the caller then splits more
+/// roughly.
 fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
     let c: Vec<char> = text.chars().collect();
     let (mut out, mut seg) = (Vec::new(), PlainSegment::default());
@@ -285,6 +299,10 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
                         '"' => break,
                         '`' => return None,
                         '$' if matches!(c.get(j + 1), Some('(' | '{')) => return None,
+                        '$' => {
+                            seg.dollar = true;
+                            word.push('$');
+                        }
                         '\\' => {
                             match *c.get(j + 1)? {
                                 '\n' => {}
@@ -313,6 +331,11 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
             }
             '`' => return None,
             '$' if matches!(c.get(i + 1), Some('(' | '{' | '\'' | '"')) => return None,
+            '$' => {
+                seg.dollar = true;
+                word.push('$');
+                started = true;
+            }
             '#' if !started => {
                 while i < c.len() && c[i] != '\n' {
                     i += 1;
@@ -342,7 +365,7 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
                         if bare == delim {
                             break;
                         }
-                        if !quoted && (line.contains("$(") || line.contains('`')) {
+                        if !quoted && line.contains(['$', '`']) {
                             return None;
                         }
                     }
@@ -418,6 +441,7 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
             }
             x if x.is_whitespace() => flush(&mut word, &mut started, &mut seg),
             x => {
+                seg.glob |= !seg.words.is_empty() && matches!(x, '*' | '?' | '[' | '{');
                 word.push(x);
                 started = true;
             }
@@ -454,14 +478,75 @@ fn assigned(word: &str) -> Option<&str> {
     .then_some(name)
 }
 
+/// The `git show|log|diff|blame|status` options the label-lock vouches for: none runs a
+/// program or a pager. Matched exactly (git takes abbreviations, which are refused), the name
+/// before any `=`.
+const GIT_OPTIONS: &[&str] = &[
+    "--",
+    "--abbrev-commit",
+    "--after",
+    "--all",
+    "--author",
+    "--before",
+    "--branch",
+    "--cached",
+    "--check",
+    "--date",
+    "--decorate",
+    "--exit-code",
+    "--first-parent",
+    "--follow",
+    "--format",
+    "--graph",
+    "--grep",
+    "--max-count",
+    "--merges",
+    "--name-only",
+    "--name-status",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-merges",
+    "--no-patch",
+    "--no-textconv",
+    "--numstat",
+    "--oneline",
+    "--patch",
+    "--porcelain",
+    "--pretty",
+    "--quiet",
+    "--reverse",
+    "--short",
+    "--shortstat",
+    "--since",
+    "--staged",
+    "--stat",
+    "--until",
+    "-b",
+    "-p",
+    "-q",
+    "-s",
+    "-w",
+];
+
+/// A vouched git option: one of `GIT_OPTIONS`, `-<n>` or `-n<n>`.
+fn git_option_ok(arg: &str) -> bool {
+    let name = arg.split_once('=').map_or(arg, |(k, _)| k);
+    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+    GIT_OPTIONS.contains(&name)
+        || arg.strip_prefix('-').is_some_and(digits)
+        || arg.strip_prefix("-n").is_some_and(digits)
+}
+
 /// The label-lock allowlist. A segment is read-only when its command (quotes removed, no
-/// path) is `bosun`, a text tool (grep, cat, jq, ...), `git show|log|diff|grep|blame|status`
-/// (only `-C dir` and `--no-pager` before it, no `--ext-diff` or `-O`), or read-only `gh`
-/// (`issue|pr list|view|status`, `pr diff|checks`, `search`, `label list`). Assignments
-/// before a command are allowed only for `bosun`; a segment of assignments alone is read-only
-/// unless it sets a `risky_var`. Keywords, groups, functions, `xargs`, `less` (its `!`) and
-/// every other command are not.
-fn segment_ro(words: &[String]) -> bool {
+/// path) is a text tool (grep, cat, jq, ...: no option of theirs runs a program), or, with no
+/// glob or brace in its arguments (`glob`, which could expand to an option), `bosun`,
+/// `git show|log|diff|blame|status` (only `-C dir` and `--no-pager` before it, only
+/// `GIT_OPTIONS` after it), or read-only `gh` (`issue|pr list|view|status`, `pr diff|checks`,
+/// `search`, `label list`). Assignments before a command are allowed only for `bosun`; a
+/// segment of assignments alone is read-only unless it sets a `risky_var`. Keywords, groups,
+/// functions, `xargs`, `less` (its `!`), `sort` and `rg` (options that run programs),
+/// `git grep` (`-O`) and every other command are not.
+fn segment_ro(words: &[String], glob: bool) -> bool {
     if words
         .iter()
         .any(|w| w.contains("/dev/tcp/") || w.contains("/dev/udp/"))
@@ -477,10 +562,10 @@ fn segment_ro(words: &[String]) -> bool {
     }
     let args: Vec<&str> = words[n + 1..].iter().map(String::as_str).collect();
     match cmd.as_str() {
-        "bosun" | "grep" | "egrep" | "fgrep" | "cat" | "head" | "tail" | "wc" | "uniq" | "cut"
-        | "tr" | "jq" | "diff" | "ls" | "test" | "[" | "true" | "false" | "echo" | "printf" => true,
-        "sort" => !args.iter().any(|a| a.starts_with("--compress")),
-        "rg" => !args.iter().any(|a| a.starts_with("--pre")),
+        "grep" | "egrep" | "fgrep" | "cat" | "head" | "tail" | "wc" | "uniq" | "cut" | "tr"
+        | "jq" | "diff" | "ls" | "test" | "[" | "true" | "false" | "echo" | "printf" => true,
+        _ if glob => false,
+        "bosun" => true,
         "git" => {
             let mut i = 0;
             loop {
@@ -490,14 +575,12 @@ fn segment_ro(words: &[String]) -> bool {
                     _ => break,
                 }
             }
+            let rest = args.get(i + 1..).unwrap_or_default();
+            let mut options = rest.iter().take_while(|a| **a != "--");
             matches!(
                 args.get(i),
-                Some(&("show" | "log" | "diff" | "grep" | "blame" | "status"))
-            ) && !args[i + 1..].iter().any(|a| {
-                a.starts_with("--ext-diff")
-                    || a.starts_with("-O")
-                    || a.starts_with("--open-files-in-pager")
-            })
+                Some(&("show" | "log" | "diff" | "blame" | "status"))
+            ) && options.all(|a| !a.starts_with('-') || git_option_ok(a))
         }
         "gh" => matches!(
             args.as_slice(),
@@ -1036,7 +1119,7 @@ mod tests {
             "gh pr view 3 --json labels | grep bosun:state/",
             "gh search issues bosun:state/review",
             "gh label list --search bosun:state/",
-            "rg bosun:state/ docs",
+            "grep -r bosun:state/ docs",
             "bosun claim 3 # bosun:state/claimed",
         ] {
             assert_eq!(bash(cmd, "x"), None, "{cmd}");
@@ -1207,6 +1290,24 @@ mod tests {
             "bosun status $(gh issue edit 1 --add-label bosun:state/merged)",
             "ech\\\no x; gh issue edit 1 --add-label bosun:state/merged",
             "echo ${x:-$(gh issue edit 1 --add-label bosun:state/merged)}",
+            // Second review: allowlisted commands that run programs, and expansions that do.
+            "sort -S 1K --com=sh f # bosun:state/merged",
+            "git grep -iOsh bosun:state/merged",
+            "git grep --open-files-in-pa=sh bosun:state/merged",
+            "X=-Osh; git grep $X bosun:state/merged",
+            "X=--pre=sh; rg $X bosun:state/merged",
+            "echo > ./--pre=sh; rg x * # bosun:state/merged",
+            "x='a[$(gh issue edit 1 --add-label bosun:state/merged)]'; echo $[x]",
+            "x='$(gh issue edit 1 --add-label bosun:state/merged)'; cat <<E\n${x@P}\nE",
+            "x='$(gh issue edit 1 --add-label bosun:state/merged)'; cat <<E\n$x\nE",
+            "git log --ext x # bosun:state/merged",
+            "git log --textconv -p # bosun:state/merged",
+            "git show {--ext-diff,HEAD} # bosun:state/merged",
+            "git log * # bosun:state/merged",
+            "git -C x log --output-directory=y # bosun:state/merged",
+            "x=$(gh issue edit 1 --add-label bosun:state/merged)",
+            "x=`gh issue edit 1 --add-label bosun:state/merged`",
+            "grep \"$X\" f # bosun:state/merged",
         ];
         let mut wrong: Vec<String> = MUST
             .iter()
@@ -1215,8 +1316,10 @@ mod tests {
             .collect();
         for cmd in [
             "grep -rn 'bosun:state/' src",
-            "rg bosun:state/ docs",
+            "grep -r bosun:state/ docs",
             "git show HEAD:docs/spec.md | grep bosun:state/review",
+            "git log --oneline -5 -- docs/spec.md | grep -c bosun:state/",
+            "grep -l bosun:state/ docs/*.md",
             "git --no-pager -C sub log --oneline | grep -c bosun:state/",
             "cat > docs/x.md <<'EOF'\nThe bosun:state/review label is set by bosun pr.\nEOF",
             "cat > docs/x.md <<-\"EOF\"\n\tIt's bosun:state/review (see `bosun pr`); a | b; $(x)\n\tEOF\ngit diff --stat",
@@ -1229,7 +1332,7 @@ mod tests {
             "gh label list --search bosun:state/ 2>&1 | head -5",
             "bosun claim 3",
             "bosun claim 3 # bosun:state/claimed",
-            "L=bosun:state/review; gh issue list --label \"$L\"",
+            "L=bosun:state/review; gh issue list --label bosun:state/review",
             "test -f x && echo 'bosun:state/review' || printf '%s\\n' none",
             "grep -c bosun:state/ docs/spec.md; wc -l docs/spec.md",
         ] {

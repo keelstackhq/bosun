@@ -329,3 +329,26 @@ fn step_3_notes_when_the_enforced_checks_cannot_be_read() {
     let d = item["detail"].as_str().unwrap();
     assert!(d.contains("cannot verify the enforced checks (403"), "{d}");
 }
+
+/// One endpoint 403 is no evidence either: a repo protected only by classic protection (often
+/// unreadable while /rules/branches answers 200) is not reported missing; the note names the
+/// endpoint. Checks the readable endpoint enforces still count.
+#[test]
+fn step_3_notes_when_only_the_classic_endpoint_is_unreadable() {
+    let tmp = step3_repo();
+    let fake = FakeGithub::start();
+    fake.fail_path("/protection/required_status_checks", 403);
+    let item = step3_on(&fake, tmp.path());
+    assert_eq!(item["status"], "ok", "{item}");
+    let d = item["detail"].as_str().unwrap();
+    assert!(d.contains("cannot verify"), "{d}");
+    assert!(d.contains("classic branch protection"), "{d}");
+    // All enforced through the readable ruleset: ok, no note needed.
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
+    let item = step3_on(&fake, tmp.path());
+    assert_eq!(item["status"], "ok", "{item}");
+    assert!(
+        !item["detail"].as_str().unwrap().contains("cannot verify"),
+        "{item}"
+    );
+}

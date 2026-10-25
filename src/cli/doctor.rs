@@ -384,11 +384,20 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         Ok(Some(info)) => Some(gh.required_status_checks(&info.default_branch)),
         _ => None,
     };
+    // A check counts as unenforced only when both endpoints were readable; with one 403, the
+    // checks the other does not show may sit behind it, so they only add a note.
+    let not_on =
+        |on: &Vec<String>| -> Vec<&String> { listed.iter().filter(|c| !on.contains(c)).collect() };
     let unenforced: Vec<&String> = match &live {
-        Some(Ok(Live::Checks(on))) => listed.iter().filter(|c| !on.contains(c)).collect(),
+        Some(Ok(Live::Checks(on))) => not_on(on),
         _ => Vec::new(),
     };
     let live_note = match &live {
+        Some(Ok(Live::Partial(on, unreadable))) if !not_on(on).is_empty() => Some(format!(
+            "cannot verify the enforced checks: {unreadable} answered 403 and the rest does not \
+             require {:?}; give the token Administration: read to check",
+            not_on(on)
+        )),
         Some(Ok(Live::Forbidden)) => Some(
             "cannot verify the enforced checks (403: a private repo on a free plan has no \
              rulesets; make it public or use a paid plan, or give the token Administration: read)"
