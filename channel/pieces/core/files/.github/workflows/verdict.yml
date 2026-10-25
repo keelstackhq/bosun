@@ -13,12 +13,13 @@ on:
   issue_comment:
     types: [created]
 
-# Every comment gets a group of its own. A group keeps only one pending run, so a shared group
-# would cancel the pending run of one reviewer session when a third comment arrives, and that
-# verdict would never be recorded. Order does not matter: `apply` lets a newer comment replace
-# only the same session's for the same head, and refuses the older one whichever run is first.
+# Verdict comments on one PR apply one at a time, in order; `apply` also refuses a comment that
+# a newer one for the same head replaces. Other comments get a group of their own: a new run
+# replaces the pending one in a group, and a skipped run must never replace a verdict.
 concurrency:
-  group: verdict-${{ github.event.issue.number }}-${{ github.event.comment.id }}
+  group: >-
+    verdict-${{ github.event.issue.number }}-${{
+    !contains(github.event.comment.body, '<!-- bosun:verdict -->') && github.run_id || 'apply' }}
   cancel-in-progress: false
 
 # Least privilege: statuses for the verdict; pull-requests: write for the verdict record comment

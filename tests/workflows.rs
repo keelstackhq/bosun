@@ -251,12 +251,8 @@ fn verdict_runs_main_code_on_verdict_comments_only() {
         yaml.contains("[ \"$rc\" = 0 ] || [ \"$rc\" = 5 ]"),
         "{yaml}"
     );
-    // Every comment gets a group of its own: a pending run never replaces another session's
-    // verdict (a group keeps one pending run), and `apply` refuses an older comment of the same
-    // session whichever order the runs take.
-    let group = &yaml[yaml.find("\nconcurrency:").unwrap()..yaml.find("\npermissions:").unwrap()];
-    assert!(group.contains("github.event.comment.id"), "{group}");
-    assert!(!group.contains("'apply'"), "{group}");
+    // Other comments must not replace a pending verdict run.
+    assert!(yaml.contains("&& github.run_id || 'apply'"), "{yaml}");
     assert!(yaml.contains("cancel-in-progress: false"));
 }
 

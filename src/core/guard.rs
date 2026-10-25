@@ -201,9 +201,10 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
 /// and backtick span is judged on its own too: stricter, never looser.
 ///
 /// Known misses: a label split by quotes or escapes (`"bosun:"state/x`, `bosun:state\/x`), a
-/// label built at run time (`printf`), a label written to a file in one call and read in
-/// another, and repo config or files set up by an earlier call (a git pager, diff driver or
-/// fsmonitor, a script on `PATH`).
+/// label built at run time (`printf`), a label passed through a file, and repo or user config,
+/// or files, written by the same or an earlier command (a git pager, diff driver or
+/// fsmonitor, a script on `PATH`); writes into `.git/` or a gitconfig are refused, other
+/// paths are not.
 fn read_only(text: &str, depth: usize) -> bool {
     if depth > MAX_DEPTH {
         return false;
@@ -461,8 +462,16 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
 fn risky_var(name: &str) -> bool {
     matches!(
         name,
-        "PATH" | "IFS" | "ENV" | "CDPATH" | "PAGER" | "MANPAGER" | "PROMPT_COMMAND" | "PS4"
-    ) || ["LD_", "GIT_", "GH_", "LESS", "BASH"]
+        "PATH"
+            | "IFS"
+            | "ENV"
+            | "CDPATH"
+            | "PAGER"
+            | "MANPAGER"
+            | "PROMPT_COMMAND"
+            | "PS4"
+            | "HOME"
+    ) || ["LD_", "GIT_", "GH_", "LESS", "BASH", "XDG_"]
         .iter()
         .any(|p| name.starts_with(p))
 }
@@ -553,6 +562,20 @@ fn segment_ro(words: &[String], glob: bool) -> bool {
     {
         return false;
     }
+    // Output redirected into git config (`.git/`, `gitconfig`, `git/config`) can make a later
+    // allowlisted git command run a program.
+    let into_git_config = words.iter().enumerate().any(|(i, w)| {
+        let target = w.trim_start_matches(['>', '|', '&']);
+        let target = match (w.starts_with('>'), target.is_empty()) {
+            (false, _) => return false,
+            (true, true) => words.get(i + 1).map_or("", String::as_str),
+            (true, false) => target,
+        };
+        target.contains(".git/") || target.ends_with("gitconfig") || target.ends_with("git/config")
+    });
+    if into_git_config {
+        return false;
+    }
     let n = words.iter().take_while(|w| assigned(w).is_some()).count();
     let Some(cmd) = words.get(n) else {
         return !words.iter().filter_map(|w| assigned(w)).any(risky_var);
@@ -562,8 +585,10 @@ fn segment_ro(words: &[String], glob: bool) -> bool {
     }
     let args: Vec<&str> = words[n + 1..].iter().map(String::as_str).collect();
     match cmd.as_str() {
+        // `printf -v NAME` assigns a variable, as `NAME=` would, unchecked.
+        "printf" => !args.iter().any(|a| a.starts_with("-v")),
         "grep" | "egrep" | "fgrep" | "cat" | "head" | "tail" | "wc" | "uniq" | "cut" | "tr"
-        | "jq" | "diff" | "ls" | "test" | "[" | "true" | "false" | "echo" | "printf" => true,
+        | "jq" | "diff" | "ls" | "test" | "[" | "true" | "false" | "echo" => true,
         _ if glob => false,
         "bosun" => true,
         "git" => {
@@ -1308,6 +1333,12 @@ mod tests {
             "x=$(gh issue edit 1 --add-label bosun:state/merged)",
             "x=`gh issue edit 1 --add-label bosun:state/merged`",
             "grep \"$X\" f # bosun:state/merged",
+            // Third review: git config written and used in the same command.
+            "printf '[core]\\n\\tfsmonitor = sh' > ../h1/.gitconfig; HOME=../h1; git status # bosun:state/x",
+            "printf '[core]\\n\\tfsmonitor = sh' >> .git/config; git status # bosun:state/x",
+            "echo x > ~/.config/git/config; XDG_CONFIG_HOME=../h; git status # bosun:state/x",
+            "printf -v PATH /tmp/x; grep bosun:state/x f",
+            "echo '[core]' >>../h1/gitconfig # bosun:state/x",
         ];
         let mut wrong: Vec<String> = MUST
             .iter()
