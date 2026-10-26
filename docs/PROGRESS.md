@@ -183,6 +183,7 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-26 · CI minutes · measured bosun's Actions use (docs/ci-minutes.md); the channel's bosun.yml is one job named after the required check, drafts fail fast, body edits rerun only test-integrity on a passed head, main-health weekly, main-open skips non-mainfix label events, AGENTS.md: local gates before every push · PR (claude/ci-minutes-channel)
 - 2026-10-26 · CI minutes 3 · release.yml skips `prepare` without `HOIST_RELEASE_TOKEN` (it failed on 81 of 93 pushes to main) · PR (claude/release-prepare-skip)
 - 2026-10-26 · CI minutes 2 · bosun's own ci.yml: one job `ci` + `ci-ok` (9 jobs before), the channel's draft and edit rules, pin check before the gates; a test keeps its edit step equal to the channel's · PR (claude/ci-minutes-own)
+- 2026-10-26 · CI minutes 4 · changelog and progress fragments (`changelog.d/`, `docs/progress.d/`, `scripts/fold-fragments.sh`, also in the channel) end the appended-line conflicts that cost a re-review per merge of main · PR #237
 
 ## Blocked
 

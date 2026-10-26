@@ -7,6 +7,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - CI minutes (docs/ci-minutes.md): the channel's bosun.yml runs every gate in one job named after the required check (`ci-ok`/`bosun-ok`) instead of nine (the gates that run no PR code first); a draft fails it at once; after a PR body or title edit only test-integrity runs again on a head that passed; main-health runs the gates weekly, not nightly. AGENTS.md: run every gate locally before a push, push once per PR.
 - release.yml: `prepare` (the release PR) runs only when the secret `HOIST_RELEASE_TOKEN` is set; without it the job failed on every push to main (GITHUB_TOKEN may not open PRs here) and is now skipped with a warning.
 - CI minutes: bosun's own ci.yml runs everything in one job `ci` (9 jobs before), `ci-ok` aggregates it; drafts fail at once, edits rerun only test-integrity on a passed head, the pin check runs before the gates; the channel's main-open and main-health comments name bosun.yml's pinned-release steps.
+- CHANGELOG and PROGRESS entries are one-line fragments (`changelog.d/`, `docs/progress.d/`) that `scripts/fold-fragments.sh` folds in a docs PR to main before a release, so merging main into a PR no longer conflicts on them; the channel ships the script as `.bosun/fold-fragments.sh` and the rule in AGENTS.md.
 
 ## 0.2.1 (2026-10-26)
 
