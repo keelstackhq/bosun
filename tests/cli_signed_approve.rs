@@ -414,3 +414,18 @@ fn signatures_never_approve_key_owner_or_codeowners_changes() {
         assert_eq!(check(&fake).0, 0, "{path}: the owner's comment counts");
     }
 }
+
+#[test]
+fn signatures_never_approve_a_diff_bosun_could_not_see_whole() {
+    let fake = high_pr();
+    // GitHub listed fewer files than the PR changed: one of them may be a trust file.
+    fake.pull_set(1, "changed_files", json!(3001));
+    app_comment(&fake, &body(HEAD, "k1", SIG));
+    assert_eq!(
+        check(&fake).0,
+        5,
+        "a signature does not count on an unseen diff"
+    );
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
+    assert_eq!(check(&fake).0, 0, "the owner's comment counts");
+}

@@ -63,6 +63,7 @@ fn governance_and_the_approval_system_need_the_owner() {
         ".github/workflows/release.yml",
         ".github/workflows/other.yaml",
         ".github/workflows/ci.yml",
+        ".github/actions/setup/action.yml",
         "src/anthropic.rs",
         "src/core/lessons.rs",
         "src/core/budget.rs",

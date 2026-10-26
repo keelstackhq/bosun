@@ -10,7 +10,7 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
+paths = [".github/workflows/**", ".github/actions/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"

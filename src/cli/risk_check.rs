@@ -165,7 +165,14 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             trust.join(", ")
         );
     }
-    let signed_ok = trust.is_empty();
+    // An unseen diff may hide a trust file: no signature counts then either.
+    let unseen = matches.iter().any(|m| m.rule == "R-unseen");
+    if unseen {
+        eprintln!(
+            "bosun: risk-check: bosun could not see the whole diff: signed approvals do not count"
+        );
+    }
+    let signed_ok = trust.is_empty() && !unseen;
     let mut approved_by = if high {
         approver(gh, &app.ctx.repo, n, head, &owners, signed_ok)?
     } else {

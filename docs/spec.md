@@ -584,8 +584,8 @@ High-risk PRs:
   the owner on GitHub (a review or a plain-token comment). No signed approval counts, owner or
   delegate key, on a PR that changes or renames away `.bosun/approvers.toml`,
   `governance/owners.toml` or a `CODEOWNERS` file (root, `.github/`, `docs/`; `TRUST_FILES` in
-  `src/core/approve.rs`), so a compromised key cannot enroll keys or owners; risk-check logs
-  why to stderr. A removed key stops counting once that PR merges. Make a key with
+  `src/core/approve.rs`), or on a PR whose diff bosun could not see whole (R-unseen: it may hide
+  one), so a compromised key cannot enroll keys or owners; risk-check logs why to stderr. A removed key stops counting once that PR merges. Make a key with
   `openssl genpkey -algorithm ed25519 -out key.pem`; its public key is
   `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64`. risk.yml runs the
   release pinned in `.bosun/version`, so signed approvals count in CI once that pin is a
@@ -654,7 +654,7 @@ High-risk PRs:
   lease: the mode lets one session decide by design, and the verdict is a quality gate, not
   proof of independence. A workflow on a pushed branch can post a record as
   `github-actions[bot]` (Limits above). Files that match no rule (`hoist.toml`,
-  `docs/setup-script.sh`, `.github/actions/**`, `tests/**` in this repo) are normal risk, so neither the
+  `docs/setup-script.sh`, `tests/**` in this repo) are normal risk, so neither the
   owner nor the floor sees them; that is a follow-up for the rules. A self-made task issue
   with its own lease record still passes the task check, hiding the real task's capabilities
   (the same trust class as the self-declared session). No job that runs repo code (tests, build
