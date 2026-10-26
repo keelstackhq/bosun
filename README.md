@@ -40,7 +40,11 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
   `risk` workflow re-runs and `risk-check` turns green. A new push needs a new comment. A GitHub
   review that approves the head SHA counts too, when the owner did not open the PR. Post the
   comment yourself (web UI or `gh` with your own token): a comment that an agent session writes
-  through the Claude app does not count, even under your login.
+  through the Claude app does not count, even under your login. To approve from a Claude chat,
+  tell the orchestrator: it posts the same line with a `bosun-sig ed25519` signature line from a
+  key enrolled in `.bosun/approvers.toml` on the default branch, and that counts whoever posts it
+  (spec §8, signed approvals). Enroll or rotate a key with a PR to that file that you approve on
+  GitHub.
 - **Review verdicts from cloud sessions.** A reviewer runs `bosun verdict comment --from -`;
   the `verdict` workflow checks the comment and posts the `review-verdict` status.
 - **Stop all work.** Create the label once:

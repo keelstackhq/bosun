@@ -552,6 +552,46 @@ High-risk PRs:
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
   count either.
+- Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
+  proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
+  in its own container (never shared) and, on the owner's chat message, posts a PR comment whose
+  first line, trimmed, is `/bosun approve <head_sha>` and of which some later line, trimmed, is
+  exactly `bosun-sig ed25519 <key id> <base64 64-byte signature>` (single spaces). Any author
+  and any app attribution count, and edits do not matter: the signature is the proof. Other
+  text (a footer) is ignored. The signed message is exactly the UTF-8 bytes
+  `bosun-approve v1 <owner>/<repo>#<pr> <head_sha>` with no trailing newline, owner and repo
+  lowercased. risk-check counts it, as `approved by key <id>`, only when the key id is in
+  `.bosun/approvers.toml` read through the API from the default branch (never the PR head, the
+  base SHA or the checkout, so a PR that adds its own key does not count), the signature
+  verifies over the message built from this repo, this PR's number and its current head, and
+  line 1 names that head. A signature for an old head, another PR or another repo does not
+  verify. Each signature line is checked on its own; one that verifies is enough. While any
+  owner's newest decisive review on the head requests changes, a signed approval does not
+  count. A missing `.bosun/approvers.toml` turns the feature off. A malformed file (bad TOML,
+  unknown fields, a duplicate or empty id, a key that is not 32 bytes of base64), an unknown
+  key id and a bad signature count as no approval, never error the check, and are logged to
+  stderr. The file is under R-gov. The crypto is `ring` (already in the tree through rustls).
+  ```toml
+  [[key]]
+  id = "orchestrator-2026-10"
+  ed25519 = "<base64 of the raw 32-byte public key>"
+  ```
+  Enroll or rotate a key with a PR that changes `.bosun/approvers.toml` (R-gov), approved by
+  the owner on GitHub (a review or a plain-token comment; a signature from a key the PR adds
+  never counts); a removed key stops counting once that PR merges. Make a key with
+  `openssl genpkey -algorithm ed25519 -out key.pem`; its public key is
+  `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64`. risk.yml runs the
+  release pinned in `.bosun/version`, so signed approvals count in CI once that pin is a
+  release with this feature.
+- `bosun approve <pr> --sign-key <pem>` is the signer's helper. It reads an ed25519 PKCS#8 PEM
+  (as `openssl genpkey -algorithm ed25519` writes it; errors name the path only, the key is
+  never printed or logged), reads the PR's current head (`<pr>@<head>` pins it: a different
+  head is exit 3, nothing signed), finds the key's id by its public key in
+  `.bosun/approvers.toml` on the default branch (not enrolled: exit 1, nothing posted, the fix
+  names the public key), and posts the signed comment with the session's own token
+  (`GITHUB_TOKEN`); `data.approved` lists `pr`, `head_sha`, `key_id`, `comment_id`. It is exit 4
+  while bosun is halted. The cloud refusal below does not apply with `--sign-key`. `--print`
+  puts the comment in `data.body` (with `pr`, `head_sha`, `key_id`) and posts nothing.
 - `bosun approve` is the owner's shortcut, run on the owner's own machine (a local shell or a
   local Claude Code session, also through Remote Control), never in a Claude cloud session: the cloud agent proxy rewrites
   every GitHub write (app attribution and a footer), so an approval sent from there never counts,
@@ -587,11 +627,12 @@ High-risk PRs:
   entry `"repost": true`. In a Claude cloud session (`CCR_AGENT_PROXY_ENABLED` is `1`, `true`,
   `yes` or `on`, or `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`, any case) the
   agent proxy rewrites every GitHub write (app attribution, a footer), so no token
-  yields a counting approval there: the posting modes are exit 5 before any call (run it on
+  yields a counting approval there: the posting modes without `--sign-key` are exit 5 before any call (run it on
   your own machine, or comment in the GitHub app), and `--list` still works with
   `data.cloud: true`. Both are exit 4 while bosun is halted. One `approve`
   record (`prs`, `at`, no session) goes on the registry issue; it is an audit hint, never
-  authority: risk-check derives approval only from the owner's PR comment or review.
+  authority: risk-check derives approval only from the owner's PR comment or review, or a
+  signed approval.
   `--main-open <pr>` is for a PR that changes `.github/workflows/main-open.yml` (the base
   workflow cannot judge it; any other PR is exit 3). It posts the `main-open` status with the
   decision of `bosun gate main-open`, exit 4 when main is red and the PR is no mainfix, and

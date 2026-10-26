@@ -125,6 +125,84 @@ pub fn api_url_ok(url: &str) -> bool {
     url.starts_with("https://") || loopback("http://127.0.0.1") || loopback("http://localhost")
 }
 
+/// Where risk-check reads the enrolled approval keys: the default branch, never a PR's head.
+pub const APPROVERS_PATH: &str = ".bosun/approvers.toml";
+
+/// One enrolled key of `.bosun/approvers.toml`: `ed25519` is the base64 raw public key.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApproverKey {
+    pub id: String,
+    pub ed25519: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApproversFile {
+    #[serde(default)]
+    key: Vec<ApproverKey>,
+}
+
+/// Parse `.bosun/approvers.toml`. Ids must be unique tokens without whitespace.
+pub fn parse_approvers(text: &str) -> Result<Vec<ApproverKey>, String> {
+    let file: ApproversFile = toml::from_str(text).map_err(|e| e.message().to_string())?;
+    for (i, k) in file.key.iter().enumerate() {
+        if k.id.is_empty() || k.id.chars().any(char::is_whitespace) {
+            return Err(format!("key id {:?} is empty or has whitespace", k.id));
+        }
+        if file.key[..i].iter().any(|o| o.id == k.id) {
+            return Err(format!("key id {:?} is listed twice", k.id));
+        }
+    }
+    Ok(file.key)
+}
+
+/// The exact bytes an approval key signs. Owner and repo are lowercased (GitHub names are
+/// case-insensitive), so the signer and risk-check agree however each spells them.
+pub fn signed_message(owner: &str, repo: &str, pr: u64, head: &str) -> String {
+    format!(
+        "bosun-approve v1 {}/{}#{pr} {head}",
+        owner.to_ascii_lowercase(),
+        repo.to_ascii_lowercase()
+    )
+}
+
+/// The `(key id, base64 signature)` of each `bosun-sig ed25519 <id> <sig>` line of a comment
+/// whose first line is `/bosun approve <head>`; empty for any other comment.
+pub fn signature_lines<'a>(body: &'a str, head: &str) -> Vec<(&'a str, &'a str)> {
+    let mut lines = body.lines();
+    let first = lines.next().unwrap_or_default().trim();
+    if head.len() != 40 || first != format!("/bosun approve {head}") {
+        return Vec::new();
+    }
+    lines
+        .filter_map(|l| {
+            let parts: Vec<&str> = l.trim().split(' ').collect();
+            match parts.as_slice() {
+                ["bosun-sig", "ed25519", id, sig] if !id.is_empty() && !sig.is_empty() => {
+                    Some((*id, *sig))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Whether `sig` is a valid ed25519 signature of `msg` by the raw 32-byte `public_key`.
+pub fn verify_ed25519(public_key: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    use ring::signature::{ED25519, UnparsedPublicKey};
+    public_key.len() == 32
+        && sig.len() == 64
+        && UnparsedPublicKey::new(&ED25519, public_key)
+            .verify(msg, sig)
+            .is_ok()
+}
+
+/// The comment `bosun approve --sign-key` posts.
+pub fn signed_comment(head: &str, key_id: &str, sig_b64: &str) -> String {
+    format!("/bosun approve {head}\nbosun-sig ed25519 {key_id} {sig_b64}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

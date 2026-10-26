@@ -6,14 +6,18 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
-use crate::app::{App, Result, task_meta};
+use crate::app::{App, Result, default_branch, task_meta};
+use crate::core::approve::{
+    APPROVERS_PATH, ApproverKey, parse_approvers, signature_lines, signed_message, verify_ed25519,
+};
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, capability_labels,
     comment_approves, evaluate, lease_sessions, new_dependencies, parse_owners, replace_note,
     requirement, risk_note, two_verdicts, unseen_diff,
 };
-use crate::github::{Comment, Github, Review};
+use crate::ctx::RepoId;
+use crate::github::{Comment, Github, Review, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const RULES_PATH: &str = ".bosun/risk.toml";
@@ -138,7 +142,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         Vec::new()
     };
     let approved_by = if high {
-        approver(gh, n, head, &owners)?
+        approver(gh, &app.ctx.repo, n, head, &owners)?
     } else {
         None
     };
@@ -250,7 +254,13 @@ pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<St
 
 /// The owner who approved `head`: by a GitHub review (their newest decisive review on `head` is
 /// an approval) or by an unedited PR comment `/bosun approve <head>`.
-fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<Option<String>> {
+fn approver(
+    gh: &dyn Github,
+    repo: &RepoId,
+    pr: u64,
+    head: &str,
+    owners: &[String],
+) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let decisive = |o: &str| decisive_review(&reviews, o, head);
     let by_review = owners
@@ -264,11 +274,96 @@ fn approver(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<O
     // login through an app, and GitHub marks that in `performed_via_github_app` (spec §8).
     // An edited comment does not count: users with write access can edit others' comments. An
     // owner whose newest decisive review on `head` requests changes has withdrawn the approval.
-    Ok(owners
+    let by_comment = owners
         .iter()
         .filter(|o| decisive(o).as_deref() != Some("CHANGES_REQUESTED"))
-        .find(|o| owner_comment(&comments, o, head).is_some())
-        .cloned())
+        .find(|o| owner_comment(&comments, o, head).is_some());
+    if let Some(o) = by_comment {
+        return Ok(Some(o.clone()));
+    }
+    // A signed approval stands for the owner, so any owner's request for changes withdraws it.
+    if owners
+        .iter()
+        .any(|o| decisive(o).as_deref() == Some("CHANGES_REQUESTED"))
+    {
+        return Ok(None);
+    }
+    Ok(signed_approver(gh, repo, pr, head, &comments)?.map(|id| format!("key {id}")))
+}
+
+/// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
+/// approvals). The keys come from the default branch only, so a PR cannot enroll its own.
+/// Any author and app count: the signature is the proof. A missing or malformed key file, an
+/// unknown key or a bad signature is no approval, logged to stderr, never an error.
+fn signed_approver(
+    gh: &dyn Github,
+    repo: &RepoId,
+    pr: u64,
+    head: &str,
+    comments: &[Comment],
+) -> Result<Option<String>> {
+    let sigs: Vec<(u64, &str, &str)> = comments
+        .iter()
+        .flat_map(|c| {
+            signature_lines(&c.body, head)
+                .into_iter()
+                .map(move |(id, sig)| (c.id, id, sig))
+        })
+        .collect();
+    if sigs.is_empty() {
+        return Ok(None);
+    }
+    let Some(keys) = enrolled_keys(gh)? else {
+        return Ok(None);
+    };
+    let msg = signed_message(&repo.owner, &repo.name, pr, head);
+    for (comment, id, sig) in sigs {
+        let Some(key) = keys.iter().find(|k| k.id == id) else {
+            eprintln!("bosun: risk-check: comment {comment}: unknown key {id:?}, not counted");
+            continue;
+        };
+        let ok = b64::decode(&key.ed25519)
+            .zip(b64::decode(sig))
+            .is_some_and(|(k, s)| verify_ed25519(&k, msg.as_bytes(), &s));
+        if ok {
+            return Ok(Some(key.id.clone()));
+        }
+        eprintln!(
+            "bosun: risk-check: comment {comment}: signature of key {id:?} does not verify for {msg:?}, not counted"
+        );
+    }
+    Ok(None)
+}
+
+/// The keys of `.bosun/approvers.toml` on the default branch; `None` when the file is missing
+/// or malformed (the feature is off; malformed is logged). A key that is not 32 bytes of
+/// base64 makes the whole file malformed.
+pub fn enrolled_keys(gh: &dyn Github) -> Result<Option<Vec<ApproverKey>>> {
+    let branch = default_branch(gh)?;
+    let Some(text) = gh.file_at(APPROVERS_PATH, &branch)? else {
+        return Ok(None);
+    };
+    let keys = parse_approvers(&text).and_then(|keys| {
+        match keys
+            .iter()
+            .find(|k| b64::decode(&k.ed25519).is_none_or(|b| b.len() != 32))
+        {
+            Some(k) => Err(format!(
+                "key {:?} is not a base64 32-byte ed25519 key",
+                k.id
+            )),
+            None => Ok(keys),
+        }
+    });
+    match keys {
+        Ok(keys) => Ok(Some(keys)),
+        Err(e) => {
+            eprintln!(
+                "bosun: risk-check: {APPROVERS_PATH} on {branch} is malformed ({e}); signed approvals are off"
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// The comment that approves `head` for `owner`: unedited, written with a plain user token and

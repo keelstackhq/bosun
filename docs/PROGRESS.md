@@ -165,6 +165,7 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-24 · Approvals · `bosun approve` refuses to post in a Claude cloud session (`CCR_AGENT_PROXY_ENABLED`, `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud*`; the agent proxy rewrites GitHub writes, so no approval from there counts), `--list` still works there; an owner review requesting changes on the head makes the PR not ready; a counting approval while risk-check is red is re-posted to re-run it · `tests/cli_approve.rs` 28/28 · PR #209
 - 2026-10-25 · Follow-ups (session F) · the unix-only test files (`cli_gate`, `cli_gate_ts`, `cli_doctor_remote`, `uc_m7`) are `#![cfg(unix)]`, so `cargo test` compiles on Windows (checked with `cargo check --tests --target x86_64-pc-windows-gnu`) · PR #212; `bosun init` sets `own_ci` from `core::checks::workflow_checks` (the `ci-ok` check context, not the job key) · `tests/cli_init.rs` 17/17 · PR #213; the channel's main-open and main-health comments name bosun.yml · `tests/channel.rs` 7/7 · two verdicts · PR #215 (#214); `tests/channel_render.rs` renders the channel for rust, ts-pnpm and mixed, with and without `own_ci`, and parses its TOML, JSON and YAML files (YAML with python3/PyYAML or ruby, required in CI) · `tests/channel_render.rs` 2/2 · PR #216
 - 2026-10-25 · Follow-ups (session F) · `bosun result --outcome blocked|needs-human` sets that state on the epic, `merged` stays a report (D13) · `tests/cli_result.rs` 6/6 · PR #217; `bosun pr --auto-merge` posts a `task-pr` record and `bosun reap` reads that PR instead of listing every PR (old tasks keep the sweep); `bosun approve`'s missing-token fix says "your own machine" (#211) · `tests/cli_lifecycle.rs` 10/10 · high risk (R-gate, owner) · PR #218
+- 2026-10-26 · Signed approvals · risk-check counts a `/bosun approve <head>` comment with a `bosun-sig ed25519` line from a key in `.bosun/approvers.toml` on the default branch (message `bosun-approve v1 <owner>/<repo>#<pr> <head>`, `ring`); `bosun approve <pr> --sign-key <pem> [--print]` signs and posts it, also in the cloud · `tests/cli_signed_approve.rs` 9/9
 
 ## Blocked
 
@@ -241,6 +242,11 @@ Human-only items, in order. Each has the exact action.
    write (app attribution and a Claude footer), so risk-check ignores it, and `bosun approve`
    refuses there (exit 5). The Claude GitHub tool does the same. Never put the PAT in a cloud
    environment.
+   A third way, from a Claude chat: a signed approval (spec §8). The orchestrator, on your
+   message, runs `bosun approve <pr> --sign-key <pem>`, and the signature from the key in
+   `.bosun/approvers.toml` on main counts whoever posts it. Approving the PR that adds that file
+   on GitHub is the enrollment; rotate a key the same way. It counts in CI once `.bosun/version`
+   pins a release with this feature (cut a release, then bump the pin).
 10. **New repos with bosun (M7, after v0.2.0 is released).** Per repo: create it with one commit
     and the Claude GitHub App; in a session with splice, bosun and a `GITHUB_TOKEN` (push and
     pull requests), `bosun init --stack rust --owner <login> [--plan plan.md]`; review and merge
