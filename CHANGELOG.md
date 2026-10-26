@@ -13,6 +13,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `verdict apply`: a newer verdict comment replaces only one of the same session, so two reviewers posting close together both count.
 - A PR body edit no longer cancels the running CI of the same head (bosun's ci.yml and the channel's bosun.yml).
 - Channel: the gates install the toolchain of `rust-toolchain.toml` (else the 1.97 pin); with own_ci a PR runs only test-integrity unless `BOSUN_ALL_GATES=1`; a docs-only PR (Markdown, not README.md, not with ts-pnpm) skips the gates; `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` are R-gov.
+- Signed owner approvals: risk-check counts `/bosun approve <head>` with a `bosun-sig ed25519` line from a key in `.bosun/approvers.toml` on the default branch, bound to repo, PR and head; `bosun approve <pr>@<head> --sign-key <pem> [--print]` signs and posts it, also from a Claude cloud session.
 - Risk rules: the owner approves all workflows, `deny.toml`, the toolchain files, `Cargo.toml`, `Cargo.lock`, build inputs, `REVIEW.md`, `docs/lessons.toml` and the gate code (R-gate); `channel/**` passes with two independent verdicts instead.
 - `bosun approve --list` returns a hint: approvals posted through the Claude GitHub tool never count.
 - `bosun approve` refuses to post from a Claude cloud session (its proxy rewrites GitHub writes); a PR whose owner review requests changes is not ready; a counting approval is re-posted when risk-check is still red.
