@@ -533,7 +533,7 @@ Rule evaluation:
 - The bosun version pin (`.bosun/version`) is R-gov.
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
-Approval classes (mechanism): a rule has `approval = "owner"` (the default), `"two-verdicts"` or `"delegate"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else a delegate when any match is `delegate` (see delegated decisions below), else two verdicts. `risk-check` sets `data.requirement` (`owner`, `delegate` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). The built-in rules use the two-verdicts class for R-ci-review only and never delegate; this repo's `.bosun/risk.toml` also makes R-ci, R-gate and R-deps `delegate`. A test keeps the two files equal apart from that opt-in.
+Approval classes (mechanism): a rule has `approval = "owner"` (the default), `"two-verdicts"` or `"delegate"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else a delegate when any match is `delegate` (see delegated decisions below), else two verdicts. `risk-check` sets `data.requirement` (`owner`, `delegate` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). The built-in rules use the two-verdicts class for R-ci-review only and never delegate; this repo's `.bosun/risk.toml` will also make R-ci, R-gate and R-deps `delegate` once `.bosun/version` pins 0.2.1 or later (risk.yml judges every PR with the pinned release, and 0.2.0 rejects the value, so the rules on main must parse with the pin; `tests/governance.rs` checks it). A test keeps the two files equal apart from that opt-in.
 
 Two verdicts:
 - The class passes when, on the PR's current head, verdict records of at least two distinct sessions have `approved = true` and `confidence >= 0.9`. An owner approval (below) also passes it. The status is `high risk, two verdicts needed (<n>/2): <ids>` (failure, exit 5) while waiting, and `high risk (<ids>), approved by two verdicts: <s1>, <s2>` when met. The owner status text is `high risk, owner approval needed: <ids>`.
@@ -648,7 +648,7 @@ High-risk PRs:
   `data.critical` lists them. While a delegate may approve, the status reads `high risk, owner
   approval needed (or a delegate): <ids>` (so `bosun approve --list` lists it),
   `data.delegate_verdicts` lists the clean verdicts and `data.delegate_blocked` says why a
-  delegate cannot approve now (null when it can). In bosun this leaves `deny.toml`, the toolchain
+  delegate cannot approve now (null when it can). Once bosun opts in (after the 0.2.1 pin), this leaves `deny.toml`, the toolchain
   files, `.config/**` and `profiles/**` to a delegate (R-ci and R-gate); R-deps is delegate-class
   but every manifest it reads is critical here. Releases stay human through the `release`
   environment. To turn delegation off at once, the owner deletes the delegate key from
