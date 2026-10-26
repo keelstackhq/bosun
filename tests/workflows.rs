@@ -724,8 +724,20 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
         yaml.contains(&format!("  RUSTUP_TOOLCHAIN: \"{channel}\"\n")),
         "RUSTUP_TOOLCHAIN must equal rust-toolchain.toml's channel {channel}"
     );
-    let guard = at("name: cargo config has no alias");
-    assert!(guard < at("uses: dtolnay/rust-toolchain") && guard < at("uses: Swatinem/rust-cache"));
+    let base_config = at("name: the base's config for the gates");
+    for later in [
+        "uses: dtolnay/rust-toolchain",
+        "uses: Swatinem/rust-cache",
+        "run: cargo build --release --locked --bin bosun",
+        "uses: taiki-e/install-action",
+        "name: bosun gates",
+    ] {
+        assert!(
+            base_config < at(later),
+            "{later} runs before the base's config"
+        );
+    }
+    assert!(at("name: the pinned release installs and reports its version") < base_config);
     assert!(at("id: binhash") < at("uses: Swatinem/rust-cache"));
     assert!(yaml.contains("BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}"));
     assert!(yaml.contains(
@@ -735,49 +747,6 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
         !yaml.contains("!cancelled()"),
         "nothing runs after a failure"
     );
-    let script = run_scripts(step_text(
-        &yaml,
-        "      - if: steps.plan.outputs.work == 'true'\n        name: cargo config has no alias",
-    ))
-    .remove(0);
-    let script: String = script
-        .lines()
-        .skip(1)
-        .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
-        .collect();
-    for (name, text, ok) in [
-        (".cargo/config.toml", "[net]\nretry = 3\n", true),
-        (
-            ".cargo/config.toml",
-            "[alias]\nfmt = [\"run\", \"--\"]\n",
-            false,
-        ),
-        (".cargo/config", "alias.deny = \"run --\"\n", false),
-        // TOML unicode escapes and includes hide an alias from a text search (review of #233).
-        (
-            ".cargo/config.toml",
-            "[\"\\u0061lias\"]\nfmt = [\"run\"]\n",
-            false,
-        ),
-        (".cargo/config.toml", "include = [\"x.toml\"]\n", false),
-        (
-            ".cargo/config.toml",
-            "[[include]]\npath = \"x.toml\"\n",
-            false,
-        ),
-        (".cargo/config.toml", "bad = = toml\n", false),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join(".cargo")).unwrap();
-        fs::write(dir.path().join(name), text).unwrap();
-        let passed = std::process::Command::new("bash")
-            .args(["-eo", "pipefail", "-c", &script])
-            .current_dir(dir.path())
-            .status()
-            .unwrap()
-            .success();
-        assert_eq!(passed, ok, "{name}: {text:?}");
-    }
     // Drafts: only the plan step reads the flag; no `if` may skip a draft.
     assert_eq!(yaml.matches("pull_request.draft").count(), 1);
     assert!(yaml.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
@@ -813,4 +782,152 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
     );
     assert_eq!(run("true", "run"), None, "a draft fails");
     assert_eq!(run("true", "integrity"), None, "a draft fails");
+}
+
+/// The script of the step that puts the base's config over the checkout, dedented.
+fn base_config_script(yaml: &str, from: &str) -> String {
+    let script = run_scripts(step_text(yaml, from)).remove(0);
+    script
+        .lines()
+        .skip(1)
+        .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
+        .collect()
+}
+
+/// Before anything runs rustc or cargo, the gates get the base's .bosun/ (gate commands),
+/// .cargo/ (aliases, includes, wrappers) and toolchain files: a PR cannot change how its own
+/// gates run, however it spells the change (review of #233).
+#[test]
+fn the_gates_use_the_bases_config() {
+    let ours = ci_yaml();
+    let channel = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/channel/pieces/core/files/.github/workflows/bosun.yml.jinja"
+    ))
+    .unwrap();
+    let step = "      - if: steps.plan.outputs.work == 'true'\n        name: the base's config for the gates";
+    let script = base_config_script(&ours, step);
+    // The channel runs the same script after setting BASE for a push without one.
+    let theirs = base_config_script(&channel, step);
+    assert_eq!(
+        theirs,
+        format!(
+            "case \"$BASE\" in \"\"|0000000000000000000000000000000000000000) BASE=\"$GITHUB_SHA\";; esac\n{script}"
+        ),
+        "the channel's step differs from ci.yml's"
+    );
+    let at = |y: &str, n: &str| y.find(n).unwrap_or_else(|| panic!("no {n:?}"));
+    for later in [
+        "name: rust toolchain",
+        "uses: Swatinem/rust-cache",
+        "pnpm install --frozen-lockfile",
+        "name: bosun gates",
+    ] {
+        assert!(at(&channel, step) < at(&channel, later), "{later}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let run = |cmd: &str| {
+        let o = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", cmd])
+            .current_dir(d)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "{cmd}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let w = |p: &str, t: &str| {
+        let p = d.join(p);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, t).unwrap();
+    };
+    run("git init -q -b main && git config user.email a@b.c && git config user.name n");
+    w(".bosun/version", "1.2.3\n");
+    w(".bosun/profiles/rust.toml", "deps = \"cargo deny check\"\n");
+    w(".cargo/config.toml", "[net]\nretry = 3\n");
+    w("rust-toolchain.toml", "[toolchain]\nchannel = \"1.97\"\n");
+    w("crates/x/lib.rs", "base\n");
+    run("git add -A && git commit -qm base");
+    let base = run("git rev-parse HEAD").trim().to_string();
+    // Each bypass the reviews found, in one PR, plus a real code change.
+    w(".bosun/profiles/rust.toml", "deps = \"sh -c true\"\n");
+    w(".cargo/config.toml", "[\"\\u0061lias\"]\nfmt = [\"run\"]\n");
+    w("crates/x/.cargo/config", "include = [\"e.toml\"]\n");
+    w("crates/x/.cargo/e.toml", "[alias]\ndeny = \"run\"\n");
+    w(
+        "rust-toolchain.toml",
+        "[toolchain]\n\"\\u0070ath\" = \"\\u002ftmp\\u002fevil\"\n",
+    );
+    w("crates/y/rust-toolchain", "/opt/evil\n");
+    w("crates/x/lib.rs", "changed\n");
+    run(
+        "mkdir -p evil && printf '[alias]\\nfmt = \"run\"\\n' > evil/config.toml && mkdir -p crates/z && ln -s ../../evil crates/z/.cargo",
+    );
+    run("git add -A && git commit -qm pr");
+    let out = std::process::Command::new("bash")
+        .args(["-eo", "pipefail", "-c", &script])
+        .current_dir(d)
+        .env("BASE", &base)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("::notice::this change edits"));
+    let read = |p: &str| fs::read_to_string(d.join(p)).unwrap();
+    assert_eq!(
+        read(".bosun/profiles/rust.toml"),
+        "deps = \"cargo deny check\"\n"
+    );
+    assert_eq!(read(".cargo/config.toml"), "[net]\nretry = 3\n");
+    assert_eq!(
+        read("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97\"\n"
+    );
+    assert!(
+        !d.join("crates/x/.cargo/config").exists() && !d.join("crates/x/.cargo/e.toml").exists()
+    );
+    assert!(
+        fs::symlink_metadata(d.join("crates/z/.cargo")).is_err(),
+        "the .cargo symlink is left"
+    );
+    assert!(!d.join("crates/y/rust-toolchain").exists());
+    assert_eq!(read("crates/x/lib.rs"), "changed\n", "code is the PR's");
+
+    // A setup PR: the base has no .bosun yet, so the change's .bosun is used.
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let run = |cmd: &str| {
+        let o = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", cmd])
+            .current_dir(d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{cmd}");
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    run(
+        "git init -q -b main && git config user.email a@b.c && git config user.name n && echo a > a && git add -A && git commit -qm base",
+    );
+    let base = run("git rev-parse HEAD").trim().to_string();
+    run("mkdir .bosun && echo 1.2.3 > .bosun/version && git add -A && git commit -qm setup");
+    let out = std::process::Command::new("bash")
+        .args(["-eo", "pipefail", "-c", &script])
+        .current_dir(d)
+        .env("BASE", &base)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("setup PR"));
+    assert_eq!(
+        fs::read_to_string(d.join(".bosun/version")).unwrap(),
+        "1.2.3\n"
+    );
 }

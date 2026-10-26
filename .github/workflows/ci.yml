@@ -30,11 +30,10 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # No PR code before lint. rustup takes RUSTUP_TOOLCHAIN over the PR's rust-toolchain.toml
-  # (whose `path` would run a compiler from the PR in rust-cache); a test keeps it equal to that
-  # file's channel, so a toolchain bump changes both. cargo takes the RUSTC* settings over a PR's
-  # .cargo/config.toml (a rustc wrapper or build.rustc); step `cargo config has no alias`
-  # refuses aliases and includes (an alias can shadow `cargo fmt` and `cargo deny`).
+  # No PR code before lint. Step `the base's config for the gates` puts the base's .bosun/,
+  # .cargo/ and toolchain files over the checkout before anything runs rustc or cargo. Also,
+  # rustup takes RUSTUP_TOOLCHAIN over any toolchain file (a test keeps it equal to
+  # rust-toolchain.toml's channel), and cargo takes these RUSTC* settings over its config.
   RUSTUP_TOOLCHAIN: "1.97"
   RUSTC: rustc
   RUSTC_WRAPPER: ""
@@ -54,9 +53,9 @@ jobs:
       # Order: every step that runs no PR code first (the base's bosun, the pin check, then the
       # gates test-integrity, deps and fmt); lint, test and the npm launcher tests run PR code on
       # this runner and come last, so it cannot replace or fake what ran before (spec §11).
-      # Before lint, the PR could still run code through its toolchain file or cargo config: the
-      # job env and step `cargo config has no alias` close that. The first failed gate stops the
-      # job. Left: PR code in lint or test has the runner's sudo and can fake their own result,
+      # Before lint, the PR could still run code through its toolchain file, cargo config or
+      # bosun profile: step `the base's config for the gates` and the job env close that. The
+      # first failed gate stops the job. Left: PR code in lint or test has the runner's sudo and can fake their own result,
       # as in a gate job of their own before (spec §7).
       # A body or title edit that did not retarget the PR changes no file, so the checks that
       # read only files keep the result of the head's newest finished `ci-ok` (GitHub Actions,
@@ -101,6 +100,7 @@ jobs:
       # worktree outside the checkout.
       - if: steps.plan.outputs.work == 'true'
         name: bosun of the base
+        id: base
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
@@ -108,6 +108,7 @@ jobs:
         run: |
           sha="${PR_BASE:-${QUEUE_BASE:-$PUSH_BEFORE}}"
           case "$sha" in ""|0000000000000000000000000000000000000000) sha="$GITHUB_SHA";; esac
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
           git worktree add --detach "$RUNNER_TEMP/base" "$sha"
       # Bootstrap: a base without the self-gating CI has no `bosun gate` to trust yet, so the
       # change builds itself, once, with a warning. Every later PR uses its base again.
@@ -167,40 +168,33 @@ jobs:
           got="$("$dir/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${v}"
-      # A cargo alias can shadow the external subcommands `cargo fmt` and `cargo deny` (and an
-      # `include` can bring one in), which would run PR code in the fmt and deps gates. A TOML
-      # parser reads each config cargo reads from here (unicode escapes and all) and fails closed
-      # on alias, include, credential providers or a parse error.
+      # Before anything runs rustc or cargo (rust-cache included).
       - if: steps.plan.outputs.work == 'true'
-        name: cargo config has no alias
+        name: the base's config for the gates
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
         run: |
-          python3 -I - . . <<'PY'
-          import os, sys, tomllib
-          start, stop = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
-          bad = {"alias", "include", "credential-alias", "credential-provider", "global-credential-providers"}
-          def walk(v, path):
-              if isinstance(v, dict):
-                  for k, x in v.items():
-                      if k in bad:
-                          sys.exit(f"{path}: key {k!r} is not allowed here (it can run PR code before the gates)")
-                      walk(x, path)
-              elif isinstance(v, list):
-                  for x in v:
-                      walk(x, path)
-          d = start
-          while True:
-              for name in ("config", "config.toml"):
-                  p = os.path.join(d, ".cargo", name)
-                  if os.path.lexists(p):
-                      try:
-                          with open(p, "rb") as f:
-                              walk(tomllib.load(f), p)
-                      except (OSError, tomllib.TOMLDecodeError) as e:
-                          sys.exit(f"{p}: not readable TOML ({e})")
-              if d == stop or d == os.path.dirname(d):
-                  break
-              d = os.path.dirname(d)
-          PY
+          # The gates use the base commit's copies of the files that decide what runs: .bosun/ (the gate
+          # commands are in its profiles), every .cargo directory (aliases, includes, rustc wrappers)
+          # and every rust-toolchain(.toml) (a path would run a compiler from the PR). Files the base
+          # lacks are deleted, also when the PR made the path a symlink. A PR's changes to them take
+          # effect after it merges; they are R-gov or R-ci, so the owner sees them.
+          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|^\.bosun(/|$)'
+          if ! git cat-file -e "$BASE:.bosun/version" 2>/dev/null; then
+            echo "::warning::the base has no .bosun yet (setup PR): this change's .bosun is used"
+            pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$'
+          fi
+          changed="$(git diff --name-only "$BASE" HEAD | grep -E "$pat" | tr '\n' ' ' || true)"
+          if [ -n "$changed" ]; then
+            echo "::notice::this change edits ${changed}; its gates run with the base's copies (they apply after merge)"
+          fi
+          git ls-tree -r --name-only HEAD | { grep -E "$pat" || true; } | while IFS= read -r p; do
+            rm -rf -- "$p"
+          done
+          git ls-tree -r --name-only "$BASE" | { grep -E "$pat" || true; } | while IFS= read -r p; do
+            mkdir -p -- "$(dirname -- "$p")"
+            git show "$BASE:$p" > "$p"
+          done
       - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
         uses: dtolnay/rust-toolchain@stable
         with:

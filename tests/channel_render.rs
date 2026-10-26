@@ -776,7 +776,8 @@ fn toolchain_run(root: &std::path::Path, cwd: &std::path::Path) -> (bool, String
     (ok, fs::read_to_string(log).unwrap_or_default())
 }
 
-/// A toolchain file that names a `path` would run a compiler from the PR before the gates.
+/// A toolchain file that names a `path` would run another compiler before the gates (the step
+/// reads the base's copy; it still checks it).
 #[test]
 fn the_toolchain_step_refuses_a_toolchain_path() {
     if yaml_json("a: 1").is_none() {
@@ -814,17 +815,6 @@ fn the_toolchain_step_refuses_a_toolchain_path() {
         ),
         ("rust-toolchain.toml", "not = = toml\n"),
         ("rust-toolchain", "/opt/evil\n"),
-        // A cargo alias can shadow `cargo fmt` and `cargo deny`.
-        (".cargo/config.toml", "[alias]\nfmt = [\"run\", \"--\"]\n"),
-        (".cargo/config", "alias.deny = \"run --\"\n"),
-        (".cargo/config.toml", "[\"\\u0061lias\"]\nfmt = [\"run\"]\n"),
-        (".cargo/config.toml", "include = [\"x.toml\"]\n"),
-        (".cargo/config.toml", "[[include]]\npath = \"x.toml\"\n"),
-        (
-            ".cargo/config.toml",
-            "[registry]\nglobal-credential-providers = [\"./e\"]\n",
-        ),
-        (".cargo/config.toml", "bad = = toml\n"),
     ] {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join(".cargo")).unwrap();
@@ -840,25 +830,9 @@ fn the_toolchain_step_refuses_a_toolchain_path() {
         "[toolchain]\nchannel = \"1.97\"\ncomponents = [\"rustfmt\", \"clippy\"]\nprofile = \"minimal\"\n",
     )
     .unwrap();
-    fs::create_dir_all(root.path().join(".cargo")).unwrap();
-    fs::write(root.path().join(".cargo/config.toml"), "[net]\nretry = 3\n").unwrap();
     assert!(
         toolchain_run(root.path(), root.path()).0,
-        "a plain channel and a cargo config without alias pass"
-    );
-    // An alias above rust_path (cargo reads every parent's config) is refused too.
-    let root = tempfile::tempdir().unwrap();
-    let sub = root.path().join("crates/app");
-    fs::create_dir_all(&sub).unwrap();
-    fs::create_dir_all(root.path().join(".cargo")).unwrap();
-    fs::write(
-        root.path().join(".cargo/config.toml"),
-        "[alias]\nx = \"run\"\n",
-    )
-    .unwrap();
-    assert!(
-        !toolchain_run(root.path(), &sub).0,
-        "a parent's alias passed"
+        "a plain channel passes"
     );
 }
 
