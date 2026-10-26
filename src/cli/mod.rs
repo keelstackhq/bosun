@@ -686,7 +686,10 @@ pub struct InitArgs {
     /// Pin .bosun/version to this exact X.Y.Z.
     #[arg(long, value_name = "X.Y.Z")]
     pub bosun_version: Option<String>,
-    /// Commit on bosun/init but do not push or open a PR.
+    /// The setup branch (default: claude/bosun-init in a Claude cloud session, else bosun/init).
+    #[arg(long, value_name = "NAME")]
+    pub branch: Option<String>,
+    /// Commit on the branch but do not push or open a PR; returns pr_title and pr_body.
     #[arg(long)]
     pub no_pr: bool,
 }

@@ -12,6 +12,15 @@ installs the release pinned in each PR's base commit, and job `pin` checks a PR'
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
 prompt has children post the record by hand); the merge queue comes with M3.
 
+Follow-ups (session G, canary findings left open): F12, work outside the plan has no `bosun pr`
+path; proposal: `bosun pr --no-task` for a diff limited to `docs/**` and `plans/**`, which opens
+the PR with `bosun:kind/bookkeeping` and posts a bookkeeping record instead of moving a task (no
+lease, no state). F7 stays as is: weekly splice update PRs change `.splice/**` and `.claude/**`
+hooks, which is governance; init's owner steps now say each needs `/bosun approve <sha>`. From the
+F10 review: a building, review or fixing issue closed without a merge keeps its state label and
+costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Closes #N`) is seen by
+`bosun pr`, not by `reap` or `result`. The label-lock's known misses are listed in spec §4.
+
 ## Done
 
 - 2026-10-22 · Docs 1 · `docs/spec.md` (forge spec renamed to bosun, adjustments A1-A14 as D13-D26, seed design decisions D27-D31) and minimal CI · PR #1
@@ -165,6 +174,7 @@ prompt has children post the record by hand); the merge queue comes with M3.
 - 2026-10-24 · Approvals · `bosun approve` refuses to post in a Claude cloud session (`CCR_AGENT_PROXY_ENABLED`, `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud*`; the agent proxy rewrites GitHub writes, so no approval from there counts), `--list` still works there; an owner review requesting changes on the head makes the PR not ready; a counting approval while risk-check is red is re-posted to re-run it · `tests/cli_approve.rs` 28/28 · PR #209
 - 2026-10-25 · Follow-ups (session F) · the unix-only test files (`cli_gate`, `cli_gate_ts`, `cli_doctor_remote`, `uc_m7`) are `#![cfg(unix)]`, so `cargo test` compiles on Windows (checked with `cargo check --tests --target x86_64-pc-windows-gnu`) · PR #212; `bosun init` sets `own_ci` from `core::checks::workflow_checks` (the `ci-ok` check context, not the job key) · `tests/cli_init.rs` 17/17 · PR #213; the channel's main-open and main-health comments name bosun.yml · `tests/channel.rs` 7/7 · two verdicts · PR #215 (#214); `tests/channel_render.rs` renders the channel for rust, ts-pnpm and mixed, with and without `own_ci`, and parses its TOML, JSON and YAML files (YAML with python3/PyYAML or ruby, required in CI) · `tests/channel_render.rs` 2/2 · PR #216
 - 2026-10-25 · Follow-ups (session F) · `bosun result --outcome blocked|needs-human` sets that state on the epic, `merged` stays a report (D13) · `tests/cli_result.rs` 6/6 · PR #217; `bosun pr --auto-merge` posts a `task-pr` record and `bosun reap` reads that PR instead of listing every PR (old tasks keep the sweep); `bosun approve`'s missing-token fix says "your own machine" (#211) · `tests/cli_lifecycle.rs` 10/10 · high risk (R-gate, owner) · PR #218
+- 2026-10-25 · Canary findings (session G, keelstackhq/rust-canary `docs/canary-findings.md`) · F14: `bosun pr` refuses an open branch PR that does not link the task (exit 3, before any change) · `tests/cli_pr.rs` 19/19 · PR #220; F10: a human merge moves building, review and fixing tasks to merged (`sync_merged`, the state table, `reap` over closed issues before lease expiry, `result --outcome merged --pr N` on a PR merged into the default branch; open in-progress work never costs a PR listing) · `tests/cli_human_merge.rs` 12/12 · high risk (R-gate, owner) · PR #222; F4, F5, F6, F11, F15 in the channel: the toolchain from `rust-toolchain.toml` (else the 1.97 pin), own_ci PRs run only test-integrity unless `BOSUN_ALL_GATES=1`, a docs-only fast path (Markdown under docs/ or plans/ or at the root except README.md; never with ts-pnpm), body edits no longer cancel gates, agent-rule files in R-gov · `tests/channel_render.rs` 10/10 · two verdicts · PR #223 (#221); F2 `init --branch` (cloud default `claude/bosun-init`), F7 owner step for weekly splice PRs, F8 and F9 doctor (the Claude app via `performed_via_github_app`; the checks the default branch enforces), F13 label-lock fail-closed (a command naming a state label must be read-only throughout; a guard against accidental edits, known misses in spec §4), the hook denies when the guard panics, F15 for bosun's own ci.yml, and the two-verdict race in `verdict apply` (a newer comment replaces only the same session's) · high risk (R-gate, R-ci, owner) · PR #224
 - 2026-10-26 · Signed approvals · risk-check counts a `/bosun approve <head>` comment with a `bosun-sig ed25519` line from a key in `.bosun/approvers.toml` on the default branch (message `bosun-approve v1 <owner>/<repo>#<pr> <head>`, `ring`); `bosun approve <pr> --sign-key <pem> [--print]` signs and posts it, also in the cloud · `tests/cli_signed_approve.rs` 9/9
 
 ## Blocked
@@ -257,3 +267,8 @@ Human-only items, in order. Each has the exact action.
     `docs/setup-script.sh` into the cloud environment; create the Routines from `bosun doctor`.
     In a hull template-rust repo, the two bosun hooks come from hull's `.claude/settings.json`
     (hull#22); until then init lists them as an owner step.
+    A private repo on a free plan has no rulesets: the required checks are advisory and
+    auto-merge (D13) cannot work, so the owner merges by hand; make the repo public or use a paid
+    plan (`bosun doctor` says "cannot verify" then). Each weekly splice update PR is R-gov and
+    needs `/bosun approve <sha>`. In a Claude cloud session `bosun init` pushes to
+    `claude/bosun-init` (or `--branch`).

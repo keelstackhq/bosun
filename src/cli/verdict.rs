@@ -117,9 +117,13 @@ fn apply(app: &App, id: u64) -> CmdResult {
         return Err(refuse(format!("it is not on PR #{}", verdict.pr)));
     }
     let pull = current_pull(gh, &verdict)?;
-    // Comments apply in order: a newer verdict comment for the same head replaces this one.
+    // Comments apply in order: a newer verdict comment of the same reviewer session for the
+    // same head replaces this one. Another session's is a second verdict (two-verdict
+    // approval), not a replacement; a comment without a session counts as "unknown".
+    let session = comment_session(&c.body).unwrap_or("unknown");
     let newer = gh.list_comments(verdict.pr)?.into_iter().any(|o| {
         o.id > c.id
+            && comment_session(&o.body).unwrap_or("unknown") == session
             && comment_json(&o.body)
                 .and_then(|t| Verdict::parse(t).ok())
                 .is_some_and(|v| v.head_sha == verdict.head_sha)
@@ -130,7 +134,6 @@ fn apply(app: &App, id: u64) -> CmdResult {
             verdict.head_sha
         )));
     }
-    let session = comment_session(&c.body).unwrap_or("unknown");
     record(app, &pull, &verdict, session)
 }
 

@@ -10,9 +10,13 @@ on:
     branches: [main]
   merge_group:
 
-# A new push to the same PR or branch cancels its older run.
+# A new push to the same PR or branch cancels its older run. An `edited` run that did not change
+# the base (a title or body edit) gets its own group: it neither cancels the running gates of the
+# same head (whose cancelled `ci-ok` would post a failure) nor is cancelled by a push. It still
+# runs every job, so its `ci-ok` reflects the head; a skipped green `ci-ok` posted after a red
+# one on the same head would let a body edit turn a failed head green.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edit-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

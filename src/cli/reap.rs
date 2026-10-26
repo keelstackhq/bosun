@@ -1,15 +1,18 @@
-//! `bosun reap`: end expired leases (task back to ready) and expired registry members.
+//! `bosun reap`: move tasks whose PR merged to merged, end expired leases (task back to ready)
+//! and expired registry members.
 
 use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, active_issues, default_branch, end_lease, notes, set_state, sync_merged};
+use crate::app::{
+    App, active_issues, default_branch, end_lease, merge_counts, notes, set_state, sync_merged,
+};
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::linked_issues;
 use crate::core::records::{Record, parse_record};
 use crate::core::state::{State, state_of};
-use crate::github::IssueState;
+use crate::github::{Issue, IssueState};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
 
@@ -17,32 +20,26 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
 
-    let mut reaped = Vec::new();
-    for (issue, notes) in active_issues(gh)? {
-        let leases = leases_of(issue.number, &notes);
-        let expired: Vec<_> = leases.iter().filter(|l| !l.is_live(now)).collect();
-        for lease in &expired {
-            end_lease(gh, issue.number, &lease.session, "reaped")?;
-            reaped.push(json!({"issue": issue.number, "session": lease.session}));
-        }
-        let held = leases.iter().any(|l| l.is_live(now));
-        let early = matches!(
-            state_of(&issue.labels),
-            Some(State::Claimed | State::Building)
-        );
-        if !expired.is_empty() && early && !held {
-            set_state(gh, issue.number, &issue, State::Ready)?;
+    // A merge closes the issue, so look at tasks in any issue state. This runs before the expiry
+    // loop: a merged task ends its leases as `merged` and is never reaped back to `ready`.
+    let mut merged = Vec::new();
+    let mut open_work: Vec<Issue> = Vec::new();
+    for st in [State::Building, State::Review, State::Fixing, State::Queued] {
+        for issue in gh.list_issues(&[&st.label()], IssueState::All)? {
+            if !merge_counts(&issue) {
+                continue;
+            }
+            if !open_work.iter().any(|i| i.number == issue.number) {
+                open_work.push(issue);
+            }
         }
     }
-
-    // Auto-merge closes the issue, so look at queued tasks in any issue state.
-    let mut merged = Vec::new();
-    let queued = gh.list_issues(&[&State::Queued.label()], IssueState::All)?;
-    if !queued.is_empty() {
+    open_work.sort_by_key(|i| i.number);
+    if !open_work.is_empty() {
         let base = default_branch(gh)?;
         // Listed only for tasks without a usable `task-pr` record (older ones).
         let mut all_pulls = None;
-        for issue in queued {
+        for issue in open_work {
             let recorded =
                 notes(gh, issue.number)?
                     .iter()
@@ -91,6 +88,24 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
                     break;
                 }
             }
+        }
+    }
+
+    let mut reaped = Vec::new();
+    for (issue, notes) in active_issues(gh)? {
+        let leases = leases_of(issue.number, &notes);
+        let expired: Vec<_> = leases.iter().filter(|l| !l.is_live(now)).collect();
+        for lease in &expired {
+            end_lease(gh, issue.number, &lease.session, "reaped")?;
+            reaped.push(json!({"issue": issue.number, "session": lease.session}));
+        }
+        let held = leases.iter().any(|l| l.is_live(now));
+        let early = matches!(
+            state_of(&issue.labels),
+            Some(State::Claimed | State::Building)
+        );
+        if !expired.is_empty() && early && !held {
+            set_state(gh, issue.number, &issue, State::Ready)?;
         }
     }
 

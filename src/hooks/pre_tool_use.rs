@@ -15,7 +15,34 @@ pub fn deny(reason: &str) -> String {
     .to_string()
 }
 
+/// The hook fails closed on a bosun bug: a panic would exit 101, which Claude Code treats as a
+/// non-blocking error and lets the tool call run.
 pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
+    guarded(|| judge(cwd, input))
+}
+
+/// Run `f`; a panic becomes a deny. While `f` runs, a panic prints one short line to stderr
+/// (no payload, which may quote the command), so stdout keeps the hook protocol.
+fn guarded(f: impl FnOnce() -> Option<String>) -> Option<String> {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|info| {
+        let at = info
+            .location()
+            .map(|l| format!(" at {l}"))
+            .unwrap_or_default();
+        eprintln!("bosun: internal error in the PreToolUse hook{at}; denying");
+    }));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    std::panic::set_hook(previous);
+    result.unwrap_or_else(|_| {
+        Some(deny(
+            "the bosun hook could not judge this command (internal error); rerun it in a \
+             simpler form or report a bosun bug",
+        ))
+    })
+}
+
+fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     let tool = input.get("tool_name").and_then(Value::as_str)?;
     let tool_input = input.get("tool_input").cloned().unwrap_or(Value::Null);
     let dir = cwd
@@ -71,4 +98,24 @@ fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
     })?;
     let text = rel.to_str()?.replace('\\', "/");
     (!text.starts_with("..")).then_some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_in_the_guard_denies() {
+        let out = guarded(|| panic!("boom in {}", "gh issue edit 1"));
+        let v: Value = serde_json::from_str(&out.unwrap()).unwrap();
+        let hso = &v["hookSpecificOutput"];
+        assert_eq!(hso["permissionDecision"], "deny");
+        let why = hso["permissionDecisionReason"].as_str().unwrap();
+        assert!(why.contains("internal error"), "{why}");
+        assert!(!why.contains("boom"), "{why}");
+        // No panic: the verdict passes through, and a later panic is caught again.
+        assert_eq!(guarded(|| None), None);
+        assert_eq!(guarded(|| Some("x".into())), Some("x".into()));
+        assert!(guarded(|| panic!("again")).is_some());
+    }
 }

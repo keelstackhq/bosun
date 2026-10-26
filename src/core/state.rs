@@ -112,7 +112,7 @@ pub fn transition_allowed(from: State, to: State) -> bool {
             | (Claimed | Building | Fixing, Review)
             | (Review, Fixing)
             | (Review, Queued)
-            | (Queued, Merged)
+            | (Building | Review | Fixing | Queued, Merged)
             | (Queued, Fixing)
             | (Claimed | Building | Review | Fixing | Queued, Ready)
             | (Blocked | NeedsHuman, Ready | Review)
@@ -144,6 +144,9 @@ mod tests {
             (Fixing, Review),
             (Review, Queued),
             (Queued, Merged),
+            (Building, Merged),
+            (Review, Merged),
+            (Fixing, Merged),
             (Ready, Blocked),
             (Building, NeedsHuman),
         ] {
@@ -156,8 +159,8 @@ mod tests {
         for (a, b) in [
             (Planned, Claimed),
             (Ready, Merged),
-            (Building, Merged),
-            (Review, Merged),
+            (Claimed, Merged),
+            (Blocked, Merged),
             (Merged, Ready),
             (Merged, Blocked),
             (Planned, Review),
