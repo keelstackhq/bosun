@@ -1,8 +1,9 @@
 # Repo settings that `hoist apply` sets (spec D17). Inference covers the rest.
 
 [github]
-# ci-ok runs every gate in one job (D15); the others are separate required checks. Beside a
-# repo's own ci.yml, bosun's gates report as bosun-ok.
+# ci-ok passes only when every gate passed (D15; with a ts-pnpm stack, after the job
+# bosun-trusted); the others are separate required checks. Beside a repo's own ci.yml, bosun's
+# gates report as bosun-ok.
 required_checks = ["ci-ok", {% if own_ci %}"bosun-ok", {% endif %}"risk-check", "review-verdict", "main-open"]
 # Auto-merge without a merge queue: risk-check and review-verdict are statuses on the PR head,
 # which a merge-queue commit would never get.

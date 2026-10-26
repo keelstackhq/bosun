@@ -50,6 +50,11 @@ These are public today, so they cost nothing. The orchestrator has run data only
   gate in one job, named after the required check (`ci-ok`, or `bosun-ok`). The gates that run
   no PR code go first. Before, this took 9 jobs (~10-12 min billed). Now it takes 1 job (~3-4
   min billed). A docs-only PR takes 1 min instead of 2.
+- **Two jobs for ts-pnpm.** Installing a PR's dependencies runs its code, so a ts-pnpm or
+  mixed stack splits off `bosun-trusted`: test-integrity and deps, no install, no cache, about
+  1 min billed (more for a mixed stack, whose toolchain and `cargo deny` run without a cache).
+  The required check's job runs install, fmt, lint and test only after it passed. This costs
+  about 1 more billed minute per run, also for an edit or a draft.
 - **Edits run test-integrity only.** A PR body or title edit changes no file. The edit run
   waits for the running run. If the head passed, it keeps the file gates and runs only
   test-integrity, which reads the body, with no toolchain setup (~1 min). Otherwise it runs

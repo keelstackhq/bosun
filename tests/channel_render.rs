@@ -410,15 +410,35 @@ fn rust_gates_install_the_toolchain_file_once() {
     assert!(!file(&files, BOSUN_YML).contains("rustup"));
 }
 
-/// The steps of the one job, `ci-ok` (or `bosun-ok` beside the repo's own ci).
-fn steps(j: &serde_json::Value, own_ci: &str) -> Vec<serde_json::Value> {
-    let name = if own_ci.is_empty() {
+/// The required check's job: `ci-ok`, or `bosun-ok` beside the repo's own ci.
+fn check_name(own_ci: &str) -> &'static str {
+    if own_ci.is_empty() {
         "ci-ok"
     } else {
         "bosun-ok"
+    }
+}
+
+/// The steps of the job that plans and runs the gates with no PR code: `bosun-trusted` with a
+/// ts-pnpm stack, else the one job, the required check's.
+fn steps(j: &serde_json::Value, own_ci: &str) -> Vec<serde_json::Value> {
+    let name = if j["jobs"].get(TRUSTED).is_some() {
+        TRUSTED
+    } else {
+        check_name(own_ci)
     };
     j["jobs"][name]["steps"].as_array().unwrap().clone()
 }
+
+/// The steps of the required check's job.
+fn check_steps(j: &serde_json::Value, own_ci: &str) -> Vec<serde_json::Value> {
+    j["jobs"][check_name(own_ci)]["steps"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+const TRUSTED: &str = "bosun-trusted";
 
 fn step<'a>(steps: &'a [serde_json::Value], key: &str, value: &str) -> &'a serde_json::Value {
     steps
@@ -437,7 +457,9 @@ fn own_ci_gates_are_test_integrity_unless_opted_in() {
         let wf = file(&own, BOSUN_YML);
         assert!(wf.contains("vars.BOSUN_ALL_GATES == '1'"), "{wf}");
         let Some(j) = yaml_json(wf) else { return };
-        assert_eq!(j["jobs"].as_object().unwrap().len(), 1, "one job");
+        // rust: one job; ts-pnpm and mixed: bosun-trusted and the required check.
+        let jobs = if stack.contains(&"ts-pnpm") { 2 } else { 1 };
+        assert_eq!(j["jobs"].as_object().unwrap().len(), jobs, "{stack:?}");
         let s = steps(&j, "1");
         let gates = &step(&s, "name", "bosun gates")["env"]["GATES"];
         let expr = gates.as_str().unwrap();
@@ -472,6 +494,8 @@ fn every_work_step_waits_for_the_plan() {
                 let cond = s["if"].as_str().unwrap_or_default();
                 assert!(cond.starts_with("steps.plan.outputs.work == 'true'"), "{s}");
             }
+            // The required check's job after bosun-trusted waits for its gates (see
+            // ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted).
         }
     }
 }
@@ -762,6 +786,7 @@ fn toolchain_run(root: &std::path::Path, cwd: &std::path::Path) -> (bool, String
         .env("PATH", path)
         .env("GITHUB_WORKSPACE", root)
         .env("GITHUB_ENV", &env)
+        .env("GITHUB_OUTPUT", bin.path().join("out"))
         .status()
         .unwrap()
         .success();
@@ -965,8 +990,8 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
             .collect();
         assert_eq!(
             setup.len(),
-            8,
-            "toolchain, rust-cache, install-action, the pnpm workspace check, 4 ts-pnpm steps"
+            4,
+            "toolchain, install-action (cargo-deny), setup-node, pnpm for the audit"
         );
         let gates = step(&steps, "name", "bosun gates");
         assert_eq!(gates["env"]["ONLY"], "${{ steps.plan.outputs.only }}");
@@ -979,211 +1004,412 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
     }
 }
 
-/// ts-pnpm: no PR code before the gates. pnpm install skips the PR's .pnpmfile.cjs and
-/// lifecycle scripts; `pnpm rebuild` runs the dependencies' scripts right before fmt, the
-/// first gate that runs PR code there (review of #233).
+/// ts-pnpm and mixed stacks run two jobs (#234): `bosun-trusted` runs test-integrity and deps
+/// and never installs the PR's dependencies or restores a cache; the required check's job runs
+/// the PR's code (install, fmt, lint, test) only after `bosun-trusted` passed.
 #[test]
-fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
+fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
+    for stack in [&["ts-pnpm"][..], &["rust", "ts-pnpm"]] {
+        for own_ci in ["", "1"] {
+            let files = variant(stack, own_ci);
+            let wf = file(&files, BOSUN_YML);
+            assert!(!wf.contains("secrets."), "no secrets in either job");
+            let Some(j) = yaml_json(wf) else { return };
+            let check = check_name(own_ci);
+            let mut ids: Vec<_> = j["jobs"].as_object().unwrap().keys().cloned().collect();
+            ids.sort();
+            let mut want = [TRUSTED, check];
+            want.sort();
+            assert_eq!(ids, want, "{stack:?}");
+            let trusted = &j["jobs"][TRUSTED];
+            let a = steps(&j, own_ci);
+            // bosun-trusted: only these actions, no cache, no install.
+            for s in &a {
+                if let Some(u) = s["uses"].as_str() {
+                    assert!(
+                        [
+                            "actions/checkout@v4",
+                            "actions/setup-node@v4",
+                            "taiki-e/install-action@v2"
+                        ]
+                        .contains(&u),
+                        "{u} in {TRUSTED}"
+                    );
+                    assert!(s["with"].get("cache").is_none(), "{s}");
+                }
+                let run = s["run"].as_str().unwrap_or_default();
+                assert!(!run.contains("pnpm install"), "{run}");
+                assert!(!run.contains("pnpm rebuild"), "{run}");
+            }
+            assert_eq!(trusted["env"]["npm_config_ignore_pnpmfile"], "true");
+            assert_eq!(
+                trusted["outputs"]["pr_gates"],
+                "${{ steps.gates.outputs.pr_gates }}"
+            );
+            // The edit step looks up the required check's earlier result, not its own job's.
+            assert_eq!(step(&a, "id", "edit")["env"]["CHECK"], check);
+            // The required check: after bosun-trusted, also when it failed (never skipped), with
+            // a read-only token.
+            let job = &j["jobs"][check];
+            assert_eq!(job["needs"], TRUSTED);
+            assert_eq!(job["if"], "${{ always() }}", "also after a cancel");
+            assert_eq!(job["permissions"], serde_json::json!({"contents": "read"}));
+            let b = check_steps(&j, own_ci);
+            assert_eq!(b[0]["name"], "bosun-trusted passed");
+            assert!(b[0].get("if").is_none(), "the first step always runs");
+            for s in &b[1..] {
+                let cond = s["if"].as_str().unwrap_or_default();
+                assert!(
+                    cond.starts_with("needs.bosun-trusted.outputs.pr_gates != ''"),
+                    "{s}"
+                );
+            }
+            let install = step(&b, "name", "install the pinned release");
+            assert!(
+                install["run"]
+                    .as_str()
+                    .unwrap()
+                    .contains("echo \"$SHA256  $RUNNER_TEMP/bin/bosun\" | sha256sum -c --quiet")
+            );
+            assert!(
+                b.iter()
+                    .any(|s| s["run"] == "pnpm install --frozen-lockfile")
+            );
+            let gates = step(&b, "name", "bosun gates");
+            assert_eq!(
+                gates["env"]["GATES"],
+                "${{ needs.bosun-trusted.outputs.pr_gates }}"
+            );
+            // Both jobs put the base's gate config over the checkout with the same script.
+            let base = "the base's config for the gates";
+            assert_eq!(step(&a, "name", base)["run"], step(&b, "name", base)["run"]);
+            let rust = stack.contains(&"rust");
+            assert_eq!(b.iter().any(|s| s["name"] == "rust toolchain"), rust);
+            assert_eq!(
+                b.iter()
+                    .any(|s| s["uses"].as_str() == Some("Swatinem/rust-cache@v2")),
+                rust
+            );
+        }
+    }
+}
+
+/// Runs `script` under bash in `dir` with `envs`; true when it passes.
+fn bash_in(dir: &Path, script: &str, envs: &[(&str, &str)]) -> bool {
+    let mut c = Command::new("bash");
+    c.args(["-eo", "pipefail", "-c", script])
+        .current_dir(dir)
+        .env_remove("RUSTUP_TOOLCHAIN");
+    for (k, v) in envs {
+        c.env(k, v);
+    }
+    c.output().unwrap().status.success()
+}
+
+#[test]
+fn the_required_check_fails_at_once_unless_bosun_trusted_passed() {
+    let files = variant(&["ts-pnpm"], "");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let run = check_steps(&j, "")[0]["run"].as_str().unwrap().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    for (result, ok) in [
+        ("success", true),
+        ("failure", false),
+        ("cancelled", false),
+        ("skipped", false),
+        ("", false),
+    ] {
+        let envs = [("RESULT", result), ("PR_GATES", "fmt lint test")];
+        assert_eq!(bash_in(dir.path(), &run, &envs), ok, "{result:?}");
+    }
+}
+
+fn git_in(dir: &Path, cmd: &str) -> String {
+    let o = Command::new("bash")
+        .args(["-eo", "pipefail", "-c", cmd])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        o.status.success(),
+        "{cmd}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// bosun-trusted's gates step, run with a fake bosun that records what each gate saw: test-
+/// integrity reads the PR's manifests; deps (`pnpm audit`) sees the PR's lockfile with every
+/// package.json and pnpm-workspace.yaml from the base, so no PR setting reaches pnpm.
+#[test]
+fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
     for stack in [&["ts-pnpm"][..], &["rust", "ts-pnpm"]] {
         let files = variant(stack, "");
         let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
             return;
         };
-        let steps = steps(&j, "");
-        let install = steps
-            .iter()
-            .find(|s| {
-                s["run"]
-                    .as_str()
-                    .is_some_and(|r| r.contains("pnpm install --frozen-lockfile"))
-            })
-            .unwrap();
-        let run = install["run"].as_str().unwrap();
-        assert!(
-            run.contains("\npnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile\n"),
-            "{run}"
-        );
-        // pnpm install may change no file but the ignored node_modules (review of #233: a
-        // patch that leaves its package rewrote pnpm-workspace.yaml).
-        // The repo is <home>/r and the install runs in its nested ts path r/ts, so the
-        // fingerprint must work from the top level, and the walk above the checkout ends at
-        // $HOME (review of #233).
-        let dir = tempfile::tempdir().unwrap();
-        let bin = tempfile::tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("r/ts")).unwrap();
-        let sh = |cmd: &str, sub: &str| {
-            Command::new("bash")
-                .args(["-eo", "pipefail", "-c", cmd])
-                .current_dir(dir.path().join(sub))
-                .env("HOME", dir.path())
-                .env(
-                    "PATH",
-                    format!(
-                        "{}:{}",
-                        bin.path().display(),
-                        std::env::var("PATH").unwrap()
-                    ),
-                )
-                .output()
-                .unwrap()
-                .status
-                .success()
-        };
-        assert!(sh(
-            "git init -q && printf 'node_modules/\\nignored/\\n' > .gitignore && echo a > pnpm-workspace.yaml && echo a > changed.txt && echo a > ts/package.json && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base",
-            "r"
-        ));
-        use std::os::unix::fs::PermissionsExt;
-        let fake = bin.path().join("pnpm");
-        for (body, ok) in [
-            ("mkdir -p node_modules/x && touch node_modules/x/y", true),
-            ("echo 'pnpmfile: evil.cjs' >> ../pnpm-workspace.yaml", false),
-            ("echo 'node-options=x' > ../.npmrc", false),
-            // A file already changed before install (by the base-config step) changed again.
-            ("echo again >> ../changed.txt", false),
-            // An ignored .npmrc is read by pnpm all the same, also outside the ts path.
-            ("echo 'node-options=x' > ../ignored/.npmrc", false),
-            // A link in node_modules may not leave the checkout (review of #233).
-            (
-                "mkdir -p node_modules/.pnpm/a && ln -s .pnpm/a node_modules/a",
-                true,
-            ),
-            ("mkdir -p node_modules && ln -s / node_modules/up", false),
-            // Nothing may appear above the checkout that cargo or pnpm reads (review of #233).
-            ("ln -s \"$PWD\" ../../.cargo", false),
-            ("echo x > ../../.npmrc", false),
-        ] {
-            sh("mkdir -p ignored && echo changed >> changed.txt", "r");
-            fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
-            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
-            assert_eq!(sh(run, "r/ts"), ok, "{body}");
-            sh(
-                "git checkout -q -- . && git clean -qfdx && rm -rf ../.cargo ../.npmrc",
-                "r",
+        let run = step(&steps(&j, ""), "name", "bosun gates")["run"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        // (base has a root package.json, PR change, gates, gate that fails) -> (passes, log, pr_gates)
+        let case = |base_root: bool, pr: &str, only: &str, fail: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            let d = dir.path();
+            git_in(
+                d,
+                "git init -q -b main && git config user.email a@b.c && git config user.name n \
+                 && mkdir -p packages/a \
+                 && echo '{\"name\":\"r\",\"packageManager\":\"pnpm@10.28.0\"}' > package.json \
+                 && printf 'packages:\\n  - packages/*\\n' > pnpm-workspace.yaml \
+                 && echo '{\"name\":\"a\"}' > packages/a/package.json && echo base-lock > pnpm-lock.yaml",
             );
-        }
-        // Every pnpm call in the job, setup-node's `pnpm store path` and the deps gate's audit
-        // included, ignores the PR's pnpmfile (review of #233).
-        assert_eq!(j["env"]["npm_config_ignore_pnpmfile"], "true");
-        let run = step(&steps, "name", "bosun gates")["run"].as_str().unwrap();
-        let rebuild = run.find("pnpm rebuild").expect("rebuild");
-        assert!(run[..rebuild].contains("if [ \"$g\" = fmt ]"), "{run}");
-        assert!(rebuild < run.find("\"$bosun\" gate").unwrap());
+            if !base_root {
+                git_in(d, "rm package.json");
+            }
+            git_in(d, "git add -A && git commit -qm base");
+            let base = git_in(d, "git rev-parse HEAD");
+            git_in(d, pr);
+            git_in(d, "git add -A && git commit -qm pr");
+            let bin = tmp.path().join("bin");
+            fs::create_dir_all(&bin).unwrap();
+            let log = tmp.path().join("log");
+            fs::write(
+                bin.join("bosun"),
+                format!(
+                    "#!/bin/sh\n{{ echo \"$2: $(cat package.json) $(cat pnpm-workspace.yaml) $(cat pnpm-lock.yaml) $(cat packages/*/package.json | tr -d '\\n')\"; }} >> {}\n[ \"$2\" != \"{fail}\" ]\n",
+                    log.display()
+                ),
+            )
+            .unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(bin.join("bosun"), fs::Permissions::from_mode(0o755)).unwrap();
+            let out = tmp.path().join("out");
+            let script = format!(
+                "export BOSUN_SHA256=\"$(sha256sum \"$RUNNER_TEMP/bin/bosun\" | cut -d' ' -f1)\"\n{run}"
+            );
+            let ok = bash_in(
+                d,
+                &script,
+                &[
+                    ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
+                    ("GITHUB_OUTPUT", out.to_str().unwrap()),
+                    ("GITHUB_SHA", "unused"),
+                    ("GATES", "test-integrity deps fmt lint test"),
+                    ("ONLY", only),
+                    ("EVENT", "pull_request"),
+                    ("BASE", &base),
+                ],
+            );
+            let log = fs::read_to_string(log).unwrap_or_default();
+            let out = fs::read_to_string(out).unwrap_or_default();
+            (ok, log, out.trim().to_string())
+        };
+        let pr = "echo '{\"name\":\"r\",\"pnpm\":{\"configDependencies\":{\"x\":\"1.0.0\"}}}' > package.json \
+                  && printf 'packages:\\n  - packages/*\\npnpmfile: evil.cjs\\n' > pnpm-workspace.yaml \
+                  && echo pr-lock > pnpm-lock.yaml && mkdir -p packages/b \
+                  && echo '{\"name\":\"b\",\"pnpm\":{}}' > packages/b/package.json";
+        let (ok, log, out) = case(true, pr, "", "");
+        assert!(ok, "{log}");
+        let (integrity, deps) = log.split_once("deps: ").expect(&log);
+        assert!(integrity.starts_with("test-integrity: "), "{log}");
+        assert!(integrity.contains("configDependencies"), "the PR's: {log}");
+        assert!(integrity.contains("pnpmfile: evil.cjs"), "{log}");
+        assert!(integrity.contains("{\"name\":\"b\""), "{log}");
+        assert_eq!(
+            deps,
+            "{\"name\":\"r\",\"packageManager\":\"pnpm@10.28.0\"} packages:\n  - packages/* pr-lock {\"name\":\"a\"}\n",
+            "the base's config, the PR's lockfile"
+        );
+        assert_eq!(out, "pr_gates=fmt lint test");
+        // An edit after a success: test-integrity only, nothing left for the required check.
+        let (ok, log, out) = case(true, pr, "test-integrity", "");
+        assert!(ok);
+        assert!(log.starts_with("test-integrity: ") && !log.contains("deps: "));
+        assert_eq!(out, "pr_gates=");
+        // The first failure stops the job.
+        let (ok, log, _) = case(true, pr, "", "test-integrity");
+        assert!(!ok && !log.contains("deps: "), "{log}");
+        // A PR that adds the stack: the base has no root package.json, so pnpm gets {}.
+        let (ok, log, _) = case(false, pr, "", "");
+        assert!(ok);
+        assert!(log.contains("deps: {} packages:"), "{log}");
+        // A directory link out of the checkout: nothing is written through it.
+        let outside = tempfile::tempdir().unwrap();
+        let link = format!(
+            "rm -r packages/a && ln -s {} packages/a",
+            outside.path().display()
+        );
+        let (ok, log, _) = case(true, &link, "", "");
+        assert!(!ok && !log.contains("deps: "), "{log}");
+        assert!(!outside.path().join("package.json").exists());
     }
-    let files = variant(&["rust"], "");
-    assert!(!file(&files, BOSUN_YML).contains("pnpm rebuild"));
 }
 
-/// pnpm-workspace.yaml settings win over env and flags: a PR naming a pnpmfile or config
-/// dependencies there would run code before the gates. Only settings that run no code pass,
-/// read by a YAML parser so no spelling hides a key (review of #233).
+/// bosun-trusted installs the pnpm release the base's package.json names (the PR's while the
+/// base has none), an exact version from the registry and never a path, URL or range.
 #[test]
-fn ts_pnpm_refuses_workspace_settings_that_run_code() {
+fn bosun_trusted_installs_an_exact_pnpm_release() {
     let files = variant(&["ts-pnpm"], "");
     let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
         return;
     };
-    let steps = steps(&j, "");
-    let at = |name: &str| {
-        steps
-            .iter()
-            .position(|s| {
-                s["name"] == name || s["uses"].as_str().is_some_and(|u| u.starts_with(name))
-            })
-            .unwrap()
-    };
-    let guard = at("pnpm workspace runs no PR code");
-    assert!(guard < at("pnpm/action-setup") && guard < at("actions/setup-node"));
-    let script = steps[guard]["run"].as_str().unwrap().to_string();
-    let check_in = |name: &str, text: &str| {
+    let run = step(&steps(&j, ""), "name", "pnpm for the audit")["run"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Some(installed spec) when the step passes.
+    let case = |base: Option<&str>, pr: &str| -> Option<String> {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join(name), text).unwrap();
-        let git = |a: &[&str]| {
-            assert!(
-                Command::new("git")
-                    .args(a)
-                    .current_dir(dir.path())
-                    .output()
-                    .unwrap()
-                    .status
-                    .success()
-            )
-        };
-        git(&["init", "-q"]);
-        git(&["add", "-A"]);
-        Command::new("bash")
-            .args(["-eo", "pipefail", "-c", &script])
-            .current_dir(dir.path())
-            .output()
-            .unwrap()
-            .status
-            .success()
+        let tmp = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        git_in(
+            d,
+            "git init -q -b main && git config user.email a@b.c && git config user.name n && echo x > x",
+        );
+        if let Some(b) = base {
+            fs::write(d.join("package.json"), b).unwrap();
+        }
+        git_in(d, "git add -A && git commit -qm base");
+        let base_sha = git_in(d, "git rev-parse HEAD");
+        fs::write(d.join("package.json"), pr).unwrap();
+        git_in(d, "git add -A && git commit -qm pr");
+        let bin = tmp.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let root = tmp.path().join("root");
+        let log = tmp.path().join("log");
+        fs::write(
+            bin.join("npm"),
+            format!(
+                "#!/bin/sh\n[ \"$1\" = root ] && {{ echo {r}; exit 0; }}\necho \"$*\" >> {l}\necho \"${{4#pnpm@}}\" > {r}.v\n",
+                r = root.display(),
+                l = log.display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            bin.join("pnpm"),
+            format!("#!/bin/sh\ncat {}.v\n", root.display()),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for f in ["npm", "pnpm"] {
+            fs::set_permissions(bin.join(f), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let ok = bash_in(
+            d,
+            &run,
+            &[
+                ("PATH", &path),
+                ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
+                ("BASE", &base_sha),
+                ("GITHUB_SHA", "unused"),
+            ],
+        );
+        let log = fs::read_to_string(log).unwrap_or_default();
+        if !ok {
+            assert!(log.is_empty(), "npm ran before the check: {log}");
+        }
+        ok.then(|| log.trim().to_string())
     };
-    let check = |yaml: &str| check_in("pnpm-workspace.yaml", yaml);
-    // A package.json `pnpm` field holds pnpm settings too.
-    assert!(check_in(
-        "package.json",
-        "{\"name\": \"a\", \"pnpm\": {\"overrides\": {}}}"
-    ));
-    assert!(check_in(
-        "package.json",
-        "{\"name\": \"a\", \"scripts\": {\"x\": \"y\"}}"
-    ));
-    assert!(!check_in(
-        "package.json",
-        "{\"pnpm\": {\"configDependencies\": {}}}"
-    ));
-    assert!(!check_in(
-        "package.json",
-        "{\"pnpm\": {\"\\u0070npmfile\": \"e.cjs\"}}"
-    ));
-    assert!(!check_in("package.json", "{\"pnpm\": \"x\"}"));
-    assert!(!check_in(
-        "package.json",
-        "{\"pnpm\": {\"patchedDependencies\": {}}}"
-    ));
-    // A dependency name with ".." or an extra "/" links outside node_modules, even into the
-    // checkout's parent, where cargo reads a .cargo (review of #233).
-    assert!(check_in(
-        "package.json",
-        "{\"dependencies\": {\"@s/n\": \"1\", \"JSONStream\": \"1\"}, \"devDependencies\": {\"a.b_c~d-e\": \"1\"}}"
-    ));
+    let pm = |v: &str| format!("{{\"packageManager\": {v}}}");
+    let pnpm = |v: &str| Some(format!("install -g --ignore-scripts {v}"));
+    assert_eq!(
+        case(
+            Some(&pm("\"pnpm@10.28.0+sha512.abc\"")),
+            &pm("\"pnpm@9.0.0\"")
+        ),
+        pnpm("pnpm@10.28.0"),
+        "the base's"
+    );
+    assert_eq!(
+        case(None, &pm("\"pnpm@9.1.2\"")),
+        pnpm("pnpm@9.1.2"),
+        "a new stack"
+    );
+    assert_eq!(
+        case(Some("{\"name\": \"r\"}"), &pm("\"pnpm@9.1.2\"")),
+        pnpm("pnpm@9.1.2")
+    );
     for bad in [
-        "{\"dependencies\": {\"../../.cargo\": \"file:./e\"}}",
-        "{\"devDependencies\": {\"a/b\": \"npm:x@1\"}}",
-        "{\"optionalDependencies\": {\"@s/../x\": \"1\"}}",
-        "{\"peerDependencies\": {\"..\": \"1\"}}",
-        "{\"dependencies\": [\"x\"]}",
+        "\"pnpm@file:../evil\"",
+        "\"pnpm@1.2.3\\nfile:../evil\"",
+        "\"pnpm@https://e.x/p.tgz\"",
+        "\"pnpm@latest\"",
+        "\"pnpm@^10.0.0\"",
+        "\"npm@10.0.0\"",
+        "5",
     ] {
-        assert!(!check_in("package.json", bad), "{bad}");
+        assert_eq!(case(None, &pm(bad)), None, "{bad}");
+        assert_eq!(
+            case(Some(&pm(bad)), &pm("\"pnpm@9.1.2\"")),
+            None,
+            "base {bad}"
+        );
     }
-    let lock_ok = "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      '@s/n':\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  '@s/n@1.0.0':\n    resolution: {integrity: x}\nsnapshots:\n  '@s/n@1.0.0(p@2.0.0)':\n    dependencies:\n      p: 2.0.0\n";
-    assert!(check_in("pnpm-lock.yaml", lock_ok));
-    for bad in [
-        lock_ok.replace("      '@s/n':\n", "      ../../.cargo:\n"),
-        lock_ok.replace("  '@s/n@1.0.0':\n", "  ../../.cargo@file:e:\n"),
-        lock_ok.replace("      p: 2.0.0", "      ../p: 2.0.0"),
-        format!("{lock_ok}snapshots: {{}}\n"),
+    assert_eq!(case(None, "not json"), None);
+}
+
+/// The required check's job installs the toolchain bosun-trusted checked (mixed stack).
+#[test]
+fn the_required_check_installs_the_toolchain_bosun_trusted_checked() {
+    let files = variant(&["rust", "ts-pnpm"], "");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let b = check_steps(&j, "");
+    let run = step(&b, "name", "rust toolchain")["run"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (file_found, channel, want) in [
+        (
+            "1",
+            "1.99.1",
+            "toolchain install\ncomponent add rustfmt clippy 1.99.1\n",
+        ),
+        (
+            "",
+            "1.97",
+            "toolchain install 1.97 --profile minimal -c rustfmt,clippy\ncomponent add rustfmt clippy 1.97\n",
+        ),
     ] {
-        assert!(!check_in("pnpm-lock.yaml", &bad), "{bad}");
-    }
-    assert!(check(
-        "packages:\n  - \"pkgs/*\"\nonlyBuiltDependencies: [esbuild]\n"
-    ));
-    assert!(check(""), "an empty file");
-    for bad in [
-        // A patch may name a path outside its package (review of #233).
-        "packages: [a]\npatchedDependencies:\n  is-number@7.0.0: patches/p.patch\n",
-        "packages: [a]\nignorePnpmfile: false\npnpmfile: evil.cjs\n",
-        "\"pnpm\\x66ile\": evil.cjs\n",
-        "configDependencies:\n  x: 1.0.0\n",
-        "x: &a {pnpmfile: e}\n<<: *a\n",
-        "packages: [a]\npackages: [b]\npnpmfile: e\n",
-        // Duplicate keys fail too (review of #233).
-        "packages: [a]\npackages: [b]\n",
-        "bad: [\n",
-        "- a\n",
-    ] {
-        assert!(!check(bad), "{bad:?} passed");
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("log");
+        fs::write(
+            tmp.path().join("rustup"),
+            format!(
+                "#!/bin/sh\necho \"$* $RUSTUP_TOOLCHAIN\" | sed 's/ $//' >> {}\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(tmp.path().join("rustup"), fs::Permissions::from_mode(0o755)).unwrap();
+        let env = tmp.path().join("env");
+        let path = format!(
+            "{}:{}",
+            tmp.path().display(),
+            std::env::var("PATH").unwrap()
+        );
+        assert!(bash_in(
+            tmp.path(),
+            &run,
+            &[
+                ("PATH", &path),
+                ("FILE", file_found),
+                ("CHANNEL", channel),
+                ("GITHUB_ENV", env.to_str().unwrap()),
+            ],
+        ));
+        assert_eq!(fs::read_to_string(&log).unwrap(), want);
+        assert_eq!(
+            fs::read_to_string(&env).unwrap(),
+            format!("RUSTUP_TOOLCHAIN={channel}\n")
+        );
     }
 }
