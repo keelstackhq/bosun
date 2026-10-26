@@ -61,7 +61,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      # Run the release pinned in .bosun/version (same steps as the bosun-bin job of ci.yml), so a
+      # Run the release pinned in .bosun/version (the same pinned-release steps as ci.yml), so a
       # broken main cannot stop this job. A pin that is `unreleased`, or a release without the
       # command, runs the shell fallback below.
       - name: pinned release

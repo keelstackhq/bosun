@@ -383,6 +383,7 @@ fn rust_gates_install_the_toolchain_file_once() {
         assert!(!wf.contains("dtolnay/rust-toolchain"), "{wf}");
         assert!(!wf.contains("\"1.97\""), "{wf}");
         assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
+        assert!(wf.contains("cache-bin: \"false\""), "{wf}");
         // Without a toolchain file in rust_path or a parent, the old pin, never `stable`; the
         // gates and the setup script fall back to the same pin.
         let setup = file(&files, "docs/setup-script.sh");
@@ -726,6 +727,13 @@ fn the_renderer_refuses_tags_outside_the_subset() {
 /// Runs the rust toolchain step in `cwd` under the workspace `root`, with a fake
 /// `rustup` on PATH; returns the rustup calls it made.
 fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
+    let (ok, calls) = toolchain_run(root, cwd);
+    assert!(ok, "the toolchain step failed");
+    calls
+}
+
+/// The toolchain step's exit (true: success) and its rustup calls.
+fn toolchain_run(root: &std::path::Path, cwd: &std::path::Path) -> (bool, String) {
     let files = variant(&["rust"], "");
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
     let steps = steps(&j, "");
@@ -747,16 +755,125 @@ fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
         bin.path().display(),
         std::env::var("PATH").unwrap()
     );
+    let env = bin.path().join("env");
     let ok = Command::new("bash")
         .args(["-eo", "pipefail", "-c", run])
         .current_dir(cwd)
         .env("PATH", path)
         .env("GITHUB_WORKSPACE", root)
+        .env("GITHUB_ENV", &env)
         .status()
         .unwrap()
         .success();
-    assert!(ok, "the toolchain step failed");
-    fs::read_to_string(log).unwrap_or_default()
+    if ok {
+        // Later steps get the checked channel, so rustup ignores the file from then on.
+        let e = fs::read_to_string(&env).unwrap();
+        assert!(
+            e.starts_with("RUSTUP_TOOLCHAIN=") && e.lines().count() == 1,
+            "{e}"
+        );
+    }
+    (ok, fs::read_to_string(log).unwrap_or_default())
+}
+
+/// A toolchain file that names a `path` would run another compiler before the gates (the step
+/// reads the base's copy; it still checks it).
+#[test]
+fn the_toolchain_step_refuses_a_toolchain_path() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    for (name, text) in [
+        ("rust-toolchain.toml", "[toolchain]\npath = \"./evil\"\n"),
+        ("rust-toolchain.toml", "[toolchain]\n  path= \"/opt/x\"\n"),
+        // Other TOML spellings of the same key (review of #233).
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\n\"path\" = \"/abs/evil\"\n",
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\n'path' = \"/abs/evil\"\n",
+        ),
+        ("rust-toolchain.toml", "toolchain.path = \"/abs/evil\"\n"),
+        (
+            "rust-toolchain.toml",
+            "toolchain = { path = \"/abs/evil\" }\n",
+        ),
+        // TOML unicode escapes hide the key and the slash from a text search (review of #233).
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\n\"\\u0070ath\" = \"\\u002ftmp\\u002fevil\"\n",
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\nchannel = \"../evil\"\n",
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\nchannel = \"1.97\"\n[other]\nx = 1\n",
+        ),
+        ("rust-toolchain.toml", "not = = toml\n"),
+        ("rust-toolchain", "/opt/evil\n"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".cargo")).unwrap();
+        fs::write(root.path().join(name), text).unwrap();
+        let (ok, calls) = toolchain_run(root.path(), root.path());
+        assert!(!ok, "{name}: {text:?} passed");
+        assert!(calls.is_empty(), "rustup ran before the check: {calls}");
+    }
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("rust-toolchain"), "1.97\n").unwrap();
+    fs::write(
+        root.path().join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97\"\ncomponents = [\"rustfmt\", \"clippy\"]\nprofile = \"minimal\"\n",
+    )
+    .unwrap();
+    assert!(
+        toolchain_run(root.path(), root.path()).0,
+        "a plain channel passes"
+    );
+}
+
+/// The rest of the defence before lint: cargo cannot swap rustc, the pinned bosun is checked
+/// before each gate, and the first failed gate stops the job.
+#[test]
+fn the_gates_run_a_checked_bosun_with_cargo_pinned_to_rustc() {
+    let files = variant(&["rust"], "");
+    let wf = file(&files, BOSUN_YML);
+    let Some(j) = yaml_json(wf) else { return };
+    for (k, v) in [
+        ("RUSTC", "rustc"),
+        ("RUSTC_WRAPPER", ""),
+        ("RUSTC_WORKSPACE_WRAPPER", ""),
+        ("CARGO_BUILD_RUSTC_WRAPPER", ""),
+        ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", ""),
+    ] {
+        assert_eq!(j["env"][k], v, "{k}");
+    }
+    let steps = steps(&j, "");
+    let install = step(&steps, "name", "install the pinned release");
+    assert_eq!(install["id"], "bin");
+    assert!(
+        install["run"]
+            .as_str()
+            .unwrap()
+            .contains("echo \"sha256=$(sha256sum \"$RUNNER_TEMP/bin/bosun\"")
+    );
+    let gates = step(&steps, "name", "bosun gates");
+    assert_eq!(
+        gates["env"]["BOSUN_SHA256"],
+        "${{ steps.bin.outputs.sha256 }}"
+    );
+    let run = gates["run"].as_str().unwrap();
+    let check = run.find("sha256sum -c --quiet").expect("hash check");
+    let gate = run.find("\"$bosun\" gate").unwrap();
+    assert!(check < gate);
+    assert!(
+        run[gate..].contains("later gates did not run\"; exit 1; }"),
+        "{run}"
+    );
 }
 
 #[test]
@@ -848,8 +965,8 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
             .collect();
         assert_eq!(
             setup.len(),
-            7,
-            "toolchain, rust-cache, install-action, 4 ts-pnpm steps"
+            8,
+            "toolchain, rust-cache, install-action, the pnpm workspace check, 4 ts-pnpm steps"
         );
         let gates = step(&steps, "name", "bosun gates");
         assert_eq!(gates["env"]["ONLY"], "${{ steps.plan.outputs.only }}");
@@ -859,5 +976,214 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
                 .unwrap()
                 .contains("GATES=\"${ONLY:-$GATES}\"")
         );
+    }
+}
+
+/// ts-pnpm: no PR code before the gates. pnpm install skips the PR's .pnpmfile.cjs and
+/// lifecycle scripts; `pnpm rebuild` runs the dependencies' scripts right before fmt, the
+/// first gate that runs PR code there (review of #233).
+#[test]
+fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
+    for stack in [&["ts-pnpm"][..], &["rust", "ts-pnpm"]] {
+        let files = variant(stack, "");
+        let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+            return;
+        };
+        let steps = steps(&j, "");
+        let install = steps
+            .iter()
+            .find(|s| {
+                s["run"]
+                    .as_str()
+                    .is_some_and(|r| r.contains("pnpm install --frozen-lockfile"))
+            })
+            .unwrap();
+        let run = install["run"].as_str().unwrap();
+        assert!(
+            run.contains("\npnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile\n"),
+            "{run}"
+        );
+        // pnpm install may change no file but the ignored node_modules (review of #233: a
+        // patch that leaves its package rewrote pnpm-workspace.yaml).
+        // The repo is <home>/r and the install runs in its nested ts path r/ts, so the
+        // fingerprint must work from the top level, and the walk above the checkout ends at
+        // $HOME (review of #233).
+        let dir = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("r/ts")).unwrap();
+        let sh = |cmd: &str, sub: &str| {
+            Command::new("bash")
+                .args(["-eo", "pipefail", "-c", cmd])
+                .current_dir(dir.path().join(sub))
+                .env("HOME", dir.path())
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        bin.path().display(),
+                        std::env::var("PATH").unwrap()
+                    ),
+                )
+                .output()
+                .unwrap()
+                .status
+                .success()
+        };
+        assert!(sh(
+            "git init -q && printf 'node_modules/\\nignored/\\n' > .gitignore && echo a > pnpm-workspace.yaml && echo a > changed.txt && echo a > ts/package.json && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base",
+            "r"
+        ));
+        use std::os::unix::fs::PermissionsExt;
+        let fake = bin.path().join("pnpm");
+        for (body, ok) in [
+            ("mkdir -p node_modules/x && touch node_modules/x/y", true),
+            ("echo 'pnpmfile: evil.cjs' >> ../pnpm-workspace.yaml", false),
+            ("echo 'node-options=x' > ../.npmrc", false),
+            // A file already changed before install (by the base-config step) changed again.
+            ("echo again >> ../changed.txt", false),
+            // An ignored .npmrc is read by pnpm all the same, also outside the ts path.
+            ("echo 'node-options=x' > ../ignored/.npmrc", false),
+            // A link in node_modules may not leave the checkout (review of #233).
+            (
+                "mkdir -p node_modules/.pnpm/a && ln -s .pnpm/a node_modules/a",
+                true,
+            ),
+            ("mkdir -p node_modules && ln -s / node_modules/up", false),
+            // Nothing may appear above the checkout that cargo or pnpm reads (review of #233).
+            ("ln -s \"$PWD\" ../../.cargo", false),
+            ("echo x > ../../.npmrc", false),
+        ] {
+            sh("mkdir -p ignored && echo changed >> changed.txt", "r");
+            fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(sh(run, "r/ts"), ok, "{body}");
+            sh(
+                "git checkout -q -- . && git clean -qfdx && rm -rf ../.cargo ../.npmrc",
+                "r",
+            );
+        }
+        // Every pnpm call in the job, setup-node's `pnpm store path` and the deps gate's audit
+        // included, ignores the PR's pnpmfile (review of #233).
+        assert_eq!(j["env"]["npm_config_ignore_pnpmfile"], "true");
+        let run = step(&steps, "name", "bosun gates")["run"].as_str().unwrap();
+        let rebuild = run.find("pnpm rebuild").expect("rebuild");
+        assert!(run[..rebuild].contains("if [ \"$g\" = fmt ]"), "{run}");
+        assert!(rebuild < run.find("\"$bosun\" gate").unwrap());
+    }
+    let files = variant(&["rust"], "");
+    assert!(!file(&files, BOSUN_YML).contains("pnpm rebuild"));
+}
+
+/// pnpm-workspace.yaml settings win over env and flags: a PR naming a pnpmfile or config
+/// dependencies there would run code before the gates. Only settings that run no code pass,
+/// read by a YAML parser so no spelling hides a key (review of #233).
+#[test]
+fn ts_pnpm_refuses_workspace_settings_that_run_code() {
+    let files = variant(&["ts-pnpm"], "");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let steps = steps(&j, "");
+    let at = |name: &str| {
+        steps
+            .iter()
+            .position(|s| {
+                s["name"] == name || s["uses"].as_str().is_some_and(|u| u.starts_with(name))
+            })
+            .unwrap()
+    };
+    let guard = at("pnpm workspace runs no PR code");
+    assert!(guard < at("pnpm/action-setup") && guard < at("actions/setup-node"));
+    let script = steps[guard]["run"].as_str().unwrap().to_string();
+    let check_in = |name: &str, text: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(name), text).unwrap();
+        let git = |a: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(a)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            )
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &script])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    let check = |yaml: &str| check_in("pnpm-workspace.yaml", yaml);
+    // A package.json `pnpm` field holds pnpm settings too.
+    assert!(check_in(
+        "package.json",
+        "{\"name\": \"a\", \"pnpm\": {\"overrides\": {}}}"
+    ));
+    assert!(check_in(
+        "package.json",
+        "{\"name\": \"a\", \"scripts\": {\"x\": \"y\"}}"
+    ));
+    assert!(!check_in(
+        "package.json",
+        "{\"pnpm\": {\"configDependencies\": {}}}"
+    ));
+    assert!(!check_in(
+        "package.json",
+        "{\"pnpm\": {\"\\u0070npmfile\": \"e.cjs\"}}"
+    ));
+    assert!(!check_in("package.json", "{\"pnpm\": \"x\"}"));
+    assert!(!check_in(
+        "package.json",
+        "{\"pnpm\": {\"patchedDependencies\": {}}}"
+    ));
+    // A dependency name with ".." or an extra "/" links outside node_modules, even into the
+    // checkout's parent, where cargo reads a .cargo (review of #233).
+    assert!(check_in(
+        "package.json",
+        "{\"dependencies\": {\"@s/n\": \"1\", \"JSONStream\": \"1\"}, \"devDependencies\": {\"a.b_c~d-e\": \"1\"}}"
+    ));
+    for bad in [
+        "{\"dependencies\": {\"../../.cargo\": \"file:./e\"}}",
+        "{\"devDependencies\": {\"a/b\": \"npm:x@1\"}}",
+        "{\"optionalDependencies\": {\"@s/../x\": \"1\"}}",
+        "{\"peerDependencies\": {\"..\": \"1\"}}",
+        "{\"dependencies\": [\"x\"]}",
+    ] {
+        assert!(!check_in("package.json", bad), "{bad}");
+    }
+    let lock_ok = "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      '@s/n':\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  '@s/n@1.0.0':\n    resolution: {integrity: x}\nsnapshots:\n  '@s/n@1.0.0(p@2.0.0)':\n    dependencies:\n      p: 2.0.0\n";
+    assert!(check_in("pnpm-lock.yaml", lock_ok));
+    for bad in [
+        lock_ok.replace("      '@s/n':\n", "      ../../.cargo:\n"),
+        lock_ok.replace("  '@s/n@1.0.0':\n", "  ../../.cargo@file:e:\n"),
+        lock_ok.replace("      p: 2.0.0", "      ../p: 2.0.0"),
+        format!("{lock_ok}snapshots: {{}}\n"),
+    ] {
+        assert!(!check_in("pnpm-lock.yaml", &bad), "{bad}");
+    }
+    assert!(check(
+        "packages:\n  - \"pkgs/*\"\nonlyBuiltDependencies: [esbuild]\n"
+    ));
+    assert!(check(""), "an empty file");
+    for bad in [
+        // A patch may name a path outside its package (review of #233).
+        "packages: [a]\npatchedDependencies:\n  is-number@7.0.0: patches/p.patch\n",
+        "packages: [a]\nignorePnpmfile: false\npnpmfile: evil.cjs\n",
+        "\"pnpm\\x66ile\": evil.cjs\n",
+        "configDependencies:\n  x: 1.0.0\n",
+        "x: &a {pnpmfile: e}\n<<: *a\n",
+        "packages: [a]\npackages: [b]\npnpmfile: e\n",
+        // Duplicate keys fail too (review of #233).
+        "packages: [a]\npackages: [b]\n",
+        "bad: [\n",
+        "- a\n",
+    ] {
+        assert!(!check(bad), "{bad:?} passed");
     }
 }

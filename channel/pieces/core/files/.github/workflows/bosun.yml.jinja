@@ -33,6 +33,19 @@ permissions:
   contents: read
   checks: read
 
+# A PR's .cargo/config.toml must not swap the compiler cargo runs (a rustc wrapper or
+# build.rustc would run PR code in rust-cache and the gates before lint): cargo takes these over
+# its config files. The rust toolchain step refuses a toolchain file that names a path.
+env:
+  # pnpm loads a .pnpmfile.cjs (or the pnpmfile pnpm-workspace.yaml names) for every command:
+  # setup-node's `pnpm store path`, install, audit (deps), rebuild. Never in this job.
+  npm_config_ignore_pnpmfile: "true"
+  RUSTC: rustc
+  RUSTC_WRAPPER: ""
+  RUSTC_WORKSPACE_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: ""
+
 jobs:
   # The required CI check (spec D15). It fails unless the pin check and every gate succeeded.
   # Beside a repo's own ci.yml and its ci-ok, it is called bosun-ok. A draft PR fails it in a few
@@ -138,6 +151,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - if: steps.plan.outputs.work == 'true'
         name: install the pinned release
+        id: bin
         env:
           VERSION: ${{ steps.pin.outputs.version }}
         run: |
@@ -148,6 +162,8 @@ jobs:
           got="$("$RUNNER_TEMP/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${VERSION}"
+          # The gates check the binary against this hash before each gate.
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/bin/bosun" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       # The pin a change sets must be a published release that reports its own version.
       - if: steps.plan.outputs.work == 'true'
         name: the pinned release installs and reports its version
@@ -164,6 +180,35 @@ jobs:
           got="$(bosun --version)"
           echo "$got"
           test "$got" = "bosun ${v}"
+      # Before anything runs rustc, cargo or the stack's tools (rust-cache included).
+      - if: steps.plan.outputs.work == 'true'
+        name: the base's config for the gates
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: |
+          case "$BASE" in ""|0000000000000000000000000000000000000000) BASE="$GITHUB_SHA";; esac
+          # The gates use the base commit's copies of the files that decide what runs: .bosun/ (the gate
+          # commands are in its profiles), every .cargo directory (aliases, includes, rustc wrappers)
+          # every rust-toolchain(.toml) (a path would run a compiler from the PR), every .npmrc
+          # (node-options would load PR code into each pnpm call) and every .pnpmfile. Files the base
+          # lacks are deleted, also when the PR made the path a symlink. A PR's changes to them take
+          # effect after it merges; they are R-gov or R-ci, so the owner sees them.
+          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|^\.bosun(/|$)'
+          if ! git cat-file -e "$BASE:.bosun/version" 2>/dev/null; then
+            echo "::warning::the base has no .bosun yet (setup PR): this change's .bosun is used"
+            pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$'
+          fi
+          changed="$(git diff --name-only -z "$BASE" HEAD | { grep -zE "$pat" || true; } | tr '\0' ' ')"
+          if [ -n "$changed" ]; then
+            echo "::notice::this change edits ${changed}; its gates run with the base's copies (they apply after merge)"
+          fi
+          git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+            rm -rf -- "$p"
+          done
+          git ls-tree -r -z --name-only "$BASE" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+            mkdir -p -- "$(dirname -- "$p")"
+            git show "$BASE:$p" > "$p"
+          done
 {% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
       # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
       # old pin (the RUST_VERSION fallback of docs/setup-script.sh; a test keeps them equal): a bare
@@ -178,6 +223,52 @@ jobs:
             if [ "$d" = "$GITHUB_WORKSPACE" ] || [ "$d" = / ]; then break; fi
             d="$(dirname "$d")"
           done
+          # The toolchain file is the base's here (step `the base's config for the gates`). A
+          # TOML parser still checks it: only a [toolchain] with a plain channel, components,
+          # targets and profile (a `path` would make rustup run another compiler), and later
+          # steps get RUSTUP_TOOLCHAIN, so rustup reads no toolchain file after this step.
+          ch=1.97
+          if [ -n "$found" ]; then
+            ch="$(python3 -I - "$d" <<'PY'
+          import os, re, sys, tomllib
+          name = re.compile(r"[0-9A-Za-z._-]+")
+          def ok(s):
+              return isinstance(s, str) and name.fullmatch(s) is not None
+          def check(p):
+              with open(p, "rb") as f:
+                  raw = f.read()
+              text = raw.decode("utf-8", "strict")
+              if p.endswith("rust-toolchain") and ok(text.strip()) and "\n" not in text.strip():
+                  return text.strip()
+              t = tomllib.loads(text)
+              tc = t.get("toolchain")
+              if set(t) != {"toolchain"} or not isinstance(tc, dict):
+                  sys.exit(f"{p}: only a [toolchain] table is allowed")
+              extra = set(tc) - {"channel", "components", "targets", "profile"}
+              if extra or not ok(tc.get("channel")):
+                  sys.exit(f"{p}: name a released channel; only channel, components, targets and profile are allowed")
+              for k in ("components", "targets"):
+                  v = tc.get(k, [])
+                  if not isinstance(v, list) or not all(ok(x) for x in v):
+                      sys.exit(f"{p}: {k} must be a list of plain names")
+              if "profile" in tc and not ok(tc["profile"]):
+                  sys.exit(f"{p}: profile must be a plain name")
+              return tc["channel"]
+          d = sys.argv[1]
+          chosen = None
+          # rustup reads rust-toolchain over rust-toolchain.toml when both exist; both must pass.
+          for fn in ("rust-toolchain.toml", "rust-toolchain"):
+              p = os.path.join(d, fn)
+              if os.path.lexists(p):
+                  try:
+                      chosen = check(p)
+                  except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+                      sys.exit(f"{p}: not readable ({e})")
+          print(chosen)
+          PY
+          )"
+          fi
+          echo "RUSTUP_TOOLCHAIN=$ch" >> "$GITHUB_ENV"
           if [ -n "$found" ]; then
             rustup toolchain install
           else
@@ -189,12 +280,115 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: {{ rust_path }}
+          # Not ~/.cargo/bin: a cache a PR's earlier run saved must not put a binary (git, rustfmt,
+          # cargo-deny) on PATH before test-integrity, deps or fmt.
+          cache-bin: "false"
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
 {% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack: Node 24, pnpm from package.json `packageManager`, the Turborepo cache
       # through hoard. Skipped while the stack has no lockfile yet (a new repo).
+      # pnpm-workspace.yaml settings win over env and flags, so a PR could name a pnpmfile or
+      # config dependencies there (or in a package.json `pnpm` field) and run code in
+      # setup-node's `pnpm store path` or the deps gate's audit. A parser reads every tracked
+      # pnpm-workspace.yaml and package.json `pnpm` field; only settings that run no code may
+      # pass (fail closed).
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        name: pnpm workspace runs no PR code
+        run: |
+          python3 -I - <<'PY'
+          import json, re, subprocess, sys, yaml
+          class Strict(yaml.SafeLoader):
+              pass
+          def mapping(loader, node, deep=False):
+              seen = set()
+              for k, _ in node.value:
+                  key = loader.construct_object(k, deep=deep)
+                  if key in seen:
+                      raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", k.start_mark)
+                  seen.add(key)
+              return yaml.SafeLoader.construct_mapping(loader, node, deep)
+          Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+          ok = {
+              "allowBuilds",
+              "packages", "catalog", "catalogs", "onlyBuiltDependencies", "ignoredBuiltDependencies",
+              "neverBuiltDependencies", "overrides", "packageExtensions", "peerDependencyRules",
+              "allowedDeprecatedVersions", "supportedArchitectures", "auditConfig",
+              "linkWorkspacePackages", "saveWorkspaceProtocol", "autoInstallPeers",
+              "strictPeerDependencies", "dedupePeerDependents", "minimumReleaseAge",
+              "minimumReleaseAgeExclude",
+          }
+          out = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout
+          # pnpm links each dependency at node_modules/<name>: a name with ".." or a "/" other
+          # than the scope's would link outside node_modules, even outside the checkout (a
+          # parent .cargo that cargo reads). Every name must be a plain npm package name.
+          name_re = re.compile(r"(@[A-Za-z0-9~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9~-][A-Za-z0-9._~-]*")
+          def names(f, deps):
+              if deps is None:
+                  return
+              if not isinstance(deps, dict):
+                  sys.exit(f"{f}: a dependency list must be a mapping")
+              for n in deps:
+                  if not isinstance(n, str) or not name_re.fullmatch(n):
+                      sys.exit(f"{f}: {n!r} is not an npm package name; pnpm would link it outside node_modules")
+          kinds = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+          def lock_name(key):
+              # "/@s/n@1.0.0(peer@2)" -> "@s/n"; v6 keys start with "/".
+              k = str(key).lstrip("/")
+              at = k.find("@", 1)
+              return k if at < 0 else k[:at]
+          def check(f, d):
+              if d is None:
+                  return
+              if not isinstance(d, dict):
+                  sys.exit(f"{f}: must be a mapping")
+              bad = sorted(str(k) for k in d if k not in ok)
+              if bad:
+                  sys.exit(f"{f}: {', '.join(bad)} may run code before the gates (a pnpmfile, config dependencies); bosun's CI allows only " + ", ".join(sorted(ok)))
+          for f in out.decode().split("\0"):
+              # A package.json `pnpm` field holds pnpm settings too.
+              if f.rsplit("/", 1)[-1] == "package.json":
+                  try:
+                      with open(f, "rb") as h:
+                          pkg = json.load(h)
+                  except Exception as e:
+                      sys.exit(f"{f}: not readable JSON ({e})")
+                  if isinstance(pkg, dict):
+                      for k in kinds:
+                          names(f + " " + k, pkg.get(k))
+                      if "pnpm" in pkg:
+                          check(f + " (pnpm)", pkg["pnpm"])
+                  continue
+              if f.rsplit("/", 1)[-1] == "pnpm-lock.yaml":
+                  # The frozen install links what the lockfile says, extensions included.
+                  try:
+                      with open(f, "rb") as h:
+                          lock = yaml.load(h, Loader=Strict) or {}
+                  except Exception as e:
+                      sys.exit(f"{f}: not readable YAML ({e})")
+                  if not isinstance(lock, dict):
+                      sys.exit(f"{f}: must be a mapping")
+                  for sec in ("importers", "packages", "snapshots"):
+                      entries = lock.get(sec) or {}
+                      if not isinstance(entries, dict):
+                          sys.exit(f"{f}: {sec} must be a mapping")
+                      for key, e in entries.items():
+                          if sec != "importers":
+                              names(f + " " + sec, {lock_name(key): 1})
+                          if isinstance(e, dict):
+                              for k in kinds:
+                                  names(f + " " + sec + " " + str(key), e.get(k))
+                  continue
+              if f.rsplit("/", 1)[-1] not in ("pnpm-workspace.yaml", "pnpm-workspace.yml"):
+                  continue
+              try:
+                  with open(f, "rb") as h:
+                      d = yaml.load(h, Loader=Strict)
+              except Exception as e:
+                  sys.exit(f"{f}: not readable YAML ({e})")
+              check(f, d)
+          PY
       - uses: pnpm/action-setup@v4
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
         with:
@@ -207,12 +401,64 @@ jobs:
           cache-dependency-path: {{ ts_path }}/pnpm-lock.yaml
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
         working-directory: {{ ts_path }}
-        run: pnpm install --frozen-lockfile
+        # No PR code before the gates: no pnpmfile and no lifecycle scripts run here; `pnpm
+        # rebuild` runs the install scripts (the root project's postinstall too) before fmt, the
+        # first gate that runs PR code in this stack.
+        # It must not change any file outside node_modules (a patch whose path leaves its
+        # package could rewrite pnpm-workspace.yaml or add an .npmrc): a fingerprint of the
+        # status, the diff to HEAD, untracked files and every .npmrc, .pnpmfile.* and
+        # pnpm-workspace.yaml (ignored or not), all from the top level, must be the same before
+        # and after. So must every .cargo and .npmrc from the checkout's parent up to $HOME,
+        # which cargo and pnpm read too.
+        run: |
+          top="$(git rev-parse --show-toplevel)"
+          above() {
+            d="$(dirname "$top")"
+            while :; do
+              for n in .cargo .npmrc; do
+                if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then
+                  echo "$d/$n"
+                  find "$d/$n" -maxdepth 1 \( -name .npmrc -o -name 'config*' \) -type f -print0 | sort -z | xargs -0r sha256sum
+                fi
+              done
+              if [ "$d" = "$HOME" ] || [ "$d" = / ]; then break; fi
+              d="$(dirname "$d")"
+            done
+          }
+          fp() {
+            (
+              cd "$top"
+              git status --porcelain=v1 -z --untracked-files=all
+              git diff --binary HEAD
+              git ls-files -o --exclude-standard -z | xargs -0r sha256sum
+              find . -name node_modules -prune -o \( -name .npmrc -o -name '.pnpmfile.*' -o -name 'pnpm-workspace.y*ml' \) -print0 \
+                | sort -z | xargs -0r sha256sum
+            ) | sha256sum
+          }
+          before="$(fp)"
+          before_above="$(above)"
+          pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
+          if [ "$(fp)" != "$before" ]; then
+            git status --short --untracked-files=all
+            echo "::error::pnpm install changed files in the checkout (see above); only node_modules may change, and it must be in .gitignore"
+            exit 1
+          fi
+          after_above="$(above)"
+          if [ "$after_above" != "$before_above" ]; then
+            diff <(echo "$before_above") <(echo "$after_above") || true
+            echo "::error::pnpm install changed a .cargo or .npmrc above the checkout (see above)"
+            exit 1
+          fi
+          # Defence in depth: no link in node_modules leads outside the checkout.
+          while IFS= read -r -d '' l; do
+            t="$(realpath -m -- "$l")"
+            case "$t" in "$top"/*) ;; *) echo "::error::$l links outside the checkout ($t)"; exit 1 ;; esac
+          done < <(find "$top" -path '*/node_modules/*' -type l -print0)
       - uses: keelstackhq/hoard@v0
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
-{% endif %}{% raw %}      # Every gate runs, also after one fails, so one run reports all failures. The gates that run
-      # no PR code come first: lint (build.rs, proc macros) and test run PR code on this runner,
-      # and it must not be able to change what test-integrity, deps or fmt report.
+{% endif %}{% raw %}      # The gates run in order and stop at the first failure. The gates that run no PR code come
+      # first: lint (build.rs, proc macros) and test run PR code on this runner, and with the
+      # runner's sudo it could hide an earlier failure, so it never runs after one.
       - if: steps.plan.outputs.work == 'true'
         name: bosun gates
         env:
@@ -226,6 +472,7 @@ jobs:
 {% endraw %}{% else %}{% raw %}          GATES: test-integrity deps fmt lint test
 {% endraw %}{% endif %}{% raw %}          # An edit after a success runs test-integrity only (see the edit step).
           ONLY: ${{ steps.plan.outputs.only }}
+          BOSUN_SHA256: ${{ steps.bin.outputs.sha256 }}
           # test-integrity reads the snapshot-change line from the PR body.
           BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
           EVENT: ${{ github.event_name }}
@@ -234,11 +481,14 @@ jobs:
           GATES="${ONLY:-$GATES}"
           # A PR runs each gate on what it changed; main and the queue run it on everything.
           if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
-          failed=""
           for g in $GATES; do
-            echo "::group::bosun gate $g"
-            "$bosun" gate "$g" $all || failed="$failed $g"
+{% endraw %}{% if "ts-pnpm" in pieces %}            # In a ts-pnpm stack fmt is the first gate that runs PR code (a package.json script):
+            # run the install scripts now (the root's postinstall too), after test-integrity and deps.
+            if [ "$g" = fmt ] && [ -f "{{ ts_path }}/pnpm-lock.yaml" ]; then (cd "{{ ts_path }}" && pnpm rebuild); fi
+{% endif %}{% raw %}            echo "::group::bosun gate $g"
+            # Defence in depth: the pinned bosun, unchanged since step bin.
+            echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "::error::$bosun changed"; exit 1; }
+            "$bosun" gate "$g" $all || { echo "::error::gate $g failed; later gates did not run"; exit 1; }
             echo "::endgroup::"
           done
-          if [ -n "$failed" ]; then echo "::error::failed gates:$failed"; exit 1; fi
 {% endraw %}

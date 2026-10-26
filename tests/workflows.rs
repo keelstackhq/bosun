@@ -160,7 +160,7 @@ fn risk_judges_from_the_base_and_never_runs_pr_code() {
 }
 
 /// risk.yml and verdict.yml run the release pinned in the checkout's `.bosun/version` (as
-/// ci.yml's bosun-bin) and build bosun only while the pin says `unreleased`, so a main that
+/// ci.yml's pinned-release steps) and build bosun only while the pin says `unreleased`, so a main that
 /// does not compile cannot block its own mainfix.
 fn runs_the_pinned_release(yaml: &str) {
     assert!(
@@ -422,7 +422,7 @@ fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
     runs_the_pinned_release(&yaml);
 }
 
-/// The install step has the shape of ci.yml's `bosun-bin` job; the job builds nothing.
+/// The install step has the shape of ci.yml's pinned-release steps; the job builds nothing.
 fn assert_pinned_install_with_fallback(yaml: &str) {
     assert!(yaml.contains("@keelstackhq/bosun@${VERSION}"), "{yaml}");
     assert!(yaml.contains("npm install -g --ignore-scripts"));
@@ -652,4 +652,297 @@ fn splice_pins_its_version() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/splice.yml");
     let yaml = fs::read_to_string(path).unwrap();
     assert!(yaml.contains("          version: \"0.2.0\"\n"), "{yaml}");
+}
+
+/// The text of ci.yml's step that starts at `from`, up to the next step.
+fn step_text<'a>(yaml: &'a str, from: &str) -> &'a str {
+    let i = yaml.find(from).unwrap_or_else(|| panic!("no {from:?}"));
+    let rest = &yaml[i..];
+    // The next step, or the comment above it, ends this one.
+    let end = rest[1..]
+        .match_indices("\n      ")
+        .map(|(j, _)| j + 1)
+        .find(|&j| rest[j + 1..].starts_with("      - ") || rest[j + 1..].starts_with("      #"))
+        .map_or(rest.len(), |j| j + 1);
+    &rest[..end]
+}
+
+/// CI minutes (docs/ci-minutes.md): one job does the work, `ci-ok` aggregates it; a draft fails
+/// at once; an edit keeps the file checks of a passed head and reruns test-integrity, with the
+/// same edit step as the channel's bosun.yml; the pin check and the gates that run no PR code
+/// come before lint and test.
+#[test]
+fn ci_is_one_work_job_with_the_channels_edit_rule() {
+    let yaml = ci_yaml();
+    assert_eq!(job_ids(&yaml), ["ci", "ci-ok"]);
+    let channel = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/channel/pieces/core/files/.github/workflows/bosun.yml.jinja"
+    ))
+    .unwrap();
+    let ours = step_text(&yaml, "      - if: github.event.action == 'edited'");
+    let theirs = step_text(&channel, "      - if: github.event.action == 'edited'");
+    assert_eq!(
+        ours,
+        theirs.replace("CHECK: ${{ github.job }}", "CHECK: ci-ok"),
+        "the edit step differs from the channel's"
+    );
+    // Every step that runs PR code comes after the trusted ones (spec §11).
+    let at = |needle: &str| yaml.find(needle).unwrap_or_else(|| panic!("no {needle:?}"));
+    let pin_check = at("name: the pinned release installs and reports its version");
+    let gates = at("name: bosun gates");
+    let npm_tests = at("name: npm launcher tests");
+    assert!(pin_check < at("uses: dtolnay/rust-toolchain"));
+    assert!(pin_check < at("uses: Swatinem/rust-cache"));
+    assert!(
+        at("run: cargo build --release --locked --bin bosun") < at("uses: Swatinem/rust-cache")
+    );
+    assert!(at("name: bosun of the base") < pin_check && pin_check < gates && gates < npm_tests);
+    assert!(
+        yaml.contains("got=\"$(\"$dir/bin/bosun\" --version)\""),
+        "the pin check runs a resolved path"
+    );
+    assert!(yaml.contains("cache-bin: \"false\""));
+    assert!(yaml.contains("          persist-credentials: false\n"));
+    // Before lint, no PR code: no toolchain path, no cargo rustc swap, a checked bosun, and
+    // lint and test never run after a failed gate.
+    for k in [
+        "  RUSTC: rustc\n",
+        "  RUSTC_WRAPPER: \"\"\n",
+        "  RUSTC_WORKSPACE_WRAPPER: \"\"\n",
+        "  CARGO_BUILD_RUSTC_WRAPPER: \"\"\n",
+        "  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: \"\"\n",
+    ] {
+        assert!(yaml.contains(k), "{k}");
+    }
+    // rustup's toolchain is pinned over the PR's rust-toolchain.toml, to the same channel.
+    let file =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/rust-toolchain.toml")).unwrap();
+    let channel: toml::Table = file.parse().unwrap();
+    let channel = channel["toolchain"]["channel"].as_str().unwrap();
+    assert!(
+        yaml.contains(&format!("  RUSTUP_TOOLCHAIN: \"{channel}\"\n")),
+        "RUSTUP_TOOLCHAIN must equal rust-toolchain.toml's channel {channel}"
+    );
+    let base_config = at("name: the base's config for the gates");
+    for later in [
+        "uses: dtolnay/rust-toolchain",
+        "uses: Swatinem/rust-cache",
+        "run: cargo build --release --locked --bin bosun",
+        "uses: taiki-e/install-action",
+        "name: bosun gates",
+    ] {
+        assert!(
+            base_config < at(later),
+            "{later} runs before the base's config"
+        );
+    }
+    assert!(at("name: the pinned release installs and reports its version") < base_config);
+    assert!(at("id: binhash") < at("uses: Swatinem/rust-cache"));
+    assert!(yaml.contains("BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}"));
+    assert!(yaml.contains(
+        "\"$BOSUN\" gate \"$g\" $all || { echo \"::error::gate $g failed; later gates did not run\"; exit 1; }"
+    ));
+    assert!(
+        !yaml.contains("!cancelled()"),
+        "nothing runs after a failure"
+    );
+    // Drafts: only the plan step reads the flag; no `if` may skip a draft.
+    assert_eq!(yaml.matches("pull_request.draft").count(), 1);
+    assert!(yaml.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
+    assert!(yaml.contains("for g in ${ONLY:-test-integrity deps fmt lint test}; do"));
+    // The plan step under the runner's shell.
+    let plan = step_text(&yaml, "      - id: plan");
+    let script = run_scripts(plan).remove(0);
+    let script: String = script
+        .lines()
+        .skip(1)
+        .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
+        .collect();
+    let run = |draft: &str, mode: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let ok = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &script])
+            .env("GITHUB_OUTPUT", &out)
+            .env("DRAFT", draft)
+            .env("MODE", mode)
+            .status()
+            .unwrap()
+            .success();
+        ok.then(|| fs::read_to_string(out).unwrap())
+    };
+    assert_eq!(
+        run("false", "run").as_deref(),
+        Some("work=true\nsetup=true\n")
+    );
+    assert_eq!(
+        run("false", "integrity").as_deref(),
+        Some("work=true\nsetup=false\nonly=test-integrity\n")
+    );
+    assert_eq!(run("true", "run"), None, "a draft fails");
+    assert_eq!(run("true", "integrity"), None, "a draft fails");
+}
+
+/// The script of the step that puts the base's config over the checkout, dedented.
+fn base_config_script(yaml: &str, from: &str) -> String {
+    let script = run_scripts(step_text(yaml, from)).remove(0);
+    script
+        .lines()
+        .skip(1)
+        .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
+        .collect()
+}
+
+/// Before anything runs rustc or cargo, the gates get the base's .bosun/ (gate commands),
+/// .cargo/ (aliases, includes, wrappers) and toolchain files: a PR cannot change how its own
+/// gates run, however it spells the change (review of #233).
+#[test]
+fn the_gates_use_the_bases_config() {
+    let ours = ci_yaml();
+    let channel = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/channel/pieces/core/files/.github/workflows/bosun.yml.jinja"
+    ))
+    .unwrap();
+    let step = "      - if: steps.plan.outputs.work == 'true'\n        name: the base's config for the gates";
+    let script = base_config_script(&ours, step);
+    // The channel runs the same script after setting BASE for a push without one.
+    let theirs = base_config_script(&channel, step);
+    assert_eq!(
+        theirs,
+        format!(
+            "case \"$BASE\" in \"\"|0000000000000000000000000000000000000000) BASE=\"$GITHUB_SHA\";; esac\n{script}"
+        ),
+        "the channel's step differs from ci.yml's"
+    );
+    let at = |y: &str, n: &str| y.find(n).unwrap_or_else(|| panic!("no {n:?}"));
+    for later in [
+        "name: rust toolchain",
+        "uses: Swatinem/rust-cache",
+        "pnpm install --frozen-lockfile",
+        "name: bosun gates",
+    ] {
+        assert!(at(&channel, step) < at(&channel, later), "{later}");
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let run = |cmd: &str| {
+        let o = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", cmd])
+            .current_dir(d)
+            .output()
+            .unwrap();
+        assert!(
+            o.status.success(),
+            "{cmd}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let w = |p: &str, t: &str| {
+        let p = d.join(p);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, t).unwrap();
+    };
+    run("git init -q -b main && git config user.email a@b.c && git config user.name n");
+    w(".bosun/version", "1.2.3\n");
+    w(".bosun/profiles/rust.toml", "deps = \"cargo deny check\"\n");
+    w(".cargo/config.toml", "[net]\nretry = 3\n");
+    w("rust-toolchain.toml", "[toolchain]\nchannel = \"1.97\"\n");
+    w("crates/x/lib.rs", "base\n");
+    run("git add -A && git commit -qm base");
+    let base = run("git rev-parse HEAD").trim().to_string();
+    // Each bypass the reviews found, in one PR, plus a real code change.
+    w(".bosun/profiles/rust.toml", "deps = \"sh -c true\"\n");
+    w(".cargo/config.toml", "[\"\\u0061lias\"]\nfmt = [\"run\"]\n");
+    w("crates/x/.cargo/config", "include = [\"e.toml\"]\n");
+    w("crates/x/.cargo/e.toml", "[alias]\ndeny = \"run\"\n");
+    w(
+        "rust-toolchain.toml",
+        "[toolchain]\n\"\\u0070ath\" = \"\\u002ftmp\\u002fevil\"\n",
+    );
+    w("crates/y/rust-toolchain", "/opt/evil\n");
+    w("crates/x/lib.rs", "changed\n");
+    w(".npmrc", "node-options=--require ./evil.js\n");
+    w(
+        ".pnpmfile.cjs",
+        "require('child_process').execSync('evil')\n",
+    );
+    w("crates/a b/.cargo/config.toml", "[alias]\nfmt = \"run\"\n");
+    run(
+        "mkdir -p evil && printf '[alias]\\nfmt = \"run\"\\n' > evil/config.toml && mkdir -p crates/z && ln -s ../../evil crates/z/.cargo",
+    );
+    run("git add -A && git commit -qm pr");
+    let out = std::process::Command::new("bash")
+        .args(["-eo", "pipefail", "-c", &script])
+        .current_dir(d)
+        .env("BASE", &base)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("::notice::this change edits"));
+    let read = |p: &str| fs::read_to_string(d.join(p)).unwrap();
+    assert_eq!(
+        read(".bosun/profiles/rust.toml"),
+        "deps = \"cargo deny check\"\n"
+    );
+    assert_eq!(read(".cargo/config.toml"), "[net]\nretry = 3\n");
+    assert_eq!(
+        read("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97\"\n"
+    );
+    assert!(
+        !d.join("crates/x/.cargo/config").exists() && !d.join("crates/x/.cargo/e.toml").exists()
+    );
+    assert!(
+        fs::symlink_metadata(d.join("crates/z/.cargo")).is_err(),
+        "the .cargo symlink is left"
+    );
+    assert!(!d.join("crates/y/rust-toolchain").exists());
+    assert_eq!(read("crates/x/lib.rs"), "changed\n", "code is the PR's");
+    assert!(!d.join(".npmrc").exists(), "the PR's .npmrc is gone");
+    assert!(
+        !d.join(".pnpmfile.cjs").exists(),
+        "the PR's pnpmfile is gone"
+    );
+    assert!(
+        !d.join("crates/a b/.cargo/config.toml").exists(),
+        "a path with a space"
+    );
+
+    // A setup PR: the base has no .bosun yet, so the change's .bosun is used.
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let run = |cmd: &str| {
+        let o = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", cmd])
+            .current_dir(d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{cmd}");
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    run(
+        "git init -q -b main && git config user.email a@b.c && git config user.name n && echo a > a && git add -A && git commit -qm base",
+    );
+    let base = run("git rev-parse HEAD").trim().to_string();
+    run("mkdir .bosun && echo 1.2.3 > .bosun/version && git add -A && git commit -qm setup");
+    let out = std::process::Command::new("bash")
+        .args(["-eo", "pipefail", "-c", &script])
+        .current_dir(d)
+        .env("BASE", &base)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("setup PR"));
+    assert_eq!(
+        fs::read_to_string(d.join(".bosun/version")).unwrap(),
+        "1.2.3\n"
+    );
 }

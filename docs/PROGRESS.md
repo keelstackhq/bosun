@@ -7,7 +7,7 @@ split into PRs of about 400 lines). The whole-branch review of the seed (2026-10
 blocker, 9 majors and 3 minors, tracked as issues #20-#32 (label `review-finding`); fixes A-E
 close all of them. bosun v0.2.1 is released (npm `@keelstackhq/bosun` and its five platform
 packages, crates.io `keel-bosun`, GitHub Release; v0.2.0 and v0.1.0 before it) and pinned in `.bosun/version`; the gate CI
-installs the release pinned in each PR's base commit, and job `pin` checks a PR's own pin.
+installs the release pinned in each PR's base commit, and a step of job `ci` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
 prompt has children post the record by hand); the merge queue comes with M3.
@@ -182,6 +182,7 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-26 · Pin v0.2.1 · `.bosun/version` and `docs/setup-script.sh` move from 0.2.0 to the published 0.2.1, so risk.yml and verdict.yml count signed and delegated approvals; after it merges, paste `docs/setup-script.sh` into the cloud environments again
 - 2026-10-26 · CI minutes · measured bosun's Actions use (docs/ci-minutes.md); the channel's bosun.yml is one job named after the required check, drafts fail fast, body edits rerun only test-integrity on a passed head, main-health weekly, main-open skips non-mainfix label events, AGENTS.md: local gates before every push · PR (claude/ci-minutes-channel)
 - 2026-10-26 · CI minutes 3 · release.yml skips `prepare` without `HOIST_RELEASE_TOKEN` (it failed on 81 of 93 pushes to main) · PR (claude/release-prepare-skip)
+- 2026-10-26 · CI minutes 2 · bosun's own ci.yml: one job `ci` + `ci-ok` (9 jobs before), the channel's draft and edit rules, pin check before the gates; a test keeps its edit step equal to the channel's · PR (claude/ci-minutes-own)
 
 ## Blocked
 
