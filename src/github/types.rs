@@ -23,6 +23,13 @@ pub struct Issue {
     /// Why a closed issue was closed: `completed`, `not_planned` or `duplicate`.
     #[serde(default)]
     pub state_reason: Option<String>,
+    /// The slug of the GitHub App that wrote the issue or PR (`performed_via_github_app`).
+    #[serde(
+        default,
+        rename = "performed_via_github_app",
+        deserialize_with = "app_slug_name"
+    )]
+    pub via_app: String,
 }
 
 impl Issue {

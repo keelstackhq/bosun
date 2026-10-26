@@ -694,7 +694,7 @@ fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
         match gh.probe_issue(next)? {
             Probe::Issue(i) => {
                 if !i.pull_request && !issues.iter().any(|x| x.number == i.number) {
-                    issues.push(i);
+                    issues.push(*i);
                     found += 1;
                 }
             }

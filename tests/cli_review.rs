@@ -376,6 +376,41 @@ fn a_newer_verdict_comment_for_the_same_head_replaces_an_older_one() {
     assert_eq!(fake.statuses_of("sha42")[0]["state"], "failure");
 }
 
+/// Two-verdict approval: reviewer B commenting seconds after reviewer A does not void A's
+/// verdict; only a newer comment of the same session replaces one.
+#[test]
+fn a_newer_verdict_comment_of_another_session_does_not_replace_one() {
+    let fake = setup();
+    let comment_as = |session: &str| {
+        let out = bosun()
+            .env("BOSUN_GITHUB_API", fake.url())
+            .env("BOSUN_SESSION", session)
+            .args(["verdict", "comment"])
+            .write_stdin(verdict("sha42", "approve", 0.9, &[], false))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
+        fake.comments_of(42).last().unwrap().id
+    };
+    let a = comment_as("session_a");
+    let b = comment_as("session_b");
+    let (code, v) = apply(&fake, a);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        fake.comments_of(42)
+            .iter()
+            .any(|c| c.body.contains(r#""session":"session_a""#))
+    );
+    let (code, v) = apply(&fake, b);
+    assert_eq!(code, 0, "{v}");
+    // The same session again: its older comment is still replaced.
+    let a2 = comment_as("session_a");
+    let (code, v) = apply(&fake, a);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("newer"));
+    assert_eq!(apply(&fake, a2).0, 0);
+}
+
 #[test]
 fn verdict_apply_refuses_edited_foreign_misplaced_and_stale_comments() {
     let fake = setup();
