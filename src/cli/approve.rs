@@ -9,15 +9,17 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::ApproveArgs;
+use crate::app::App;
 use crate::app::{Result, kill_switch, main_red};
-use crate::cli::risk_check::{decisive_review, owner_comment, owner_logins};
+use crate::cli::risk_check::{decisive_review, enrolled_keys, owner_comment, owner_logins};
 use crate::core::approve::{
-    Readiness, Run, Stat, api_url_ok, approve_command, in_cloud, parse_target, readiness,
+    APPROVERS_PATH, Readiness, Run, Stat, api_url_ok, approve_command, in_cloud, parse_target,
+    readiness, signed_comment, signed_message,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
 use crate::gates::main_open::{is_mainfix, judge};
-use crate::github::{Github, IssueState, LiveGithub, Pull};
+use crate::github::{Github, IssueState, LiveGithub, Pull, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -125,6 +127,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             "approve needs PR@HEAD arguments, --list or --main-open PR",
             "run `bosun approve --list`, then the command in its data.approve_command",
         ));
+    }
+    if let Some(key) = &args.sign_key {
+        return sign(dir, args, key);
     }
     let mut targets = Vec::new();
     for a in &args.prs {
@@ -367,4 +372,120 @@ fn redact(token: &str, result: CmdResult) -> CmdResult {
             Err(e)
         }
     }
+}
+
+/// `bosun approve <pr>@<head> --sign-key <pem>`: the signer (the orchestrator session, on the owner's
+/// word in chat) signs `signed_message` for the PR's current head and posts the comment with
+/// the session's own token. It works in a Claude cloud session: the signature, not the author,
+/// is what risk-check checks. The key is never printed or logged.
+fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
+    // The owner approves the head they saw: a bare PR number would sign whatever was pushed
+    // in between.
+    let (pr, pinned) = match args.prs.as_slice() {
+        [target] => parse_target(target),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        BosunError::usage(
+            "--sign-key takes one <pr>@<40-hex head sha>: the head the owner approved",
+            "run `bosun approve --list` (it works in the cloud), confirm the head with the owner, then `bosun approve <pr>@<head> --sign-key <pem>`",
+        )
+    })?;
+    let api = std::env::var("BOSUN_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into());
+    if !api_url_ok(&api) {
+        return Err(BosunError::error(
+            "BOSUN_GITHUB_API is not https://, so the head it reports is not trusted for signing",
+            "unset BOSUN_GITHUB_API (or set it to an https:// URL)",
+        ));
+    }
+    let pair = read_key(key_path)?;
+    let app = App::load(dir)?;
+    let gh = app.gh.as_ref();
+    // Also for --print: a printed body could be posted by hand while bosun is halted.
+    kill_switch(gh)?;
+    let pull = gh
+        .get_pull(pr)?
+        .filter(|p| p.state == "open")
+        .ok_or_else(|| {
+            BosunError::conflict(format!("PR #{pr} is not an open PR"), "name an open PR")
+        })?;
+    let head = pull.head_sha;
+    if pinned != head {
+        return Err(BosunError::conflict(
+            format!("PR #{pr} head changed (now {head}); nothing was signed"),
+            "show the owner the new head and sign it only on their word",
+        ));
+    }
+    let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
+    let keys = enrolled_keys(gh).map_err(|why| {
+        BosunError::error(
+            format!("signed approvals are off: {why}"),
+            format!(
+                "fix {APPROVERS_PATH} on the default branch with a PR the owner approves on GitHub"
+            ),
+        )
+    })?;
+    let key_id = keys
+        .into_iter()
+        .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
+        .map(|k| k.id)
+        .ok_or_else(|| {
+            BosunError::error(
+                format!("the key is not enrolled in {APPROVERS_PATH} on the default branch"),
+                format!(
+                    "enroll the public key {public} in {APPROVERS_PATH} with a PR the owner approves on GitHub"
+                ),
+            )
+        })?;
+    let msg = signed_message(&app.ctx.repo.owner, &app.ctx.repo.name, pr, &head);
+    let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
+    let body = signed_comment(&head, &key_id, &sig);
+    if args.print {
+        return Ok(Outcome::data(
+            json!({"pr": pr, "head_sha": head, "key_id": key_id, "body": body}),
+        ));
+    }
+    let id = gh.add_comment(pr, &body)?.id;
+    Ok(Outcome::data(json!({"approved": [
+        {"pr": pr, "head_sha": head, "key_id": key_id, "comment_id": id}
+    ]})))
+}
+
+/// An ed25519 key from a PKCS#8 PEM (`openssl genpkey -algorithm ed25519`). Errors name the
+/// path only, never the content.
+fn read_key(path: &Path) -> Result<ring::signature::Ed25519KeyPair> {
+    let bad = || {
+        BosunError::error(
+            format!(
+                "{} is not an ed25519 PKCS#8 PEM private key",
+                path.display()
+            ),
+            "pass the file `openssl genpkey -algorithm ed25519 -out key.pem` wrote",
+        )
+    };
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        BosunError::error(
+            format!("cannot read {}: {}", path.display(), e.kind()),
+            "pass a readable PEM file to --sign-key",
+        )
+    })?;
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 != 0 {
+            eprintln!(
+                "bosun: approve: {} is readable by group or others; chmod 600 it",
+                path.display()
+            );
+        }
+    }
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    if lines.next() != Some("-----BEGIN PRIVATE KEY-----") {
+        return Err(bad());
+    }
+    let b64_body: String = lines
+        .take_while(|l| *l != "-----END PRIVATE KEY-----")
+        .collect();
+    let der = b64::decode(&b64_body).ok_or_else(bad)?;
+    ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(&der).map_err(|_| bad())
 }

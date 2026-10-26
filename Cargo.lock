@@ -415,6 +415,7 @@ dependencies = [
  "clap",
  "predicates",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "tempfile",

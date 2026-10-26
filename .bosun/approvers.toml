@@ -1,0 +1,9 @@
+# Keys whose signed `/bosun approve` comments count as an owner approval (spec §8, signed
+# approvals). risk-check reads this file from the default branch only, never from a PR, so a PR
+# cannot enroll its own key. Enroll or rotate a key with a PR the owner approves on GitHub.
+# `ed25519` is the base64 of the raw 32-byte public key:
+#   openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64
+
+[[key]]
+id = "orchestrator-2026-10"
+ed25519 = "CEcJkeUcWMFZTOjPcZ3bmL2y7yBrnJDBQF1aCvFx010="
