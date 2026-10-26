@@ -62,8 +62,8 @@ pub fn halt_reason(gh: &dyn Github) -> Result<Option<(String, String)>> {
         .list_issues(&[HALT_LABEL], IssueState::Open)
         .map_err(|e| closed("the bosun:halt issues", e))?;
     if !issues.is_empty() {
-        let owners = default_branch(gh)
-            .and_then(|b| owner_logins(gh, &b))
+        let owners = default_ref(gh)
+            .and_then(|r| owner_logins(gh, &r))
             .map_err(|e| closed("the owners on the default branch", e))?;
         if owners.is_empty() {
             return Ok(Some((
@@ -113,6 +113,12 @@ pub fn default_branch(gh: &dyn Github) -> Result<String> {
         )
     })?;
     Ok(CACHE.get_or_init(|| info.default_branch).clone())
+}
+
+/// `refs/heads/<default branch>`: the full ref, so a tag or another ref named like the branch
+/// cannot stand in for it when governance files are read.
+pub fn default_ref(gh: &dyn Github) -> Result<String> {
+    Ok(format!("refs/heads/{}", default_branch(gh)?))
 }
 
 /// The number of an open issue labelled `bosun:main-red`.

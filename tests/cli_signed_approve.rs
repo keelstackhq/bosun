@@ -328,12 +328,18 @@ fn approve_sign_key_errors() {
 fn this_repos_approvers_file_parses_with_32_byte_keys() {
     let text = include_str!("../.bosun/approvers.toml");
     let keys = bosun::core::approve::parse_approvers(text).unwrap();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].id, "orchestrator-2026-10");
+    use bosun::core::approve::Role;
+    let got: Vec<(&str, Role)> = keys.iter().map(|k| (k.id.as_str(), k.role)).collect();
     assert_eq!(
-        bosun::github::b64::decode(&keys[0].ed25519).unwrap().len(),
-        32
+        got,
+        [
+            ("orchestrator-2026-10", Role::Owner),
+            ("delegate-2026-10", Role::Delegate)
+        ]
     );
+    for k in &keys {
+        assert_eq!(bosun::github::b64::decode(&k.ed25519).unwrap().len(), 32);
+    }
 }
 
 #[test]
@@ -385,4 +391,41 @@ fn the_signer_needs_a_pinned_head_https_and_no_halt() {
         "halted, also --print"
     );
     assert!(fake.state.lock().unwrap().comments.is_empty());
+}
+
+#[test]
+fn signatures_never_approve_key_owner_or_codeowners_changes() {
+    for (path, previous) in [
+        (".bosun/approvers.toml", None),
+        ("governance/owners.toml", None),
+        (".github/CODEOWNERS", None),
+        ("CODEOWNERS", None),
+        ("docs/old-owners.toml", Some("governance/owners.toml")),
+    ] {
+        let fake = high_pr();
+        fake.pull_file(1, path, "modified", 1, 0, Some("@@ -0,0 +1,1 @@\n+x"));
+        if let Some(p) = previous {
+            fake.renamed_from(1, p);
+        }
+        app_comment(&fake, &body(HEAD, "k1", SIG));
+        assert_eq!(check(&fake).0, 5, "{path}: a signature does not count");
+        // The owner's own approval still does.
+        fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
+        assert_eq!(check(&fake).0, 0, "{path}: the owner's comment counts");
+    }
+}
+
+#[test]
+fn signatures_never_approve_a_diff_bosun_could_not_see_whole() {
+    let fake = high_pr();
+    // GitHub listed fewer files than the PR changed: one of them may be a trust file.
+    fake.pull_set(1, "changed_files", json!(3001));
+    app_comment(&fake, &body(HEAD, "k1", SIG));
+    assert_eq!(
+        check(&fake).0,
+        5,
+        "a signature does not count on an unseen diff"
+    );
+    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
+    assert_eq!(check(&fake).0, 0, "the owner's comment counts");
 }

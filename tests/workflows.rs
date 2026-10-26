@@ -581,6 +581,13 @@ fn main_health_reports_with_bosun_built_from_the_default_branch() {
     );
     let yaml = fs::read_to_string(path).unwrap();
     let report = &yaml[yaml.find("\n  report:\n").unwrap()..];
+    // The nightly job runs repo code: read-only token, not persisted.
+    let nightly = &yaml[yaml.find("\n  nightly:\n").unwrap()..yaml.find("\n  report:\n").unwrap()];
+    assert!(
+        nightly.contains("    permissions:\n      contents: read\n    steps:"),
+        "{nightly}"
+    );
+    assert!(nightly.contains("persist-credentials: false"), "{nightly}");
     assert!(report.contains("always()"));
     assert!(report.contains("github.event.workflow_run.event == 'push'"));
     assert!(

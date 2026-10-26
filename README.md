@@ -45,6 +45,13 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
   key enrolled in `.bosun/approvers.toml` on the default branch, and that counts whoever posts it
   (spec §8, signed approvals). Enroll or rotate a key with a PR to that file that you approve on
   GitHub.
+- **Delegate decisions.** A key with `role = "delegate"` lets one Claude session approve PRs whose
+  risk rules are all `approval = "delegate"`, with one clean review verdict on the head, while
+  bosun is not halted. Critical changes (`.bosun/`, `governance/`, CODEOWNERS, every workflow,
+  bosun's code and manifests, secrets, prod writes, an unseen diff) always need you (spec §8,
+  delegated decisions); here that leaves `deny.toml`, the toolchain files, `.config/` and
+  `profiles/` to a delegate. To turn it off at once, delete the delegate key from
+  `.bosun/approvers.toml` in a PR you approve.
 - **Review verdicts from cloud sessions.** A reviewer runs `bosun verdict comment --from -`;
   the `verdict` workflow checks the comment and posts the `review-verdict` status.
 - **Stop all work.** Create the label once:

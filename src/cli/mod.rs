@@ -387,6 +387,10 @@ pub struct ApproveArgs {
     /// With --sign-key: print the comment body in data.body instead of posting it.
     #[arg(long, requires = "sign_key")]
     pub print: bool,
+    /// With --sign-key: sign as `owner` (default) or `delegate`; it must be the key's enrolled
+    /// role.
+    #[arg(long = "as", value_name = "ROLE", requires = "sign_key", value_parser = ["owner", "delegate"])]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Args)]

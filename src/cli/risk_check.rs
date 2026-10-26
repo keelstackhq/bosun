@@ -6,15 +6,17 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
-use crate::app::{App, Result, default_branch, task_meta};
+use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta};
 use crate::core::approve::{
-    APPROVERS_PATH, ApproverKey, parse_approvers, signature_lines, signed_message, verify_ed25519,
+    APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
+    trust_files_changed, verify_ed25519,
 };
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
-    self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, capability_labels,
-    comment_approves, evaluate, lease_sessions, new_dependencies, parse_owners, replace_note,
-    requirement, risk_note, two_verdicts, unseen_diff,
+    self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
+    capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
+    new_dependencies, parse_owners, replace_note, requirement, risk_note, two_verdicts,
+    unseen_diff,
 };
 use crate::ctx::RepoId;
 use crate::github::{Comment, Github, Review, b64};
@@ -23,6 +25,8 @@ use crate::output::{BosunError, CmdResult, Outcome};
 const RULES_PATH: &str = ".bosun/risk.toml";
 pub const OWNERS_PATH: &str = "governance/owners.toml";
 const CONTEXT: &str = "risk-check";
+/// A base with this file carries bosun's own approval code, which is then critical too.
+const BOSUN_CODE_MARKER: &str = "src/cli/risk_check.rs";
 
 /// Owner logins from `governance/owners.toml` at `git_ref`; empty when the file is missing.
 pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
@@ -127,6 +131,14 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         })
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));
+    // The critical floor: a delegate never approves the approval system, secrets or prod.
+    let critical = if matches.iter().any(|m| m.approval == Approval::Delegate) {
+        let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
+        risk::critical(&matches, &files, bosun_code)
+    } else {
+        Vec::new()
+    };
+    apply_floor(&mut matches, &critical);
     let level = risk::level(&matches);
     let high = level == "high";
 
@@ -141,8 +153,28 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     } else {
         Vec::new()
     };
-    let approved_by = if high {
-        approver(gh, &app.ctx.repo, n, head, &owners)?
+    // Key and owner changes need the owner's own GitHub approval, never a signature.
+    let trust = trust_files_changed(
+        files
+            .iter()
+            .map(|f| (f.path.as_str(), f.previous_path.as_deref())),
+    );
+    if !trust.is_empty() {
+        eprintln!(
+            "bosun: risk-check: the PR changes {}: signed approvals do not count",
+            trust.join(", ")
+        );
+    }
+    // An unseen diff may hide a trust file: no signature counts then either.
+    let unseen = matches.iter().any(|m| m.rule == "R-unseen");
+    if unseen {
+        eprintln!(
+            "bosun: risk-check: bosun could not see the whole diff: signed approvals do not count"
+        );
+    }
+    let signed_ok = trust.is_empty() && !unseen;
+    let mut approved_by = if high {
+        approver(gh, &app.ctx.repo, n, head, &owners, signed_ok)?
     } else {
         None
     };
@@ -150,19 +182,11 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     // Two verdicts only matter when the owner has not approved and the class allows them.
     let linked = linked_issues(&pull.body);
     // Without a linked task there is no lease to check the reviewers against: fail closed.
-    let unlinked = linked.is_empty() && requirement == Approval::TwoVerdicts;
+    let unlinked =
+        linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
     let verdicts =
         if high && approved_by.is_none() && requirement == Approval::TwoVerdicts && !unlinked {
-            let mut comments = gh.list_comments(n)?;
-            comments.sort_by_key(|c| c.id);
-            // The reviewer must not be a session that worked on the task: every session with a
-            // lease record (past or live) on a linked issue is out. `bosun pr` records no session
-            // for the PR author, so the lease is the only trace of who wrote the change.
-            let mut excluded = Vec::new();
-            for i in linked {
-                let notes = gh.list_comments(i)?;
-                excluded.extend(lease_sessions(notes.iter().map(|c| c.body.as_str())));
-            }
+            let (comments, excluded) = verdict_inputs(gh, n, &linked)?;
             two_verdicts(
                 comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
                 head,
@@ -171,6 +195,33 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         } else {
             Vec::new()
         };
+    // A delegate decides only with one clean independent verdict on the head (spec §8).
+    let mut delegate_verdicts = Vec::new();
+    let mut delegate_blocked = None;
+    if high && approved_by.is_none() && requirement == Approval::Delegate && !unlinked {
+        delegate_blocked = delegation_blocked(gh, &pull.base_ref, &linked)?;
+    }
+    if let Some(why) = &delegate_blocked {
+        eprintln!("bosun: risk-check: a delegate cannot approve: {why}");
+    }
+    if high
+        && approved_by.is_none()
+        && requirement == Approval::Delegate
+        && !unlinked
+        && delegate_blocked.is_none()
+        && signed_ok
+    {
+        let (comments, excluded) = verdict_inputs(gh, n, &linked)?;
+        delegate_verdicts = clean_verdicts(
+            comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+            head,
+            &excluded,
+        );
+        if !delegate_verdicts.is_empty() && !withdrawn(gh, n, head, &owners)? {
+            approved_by = signed_approver(gh, &app.ctx.repo, n, head, &comments, Role::Delegate)?
+                .map(|id| format!("delegate {id}"));
+        }
+    }
     let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
     let passed = !high || approved_by.is_some() || by_verdicts;
 
@@ -185,6 +236,15 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         ),
         (None, _) if unlinked => format!(
             "high risk, owner approval needed (links no task, so verdicts cannot count): {}",
+            ids.join(", ")
+        ),
+        (None, _) if !critical.is_empty() => format!(
+            "high risk, owner approval needed (critical: {}): {}",
+            critical.join(", "),
+            ids.join(", ")
+        ),
+        (None, _) if requirement == Approval::Delegate => format!(
+            "high risk, owner approval needed (or a delegate): {}",
             ids.join(", ")
         ),
         (None, _) if requirement == Approval::TwoVerdicts => format!(
@@ -204,6 +264,13 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         if requirement == Approval::TwoVerdicts {
             data["verdicts"] = json!(verdicts);
         }
+        if requirement == Approval::Delegate {
+            data["delegate_verdicts"] = json!(delegate_verdicts);
+            data["delegate_blocked"] = json!(delegate_blocked);
+        }
+        if !critical.is_empty() {
+            data["critical"] = json!(critical);
+        }
     }
     if passed {
         return Ok(Outcome::data(data));
@@ -218,6 +285,11 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let fix = if unlinked {
         format!(
             "the PR links no task (`Closes #N`), so verdicts cannot be checked for independence: link the task, or get an owner approval: {owner_fix}"
+        )
+    } else if requirement == Approval::Delegate {
+        format!(
+            "get one independent review verdict (approve, confidence >= {}, no major finding) on head {head} and a delegate's signed approval (`bosun approve {n}@{head} --sign-key <pem> --as delegate`), or an owner approval: {owner_fix}",
+            risk::VERDICT_MIN_CONFIDENCE
         )
     } else if requirement == Approval::TwoVerdicts {
         format!(
@@ -260,6 +332,7 @@ fn approver(
     pr: u64,
     head: &str,
     owners: &[String],
+    signed_ok: bool,
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let decisive = |o: &str| decisive_review(&reviews, o, head);
@@ -283,14 +356,78 @@ fn approver(
     }
     // A signed approval stands for the owner: with no owners it counts for no one, and any
     // owner's request for changes withdraws it.
-    if owners.is_empty()
+    if !signed_ok
+        || owners.is_empty()
         || owners
             .iter()
             .any(|o| decisive(o).as_deref() == Some("CHANGES_REQUESTED"))
     {
         return Ok(None);
     }
-    Ok(signed_approver(gh, repo, pr, head, &comments)?.map(|id| format!("key {id}")))
+    Ok(signed_approver(gh, repo, pr, head, &comments, Role::Owner)?.map(|id| format!("key {id}")))
+}
+
+/// Why a delegate cannot approve now, if it cannot: bosun is halted (or cannot tell), the PR
+/// targets another branch than the default one, or a linked issue is not an open bosun task
+/// with a lease record (a decoy link would hide the real task's capabilities and its lease
+/// holders). An unreadable task issue is a reason; an error listing its comments errors the
+/// check (fail closed, as every other read here).
+fn delegation_blocked(gh: &dyn Github, base_ref: &str, linked: &[u64]) -> Result<Option<String>> {
+    match halt_reason(gh) {
+        Ok(None) => {}
+        Ok(Some((why, _))) => return Ok(Some(format!("bosun is halted ({why})"))),
+        Err(e) => {
+            return Ok(Some(format!(
+                "cannot tell whether bosun is halted: {}",
+                e.message
+            )));
+        }
+    }
+    let branch = default_branch(gh)?;
+    if base_ref != branch {
+        return Ok(Some(format!(
+            "the PR targets {base_ref}, not the default branch {branch}"
+        )));
+    }
+    for i in linked {
+        let issue = match gh.get_issue(*i) {
+            Ok(Some(issue)) => issue,
+            Ok(None) => return Ok(Some(format!("linked #{i} does not exist"))),
+            Err(e) => return Ok(Some(format!("cannot read linked #{i}: {}", e.message))),
+        };
+        if issue.pull_request || issue.state != "open" || task_meta(&issue).is_none() {
+            return Ok(Some(format!("linked #{i} is not an open bosun task")));
+        }
+        let notes = gh.list_comments(*i)?;
+        if lease_sessions(notes.iter().map(|c| c.body.as_str())).is_empty() {
+            return Ok(Some(format!("linked task #{i} has no lease record")));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether a signed approval of `head` cannot count: no owners, or an owner's newest decisive
+/// review on `head` requests changes.
+fn withdrawn(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<bool> {
+    let reviews = gh.list_reviews(pr)?;
+    Ok(owners.is_empty()
+        || owners
+            .iter()
+            .any(|o| decisive_review(&reviews, o, head).as_deref() == Some("CHANGES_REQUESTED")))
+}
+
+/// The PR's comments oldest first, and the sessions that cannot review it independently: every
+/// session with a lease record (past or live) on a linked issue. `bosun pr` records no session
+/// for the PR author, so the lease is the only trace of who wrote the change.
+fn verdict_inputs(gh: &dyn Github, n: u64, linked: &[u64]) -> Result<(Vec<Comment>, Vec<String>)> {
+    let mut comments = gh.list_comments(n)?;
+    comments.sort_by_key(|c| c.id);
+    let mut excluded = Vec::new();
+    for i in linked {
+        let notes = gh.list_comments(*i)?;
+        excluded.extend(lease_sessions(notes.iter().map(|c| c.body.as_str())));
+    }
+    Ok((comments, excluded))
 }
 
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
@@ -303,6 +440,7 @@ fn signed_approver(
     pr: u64,
     head: &str,
     comments: &[Comment],
+    role: Role,
 ) -> Result<Option<String>> {
     let sigs: Vec<(u64, &str, &str)> = comments
         .iter()
@@ -322,12 +460,20 @@ fn signed_approver(
             return Ok(None);
         }
     };
-    let msg = signed_message(&repo.owner, &repo.name, pr, head);
+    let msg = signed_message(role, &repo.owner, &repo.name, pr, head);
     for (comment, id, sig) in sigs {
         let Some(key) = keys.iter().find(|k| k.id == id) else {
             eprintln!("bosun: risk-check: comment {comment}: unknown key {id:?}, not counted");
             continue;
         };
+        if key.role != role {
+            eprintln!(
+                "bosun: risk-check: comment {comment}: key {id:?} is a {} key, not counted as {}",
+                key.role.name(),
+                role.name()
+            );
+            continue;
+        }
         let ok = b64::decode(&key.ed25519)
             .zip(b64::decode(sig))
             .is_some_and(|(k, s)| verify_ed25519(&k, msg.as_bytes(), &s));
@@ -346,8 +492,7 @@ fn signed_approver(
 /// approvals are off: the file is missing, unreadable or malformed (a key that is not 32 bytes
 /// of base64 makes the whole file malformed). Never an error of the check.
 pub fn enrolled_keys(gh: &dyn Github) -> std::result::Result<Vec<ApproverKey>, String> {
-    let branch = default_branch(gh).map_err(|e| format!("no default branch: {}", e.message))?;
-    let git_ref = format!("refs/heads/{branch}");
+    let git_ref = default_ref(gh).map_err(|e| format!("no default branch: {}", e.message))?;
     let text = match gh.file_at(APPROVERS_PATH, &git_ref) {
         Ok(Some(text)) => text,
         Ok(None) => return Err(format!("{APPROVERS_PATH} is missing on {git_ref}")),
@@ -355,6 +500,19 @@ pub fn enrolled_keys(gh: &dyn Github) -> std::result::Result<Vec<ApproverKey>, S
     };
     let keys = parse_approvers(&text)
         .map_err(|e| format!("{APPROVERS_PATH} on {git_ref} is malformed: {e}"))?;
+    let raw: Vec<Option<Vec<u8>>> = keys.iter().map(|k| b64::decode(&k.ed25519)).collect();
+    if let Some(k) = keys
+        .iter()
+        .zip(&raw)
+        .enumerate()
+        .find(|(i, (_, r))| r.is_some() && raw[..*i].contains(r))
+        .map(|(_, (k, _))| k)
+    {
+        return Err(format!(
+            "{APPROVERS_PATH} on {git_ref} is malformed: the public key of {:?} is enrolled twice",
+            k.id
+        ));
+    }
     match keys
         .iter()
         .find(|k| b64::decode(&k.ed25519).is_none_or(|b| b.len() != 32))
