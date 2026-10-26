@@ -5,6 +5,7 @@ description = "bosun governance, CI that runs `bosun gate`, the risk and verdict
 # Owned: the bosun channel replaces them on update. A change goes to keelstackhq/bosun.
 owned = [
   ".bosun/version",
+  ".bosun/fold-fragments.sh",
   ".github/workflows/bosun.yml",
   ".github/workflows/risk.yml",
   ".github/workflows/verdict.yml",

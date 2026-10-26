@@ -1,0 +1,1 @@
+- 2026-10-26 · CI minutes 4 · changelog and progress fragments (`changelog.d/`, `docs/progress.d/`, `scripts/fold-fragments.sh`, also in the channel) end the appended-line conflicts that cost a re-review per merge of main · PR #237

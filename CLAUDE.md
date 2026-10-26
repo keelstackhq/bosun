@@ -10,6 +10,10 @@ and acts on the one JSON object it prints. One static Rust binary. Part of the k
 - Defaults and their evidence: `docs/defaults.md`. Plan format: `docs/plan-format.md`.
 - Plans: `docs/superpowers/plans/` (the seed plan splits S1-S10 into PRs). Tick tasks as they land.
 - Progress: `docs/PROGRESS.md` — Status, Done (one line per task), Blocked (human-only items).
+- Never append to CHANGELOG.md or the Done list of `docs/PROGRESS.md` in a PR: add one-line fragments
+  `changelog.d/<name>.md` and `docs/progress.d/<name>.md`, name = the branch with `/` as `-`
+  (two PRs never edit the same file, so merging main never conflicts). Before a release, a docs
+  PR to main runs `scripts/fold-fragments.sh`.
 
 ## Layout
 
@@ -57,7 +61,7 @@ Run the fast checks before every commit.
 ## How to work here
 
 - Test first: failing test, watch it fail, implement, watch it pass.
-- One plan task per PR of at most 400 changed lines, with its PROGRESS line.
+- One plan task per PR of at most 400 changed lines, with its progress fragment.
 - Ask (in the PR or to the orchestrator) before adding a crate not in the plan's Tech Stack.
 - Show real command output before claiming something works.
 - Human-only items (repo settings, releases, Routines) go to Blocked in `docs/PROGRESS.md`.
