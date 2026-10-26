@@ -91,16 +91,26 @@ fn governance_and_the_approval_system_need_the_owner() {
 }
 
 #[test]
-fn ci_and_gate_inputs_outside_workflows_and_code_need_the_owner_until_the_pin_knows_delegates() {
-    // They become "delegate" again once .bosun/version pins 0.2.1+ (tests/governance.rs).
-    for path in [
-        "deny.toml",
-        "rust-toolchain.toml",
-        "rust-toolchain",
-        ".config/nextest.toml",
-        "profiles/rust.toml",
+fn ci_and_gate_inputs_outside_workflows_and_code_follow_their_rules_class() {
+    // Delegate when the rule says so (from the 0.2.1 pin on), else the owner. Read from the
+    // file present: CI runs the gates with the base commit's .bosun/ (ci.yml), so a PR that
+    // changes the class is tested against the old file until it merges.
+    let rules = bosun::core::risk::Rules::parse(&rules()).unwrap();
+    let class = |id: &str| {
+        let r = rules.rules.iter().find(|r| r.id == id).unwrap();
+        match r.approval {
+            bosun::core::risk::Approval::Delegate => "delegate",
+            _ => "owner",
+        }
+    };
+    for (path, rule) in [
+        ("deny.toml", "R-ci"),
+        ("rust-toolchain.toml", "R-ci"),
+        ("rust-toolchain", "R-ci"),
+        (".config/nextest.toml", "R-gate"),
+        ("profiles/rust.toml", "R-gate"),
     ] {
-        assert_eq!(requirement(path, None), "owner", "{path}");
+        assert_eq!(requirement(path, None), class(rule), "{path}");
     }
 }
 

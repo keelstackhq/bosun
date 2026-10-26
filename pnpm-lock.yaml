@@ -9,19 +9,19 @@ importers:
   npm/bosun:
     optionalDependencies:
       '@keelstackhq/bosun-darwin-arm64':
-        specifier: 0.2.1
+        specifier: 0.2.2
         version: link:../bosun-darwin-arm64
       '@keelstackhq/bosun-darwin-x64':
-        specifier: 0.2.1
+        specifier: 0.2.2
         version: link:../bosun-darwin-x64
       '@keelstackhq/bosun-linux-arm64':
-        specifier: 0.2.1
+        specifier: 0.2.2
         version: link:../bosun-linux-arm64
       '@keelstackhq/bosun-linux-x64':
-        specifier: 0.2.1
+        specifier: 0.2.2
         version: link:../bosun-linux-x64
       '@keelstackhq/bosun-win32-x64':
-        specifier: 0.2.1
+        specifier: 0.2.2
         version: link:../bosun-win32-x64
 
   npm/bosun-darwin-arm64: {}

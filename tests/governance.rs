@@ -26,9 +26,10 @@ fn bosun_toml_and_limits_parse() {
     );
 }
 
-/// The rules bosun's own .bosun/risk.toml delegates. Empty while .bosun/version pins 0.2.0,
-/// which rejects `approval = "delegate"`; R-ci, R-gate and R-deps return after the 0.2.1 pin.
-const REPO_DELEGATES: &[&str] = &[];
+/// The only rules bosun's own .bosun/risk.toml may delegate (it does from the 0.2.1 pin on).
+/// The tests accept owner or delegate for them: CI runs the gates with the base commit's
+/// .bosun/, so a PR that changes the class is tested against the old file until it merges.
+const REPO_DELEGATES: &[&str] = &["R-ci", "R-gate", "R-deps"];
 
 /// risk.yml judges every PR with the release pinned in .bosun/version, so the rules on main must
 /// parse with it: `approval = "delegate"` needs 0.2.1 or later.
@@ -80,7 +81,9 @@ fn shipped_rules_have_the_decided_approval_class() {
     // The built-in rules never delegate: a repo opts in in its own .bosun/risk.toml.
     let class = |r: &bosun::core::risk::Rule, repo: bool| match r.id.as_str() {
         "R-ci-review" => Approval::TwoVerdicts,
-        id if repo && REPO_DELEGATES.contains(&id) => Approval::Delegate,
+        id if repo && REPO_DELEGATES.contains(&id) && r.approval == Approval::Delegate => {
+            Approval::Delegate
+        }
         _ => Approval::Owner,
     };
     for r in &Rules::parse(&read(".bosun/risk.toml")).unwrap().rules {
@@ -176,7 +179,12 @@ fn every_shipped_path_glob_matches_a_concrete_path_with_its_class() {
                 // No other rule may match it with a different class: the strictest wins.
                 let want = match rule.id.as_str() {
                     "R-ci-review" => Approval::TwoVerdicts,
-                    id if repo && REPO_DELEGATES.contains(&id) => Approval::Delegate,
+                    id if repo
+                        && REPO_DELEGATES.contains(&id)
+                        && rule.approval == Approval::Delegate =>
+                    {
+                        Approval::Delegate
+                    }
                     _ => Approval::Owner,
                 };
                 assert_eq!(rule.approval, want, "{}", rule.id);
