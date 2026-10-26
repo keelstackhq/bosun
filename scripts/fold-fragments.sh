@@ -20,7 +20,9 @@
 # their section, with one blank line before the next heading. Without fragments it changes
 # nothing.
 #
-# Usage: fold-fragments.sh [repo root; default: the git top level, else .]
+# Usage: bash fold-fragments.sh [repo root; default: the git top level, else .]
+# Always through bash: splice ships files without their mode (template format 9.13), so the
+# copy in a repo is not executable.
 set -euo pipefail
 export LC_ALL=C
 root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"

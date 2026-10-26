@@ -13,7 +13,7 @@ and acts on the one JSON object it prints. One static Rust binary. Part of the k
 - Never append to CHANGELOG.md or the Done list of `docs/PROGRESS.md` in a PR: add one-line fragments
   `changelog.d/<name>.md` and `docs/progress.d/<name>.md`, name = the branch with `/` as `-`
   (two PRs never edit the same file, so merging main never conflicts). Before a release, a docs
-  PR to main runs `scripts/fold-fragments.sh`.
+  PR to main runs `bash scripts/fold-fragments.sh`.
 
 ## Layout
 
