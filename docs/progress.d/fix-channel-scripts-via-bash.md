@@ -1,1 +1,0 @@
-- 2026-10-26 · Channel scripts via bash · AGENTS/CLAUDE, releasing.md, the fragment READMEs and the channel's agents section call the fold script as `bash …/fold-fragments.sh` (splice ships 0644, template format 9.13); `tests/channel.rs` `shipped_scripts_are_only_ever_called_through_bash` · PR (fix/channel-scripts-via-bash)
