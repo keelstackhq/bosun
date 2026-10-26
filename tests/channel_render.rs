@@ -995,13 +995,50 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
             .find(|s| {
                 s["run"]
                     .as_str()
-                    .is_some_and(|r| r.starts_with("pnpm install"))
+                    .is_some_and(|r| r.contains("pnpm install --frozen-lockfile"))
             })
             .unwrap();
-        assert_eq!(
-            install["run"],
-            "pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile"
+        let run = install["run"].as_str().unwrap();
+        assert!(
+            run.contains("\npnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile\n"),
+            "{run}"
         );
+        // pnpm install may change no file but the ignored node_modules (review of #233: a
+        // patch that leaves its package rewrote pnpm-workspace.yaml).
+        let dir = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let sh = |cmd: &str| {
+            Command::new("bash")
+                .args(["-eo", "pipefail", "-c", cmd])
+                .current_dir(dir.path())
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        bin.path().display(),
+                        std::env::var("PATH").unwrap()
+                    ),
+                )
+                .output()
+                .unwrap()
+                .status
+                .success()
+        };
+        assert!(sh(
+            "git init -q && printf 'node_modules/\\n' > .gitignore && echo a > pnpm-workspace.yaml && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base"
+        ));
+        use std::os::unix::fs::PermissionsExt;
+        let fake = bin.path().join("pnpm");
+        for (body, ok) in [
+            ("mkdir -p node_modules/x && touch node_modules/x/y", true),
+            ("echo 'pnpmfile: evil.cjs' >> pnpm-workspace.yaml", false),
+            ("echo 'node-options=x' > .npmrc", false),
+        ] {
+            fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(sh(run), ok, "{body}");
+            sh("git checkout -q -- . && git clean -qfdx");
+        }
         // Every pnpm call in the job, setup-node's `pnpm store path` and the deps gate's audit
         // included, ignores the PR's pnpmfile (review of #233).
         assert_eq!(j["env"]["npm_config_ignore_pnpmfile"], "true");
@@ -1078,11 +1115,17 @@ fn ts_pnpm_refuses_workspace_settings_that_run_code() {
         "{\"pnpm\": {\"\\u0070npmfile\": \"e.cjs\"}}"
     ));
     assert!(!check_in("package.json", "{\"pnpm\": \"x\"}"));
+    assert!(!check_in(
+        "package.json",
+        "{\"pnpm\": {\"patchedDependencies\": {}}}"
+    ));
     assert!(check(
         "packages:\n  - \"pkgs/*\"\nonlyBuiltDependencies: [esbuild]\n"
     ));
     assert!(check(""), "an empty file");
     for bad in [
+        // A patch may name a path outside its package (review of #233).
+        "packages: [a]\npatchedDependencies:\n  is-number@7.0.0: patches/p.patch\n",
         "packages: [a]\nignorePnpmfile: false\npnpmfile: evil.cjs\n",
         "\"pnpm\\x66ile\": evil.cjs\n",
         "configDependencies:\n  x: 1.0.0\n",

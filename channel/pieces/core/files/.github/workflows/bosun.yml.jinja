@@ -303,7 +303,7 @@ jobs:
               "allowBuilds",
               "packages", "catalog", "catalogs", "onlyBuiltDependencies", "ignoredBuiltDependencies",
               "neverBuiltDependencies", "overrides", "packageExtensions", "peerDependencyRules",
-              "allowedDeprecatedVersions", "patchedDependencies", "supportedArchitectures", "auditConfig",
+              "allowedDeprecatedVersions", "supportedArchitectures", "auditConfig",
               "linkWorkspacePackages", "saveWorkspaceProtocol", "autoInstallPeers",
               "strictPeerDependencies", "dedupePeerDependents", "minimumReleaseAge",
               "minimumReleaseAgeExclude",
@@ -352,7 +352,18 @@ jobs:
         # No PR code before the gates: no pnpmfile and no lifecycle scripts run here; `pnpm
         # rebuild` runs the install scripts (the root project's postinstall too) before fmt, the
         # first gate that runs PR code in this stack.
-        run: pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
+        # It must not write any file outside the ignored node_modules (a patch whose path leaves
+        # its package could rewrite pnpm-workspace.yaml or add an .npmrc): the git status
+        # before and after must be the same.
+        run: |
+          before="$(git status --porcelain=v1 -z --untracked-files=all | sha256sum)"
+          pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
+          after="$(git status --porcelain=v1 -z --untracked-files=all | sha256sum)"
+          if [ "$before" != "$after" ]; then
+            git status --short --untracked-files=all
+            echo "::error::pnpm install changed files in the checkout (see above); only node_modules may change, and it must be in .gitignore"
+            exit 1
+          fi
       - uses: keelstackhq/hoard@v0
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
 {% endif %}{% raw %}      # The gates run in order and stop at the first failure. The gates that run no PR code come
