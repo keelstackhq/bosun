@@ -37,6 +37,9 @@ permissions:
 # build.rustc would run PR code in rust-cache and the gates before lint): cargo takes these over
 # its config files. The rust toolchain step refuses a toolchain file that names a path.
 env:
+  # pnpm loads a .pnpmfile.cjs (or the pnpmfile pnpm-workspace.yaml names) for every command:
+  # setup-node's `pnpm store path`, install, audit (deps), rebuild. Never in this job.
+  npm_config_ignore_pnpmfile: "true"
   RUSTC: rustc
   RUSTC_WRAPPER: ""
   RUSTC_WORKSPACE_WRAPPER: ""

@@ -1002,6 +1002,9 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
             install["run"],
             "pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile"
         );
+        // Every pnpm call in the job, setup-node's `pnpm store path` and the deps gate's audit
+        // included, ignores the PR's pnpmfile (review of #233).
+        assert_eq!(j["env"]["npm_config_ignore_pnpmfile"], "true");
         let run = step(&steps, "name", "bosun gates")["run"].as_str().unwrap();
         let rebuild = run.find("pnpm rebuild").expect("rebuild");
         assert!(run[..rebuild].contains("if [ \"$g\" = fmt ]"), "{run}");
