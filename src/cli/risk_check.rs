@@ -9,7 +9,7 @@ use super::PrArg;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
-    verify_ed25519,
+    trust_files_changed, verify_ed25519,
 };
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
@@ -153,8 +153,21 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     } else {
         Vec::new()
     };
+    // Key and owner changes need the owner's own GitHub approval, never a signature.
+    let trust = trust_files_changed(
+        files
+            .iter()
+            .map(|f| (f.path.as_str(), f.previous_path.as_deref())),
+    );
+    if !trust.is_empty() {
+        eprintln!(
+            "bosun: risk-check: the PR changes {}: signed approvals do not count",
+            trust.join(", ")
+        );
+    }
+    let signed_ok = trust.is_empty();
     let mut approved_by = if high {
-        approver(gh, &app.ctx.repo, n, head, &owners)?
+        approver(gh, &app.ctx.repo, n, head, &owners, signed_ok)?
     } else {
         None
     };
@@ -189,6 +202,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         && requirement == Approval::Delegate
         && !unlinked
         && delegate_blocked.is_none()
+        && signed_ok
     {
         let (comments, excluded) = verdict_inputs(gh, n, &linked)?;
         delegate_verdicts = clean_verdicts(
@@ -311,6 +325,7 @@ fn approver(
     pr: u64,
     head: &str,
     owners: &[String],
+    signed_ok: bool,
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let decisive = |o: &str| decisive_review(&reviews, o, head);
@@ -334,7 +349,8 @@ fn approver(
     }
     // A signed approval stands for the owner: with no owners it counts for no one, and any
     // owner's request for changes withdraws it.
-    if owners.is_empty()
+    if !signed_ok
+        || owners.is_empty()
         || owners
             .iter()
             .any(|o| decisive(o).as_deref() == Some("CHANGES_REQUESTED"))

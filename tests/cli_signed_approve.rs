@@ -392,3 +392,25 @@ fn the_signer_needs_a_pinned_head_https_and_no_halt() {
     );
     assert!(fake.state.lock().unwrap().comments.is_empty());
 }
+
+#[test]
+fn signatures_never_approve_key_owner_or_codeowners_changes() {
+    for (path, previous) in [
+        (".bosun/approvers.toml", None),
+        ("governance/owners.toml", None),
+        (".github/CODEOWNERS", None),
+        ("CODEOWNERS", None),
+        ("docs/old-owners.toml", Some("governance/owners.toml")),
+    ] {
+        let fake = high_pr();
+        fake.pull_file(1, path, "modified", 1, 0, Some("@@ -0,0 +1,1 @@\n+x"));
+        if let Some(p) = previous {
+            fake.renamed_from(1, p);
+        }
+        app_comment(&fake, &body(HEAD, "k1", SIG));
+        assert_eq!(check(&fake).0, 5, "{path}: a signature does not count");
+        // The owner's own approval still does.
+        fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
+        assert_eq!(check(&fake).0, 0, "{path}: the owner's comment counts");
+    }
+}

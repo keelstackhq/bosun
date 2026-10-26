@@ -229,6 +229,31 @@ pub fn verify_ed25519(public_key: &[u8], msg: &[u8], sig: &[u8]) -> bool {
             .is_ok()
 }
 
+/// Files that decide who approves: a PR that changes one (or renames one away) never passes on a
+/// signed approval, owner or delegate key, so a compromised key cannot enroll keys or owners.
+pub const TRUST_FILES: [&str; 5] = [
+    APPROVERS_PATH,
+    "governance/owners.toml",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+    "docs/CODEOWNERS",
+];
+
+/// The changed trust files among `(path, previous path)` pairs.
+pub fn trust_files_changed<'a>(
+    files: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Vec<String> {
+    files
+        .into_iter()
+        .filter(|(p, prev)| {
+            std::iter::once(*p)
+                .chain(*prev)
+                .any(|x| TRUST_FILES.contains(&x))
+        })
+        .map(|(p, _)| p.to_string())
+        .collect()
+}
+
 /// The comment `bosun approve --sign-key` posts.
 pub fn signed_comment(head: &str, key_id: &str, sig_b64: &str) -> String {
     format!("/bosun approve {head}\nbosun-sig ed25519 {key_id} {sig_b64}")

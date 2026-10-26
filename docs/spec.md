@@ -581,8 +581,11 @@ High-risk PRs:
   ed25519 = "<base64 of the raw 32-byte public key>"
   ```
   Enroll or rotate a key with a PR that changes `.bosun/approvers.toml` (R-gov), approved by
-  the owner on GitHub (a review or a plain-token comment; a signature from a key the PR adds
-  never counts); a removed key stops counting once that PR merges. Make a key with
+  the owner on GitHub (a review or a plain-token comment). No signed approval counts, owner or
+  delegate key, on a PR that changes or renames away `.bosun/approvers.toml`,
+  `governance/owners.toml` or a `CODEOWNERS` file (root, `.github/`, `docs/`; `TRUST_FILES` in
+  `src/core/approve.rs`), so a compromised key cannot enroll keys or owners; risk-check logs
+  why to stderr. A removed key stops counting once that PR merges. Make a key with
   `openssl genpkey -algorithm ed25519 -out key.pem`; its public key is
   `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64`. risk.yml runs the
   release pinned in `.bosun/version`, so signed approvals count in CI once that pin is a
