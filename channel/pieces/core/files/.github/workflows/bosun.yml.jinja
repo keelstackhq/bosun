@@ -290,15 +290,17 @@ jobs:
 {% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack: Node 24, pnpm from package.json `packageManager`, the Turborepo cache
       # through hoard. Skipped while the stack has no lockfile yet (a new repo).
       # pnpm-workspace.yaml settings win over env and flags, so a PR could name a pnpmfile or
-      # config dependencies there and run code in setup-node's `pnpm store path` or the deps
-      # gate's audit. A YAML parser reads every tracked pnpm-workspace.yaml; only settings
-      # that run no code may pass (fail closed).
+      # config dependencies there (or in a package.json `pnpm` field) and run code in
+      # setup-node's `pnpm store path` or the deps gate's audit. A parser reads every tracked
+      # pnpm-workspace.yaml and package.json `pnpm` field; only settings that run no code may
+      # pass (fail closed).
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
         name: pnpm workspace runs no PR code
         run: |
           python3 -I - <<'PY'
-          import subprocess, sys, yaml
+          import json, subprocess, sys, yaml
           ok = {
+              "allowBuilds",
               "packages", "catalog", "catalogs", "onlyBuiltDependencies", "ignoredBuiltDependencies",
               "neverBuiltDependencies", "overrides", "packageExtensions", "peerDependencyRules",
               "allowedDeprecatedVersions", "patchedDependencies", "supportedArchitectures", "auditConfig",
@@ -307,7 +309,25 @@ jobs:
               "minimumReleaseAgeExclude",
           }
           out = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout
+          def check(f, d):
+              if d is None:
+                  return
+              if not isinstance(d, dict):
+                  sys.exit(f"{f}: must be a mapping")
+              bad = sorted(str(k) for k in d if k not in ok)
+              if bad:
+                  sys.exit(f"{f}: {', '.join(bad)} may run code before the gates (a pnpmfile, config dependencies); bosun's CI allows only " + ", ".join(sorted(ok)))
           for f in out.decode().split("\0"):
+              # A package.json `pnpm` field holds pnpm settings too.
+              if f.rsplit("/", 1)[-1] == "package.json":
+                  try:
+                      with open(f, "rb") as h:
+                          pkg = json.load(h)
+                  except Exception as e:
+                      sys.exit(f"{f}: not readable JSON ({e})")
+                  if isinstance(pkg, dict) and "pnpm" in pkg:
+                      check(f + " (pnpm)", pkg["pnpm"])
+                  continue
               if f.rsplit("/", 1)[-1] not in ("pnpm-workspace.yaml", "pnpm-workspace.yml"):
                   continue
               try:
@@ -315,13 +335,7 @@ jobs:
                       d = yaml.safe_load(h)
               except Exception as e:
                   sys.exit(f"{f}: not readable YAML ({e})")
-              if d is None:
-                  continue
-              if not isinstance(d, dict):
-                  sys.exit(f"{f}: must be a mapping")
-              bad = sorted(str(k) for k in d if k not in ok)
-              if bad:
-                  sys.exit(f"{f}: {', '.join(bad)} may run code before the gates (a pnpmfile, config dependencies); bosun's CI allows only " + ", ".join(sorted(ok)))
+              check(f, d)
           PY
       - uses: pnpm/action-setup@v4
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''

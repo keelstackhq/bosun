@@ -1035,9 +1035,9 @@ fn ts_pnpm_refuses_workspace_settings_that_run_code() {
     let guard = at("pnpm workspace runs no PR code");
     assert!(guard < at("pnpm/action-setup") && guard < at("actions/setup-node"));
     let script = steps[guard]["run"].as_str().unwrap().to_string();
-    let check = |yaml: &str| {
+    let check_in = |name: &str, text: &str| {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("pnpm-workspace.yaml"), yaml).unwrap();
+        fs::write(dir.path().join(name), text).unwrap();
         let git = |a: &[&str]| {
             assert!(
                 Command::new("git")
@@ -1059,6 +1059,25 @@ fn ts_pnpm_refuses_workspace_settings_that_run_code() {
             .status
             .success()
     };
+    let check = |yaml: &str| check_in("pnpm-workspace.yaml", yaml);
+    // A package.json `pnpm` field holds pnpm settings too.
+    assert!(check_in(
+        "package.json",
+        "{\"name\": \"a\", \"pnpm\": {\"overrides\": {}}}"
+    ));
+    assert!(check_in(
+        "package.json",
+        "{\"name\": \"a\", \"scripts\": {\"x\": \"y\"}}"
+    ));
+    assert!(!check_in(
+        "package.json",
+        "{\"pnpm\": {\"configDependencies\": {}}}"
+    ));
+    assert!(!check_in(
+        "package.json",
+        "{\"pnpm\": {\"\\u0070npmfile\": \"e.cjs\"}}"
+    ));
+    assert!(!check_in("package.json", "{\"pnpm\": \"x\"}"));
     assert!(check(
         "packages:\n  - \"pkgs/*\"\nonlyBuiltDependencies: [esbuild]\n"
     ));
