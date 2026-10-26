@@ -322,6 +322,11 @@ fn every_variant_renders_to_files_that_parse() {
 
 /// One variant of the channel, rendered: `(path, text)`.
 fn variant(stack: &[&str], own_ci: &str) -> Vec<(String, String)> {
+    variant_at(stack, own_ci, ".")
+}
+
+/// One variant with the ts-pnpm stack at `ts_path`.
+fn variant_at(stack: &[&str], own_ci: &str, ts_path: &str) -> Vec<(String, String)> {
     let mut pieces = vec!["core"];
     pieces.extend_from_slice(stack);
     let vars: BTreeMap<&str, String> = [
@@ -330,7 +335,7 @@ fn variant(stack: &[&str], own_ci: &str) -> Vec<(String, String)> {
         ("bosun_version", ""),
         ("template.version", "1.2.3"),
         ("rust_path", "."),
-        ("ts_path", "."),
+        ("ts_path", ts_path),
         ("own_ci", own_ci),
     ]
     .into_iter()
@@ -1432,4 +1437,54 @@ fn the_required_check_installs_the_toolchain_bosun_trusted_checked() {
             format!("RUSTUP_TOOLCHAIN={channel}\n")
         );
     }
+}
+
+/// A stack path that does not exist yet (a repo right after `bosun init`): deps runs, and
+/// bosun-trusted creates nothing there (review of #234).
+#[test]
+fn bosun_trusted_deps_passes_before_the_ts_stack_exists() {
+    let files = variant_at(&["ts-pnpm"], "", "web");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let run = step(&steps(&j, ""), "name", "bosun gates")["run"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    git_in(
+        d,
+        "git init -q -b main && git config user.email a@b.c && git config user.name n \
+         && echo x > x && git add -A && git commit -qm base && echo y > x && git commit -qam pr",
+    );
+    let base = git_in(d, "git rev-parse HEAD~1");
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("bosun"), "#!/bin/sh\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(bin.join("bosun"), fs::Permissions::from_mode(0o755)).unwrap();
+    let out = tmp.path().join("out");
+    let script = format!(
+        "export BOSUN_SHA256=\"$(sha256sum \"$RUNNER_TEMP/bin/bosun\" | cut -d' ' -f1)\"\n{run}"
+    );
+    assert!(bash_in(
+        d,
+        &script,
+        &[
+            ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
+            ("GITHUB_OUTPUT", out.to_str().unwrap()),
+            ("GITHUB_SHA", "unused"),
+            ("GATES", "test-integrity deps fmt lint test"),
+            ("ONLY", ""),
+            ("EVENT", "pull_request"),
+            ("BASE", &base),
+        ],
+    ));
+    assert!(!d.join("web").exists());
+    assert_eq!(
+        fs::read_to_string(out).unwrap().trim(),
+        "pr_gates=fmt lint test"
+    );
 }

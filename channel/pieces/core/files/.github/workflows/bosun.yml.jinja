@@ -410,7 +410,12 @@ jobs:
                 mkdir -p -- "$(dirname -- "$p")"
                 git show "$BASE:$p" > "$p"
               done
-              [ -e "{{ ts_path }}/package.json" ] || echo '{}' > "{{ ts_path }}/package.json"
+              # Only for a stack directory in the checkout (a new repo may have none yet).
+              if [ -d "{{ ts_path }}" ] && [ ! -e "{{ ts_path }}/package.json" ]; then
+                case "$(realpath -m -- "{{ ts_path }}")" in
+                  "$top"|"$top"/*) echo '{}' > "{{ ts_path }}/package.json" ;;
+                esac
+              fi
             fi
 {% endif %}{% raw %}            echo "::group::bosun gate $g"
             # Defence in depth: the pinned bosun, unchanged since step bin.
@@ -422,9 +427,10 @@ jobs:
 {% endif %}{% if "ts-pnpm" in pieces %}{% raw %}
   # The required CI check (spec D15). Beside a repo's own ci.yml and its ci-ok, it is called
   # bosun-ok. It needs bosun-trusted and fails at once unless that passed (a draft, a failed
-  # gate, a cancel, a timeout): never skipped, since a skipped required check counts as passed. Then it installs the
-  # PR's dependencies and runs the gates that run PR code (fmt, lint, test). Nothing it does
-  # reaches bosun-trusted, which finished first and restores no cache this job saves.
+  # gate, a cancel, a timeout): never skipped, since a skipped required check counts as passed.
+  # Then it installs the PR's dependencies and runs the gates that run PR code (fmt, lint,
+  # test). Nothing it does reaches bosun-trusted, which finished first and restores no cache
+  # this job saves.
 {% endraw %}{% if own_ci %}  bosun-ok:
 {% else %}  ci-ok:
 {% endif %}{% raw %}    needs: bosun-trusted
