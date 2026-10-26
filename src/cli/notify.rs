@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::NotifyArgs;
 use super::spawn::valid_ts;
-use crate::app::{App, HALT_LABEL, default_branch, limits_from_default, main_red};
+use crate::app::{App, HALT_LABEL, default_ref, limits_from_default, main_red};
 use crate::cli::risk_check::owner_logins;
 use crate::core::budget::{Level, level};
 use crate::core::records::{Record, parse_record, spend_total};
@@ -203,7 +203,7 @@ fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Fou
         let r = (|| -> Result<(), BosunError> {
             let halts = gh.list_issues(&[HALT_LABEL], IssueState::Open)?;
             if !halts.is_empty() {
-                let owners = owner_logins(gh, &default_branch(gh)?)?;
+                let owners = owner_logins(gh, &default_ref(gh)?)?;
                 let hit = if owners.is_empty() {
                     halts.first()
                 } else {

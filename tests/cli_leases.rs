@@ -211,8 +211,14 @@ fn an_open_halt_issue_by_an_owner_halts() {
     ready(&fake, 10, "src/a.rs");
     fake.content(
         "governance/owners.toml",
-        "main",
+        "refs/heads/main",
         "[[owner]]\ngithub = \"ada\"\n",
+    );
+    // A tag named `main` cannot stand in for the branch: its owners are ignored.
+    fake.content(
+        "governance/owners.toml",
+        "main",
+        "[[owner]]\ngithub = \"mallory\"\n",
     );
     fake.issue(50, "stop", &["bosun:halt"], "");
     fake.issue_by(50, "mallory");

@@ -707,7 +707,7 @@ High-risk PRs:
 Kill switch: bosun is halted while either source says so, and then every command that starts or
 changes work (including `bosun pr` and `bosun verdict post`) is exit 4:
 - An open issue with the label `bosun:halt`, opened by a login in `governance/owners.toml` (read
-  from the default branch). An issue opened by anyone else is ignored. Any error reading the
+  from the default branch at `refs/heads/<branch>`, so a tag of that name cannot stand in; `bosun notify` likewise). An issue opened by anyone else is ignored. Any error reading the
   issues or the owners is exit 4 (fail closed), and so is an open halt issue while no owners
   are listed. Agents must never close a halt issue or remove its label; bosun does not yet
   enforce that (a token with Issues: write can), so against a misbehaving agent the owner also

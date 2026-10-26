@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
-use crate::app::{App, Result, default_branch, task_meta};
+use crate::app::{App, Result, default_ref, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
     verify_ed25519,
@@ -417,8 +417,7 @@ fn signed_approver(
 /// approvals are off: the file is missing, unreadable or malformed (a key that is not 32 bytes
 /// of base64 makes the whole file malformed). Never an error of the check.
 pub fn enrolled_keys(gh: &dyn Github) -> std::result::Result<Vec<ApproverKey>, String> {
-    let branch = default_branch(gh).map_err(|e| format!("no default branch: {}", e.message))?;
-    let git_ref = format!("refs/heads/{branch}");
+    let git_ref = default_ref(gh).map_err(|e| format!("no default branch: {}", e.message))?;
     let text = match gh.file_at(APPROVERS_PATH, &git_ref) {
         Ok(Some(text)) => text,
         Ok(None) => return Err(format!("{APPROVERS_PATH} is missing on {git_ref}")),

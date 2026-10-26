@@ -24,7 +24,7 @@ fn env_with(notify: &str) -> Env {
     )
     .unwrap();
     let fake = FakeGithub::start();
-    fake.content("governance/owners.toml", "main", OWNERS);
+    fake.content("governance/owners.toml", "refs/heads/main", OWNERS);
     Env { fake, dir }
 }
 
@@ -568,7 +568,8 @@ fn an_ack_by_a_token_user_without_write_access_is_refused() {
 #[test]
 fn a_halt_with_no_owners_has_its_own_text() {
     let e = env();
-    e.fake.content("governance/owners.toml", "main", "");
+    e.fake
+        .content("governance/owners.toml", "refs/heads/main", "");
     e.fake.issue(2, "halt", &["bosun:halt"], "");
     let (code, v) = e.notify();
     assert_eq!(code, 0, "{v}");
