@@ -1,0 +1,1 @@
+- 2026-10-26 · Release v0.2.2 · release PR: `Cargo.toml`, `Cargo.lock`, the six `npm/*/package.json`, `pnpm-lock.yaml`, `## 0.2.2 (2026-10-26)` in CHANGELOG (CI minutes #228, #232, #233, fragments #237); after it publishes, the pin PR moves `.bosun/version` and the setup script to 0.2.2 · PR (release/0.2.2)
