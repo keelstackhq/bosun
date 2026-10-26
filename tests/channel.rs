@@ -157,29 +157,34 @@ fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
 }
 
 #[test]
-fn the_aggregate_job_needs_every_job() {
+fn one_job_carries_the_required_check() {
     let wf = channel().join("pieces/core/files/.github/workflows");
     // bosun.yml, never ci.yml: a repo's own ci.yml (a hull template) stays untouched.
     assert!(!wf.join("ci.yml.jinja").exists() && !wf.join("ci.yml").exists());
     let ci = fs::read_to_string(wf.join("bosun.yml.jinja")).unwrap();
     let body = &ci[ci.find("\njobs:\n").unwrap()..];
-    let ids: Vec<&str> = body
+    // CI minutes: every job is rounded up to a whole minute, so there is exactly one job, named
+    // after the required check: ci-ok, or bosun-ok beside the repo's own ci-ok.
+    let ids = body
         .lines()
         .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.ends_with(':'))
-        .map(|l| l.trim().trim_end_matches(':'))
-        .collect();
-    assert_eq!(ids, ["changes", "bosun-bin", "gate", "pin"]);
-    // The aggregate: ci-ok, or bosun-ok beside the repo's own ci-ok.
+        .count();
+    assert_eq!(ids, 0, "every job id sits in the own_ci switch");
     let head = "{% if own_ci %}  bosun-ok:\n{% else %}  ci-ok:\n{% endif %}";
-    let ci_ok = &body[body.find(head).expect("aggregate job")..];
-    assert!(ci_ok.contains("needs: [changes, bosun-bin, gate, pin]"));
-    assert!(ci_ok.contains("if: always()"));
-    for (var, id) in [("BIN", "bosun-bin"), ("GATE", "gate"), ("PIN", "pin")] {
-        assert!(ci_ok.contains(&format!("{var}: ${{{{ needs.{id}.result }}}}")));
-    }
-    // `changes` must succeed; the others may be skipped only when docs_only is true.
-    assert!(ci_ok.contains("test \"$CHANGES\" = success"));
-    assert!(ci_ok.contains("[ \"$DOCS_ONLY\" = true ] && [ \"$r\" = skipped ]"));
+    assert_eq!(body.matches(head).count(), 1, "one aggregate job");
+    assert!(!body.contains("needs:") && !body.contains("upload-artifact"));
+    // A draft fails it at once (never skipped: a skipped required check counts as passed);
+    // marking a PR ready runs it.
+    assert!(!body.contains("pull_request.draft\n"));
+    assert!(body.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
+    // The gates that run no PR code first (lint and test run build.rs and tests).
+    assert!(body.contains("GATES: test-integrity deps fmt lint test\n"));
+    assert!(ci.contains("types: [opened, synchronize, reopened, edited, ready_for_review]"));
+    // Every gate runs, also after one fails, and any failure fails the job.
+    assert!(body.contains("\"$bosun\" gate \"$g\" $all || failed=\"$failed $g\""));
+    assert!(body.contains(
+        "if [ -n \"$failed\" ]; then echo \"::error::failed gates:$failed\"; exit 1; fi"
+    ));
 }
 
 /// The `run:` scripts of a workflow: the `run:` line and its indented block.

@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- CI minutes (docs/ci-minutes.md): the channel's bosun.yml runs every gate in one job named after the required check (`ci-ok`/`bosun-ok`) instead of nine (the gates that run no PR code first); a draft fails it at once; after a PR body or title edit only test-integrity runs again on a head that passed; main-health runs the gates weekly, not nightly. AGENTS.md: run every gate locally before a push, push once per PR.
+
 ## 0.2.1 (2026-10-26)
 
 - bosun's own `.bosun/risk.toml` delegates nothing until `.bosun/version` pins 0.2.1: the pinned 0.2.0 risk-check rejected `approval = "delegate"` and failed every PR. A test keeps the rules parseable by the pin.
