@@ -5,8 +5,8 @@
 Seed complete: S1-S10 done, plan `docs/superpowers/plans/2026-10-22-bosun-seed.md` (Tasks 1-19,
 split into PRs of about 400 lines). The whole-branch review of the seed (2026-10-22) found 1
 blocker, 9 majors and 3 minors, tracked as issues #20-#32 (label `review-finding`); fixes A-E
-close all of them. bosun v0.2.0 is released (npm `@keelstackhq/bosun` and its five platform
-packages, crates.io `keel-bosun`, GitHub Release; v0.1.0 before it) and pinned in `.bosun/version`; the gate CI
+close all of them. bosun v0.2.1 is released (npm `@keelstackhq/bosun` and its five platform
+packages, crates.io `keel-bosun`, GitHub Release; v0.2.0 and v0.1.0 before it) and pinned in `.bosun/version`; the gate CI
 installs the release pinned in each PR's base commit, and job `pin` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
@@ -179,6 +179,7 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-26 · Delegated decisions · `approval = "delegate"` rules, `role = "delegate"` keys (`delegate-2026-10` enrolled), `bosun-delegate v1` signatures with one clean independent verdict (`major` now in verdict records); critical floor (R-secrets, R-prod-write, R-unseen, governance, every workflow, all of bosun's `src/**` and manifests); no delegation while halted or for decoy/unleased task links; bosun's R-ci, R-gate, R-deps delegate-class; `bosun approve --as delegate`; kill switch and notify read owners at `refs/heads/<default>` · `tests/cli_delegate_approve.rs` 12/12
 - 2026-10-26 · Fix · `approval = "delegate"` out of bosun's `.bosun/risk.toml` again: risk.yml runs the pinned 0.2.0, which rejected it, so every PR failed risk-check after #227; `tests/governance.rs` `repo_rules_parse_with_the_pinned_release`; delegation in this repo returns with a PR after the 0.2.1 pin
 - 2026-10-26 · Release v0.2.1 · release PR: `Cargo.toml`, `Cargo.lock`, the six `npm/*/package.json`, `pnpm-lock.yaml`, `## 0.2.1 (2026-10-26)` in CHANGELOG (signed and delegated approvals, #226, #227); after it publishes, the pin PR moves `.bosun/version` and the setup script to 0.2.1 · `tests/release_config.rs` 10/10
+- 2026-10-26 · Pin v0.2.1 · `.bosun/version` and `docs/setup-script.sh` move from 0.2.0 to the published 0.2.1, so risk.yml and verdict.yml count signed and delegated approvals; after it merges, paste `docs/setup-script.sh` into the cloud environments again
 
 ## Blocked
 
@@ -194,7 +195,7 @@ Human-only items, in order. Each has the exact action.
    cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
    settings → setup script: paste `docs/setup-script.sh` (again after each pin bump: it now
-   installs `@keelstackhq/bosun@0.2.0` from npm), in every environment, the owner's included.
+   installs `@keelstackhq/bosun@0.2.1` from npm), in every environment, the owner's included.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
    15 min, Haiku). Create them in claude.ai → Routines.
