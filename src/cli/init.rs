@@ -26,16 +26,30 @@ const SEEDS: [&str; 9] = [
 const SETTINGS: &str = ".claude/settings.json";
 const HOOKS_STEP: &str = "The bosun hooks are missing from .claude/settings.json, which another template owns: take them from that template (hull adds them in hull#22, then `splice update`) instead of editing the file.";
 const HOIST_CHECKS: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
+/// The branch outside a Claude cloud session, which can push only to `claude/` branches.
 const BRANCH: &str = "bosun/init";
+const CLOUD_BRANCH: &str = "claude/bosun-init";
 
-const OWNER_STEPS: [&str; 6] = [
+const PR_TITLE: &str = "chore: set up bosun";
+const OWNER_STEPS: [&str; 7] = [
     "Fill governance/owners.toml with the owners' GitHub logins (the channel seeds it from --owner).",
     "Run `hoist apply` for branch protection, auto-merge and the required checks ci-ok, risk-check, review-verdict, main-open (hoist.toml).",
     "Create the kill-switch label: `gh label create bosun:halt --color B60205`.",
     "Add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) so the splice update bot's PRs run CI.",
     "Review this setup PR; it is R-gov, so approve its head SHA (`/bosun approve <sha>`). While main has no bosun workflows, risk-check, review-verdict and main-open cannot run on it: merge it yourself, then apply the required checks.",
     "Create the Routines (janitor, curator, notify); `bosun doctor` prints their prompts.",
+    "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA with `/bosun approve <sha>`.",
 ];
+
+/// A name `git check-ref-format --branch` accepts (git is the judge; it needs no repo).
+fn valid_branch(name: &str) -> bool {
+    Command::new("git")
+        .args(["check-ref-format", "--branch", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
 
 fn is_semver(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
@@ -397,19 +411,31 @@ fn setup(
 /// Undo a failed init: drop what splice wrote and the branch, and go back to where it started
 /// (a branch, or a commit when HEAD was detached). The tree was clean before, so nothing of the
 /// user's is lost. False when a step failed.
-fn rollback(root: &Path, start: &str, detached: bool) -> bool {
+fn rollback(root: &Path, start: &str, detached: bool, branch: &str) -> bool {
     let back = if detached { "--detach" } else { "--no-guess" };
     [
         vec!["reset", "-q", "--hard"],
         vec!["clean", "-q", "-fd"],
         vec!["switch", "-q", back, start],
-        vec!["branch", "-q", "-D", BRANCH],
+        vec!["branch", "-q", "-D", branch],
     ]
     .iter()
     .all(|args| git(root, args).is_ok())
 }
 
 pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
+    let branch = args.branch.clone().unwrap_or_else(|| {
+        let cloud = std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
+            .is_ok_and(|v| v.starts_with("cloud"));
+        (if cloud { CLOUD_BRANCH } else { BRANCH }).to_string()
+    });
+    let branch = branch.as_str();
+    if branch.starts_with('-') || !valid_branch(branch) {
+        return Err(BosunError::usage(
+            format!("--branch {branch:?} is not a valid branch name"),
+            "pass a branch name such as claude/bosun-init",
+        ));
+    }
     for (i, s) in args.stack.iter().enumerate() {
         if args.stack[..i].contains(s) {
             return Err(BosunError::usage(
@@ -466,14 +492,16 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             "rev-parse",
             "--verify",
             "-q",
-            &format!("refs/heads/{BRANCH}"),
+            &format!("refs/heads/{branch}"),
         ],
     )
     .is_ok()
     {
         return Err(BosunError::conflict(
-            format!("branch {BRANCH} already exists"),
-            "finish that setup, or delete the branch (`git branch -D bosun/init`) and rerun",
+            format!("branch {branch} already exists"),
+            format!(
+                "finish that setup, or delete the branch (`git branch -D {branch}`) and rerun, or pass --branch"
+            ),
         ));
     }
 
@@ -577,22 +605,22 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         start
     };
 
-    git(&root, &["switch", "-q", "-c", BRANCH])?;
+    git(&root, &["switch", "-q", "-c", branch])?;
     let local = setup(&root, args, &argv, &hoist).and_then(|(changes, plan, added)| {
         if github.is_some() {
-            git(&root, &["push", "-q", "-u", "origin", BRANCH])?;
+            git(&root, &["push", "-q", "-u", "origin", branch])?;
         }
         Ok((changes, plan, added))
     });
     let (changes, plan, added) = match local {
         Ok(v) => v,
         Err(e) => {
-            let fix = if rollback(&root, &start, detached) {
+            let fix = if rollback(&root, &start, detached, branch) {
                 format!("bosun init rolled back to {start}; {}", e.fix)
             } else {
                 format!(
                     "bosun init could not roll back fully: check `git status`, switch to {start} and \
-                     delete bosun/init; then: {}",
+                     delete {branch}; then: {}",
                     e.fix
                 )
             };
@@ -601,28 +629,33 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     };
     let commit = git(&root, &["rev-parse", "HEAD"])?;
 
+    let body = pr_body(&pieces, &changes, &kept, &steps);
     let mut pr = None;
     if let Some((app, base)) = &github {
-        let body = pr_body(&pieces, &changes, &kept, &steps);
         let pull = app
             .gh
-            .create_pull("chore: set up bosun", BRANCH, base, &body)
+            .create_pull(PR_TITLE, branch, base, &body)
             .map_err(|e| BosunError {
                 fix: format!(
-                    "bosun/init is pushed: open its PR by hand with \
-                     `gh pr create --head bosun/init --base {base} --title \"chore: set up bosun\"`"
+                    "{branch} is pushed: open its PR by hand with \
+                     `gh pr create --head {branch} --base {base} --title \"{PR_TITLE}\"`"
                 ),
                 ..e
             })?;
         pr = Some(json!({"number": pull.number, "head_sha": pull.head_sha}));
     }
 
-    Ok(Outcome::data(json!({
+    let mut out = json!({
         "channel": "bosun", "source": args.source, "ref": git_ref, "pieces": pieces,
-        "changes": changes, "excluded": kept, "plan": plan, "branch": BRANCH,
+        "changes": changes, "excluded": kept, "plan": plan, "branch": branch,
         "commit": commit, "pr": pr, "risk": "high", "owner_steps": steps,
         "own_ci": own_ci, "claude_md": claude_md, "hoist_checks_added": added,
-    })))
+    });
+    if args.no_pr {
+        out["pr_title"] = json!(PR_TITLE);
+        out["pr_body"] = json!(body);
+    }
+    Ok(Outcome::data(out))
 }
 
 #[cfg(test)]

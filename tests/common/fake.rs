@@ -26,6 +26,8 @@ pub struct FakeIssue {
     pub closed_at: Option<String>,
     pub state_reason: Option<String>,
     pub updated_at: String,
+    /// Slug of the app the issue was written via (`performed_via_github_app`).
+    pub via_app: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +64,10 @@ pub struct State {
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
     pub variables: HashMap<String, String>,
+    /// Contexts a ruleset on the default branch requires (`GET /rules/branches/<b>`).
+    pub ruleset_checks: Vec<String>,
+    /// Contexts classic branch protection requires; empty answers 404.
+    pub classic_checks: Vec<String>,
     pub pulls: Vec<Value>,
     pub files: HashMap<u64, Vec<Value>>,
     pub statuses: HashMap<String, Vec<Value>>,
@@ -164,6 +170,7 @@ impl FakeGithub {
             closed_at: None,
             state_reason: None,
             updated_at: TS.into(),
+            via_app: None,
         });
     }
 
@@ -433,6 +440,16 @@ impl FakeGithub {
             .user = user.into();
     }
 
+    /// An issue or pull entry written through the GitHub App `slug`.
+    pub fn issue_via_app(&self, number: u64, slug: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.issues
+            .iter_mut()
+            .find(|i| i.number == number)
+            .unwrap()
+            .via_app = Some(slug.into());
+    }
+
     /// A comment written by `user`.
     pub fn comment_by(&self, issue: u64, user: &str, body: &str) {
         let mut s = self.state.lock().unwrap();
@@ -487,6 +504,16 @@ impl FakeGithub {
             .unwrap()
             .variables
             .insert(name.into(), value.into());
+    }
+
+    /// Checks the default branch enforces through a ruleset.
+    pub fn enforce_checks(&self, checks: &[&str]) {
+        self.state.lock().unwrap().ruleset_checks = checks.iter().map(|c| c.to_string()).collect();
+    }
+
+    /// Checks the default branch enforces through classic branch protection.
+    pub fn enforce_classic(&self, checks: &[&str]) {
+        self.state.lock().unwrap().classic_checks = checks.iter().map(|c| c.to_string()).collect();
     }
 
     /// Answer the next `times` requests with `status` and a JSON message.
@@ -587,6 +614,9 @@ fn issue_json(i: &FakeIssue) -> Value {
     let mut v = json!({"number": i.number, "title": i.title, "body": i.body, "state": i.state,
         "labels": labels, "user": {"login": i.user}, "closed_at": i.closed_at,
         "state_reason": i.state_reason, "updated_at": i.updated_at});
+    if let Some(slug) = &i.via_app {
+        v["performed_via_github_app"] = json!({"slug": slug});
+    }
     if i.is_pr {
         v["pull_request"] = json!({"url": "https://example.test/pull"});
     }
@@ -828,6 +858,7 @@ fn route(
                 closed_at: None,
                 state_reason: None,
                 updated_at: TS.into(),
+                via_app: None,
             };
             let v = issue_json(&issue);
             s.issues.push(issue);
@@ -1183,6 +1214,22 @@ fn route(
             Some(t) => ok(json!({"tag_name": t})),
             None => msg(404, "Not Found"),
         },
+        ("GET", ["rules", "branches", _]) => ok(if s.ruleset_checks.is_empty() {
+            json!([{"type": "deletion"}])
+        } else {
+            let list: Vec<Value> = (s.ruleset_checks.iter())
+                .map(|c| json!({"context": c}))
+                .collect();
+            json!([{"type": "required_status_checks",
+                "parameters": {"required_status_checks": list}}])
+        }),
+        ("GET", ["branches", _, "protection", "required_status_checks"]) => {
+            if s.classic_checks.is_empty() {
+                msg(404, "Branch not protected")
+            } else {
+                ok(json!({"contexts": s.classic_checks, "checks": []}))
+            }
+        }
         ("GET", ["actions", "variables", name]) => match s.variables.get(*name) {
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
