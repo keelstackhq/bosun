@@ -26,6 +26,30 @@ fn bosun_toml_and_limits_parse() {
     );
 }
 
+/// The rules bosun's own .bosun/risk.toml delegates. Empty while .bosun/version pins 0.2.0,
+/// which rejects `approval = "delegate"`; R-ci, R-gate and R-deps return after the 0.2.1 pin.
+const REPO_DELEGATES: &[&str] = &[];
+
+/// risk.yml judges every PR with the release pinned in .bosun/version, so the rules on main must
+/// parse with it: `approval = "delegate"` needs 0.2.1 or later.
+#[test]
+fn repo_rules_parse_with_the_pinned_release() {
+    let pin = read(".bosun/version").trim().to_string();
+    if pin == "unreleased" {
+        return; // risk.yml builds main itself
+    }
+    let parts: Vec<u32> = pin.split('.').map(|p| p.parse().unwrap()).collect();
+    let knows_delegate = parts.as_slice() >= [0, 2, 1].as_slice();
+    let rules = Rules::parse(&read(".bosun/risk.toml")).unwrap();
+    for r in &rules.rules {
+        assert!(
+            knows_delegate || r.approval != Approval::Delegate,
+            "{}: `approval = \"delegate\"` breaks risk-check under the pinned bosun {pin}",
+            r.id
+        );
+    }
+}
+
 #[test]
 fn risk_rules_cover_the_defaults() {
     let rules = Rules::parse(&read(".bosun/risk.toml")).unwrap();
@@ -53,11 +77,10 @@ fn shipped_rules_have_the_decided_approval_class() {
             ]
         );
     }
-    // The built-in rules never delegate: a repo opts in in its own .bosun/risk.toml. bosun
-    // delegates R-ci, R-gate and R-deps; the critical floor still guards the approval system.
+    // The built-in rules never delegate: a repo opts in in its own .bosun/risk.toml.
     let class = |r: &bosun::core::risk::Rule, repo: bool| match r.id.as_str() {
         "R-ci-review" => Approval::TwoVerdicts,
-        "R-ci" | "R-gate" | "R-deps" if repo => Approval::Delegate,
+        id if repo && REPO_DELEGATES.contains(&id) => Approval::Delegate,
         _ => Approval::Owner,
     };
     for r in &Rules::parse(&read(".bosun/risk.toml")).unwrap().rules {
@@ -153,7 +176,7 @@ fn every_shipped_path_glob_matches_a_concrete_path_with_its_class() {
                 // No other rule may match it with a different class: the strictest wins.
                 let want = match rule.id.as_str() {
                     "R-ci-review" => Approval::TwoVerdicts,
-                    "R-ci" | "R-gate" | "R-deps" if repo => Approval::Delegate,
+                    id if repo && REPO_DELEGATES.contains(&id) => Approval::Delegate,
                     _ => Approval::Owner,
                 };
                 assert_eq!(rule.approval, want, "{}", rule.id);
