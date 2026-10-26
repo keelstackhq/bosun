@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
-use crate::app::{App, Result, default_ref, task_meta};
+use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
     verify_ed25519,
@@ -177,7 +177,19 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         };
     // A delegate decides only with one clean independent verdict on the head (spec §8).
     let mut delegate_verdicts = Vec::new();
+    let mut delegate_blocked = None;
     if high && approved_by.is_none() && requirement == Approval::Delegate && !unlinked {
+        delegate_blocked = delegation_blocked(gh, &pull.base_ref, &linked)?;
+    }
+    if let Some(why) = &delegate_blocked {
+        eprintln!("bosun: risk-check: a delegate cannot approve: {why}");
+    }
+    if high
+        && approved_by.is_none()
+        && requirement == Approval::Delegate
+        && !unlinked
+        && delegate_blocked.is_none()
+    {
         let (comments, excluded) = verdict_inputs(gh, n, &linked)?;
         delegate_verdicts = clean_verdicts(
             comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
@@ -233,6 +245,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         }
         if requirement == Approval::Delegate {
             data["delegate_verdicts"] = json!(delegate_verdicts);
+            data["delegate_blocked"] = json!(delegate_blocked);
         }
         if !critical.is_empty() {
             data["critical"] = json!(critical);
@@ -331,6 +344,44 @@ fn approver(
     Ok(signed_approver(gh, repo, pr, head, &comments, Role::Owner)?.map(|id| format!("key {id}")))
 }
 
+/// Why a delegate cannot approve now, if it cannot: bosun is halted (or cannot tell), the PR
+/// targets another branch than the default one, or a linked issue is not an open bosun task
+/// with a lease record (a decoy link would hide the real task's capabilities and its lease
+/// holders). Read errors of the task are reasons too, never errors of the check.
+fn delegation_blocked(gh: &dyn Github, base_ref: &str, linked: &[u64]) -> Result<Option<String>> {
+    match halt_reason(gh) {
+        Ok(None) => {}
+        Ok(Some((why, _))) => return Ok(Some(format!("bosun is halted ({why})"))),
+        Err(e) => {
+            return Ok(Some(format!(
+                "cannot tell whether bosun is halted: {}",
+                e.message
+            )));
+        }
+    }
+    let branch = default_branch(gh)?;
+    if base_ref != branch {
+        return Ok(Some(format!(
+            "the PR targets {base_ref}, not the default branch {branch}"
+        )));
+    }
+    for i in linked {
+        let issue = match gh.get_issue(*i) {
+            Ok(Some(issue)) => issue,
+            Ok(None) => return Ok(Some(format!("linked #{i} does not exist"))),
+            Err(e) => return Ok(Some(format!("cannot read linked #{i}: {}", e.message))),
+        };
+        if issue.pull_request || issue.state != "open" || task_meta(&issue).is_none() {
+            return Ok(Some(format!("linked #{i} is not an open bosun task")));
+        }
+        let notes = gh.list_comments(*i)?;
+        if lease_sessions(notes.iter().map(|c| c.body.as_str())).is_empty() {
+            return Ok(Some(format!("linked task #{i} has no lease record")));
+        }
+    }
+    Ok(None)
+}
+
 /// Whether a signed approval of `head` cannot count: no owners, or an owner's newest decisive
 /// review on `head` requests changes.
 fn withdrawn(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<bool> {
@@ -425,6 +476,19 @@ pub fn enrolled_keys(gh: &dyn Github) -> std::result::Result<Vec<ApproverKey>, S
     };
     let keys = parse_approvers(&text)
         .map_err(|e| format!("{APPROVERS_PATH} on {git_ref} is malformed: {e}"))?;
+    let raw: Vec<Option<Vec<u8>>> = keys.iter().map(|k| b64::decode(&k.ed25519)).collect();
+    if let Some(k) = keys
+        .iter()
+        .zip(&raw)
+        .enumerate()
+        .find(|(i, (_, r))| r.is_some() && raw[..*i].contains(r))
+        .map(|(_, (k, _))| k)
+    {
+        return Err(format!(
+            "{APPROVERS_PATH} on {git_ref} is malformed: the public key of {:?} is enrolled twice",
+            k.id
+        ));
+    }
     match keys
         .iter()
         .find(|k| b64::decode(&k.ed25519).is_none_or(|b| b.len() != 32))

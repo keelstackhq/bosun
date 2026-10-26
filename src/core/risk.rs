@@ -237,7 +237,11 @@ pub fn level(matches: &[Match]) -> &'static str {
 /// normal PR; the caller does not ask then.
 pub fn requirement(matches: &[Match]) -> Approval {
     let any = |a| matches.iter().any(|m| m.approval == a);
-    if any(Approval::Owner) || matches.is_empty() {
+    // A delegate never stands in for two verdicts: a mix of both classes needs the owner.
+    if any(Approval::Owner)
+        || matches.is_empty()
+        || (any(Approval::Delegate) && any(Approval::TwoVerdicts))
+    {
         Approval::Owner
     } else if any(Approval::Delegate) {
         Approval::Delegate
@@ -250,48 +254,24 @@ pub fn requirement(matches: &[Match]) -> Approval {
 pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 
 /// Paths of the approval and risk system in every repo: a delegate never approves a change to
-/// them (also when renamed from or to them).
-pub const CRITICAL_PATHS: [&str; 11] = [
+/// them (also when renamed from or to them). Every workflow is here: any workflow with
+/// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR.
+pub const CRITICAL_PATHS: [&str; 7] = [
     ".bosun/**",
     "governance/**",
     "CODEOWNERS",
     ".github/CODEOWNERS",
     "docs/CODEOWNERS",
-    ".github/workflows/risk.yml",
-    ".github/workflows/verdict.yml",
-    ".github/workflows/review.yml",
-    ".github/workflows/main-open.yml",
-    ".github/workflows/release.yml",
-    ".github/workflows/bosun.yml",
+    ".github/workflows/**",
+    ".github/actions/**",
 ];
 
-/// bosun's own approval and risk code, critical in a repo whose base has bosun's code (bosun
-/// itself and its forks): what judges approvals, feeds and parses verdicts, and builds or
-/// installs the binary.
-pub const APPROVAL_CODE_PATHS: [&str; 29] = [
-    "src/core/risk.rs",
-    "src/core/risk_default.toml",
-    "src/core/approve.rs",
-    "src/core/verdict.rs",
-    "src/core/verdict/**",
-    "src/core/records.rs",
-    "src/core/records/**",
-    "src/core/meta.rs",
-    "src/core/glob.rs",
-    "src/core/mod.rs",
-    "src/cli/risk_check.rs",
-    "src/cli/approve.rs",
-    "src/cli/verdict.rs",
-    "src/cli/review_ci.rs",
-    "src/cli/review_pack.rs",
-    "src/core/review.rs",
-    "src/cli/mod.rs",
-    "src/github/**",
-    "src/app.rs",
-    "src/ctx.rs",
-    "src/output.rs",
-    "src/lib.rs",
-    "src/main.rs",
+/// bosun's own code, critical in a repo whose base has bosun's code (bosun itself and its
+/// forks). All of `src/**`: the modules that judge approvals call most of the others, and any
+/// of them can do I/O with the workflow's token once released. Also what builds or installs
+/// the binary.
+pub const APPROVAL_CODE_PATHS: [&str; 7] = [
+    "src/**",
     "Cargo.toml",
     "Cargo.lock",
     "build.rs",

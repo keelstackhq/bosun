@@ -4,7 +4,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
-- Delegated decisions: `approval = "delegate"` rules and `role = "delegate"` keys; risk-check counts a signed `bosun-delegate v1` approval with one clean independent verdict, never on a critical change (hard-coded floor); verdict records carry `major`; `bosun approve --as delegate`. bosun delegates R-ci, R-gate and R-deps.
+- Delegated decisions: `approval = "delegate"` rules and `role = "delegate"` keys; risk-check counts a signed `bosun-delegate v1` approval with one clean independent verdict, never on a critical change (hard-coded floor: every workflow, governance, bosun's code), while halted, or for a PR whose linked issues are not open leased tasks; verdict records carry `major`; `bosun approve --as delegate`. The kill switch and notify read owners at `refs/heads/<default>`.
 - `bosun pr` refuses an open PR on the branch that does not link the task (exit 3).
 - A human merge moves a building, review or fixing task to merged: `bosun pr`, `bosun reap` (also for closed issues) and `bosun result --outcome merged --pr N` see it; leases end with reason `merged`.
 - `bosun init --branch <name>`; in a Claude cloud session the default is `claude/bosun-init`; `--no-pr` returns the PR title and body. The owner steps say each weekly splice update PR needs `/bosun approve <sha>`.

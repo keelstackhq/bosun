@@ -61,6 +61,14 @@ fn governance_and_the_approval_system_need_the_owner() {
         ".github/workflows/risk.yml",
         ".github/workflows/verdict.yml",
         ".github/workflows/release.yml",
+        ".github/workflows/other.yaml",
+        ".github/workflows/ci.yml",
+        "src/anthropic.rs",
+        "src/core/lessons.rs",
+        "src/core/budget.rs",
+        "src/sessions/usage.rs",
+        "src/gates/runner.rs",
+        "src/config.rs",
         "Cargo.toml",
         "Cargo.lock",
         "build.rs",
@@ -82,19 +90,12 @@ fn governance_and_the_approval_system_need_the_owner() {
 }
 
 #[test]
-fn other_workflows_and_gate_code_can_be_delegated() {
+fn ci_and_gate_inputs_outside_workflows_and_code_can_be_delegated() {
     for path in [
-        ".github/workflows/other.yaml",
-        ".github/workflows/ci.yml",
         "deny.toml",
         "rust-toolchain.toml",
         "rust-toolchain",
         ".config/nextest.toml",
-        "src/anthropic.rs",
-        "src/core/lessons.rs",
-        "src/core/budget.rs",
-        "src/sessions/usage.rs",
-        "src/gates/runner.rs",
         "profiles/rust.toml",
     ] {
         assert_eq!(requirement(path, None), "delegate", "{path}");
@@ -102,14 +103,11 @@ fn other_workflows_and_gate_code_can_be_delegated() {
 }
 
 #[test]
-fn a_rename_out_of_gate_code_into_channel_needs_a_delegate() {
+fn a_rename_out_of_gate_code_into_channel_needs_the_owner() {
+    assert_eq!(requirement("channel/x.rs", Some("src/gates/x.rs")), "owner");
+    // A delegate never stands in for the two verdicts of R-ci-review.
     assert_eq!(
-        requirement("channel/x.rs", Some("src/gates/x.rs")),
-        "delegate"
-    );
-    // Out of the approval code it stays the owner's.
-    assert_eq!(
-        requirement("channel/x.rs", Some("src/core/risk.rs")),
+        requirement("channel/x.toml", Some("profiles/x.toml")),
         "owner"
     );
 }

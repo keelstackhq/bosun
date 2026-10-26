@@ -13,6 +13,7 @@ const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 const OLD: &str = "1111111111111111111111111111111111111111";
 const MAIN: &str = "refs/heads/main";
 const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
+const TASK: &str = "<!-- bosun:task {} -->";
 
 // RFC 8032 test 1 key (role owner) and test 2 key (role delegate).
 const PUB_OWNER: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
@@ -44,13 +45,13 @@ paths = [".bosun/**", "governance/**"]
 [[rule]]
 id = "R-ci"
 why = "ci"
-paths = [".github/workflows/**"]
+paths = [".github/workflows/**", "deny.toml"]
 approval = "delegate"
 
 [[rule]]
 id = "R-gate"
 why = "gate"
-paths = ["src/gates/**", "src/cli/risk_check.rs", "docs/moved/**"]
+paths = ["src/**", "Cargo.toml", "docs/moved/**"]
 approval = "delegate"
 
 [[rule]]
@@ -85,7 +86,7 @@ fn pr(path: &str) -> FakeGithub {
     fake.pull(1, "change", "feature", "Closes #7");
     fake.pull_as_issue(1, "change");
     fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
-    fake.issue(7, "task", &[], "");
+    fake.issue(7, "task", &[], TASK);
     fake.comment(
         7,
         &lease_note("session_w", "2026-10-22T12:00:00Z", "src/**"),
@@ -126,7 +127,7 @@ fn description(fake: &FakeGithub) -> String {
 
 #[test]
 fn a_delegate_with_one_clean_verdict_approves_delegate_rules() {
-    let fake = delegated(".github/workflows/ci.yml");
+    let fake = delegated("deny.toml");
     let (code, v) = check(&fake);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["approved_by"], "delegate d1");
@@ -144,7 +145,7 @@ fn a_delegate_with_one_clean_verdict_approves_delegate_rules() {
 
 #[test]
 fn waiting_for_a_delegate_still_reads_as_owner_approval_needed() {
-    let fake = pr(".github/workflows/ci.yml");
+    let fake = pr("deny.toml");
     assert_eq!(check(&fake).0, 5);
     assert!(
         description(&fake).starts_with("high risk, owner approval needed (or a delegate): R-ci"),
@@ -163,7 +164,7 @@ fn the_verdict_must_be_independent_clean_confident_and_on_the_head() {
         ("session_r", OLD, true, 0.95, Some(0)), // another head
         ("session_w", HEAD, true, 0.95, Some(0)), // the worker holds the lease
     ] {
-        let fake = pr(".github/workflows/ci.yml");
+        let fake = pr("deny.toml");
         fake.comment_by(
             1,
             "github-actions[bot]",
@@ -173,7 +174,7 @@ fn the_verdict_must_be_independent_clean_confident_and_on_the_head() {
         assert_eq!(check(&fake).0, 5, "{session} {head} {confidence} {major:?}");
     }
     // A verdict not written by the verdict workflow does not count.
-    let fake = pr(".github/workflows/ci.yml");
+    let fake = pr("deny.toml");
     fake.comment_by(
         1,
         "mallory",
@@ -190,7 +191,7 @@ fn roles_and_messages_are_not_interchangeable() {
     fake.comment_by(1, "claude", &sig_comment("d1", SIG_DELEGATE_OWNER_MSG));
     assert_eq!(check(&fake).0, 5);
     // An owner key signing the delegate message is neither.
-    let fake = pr(".github/workflows/ci.yml");
+    let fake = pr("deny.toml");
     fake.comment_by(
         1,
         "github-actions[bot]",
@@ -208,9 +209,11 @@ fn critical_changes_always_need_the_owner() {
     // Configured delegate, but the approval system itself: a hard floor.
     for path in [
         ".github/workflows/risk.yml",
-        ".github/workflows/verdict.yml",
-        ".github/workflows/release.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/main-health.yml",
         "src/cli/risk_check.rs",
+        "src/config.rs",
+        "Cargo.toml",
     ] {
         let fake = delegated(path);
         // bosun's own code counts as critical where the base has it.
@@ -256,7 +259,7 @@ fn bosun_code_is_delegate_able_where_the_base_has_no_bosun_code() {
 
 #[test]
 fn a_pr_without_a_task_cannot_be_delegated() {
-    let fake = delegated(".github/workflows/ci.yml");
+    let fake = delegated("deny.toml");
     fake.pull_set(1, "body", json!(""));
     let (code, _) = check(&fake);
     assert_eq!(code, 5);
@@ -269,7 +272,7 @@ fn a_pr_without_a_task_cannot_be_delegated() {
 
 #[test]
 fn without_delegate_rules_the_mode_is_off() {
-    let fake = delegated(".github/workflows/ci.yml");
+    let fake = delegated("deny.toml");
     fake.content(
         ".bosun/risk.toml",
         BASE,
@@ -301,7 +304,7 @@ fn sign(fake: &FakeGithub, pem: &str, extra: &[&str]) -> (i32, Value) {
 
 #[test]
 fn approve_as_delegate_signs_the_delegate_message() {
-    let fake = pr(".github/workflows/ci.yml");
+    let fake = pr("deny.toml");
     let (code, v) = sign(&fake, PEM_DELEGATE, &["--as", "delegate"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(
@@ -317,5 +320,67 @@ fn approve_as_delegate_signs_the_delegate_message() {
     );
     assert_eq!(sign(&fake, PEM_OWNER, &["--as", "delegate"]).0, 1);
     assert_eq!(sign(&fake, PEM_OWNER, &[]).0, 0);
-    let _ = (PUB_OWNER, PUB_DELEGATE);
+    let _ = PUB_OWNER;
+}
+
+#[test]
+fn a_mix_with_two_verdicts_needs_the_owner() {
+    let fake = delegated("channel/x.toml");
+    let rules = format!(
+        "{RULES}\n[[rule]]\nid = \"R-ci-review\"\nwhy = \"c\"\npaths = [\"channel/**\"]\napproval = \"two-verdicts\"\n"
+    );
+    fake.content(".bosun/risk.toml", BASE, &rules);
+    fake.pull_file(
+        1,
+        "deny.toml",
+        "modified",
+        1,
+        0,
+        Some("@@ -0,0 +1,1 @@\n+x"),
+    );
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["requirement"], "owner");
+}
+
+#[test]
+fn no_delegation_while_halted_off_main_or_without_a_real_leased_task() {
+    // Halted: the owner stopped all work.
+    let fake = delegated("deny.toml");
+    fake.variable("BOSUN_HALT", "1");
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["data"]["delegate_blocked"]
+            .as_str()
+            .unwrap()
+            .contains("halted"),
+        "{v}"
+    );
+
+    // A PR into another branch.
+    let fake = delegated("deny.toml");
+    fake.pull_set(1, "base", json!({"sha": BASE, "ref": "release"}));
+    assert_eq!(check(&fake).0, 5);
+
+    // A decoy link: an issue that is not a bosun task, a closed task, a task without a lease.
+    let fake = delegated("deny.toml");
+    fake.pull_set(1, "body", json!("Closes #8"));
+    fake.issue(8, "decoy", &[], "");
+    assert_eq!(check(&fake).0, 5, "not a task");
+    fake.pull_set(1, "body", json!("Closes #9"));
+    fake.issue(9, "task", &[], TASK);
+    assert_eq!(check(&fake).0, 5, "no lease");
+    fake.comment(9, &lease_note("session_w", "2026-10-22T12:00:00Z", "x"));
+    assert_eq!(check(&fake).0, 0, "an open leased task");
+    fake.close_issue(9, NOW);
+    assert_eq!(check(&fake).0, 5, "a closed task");
+}
+
+#[test]
+fn one_public_key_under_two_ids_is_malformed() {
+    let fake = delegated("deny.toml");
+    let twice = format!("{APPROVERS}\n[[key]]\nid = \"o2\"\ned25519 = \"{PUB_DELEGATE}\"\n");
+    fake.content(".bosun/approvers.toml", MAIN, &twice);
+    assert_eq!(check(&fake).0, 5);
 }

@@ -11,9 +11,10 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 id = "R-ci"
 why = "CI decides what is verified."
 # Delegate-able (spec §8, delegated decisions): a delegate key with one clean verdict may
-# approve. The critical floor (risk, verdict, review, main-open, release and bosun workflows,
-# .bosun/**, governance/**, CODEOWNERS, bosun's approval code, R-secrets, R-prod-write,
-# R-unseen) always needs the owner. Remove these lines to turn delegation off.
+# approve. The critical floor (every workflow, .bosun/**, governance/**, CODEOWNERS, all of
+# src/** and the manifests, R-secrets, R-prod-write, R-unseen) always needs the owner, so here
+# a delegate decides deny.toml, the toolchain files, .config/** and profiles/**. Delete the
+# delegate key in .bosun/approvers.toml to turn delegation off.
 approval = "delegate"
 paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
