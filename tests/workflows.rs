@@ -684,7 +684,11 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
     let theirs = step_text(&channel, "      - if: github.event.action == 'edited'");
     assert_eq!(
         ours,
-        theirs.replace("CHECK: ${{ github.job }}", "CHECK: ci-ok"),
+        // The channel names the required check: ci-ok, or bosun-ok beside a repo's own ci.
+        theirs.replace(
+            "{% endraw %}{% if own_ci %}          CHECK: bosun-ok\n{% else %}          CHECK: ci-ok\n{% endif %}{% raw %}",
+            "          CHECK: ci-ok\n"
+        ),
         "the edit step differs from the channel's"
     );
     // Every step that runs PR code comes after the trusted ones (spec §11).

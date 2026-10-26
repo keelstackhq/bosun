@@ -163,16 +163,29 @@ fn one_job_carries_the_required_check() {
     assert!(!wf.join("ci.yml.jinja").exists() && !wf.join("ci.yml").exists());
     let ci = fs::read_to_string(wf.join("bosun.yml.jinja")).unwrap();
     let body = &ci[ci.find("\njobs:\n").unwrap()..];
-    // CI minutes: every job is rounded up to a whole minute, so there is exactly one job, named
-    // after the required check: ci-ok, or bosun-ok beside the repo's own ci-ok.
-    let ids = body
+    // CI minutes: every job is rounded up to a whole minute, so a rust stack has exactly one
+    // job, named after the required check: ci-ok, or bosun-ok beside the repo's own ci-ok. A
+    // ts-pnpm stack has one more, bosun-trusted, that runs no PR code (#234).
+    let ids: Vec<_> = body
         .lines()
         .filter(|l| l.starts_with("  ") && !l.starts_with("   ") && l.ends_with(':'))
-        .count();
-    assert_eq!(ids, 0, "every job id sits in the own_ci switch");
+        .collect();
+    assert_eq!(
+        ids,
+        ["  bosun-trusted:"],
+        "every other job id sits in the own_ci switch"
+    );
+    let ts = "{% if \"ts-pnpm\" in pieces %}";
+    assert!(body.find(ts).unwrap() < body.find("  bosun-trusted:").unwrap());
     let head = "{% if own_ci %}  bosun-ok:\n{% else %}  ci-ok:\n{% endif %}";
-    assert_eq!(body.matches(head).count(), 1, "one aggregate job");
-    assert!(!body.contains("needs:") && !body.contains("upload-artifact"));
+    assert_eq!(
+        body.matches(head).count(),
+        2,
+        "the required check: the rust job, or the ts-pnpm job after bosun-trusted"
+    );
+    assert_eq!(body.matches("needs:").count(), 1);
+    assert!(body.contains("    needs: bosun-trusted\n"));
+    assert!(!body.contains("upload-artifact"));
     // A draft fails it at once (never skipped: a skipped required check counts as passed);
     // marking a PR ready runs it.
     assert!(!body.contains("pull_request.draft\n"));
