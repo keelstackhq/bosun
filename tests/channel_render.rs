@@ -1040,6 +1040,12 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
                 "echo 'node-options=x' > node_modules/../ignored/.npmrc",
                 false,
             ),
+            // A link in node_modules may not leave the checkout (review of #233).
+            (
+                "mkdir -p node_modules/.pnpm/a && ln -s .pnpm/a node_modules/a",
+                true,
+            ),
+            ("mkdir -p node_modules && ln -s / node_modules/up", false),
         ] {
             sh("mkdir -p ignored && echo changed >> changed.txt");
             fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -1127,6 +1133,31 @@ fn ts_pnpm_refuses_workspace_settings_that_run_code() {
         "package.json",
         "{\"pnpm\": {\"patchedDependencies\": {}}}"
     ));
+    // A dependency name with ".." or an extra "/" links outside node_modules, even into the
+    // checkout's parent, where cargo reads a .cargo (review of #233).
+    assert!(check_in(
+        "package.json",
+        "{\"dependencies\": {\"@s/n\": \"1\", \"JSONStream\": \"1\"}, \"devDependencies\": {\"a.b_c~d-e\": \"1\"}}"
+    ));
+    for bad in [
+        "{\"dependencies\": {\"../../.cargo\": \"file:./e\"}}",
+        "{\"devDependencies\": {\"a/b\": \"npm:x@1\"}}",
+        "{\"optionalDependencies\": {\"@s/../x\": \"1\"}}",
+        "{\"peerDependencies\": {\"..\": \"1\"}}",
+        "{\"dependencies\": [\"x\"]}",
+    ] {
+        assert!(!check_in("package.json", bad), "{bad}");
+    }
+    let lock_ok = "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      '@s/n':\n        specifier: 1.0.0\n        version: 1.0.0\npackages:\n  '@s/n@1.0.0':\n    resolution: {integrity: x}\nsnapshots:\n  '@s/n@1.0.0(p@2.0.0)':\n    dependencies:\n      p: 2.0.0\n";
+    assert!(check_in("pnpm-lock.yaml", lock_ok));
+    for bad in [
+        lock_ok.replace("      '@s/n':\n", "      ../../.cargo:\n"),
+        lock_ok.replace("  '@s/n@1.0.0':\n", "  ../../.cargo@file:e:\n"),
+        lock_ok.replace("      p: 2.0.0", "      ../p: 2.0.0"),
+        format!("{lock_ok}snapshots: {{}}\n"),
+    ] {
+        assert!(!check_in("pnpm-lock.yaml", &bad), "{bad}");
+    }
     assert!(check(
         "packages:\n  - \"pkgs/*\"\nonlyBuiltDependencies: [esbuild]\n"
     ));

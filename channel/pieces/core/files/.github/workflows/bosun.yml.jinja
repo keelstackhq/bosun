@@ -298,7 +298,7 @@ jobs:
         name: pnpm workspace runs no PR code
         run: |
           python3 -I - <<'PY'
-          import json, subprocess, sys, yaml
+          import json, re, subprocess, sys, yaml
           class Strict(yaml.SafeLoader):
               pass
           def mapping(loader, node, deep=False):
@@ -320,6 +320,24 @@ jobs:
               "minimumReleaseAgeExclude",
           }
           out = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True).stdout
+          # pnpm links each dependency at node_modules/<name>: a name with ".." or a "/" other
+          # than the scope's would link outside node_modules, even outside the checkout (a
+          # parent .cargo that cargo reads). Every name must be a plain npm package name.
+          name_re = re.compile(r"(@[A-Za-z0-9~-][A-Za-z0-9._~-]*/)?[A-Za-z0-9~-][A-Za-z0-9._~-]*")
+          def names(f, deps):
+              if deps is None:
+                  return
+              if not isinstance(deps, dict):
+                  sys.exit(f"{f}: a dependency list must be a mapping")
+              for n in deps:
+                  if not isinstance(n, str) or not name_re.fullmatch(n):
+                      sys.exit(f"{f}: {n!r} is not an npm package name; pnpm would link it outside node_modules")
+          kinds = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+          def lock_name(key):
+              # "/@s/n@1.0.0(peer@2)" -> "@s/n"; v6 keys start with "/".
+              k = str(key).lstrip("/")
+              at = k.find("@", 1)
+              return k if at < 0 else k[:at]
           def check(f, d):
               if d is None:
                   return
@@ -336,8 +354,31 @@ jobs:
                           pkg = json.load(h)
                   except Exception as e:
                       sys.exit(f"{f}: not readable JSON ({e})")
-                  if isinstance(pkg, dict) and "pnpm" in pkg:
-                      check(f + " (pnpm)", pkg["pnpm"])
+                  if isinstance(pkg, dict):
+                      for k in kinds:
+                          names(f + " " + k, pkg.get(k))
+                      if "pnpm" in pkg:
+                          check(f + " (pnpm)", pkg["pnpm"])
+                  continue
+              if f.rsplit("/", 1)[-1] == "pnpm-lock.yaml":
+                  # The frozen install links what the lockfile says, extensions included.
+                  try:
+                      with open(f, "rb") as h:
+                          lock = yaml.load(h, Loader=Strict) or {}
+                  except Exception as e:
+                      sys.exit(f"{f}: not readable YAML ({e})")
+                  if not isinstance(lock, dict):
+                      sys.exit(f"{f}: must be a mapping")
+                  for sec in ("importers", "packages", "snapshots"):
+                      entries = lock.get(sec) or {}
+                      if not isinstance(entries, dict):
+                          sys.exit(f"{f}: {sec} must be a mapping")
+                      for key, e in entries.items():
+                          if sec != "importers":
+                              names(f + " " + sec, {lock_name(key): 1})
+                          if isinstance(e, dict):
+                              for k in kinds:
+                                  names(f + " " + sec + " " + str(key), e.get(k))
                   continue
               if f.rsplit("/", 1)[-1] not in ("pnpm-workspace.yaml", "pnpm-workspace.yml"):
                   continue
@@ -385,6 +426,12 @@ jobs:
             echo "::error::pnpm install changed files in the checkout (see above); only node_modules may change, and it must be in .gitignore"
             exit 1
           fi
+          # Defence in depth: no link in node_modules leads outside the checkout.
+          top="$(git rev-parse --show-toplevel)"
+          while IFS= read -r -d '' l; do
+            t="$(realpath -m -- "$l")"
+            case "$t" in "$top"/*) ;; *) echo "::error::$l links outside the checkout ($t)"; exit 1 ;; esac
+          done < <(find . -path '*/node_modules/*' -type l -print0)
       - uses: keelstackhq/hoard@v0
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
 {% endif %}{% raw %}      # The gates run in order and stop at the first failure. The gates that run no PR code come
