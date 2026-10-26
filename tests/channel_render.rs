@@ -1041,7 +1041,15 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
                 assert!(!run.contains("pnpm install"), "{run}");
                 assert!(!run.contains("pnpm rebuild"), "{run}");
             }
-            assert_eq!(trusted["env"]["npm_config_ignore_pnpmfile"], "true");
+            for k in ["npm_config_ignore_pnpmfile", "pnpm_config_ignore_pnpmfile"] {
+                assert_eq!(trusted["env"][k], "true", "{k}");
+            }
+            for k in [
+                "npm_config_manage_package_manager_versions",
+                "pnpm_config_manage_package_manager_versions",
+            ] {
+                assert_eq!(trusted["env"][k], "false", "{k}");
+            }
             assert_eq!(
                 trusted["outputs"]["pr_gates"],
                 "${{ steps.gates.outputs.pr_gates }}"
@@ -1056,7 +1064,10 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
             assert_eq!(job["permissions"], serde_json::json!({"contents": "read"}));
             let b = check_steps(&j, own_ci);
             assert_eq!(b[0]["name"], "bosun-trusted passed");
-            assert!(b[0].get("if").is_none(), "the first step always runs");
+            assert_eq!(
+                b[0]["if"], "always()",
+                "the first step runs after a cancel too"
+            );
             for s in &b[1..] {
                 let cond = s["if"].as_str().unwrap_or_default();
                 assert!(
@@ -1237,6 +1248,14 @@ fn bosun_trusted_audits_the_prs_lockfile_with_the_bases_pnpm_config() {
         let (ok, log, _) = case(false, pr, "", "");
         assert!(ok);
         assert!(log.contains("deps: {} packages:"), "{log}");
+        // A PR without the lockfile still gets the base's config.
+        let (ok, log, _) = case(true, &format!("{pr} && rm pnpm-lock.yaml"), "", "");
+        assert!(ok);
+        let deps = log.split_once("deps: ").expect(&log).1;
+        assert!(
+            !deps.contains("evil") && !deps.contains("configDependencies"),
+            "{deps}"
+        );
         // A directory link out of the checkout: nothing is written through it.
         let outside = tempfile::tempdir().unwrap();
         let link = format!(
@@ -1336,6 +1355,7 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
         pnpm("pnpm@9.1.2")
     );
     for bad in [
+        "\"pnpm@8.15.0\"",
         "\"pnpm@file:../evil\"",
         "\"pnpm@1.2.3\\nfile:../evil\"",
         "\"pnpm@https://e.x/p.tgz\"",

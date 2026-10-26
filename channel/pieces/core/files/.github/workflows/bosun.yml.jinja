@@ -57,8 +57,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # Defence in depth: the pnpmfile here is the base's, and no pnpm call loads it.
+      # Defence in depth: the pnpmfile here is the base's, and no pnpm call loads it; pnpm never
+      # switches to another release (packageManager, devEngines). Both env spellings (pnpm 11
+      # reads pnpm_config_*).
       npm_config_ignore_pnpmfile: "true"
+      pnpm_config_ignore_pnpmfile: "true"
+      npm_config_manage_package_manager_versions: "false"
+      pnpm_config_manage_package_manager_versions: "false"
     outputs:
       version: ${{ steps.pin.outputs.version }}
       sha256: ${{ steps.bin.outputs.sha256 }}
@@ -315,8 +320,8 @@ jobs:
         with:
           tool: cargo-nextest,cargo-deny
 {% endif %}{% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack, for the deps gate's `pnpm audit` only: Node 24 and the pnpm release that the
-      # base's package.json `packageManager` names (the PR's while the base has none: a new stack),
-      # an exact version from the registry, never a path or URL. No install, no cache. Skipped
+      # base's package.json `packageManager` names (the PR's while the base names none), an exact
+      # version 9 or later from the registry, never a path, URL or range. No install, no cache. Skipped
       # while the stack has no lockfile yet (a new repo).
       - uses: actions/setup-node@v4
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
@@ -331,10 +336,11 @@ jobs:
           pm() { python3 -I -c 'import json, sys; d = json.load(sys.stdin); v = d.get("packageManager", "") if isinstance(d, dict) else ""; print(v if isinstance(v, str) else "!")'; }
           v="$(git show "$BASE:{{ ts_path }}/package.json" 2>/dev/null | pm || true)"
           if [ -z "$v" ]; then v="$(pm < "{{ ts_path }}/package.json" || true)"; fi
-          # pnpm@x.y.z, with an optional +sha hash (the registry checks the tarball).
+          # pnpm@x.y.z (9 or later: older releases read other config files), with an optional
+          # +sha hash (the registry checks the tarball).
           v="${v%%+*}"
-          [[ "$v" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
-            echo "::error::{{ ts_path }}/package.json: packageManager must name pnpm@x.y.z, not '$v'"
+          [[ "$v" =~ ^pnpm@(9|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::{{ ts_path }}/package.json: packageManager must name pnpm@x.y.z (9 or later), not '$v'"
             exit 1
           }
           cd "$RUNNER_TEMP"
@@ -383,9 +389,15 @@ jobs:
             # and pnpm-workspace.yaml (where a PR could name a pnpmfile, config dependencies or
             # any pnpm setting) is the base's; one the base lacks is deleted, and a stack root
             # package.json the base lacks (a PR that adds the stack) is {}. No file is written
-            # through a directory link that leaves the checkout.
-            if [ "$g" = deps ] && [ -f "{{ ts_path }}/pnpm-lock.yaml" ]; then
+            # through a directory link that leaves the checkout. Also when the PR has no
+            # lockfile: what pnpm reads never depends on the PR. So a PR's change to these
+            # (auditConfig too) applies after it merges.
+            if [ "$g" = deps ]; then
               pat='(^|/)package\.json$|(^|/)pnpm-workspace\.ya?ml$'
+              changed="$(git diff --name-only -z "$BASE" HEAD | { grep -zE "$pat" || true; } | tr '\0' ' ')"
+              if [ -n "$changed" ]; then
+                echo "::notice::this change edits ${changed}; deps (pnpm audit) uses the base's copies (they apply after merge)"
+              fi
               git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
                 rm -rf -- "$p"
               done
@@ -409,8 +421,8 @@ jobs:
 {% endraw %}{% if "ts-pnpm" in pieces %}          echo "pr_gates=${later# }" >> "$GITHUB_OUTPUT"
 {% endif %}{% if "ts-pnpm" in pieces %}{% raw %}
   # The required CI check (spec D15). Beside a repo's own ci.yml and its ci-ok, it is called
-  # bosun-ok. It needs bosun-trusted and fails at once unless that passed (a draft, a failed gate,
-  # a cancel, a timeout): never skipped, since a skipped required check counts as passed. Then it installs the
+  # bosun-ok. It needs bosun-trusted and fails at once unless that passed (a draft, a failed
+  # gate, a cancel, a timeout): never skipped, since a skipped required check counts as passed. Then it installs the
   # PR's dependencies and runs the gates that run PR code (fmt, lint, test). Nothing it does
   # reaches bosun-trusted, which finished first and restores no cache this job saves.
 {% endraw %}{% if own_ci %}  bosun-ok:
@@ -424,7 +436,9 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: bosun-trusted passed
+      # always(): after a cancel a step without `if` would be skipped, not fail.
+      - if: always()
+        name: bosun-trusted passed
         env:
           RESULT: ${{ needs.bosun-trusted.result }}
           PR_GATES: ${{ needs.bosun-trusted.outputs.pr_gates }}
