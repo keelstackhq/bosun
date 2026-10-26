@@ -1005,12 +1005,17 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
         );
         // pnpm install may change no file but the ignored node_modules (review of #233: a
         // patch that leaves its package rewrote pnpm-workspace.yaml).
+        // The repo is <home>/r and the install runs in its nested ts path r/ts, so the
+        // fingerprint must work from the top level, and the walk above the checkout ends at
+        // $HOME (review of #233).
         let dir = tempfile::tempdir().unwrap();
         let bin = tempfile::tempdir().unwrap();
-        let sh = |cmd: &str| {
+        fs::create_dir_all(dir.path().join("r/ts")).unwrap();
+        let sh = |cmd: &str, sub: &str| {
             Command::new("bash")
                 .args(["-eo", "pipefail", "-c", cmd])
-                .current_dir(dir.path())
+                .current_dir(dir.path().join(sub))
+                .env("HOME", dir.path())
                 .env(
                     "PATH",
                     format!(
@@ -1025,33 +1030,37 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
                 .success()
         };
         assert!(sh(
-            "git init -q && printf 'node_modules/\\nignored/\\n' > .gitignore && echo a > pnpm-workspace.yaml && echo a > changed.txt && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base"
+            "git init -q && printf 'node_modules/\\nignored/\\n' > .gitignore && echo a > pnpm-workspace.yaml && echo a > changed.txt && echo a > ts/package.json && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base",
+            "r"
         ));
         use std::os::unix::fs::PermissionsExt;
         let fake = bin.path().join("pnpm");
         for (body, ok) in [
             ("mkdir -p node_modules/x && touch node_modules/x/y", true),
-            ("echo 'pnpmfile: evil.cjs' >> pnpm-workspace.yaml", false),
-            ("echo 'node-options=x' > .npmrc", false),
+            ("echo 'pnpmfile: evil.cjs' >> ../pnpm-workspace.yaml", false),
+            ("echo 'node-options=x' > ../.npmrc", false),
             // A file already changed before install (by the base-config step) changed again.
-            ("echo again >> changed.txt", false),
-            // An ignored .npmrc is read by pnpm all the same.
-            (
-                "echo 'node-options=x' > node_modules/../ignored/.npmrc",
-                false,
-            ),
+            ("echo again >> ../changed.txt", false),
+            // An ignored .npmrc is read by pnpm all the same, also outside the ts path.
+            ("echo 'node-options=x' > ../ignored/.npmrc", false),
             // A link in node_modules may not leave the checkout (review of #233).
             (
                 "mkdir -p node_modules/.pnpm/a && ln -s .pnpm/a node_modules/a",
                 true,
             ),
             ("mkdir -p node_modules && ln -s / node_modules/up", false),
+            // Nothing may appear above the checkout that cargo or pnpm reads (review of #233).
+            ("ln -s \"$PWD\" ../../.cargo", false),
+            ("echo x > ../../.npmrc", false),
         ] {
-            sh("mkdir -p ignored && echo changed >> changed.txt");
+            sh("mkdir -p ignored && echo changed >> changed.txt", "r");
             fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
             fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
-            assert_eq!(sh(run), ok, "{body}");
-            sh("git checkout -q -- . && git clean -qfdx");
+            assert_eq!(sh(run, "r/ts"), ok, "{body}");
+            sh(
+                "git checkout -q -- . && git clean -qfdx && rm -rf ../.cargo ../.npmrc",
+                "r",
+            );
         }
         // Every pnpm call in the job, setup-node's `pnpm store path` and the deps gate's audit
         // included, ignores the PR's pnpmfile (review of #233).

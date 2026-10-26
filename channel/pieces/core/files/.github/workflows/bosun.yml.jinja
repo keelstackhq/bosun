@@ -407,31 +407,53 @@ jobs:
         # It must not change any file outside node_modules (a patch whose path leaves its
         # package could rewrite pnpm-workspace.yaml or add an .npmrc): a fingerprint of the
         # status, the diff to HEAD, untracked files and every .npmrc, .pnpmfile.* and
-        # pnpm-workspace.yaml (ignored or not) must be the same before and after.
+        # pnpm-workspace.yaml (ignored or not), all from the top level, must be the same before
+        # and after. So must every .cargo and .npmrc from the checkout's parent up to $HOME,
+        # which cargo and pnpm read too.
         run: |
+          top="$(git rev-parse --show-toplevel)"
+          above() {
+            d="$(dirname "$top")"
+            while :; do
+              for n in .cargo .npmrc; do
+                if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then
+                  echo "$d/$n"
+                  find "$d/$n" -maxdepth 1 \( -name .npmrc -o -name 'config*' \) -type f -print0 | sort -z | xargs -0r sha256sum
+                fi
+              done
+              if [ "$d" = "$HOME" ] || [ "$d" = / ]; then break; fi
+              d="$(dirname "$d")"
+            done
+          }
           fp() {
-            {
+            (
+              cd "$top"
               git status --porcelain=v1 -z --untracked-files=all
               git diff --binary HEAD
               git ls-files -o --exclude-standard -z | xargs -0r sha256sum
               find . -name node_modules -prune -o \( -name .npmrc -o -name '.pnpmfile.*' -o -name 'pnpm-workspace.y*ml' \) -print0 \
                 | sort -z | xargs -0r sha256sum
-            } | sha256sum
+            ) | sha256sum
           }
           before="$(fp)"
+          before_above="$(above)"
           pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
-          after="$(fp)"
-          if [ "$before" != "$after" ]; then
+          if [ "$(fp)" != "$before" ]; then
             git status --short --untracked-files=all
             echo "::error::pnpm install changed files in the checkout (see above); only node_modules may change, and it must be in .gitignore"
             exit 1
           fi
+          after_above="$(above)"
+          if [ "$after_above" != "$before_above" ]; then
+            diff <(echo "$before_above") <(echo "$after_above") || true
+            echo "::error::pnpm install changed a .cargo or .npmrc above the checkout (see above)"
+            exit 1
+          fi
           # Defence in depth: no link in node_modules leads outside the checkout.
-          top="$(git rev-parse --show-toplevel)"
           while IFS= read -r -d '' l; do
             t="$(realpath -m -- "$l")"
             case "$t" in "$top"/*) ;; *) echo "::error::$l links outside the checkout ($t)"; exit 1 ;; esac
-          done < <(find . -path '*/node_modules/*' -type l -print0)
+          done < <(find "$top" -path '*/node_modules/*' -type l -print0)
       - uses: keelstackhq/hoard@v0
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
 {% endif %}{% raw %}      # The gates run in order and stop at the first failure. The gates that run no PR code come
