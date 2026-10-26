@@ -95,7 +95,10 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             .iter()
             .filter(|p| p.state == "closed" && linked_issues(&p.body).contains(&n))
         {
-            if gh.get_pull(p.number)?.is_some_and(|f| f.merged) {
+            if gh
+                .get_pull(p.number)?
+                .is_some_and(|f| f.merged && f.base_ref == base)
+            {
                 let moved = sync_merged(gh, n, &issue, Some(&app.ctx.session))?;
                 let task_state = if moved {
                     Some(State::Merged)
