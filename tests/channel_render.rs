@@ -965,8 +965,8 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
             .collect();
         assert_eq!(
             setup.len(),
-            7,
-            "toolchain, rust-cache, install-action, 4 ts-pnpm steps"
+            8,
+            "toolchain, rust-cache, install-action, the pnpm workspace check, 4 ts-pnpm steps"
         );
         let gates = step(&steps, "name", "bosun gates");
         assert_eq!(gates["env"]["ONLY"], "${{ steps.plan.outputs.only }}");
@@ -1012,4 +1012,66 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
     }
     let files = variant(&["rust"], "");
     assert!(!file(&files, BOSUN_YML).contains("pnpm rebuild"));
+}
+
+/// pnpm-workspace.yaml settings win over env and flags: a PR naming a pnpmfile or config
+/// dependencies there would run code before the gates. Only settings that run no code pass,
+/// read by a YAML parser so no spelling hides a key (review of #233).
+#[test]
+fn ts_pnpm_refuses_workspace_settings_that_run_code() {
+    let files = variant(&["ts-pnpm"], "");
+    let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+        return;
+    };
+    let steps = steps(&j, "");
+    let at = |name: &str| {
+        steps
+            .iter()
+            .position(|s| {
+                s["name"] == name || s["uses"].as_str().is_some_and(|u| u.starts_with(name))
+            })
+            .unwrap()
+    };
+    let guard = at("pnpm workspace runs no PR code");
+    assert!(guard < at("pnpm/action-setup") && guard < at("actions/setup-node"));
+    let script = steps[guard]["run"].as_str().unwrap().to_string();
+    let check = |yaml: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("pnpm-workspace.yaml"), yaml).unwrap();
+        let git = |a: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(a)
+                    .current_dir(dir.path())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            )
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &script])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+            .status
+            .success()
+    };
+    assert!(check(
+        "packages:\n  - \"pkgs/*\"\nonlyBuiltDependencies: [esbuild]\n"
+    ));
+    assert!(check(""), "an empty file");
+    for bad in [
+        "packages: [a]\nignorePnpmfile: false\npnpmfile: evil.cjs\n",
+        "\"pnpm\\x66ile\": evil.cjs\n",
+        "configDependencies:\n  x: 1.0.0\n",
+        "x: &a {pnpmfile: e}\n<<: *a\n",
+        "packages: [a]\npackages: [b]\npnpmfile: e\n",
+        "bad: [\n",
+        "- a\n",
+    ] {
+        assert!(!check(bad), "{bad:?} passed");
+    }
 }
