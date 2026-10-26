@@ -328,12 +328,18 @@ fn approve_sign_key_errors() {
 fn this_repos_approvers_file_parses_with_32_byte_keys() {
     let text = include_str!("../.bosun/approvers.toml");
     let keys = bosun::core::approve::parse_approvers(text).unwrap();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].id, "orchestrator-2026-10");
+    use bosun::core::approve::Role;
+    let got: Vec<(&str, Role)> = keys.iter().map(|k| (k.id.as_str(), k.role)).collect();
     assert_eq!(
-        bosun::github::b64::decode(&keys[0].ed25519).unwrap().len(),
-        32
+        got,
+        [
+            ("orchestrator-2026-10", Role::Owner),
+            ("delegate-2026-10", Role::Delegate)
+        ]
     );
+    for k in &keys {
+        assert_eq!(bosun::github::b64::decode(&k.ed25519).unwrap().len(), 32);
+    }
 }
 
 #[test]

@@ -1,9 +1,18 @@
 # Keys whose signed `/bosun approve` comments count as an owner approval (spec §8, signed
 # approvals). risk-check reads this file from the default branch only, never from a PR, so a PR
 # cannot enroll its own key. Enroll or rotate a key with a PR the owner approves on GitHub.
-# `ed25519` is the base64 of the raw 32-byte public key:
+# `role` is `owner` (the default: counts as an owner approval) or `delegate` (approves only PRs
+# whose rules are all `approval = "delegate"`, with one clean verdict; never a critical change).
+# Delete a delegate key to turn delegation off. `ed25519` is the base64 of the raw 32-byte
+# public key:
 #   openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64
 
 [[key]]
 id = "orchestrator-2026-10"
 ed25519 = "CEcJkeUcWMFZTOjPcZ3bmL2y7yBrnJDBQF1aCvFx010="
+role = "owner"
+
+[[key]]
+id = "delegate-2026-10"
+ed25519 = "eY7+H4GGfi5VIijIl1b4D18VIW94AYnBgdoaf4KYEhc="
+role = "delegate"

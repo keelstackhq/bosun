@@ -58,6 +58,9 @@ pub enum Record {
         /// The verdict's confidence; a record without it never counts toward two verdicts.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         confidence: Option<f64>,
+        /// Major findings in the verdict; a record without it never lets a delegate approve.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        major: Option<u32>,
     },
     /// A failed fix round: the failure signature and the lines it changed (spec §4 stop rules).
     Failure {
@@ -241,10 +244,11 @@ mod tests {
             head_sha: "h".into(),
             approved: true,
             confidence: Some(0.95),
+            major: Some(1),
         };
         assert_eq!(
             r.to_line(),
-            r#"{"bosun":"verdict","session":"s","head_sha":"h","approved":true,"confidence":0.95}"#
+            r#"{"bosun":"verdict","session":"s","head_sha":"h","approved":true,"confidence":0.95,"major":1}"#
         );
         assert_eq!(parse_record(&r.to_line()), Some(r));
         let old = r#"{"bosun":"verdict","session":"s","head_sha":"h","approved":true}"#;

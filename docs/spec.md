@@ -528,7 +528,7 @@ Rule evaluation:
 - The bosun version pin (`.bosun/version`) is R-gov.
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
-Approval classes (mechanism): a rule has `approval = "owner"` (the default) or `"two-verdicts"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else two verdicts. `risk-check` sets `data.requirement` (`owner` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). This repo uses the class for R-ci-review only; every other rule, in the built-in file and in `.bosun/risk.toml` alike, is an owner rule, and a test keeps the two files equal.
+Approval classes (mechanism): a rule has `approval = "owner"` (the default), `"two-verdicts"` or `"delegate"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else a delegate when any match is `delegate` (see delegated decisions below), else two verdicts. `risk-check` sets `data.requirement` (`owner`, `delegate` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). The built-in rules use the two-verdicts class for R-ci-review only and never delegate; this repo's `.bosun/risk.toml` also makes R-ci, R-gate and R-deps `delegate`. A test keeps the two files equal apart from that opt-in.
 
 Two verdicts:
 - The class passes when, on the PR's current head, verdict records of at least two distinct sessions have `approved = true` and `confidence >= 0.9`. An owner approval (below) also passes it. The status is `high risk, two verdicts needed (<n>/2): <ids>` (failure, exit 5) while waiting, and `high risk (<ids>), approved by two verdicts: <s1>, <s2>` when met. The owner status text is `high risk, owner approval needed: <ids>`.
@@ -599,7 +599,48 @@ High-risk PRs:
   (`GITHUB_TOKEN`); `data.approved` lists `pr`, `head_sha`, `key_id`, `comment_id`. It trusts
   the head only from an `https://` or loopback `BOSUN_GITHUB_API` (else exit 1). It is exit 4
   while bosun is halted, `--print` included. The cloud refusal below does not apply with `--sign-key`. `--print`
-  puts the comment in `data.body` (with `pr`, `head_sha`, `key_id`) and posts nothing.
+  puts the comment in `data.body` (with `pr`, `head_sha`, `key_id`, `role`) and posts nothing.
+- Delegated decisions let one Claude session decide high-risk PRs itself; only critical
+  changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
+  as above) or `role = "delegate"`. A delegate signs `bosun-delegate v1 <owner>/<repo>#<pr>
+  <head_sha>` (same comment shape and rules as above: `bosun approve <pr>@<head> --sign-key
+  <pem> --as delegate`; `--as` must be the key's enrolled role, else exit 1). Each role
+  verifies only its own message, so a delegate signature never counts as an owner's, nor the
+  reverse. risk-check counts it, as `approved by delegate <id>`, only when all hold:
+  - every rule matched on the head is `approval = "delegate"` (any owner rule needs the owner;
+    the mode is off in a repo without `delegate` rules, and the built-in rules have none);
+  - the PR is not critical (below);
+  - the PR links a task (`Closes #N`), and at least one review verdict record on the head,
+    written by `bosun verdict apply` (author `github-actions[bot]`, the shape of the two-verdicts
+    class) from a session without a lease on a linked task, approves with confidence >= 0.9 and
+    counts `major: 0` findings (the record carries `major` from this version on; an older
+    record without it never counts; an approving verdict has no blocker); a session's newest
+    record for the head decides;
+  - owners exist at base and no owner's newest decisive review on the head requests changes;
+  - the signature checks of signed approvals above.
+  The critical floor is hard-coded and holds whatever a rule's `approval` says: the rules
+  R-secrets, R-prod-write and R-unseen (bosun could not see the whole diff, so it cannot rule
+  out a critical file or a secret in it), and any changed file whose path or previous path
+  (renames count both ways) is `.bosun/**` (approvers.toml and risk.toml included),
+  `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), or the workflows `risk.yml`,
+  `verdict.yml`, `review.yml`, `main-open.yml`, `release.yml` and `bosun.yml` in
+  `.github/workflows/`. Where the base has `src/cli/risk_check.rs` (bosun and its forks),
+  bosun's approval code is critical too: `core::risk`, `risk_default.toml`, `core::approve`,
+  `core::verdict`, `core::records`, `core::meta`, `core::glob`, `core/mod.rs`, `cli::risk_check`,
+  `cli::approve`, `cli::verdict`, `cli::review_ci`, `cli::review_pack`, `core::review`,
+  `cli/mod.rs`, `src/github/**`, `app.rs`, `ctx.rs`, `output.rs`, `lib.rs`, `main.rs`,
+  `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**` and `npm/**` (the list is
+  `APPROVAL_CODE_PATHS` in `src/core/risk.rs`). On a critical PR every delegate match becomes an
+  owner match, and the status reads `high risk, owner approval needed (critical: <rules and
+  paths>): <ids>`; `data.critical` lists them. While a delegate may approve, the status reads
+  `high risk, owner approval needed (or a delegate): <ids>` (so `bosun approve --list` lists
+  it) and `data.delegate_verdicts` lists the clean verdicts. A PR without a linked task cannot be
+  delegated (the links-no-task status above). Releases stay human through the `release`
+  environment. To turn delegation off, the owner deletes the delegate key from
+  `.bosun/approvers.toml` or the `approval = "delegate"` lines from `.bosun/risk.toml`; both are
+  R-gov and critical, so only the owner approves that PR. Residual: R-ci is delegate-able, and any
+  workflow with `statuses: write` can post a `risk-check` status (Limits above), so a delegate
+  could approve a new workflow that forges one; the owner sees it only in the workflow list.
 - `bosun approve` is the owner's shortcut, run on the owner's own machine (a local shell or a
   local Claude Code session, also through Remote Control), never in a Claude cloud session: the cloud agent proxy rewrites
   every GitHub write (app attribution and a footer), so an approval sent from there never counts,

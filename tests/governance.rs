@@ -4,7 +4,7 @@
 mod common;
 
 use bosun::config::{Config, Limits};
-use bosun::core::risk::{Rules, parse_owners};
+use bosun::core::risk::{Approval, Rules, parse_owners};
 use common::bosun;
 use serde_json::{Value, json};
 use std::fs;
@@ -35,7 +35,6 @@ fn risk_rules_cover_the_defaults() {
 
 #[test]
 fn shipped_rules_have_the_decided_approval_class() {
-    use bosun::core::risk::Approval;
     for rules in [
         Rules::parse(&read(".bosun/risk.toml")).unwrap(),
         Rules::defaults(),
@@ -53,14 +52,19 @@ fn shipped_rules_have_the_decided_approval_class() {
                 "R-prod-write"
             ]
         );
-        for r in &rules.rules {
-            let want = if r.id == "R-ci-review" {
-                Approval::TwoVerdicts
-            } else {
-                Approval::Owner
-            };
-            assert_eq!(r.approval, want, "{}", r.id);
-        }
+    }
+    // The built-in rules never delegate: a repo opts in in its own .bosun/risk.toml. bosun
+    // delegates R-ci, R-gate and R-deps; the critical floor still guards the approval system.
+    let class = |r: &bosun::core::risk::Rule, repo: bool| match r.id.as_str() {
+        "R-ci-review" => Approval::TwoVerdicts,
+        "R-ci" | "R-gate" | "R-deps" if repo => Approval::Delegate,
+        _ => Approval::Owner,
+    };
+    for r in &Rules::parse(&read(".bosun/risk.toml")).unwrap().rules {
+        assert_eq!(r.approval, class(r, true), "{}", r.id);
+    }
+    for r in &Rules::defaults().rules {
+        assert_eq!(r.approval, class(r, false), "{}", r.id);
     }
 }
 
@@ -87,7 +91,10 @@ fn builtin_rules_equal_the_repo_rules() {
         );
         assert_eq!(a.new_dependency, b.new_dependency, "{}", a.id);
         assert_eq!(a.capability, b.capability, "{}", a.id);
-        assert_eq!(a.approval, b.approval, "{}", a.id);
+        // The approval class may differ: only the repo file opts in to delegation.
+        if a.approval != Approval::Delegate {
+            assert_eq!(a.approval, b.approval, "{}", a.id);
+        }
     }
 }
 
@@ -130,10 +137,9 @@ fn settings_hooks_run_bosun_hook_commands() {
 
 #[test]
 fn every_shipped_path_glob_matches_a_concrete_path_with_its_class() {
-    use bosun::core::risk::Approval;
-    for rules in [
-        Rules::parse(&read(".bosun/risk.toml")).unwrap(),
-        Rules::defaults(),
+    for (rules, repo) in [
+        (Rules::parse(&read(".bosun/risk.toml")).unwrap(), true),
+        (Rules::defaults(), false),
     ] {
         for rule in &rules.rules {
             for g in &rule.paths {
@@ -145,15 +151,19 @@ fn every_shipped_path_glob_matches_a_concrete_path_with_its_class() {
                 };
                 assert!(g.matches(&concrete), "{} / {text}: {concrete}", rule.id);
                 // No other rule may match it with a different class: the strictest wins.
-                let want = if rule.id == "R-ci-review" {
-                    Approval::TwoVerdicts
-                } else {
-                    Approval::Owner
+                let want = match rule.id.as_str() {
+                    "R-ci-review" => Approval::TwoVerdicts,
+                    "R-ci" | "R-gate" | "R-deps" if repo => Approval::Delegate,
+                    _ => Approval::Owner,
                 };
                 assert_eq!(rule.approval, want, "{}", rule.id);
                 for other in &rules.rules {
                     if other.paths.iter().any(|o| o.matches(&concrete)) && other.id != rule.id {
-                        assert_eq!(other.approval, Approval::Owner, "{concrete}: {}", other.id);
+                        assert!(
+                            matches!(other.approval, Approval::Owner | Approval::Delegate),
+                            "{concrete}: {}",
+                            other.id
+                        );
                     }
                 }
             }

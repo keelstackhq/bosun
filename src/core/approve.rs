@@ -134,6 +134,36 @@ pub const APPROVERS_PATH: &str = ".bosun/approvers.toml";
 pub struct ApproverKey {
     pub id: String,
     pub ed25519: String,
+    /// `owner` (the default) or `delegate`.
+    #[serde(default)]
+    pub role: Role,
+}
+
+/// What a key's signature stands for. Each role signs its own message, so a signature of one
+/// role never counts as the other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Owner,
+    Delegate,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Delegate => "delegate",
+        }
+    }
+
+    /// The first word of the signed message.
+    fn prefix(self) -> &'static str {
+        match self {
+            Role::Owner => "bosun-approve",
+            Role::Delegate => "bosun-delegate",
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -157,11 +187,12 @@ pub fn parse_approvers(text: &str) -> Result<Vec<ApproverKey>, String> {
     Ok(file.key)
 }
 
-/// The exact bytes an approval key signs. Owner and repo are lowercased (GitHub names are
+/// The exact bytes a key of `role` signs. Owner and repo are lowercased (GitHub names are
 /// case-insensitive), so the signer and risk-check agree however each spells them.
-pub fn signed_message(owner: &str, repo: &str, pr: u64, head: &str) -> String {
+pub fn signed_message(role: Role, owner: &str, repo: &str, pr: u64, head: &str) -> String {
     format!(
-        "bosun-approve v1 {}/{}#{pr} {head}",
+        "{} v1 {}/{}#{pr} {head}",
+        role.prefix(),
         owner.to_ascii_lowercase(),
         repo.to_ascii_lowercase()
     )

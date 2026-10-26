@@ -23,6 +23,8 @@ fn pr_touching(path: &str, previous: Option<&str>) -> FakeGithub {
     fake.issue(7, "task", &[], "");
     fake.content("governance/owners.toml", BASE, OWNERS);
     fake.content(".bosun/risk.toml", BASE, &rules());
+    // The base is bosun: its approval code is critical.
+    fake.content("src/cli/risk_check.rs", BASE, "// risk-check");
     let status = if previous.is_some() {
         "renamed"
     } else {
@@ -54,24 +56,16 @@ fn channel_needs_two_verdicts() {
 }
 
 #[test]
-fn workflows_gate_code_and_governance_need_the_owner() {
+fn governance_and_the_approval_system_need_the_owner() {
     for path in [
-        ".github/workflows/ci.yml",
         ".github/workflows/risk.yml",
-        ".github/workflows/other.yaml",
-        "deny.toml",
-        "rust-toolchain.toml",
-        "rust-toolchain",
+        ".github/workflows/verdict.yml",
+        ".github/workflows/release.yml",
         "Cargo.toml",
         "Cargo.lock",
         "build.rs",
         "crates/x/build.rs",
         ".cargo/config.toml",
-        ".config/nextest.toml",
-        "src/anthropic.rs",
-        "src/core/lessons.rs",
-        "src/core/budget.rs",
-        "src/sessions/usage.rs",
         "docs/lessons.toml",
         "src/cli/review_pack.rs",
         "REVIEW.md",
@@ -80,8 +74,6 @@ fn workflows_gate_code_and_governance_need_the_owner() {
         "src/core/records.rs",
         "src/core/risk.rs",
         "src/core/risk_default.toml",
-        "src/gates/runner.rs",
-        "profiles/rust.toml",
         "npm/bosun/package.json",
         ".bosun/risk.toml",
     ] {
@@ -90,8 +82,36 @@ fn workflows_gate_code_and_governance_need_the_owner() {
 }
 
 #[test]
-fn a_rename_out_of_gate_code_into_channel_needs_the_owner() {
-    assert_eq!(requirement("channel/x.rs", Some("src/gates/x.rs")), "owner");
+fn other_workflows_and_gate_code_can_be_delegated() {
+    for path in [
+        ".github/workflows/other.yaml",
+        ".github/workflows/ci.yml",
+        "deny.toml",
+        "rust-toolchain.toml",
+        "rust-toolchain",
+        ".config/nextest.toml",
+        "src/anthropic.rs",
+        "src/core/lessons.rs",
+        "src/core/budget.rs",
+        "src/sessions/usage.rs",
+        "src/gates/runner.rs",
+        "profiles/rust.toml",
+    ] {
+        assert_eq!(requirement(path, None), "delegate", "{path}");
+    }
+}
+
+#[test]
+fn a_rename_out_of_gate_code_into_channel_needs_a_delegate() {
+    assert_eq!(
+        requirement("channel/x.rs", Some("src/gates/x.rs")),
+        "delegate"
+    );
+    // Out of the approval code it stays the owner's.
+    assert_eq!(
+        requirement("channel/x.rs", Some("src/core/risk.rs")),
+        "owner"
+    );
 }
 
 #[test]

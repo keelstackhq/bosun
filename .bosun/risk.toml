@@ -10,11 +10,17 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
+# Delegate-able (spec §8, delegated decisions): a delegate key with one clean verdict may
+# approve. The critical floor (risk, verdict, review, main-open, release and bosun workflows,
+# .bosun/**, governance/**, CODEOWNERS, bosun's approval code, R-secrets, R-prod-write,
+# R-unseen) always needs the owner. Remove these lines to turn delegation off.
+approval = "delegate"
 paths = [".github/workflows/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"
 why = "The gate code decides what passes."
+approval = "delegate"
 # A file and its module directory: `x.rs` and `x/**`.
 paths = [
     "src/core/risk.rs",
@@ -100,6 +106,7 @@ content = '(?i)(api[_-]?key|secret|token)\s*='
 id = "R-deps"
 why = "A new dependency adds code that nobody reviewed."
 new_dependency = true
+approval = "delegate"
 
 [[rule]]
 id = "R-prod-write"

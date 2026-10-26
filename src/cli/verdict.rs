@@ -159,6 +159,7 @@ pub(crate) fn record(app: &App, pull: &Pull, verdict: &Verdict, session: &str) -
         head_sha: verdict.head_sha.clone(),
         approved: eff.approve,
         confidence: Some(verdict.confidence),
+        major: Some(verdict.count("major") as u32),
     };
     let human = format!("Review verdict: {}.", verdict.summary());
     gh.add_comment(n, &format!("{human}\n\n{}", record.to_line()))?;

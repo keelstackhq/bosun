@@ -13,8 +13,8 @@ use crate::app::App;
 use crate::app::{Result, kill_switch, main_red};
 use crate::cli::risk_check::{decisive_review, enrolled_keys, owner_comment, owner_logins};
 use crate::core::approve::{
-    APPROVERS_PATH, Readiness, Run, Stat, api_url_ok, approve_command, in_cloud, parse_target,
-    readiness, signed_comment, signed_message,
+    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, in_cloud,
+    parse_target, readiness, signed_comment, signed_message,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
@@ -425,10 +425,13 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             ),
         )
     })?;
-    let key_id = keys
+    let role = match args.role.as_deref() {
+        Some("delegate") => Role::Delegate,
+        _ => Role::Owner,
+    };
+    let key = keys
         .into_iter()
         .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
-        .map(|k| k.id)
         .ok_or_else(|| {
             BosunError::error(
                 format!("the key is not enrolled in {APPROVERS_PATH} on the default branch"),
@@ -437,17 +440,32 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
                 ),
             )
         })?;
-    let msg = signed_message(&app.ctx.repo.owner, &app.ctx.repo.name, pr, &head);
+    if key.role != role {
+        return Err(BosunError::error(
+            format!(
+                "key {} is enrolled as {}, not {}; nothing was signed",
+                key.id,
+                key.role.name(),
+                role.name()
+            ),
+            format!(
+                "pass `--as {}`, or enroll the key with that role",
+                key.role.name()
+            ),
+        ));
+    }
+    let key_id = key.id;
+    let msg = signed_message(role, &app.ctx.repo.owner, &app.ctx.repo.name, pr, &head);
     let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
     let body = signed_comment(&head, &key_id, &sig);
     if args.print {
         return Ok(Outcome::data(
-            json!({"pr": pr, "head_sha": head, "key_id": key_id, "body": body}),
+            json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(), "body": body}),
         ));
     }
     let id = gh.add_comment(pr, &body)?.id;
     Ok(Outcome::data(json!({"approved": [
-        {"pr": pr, "head_sha": head, "key_id": key_id, "comment_id": id}
+        {"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(), "comment_id": id}
     ]})))
 }
 
