@@ -1,6 +1,6 @@
 [package]
 name = "keel-bosun"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.97"
 description = "Orchestration helper for repos where agents write all the code"
