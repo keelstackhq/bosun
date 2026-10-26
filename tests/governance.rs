@@ -26,9 +26,8 @@ fn bosun_toml_and_limits_parse() {
     );
 }
 
-/// The rules bosun's own .bosun/risk.toml delegates. Empty while .bosun/version pins 0.2.0,
-/// which rejects `approval = "delegate"`; R-ci, R-gate and R-deps return after the 0.2.1 pin.
-const REPO_DELEGATES: &[&str] = &[];
+/// The rules bosun's own .bosun/risk.toml delegates (the pin is 0.2.1+, which knows the value).
+const REPO_DELEGATES: &[&str] = &["R-ci", "R-gate", "R-deps"];
 
 /// risk.yml judges every PR with the release pinned in .bosun/version, so the rules on main must
 /// parse with it: `approval = "delegate"` needs 0.2.1 or later.

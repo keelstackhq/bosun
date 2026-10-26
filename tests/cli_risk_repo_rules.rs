@@ -91,8 +91,7 @@ fn governance_and_the_approval_system_need_the_owner() {
 }
 
 #[test]
-fn ci_and_gate_inputs_outside_workflows_and_code_need_the_owner_until_the_pin_knows_delegates() {
-    // They become "delegate" again once .bosun/version pins 0.2.1+ (tests/governance.rs).
+fn ci_and_gate_inputs_outside_workflows_and_code_can_be_delegated() {
     for path in [
         "deny.toml",
         "rust-toolchain.toml",
@@ -100,7 +99,7 @@ fn ci_and_gate_inputs_outside_workflows_and_code_need_the_owner_until_the_pin_kn
         ".config/nextest.toml",
         "profiles/rust.toml",
     ] {
-        assert_eq!(requirement(path, None), "owner", "{path}");
+        assert_eq!(requirement(path, None), "delegate", "{path}");
     }
 }
 

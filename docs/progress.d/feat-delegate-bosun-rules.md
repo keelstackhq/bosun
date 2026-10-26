@@ -1,0 +1,1 @@
+- 2026-10-26 · Delegation on · `approval = "delegate"` back on R-ci, R-gate and R-deps in bosun's `.bosun/risk.toml` (pin 0.2.1); `REPO_DELEGATES` and the repo-rules tests expect delegate again · PR (feat/delegate-bosun-rules)
