@@ -58,9 +58,11 @@ publishers that step 4 registers expire when they are not used for 2 days (D24).
      -f name=main -f type=branch
    ```
 
-2. **Optional secret `HOIST_RELEASE_TOKEN`**: a fine-grained token with Contents and Pull
-   requests: write on keelstackhq/bosun. With it, the release PR runs CI. Without it, `prepare`
-   uses `GITHUB_TOKEN`, and that PR runs no checks.
+2. **Secret `HOIST_RELEASE_TOKEN`** (optional, not set here): a fine-grained token with Contents
+   and Pull requests: write on keelstackhq/bosun. With it, `prepare` opens the release PR and
+   that PR runs CI. Without it, `prepare` is skipped with a warning (`GITHUB_TOKEN` may not open
+   PRs here, 403, and a PR it opened would run no checks), and a session opens the release PR
+   instead. `publish` does not need it.
    `gh secret set HOIST_RELEASE_TOKEN --repo keelstackhq/bosun`
 3. **Turn on the gate.** `gh variable set BOSUN_RELEASE --body enabled --repo keelstackhq/bosun`,
    then `gh workflow run release.yml --repo keelstackhq/bosun --ref main` (or wait for the next
