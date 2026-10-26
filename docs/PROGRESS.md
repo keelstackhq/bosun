@@ -179,6 +179,7 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-26 · Delegated decisions · `approval = "delegate"` rules, `role = "delegate"` keys (`delegate-2026-10` enrolled), `bosun-delegate v1` signatures with one clean independent verdict (`major` now in verdict records); critical floor (R-secrets, R-prod-write, R-unseen, governance, every workflow, all of bosun's `src/**` and manifests); no delegation while halted or for decoy/unleased task links; bosun's R-ci, R-gate, R-deps delegate-class; `bosun approve --as delegate`; kill switch and notify read owners at `refs/heads/<default>` · `tests/cli_delegate_approve.rs` 12/12
 - 2026-10-26 · Fix · `approval = "delegate"` out of bosun's `.bosun/risk.toml` again: risk.yml runs the pinned 0.2.0, which rejected it, so every PR failed risk-check after #227; `tests/governance.rs` `repo_rules_parse_with_the_pinned_release`; delegation in this repo returns with a PR after the 0.2.1 pin
 - 2026-10-26 · Release v0.2.1 · release PR: `Cargo.toml`, `Cargo.lock`, the six `npm/*/package.json`, `pnpm-lock.yaml`, `## 0.2.1 (2026-10-26)` in CHANGELOG (signed and delegated approvals, #226, #227); after it publishes, the pin PR moves `.bosun/version` and the setup script to 0.2.1 · `tests/release_config.rs` 10/10
+- 2026-10-26 · CI minutes 3 · release.yml skips `prepare` without `HOIST_RELEASE_TOKEN` (it failed on 81 of 93 pushes to main) · PR (claude/release-prepare-skip)
 
 ## Blocked
 

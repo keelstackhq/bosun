@@ -293,6 +293,19 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
             );
         }
     }
+    // Without HOIST_RELEASE_TOKEN, prepare is skipped (GITHUB_TOKEN may not open the release PR,
+    // and its PR would run no CI); only whether the secret is set reaches the detect job.
+    let prepare = &yaml[yaml.find("\n  prepare:\n").unwrap()..];
+    let cond = prepare
+        .lines()
+        .find(|l| l.trim_start().starts_with("if:"))
+        .unwrap();
+    assert!(
+        cond.contains("needs.detect.outputs.release_token == 'true'"),
+        "{cond}"
+    );
+    assert!(yaml.contains("HAS_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN != '' }}"));
+    assert!(yaml.contains("release_token: ${{ steps.gate.outputs.release_token }}"));
     // Event data reaches scripts through env only.
     for s in run_scripts(&yaml) {
         for bad in ["github.event", "head_ref", "github.actor", "inputs."] {

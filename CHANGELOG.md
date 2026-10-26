@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- release.yml: `prepare` (the release PR) runs only when the secret `HOIST_RELEASE_TOKEN` is set; without it the job failed on every push to main (GITHUB_TOKEN may not open PRs here) and is now skipped with a warning.
+
 ## 0.2.1 (2026-10-26)
 
 - bosun's own `.bosun/risk.toml` delegates nothing until `.bosun/version` pins 0.2.1: the pinned 0.2.0 risk-check rejected `approval = "delegate"` and failed every PR. A test keeps the rules parseable by the pin.
