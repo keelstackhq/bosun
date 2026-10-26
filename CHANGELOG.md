@@ -2,6 +2,28 @@
 
 All notable changes to bosun. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## 0.3.0 (2026-10-26)
+
+### Features
+
+- delegated decisions with a hard-coded critical floor (#227) (9444016)
+- signed owner approvals from an enrolled ed25519 key (#226) (1dcb6b4)
+- read the task's recorded PR instead of listing every PR; approve fix text (#211) (#218) (8a5bdb7)
+- build inputs and review feeders need the owner (#208) (b29cbda)
+- owner gate for gate code and all CI; two verdicts for channel/** only (4b) (#207) (a9685b3)
+- --list says comments from the Claude GitHub tool never count (#206) (0b3812b)
+
+### Fixes
+
+- no delegate rules in bosun's own risk.toml until the pin knows them (b13bc25)
+- canary owner batch: init --branch, doctor live checks and app, label-lock fail-closed, verdict race, edits don't cancel CI (F2 F7 F8 F9 F13 F15) (#224) (a4959ea)
+- a human merge moves building, review and fixing tasks to merged (F10) (#222) (a7fdddd)
+- toolchain from rust-toolchain.toml, own_ci runs only test-integrity, docs-only fast path, edits no longer cancel gates, agent rules in R-gov (#223) (6a30c4e)
+- refuse an open branch PR that does not link the task (F14) (#220) (9a3b7ab)
+- blocked and needs-human outcomes set that state on the epic; merged stays a report (#217) (0bbc9b2)
+- main-open and main-health comments name bosun.yml, not ci.yml (#215) (01feb63)
+- refuse in Claude cloud sessions; a withdrawn approval is refused, a counting one is re-posted (#209) (c00a7ff)
+
 ## Unreleased
 
 - bosun's own `.bosun/risk.toml` delegates nothing until `.bosun/version` pins 0.2.1: the pinned 0.2.0 risk-check rejected `approval = "delegate"` and failed every PR. A test keeps the rules parseable by the pin.
