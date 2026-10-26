@@ -4,6 +4,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- CI minutes (docs/ci-minutes.md): the channel's bosun.yml runs every gate in one job named after the required check (`ci-ok`/`bosun-ok`) instead of nine (the gates that run no PR code first); a draft fails it at once; a PR body or title edit reuses the head's last result unless its `snapshot-change:` lines changed; main-health runs the gates weekly, not nightly. AGENTS.md: run every gate locally before a push, push once per PR.
 - `bosun pr` refuses an open PR on the branch that does not link the task (exit 3).
 - A human merge moves a building, review or fixing task to merged: `bosun pr`, `bosun reap` (also for closed issues) and `bosun result --outcome merged --pr N` see it; leases end with reason `merged`.
 - `bosun init --branch <name>`; in a Claude cloud session the default is `claude/bosun-init`; `--no-pr` returns the PR title and body. The owner steps say each weekly splice update PR needs `/bosun approve <sha>`.

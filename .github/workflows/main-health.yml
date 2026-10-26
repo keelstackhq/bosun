@@ -1,7 +1,7 @@
 name: main-health
 
 # Keeps one bosun:main-red issue open while main fails (spec §9): it opens one when ci fails
-# on main or the nightly run fails, and closes it when main is green again. The report job runs
+# on main or the weekly run fails, and closes it when main is green again. The report job runs
 # the bosun release pinned on the default branch head (shell fallback while the pin lacks the
 # command); it never checks out PR code.
 on:
@@ -9,8 +9,9 @@ on:
     workflows: [ci]
     types: [completed]
     branches: [main]
+  # Weekly, not nightly: every push to main already runs the gates on all of main (CI minutes).
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -18,6 +19,8 @@ permissions:
   issues: write
   pull-requests: read
   statuses: write
+  # checks: read: the channel's weekly run calls bosun.yml, which reads check runs.
+  checks: read
 
 jobs:
   nightly:

@@ -14,8 +14,13 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
+# A label event that the job skips gets a group of its own: it must never cancel or replace the
+# run that judges a new head.
 concurrency:
-  group: main-open-${{ github.event.pull_request.number }}
+  group: >-
+    main-open-${{ github.event.pull_request.number }}${{
+    (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
+    github.event.label.name != 'bosun:kind/mainfix' && format('-skip-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -26,6 +31,10 @@ permissions:
 
 jobs:
   judge:
+    # Only the mainfix label changes the verdict: other label events skip before a runner starts.
+    if: >-
+      (github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'bosun:kind/mainfix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

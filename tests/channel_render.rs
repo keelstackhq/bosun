@@ -370,7 +370,9 @@ fn yaml_json(text: &str) -> Option<serde_json::Value> {
     }
 }
 
-const ALL_GATES: [&str; 5] = ["fmt", "lint", "test", "deps", "test-integrity"];
+/// In run order: the gates that run no PR code first, then lint (build.rs, proc macros) and test,
+/// so PR code on the one runner cannot change what test-integrity, deps or fmt report.
+const ALL_GATES: [&str; 5] = ["test-integrity", "deps", "fmt", "lint", "test"];
 const BOSUN_YML: &str = ".github/workflows/bosun.yml";
 
 #[test]
@@ -407,8 +409,25 @@ fn rust_gates_install_the_toolchain_file_once() {
     assert!(!file(&files, BOSUN_YML).contains("rustup"));
 }
 
+/// The steps of the one job, `ci-ok` (or `bosun-ok` beside the repo's own ci).
+fn steps(j: &serde_json::Value, own_ci: &str) -> Vec<serde_json::Value> {
+    let name = if own_ci.is_empty() {
+        "ci-ok"
+    } else {
+        "bosun-ok"
+    };
+    j["jobs"][name]["steps"].as_array().unwrap().clone()
+}
+
+fn step<'a>(steps: &'a [serde_json::Value], key: &str, value: &str) -> &'a serde_json::Value {
+    steps
+        .iter()
+        .find(|s| s[key] == value)
+        .unwrap_or_else(|| panic!("no step with {key} {value}"))
+}
+
 #[test]
-fn own_ci_gate_matrix_is_test_integrity_unless_opted_in() {
+fn own_ci_gates_are_test_integrity_unless_opted_in() {
     for stack in [&["rust"][..], &["ts-pnpm"], &["rust", "ts-pnpm"]] {
         let plain = variant(stack, "");
         let wf = file(&plain, BOSUN_YML);
@@ -417,45 +436,46 @@ fn own_ci_gate_matrix_is_test_integrity_unless_opted_in() {
         let wf = file(&own, BOSUN_YML);
         assert!(wf.contains("vars.BOSUN_ALL_GATES == '1'"), "{wf}");
         let Some(j) = yaml_json(wf) else { return };
-        let m = &j["jobs"]["gate"]["strategy"]["matrix"]["gate"];
-        let expr = m.as_str().expect("own_ci matrix is an expression");
-        assert!(expr.contains("fromJSON(") && expr.contains("github.event_name != 'pull_request'"));
-        assert!(expr.contains("'[\"test-integrity\"]'"), "{expr}");
+        assert_eq!(j["jobs"].as_object().unwrap().len(), 1, "one job");
+        let s = steps(&j, "1");
+        let gates = &step(&s, "name", "bosun gates")["env"]["GATES"];
+        let expr = gates.as_str().unwrap();
         assert!(
-            expr.contains(&serde_json::to_string(&ALL_GATES).unwrap()),
+            expr.contains("github.event_name != 'pull_request'"),
+            "{expr}"
+        );
+        assert!(expr.contains("|| 'test-integrity' }}"), "{expr}");
+        assert!(
+            expr.contains(&format!("'{}'", ALL_GATES.join(" "))),
             "{expr}"
         );
         let j = yaml_json(file(&plain, BOSUN_YML)).unwrap();
-        let m = &j["jobs"]["gate"]["strategy"]["matrix"]["gate"];
-        assert_eq!(m, &serde_json::json!(ALL_GATES));
+        let s = steps(&j, "");
+        let gates = &step(&s, "name", "bosun gates")["env"]["GATES"];
+        assert_eq!(gates.as_str(), Some(ALL_GATES.join(" ").as_str()));
     }
 }
 
 #[test]
-fn docs_only_fast_path_skips_work_and_the_aggregate_stays_strict() {
-    for (own_ci, agg) in [("", "ci-ok"), ("1", "bosun-ok")] {
-        let files = variant(&["rust"], own_ci);
-        let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
-            return;
-        };
-        let jobs = &j["jobs"];
-        assert!(jobs["changes"].is_object());
-        let skip = "needs.changes.outputs.docs_only != 'true'";
-        for job in ["bosun-bin", "gate", "pin"] {
-            assert_eq!(jobs[job]["if"].as_str(), Some(skip), "{job}");
-            assert!(jobs[job]["needs"].to_string().contains("changes"), "{job}");
+fn every_work_step_waits_for_the_plan() {
+    for stack in [&["rust"][..], &["ts-pnpm"], &["rust", "ts-pnpm"]] {
+        for own_ci in ["", "1"] {
+            let files = variant(stack, own_ci);
+            let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+                return;
+            };
+            let steps = steps(&j, own_ci);
+            let plan = steps.iter().position(|s| s["id"] == "plan").unwrap();
+            assert!(plan > 0 && plan < steps.len() - 1);
+            for s in &steps[plan + 1..] {
+                let cond = s["if"].as_str().unwrap_or_default();
+                assert!(cond.starts_with("steps.plan.outputs.work == 'true'"), "{s}");
+            }
         }
-        let needs = jobs[agg]["needs"].to_string();
-        for n in ["changes", "bosun-bin", "gate", "pin"] {
-            assert!(needs.contains(n), "{agg} needs {n}");
-        }
-        let run = jobs[agg]["steps"][0]["run"].as_str().unwrap();
-        assert!(run.contains("test \"$CHANGES\" = success"), "{run}");
-        assert!(run.contains("DOCS_ONLY"), "{run}");
     }
 }
 
-/// Runs the `changes` job's script in a real git repo whose PR changes `changed` (`a->b`: a move).
+/// Runs the docs-only step's script in a real git repo whose PR changes `changed` (`a->b`: a move).
 fn docs_only(changed: &[&str]) -> String {
     docs_only_in(&["rust"], changed)
 }
@@ -463,10 +483,8 @@ fn docs_only(changed: &[&str]) -> String {
 fn docs_only_in(stack: &[&str], changed: &[&str]) -> String {
     let files = variant(stack, "");
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
-    let steps = j["jobs"]["changes"]["steps"].as_array().unwrap();
-    let script = steps.iter().find(|s| s["id"] == "diff").unwrap()["run"]
-        .as_str()
-        .unwrap();
+    let steps = steps(&j, "");
+    let script = step(&steps, "id", "diff")["run"].as_str().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let sh = |cmd: &str, base: &str, head: &str| {
         let o = Command::new("sh")
@@ -526,22 +544,167 @@ fn docs_only_detection_fails_closed() {
 }
 
 #[test]
-fn a_body_edit_gets_its_own_concurrency_group() {
+fn a_body_edit_waits_and_never_cancels() {
     let files = variant(&["rust"], "1");
     let wf = file(&files, BOSUN_YML);
     let Some(j) = yaml_json(wf) else { return };
     let g = j["concurrency"]["group"].as_str().unwrap();
     assert!(
-        g.contains("github.event.action == 'edited' && !github.event.changes.base"),
+        !g.contains("run_id") && g.contains("github.event_name"),
         "{g}"
     );
+    let c = j["concurrency"]["cancel-in-progress"].as_str().unwrap();
     assert!(
-        g.contains("-edit-{0}") && g.contains("github.run_id"),
-        "{g}"
+        c.contains("!(github.event.action == 'edited' && !github.event.changes.base)"),
+        "{c}"
     );
-    assert!(g.contains("github.event_name"), "{g}");
-    // The edit run must still run its jobs: nothing is skipped on `edited`.
-    assert!(!wf.contains("action != 'edited'"), "{wf}");
+    assert_eq!(j["permissions"]["checks"], "read");
+}
+
+/// Runs the edit step with a fake `gh` that applies its `--jq` filter (with jq) to a check-runs
+/// answer: `runs` are `(id, app, status, conclusion, run id)`; returns the step's `mode` output.
+fn edit_runs(
+    old: &str,
+    new: &str,
+    body_changed: bool,
+    runs: &[(u64, &str, &str, &str, u64)],
+) -> String {
+    let files = variant(&["rust"], "");
+    let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
+    let steps = steps(&j, "");
+    let s = step(&steps, "id", "edit");
+    assert_eq!(
+        s["if"],
+        "github.event.action == 'edited' && !github.event.changes.base"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let runs: Vec<serde_json::Value> = runs
+        .iter()
+        .map(|(id, app, status, conclusion, run)| {
+            serde_json::json!({"id": id, "app": {"slug": app}, "status": status,
+                "conclusion": if conclusion.is_empty() { serde_json::Value::Null } else { (*conclusion).into() },
+                "details_url": format!("https://github.com/o/r/actions/runs/{run}/job/{id}")})
+        })
+        .collect();
+    let answer = dir.path().join("answer.json");
+    fs::write(
+        &answer,
+        serde_json::json!({ "check_runs": runs }).to_string(),
+    )
+    .unwrap();
+    let gh = dir.path().join("gh");
+    // `gh api URL --jq EXPR`: the URL must name the head and the check.
+    fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\ncase \"$2\" in repos/o/r/commits/abc/check-runs?check_name=ci-ok\\&*) ;; *) exit 9;; esac\n\
+             [ \"$3\" = --jq ] || exit 9\njq -r \"$4\" {}\n",
+            answer.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let out = dir.path().join("out");
+    let ok = Command::new("bash")
+        .args(["-eo", "pipefail", "-c", s["run"].as_str().unwrap()])
+        .env("PATH", path)
+        .env("GITHUB_OUTPUT", &out)
+        .env("GITHUB_RUN_ID", "7")
+        .env("GITHUB_REPOSITORY", "o/r")
+        .env("HEAD", "abc")
+        .env("CHECK", "ci-ok")
+        .env("OLD_BODY", old)
+        .env("NEW_BODY", new)
+        .env("BODY_CHANGED", if body_changed { "true" } else { "false" })
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok, "the edit step failed");
+    fs::read_to_string(out).unwrap().trim().to_string()
+}
+
+/// The edit step when the head's newest earlier check run concluded `prev` ("" = none).
+fn edit_mode(old: &str, new: &str, body_changed: bool, prev: &str) -> String {
+    if prev.is_empty() {
+        return edit_runs(old, new, body_changed, &[]);
+    }
+    edit_runs(
+        old,
+        new,
+        body_changed,
+        &[(5, "github-actions", "completed", prev, 3)],
+    )
+}
+
+#[test]
+fn a_body_edit_reuses_the_heads_result_unless_test_integrity_input_changed() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    assert_eq!(edit_mode("a", "b", true, "success"), "mode=success");
+    assert_eq!(edit_mode("a", "b", true, "failure"), "mode=failure");
+    assert_eq!(
+        edit_mode("", "", false, "success"),
+        "mode=success",
+        "a title edit"
+    );
+    // Nothing finished on the head yet, or it was cancelled or skipped: run the gates.
+    for prev in ["", "cancelled", "skipped", "neutral"] {
+        assert_eq!(edit_mode("a", "b", true, prev), "mode=run", "{prev:?}");
+    }
+    // A new, removed or changed snapshot-change line is new input for test-integrity.
+    let line = "x\nsnapshot-change: new golden";
+    assert_eq!(edit_mode("x", line, true, "failure"), "mode=run");
+    assert_eq!(edit_mode(line, "x", true, "success"), "mode=run");
+    let more = format!("{line}\nmore");
+    assert_eq!(edit_mode(line, &more, true, "success"), "mode=success");
+    // The newest finished run of GitHub Actions counts; this run's own and other apps' do not.
+    let ok = (4, "github-actions", "completed", "success", 3);
+    let failed = (6, "github-actions", "completed", "failure", 4);
+    assert_eq!(edit_runs("a", "b", true, &[ok, failed]), "mode=failure");
+    assert_eq!(
+        edit_runs("a", "b", true, &[failed, ok]),
+        "mode=failure",
+        "by id, not order"
+    );
+    let mine = (9, "github-actions", "completed", "success", 7);
+    assert_eq!(edit_runs("a", "b", true, &[failed, mine]), "mode=failure");
+    let other_app = (9, "forger", "completed", "success", 8);
+    assert_eq!(
+        edit_runs("a", "b", true, &[failed, other_app]),
+        "mode=failure"
+    );
+    let running = (9, "github-actions", "in_progress", "", 8);
+    assert_eq!(edit_runs("a", "b", true, &[ok, running]), "mode=success");
+}
+
+#[test]
+fn main_open_skips_label_events_but_the_mainfix_label_in_a_group_of_their_own() {
+    let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/main-open.yml");
+    let files = variant(&["rust"], "");
+    for wf in [
+        file(&files, ".github/workflows/main-open.yml").to_string(),
+        fs::read_to_string(ours).unwrap(),
+    ] {
+        let Some(j) = yaml_json(&wf) else { return };
+        let cond = j["jobs"]["judge"]["if"].as_str().unwrap();
+        assert!(
+            cond.contains("github.event.action != 'labeled' && github.event.action != 'unlabeled'"),
+            "{cond}"
+        );
+        assert!(
+            cond.contains("|| github.event.label.name == 'bosun:kind/mainfix'"),
+            "{cond}"
+        );
+        let g = j["concurrency"]["group"].as_str().unwrap();
+        assert!(g.contains("github.event.label.name != 'bosun:kind/mainfix' && format('-skip-{0}', github.run_id)"), "{g}");
+    }
 }
 
 #[test]
@@ -596,16 +759,13 @@ fn the_renderer_refuses_tags_outside_the_subset() {
     }
 }
 
-/// Runs the gate job's rust toolchain step in `cwd` under the workspace `root`, with a fake
+/// Runs the rust toolchain step in `cwd` under the workspace `root`, with a fake
 /// `rustup` on PATH; returns the rustup calls it made.
 fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
     let files = variant(&["rust"], "");
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
-    let steps = j["jobs"]["gate"]["steps"].as_array().unwrap();
-    let run = steps
-        .iter()
-        .find(|s| s["name"] == "rust toolchain")
-        .unwrap()["run"]
+    let steps = steps(&j, "");
+    let run = step(&steps, "name", "rust toolchain")["run"]
         .as_str()
         .unwrap();
     let bin = tempfile::tempdir().unwrap();
@@ -660,45 +820,63 @@ fn the_toolchain_step_installs_the_file_or_the_old_pin() {
     }
 }
 
-/// Runs the aggregate job's script with the given needs results; true when it exits 0.
-fn aggregate_passes(own_ci: &str, changes: &str, docs_only: &str, rest: [&str; 3]) -> bool {
-    let name = if own_ci.is_empty() {
-        "ci-ok"
-    } else {
-        "bosun-ok"
-    };
+/// Runs the plan step: `Some(work output)` when it passes, `None` when it fails the job.
+fn plan(own_ci: &str, docs_only: &str, mode: &str) -> Option<String> {
+    plan_draft(own_ci, "false", docs_only, mode)
+}
+
+fn plan_draft(own_ci: &str, draft: &str, docs_only: &str, mode: &str) -> Option<String> {
     let files = variant(&["rust"], own_ci);
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
-    let run = j["jobs"][name]["steps"][0]["run"].as_str().unwrap();
-    // The shell a `run:` step gets on a runner.
-    Command::new("bash")
-        .args(["-eo", "pipefail", "-c", run])
-        .env("CHANGES", changes)
+    let steps = steps(&j, own_ci);
+    let run = step(&steps, "id", "plan")["run"].as_str().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let ok = Command::new("bash")
+        .args(["-e", "-c", run])
+        .env("GITHUB_OUTPUT", &out)
+        .env("DRAFT", draft)
         .env("DOCS_ONLY", docs_only)
-        .env("BIN", rest[0])
-        .env("GATE", rest[1])
-        .env("PIN", rest[2])
+        .env("MODE", mode)
         .output()
         .unwrap()
         .status
-        .success()
+        .success();
+    ok.then(|| fs::read_to_string(out).unwrap().trim().to_string())
 }
 
 #[test]
-fn the_aggregate_script_skips_only_on_the_docs_only_path() {
+fn the_plan_skips_work_only_on_docs_or_a_reused_success() {
+    let files = variant(&["rust"], "");
+    let wf = file(&files, BOSUN_YML);
+    assert!(
+        !wf.contains("draft\n    runs-on")
+            && !wf.contains(
+                "if: github.event_name != 'pull_request' || !github.event.pull_request.draft"
+            )
+    );
     if yaml_json("a: 1").is_none() {
         return;
     }
     for own_ci in ["", "1"] {
-        let ok = ["success"; 3];
-        let skipped = ["skipped"; 3];
-        assert!(aggregate_passes(own_ci, "success", "false", ok));
-        assert!(aggregate_passes(own_ci, "success", "true", skipped));
-        let one_failed = ["skipped", "failure", "skipped"];
-        assert!(!aggregate_passes(own_ci, "success", "true", one_failed));
-        assert!(!aggregate_passes(own_ci, "success", "", skipped));
-        assert!(!aggregate_passes(own_ci, "success", "false", skipped));
-        assert!(!aggregate_passes(own_ci, "cancelled", "true", skipped));
-        assert!(!aggregate_passes(own_ci, "failure", "true", ok));
+        let work = Some("work=true".to_string());
+        let idle = Some("work=false".to_string());
+        assert_eq!(plan(own_ci, "false", "run"), work);
+        assert_eq!(plan(own_ci, "", "run"), work, "not a pull request");
+        assert_eq!(plan(own_ci, "true", "run"), idle);
+        assert_eq!(plan(own_ci, "false", "success"), idle);
+        assert_eq!(
+            plan(own_ci, "true", "failure"),
+            None,
+            "a failed head stays failed"
+        );
+        assert_eq!(plan(own_ci, "false", "failure"), None);
+        // A draft fails at once, never skipped: a skipped required check counts as passed.
+        assert_eq!(plan_draft(own_ci, "true", "true", "success"), None);
+        assert_eq!(
+            plan_draft(own_ci, "", "false", "run"),
+            work,
+            "not a pull request"
+        );
     }
 }

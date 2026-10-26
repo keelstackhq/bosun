@@ -611,7 +611,7 @@ fn main_health_reports_with_bosun_built_from_the_default_branch() {
     let granted: Vec<&str> = perms
         .lines()
         .skip(2)
-        .filter(|l| l.starts_with("  "))
+        .filter(|l| l.starts_with("  ") && !l.trim_start().starts_with('#'))
         .collect();
     assert_eq!(
         granted,
@@ -619,9 +619,12 @@ fn main_health_reports_with_bosun_built_from_the_default_branch() {
             "  contents: read",
             "  issues: write",
             "  pull-requests: read",
-            "  statuses: write"
+            "  statuses: write",
+            "  checks: read"
         ]
     );
+    // Weekly: a push to main already runs every gate on all of main (CI minutes).
+    assert!(yaml.contains("cron: \"17 3 * * 1\""));
 }
 
 #[test]

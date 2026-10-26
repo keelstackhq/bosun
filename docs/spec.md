@@ -143,7 +143,7 @@ A branch or sha ref has no release version; such a consumer sets the template va
 The channel's workflows run the release pinned in `.bosun/version` from npm, never bosun built
 from the change: bosun.yml reads the pin of the PR's base commit (the setup PR, whose base has no
 pin yet, uses its own and says so in a warning); risk.yml and verdict.yml read it from the base
-or the default branch and never check out PR code. main-health's nightly calls bosun.yml
+or the default branch and never check out PR code. main-health's weekly run calls bosun.yml
 (`workflow_call`), so it runs `bosun gate <name> --all` for any stack. Consumers inherit the
 residual of PROGRESS Blocked item 5: a same-repo PR can add a workflow that posts a forged
 status; such a PR is R-ci and needs the owner.
@@ -154,10 +154,14 @@ and .claude/settings.json): its gates run in `.github/workflows/bosun.yml`, whos
 with `own_ci`, main-health watches both workflows and closes `bosun:main-red` only when the
 latest push run on main of each is green; with `own_ci` a pull request runs only the `test-integrity`
 gate and relies on the repo's own `ci-ok` for fmt, lint, test and deps (if that CI lacks one, such as cargo-deny, set the repo
-variable `BOSUN_ALL_GATES=1`); push, merge queue and the nightly run still run all five; a pull request whose files are all `*.md` under `docs/` or `plans/` or at the root except README.md (doctests; never with the ts-pnpm stack: prettier checks Markdown)
-skips bosun-bin, gate and pin (job `changes`, fail closed; the aggregate accepts `skipped` only then and needs `changes` to
-succeed); a PR-body edit that keeps the base runs in its own concurrency group, so it never cancels or is cancelled by the
-push run and is not skipped; the rust gates install the toolchain of the repo's `rust-toolchain.toml` once (the step looks in `rust_path` and its parents up to the repo root; no
+variable `BOSUN_ALL_GATES=1`); push, merge queue and the weekly run still run all five; a pull request whose files are all `*.md` under `docs/` or `plans/` or at the root except README.md (doctests; never with the ts-pnpm stack: prettier checks Markdown)
+runs no gate (step `diff`, fail closed); to save CI minutes (each job is billed as at least one minute on a private repo) bosun.yml is one job
+named after the required check (timeout 30 min), which runs the docs-only check, the pinned bosun, the pin check, then every gate (all of them, then fails if any failed), the gates that
+run no PR code first (test-integrity, deps, fmt) and lint and test (build.rs, tests) last, so PR code on the one runner cannot change the others' result;
+a draft PR fails it in seconds, never skips it (a skipped required check counts as passed; `ready_for_review` runs the gates); a body or title edit that keeps the base never cancels: it waits in the PR's concurrency group,
+then reuses the newest finished `success` or `failure` of that check on the head from GitHub Actions (`checks: read`), and runs the gates
+when there is none or when its `snapshot-change:` lines changed (residuals, both R-ci or fail closed: a check of the same name from another workflow of the head counts, as in `bosun approve`;
+a late edit event can replace a pending push run, which leaves the new head without the check until its next event; on the ts-pnpm stack `pnpm install` runs the PR's lifecycle scripts before every gate, as it did in each gate job before); the rust gates install the toolchain of the repo's `rust-toolchain.toml` once (the step looks in `rust_path` and its parents up to the repo root; no
 dtolnay step; the old 1.97 pin when there is no toolchain file, never the runner's stable), and the setup script reads its `channel` too (1.97 is the fallback); the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
 `bosun init` sets `own_ci`, adds `claude-md` unless the main template owns CLAUDE.md, merges the
 required checks into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
@@ -422,8 +426,9 @@ Gate contract (stack-agnostic):
 - test-integrity: always, as a gate job.
 - risk-check, review-verdict, main-open: always, each its own required check (D15).
 
-CI templates call only `bosun gate <name>`; each gate is one job `gate-<name>`, and the job
-`ci-ok` needs every `gate-*` job and fails unless all succeeded. Jobs cache through
+CI templates call only `bosun gate <name>`. The channel's bosun.yml runs every gate in one job
+`ci-ok` (or `bosun-ok`), which fails unless all succeeded: every job is billed as at least one
+minute on a private repo (docs/ci-minutes.md). bosun's own ci.yml may split gates into jobs. Jobs cache through
 `keelstackhq/hoard@v0` (D19). A profile maps each gate to a command.
 
 Profiles map gates to commands with the placeholders `{packages}`, `{files}` and `{diff}`. Each
@@ -455,7 +460,7 @@ profile has three adapters:
 - ts-pnpm profile: the gates call the workspace's root `package.json` scripts, so a repo chooses its tools: fmt runs `pnpm run format:check`, lint `pnpm run lint`, types `pnpm run typecheck`; test runs `pnpm --filter ...<pkg> run test` for each affected package (`...pkg` selects the package and its dependents, so `data.packages` lists the changed packages and the run covers their dependents too) and `pnpm -r --include-workspace-root run test` for all; deps runs `pnpm audit --prod --audit-level high` and `requires` `pnpm-lock.yaml`. With `--include-workspace-root` the gate runs the root project's own `test` script too, so the root `test` script must not be a recursive `pnpm -r run test` (it would run every package twice). Packages adapter `pnpm-workspace` reads the `packages:` globs of `pnpm-workspace.yaml` (a block list or a one-line list `[a, 'b']`; any other value, or a glob with braces, is an error with a fix) and the directories with a `package.json` that has a `name`. It does not enter dot directories, symlinks or `node_modules`; it skips directories named `target`, `dist`, `build` or `coverage` unless a `packages:` glob matches that directory (`packages/build` is a package when `packages/*` is listed). A changed file inside a package affects that package, whatever its extension. A root `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.npmrc` or `.nvmrc`, or a file with extension ts, tsx, mts, cts, js, jsx, mjs, cjs, json, yaml or yml in no package, means all packages; other files outside every package (docs) affect none.
 - A gate with `each_package` and `when_no_package = "skip"` is skipped (exit 0, `skipped: true`) when no package is affected; the default `when_no_package` is `run`, which runs the gate with its `all` arguments.
 
-Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one job at most 8 min.
+Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one gate at most 8 min.
 A gate over budget opens a lesson.
 
 test-integrity:
@@ -638,7 +643,7 @@ Audit: `bosun progress --risk` lists the high PRs, who approved them, and the ti
 ## 9. Main-health, cost and spend guard
 
 Main-health:
-- The main-health workflow runs on each push to main and nightly. It opens one main-red issue on
+- The main-health workflow runs on each push to main and weekly. It opens one main-red issue on
   failure and closes it on recovery.
 - The required check main-open fails every non-mainfix PR while main is red.
 - Both workflows run the bosun release pinned in `.bosun/version` of the base commit (main-open, `pull_request_target`) or the default branch head (main-health), never PR code; while the pin lacks the command they run a shell fallback that posts the same status or issue. The main-open fallback is stricter than `bosun gate main-open`: it reads only the PR's own labels from the event, not linked issues. The main-open job is named `judge`; `bosun gate main-open` posts the `main-open` status. main-health ignores `workflow_run` events that are not pushes of this repo.
