@@ -380,8 +380,8 @@ pub struct ApproveArgs {
     /// Post the `main-open` status on this PR (bootstrap: the PR changes main-open.yml).
     #[arg(long, value_name = "PR")]
     pub main_open: Option<u64>,
-    /// Sign the approval of one PR's current head (`<pr>`, or `<pr>@<head>` to pin it) with
-    /// this ed25519 PKCS#8 PEM key, enrolled in .bosun/approvers.toml, and post it.
+    /// Sign the approval of one `<pr>@<head>` (the head the owner approved; it must still be
+    /// the PR's head) with this ed25519 PKCS#8 PEM key, enrolled in .bosun/approvers.toml.
     #[arg(long, value_name = "PEM", conflicts_with_all = ["list", "main_open"])]
     pub sign_key: Option<std::path::PathBuf>,
     /// With --sign-key: print the comment body in data.body instead of posting it.

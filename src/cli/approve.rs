@@ -374,32 +374,35 @@ fn redact(token: &str, result: CmdResult) -> CmdResult {
     }
 }
 
-/// `bosun approve <pr> --sign-key <pem>`: the signer (the orchestrator session, on the owner's
+/// `bosun approve <pr>@<head> --sign-key <pem>`: the signer (the orchestrator session, on the owner's
 /// word in chat) signs `signed_message` for the PR's current head and posts the comment with
 /// the session's own token. It works in a Claude cloud session: the signature, not the author,
 /// is what risk-check checks. The key is never printed or logged.
 fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
-    let usage = || {
+    // The owner approves the head they saw: a bare PR number would sign whatever was pushed
+    // in between.
+    let (pr, pinned) = match args.prs.as_slice() {
+        [target] => parse_target(target),
+        _ => None,
+    }
+    .ok_or_else(|| {
         BosunError::usage(
-            "--sign-key takes one PR: <pr> or <pr>@<40-hex head sha>",
-            "run `bosun approve <pr> --sign-key <pem>`",
+            "--sign-key takes one <pr>@<40-hex head sha>: the head the owner approved",
+            "run `bosun approve --list` (it works in the cloud), confirm the head with the owner, then `bosun approve <pr>@<head> --sign-key <pem>`",
         )
-    };
-    let [target] = args.prs.as_slice() else {
-        return Err(usage());
-    };
-    let (pr, pinned) = match target.parse::<u64>() {
-        Ok(n) => (n, None),
-        Err(_) => parse_target(target)
-            .map(|(n, s)| (n, Some(s)))
-            .ok_or_else(usage)?,
-    };
+    })?;
+    let api = std::env::var("BOSUN_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into());
+    if !api_url_ok(&api) {
+        return Err(BosunError::error(
+            "BOSUN_GITHUB_API is not https://, so the head it reports is not trusted for signing",
+            "unset BOSUN_GITHUB_API (or set it to an https:// URL)",
+        ));
+    }
     let pair = read_key(key_path)?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    if !args.print {
-        kill_switch(gh)?;
-    }
+    // Also for --print: a printed body could be posted by hand while bosun is halted.
+    kill_switch(gh)?;
     let pull = gh
         .get_pull(pr)?
         .filter(|p| p.state == "open")
@@ -407,15 +410,22 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             BosunError::conflict(format!("PR #{pr} is not an open PR"), "name an open PR")
         })?;
     let head = pull.head_sha;
-    if pinned.as_ref().is_some_and(|s| *s != head) {
+    if pinned != head {
         return Err(BosunError::conflict(
             format!("PR #{pr} head changed (now {head}); nothing was signed"),
-            "look at the new head, then sign it",
+            "show the owner the new head and sign it only on their word",
         ));
     }
     let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
-    let key_id = enrolled_keys(gh)?
-        .unwrap_or_default()
+    let keys = enrolled_keys(gh).map_err(|why| {
+        BosunError::error(
+            format!("signed approvals are off: {why}"),
+            format!(
+                "fix {APPROVERS_PATH} on the default branch with a PR the owner approves on GitHub"
+            ),
+        )
+    })?;
+    let key_id = keys
         .into_iter()
         .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
         .map(|k| k.id)
@@ -459,6 +469,16 @@ fn read_key(path: &Path) -> Result<ring::signature::Ed25519KeyPair> {
             "pass a readable PEM file to --sign-key",
         )
     })?;
+    #[cfg(unix)]
+    if let Ok(meta) = std::fs::metadata(path) {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 != 0 {
+            eprintln!(
+                "bosun: approve: {} is readable by group or others; chmod 600 it",
+                path.display()
+            );
+        }
+    }
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     if lines.next() != Some("-----BEGIN PRIVATE KEY-----") {
         return Err(bad());

@@ -281,10 +281,12 @@ fn approver(
     if let Some(o) = by_comment {
         return Ok(Some(o.clone()));
     }
-    // A signed approval stands for the owner, so any owner's request for changes withdraws it.
-    if owners
-        .iter()
-        .any(|o| decisive(o).as_deref() == Some("CHANGES_REQUESTED"))
+    // A signed approval stands for the owner: with no owners it counts for no one, and any
+    // owner's request for changes withdraws it.
+    if owners.is_empty()
+        || owners
+            .iter()
+            .any(|o| decisive(o).as_deref() == Some("CHANGES_REQUESTED"))
     {
         return Ok(None);
     }
@@ -313,8 +315,12 @@ fn signed_approver(
     if sigs.is_empty() {
         return Ok(None);
     }
-    let Some(keys) = enrolled_keys(gh)? else {
-        return Ok(None);
+    let keys = match enrolled_keys(gh) {
+        Ok(keys) => keys,
+        Err(why) => {
+            eprintln!("bosun: risk-check: signed approvals are off: {why}");
+            return Ok(None);
+        }
     };
     let msg = signed_message(&repo.owner, &repo.name, pr, head);
     for (comment, id, sig) in sigs {
@@ -335,34 +341,29 @@ fn signed_approver(
     Ok(None)
 }
 
-/// The keys of `.bosun/approvers.toml` on the default branch; `None` when the file is missing
-/// or malformed (the feature is off; malformed is logged). A key that is not 32 bytes of
-/// base64 makes the whole file malformed.
-pub fn enrolled_keys(gh: &dyn Github) -> Result<Option<Vec<ApproverKey>>> {
-    let branch = default_branch(gh)?;
-    let Some(text) = gh.file_at(APPROVERS_PATH, &branch)? else {
-        return Ok(None);
+/// The keys of `.bosun/approvers.toml` on the default branch, read at `refs/heads/<branch>` so
+/// a tag or another ref of the same name cannot stand in for it. `Err` says why signed
+/// approvals are off: the file is missing, unreadable or malformed (a key that is not 32 bytes
+/// of base64 makes the whole file malformed). Never an error of the check.
+pub fn enrolled_keys(gh: &dyn Github) -> std::result::Result<Vec<ApproverKey>, String> {
+    let branch = default_branch(gh).map_err(|e| format!("no default branch: {}", e.message))?;
+    let git_ref = format!("refs/heads/{branch}");
+    let text = match gh.file_at(APPROVERS_PATH, &git_ref) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Err(format!("{APPROVERS_PATH} is missing on {git_ref}")),
+        Err(e) => return Err(format!("cannot read {APPROVERS_PATH}: {}", e.message)),
     };
-    let keys = parse_approvers(&text).and_then(|keys| {
-        match keys
-            .iter()
-            .find(|k| b64::decode(&k.ed25519).is_none_or(|b| b.len() != 32))
-        {
-            Some(k) => Err(format!(
-                "key {:?} is not a base64 32-byte ed25519 key",
-                k.id
-            )),
-            None => Ok(keys),
-        }
-    });
-    match keys {
-        Ok(keys) => Ok(Some(keys)),
-        Err(e) => {
-            eprintln!(
-                "bosun: risk-check: {APPROVERS_PATH} on {branch} is malformed ({e}); signed approvals are off"
-            );
-            Ok(None)
-        }
+    let keys = parse_approvers(&text)
+        .map_err(|e| format!("{APPROVERS_PATH} on {git_ref} is malformed: {e}"))?;
+    match keys
+        .iter()
+        .find(|k| b64::decode(&k.ed25519).is_none_or(|b| b.len() != 32))
+    {
+        Some(k) => Err(format!(
+            "{APPROVERS_PATH} on {git_ref} is malformed: key {:?} is not a base64 32-byte ed25519 key",
+            k.id
+        )),
+        None => Ok(keys),
     }
 }
 

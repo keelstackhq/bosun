@@ -562,13 +562,16 @@ High-risk PRs:
   text (a footer) is ignored. The signed message is exactly the UTF-8 bytes
   `bosun-approve v1 <owner>/<repo>#<pr> <head_sha>` with no trailing newline, owner and repo
   lowercased. risk-check counts it, as `approved by key <id>`, only when the key id is in
-  `.bosun/approvers.toml` read through the API from the default branch (never the PR head, the
-  base SHA or the checkout, so a PR that adds its own key does not count), the signature
+  `.bosun/approvers.toml` read through the API at `refs/heads/<default branch>` (the full ref,
+  so a tag or other ref of that name cannot stand in; never the PR head, the base SHA or the
+  checkout, so a PR that adds its own key does not count), the signature
   verifies over the message built from this repo, this PR's number and its current head, and
   line 1 names that head. A signature for an old head, another PR or another repo does not
-  verify. Each signature line is checked on its own; one that verifies is enough. While any
-  owner's newest decisive review on the head requests changes, a signed approval does not
-  count. A missing `.bosun/approvers.toml` turns the feature off. A malformed file (bad TOML,
+  verify. Each signature line is checked on its own; one that verifies is enough. A key stands
+  for the owners: with no owners in `governance/owners.toml` at base, or while any owner's
+  newest decisive review on the head requests changes, a signed approval does not count. Heads
+  are 40-hex SHA-1, so a SHA-256 repo has the feature off. A missing or unreadable
+  `.bosun/approvers.toml` turns the feature off. A malformed file (bad TOML,
   unknown fields, a duplicate or empty id, a key that is not 32 bytes of base64), an unknown
   key id and a bad signature count as no approval, never error the check, and are logged to
   stderr. The file is under R-gov. The crypto is `ring` (already in the tree through rustls).
@@ -584,14 +587,18 @@ High-risk PRs:
   `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64`. risk.yml runs the
   release pinned in `.bosun/version`, so signed approvals count in CI once that pin is a
   release with this feature.
-- `bosun approve <pr> --sign-key <pem>` is the signer's helper. It reads an ed25519 PKCS#8 PEM
+- `bosun approve <pr>@<head> --sign-key <pem>` is the signer's helper. It reads an ed25519 PKCS#8 PEM
   (as `openssl genpkey -algorithm ed25519` writes it; errors name the path only, the key is
-  never printed or logged), reads the PR's current head (`<pr>@<head>` pins it: a different
-  head is exit 3, nothing signed), finds the key's id by its public key in
-  `.bosun/approvers.toml` on the default branch (not enrolled: exit 1, nothing posted, the fix
-  names the public key), and posts the signed comment with the session's own token
-  (`GITHUB_TOKEN`); `data.approved` lists `pr`, `head_sha`, `key_id`, `comment_id`. It is exit 4
-  while bosun is halted. The cloud refusal below does not apply with `--sign-key`. `--print`
+  never printed or logged; a file readable by group or others gets a warning on stderr). The
+  argument is `<pr>@<head>`, the head the owner approved (a bare number is exit 2, so a push in
+  between is never signed unseen; `bosun approve --list` gives the heads and works in the
+  cloud). It reads the PR's current head (another head is exit 3, nothing signed), finds the
+  key's id by its public key in `.bosun/approvers.toml` on the default branch (not enrolled, or
+  the file missing or malformed: exit 1, nothing posted, the fix names the public key or the
+  file), and posts the signed comment with the session's own token
+  (`GITHUB_TOKEN`); `data.approved` lists `pr`, `head_sha`, `key_id`, `comment_id`. It trusts
+  the head only from an `https://` or loopback `BOSUN_GITHUB_API` (else exit 1). It is exit 4
+  while bosun is halted, `--print` included. The cloud refusal below does not apply with `--sign-key`. `--print`
   puts the comment in `data.body` (with `pr`, `head_sha`, `key_id`) and posts nothing.
 - `bosun approve` is the owner's shortcut, run on the owner's own machine (a local shell or a
   local Claude Code session, also through Remote Control), never in a Claude cloud session: the cloud agent proxy rewrites

@@ -10,6 +10,8 @@ const NOW: &str = "2026-10-22T10:00:00Z";
 const BASE: &str = "base0000";
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 const OLD: &str = "1111111111111111111111111111111111111111";
+/// The keys are read at the full branch ref, so a tag `main` cannot stand in for the branch.
+const MAIN: &str = "refs/heads/main";
 const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
 
 // RFC 8032 test 1 key; its PKCS#8 PEM is what `openssl pkey` writes for that seed.
@@ -55,7 +57,7 @@ fn high_pr() -> FakeGithub {
     fake.pull_as_issue(1, "change");
     fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
     fake.content("governance/owners.toml", BASE, OWNERS);
-    fake.content(".bosun/approvers.toml", "main", &approvers(&[("k1", PUB)]));
+    fake.content(".bosun/approvers.toml", MAIN, &approvers(&[("k1", PUB)]));
     fake.pull_file(
         1,
         ".github/workflows/ci.yml",
@@ -156,6 +158,8 @@ fn a_key_only_on_the_pr_head_or_base_does_not_count() {
     fake.content(".bosun/approvers.toml", "feature", &both);
     fake.content(".bosun/approvers.toml", HEAD, &both);
     fake.content(".bosun/approvers.toml", BASE, &both);
+    // A tag or another ref named `main` that an agent pushed.
+    fake.content(".bosun/approvers.toml", "main", &both);
     fake.pull_file(
         1,
         ".bosun/approvers.toml",
@@ -177,14 +181,14 @@ fn missing_or_malformed_approvers_turn_the_feature_off_without_an_error() {
         "[[key]]\nid = \"k1\"\ned25519 = \"AAAA\"\n",
         "[[key]]\nid = \"k1\"\n",
     ] {
-        fake.content(".bosun/approvers.toml", "main", text);
+        fake.content(".bosun/approvers.toml", MAIN, text);
         let (code, v) = check(&fake);
         assert_eq!(code, 5, "{text}: {v}");
     }
     // A duplicate id is malformed: two keys under one name would make the record ambiguous.
     fake.content(
         ".bosun/approvers.toml",
-        "main",
+        MAIN,
         &approvers(&[("k1", PUB2), ("k1", PUB)]),
     );
     assert_eq!(check(&fake).0, 5, "duplicate ids");
@@ -192,7 +196,7 @@ fn missing_or_malformed_approvers_turn_the_feature_off_without_an_error() {
         .lock()
         .unwrap()
         .contents
-        .remove("main:.bosun/approvers.toml");
+        .remove(&format!("{MAIN}:.bosun/approvers.toml"));
     assert_eq!(check(&fake).0, 5, "no file: the feature is off");
 }
 
@@ -226,7 +230,7 @@ fn approve_sign_key_print_matches_openssl_and_posts_nothing() {
     let fake = high_pr();
     let key = key_file();
     let out = sign_cmd(&fake, true)
-        .args(["approve", "1", "--print", "--sign-key"])
+        .args(["approve", &format!("1@{HEAD}"), "--print", "--sign-key"])
         .arg(&key)
         .output()
         .unwrap();
@@ -250,7 +254,7 @@ fn approve_sign_key_posts_in_the_cloud_and_risk_check_accepts_it() {
     let fake = high_pr();
     let key = key_file();
     let out = sign_cmd(&fake, true)
-        .args(["approve", "1", "--sign-key"])
+        .args(["approve", &format!("1@{HEAD}"), "--sign-key"])
         .arg(&key)
         .output()
         .unwrap();
@@ -277,7 +281,7 @@ fn approve_sign_key_errors() {
     )
     .unwrap();
     let out = sign_cmd(&fake, false)
-        .args(["approve", "1", "--sign-key"])
+        .args(["approve", &format!("1@{HEAD}"), "--sign-key"])
         .arg(&bad)
         .output()
         .unwrap();
@@ -290,9 +294,9 @@ fn approve_sign_key_errors() {
     );
 
     // The key is not enrolled on main: refused before posting.
-    fake.content(".bosun/approvers.toml", "main", &approvers(&[("k2", PUB2)]));
+    fake.content(".bosun/approvers.toml", MAIN, &approvers(&[("k2", PUB2)]));
     let out = sign_cmd(&fake, false)
-        .args(["approve", "1", "--sign-key"])
+        .args(["approve", &format!("1@{HEAD}"), "--sign-key"])
         .arg(key_file())
         .output()
         .unwrap();
@@ -330,4 +334,55 @@ fn this_repos_approvers_file_parses_with_32_byte_keys() {
         bosun::github::b64::decode(&keys[0].ed25519).unwrap().len(),
         32
     );
+}
+
+#[test]
+fn signed_approvals_need_owners_on_the_base() {
+    let fake = high_pr();
+    fake.state
+        .lock()
+        .unwrap()
+        .contents
+        .remove(&format!("{BASE}:governance/owners.toml"));
+    app_comment(&fake, &body(HEAD, "k1", SIG));
+    assert_eq!(
+        check(&fake).0,
+        5,
+        "a key stands for an owner; no owners, no approval"
+    );
+}
+
+#[test]
+fn the_signer_needs_a_pinned_head_https_and_no_halt() {
+    let fake = high_pr();
+    let key = key_file();
+    let sign = |args: &[&str], api: Option<&str>| {
+        let mut cmd = sign_cmd(&fake, true);
+        if let Some(api) = api {
+            cmd.env("BOSUN_GITHUB_API", api);
+        }
+        let out = cmd
+            .arg("approve")
+            .args(args)
+            .arg("--sign-key")
+            .arg(&key)
+            .output()
+            .unwrap();
+        let v = one_object(&out.stdout);
+        (out.status.code().unwrap(), v)
+    };
+    assert_eq!(sign(&["1"], None).0, 2, "a bare PR number is a usage error");
+    assert_eq!(sign(&[&format!("1@{OLD}")], None).0, 3, "the head moved");
+    let (code, v) = sign(
+        &[&format!("1@{HEAD}"), "--print"],
+        Some("http://example.com"),
+    );
+    assert_eq!(code, 1, "{v}");
+    fake.variable("BOSUN_HALT", "1");
+    assert_eq!(
+        sign(&[&format!("1@{HEAD}"), "--print"], None).0,
+        4,
+        "halted, also --print"
+    );
+    assert!(fake.state.lock().unwrap().comments.is_empty());
 }
