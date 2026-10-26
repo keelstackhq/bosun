@@ -715,14 +715,29 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
     ] {
         assert!(yaml.contains(k), "{k}");
     }
-    let guard = at("name: toolchain is a release");
+    // rustup's toolchain is pinned over the PR's rust-toolchain.toml, to the same channel.
+    let file =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/rust-toolchain.toml")).unwrap();
+    let channel: toml::Table = file.parse().unwrap();
+    let channel = channel["toolchain"]["channel"].as_str().unwrap();
+    assert!(
+        yaml.contains(&format!("  RUSTUP_TOOLCHAIN: \"{channel}\"\n")),
+        "RUSTUP_TOOLCHAIN must equal rust-toolchain.toml's channel {channel}"
+    );
+    let guard = at("name: cargo config has no alias");
     assert!(guard < at("uses: dtolnay/rust-toolchain") && guard < at("uses: Swatinem/rust-cache"));
     assert!(at("id: binhash") < at("uses: Swatinem/rust-cache"));
     assert!(yaml.contains("BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}"));
-    assert!(at("lint and test did not run") < at("sha256sum -c --quiet"));
+    assert!(yaml.contains(
+        "\"$BOSUN\" gate \"$g\" $all || { echo \"::error::gate $g failed; later gates did not run\"; exit 1; }"
+    ));
+    assert!(
+        !yaml.contains("!cancelled()"),
+        "nothing runs after a failure"
+    );
     let script = run_scripts(step_text(
         &yaml,
-        "      - if: steps.plan.outputs.work == 'true'\n        name: toolchain is a release",
+        "      - if: steps.plan.outputs.work == 'true'\n        name: cargo config has no alias",
     ))
     .remove(0);
     let script: String = script
@@ -731,19 +746,16 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
         .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
         .collect();
     for (name, text, ok) in [
+        (".cargo/config.toml", "[net]\nretry = 3\n", true),
         (
-            "rust-toolchain.toml",
-            "[toolchain]\nchannel = \"1.97\"\n",
-            true,
-        ),
-        (
-            "rust-toolchain.toml",
-            "[toolchain]\npath = \"./evil\"\n",
+            ".cargo/config.toml",
+            "[alias]\nfmt = [\"run\", \"--\"]\n",
             false,
         ),
-        ("rust-toolchain", "/opt/evil\n", false),
+        (".cargo/config", "alias.deny = \"run --\"\n", false),
     ] {
         let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".cargo")).unwrap();
         fs::write(dir.path().join(name), text).unwrap();
         let passed = std::process::Command::new("bash")
             .args(["-eo", "pipefail", "-c", &script])

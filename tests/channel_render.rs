@@ -775,9 +775,27 @@ fn the_toolchain_step_refuses_a_toolchain_path() {
     for (name, text) in [
         ("rust-toolchain.toml", "[toolchain]\npath = \"./evil\"\n"),
         ("rust-toolchain.toml", "[toolchain]\n  path= \"/opt/x\"\n"),
+        // Other TOML spellings of the same key (review of #233).
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\n\"path\" = \"/abs/evil\"\n",
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\n'path' = \"/abs/evil\"\n",
+        ),
+        ("rust-toolchain.toml", "toolchain.path = \"/abs/evil\"\n"),
+        (
+            "rust-toolchain.toml",
+            "toolchain = { path = \"/abs/evil\" }\n",
+        ),
         ("rust-toolchain", "/opt/evil\n"),
+        // A cargo alias can shadow `cargo fmt` and `cargo deny`.
+        (".cargo/config.toml", "[alias]\nfmt = [\"run\", \"--\"]\n"),
+        (".cargo/config", "alias.deny = \"run --\"\n"),
     ] {
         let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".cargo")).unwrap();
         fs::write(root.path().join(name), text).unwrap();
         let (ok, calls) = toolchain_run(root.path(), root.path());
         assert!(!ok, "{name}: {text:?} passed");
@@ -785,14 +803,30 @@ fn the_toolchain_step_refuses_a_toolchain_path() {
     }
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("rust-toolchain"), "1.97\n").unwrap();
+    fs::create_dir_all(root.path().join(".cargo")).unwrap();
+    fs::write(root.path().join(".cargo/config.toml"), "[net]\nretry = 3\n").unwrap();
     assert!(
         toolchain_run(root.path(), root.path()).0,
-        "a plain channel passes"
+        "a plain channel and a cargo config without alias pass"
+    );
+    // An alias above rust_path (cargo reads every parent's config) is refused too.
+    let root = tempfile::tempdir().unwrap();
+    let sub = root.path().join("crates/app");
+    fs::create_dir_all(&sub).unwrap();
+    fs::create_dir_all(root.path().join(".cargo")).unwrap();
+    fs::write(
+        root.path().join(".cargo/config.toml"),
+        "[alias]\nx = \"run\"\n",
+    )
+    .unwrap();
+    assert!(
+        !toolchain_run(root.path(), &sub).0,
+        "a parent's alias passed"
     );
 }
 
 /// The rest of the defence before lint: cargo cannot swap rustc, the pinned bosun is checked
-/// before each gate, and lint and test (PR code) never run after another gate failed.
+/// before each gate, and the first failed gate stops the job.
 #[test]
 fn the_gates_run_a_checked_bosun_with_cargo_pinned_to_rustc() {
     let files = variant(&["rust"], "");
@@ -823,8 +857,12 @@ fn the_gates_run_a_checked_bosun_with_cargo_pinned_to_rustc() {
     );
     let run = gates["run"].as_str().unwrap();
     let check = run.find("sha256sum -c --quiet").expect("hash check");
-    let stop = run.find("lint and test did not run").expect("early stop");
-    assert!(stop < check && check < run.find("\"$bosun\" gate").unwrap());
+    let gate = run.find("\"$bosun\" gate").unwrap();
+    assert!(check < gate);
+    assert!(
+        run[gate..].contains("later gates did not run\"; exit 1; }"),
+        "{run}"
+    );
 }
 
 #[test]

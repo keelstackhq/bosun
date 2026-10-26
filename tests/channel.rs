@@ -180,11 +180,11 @@ fn one_job_carries_the_required_check() {
     // The gates that run no PR code first (lint and test run build.rs and tests).
     assert!(body.contains("GATES: test-integrity deps fmt lint test\n"));
     assert!(ci.contains("types: [opened, synchronize, reopened, edited, ready_for_review]"));
-    // Every gate runs, also after one fails, and any failure fails the job.
-    assert!(body.contains("\"$bosun\" gate \"$g\" $all || failed=\"$failed $g\""));
+    // The first failed gate stops the job: no PR code (lint, test) runs after a failure.
     assert!(body.contains(
-        "if [ -n \"$failed\" ]; then echo \"::error::failed gates:$failed\"; exit 1; fi"
+        "\"$bosun\" gate \"$g\" $all || { echo \"::error::gate $g failed; later gates did not run\"; exit 1; }"
     ));
+    assert!(!body.contains("failed=\""));
 }
 
 /// The `run:` scripts of a workflow: the `run:` line and its indented block.

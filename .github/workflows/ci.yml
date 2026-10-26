@@ -30,9 +30,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # A PR's .cargo/config.toml must not swap the compiler cargo runs (a rustc wrapper or
-  # build.rustc would run PR code in rust-cache and the gates before lint): cargo takes these
-  # over its config files. The toolchain file is checked by the step `toolchain is a release`.
+  # No PR code before lint. rustup takes RUSTUP_TOOLCHAIN over the PR's rust-toolchain.toml
+  # (whose `path` would run a compiler from the PR in rust-cache); a test keeps it equal to that
+  # file's channel, so a toolchain bump changes both. cargo takes the RUSTC* settings over a PR's
+  # .cargo/config.toml (a rustc wrapper or build.rustc); step `cargo config has no alias`
+  # refuses aliases (they can shadow `cargo fmt` and `cargo deny`).
+  RUSTUP_TOOLCHAIN: "1.97"
   RUSTC: rustc
   RUSTC_WRAPPER: ""
   RUSTC_WORKSPACE_WRAPPER: ""
@@ -51,9 +54,10 @@ jobs:
       # Order: every step that runs no PR code first (the base's bosun, the pin check, then the
       # gates test-integrity, deps and fmt); lint, test and the npm launcher tests run PR code on
       # this runner and come last, so it cannot replace or fake what ran before (spec §11).
-      # Before lint, the PR could still run code through its toolchain file or cargo config:
-      # step `toolchain is a release` and the job env above close that. Not closed: PR code in
-      # lint or test has the runner's sudo and can tamper with this job's own outcome (spec §11).
+      # Before lint, the PR could still run code through its toolchain file or cargo config: the
+      # job env and step `cargo config has no alias` close that. The first failed gate stops the
+      # job. Left: PR code in lint or test has the runner's sudo and can fake their own result,
+      # as in a gate job of their own before (spec §7).
       # A body or title edit that did not retarget the PR changes no file, so the checks that
       # read only files keep the result of the head's newest finished `ci-ok` (GitHub Actions,
       # not this run). test-integrity also reads the PR body, and that run may have read another
@@ -163,15 +167,15 @@ jobs:
           got="$("$dir/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${v}"
-      # A toolchain file with `path` makes rustup run a compiler from the PR (rust-cache runs
-      # `rustc -vV` before the gates): only a released toolchain (a channel) may be named.
+      # A cargo alias can shadow the external subcommands `cargo fmt` and `cargo deny`, which
+      # would run PR code in the fmt and deps gates; fail closed on any alias in a config cargo
+      # reads from here.
       - if: steps.plan.outputs.work == 'true'
-        name: toolchain is a release
+        name: cargo config has no alias
         run: |
-          for f in rust-toolchain.toml rust-toolchain; do
-            [ -f "$f" ] || continue
-            if grep -Eq '^[[:space:]]*path[[:space:]]*=' "$f" || { [ "$f" = rust-toolchain ] && grep -q / "$f"; }; then
-              echo "::error::$f names a toolchain path; name a released channel instead"
+          for f in .cargo/config .cargo/config.toml; do
+            if [ -f "$f" ] && grep -q alias "$f"; then
+              echo "::error::$f mentions alias; cargo aliases are not allowed here"
               exit 1
             fi
           done
@@ -198,7 +202,7 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
-      # Every gate runs, also after one fails, so one run reports all failures.
+      # The gates run in order and stop at the first failure.
       - if: steps.plan.outputs.work == 'true'
         name: bosun gates
         env:
@@ -212,24 +216,18 @@ jobs:
         run: |
           # A PR runs each gate on what it changed; main and the queue run it on everything.
           if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
-          failed=""
           # The gates that run no PR code first: lint (build.rs, proc macros) and test run PR
-          # code on this runner, and it must not change what test-integrity, deps or fmt report.
+          # code on this runner. The first failed gate stops the job, so no PR code runs after
+          # a failure it could hide (with the runner's sudo).
           for g in ${ONLY:-test-integrity deps fmt lint test}; do
-            # lint and test run PR code: after a failed gate that runs none, they do not run, so
-            # PR code cannot hide that failure.
-            case "$g" in lint|test)
-              if [ -n "$failed" ]; then echo "::error::failed gates:$failed (lint and test did not run)"; exit 1; fi ;;
-            esac
             echo "::group::bosun gate $g"
-            # The base's bosun, unchanged since step binhash.
+            # Defence in depth: the base's bosun, unchanged since step binhash.
             echo "$BOSUN_SHA256  $BOSUN" | sha256sum -c --quiet || { echo "::error::$BOSUN changed"; exit 1; }
-            "$BOSUN" gate "$g" $all || failed="$failed $g"
+            "$BOSUN" gate "$g" $all || { echo "::error::gate $g failed; later gates did not run"; exit 1; }
             echo "::endgroup::"
           done
-          if [ -n "$failed" ]; then echo "::error::failed gates:$failed"; exit 1; fi
       # The npm launcher (npm/bosun) has no Rust; the runner's Node runs its tests. Last: PR code.
-      - if: ${{ !cancelled() && steps.plan.outputs.setup == 'true' }}
+      - if: steps.plan.outputs.setup == 'true'
         name: npm launcher tests
         run: node --test npm/bosun/test/*.test.js
 

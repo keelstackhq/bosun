@@ -191,14 +191,27 @@ jobs:
             if [ "$d" = "$GITHUB_WORKSPACE" ] || [ "$d" = / ]; then break; fi
             d="$(dirname "$d")"
           done
-          # A toolchain file with `path` makes rustup run a compiler from the PR (rust-cache runs
-          # `rustc -vV` before the gates): only a released toolchain (a channel) may be named.
+          # No PR code before the gates. A toolchain file with a `path` (in any TOML spelling)
+          # makes rustup run a compiler from the PR in rust-cache: fail closed on any "path" or
+          # "/" in it. A cargo alias can shadow `cargo fmt` and `cargo deny`: fail closed on any
+          # alias in a .cargo/config(.toml) cargo reads, from here up to the repo root.
           for f in "$d/rust-toolchain.toml" "$d/rust-toolchain"; do
             [ -n "$found" ] && [ -f "$f" ] || continue
-            if grep -Eq '^[[:space:]]*path[[:space:]]*=' "$f" || { [ "${f##*/}" = rust-toolchain ] && grep -q / "$f"; }; then
+            if grep -q -e path -e / "$f"; then
               echo "::error::$f names a toolchain path; name a released channel instead"
               exit 1
             fi
+          done
+          c="$PWD"
+          while :; do
+            for f in "$c/.cargo/config" "$c/.cargo/config.toml"; do
+              if [ -f "$f" ] && grep -q alias "$f"; then
+                echo "::error::$f mentions alias; cargo aliases are not allowed here"
+                exit 1
+              fi
+            done
+            if [ "$c" = "$GITHUB_WORKSPACE" ] || [ "$c" = / ]; then break; fi
+            c="$(dirname "$c")"
           done
           if [ -n "$found" ]; then
             rustup toolchain install
@@ -235,9 +248,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - uses: keelstackhq/hoard@v0
         if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
-{% endif %}{% raw %}      # Every gate runs, also after one fails, so one run reports all failures. The gates that run
-      # no PR code come first: lint (build.rs, proc macros) and test run PR code on this runner,
-      # and it must not be able to change what test-integrity, deps or fmt report.
+{% endif %}{% raw %}      # The gates run in order and stop at the first failure. The gates that run no PR code come
+      # first: lint (build.rs, proc macros) and test run PR code on this runner, and with the
+      # runner's sudo it could hide an earlier failure, so it never runs after one.
       - if: steps.plan.outputs.work == 'true'
         name: bosun gates
         env:
@@ -260,18 +273,11 @@ jobs:
           GATES="${ONLY:-$GATES}"
           # A PR runs each gate on what it changed; main and the queue run it on everything.
           if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
-          failed=""
           for g in $GATES; do
-            # lint and test run PR code: after a failed gate that runs none, they do not run, so
-            # PR code cannot hide that failure.
-            case "$g" in lint|test)
-              if [ -n "$failed" ]; then echo "::error::failed gates:$failed (lint and test did not run)"; exit 1; fi ;;
-            esac
             echo "::group::bosun gate $g"
-            # The pinned bosun, unchanged since step bin.
+            # Defence in depth: the pinned bosun, unchanged since step bin.
             echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "::error::$bosun changed"; exit 1; }
-            "$bosun" gate "$g" $all || failed="$failed $g"
+            "$bosun" gate "$g" $all || { echo "::error::gate $g failed; later gates did not run"; exit 1; }
             echo "::endgroup::"
           done
-          if [ -n "$failed" ]; then echo "::error::failed gates:$failed"; exit 1; fi
 {% endraw %}
