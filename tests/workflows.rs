@@ -160,7 +160,7 @@ fn risk_judges_from_the_base_and_never_runs_pr_code() {
 }
 
 /// risk.yml and verdict.yml run the release pinned in the checkout's `.bosun/version` (as
-/// ci.yml's bosun-bin) and build bosun only while the pin says `unreleased`, so a main that
+/// ci.yml's pinned-release steps) and build bosun only while the pin says `unreleased`, so a main that
 /// does not compile cannot block its own mainfix.
 fn runs_the_pinned_release(yaml: &str) {
     assert!(
@@ -409,7 +409,7 @@ fn review_runs_base_code_with_the_secret_and_skips_without_review_ci() {
     runs_the_pinned_release(&yaml);
 }
 
-/// The install step has the shape of ci.yml's `bosun-bin` job; the job builds nothing.
+/// The install step has the shape of ci.yml's pinned-release steps; the job builds nothing.
 fn assert_pinned_install_with_fallback(yaml: &str) {
     assert!(yaml.contains("@keelstackhq/bosun@${VERSION}"), "{yaml}");
     assert!(yaml.contains("npm install -g --ignore-scripts"));
@@ -639,4 +639,91 @@ fn splice_pins_its_version() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/splice.yml");
     let yaml = fs::read_to_string(path).unwrap();
     assert!(yaml.contains("          version: \"0.2.0\"\n"), "{yaml}");
+}
+
+/// The text of ci.yml's step that starts at `from`, up to the next step.
+fn step_text<'a>(yaml: &'a str, from: &str) -> &'a str {
+    let i = yaml.find(from).unwrap_or_else(|| panic!("no {from:?}"));
+    let rest = &yaml[i..];
+    // The next step, or the comment above it, ends this one.
+    let end = rest[1..]
+        .match_indices("\n      ")
+        .map(|(j, _)| j + 1)
+        .find(|&j| rest[j + 1..].starts_with("      - ") || rest[j + 1..].starts_with("      #"))
+        .map_or(rest.len(), |j| j + 1);
+    &rest[..end]
+}
+
+/// CI minutes (docs/ci-minutes.md): one job does the work, `ci-ok` aggregates it; a draft fails
+/// at once; an edit keeps the file checks of a passed head and reruns test-integrity, with the
+/// same edit step as the channel's bosun.yml; the pin check and the gates that run no PR code
+/// come before lint and test.
+#[test]
+fn ci_is_one_work_job_with_the_channels_edit_rule() {
+    let yaml = ci_yaml();
+    assert_eq!(job_ids(&yaml), ["ci", "ci-ok"]);
+    let channel = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/channel/pieces/core/files/.github/workflows/bosun.yml.jinja"
+    ))
+    .unwrap();
+    let ours = step_text(&yaml, "      - if: github.event.action == 'edited'");
+    let theirs = step_text(&channel, "      - if: github.event.action == 'edited'");
+    assert_eq!(
+        ours,
+        theirs.replace("CHECK: ${{ github.job }}", "CHECK: ci-ok"),
+        "the edit step differs from the channel's"
+    );
+    // Every step that runs PR code comes after the trusted ones (spec §11).
+    let at = |needle: &str| yaml.find(needle).unwrap_or_else(|| panic!("no {needle:?}"));
+    let pin_check = at("name: the pinned release installs and reports its version");
+    let gates = at("name: bosun gates");
+    let npm_tests = at("name: npm launcher tests");
+    assert!(pin_check < at("uses: dtolnay/rust-toolchain"));
+    assert!(pin_check < at("uses: Swatinem/rust-cache"));
+    assert!(
+        at("run: cargo build --release --locked --bin bosun") < at("uses: Swatinem/rust-cache")
+    );
+    assert!(at("name: bosun of the base") < pin_check && pin_check < gates && gates < npm_tests);
+    assert!(
+        yaml.contains("got=\"$(\"$dir/bin/bosun\" --version)\""),
+        "the pin check runs a resolved path"
+    );
+    assert!(yaml.contains("cache-bin: \"false\""));
+    assert!(yaml.contains("          persist-credentials: false\n"));
+    // Drafts: only the plan step reads the flag; no `if` may skip a draft.
+    assert_eq!(yaml.matches("pull_request.draft").count(), 1);
+    assert!(yaml.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
+    assert!(yaml.contains("for g in ${ONLY:-test-integrity deps fmt lint test}; do"));
+    // The plan step under the runner's shell.
+    let plan = step_text(&yaml, "      - id: plan");
+    let script = run_scripts(plan).remove(0);
+    let script: String = script
+        .lines()
+        .skip(1)
+        .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
+        .collect();
+    let run = |draft: &str, mode: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out");
+        let ok = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &script])
+            .env("GITHUB_OUTPUT", &out)
+            .env("DRAFT", draft)
+            .env("MODE", mode)
+            .status()
+            .unwrap()
+            .success();
+        ok.then(|| fs::read_to_string(out).unwrap())
+    };
+    assert_eq!(
+        run("false", "run").as_deref(),
+        Some("work=true\nsetup=true\n")
+    );
+    assert_eq!(
+        run("false", "integrity").as_deref(),
+        Some("work=true\nsetup=false\nonly=test-integrity\n")
+    );
+    assert_eq!(run("true", "run"), None, "a draft fails");
+    assert_eq!(run("true", "integrity"), None, "a draft fails");
 }

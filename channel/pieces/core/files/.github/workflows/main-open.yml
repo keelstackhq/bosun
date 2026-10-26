@@ -41,7 +41,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      # Run the release pinned in .bosun/version (same steps as the bosun-bin job of bosun.yml), so a
+      # Run the release pinned in .bosun/version (the same pinned-release steps as bosun.yml), so a
       # broken main cannot stop this job. A pin that is `unreleased`, or a release without the
       # command, runs the shell fallback below.
       - name: pinned release

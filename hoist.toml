@@ -1,7 +1,7 @@
 # Repo settings that `hoist apply` sets (spec D17). Inference covers the rest.
 
 [github]
-# ci-ok aggregates every gate-* job (D15); the other three are separate required checks.
+# ci-ok aggregates the ci job, which runs every gate (D15); the other three are separate required checks.
 required_checks = ["ci-ok", "risk-check", "review-verdict", "main-open"]
 # Seed: auto-merge without a merge queue. risk-check and review-verdict are statuses on the PR
 # head, so a merge-queue commit would never get them; the queue comes with M3.

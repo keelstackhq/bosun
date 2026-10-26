@@ -383,6 +383,7 @@ fn rust_gates_install_the_toolchain_file_once() {
         assert!(!wf.contains("dtolnay/rust-toolchain"), "{wf}");
         assert!(!wf.contains("\"1.97\""), "{wf}");
         assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
+        assert!(wf.contains("cache-bin: \"false\""), "{wf}");
         // Without a toolchain file in rust_path or a parent, the old pin, never `stable`; the
         // gates and the setup script fall back to the same pin.
         let setup = file(&files, "docs/setup-script.sh");

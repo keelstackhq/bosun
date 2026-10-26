@@ -189,6 +189,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: {{ rust_path }}
+          # Not ~/.cargo/bin: a cache a PR's earlier run saved must not put a binary (git, rustfmt,
+          # cargo-deny) on PATH before test-integrity, deps or fmt.
+          cache-bin: "false"
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: taiki-e/install-action@v2
         with:

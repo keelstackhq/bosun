@@ -428,7 +428,7 @@ Gate contract (stack-agnostic):
 
 CI templates call only `bosun gate <name>`. The channel's bosun.yml runs every gate in one job
 `ci-ok` (or `bosun-ok`), which fails unless all succeeded: every job is billed as at least one
-minute on a private repo (docs/ci-minutes.md). bosun's own ci.yml may split gates into jobs. Jobs cache through
+minute on a private repo (docs/ci-minutes.md). bosun's own ci.yml runs them in one job `ci`, the same way (including the edit and draft rules; every step that runs PR code, lint, test and the npm launcher tests, comes after the base's bosun, the pin check and the other gates), and `ci-ok` aggregates it. Neither caches `~/.cargo/bin` (`cache-bin: false`): a cache a PR's earlier run saved must not put a binary on PATH (residual, as before: the restored `~/.cargo/registry` that the deps gate reads can come from such a run). Jobs cache through
 `keelstackhq/hoard@v0` (D19). A profile maps each gate to a command.
 
 Profiles map gates to commands with the placeholders `{packages}`, `{files}` and `{diff}`. Each
@@ -839,10 +839,10 @@ Rules:
 ## 11. Seed and bootstrap
 
 bosun pins its own release in `.bosun/version`. Its gates run the pinned release, never the binary
-built from main, so a bad change to bosun cannot approve itself: job `bosun-bin` reads the pin from
-the PR's base commit and installs `@keelstackhq/bosun@<pin>` from npm, checking that it reports that
+built from main, so a bad change to bosun cannot approve itself: job `ci` (step `bosun of the base`, a worktree of
+the PR's base commit outside the checkout) reads the pin from the PR's base commit and installs `@keelstackhq/bosun@<pin>` from npm, checking that it reports that
 version. A base that pins `unreleased` (the seed, see the seed plan S10) builds bosun from the base
-commit instead. Job `pin` checks the pin a PR sets: that release must install and report its version. One
+commit instead. A step of the same job, before the gates, checks the pin a PR sets: that release must install and report its version. One
 bootstrap exception: when the base has no self-gating CI yet (the PR that adds it, and PRs stacked
 on it before it merges), the change builds bosun itself, and CI says so in a warning.
 

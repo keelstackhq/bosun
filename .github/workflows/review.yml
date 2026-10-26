@@ -44,7 +44,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      # The release pinned in .bosun/version of this checkout (spec §11), as ci.yml's bosun-bin.
+      # The release pinned in .bosun/version of this checkout (spec §11), as ci.yml's pinned-release steps.
       # `unreleased` builds instead.
       - name: pinned release
         id: pin

@@ -26,7 +26,7 @@ src/hooks/                  PreToolUse (edit-, label-, merge-lock), SessionStart
 src/sessions/               usage providers (claude-sessions, generic)
 tests/common/               fake GitHub (tiny_http, stateful), bosun() command builder
 .bosun/ governance/ .claude/ AGENTS.md REVIEW.md hoist.toml   bosun runs on itself
-.github/workflows/ci.yml    gate-* jobs + ci-ok; risk.yml, main-open.yml, main-health.yml (S10)
+.github/workflows/ci.yml    one job `ci` (every gate) + ci-ok; risk.yml, main-open.yml, main-health.yml (S10)
 ```
 
 ## Commands

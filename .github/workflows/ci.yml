@@ -1,53 +1,91 @@
 name: ci
 
+# CI minutes (docs/ci-minutes.md): every job is billed as at least one minute on a private repo,
+# so one job `ci` does all the work and `ci-ok` only aggregates it. A draft fails at once
+# (ready_for_review runs the gates); after a PR body or title edit only test-integrity (which
+# reads the body) runs again on a head that passed. Run the same checks locally first
+# (CLAUDE.md, Commands).
 on:
   # Only PRs into main: stacked PRs run once they target main, so they do not fill the queue.
   pull_request:
     branches: [main]
-    # `edited` covers a stacked PR being retargeted to main.
-    types: [opened, synchronize, reopened, edited]
+    # `edited` covers a stacked PR being retargeted to main and a new `snapshot-change:` line.
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   push:
     branches: [main]
   merge_group:
 
-# A new push to the same PR or branch cancels its older run. An `edited` run that did not change
-# the base (a title or body edit) gets its own group: it neither cancels the running gates of the
-# same head (whose cancelled `ci-ok` would post a failure) nor is cancelled by a push. It still
-# runs every job, so its `ci-ok` reflects the head; a skipped green `ci-ok` posted after a red
-# one on the same head would let a body edit turn a failed head green.
+# One group per PR. A push (or a retarget) cancels the older run of the PR. A body or title edit
+# never cancels: it waits for the running run, then keeps that run's file gates when it passed
+# and runs test-integrity on its own body (else every gate). So an edit never leaves a cancelled
+# run and a red `ci-ok` behind.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'edited' && !github.event.changes.base && format('-edit-{0}', github.run_id) || '' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base) }}
 
+# checks: read lets a body edit read the head's earlier ci-ok.
 permissions:
   contents: read
+  checks: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  docs:
+  ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      # Order: every step that runs no PR code first (the base's bosun, the pin check, then the
+      # gates test-integrity, deps and fmt); lint, test and the npm launcher tests run PR code on
+      # this runner and come last, so it cannot replace or fake what ran before (spec §11).
+      # A body or title edit that did not retarget the PR changes no file, so the checks that
+      # read only files keep the result of the head's newest finished `ci-ok` (GitHub Actions,
+      # not this run). test-integrity also reads the PR body, and that run may have read another
+      # body (an edit can replace a pending run), so after a success it runs again on the body of
+      # this event (mode=integrity). After anything else, or none, everything runs.
+      - if: github.event.action == 'edited' && !github.event.changes.base
+        id: edit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          CHECK: ci-ok
+        run: |
+          mode=run
+          prev="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD/check-runs?check_name=$CHECK&filter=all&per_page=100" \
+            --jq "[.check_runs[] | select(.app.slug == \"github-actions\" and .status == \"completed\" and (.details_url | contains(\"/runs/$GITHUB_RUN_ID/\") | not))] | max_by(.id) | .conclusion // \"\"" || true)"
+          if [ "$prev" = success ]; then mode=integrity; fi
+          echo "the head's earlier $CHECK: ${prev:-none}; mode=$mode"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      # work: run anything; setup: the file checks and their tools; only: the gates.
+      - id: plan
+        env:
+          DRAFT: ${{ github.event.pull_request.draft || false }}
+          MODE: ${{ steps.edit.outputs.mode || 'run' }}
+        run: |
+          if [ "$DRAFT" = true ]; then echo "::error::draft: not checked; mark it ready to run the gates"; exit 1; fi
+          if [ "$MODE" = integrity ]; then
+            { echo "work=true"; echo "setup=false"; echo "only=test-integrity"; } >> "$GITHUB_OUTPUT"
+            echo "this head passed the file checks; test-integrity runs on this body"
+          else
+            { echo "work=true"; echo "setup=true"; } >> "$GITHUB_OUTPUT"
+          fi
       # Whitespace errors in the change (trailing spaces, conflict markers).
-      - name: diff check
-        if: github.event_name == 'pull_request'
-        run: git diff --check "origin/${{ github.base_ref }}...HEAD"
-      # The npm launcher (npm/bosun) has no Rust; the runner's Node runs its tests.
-      - name: npm launcher tests
-        run: node --test npm/bosun/test/*.test.js
-
-  # The gates run bosun built from the base commit, never from the change under test, so a bad
-  # change to bosun cannot pass its own gates (spec §11). After the first release they run the
-  # release pinned in .bosun/version instead.
-  bosun-bin:
-    runs-on: ubuntu-latest
-    steps:
-      - name: base commit
-        id: base
+      - if: steps.plan.outputs.setup == 'true' && github.event_name == 'pull_request'
+        name: diff check
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git diff --check "origin/$BASE_REF...HEAD"
+      # The gates run bosun from the base commit, never from the change under test, so a bad
+      # change to bosun cannot pass its own gates (spec §11): the release pinned in the base's
+      # .bosun/version, or bosun built from the base while it says `unreleased`. The base is a
+      # worktree outside the checkout.
+      - if: steps.plan.outputs.work == 'true'
+        name: bosun of the base
         env:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
@@ -55,26 +93,24 @@ jobs:
         run: |
           sha="${PR_BASE:-${QUEUE_BASE:-$PUSH_BEFORE}}"
           case "$sha" in ""|0000000000000000000000000000000000000000) sha="$GITHUB_SHA";; esac
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.base.outputs.sha }}
-      # Bootstrap: a base without the self-gating CI (this job) has no `bosun gate` to trust yet,
-      # so the change builds itself, once, with a warning. Every later PR uses its base again.
-      - name: base has self-gating CI
+          git worktree add --detach "$RUNNER_TEMP/base" "$sha"
+      # Bootstrap: a base without the self-gating CI has no `bosun gate` to trust yet, so the
+      # change builds itself, once, with a warning. Every later PR uses its base again.
+      - if: steps.plan.outputs.work == 'true'
+        name: base has self-gating CI
         id: boot
+        working-directory: ${{ runner.temp }}/base
         run: |
-          if grep -q "^  bosun-bin:" .github/workflows/ci.yml 2>/dev/null; then
-            echo "self=false" >> "$GITHUB_OUTPUT"
+          if grep -Eq '^  bosun-bin:|name: bosun of the base' .github/workflows/ci.yml 2>/dev/null; then
+            echo "dir=$RUNNER_TEMP/base" >> "$GITHUB_OUTPUT"
           else
-            echo "self=true" >> "$GITHUB_OUTPUT"
+            echo "dir=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
             echo "::warning::the base has no self-gating CI yet; bosun is built from this change (seed bootstrap)"
           fi
-      - if: steps.boot.outputs.self == 'true'
-        uses: actions/checkout@v4
-      # The gates run the release pinned in the base's .bosun/version (spec §11), so a change to
-      # bosun cannot approve itself. A base that says `unreleased` builds bosun from the base.
-      - name: pinned release of the base
+      # The release pinned in .bosun/version, so a change to bosun cannot approve itself.
+      - if: steps.plan.outputs.work == 'true'
+        name: pinned release of the base
+        working-directory: ${{ steps.boot.outputs.dir }}
         id: pin
         run: |
           v="$(tr -d '[:space:]' < .bosun/version 2>/dev/null || true)"
@@ -85,8 +121,9 @@ jobs:
             exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
-      - if: steps.pin.outputs.version != ''
+      - if: steps.plan.outputs.work == 'true' && steps.pin.outputs.version != ''
         name: install the pinned release
+        working-directory: ${{ steps.boot.outputs.dir }}
         env:
           VERSION: ${{ steps.pin.outputs.version }}
         run: |
@@ -97,67 +134,10 @@ jobs:
           got="$(target/release/bosun --version)"
           echo "$got"
           test "$got" = "bosun ${VERSION}"
-      - if: steps.pin.outputs.version == ''
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97"
-      - if: steps.pin.outputs.version == ''
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: bosun-bin
-      - if: steps.pin.outputs.version == ''
-        run: cargo build --release --locked --bin bosun
-      - uses: actions/upload-artifact@v4
-        with:
-          name: bosun-bin
-          path: target/release/bosun
-          retention-days: 1
-
-  gate:
-    name: gate-${{ matrix.gate }}
-    needs: bosun-bin
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    strategy:
-      fail-fast: false
-      matrix:
-        gate: [fmt, lint, test, deps, test-integrity]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.97"
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest,cargo-deny
-      - uses: actions/download-artifact@v4
-        with:
-          name: bosun-bin
-          path: ${{ runner.temp }}/bosun
-      - name: bosun gate ${{ matrix.gate }}
-        env:
-          GATE: ${{ matrix.gate }}
-          # test-integrity reads the snapshot-change line from the PR body.
-          BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
-          EVENT: ${{ github.event_name }}
-        run: |
-          bosun="$RUNNER_TEMP/bosun/bosun"
-          chmod +x "$bosun"
-          # A PR runs the gate on what it changed; main and the queue run it on everything.
-          if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
-          "$bosun" gate "$GATE" $all
-
-  # The pin this change sets must be a published release that reports its own version; the
-  # gates of the next PRs install it.
-  pin:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: the pinned release installs and reports its version
+      # The pin this change sets must be a published release that reports its own version; the
+      # gates of the next PRs install it. Before any cache restore and any PR code.
+      - if: steps.plan.outputs.setup == 'true'
+        name: the pinned release installs and reports its version
         run: |
           v="$(tr -d '[:space:]' < .bosun/version)"
           if [ "$v" = unreleased ]; then echo "no release pinned yet"; exit 0; fi
@@ -167,21 +147,64 @@ jobs:
             exit 1
           }
           npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
-          got="$(bosun --version)"
+          # By its resolved path: never a `bosun` found on PATH.
+          dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+          got="$("$dir/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${v}"
+      - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+          components: rustfmt, clippy
+      - if: steps.plan.outputs.work == 'true' && steps.pin.outputs.version == ''
+        # Before the cache restore: the base is built from base code only.
+        working-directory: ${{ steps.boot.outputs.dir }}
+        run: cargo build --release --locked --bin bosun
+      - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Not ~/.cargo/bin: a cache a PR's earlier run saved must not put a binary on PATH.
+          cache-bin: "false"
+      - if: steps.plan.outputs.setup == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      # Every gate runs, also after one fails, so one run reports all failures.
+      - if: steps.plan.outputs.work == 'true'
+        name: bosun gates
+        env:
+          BOSUN: ${{ steps.boot.outputs.dir }}/target/release/bosun
+          # An edit after a success runs test-integrity only (see the edit step).
+          ONLY: ${{ steps.plan.outputs.only }}
+          # test-integrity reads the snapshot-change line from the PR body.
+          BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # A PR runs each gate on what it changed; main and the queue run it on everything.
+          if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
+          failed=""
+          # The gates that run no PR code first: lint (build.rs, proc macros) and test run PR
+          # code on this runner, and it must not change what test-integrity, deps or fmt report.
+          for g in ${ONLY:-test-integrity deps fmt lint test}; do
+            echo "::group::bosun gate $g"
+            "$BOSUN" gate "$g" $all || failed="$failed $g"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "::error::failed gates:$failed"; exit 1; fi
+      # The npm launcher (npm/bosun) has no Rust; the runner's Node runs its tests. Last: PR code.
+      - if: ${{ !cancelled() && steps.plan.outputs.setup == 'true' }}
+        name: npm launcher tests
+        run: node --test npm/bosun/test/*.test.js
 
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).
   ci-ok:
-    needs: [docs, bosun-bin, gate, pin]
+    needs: [ci]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
         run: |
-          echo "docs: ${{ needs.docs.result }}, bosun-bin: ${{ needs.bosun-bin.result }}, gate: ${{ needs.gate.result }}, pin: ${{ needs.pin.result }}"
-          test "${{ needs.docs.result }}" = "success"
-          test "${{ needs.bosun-bin.result }}" = "success"
-          test "${{ needs.gate.result }}" = "success"
-          test "${{ needs.pin.result }}" = "success"
+          echo "ci: ${{ needs.ci.result }}"
+          test "${{ needs.ci.result }}" = "success"

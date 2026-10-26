@@ -62,5 +62,8 @@ These are public today, so they cost nothing. The orchestrator has run data only
   is found up to 7 days later, or at the next push to main.
 - **Local first.** AGENTS.md: run every gate locally before a push, and push once per PR.
 
+bosun's own ci.yml follows the same rules with two jobs (`ci` does the work, `ci-ok`
+aggregates it, the org convention): ~9 → ~3 min per PR push.
+
 Rules for every repo: run the local checks before every push. Skip non-command events at job
 level. Use Windows and macOS only for releases.

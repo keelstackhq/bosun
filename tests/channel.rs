@@ -289,10 +289,10 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     assert!(health.find(judged).unwrap() > gate);
     assert!(health.contains("github.event.workflow_run.event == 'push'"));
     assert!(health.contains("workflow_run.head_repository.full_name == github.repository"));
-    // In a consumer repo the bosun-bin job is in bosun.yml; ci.yml is the repo's own workflow.
+    // In a consumer repo the pinned-release steps are in bosun.yml; ci.yml is the repo's own.
     for f in ["main-open.yml", "main-health.yml.jinja"] {
         let y = fs::read_to_string(wf.join(f)).unwrap();
-        assert!(y.contains("bosun-bin job of bosun.yml"), "{f}");
+        assert!(y.contains("pinned-release steps as bosun.yml"), "{f}");
         assert!(!y.contains("job of ci.yml"), "{f}");
     }
     // The update bot can write: its splice is pinned.
