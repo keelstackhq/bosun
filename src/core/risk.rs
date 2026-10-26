@@ -37,6 +37,8 @@ pub enum Approval {
     Owner,
     /// Two independent review verdicts, or an owner.
     TwoVerdicts,
+    /// A delegate key's signed approval with one clean independent verdict, or an owner.
+    Delegate,
 }
 
 impl Approval {
@@ -44,6 +46,7 @@ impl Approval {
         match self {
             Approval::Owner => "owner",
             Approval::TwoVerdicts => "two-verdicts",
+            Approval::Delegate => "delegate",
         }
     }
 }
@@ -93,9 +96,10 @@ impl Rules {
             let approval = match r.approval.as_deref() {
                 None | Some("owner") => Approval::Owner,
                 Some("two-verdicts") => Approval::TwoVerdicts,
+                Some("delegate") => Approval::Delegate,
                 Some(other) => {
                     return Err(format!(
-                        "rule {id}: unknown approval `{other}` (use \"owner\" or \"two-verdicts\")"
+                        "rule {id}: unknown approval `{other}` (use \"owner\", \"two-verdicts\" or \"delegate\")"
                     ));
                 }
             };
@@ -229,12 +233,91 @@ pub fn level(matches: &[Match]) -> &'static str {
 }
 
 /// What a high risk PR needs: the owner when any match needs the owner (R-unseen always does),
-/// else two verdicts. No match at all is a normal PR; the caller does not ask then.
+/// else a delegate when any match is delegate-able, else two verdicts. No match at all is a
+/// normal PR; the caller does not ask then.
 pub fn requirement(matches: &[Match]) -> Approval {
-    if matches.iter().any(|m| m.approval == Approval::Owner) || matches.is_empty() {
+    let any = |a| matches.iter().any(|m| m.approval == a);
+    // A delegate never stands in for two verdicts: a mix of both classes needs the owner.
+    if any(Approval::Owner)
+        || matches.is_empty()
+        || (any(Approval::Delegate) && any(Approval::TwoVerdicts))
+    {
         Approval::Owner
+    } else if any(Approval::Delegate) {
+        Approval::Delegate
     } else {
         Approval::TwoVerdicts
+    }
+}
+
+/// Rules that are critical whatever their `approval` says: a delegate never approves them.
+pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
+
+/// Paths of the approval and risk system in every repo: a delegate never approves a change to
+/// them (also when renamed from or to them). Every workflow is here: any workflow with
+/// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR.
+pub const CRITICAL_PATHS: [&str; 7] = [
+    ".bosun/**",
+    "governance/**",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+    "docs/CODEOWNERS",
+    ".github/workflows/**",
+    ".github/actions/**",
+];
+
+/// bosun's own code, critical in a repo whose base has bosun's code (bosun itself and its
+/// forks). All of `src/**`: the modules that judge approvals call most of the others, and any
+/// of them can do I/O with the workflow's token once released. Also what builds or installs
+/// the binary.
+pub const APPROVAL_CODE_PATHS: [&str; 7] = [
+    "src/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "**/build.rs",
+    ".cargo/**",
+    "npm/**",
+];
+
+/// Why a PR is critical: the critical rules it matches and the changed critical paths (a
+/// rename counts on both sides). `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: not critical.
+pub fn critical(matches: &[Match], files: &[ChangedFile], bosun_code: bool) -> Vec<String> {
+    let mut why: Vec<String> = matches
+        .iter()
+        .filter(|m| CRITICAL_RULES.contains(&m.rule.as_str()))
+        .map(|m| m.rule.clone())
+        .collect();
+    let code: &[&str] = if bosun_code {
+        &APPROVAL_CODE_PATHS
+    } else {
+        &[]
+    };
+    let globs: Vec<Glob> = CRITICAL_PATHS
+        .iter()
+        .chain(code)
+        .map(|g| Glob::parse(g).expect("built-in critical glob"))
+        .collect();
+    for f in files {
+        let hit = std::iter::once(&f.path)
+            .chain(f.previous_path.as_ref())
+            .any(|p| globs.iter().any(|g| g.matches(p)));
+        if hit {
+            why.push(f.path.clone());
+        }
+    }
+    why
+}
+
+/// The floor: on a critical PR every delegate match needs the owner.
+pub fn apply_floor(matches: &mut [Match], critical: &[String]) {
+    if !critical.is_empty() {
+        for m in matches
+            .iter_mut()
+            .filter(|m| m.approval == Approval::Delegate)
+        {
+            m.approval = Approval::Owner;
+        }
     }
 }
 
@@ -291,6 +374,26 @@ pub fn two_verdicts<'a>(
     head: &str,
     excluded: &[String],
 ) -> Vec<String> {
+    verdict_sessions(comments, head, excluded, |_| true)
+}
+
+/// The sessions whose verdict on `head` lets a delegate approve: as [`two_verdicts`], and the
+/// record counts its major findings and has none (a blocker never approves). Older records
+/// without the count never count.
+pub fn clean_verdicts<'a>(
+    comments: impl IntoIterator<Item = (&'a str, &'a str)>,
+    head: &str,
+    excluded: &[String],
+) -> Vec<String> {
+    verdict_sessions(comments, head, excluded, |major| major == Some(0))
+}
+
+fn verdict_sessions<'a>(
+    comments: impl IntoIterator<Item = (&'a str, &'a str)>,
+    head: &str,
+    excluded: &[String],
+    clean: impl Fn(Option<u32>) -> bool,
+) -> Vec<String> {
     let mut newest: std::collections::BTreeMap<String, bool> = Default::default();
     for (author, body) in comments {
         if !author.eq_ignore_ascii_case(VERDICT_AUTHOR) {
@@ -301,13 +404,15 @@ pub fn two_verdicts<'a>(
             head_sha,
             approved,
             confidence,
+            major,
         }) = apply_record(body)
             && head_sha == head
             && !session.is_empty()
             && session != "unknown"
             && !excluded.contains(&session)
         {
-            let counts = approved && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE);
+            let counts =
+                approved && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE) && clean(major);
             newest.insert(session, counts);
         }
     }
@@ -424,6 +529,9 @@ pub fn risk_note(matches: &[Match], head_sha: &str) -> String {
         ),
         Approval::TwoVerdicts => format!(
             "Needed: two independent review verdicts (different sessions, approve with confidence >= {VERDICT_MIN_CONFIDENCE}) on the head SHA {head_sha}, or an owner approval. Verdicts on an older commit do not count."
+        ),
+        Approval::Delegate => format!(
+            "Needed: an owner approval of the head SHA {head_sha}, or a delegate's signed approval with one independent review verdict (approve, confidence >= {VERDICT_MIN_CONFIDENCE}, no major finding) on it."
         ),
     };
     s.push_str(&format!("\n{ask}\n{NOTE_CLOSE}"));
@@ -689,6 +797,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             head_sha: head.into(),
             approved,
             confidence: conf,
+            major: None,
         }
         .to_line()
     }

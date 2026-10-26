@@ -134,6 +134,36 @@ pub const APPROVERS_PATH: &str = ".bosun/approvers.toml";
 pub struct ApproverKey {
     pub id: String,
     pub ed25519: String,
+    /// `owner` (the default) or `delegate`.
+    #[serde(default)]
+    pub role: Role,
+}
+
+/// What a key's signature stands for. Each role signs its own message, so a signature of one
+/// role never counts as the other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Owner,
+    Delegate,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Delegate => "delegate",
+        }
+    }
+
+    /// The first word of the signed message.
+    fn prefix(self) -> &'static str {
+        match self {
+            Role::Owner => "bosun-approve",
+            Role::Delegate => "bosun-delegate",
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -157,11 +187,12 @@ pub fn parse_approvers(text: &str) -> Result<Vec<ApproverKey>, String> {
     Ok(file.key)
 }
 
-/// The exact bytes an approval key signs. Owner and repo are lowercased (GitHub names are
+/// The exact bytes a key of `role` signs. Owner and repo are lowercased (GitHub names are
 /// case-insensitive), so the signer and risk-check agree however each spells them.
-pub fn signed_message(owner: &str, repo: &str, pr: u64, head: &str) -> String {
+pub fn signed_message(role: Role, owner: &str, repo: &str, pr: u64, head: &str) -> String {
     format!(
-        "bosun-approve v1 {}/{}#{pr} {head}",
+        "{} v1 {}/{}#{pr} {head}",
+        role.prefix(),
         owner.to_ascii_lowercase(),
         repo.to_ascii_lowercase()
     )
@@ -196,6 +227,31 @@ pub fn verify_ed25519(public_key: &[u8], msg: &[u8], sig: &[u8]) -> bool {
         && UnparsedPublicKey::new(&ED25519, public_key)
             .verify(msg, sig)
             .is_ok()
+}
+
+/// Files that decide who approves: a PR that changes one (or renames one away) never passes on a
+/// signed approval, owner or delegate key, so a compromised key cannot enroll keys or owners.
+pub const TRUST_FILES: [&str; 5] = [
+    APPROVERS_PATH,
+    "governance/owners.toml",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+    "docs/CODEOWNERS",
+];
+
+/// The changed trust files among `(path, previous path)` pairs.
+pub fn trust_files_changed<'a>(
+    files: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+) -> Vec<String> {
+    files
+        .into_iter()
+        .filter(|(p, prev)| {
+            std::iter::once(*p)
+                .chain(*prev)
+                .any(|x| TRUST_FILES.contains(&x))
+        })
+        .map(|(p, _)| p.to_string())
+        .collect()
 }
 
 /// The comment `bosun approve --sign-key` posts.
