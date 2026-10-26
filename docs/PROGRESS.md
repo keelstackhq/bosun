@@ -19,7 +19,7 @@ lease, no state). F7 stays as is: weekly splice update PRs change `.splice/**` a
 hooks, which is governance; init's owner steps now say each needs `/bosun approve <sha>`. From the
 F10 review: a building, review or fixing issue closed without a merge keeps its state label and
 costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Closes #N`) is seen by
-`bosun pr`, not by `reap` or `result`.
+`bosun pr`, not by `reap` or `result`. The label-lock's known misses are listed in spec §4.
 
 ## Done
 
