@@ -1,6 +1,6 @@
 //! CHANGELOG and PROGRESS fragments: a PR adds `changelog.d/<branch>.md` or
 //! `docs/progress.d/<branch>.md` (one line each) instead of appending to the shared files, and
-//! `scripts/fold-fragments.sh` folds them in the release PR. Two PRs then never conflict there.
+//! `scripts/fold-fragments.sh` folds them in a docs PR to main before a release. Two PRs then never conflict there.
 
 use std::fs;
 use std::path::Path;
@@ -160,6 +160,38 @@ fn anything_but_a_fragment_in_the_directories_is_an_error() {
         assert!(!fold(dir.path()), "{path}");
         assert_eq!(read(dir.path(), "CHANGELOG.md"), CHANGELOG, "{path}");
     }
+}
+
+/// A name with a tab, newline or space is refused before any write (review of #237: a tab-split
+/// list made `x<TAB>Cargo.toml<TAB>y.md` delete the root Cargo.toml).
+#[test]
+fn a_fragment_name_with_odd_characters_is_refused_and_nothing_is_deleted() {
+    for name in [
+        "x\tCargo.toml\ty.md",
+        "x\nCargo.toml\ny.md",
+        "x Cargo.toml y.md",
+        "-rf.md\u{e9}",
+        "\u{e9}.md",
+    ] {
+        let dir = repo(&[("changelog.d/a.md", "- good\n")]);
+        fs::write(dir.path().join("Cargo.toml"), "keep\n").unwrap();
+        fs::write(dir.path().join("changelog.d").join(name), "- x\n").unwrap();
+        assert!(!fold(dir.path()), "{name:?} folded");
+        assert_eq!(read(dir.path(), "Cargo.toml"), "keep\n", "{name:?}");
+        assert_eq!(read(dir.path(), "CHANGELOG.md"), CHANGELOG, "{name:?}");
+        assert!(dir.path().join("changelog.d/a.md").exists(), "{name:?}");
+        assert!(
+            dir.path().join("changelog.d").join(name).exists(),
+            "{name:?}"
+        );
+    }
+    // Every allowed character folds, and only the fragments go.
+    let dir = repo(&[("changelog.d/A-z_0.9.md", "- ok\n")]);
+    fs::write(dir.path().join("Cargo.toml"), "keep\n").unwrap();
+    assert!(fold(dir.path()));
+    assert!(read(dir.path(), "CHANGELOG.md").contains("- ok\n"));
+    assert_eq!(read(dir.path(), "Cargo.toml"), "keep\n");
+    assert!(!dir.path().join("changelog.d/A-z_0.9.md").exists());
 }
 
 #[test]

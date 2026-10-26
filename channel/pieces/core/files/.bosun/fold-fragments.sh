@@ -10,9 +10,10 @@
 # moves the entries from "## Unreleased" under the new version.
 #
 # Rules, all checked before anything is written (it writes both files or neither):
-# - a fragment is a regular *.md file directly in its directory, exactly one line
-#   "- <text>" (LF only, a final newline is optional); README.md is not a fragment; any other
-#   entry in the directory (a subdirectory, a .txt file, a link) is an error, never skipped;
+# - a fragment is a regular file directly in its directory, named [A-Za-z0-9._-]+.md, exactly
+#   one line "- <text>" (LF only, a final newline is optional); README.md is not a fragment; any
+#   other entry in the directory (a subdirectory, a .txt file, a link, a name with a space, tab
+#   or newline) is an error, never skipped;
 # - the target file exists and has its heading exactly once.
 # Deterministic: fragments fold in byte order of their file names (LC_ALL=C), at the end of
 # their section, with one blank line before the next heading. Without fragments it changes
@@ -29,11 +30,13 @@ die() {
   exit 1
 }
 
-# The plan, filled by plan(): per target, its folded temp file and its fragments (tab-separated);
-# tmps lists every temp file for the cleanup.
+# The plan, filled by plan(): per target, its folded temp file and its fragments, which are
+# frags_all[first[i]] .. frags_all[first[i] + count[i] - 1]; tmps lists every temp file.
 targets=()
 outs=()
-fraglists=()
+frags_all=()
+first=()
+count=()
 tmps=()
 cleanup() { if [ "${#tmps[@]}" -gt 0 ]; then rm -f "${tmps[@]}"; fi; }
 trap cleanup EXIT
@@ -44,14 +47,15 @@ plan() {
   local target="$1" heading="$2" dir="$3"
   [ -d "$dir" ] || return 0
   local frags=() e base
-  while IFS= read -r e; do
+  while IFS= read -r -d '' e; do
     base="${e##*/}"
     if [ "$base" = README.md ]; then continue; fi
-    if [ ! -f "$e" ] || [ -L "$e" ] || [ "${base%.md}" = "$base" ]; then
-      die "$e is not a fragment: use a file <branch with / as ->.md directly in $dir/"
+    # Only plain names: no space, tab or newline, nothing a later step could split.
+    if [ ! -f "$e" ] || [ -L "$e" ] || [[ ! "$base" =~ ^[A-Za-z0-9._-]+\.md$ ]]; then
+      die "$(printf '%q' "$e") is not a fragment: use a file <branch with / as ->.md ([A-Za-z0-9._-]) directly in $dir/"
     fi
     frags+=("$e")
-  done < <(find "$dir" -mindepth 1 -maxdepth 1 | sort)
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 | sort -z)
   [ "${#frags[@]}" -gt 0 ] || return 0
   [ -f "$target" ] || die "$target is missing, but $dir/ has fragments"
   [ "$(grep -cxF -- "$heading" "$target" || true)" = 1 ] ||
@@ -96,9 +100,9 @@ plan() {
   ' "$target" > "$tmp"
   targets+=("$target")
   outs+=("$tmp")
-  local joined
-  joined="$(printf '%s\t' "${frags[@]}")"
-  fraglists+=("${joined%$'\t'}")
+  first+=("${#frags_all[@]}")
+  count+=("${#frags[@]}")
+  frags_all+=("${frags[@]}")
 }
 
 # Phase 1: plan both folds; any error stops here, with nothing written.
@@ -108,7 +112,6 @@ plan docs/PROGRESS.md "## Done" docs/progress.d
 # Phase 2: write. `cat >` keeps the target's mode and inode.
 for i in "${!targets[@]}"; do
   cat "${outs[$i]}" > "${targets[$i]}"
-  IFS=$'\t' read -r -a done_frags <<< "${fraglists[$i]}"
-  rm -f "${done_frags[@]}"
-  echo "fold-fragments: ${#done_frags[@]} into ${targets[$i]}"
+  rm -f -- "${frags_all[@]:${first[$i]}:${count[$i]}}"
+  echo "fold-fragments: ${count[$i]} into ${targets[$i]}"
 done
