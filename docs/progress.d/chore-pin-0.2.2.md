@@ -1,0 +1,1 @@
+- 2026-10-26 · Pin v0.2.2 · `.bosun/version` and `docs/setup-script.sh` move from 0.2.1 to the published 0.2.2; after it merges, paste `docs/setup-script.sh` into the cloud environments again · PR (chore/pin-0.2.2)
