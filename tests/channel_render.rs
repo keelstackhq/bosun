@@ -1025,7 +1025,7 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
                 .success()
         };
         assert!(sh(
-            "git init -q && printf 'node_modules/\\n' > .gitignore && echo a > pnpm-workspace.yaml && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base"
+            "git init -q && printf 'node_modules/\\nignored/\\n' > .gitignore && echo a > pnpm-workspace.yaml && echo a > changed.txt && git add -A && git -c user.email=a@b.c -c user.name=n commit -qm base"
         ));
         use std::os::unix::fs::PermissionsExt;
         let fake = bin.path().join("pnpm");
@@ -1033,7 +1033,15 @@ fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
             ("mkdir -p node_modules/x && touch node_modules/x/y", true),
             ("echo 'pnpmfile: evil.cjs' >> pnpm-workspace.yaml", false),
             ("echo 'node-options=x' > .npmrc", false),
+            // A file already changed before install (by the base-config step) changed again.
+            ("echo again >> changed.txt", false),
+            // An ignored .npmrc is read by pnpm all the same.
+            (
+                "echo 'node-options=x' > node_modules/../ignored/.npmrc",
+                false,
+            ),
         ] {
+            sh("mkdir -p ignored && echo changed >> changed.txt");
             fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
             fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
             assert_eq!(sh(run), ok, "{body}");
@@ -1131,6 +1139,8 @@ fn ts_pnpm_refuses_workspace_settings_that_run_code() {
         "configDependencies:\n  x: 1.0.0\n",
         "x: &a {pnpmfile: e}\n<<: *a\n",
         "packages: [a]\npackages: [b]\npnpmfile: e\n",
+        // Duplicate keys fail too (review of #233).
+        "packages: [a]\npackages: [b]\n",
         "bad: [\n",
         "- a\n",
     ] {

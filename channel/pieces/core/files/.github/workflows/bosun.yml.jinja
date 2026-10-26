@@ -299,6 +299,17 @@ jobs:
         run: |
           python3 -I - <<'PY'
           import json, subprocess, sys, yaml
+          class Strict(yaml.SafeLoader):
+              pass
+          def mapping(loader, node, deep=False):
+              seen = set()
+              for k, _ in node.value:
+                  key = loader.construct_object(k, deep=deep)
+                  if key in seen:
+                      raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", k.start_mark)
+                  seen.add(key)
+              return yaml.SafeLoader.construct_mapping(loader, node, deep)
+          Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
           ok = {
               "allowBuilds",
               "packages", "catalog", "catalogs", "onlyBuiltDependencies", "ignoredBuiltDependencies",
@@ -332,7 +343,7 @@ jobs:
                   continue
               try:
                   with open(f, "rb") as h:
-                      d = yaml.safe_load(h)
+                      d = yaml.load(h, Loader=Strict)
               except Exception as e:
                   sys.exit(f"{f}: not readable YAML ({e})")
               check(f, d)
@@ -352,13 +363,23 @@ jobs:
         # No PR code before the gates: no pnpmfile and no lifecycle scripts run here; `pnpm
         # rebuild` runs the install scripts (the root project's postinstall too) before fmt, the
         # first gate that runs PR code in this stack.
-        # It must not write any file outside the ignored node_modules (a patch whose path leaves
-        # its package could rewrite pnpm-workspace.yaml or add an .npmrc): the git status
-        # before and after must be the same.
+        # It must not change any file outside node_modules (a patch whose path leaves its
+        # package could rewrite pnpm-workspace.yaml or add an .npmrc): a fingerprint of the
+        # status, the diff to HEAD, untracked files and every .npmrc, .pnpmfile.* and
+        # pnpm-workspace.yaml (ignored or not) must be the same before and after.
         run: |
-          before="$(git status --porcelain=v1 -z --untracked-files=all | sha256sum)"
+          fp() {
+            {
+              git status --porcelain=v1 -z --untracked-files=all
+              git diff --binary HEAD
+              git ls-files -o --exclude-standard -z | xargs -0r sha256sum
+              find . -name node_modules -prune -o \( -name .npmrc -o -name '.pnpmfile.*' -o -name 'pnpm-workspace.y*ml' \) -print0 \
+                | sort -z | xargs -0r sha256sum
+            } | sha256sum
+          }
+          before="$(fp)"
           pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile
-          after="$(git status --porcelain=v1 -z --untracked-files=all | sha256sum)"
+          after="$(fp)"
           if [ "$before" != "$after" ]; then
             git status --short --untracked-files=all
             echo "::error::pnpm install changed files in the checkout (see above); only node_modules may change, and it must be in .gitignore"
