@@ -1,0 +1,1 @@
+- The channel's docs call `.bosun/fold-fragments.sh` through bash (`bash .bosun/fold-fragments.sh`): splice ships files without their mode (template format 9.13), so the script lands as 0644; a test keeps every shipped script call behind `bash`.

@@ -299,3 +299,68 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     let bot = fs::read_to_string(wf.join("splice.yml")).unwrap();
     assert!(bot.contains("version: 0.2.0"));
 }
+
+/// Every occurrence of `script` in `text` is a call through bash: `bash <script>`.
+fn calls_without_bash(text: &str, script: &str) -> usize {
+    text.match_indices(script)
+        .filter(|(i, _)| !text[..*i].ends_with("bash "))
+        .count()
+}
+
+/// Splice does not carry file modes (template format 9.13): a channel script lands as 0644, so
+/// the channel's docs, sections and workflows (and bosun's own docs, for its copy in scripts/)
+/// call each shipped script through bash, never directly.
+#[test]
+fn shipped_scripts_are_only_ever_called_through_bash() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut channel_files = Vec::new();
+    files_under(&channel().join("pieces"), &mut channel_files);
+    // A script is a file the channel ships that ends in .sh. docs/setup-script.sh is not run in a
+    // repo: the owner pastes it into the cloud environment's settings.
+    let mut scripts: Vec<String> = channel_files
+        .iter()
+        .filter_map(|p| {
+            let rel = p.to_str()?.split("/files/").nth(1)?.to_string();
+            (rel.ends_with(".sh") && rel != "docs/setup-script.sh").then_some(rel)
+        })
+        .collect();
+    scripts.push("scripts/fold-fragments.sh".into());
+    assert!(
+        scripts.contains(&".bosun/fold-fragments.sh".to_string()),
+        "{scripts:?}"
+    );
+
+    let mut texts: Vec<PathBuf> = channel_files
+        .into_iter()
+        .filter(|p| {
+            p.to_str()
+                .is_some_and(|s| s.contains("/files/") && !s.ends_with(".sh"))
+        })
+        .collect();
+    for f in [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "docs/releasing.md",
+        "docs/spec.md",
+        "changelog.d/README.md",
+        "docs/progress.d/README.md",
+    ] {
+        texts.push(root.join(f));
+    }
+    files_under(&root.join(".github/workflows"), &mut texts);
+    let mut found = 0;
+    for path in &texts {
+        let text = fs::read_to_string(path).unwrap();
+        for s in &scripts {
+            found += text.matches(s.as_str()).count();
+            assert_eq!(
+                calls_without_bash(&text, s),
+                0,
+                "{} calls {s} without `bash ` (splice ships it as 0644)",
+                path.display()
+            );
+        }
+    }
+    assert!(found >= 2, "the fold script is documented for both copies");
+}
