@@ -194,6 +194,58 @@ fn a_fragment_name_with_odd_characters_is_refused_and_nothing_is_deleted() {
     assert!(!dir.path().join("changelog.d/A-z_0.9.md").exists());
 }
 
+/// A symlinked target, fragment directory or fragment would let the fold write or delete
+/// outside the repo (review of #237): each one is refused before any write.
+#[test]
+fn symlinks_are_refused() {
+    use std::os::unix::fs::symlink;
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim.md");
+    // Both headings, so only the symlink rule can stop a fold into it.
+    let body = format!("{CHANGELOG}\n## Done\n\n- d\n");
+    fs::write(&victim, &body).unwrap();
+    let cases: [&dyn Fn(&Path); 4] = [
+        &|d| {
+            fs::remove_file(d.join("CHANGELOG.md")).unwrap();
+            symlink(&victim, d.join("CHANGELOG.md")).unwrap();
+        },
+        &|d| {
+            fs::remove_file(d.join("docs/PROGRESS.md")).unwrap();
+            symlink(&victim, d.join("docs/PROGRESS.md")).unwrap();
+            fs::write(d.join("docs/progress.d/p.md"), "- p\n").unwrap();
+        },
+        &|d| {
+            let real = outside.path().join("frags");
+            fs::create_dir_all(&real).unwrap();
+            fs::write(real.join("b.md"), "- b\n").unwrap();
+            fs::remove_dir_all(d.join("docs/progress.d")).unwrap();
+            symlink(&real, d.join("docs/progress.d")).unwrap();
+        },
+        &|d| symlink(&victim, d.join("changelog.d/link.md")).unwrap(),
+    ];
+    for (i, setup) in cases.iter().enumerate() {
+        let dir = repo(&[("changelog.d/a.md", "- good\n")]);
+        setup(dir.path());
+        assert!(!fold(dir.path()), "case {i} folded");
+        assert_eq!(fs::read_to_string(&victim).unwrap(), body, "case {i}");
+        assert!(dir.path().join("changelog.d/a.md").exists(), "case {i}");
+    }
+}
+
+/// README.md is the directory's README, never a fragment: one that reads like a fragment fails
+/// loudly instead of being skipped with its entry lost (review of #237).
+#[test]
+fn a_readme_that_is_not_a_readme_fails() {
+    for text in ["- an entry\n", "", "#no space\n"] {
+        let dir = repo(&[("docs/progress.d/README.md", text)]);
+        assert!(!fold(dir.path()), "{text:?} was skipped");
+        assert_eq!(read(dir.path(), "docs/PROGRESS.md"), PROGRESS, "{text:?}");
+    }
+    let dir = repo(&[("docs/progress.d/README.md", "# progress.d\n\nrules\n")]);
+    assert!(fold(dir.path()));
+    assert!(dir.path().join("docs/progress.d/README.md").exists());
+}
+
 #[test]
 fn the_fold_keeps_layout_mode_and_finds_the_repo_root() {
     // hoist writes "## <version>" right below "## Unreleased": a blank line goes before it.
