@@ -293,6 +293,19 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
             );
         }
     }
+    // Without HOIST_RELEASE_TOKEN, prepare is skipped (GITHUB_TOKEN may not open the release PR,
+    // and its PR would run no CI); only whether the secret is set reaches the detect job.
+    let prepare = &yaml[yaml.find("\n  prepare:\n").unwrap()..];
+    let cond = prepare
+        .lines()
+        .find(|l| l.trim_start().starts_with("if:"))
+        .unwrap();
+    assert!(
+        cond.contains("needs.detect.outputs.release_token == 'true'"),
+        "{cond}"
+    );
+    assert!(yaml.contains("HAS_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN != '' }}"));
+    assert!(yaml.contains("release_token: ${{ steps.gate.outputs.release_token }}"));
     // Event data reaches scripts through env only.
     for s in run_scripts(&yaml) {
         for bad in ["github.event", "head_ref", "github.actor", "inputs."] {
@@ -691,6 +704,55 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
     );
     assert!(yaml.contains("cache-bin: \"false\""));
     assert!(yaml.contains("          persist-credentials: false\n"));
+    // Before lint, no PR code: no toolchain path, no cargo rustc swap, a checked bosun, and
+    // lint and test never run after a failed gate.
+    for k in [
+        "  RUSTC: rustc\n",
+        "  RUSTC_WRAPPER: \"\"\n",
+        "  RUSTC_WORKSPACE_WRAPPER: \"\"\n",
+        "  CARGO_BUILD_RUSTC_WRAPPER: \"\"\n",
+        "  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: \"\"\n",
+    ] {
+        assert!(yaml.contains(k), "{k}");
+    }
+    let guard = at("name: toolchain is a release");
+    assert!(guard < at("uses: dtolnay/rust-toolchain") && guard < at("uses: Swatinem/rust-cache"));
+    assert!(at("id: binhash") < at("uses: Swatinem/rust-cache"));
+    assert!(yaml.contains("BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}"));
+    assert!(at("lint and test did not run") < at("sha256sum -c --quiet"));
+    let script = run_scripts(step_text(
+        &yaml,
+        "      - if: steps.plan.outputs.work == 'true'\n        name: toolchain is a release",
+    ))
+    .remove(0);
+    let script: String = script
+        .lines()
+        .skip(1)
+        .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
+        .collect();
+    for (name, text, ok) in [
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\nchannel = \"1.97\"\n",
+            true,
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\npath = \"./evil\"\n",
+            false,
+        ),
+        ("rust-toolchain", "/opt/evil\n", false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(name), text).unwrap();
+        let passed = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &script])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success();
+        assert_eq!(passed, ok, "{name}: {text:?}");
+    }
     // Drafts: only the plan step reads the flag; no `if` may skip a draft.
     assert_eq!(yaml.matches("pull_request.draft").count(), 1);
     assert!(yaml.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));

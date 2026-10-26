@@ -33,6 +33,16 @@ permissions:
   contents: read
   checks: read
 
+# A PR's .cargo/config.toml must not swap the compiler cargo runs (a rustc wrapper or
+# build.rustc would run PR code in rust-cache and the gates before lint): cargo takes these over
+# its config files. The rust toolchain step refuses a toolchain file that names a path.
+env:
+  RUSTC: rustc
+  RUSTC_WRAPPER: ""
+  RUSTC_WORKSPACE_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: ""
+
 jobs:
   # The required CI check (spec D15). It fails unless the pin check and every gate succeeded.
   # Beside a repo's own ci.yml and its ci-ok, it is called bosun-ok. A draft PR fails it in a few
@@ -138,6 +148,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
       - if: steps.plan.outputs.work == 'true'
         name: install the pinned release
+        id: bin
         env:
           VERSION: ${{ steps.pin.outputs.version }}
         run: |
@@ -148,6 +159,8 @@ jobs:
           got="$("$RUNNER_TEMP/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${VERSION}"
+          # The gates check the binary against this hash before each gate.
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/bin/bosun" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       # The pin a change sets must be a published release that reports its own version.
       - if: steps.plan.outputs.work == 'true'
         name: the pinned release installs and reports its version
@@ -177,6 +190,15 @@ jobs:
             if [ -f "$d/rust-toolchain.toml" ] || [ -f "$d/rust-toolchain" ]; then found=1; break; fi
             if [ "$d" = "$GITHUB_WORKSPACE" ] || [ "$d" = / ]; then break; fi
             d="$(dirname "$d")"
+          done
+          # A toolchain file with `path` makes rustup run a compiler from the PR (rust-cache runs
+          # `rustc -vV` before the gates): only a released toolchain (a channel) may be named.
+          for f in "$d/rust-toolchain.toml" "$d/rust-toolchain"; do
+            [ -n "$found" ] && [ -f "$f" ] || continue
+            if grep -Eq '^[[:space:]]*path[[:space:]]*=' "$f" || { [ "${f##*/}" = rust-toolchain ] && grep -q / "$f"; }; then
+              echo "::error::$f names a toolchain path; name a released channel instead"
+              exit 1
+            fi
           done
           if [ -n "$found" ]; then
             rustup toolchain install
@@ -229,6 +251,7 @@ jobs:
 {% endraw %}{% else %}{% raw %}          GATES: test-integrity deps fmt lint test
 {% endraw %}{% endif %}{% raw %}          # An edit after a success runs test-integrity only (see the edit step).
           ONLY: ${{ steps.plan.outputs.only }}
+          BOSUN_SHA256: ${{ steps.bin.outputs.sha256 }}
           # test-integrity reads the snapshot-change line from the PR body.
           BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
           EVENT: ${{ github.event_name }}
@@ -239,7 +262,14 @@ jobs:
           if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
           failed=""
           for g in $GATES; do
+            # lint and test run PR code: after a failed gate that runs none, they do not run, so
+            # PR code cannot hide that failure.
+            case "$g" in lint|test)
+              if [ -n "$failed" ]; then echo "::error::failed gates:$failed (lint and test did not run)"; exit 1; fi ;;
+            esac
             echo "::group::bosun gate $g"
+            # The pinned bosun, unchanged since step bin.
+            echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "::error::$bosun changed"; exit 1; }
             "$bosun" gate "$g" $all || failed="$failed $g"
             echo "::endgroup::"
           done

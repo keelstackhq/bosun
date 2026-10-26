@@ -30,6 +30,14 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # A PR's .cargo/config.toml must not swap the compiler cargo runs (a rustc wrapper or
+  # build.rustc would run PR code in rust-cache and the gates before lint): cargo takes these
+  # over its config files. The toolchain file is checked by the step `toolchain is a release`.
+  RUSTC: rustc
+  RUSTC_WRAPPER: ""
+  RUSTC_WORKSPACE_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: ""
 
 jobs:
   ci:
@@ -43,6 +51,9 @@ jobs:
       # Order: every step that runs no PR code first (the base's bosun, the pin check, then the
       # gates test-integrity, deps and fmt); lint, test and the npm launcher tests run PR code on
       # this runner and come last, so it cannot replace or fake what ran before (spec §11).
+      # Before lint, the PR could still run code through its toolchain file or cargo config:
+      # step `toolchain is a release` and the job env above close that. Not closed: PR code in
+      # lint or test has the runner's sudo and can tamper with this job's own outcome (spec §11).
       # A body or title edit that did not retarget the PR changes no file, so the checks that
       # read only files keep the result of the head's newest finished `ci-ok` (GitHub Actions,
       # not this run). test-integrity also reads the PR body, and that run may have read another
@@ -152,6 +163,18 @@ jobs:
           got="$("$dir/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${v}"
+      # A toolchain file with `path` makes rustup run a compiler from the PR (rust-cache runs
+      # `rustc -vV` before the gates): only a released toolchain (a channel) may be named.
+      - if: steps.plan.outputs.work == 'true'
+        name: toolchain is a release
+        run: |
+          for f in rust-toolchain.toml rust-toolchain; do
+            [ -f "$f" ] || continue
+            if grep -Eq '^[[:space:]]*path[[:space:]]*=' "$f" || { [ "$f" = rust-toolchain ] && grep -q / "$f"; }; then
+              echo "::error::$f names a toolchain path; name a released channel instead"
+              exit 1
+            fi
+          done
       - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -161,6 +184,11 @@ jobs:
         # Before the cache restore: the base is built from base code only.
         working-directory: ${{ steps.boot.outputs.dir }}
         run: cargo build --release --locked --bin bosun
+      # The base's bosun is final here: the gates check it against this hash before each gate.
+      - if: steps.plan.outputs.work == 'true'
+        id: binhash
+        working-directory: ${{ steps.boot.outputs.dir }}
+        run: echo "sha256=$(sha256sum target/release/bosun | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
         uses: Swatinem/rust-cache@v2
         with:
@@ -175,6 +203,7 @@ jobs:
         name: bosun gates
         env:
           BOSUN: ${{ steps.boot.outputs.dir }}/target/release/bosun
+          BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}
           # An edit after a success runs test-integrity only (see the edit step).
           ONLY: ${{ steps.plan.outputs.only }}
           # test-integrity reads the snapshot-change line from the PR body.
@@ -187,7 +216,14 @@ jobs:
           # The gates that run no PR code first: lint (build.rs, proc macros) and test run PR
           # code on this runner, and it must not change what test-integrity, deps or fmt report.
           for g in ${ONLY:-test-integrity deps fmt lint test}; do
+            # lint and test run PR code: after a failed gate that runs none, they do not run, so
+            # PR code cannot hide that failure.
+            case "$g" in lint|test)
+              if [ -n "$failed" ]; then echo "::error::failed gates:$failed (lint and test did not run)"; exit 1; fi ;;
+            esac
             echo "::group::bosun gate $g"
+            # The base's bosun, unchanged since step binhash.
+            echo "$BOSUN_SHA256  $BOSUN" | sha256sum -c --quiet || { echo "::error::$BOSUN changed"; exit 1; }
             "$BOSUN" gate "$g" $all || failed="$failed $g"
             echo "::endgroup::"
           done

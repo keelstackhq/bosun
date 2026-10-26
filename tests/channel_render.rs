@@ -727,6 +727,13 @@ fn the_renderer_refuses_tags_outside_the_subset() {
 /// Runs the rust toolchain step in `cwd` under the workspace `root`, with a fake
 /// `rustup` on PATH; returns the rustup calls it made.
 fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
+    let (ok, calls) = toolchain_run(root, cwd);
+    assert!(ok, "the toolchain step failed");
+    calls
+}
+
+/// The toolchain step's exit (true: success) and its rustup calls.
+fn toolchain_run(root: &std::path::Path, cwd: &std::path::Path) -> (bool, String) {
     let files = variant(&["rust"], "");
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
     let steps = steps(&j, "");
@@ -756,8 +763,68 @@ fn toolchain_calls(root: &std::path::Path, cwd: &std::path::Path) -> String {
         .status()
         .unwrap()
         .success();
-    assert!(ok, "the toolchain step failed");
-    fs::read_to_string(log).unwrap_or_default()
+    (ok, fs::read_to_string(log).unwrap_or_default())
+}
+
+/// A toolchain file that names a `path` would run a compiler from the PR before the gates.
+#[test]
+fn the_toolchain_step_refuses_a_toolchain_path() {
+    if yaml_json("a: 1").is_none() {
+        return;
+    }
+    for (name, text) in [
+        ("rust-toolchain.toml", "[toolchain]\npath = \"./evil\"\n"),
+        ("rust-toolchain.toml", "[toolchain]\n  path= \"/opt/x\"\n"),
+        ("rust-toolchain", "/opt/evil\n"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(name), text).unwrap();
+        let (ok, calls) = toolchain_run(root.path(), root.path());
+        assert!(!ok, "{name}: {text:?} passed");
+        assert!(calls.is_empty(), "rustup ran before the check: {calls}");
+    }
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("rust-toolchain"), "1.97\n").unwrap();
+    assert!(
+        toolchain_run(root.path(), root.path()).0,
+        "a plain channel passes"
+    );
+}
+
+/// The rest of the defence before lint: cargo cannot swap rustc, the pinned bosun is checked
+/// before each gate, and lint and test (PR code) never run after another gate failed.
+#[test]
+fn the_gates_run_a_checked_bosun_with_cargo_pinned_to_rustc() {
+    let files = variant(&["rust"], "");
+    let wf = file(&files, BOSUN_YML);
+    let Some(j) = yaml_json(wf) else { return };
+    for (k, v) in [
+        ("RUSTC", "rustc"),
+        ("RUSTC_WRAPPER", ""),
+        ("RUSTC_WORKSPACE_WRAPPER", ""),
+        ("CARGO_BUILD_RUSTC_WRAPPER", ""),
+        ("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", ""),
+    ] {
+        assert_eq!(j["env"][k], v, "{k}");
+    }
+    let steps = steps(&j, "");
+    let install = step(&steps, "name", "install the pinned release");
+    assert_eq!(install["id"], "bin");
+    assert!(
+        install["run"]
+            .as_str()
+            .unwrap()
+            .contains("echo \"sha256=$(sha256sum \"$RUNNER_TEMP/bin/bosun\"")
+    );
+    let gates = step(&steps, "name", "bosun gates");
+    assert_eq!(
+        gates["env"]["BOSUN_SHA256"],
+        "${{ steps.bin.outputs.sha256 }}"
+    );
+    let run = gates["run"].as_str().unwrap();
+    let check = run.find("sha256sum -c --quiet").expect("hash check");
+    let stop = run.find("lint and test did not run").expect("early stop");
+    assert!(stop < check && check < run.find("\"$bosun\" gate").unwrap());
 }
 
 #[test]

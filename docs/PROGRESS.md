@@ -181,6 +181,7 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-26 · Release v0.2.1 · release PR: `Cargo.toml`, `Cargo.lock`, the six `npm/*/package.json`, `pnpm-lock.yaml`, `## 0.2.1 (2026-10-26)` in CHANGELOG (signed and delegated approvals, #226, #227); after it publishes, the pin PR moves `.bosun/version` and the setup script to 0.2.1 · `tests/release_config.rs` 10/10
 - 2026-10-26 · Pin v0.2.1 · `.bosun/version` and `docs/setup-script.sh` move from 0.2.0 to the published 0.2.1, so risk.yml and verdict.yml count signed and delegated approvals; after it merges, paste `docs/setup-script.sh` into the cloud environments again
 - 2026-10-26 · CI minutes · measured bosun's Actions use (docs/ci-minutes.md); the channel's bosun.yml is one job named after the required check, drafts fail fast, body edits rerun only test-integrity on a passed head, main-health weekly, main-open skips non-mainfix label events, AGENTS.md: local gates before every push · PR (claude/ci-minutes-channel)
+- 2026-10-26 · CI minutes 3 · release.yml skips `prepare` without `HOIST_RELEASE_TOKEN` (it failed on 81 of 93 pushes to main) · PR (claude/release-prepare-skip)
 - 2026-10-26 · CI minutes 2 · bosun's own ci.yml: one job `ci` + `ci-ok` (9 jobs before), the channel's draft and edit rules, pin check before the gates; a test keeps its edit step equal to the channel's · PR (claude/ci-minutes-own)
 
 ## Blocked
