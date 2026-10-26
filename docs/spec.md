@@ -651,8 +651,12 @@ High-risk PRs:
   lease: the mode lets one session decide by design, and the verdict is a quality gate, not
   proof of independence. A workflow on a pushed branch can post a record as
   `github-actions[bot]` (Limits above). Files that match no rule (`hoist.toml`,
-  `docs/setup-script.sh`, `.github/actions/**` in this repo) are normal risk, so neither the
-  owner nor the floor sees them; that is a follow-up for the rules.
+  `docs/setup-script.sh`, `.github/actions/**`, `tests/**` in this repo) are normal risk, so neither the
+  owner nor the floor sees them; that is a follow-up for the rules. A self-made task issue
+  with its own lease record still passes the task check, hiding the real task's capabilities
+  (the same trust class as the self-declared session). No job that runs repo code (tests, build
+  scripts, `.config/nextest.toml`) holds a token that can write statuses or issues: main-health's
+  nightly job is `contents: read` without persisted credentials (`tests/workflows.rs`).
 - `bosun approve` is the owner's shortcut, run on the owner's own machine (a local shell or a
   local Claude Code session, also through Remote Control), never in a Claude cloud session: the cloud agent proxy rewrites
   every GitHub write (app attribution and a footer), so an approval sent from there never counts,

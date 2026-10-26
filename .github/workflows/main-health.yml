@@ -23,8 +23,14 @@ jobs:
   nightly:
     if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
+    # It runs the repo's tests and build scripts: read only, and no token left in .git/config,
+    # so that code cannot post a status or write an issue (spec §8, delegated decisions).
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.97"

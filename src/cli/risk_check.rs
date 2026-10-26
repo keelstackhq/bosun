@@ -347,7 +347,8 @@ fn approver(
 /// Why a delegate cannot approve now, if it cannot: bosun is halted (or cannot tell), the PR
 /// targets another branch than the default one, or a linked issue is not an open bosun task
 /// with a lease record (a decoy link would hide the real task's capabilities and its lease
-/// holders). Read errors of the task are reasons too, never errors of the check.
+/// holders). An unreadable task issue is a reason; an error listing its comments errors the
+/// check (fail closed, as every other read here).
 fn delegation_blocked(gh: &dyn Github, base_ref: &str, linked: &[u64]) -> Result<Option<String>> {
     match halt_reason(gh) {
         Ok(None) => {}
