@@ -49,7 +49,7 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
   risk rules are all `approval = "delegate"`, with one clean review verdict on the head, while
   bosun is not halted. Critical changes (`.bosun/`, `governance/`, CODEOWNERS, every workflow,
   bosun's code and manifests, secrets, prod writes, an unseen diff) always need you (spec §8,
-  delegated decisions); here that leaves `deny.toml`, the toolchain files, `.config/` and
+  delegated decisions); here, once the pin is 0.2.1, that leaves `deny.toml`, the toolchain files, `.config/` and
   `profiles/` to a delegate. To turn it off at once, delete the delegate key from
   `.bosun/approvers.toml` in a PR you approve.
 - **Review verdicts from cloud sessions.** A reviewer runs `bosun verdict comment --from -`;
