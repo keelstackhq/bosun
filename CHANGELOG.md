@@ -4,6 +4,10 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- The channel's bosun.yml runs a ts-pnpm or mixed stack in two jobs (#234): `bosun-trusted` runs test-integrity and deps with no PR code (no install, no cache; `pnpm audit` reads the PR's lockfile with the base's pnpm config and an exact pnpm release), and `ci-ok` (or `bosun-ok`) installs and runs fmt, lint and test only after it passed. The pnpm allow-list, install fingerprint, `--ignore-scripts` install and `pnpm rebuild` of #233 are gone; rust stacks stay one job.
+- bosun's own `.bosun/risk.toml` delegates R-ci, R-gate and R-deps again now that `.bosun/version` pins 0.2.1; after the critical floor a delegate decides `deny.toml`, the toolchain files, `.config/**` and `profiles/**`.
+- The channel's docs call `.bosun/fold-fragments.sh` through bash (`bash .bosun/fold-fragments.sh`): splice ships files without their mode (template format 9.13), so the script lands as 0644; a test keeps every shipped script call behind `bash`.
+
 ## 0.2.2 (2026-10-26)
 
 - CI minutes (docs/ci-minutes.md): the channel's bosun.yml runs every gate in one job named after the required check (`ci-ok`/`bosun-ok`) instead of nine (the gates that run no PR code first); a draft fails it at once; after a PR body or title edit only test-integrity runs again on a head that passed; main-health runs the gates weekly, not nightly. AGENTS.md: run every gate locally before a push, push once per PR.

@@ -1,1 +1,0 @@
-- bosun's own `.bosun/risk.toml` delegates R-ci, R-gate and R-deps again now that `.bosun/version` pins 0.2.1; after the critical floor a delegate decides `deny.toml`, the toolchain files, `.config/**` and `profiles/**`.

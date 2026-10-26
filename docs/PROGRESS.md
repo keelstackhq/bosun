@@ -184,6 +184,11 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-26 · CI minutes 3 · release.yml skips `prepare` without `HOIST_RELEASE_TOKEN` (it failed on 81 of 93 pushes to main) · PR (claude/release-prepare-skip)
 - 2026-10-26 · CI minutes 2 · bosun's own ci.yml: one job `ci` + `ci-ok` (9 jobs before), the channel's draft and edit rules, pin check before the gates; a test keeps its edit step equal to the channel's · PR (claude/ci-minutes-own)
 - 2026-10-26 · CI minutes 4 · changelog and progress fragments (`changelog.d/`, `docs/progress.d/`, `scripts/fold-fragments.sh`, also in the channel) end the appended-line conflicts that cost a re-review per merge of main · PR #237
+- 2026-10-26 · Pin v0.2.2 · `.bosun/version` and `docs/setup-script.sh` move from 0.2.1 to the published 0.2.2; after it merges, paste `docs/setup-script.sh` into the cloud environments again · PR (chore/pin-0.2.2)
+- 2026-10-26 · ts-pnpm two jobs · the channel's bosun.yml: `bosun-trusted` (test-integrity, deps; the audit reads the PR's lockfile with the base's pnpm config) then `ci-ok`/`bosun-ok` (install, fmt, lint, test); render tests run the shipped steps; spec §3/§7 drop the best-effort note · PR (claude/ci-channel-two-jobs-234)
+- 2026-10-26 · Delegation on · `approval = "delegate"` back on R-ci, R-gate and R-deps in bosun's `.bosun/risk.toml` (pin 0.2.1); `REPO_DELEGATES` and the repo-rules tests expect delegate again · PR (feat/delegate-bosun-rules)
+- 2026-10-26 · Channel scripts via bash · AGENTS/CLAUDE, releasing.md, the fragment READMEs and the channel's agents section call the fold script as `bash …/fold-fragments.sh` (splice ships 0644, template format 9.13); `tests/channel.rs` `shipped_scripts_are_only_ever_called_through_bash` · PR (fix/channel-scripts-via-bash)
+- 2026-10-26 · Release v0.2.2 · release PR: `Cargo.toml`, `Cargo.lock`, the six `npm/*/package.json`, `pnpm-lock.yaml`, `## 0.2.2 (2026-10-26)` in CHANGELOG (CI minutes #228, #232, #233, fragments #237); after it publishes, the pin PR moves `.bosun/version` and the setup script to 0.2.2 · PR (release/0.2.2)
 
 ## Blocked
 

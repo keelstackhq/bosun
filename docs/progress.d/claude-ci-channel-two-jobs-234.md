@@ -1,1 +1,0 @@
-- 2026-10-26 · ts-pnpm two jobs · the channel's bosun.yml: `bosun-trusted` (test-integrity, deps; the audit reads the PR's lockfile with the base's pnpm config) then `ci-ok`/`bosun-ok` (install, fmt, lint, test); render tests run the shipped steps; spec §3/§7 drop the best-effort note · PR (claude/ci-channel-two-jobs-234)
