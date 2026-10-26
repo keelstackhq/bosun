@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.2.1 (2026-10-26)
+
 - No signed approval (owner or delegate key) counts on a PR that changes `.bosun/approvers.toml`, `governance/owners.toml` or a CODEOWNERS file: key and owner changes need the owner's own GitHub approval, as does a diff bosun could not see whole. `.github/actions/**` is R-ci.
 - Delegated decisions: `approval = "delegate"` rules and `role = "delegate"` keys; risk-check counts a signed `bosun-delegate v1` approval with one clean independent verdict, never on a critical change (hard-coded floor: every workflow, governance, bosun's code), while halted, or for a PR whose linked issues are not open leased tasks; verdict records carry `major`; `bosun approve --as delegate`. The kill switch and notify read owners at `refs/heads/<default>`.
 - `bosun pr` refuses an open PR on the branch that does not link the task (exit 3).
