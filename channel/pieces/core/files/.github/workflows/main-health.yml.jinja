@@ -2,7 +2,7 @@
 name: main-health
 
 # Keeps one bosun:main-red issue open while main fails (spec §9): it opens one when bosun's
-# gates (or the repo's own ci) fail on main or the nightly run fails, and closes it when main is
+# gates (or the repo's own ci) fail on main or the weekly run fails, and closes it when main is
 # green again (with the repo's own ci, only when both workflows' latest main runs are green).
 # The report job runs the bosun release pinned on the default branch head (shell fallback while
 # the pin lacks the command); it never checks out PR code.
@@ -11,8 +11,9 @@ on:
 {% endraw %}    workflows: [bosun{% if own_ci %}, ci{% endif %}]
 {% raw %}    types: [completed]
     branches: [main]
+  # Weekly, not nightly: every push to main already runs the gates on all of main (CI minutes).
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -20,10 +21,12 @@ permissions:
   issues: write
   pull-requests: read
   statuses: write
+  # checks: read: the channel's weekly run calls bosun.yml, which reads check runs.
+  checks: read
 {% endraw %}{% if own_ci %}  actions: read
 {% endif %}{% raw %}
 jobs:
-  # The gates of bosun.yml on all of main (`bosun gate <name> --all`), whatever the stacks are.
+  # The gates of bosun.yml on all of main, weekly (`bosun gate <name> --all`), whatever the stacks are.
   nightly:
     if: github.event_name != 'workflow_run'
     uses: ./.github/workflows/bosun.yml
