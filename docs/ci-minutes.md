@@ -48,16 +48,18 @@ These are public today, so they cost nothing. The orchestrator has run data only
 
 - **One job.** bosun.yml runs the docs-only check, the pinned bosun, the pin check and every
   gate in one job, named after the required check (`ci-ok`, or `bosun-ok`). The gates that run
-  no PR code go first. Before, this took 9 jobs (~10-12 min billed). Now it takes 1 job (~3-4 min billed). A docs-only PR takes 1 min instead
-  of 2.
-- **Edits reuse the result.** A PR body or title edit no longer runs the gates again. The edit
-  run waits for the running run, then copies the head's last `success` or `failure` (1 min).
-  When there is no result, or when the `snapshot-change:` lines changed, it runs the gates.
+  no PR code go first. Before, this took 9 jobs (~10-12 min billed). Now it takes 1 job (~3-4
+  min billed). A docs-only PR takes 1 min instead of 2.
+- **Edits run test-integrity only.** A PR body or title edit changes no file. The edit run
+  waits for the running run. If the head passed, it keeps the file gates and runs only
+  test-integrity, which reads the body, with no toolchain setup (~1 min). Otherwise it runs
+  every gate.
 - **Drafts fail fast.** A draft PR fails the check in seconds and runs no gate. A skipped
   required check would count as passed. `ready_for_review` runs the gates.
 - **Label events skip.** main-open judges again only when the label is `bosun:kind/mainfix`.
 - **Weekly, not nightly.** main-health runs the gates weekly. Every push to main already runs
-  them on all of main.
+  them on all of main. The trade-off: a new advisory against an unchanged lockfile (cargo deny)
+  is found up to 7 days later, or at the next push to main.
 - **Local first.** AGENTS.md: run every gate locally before a push, and push once per PR.
 
 Rules for every repo: run the local checks before every push. Skip non-command events at job

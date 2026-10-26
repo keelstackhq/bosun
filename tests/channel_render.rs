@@ -563,12 +563,7 @@ fn a_body_edit_waits_and_never_cancels() {
 
 /// Runs the edit step with a fake `gh` that applies its `--jq` filter (with jq) to a check-runs
 /// answer: `runs` are `(id, app, status, conclusion, run id)`; returns the step's `mode` output.
-fn edit_runs(
-    old: &str,
-    new: &str,
-    body_changed: bool,
-    runs: &[(u64, &str, &str, &str, u64)],
-) -> String {
+fn edit_runs(runs: &[(u64, &str, &str, &str, u64)]) -> String {
     let files = variant(&["rust"], "");
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
     let steps = steps(&j, "");
@@ -577,6 +572,8 @@ fn edit_runs(
         s["if"],
         "github.event.action == 'edited' && !github.event.changes.base"
     );
+    // The body never decides: test-integrity re-reads it in this run.
+    assert!(!s["env"].to_string().contains("body"), "{s}");
     let dir = tempfile::tempdir().unwrap();
     let runs: Vec<serde_json::Value> = runs
         .iter()
@@ -619,9 +616,6 @@ fn edit_runs(
         .env("GITHUB_REPOSITORY", "o/r")
         .env("HEAD", "abc")
         .env("CHECK", "ci-ok")
-        .env("OLD_BODY", old)
-        .env("NEW_BODY", new)
-        .env("BODY_CHANGED", if body_changed { "true" } else { "false" })
         .status()
         .unwrap()
         .success();
@@ -629,59 +623,29 @@ fn edit_runs(
     fs::read_to_string(out).unwrap().trim().to_string()
 }
 
-/// The edit step when the head's newest earlier check run concluded `prev` ("" = none).
-fn edit_mode(old: &str, new: &str, body_changed: bool, prev: &str) -> String {
-    if prev.is_empty() {
-        return edit_runs(old, new, body_changed, &[]);
-    }
-    edit_runs(
-        old,
-        new,
-        body_changed,
-        &[(5, "github-actions", "completed", prev, 3)],
-    )
-}
-
 #[test]
-fn a_body_edit_reuses_the_heads_result_unless_test_integrity_input_changed() {
+fn a_body_edit_keeps_the_file_gates_of_a_passed_head_and_reruns_test_integrity() {
     if yaml_json("a: 1").is_none() {
         return;
     }
-    assert_eq!(edit_mode("a", "b", true, "success"), "mode=success");
-    assert_eq!(edit_mode("a", "b", true, "failure"), "mode=failure");
-    assert_eq!(
-        edit_mode("", "", false, "success"),
-        "mode=success",
-        "a title edit"
-    );
-    // Nothing finished on the head yet, or it was cancelled or skipped: run the gates.
-    for prev in ["", "cancelled", "skipped", "neutral"] {
-        assert_eq!(edit_mode("a", "b", true, prev), "mode=run", "{prev:?}");
+    let one = |c: &str| edit_runs(&[(5, "github-actions", "completed", c, 3)]);
+    assert_eq!(one("success"), "mode=integrity");
+    // A failure (maybe test-integrity on an older body), a cancel, a skip or nothing: every gate.
+    for prev in ["failure", "cancelled", "skipped", "neutral"] {
+        assert_eq!(one(prev), "mode=run", "{prev:?}");
     }
-    // A new, removed or changed snapshot-change line is new input for test-integrity.
-    let line = "x\nsnapshot-change: new golden";
-    assert_eq!(edit_mode("x", line, true, "failure"), "mode=run");
-    assert_eq!(edit_mode(line, "x", true, "success"), "mode=run");
-    let more = format!("{line}\nmore");
-    assert_eq!(edit_mode(line, &more, true, "success"), "mode=success");
+    assert_eq!(edit_runs(&[]), "mode=run", "no earlier run");
     // The newest finished run of GitHub Actions counts; this run's own and other apps' do not.
     let ok = (4, "github-actions", "completed", "success", 3);
     let failed = (6, "github-actions", "completed", "failure", 4);
-    assert_eq!(edit_runs("a", "b", true, &[ok, failed]), "mode=failure");
-    assert_eq!(
-        edit_runs("a", "b", true, &[failed, ok]),
-        "mode=failure",
-        "by id, not order"
-    );
+    assert_eq!(edit_runs(&[ok, failed]), "mode=run");
+    assert_eq!(edit_runs(&[failed, ok]), "mode=run", "by id, not order");
     let mine = (9, "github-actions", "completed", "success", 7);
-    assert_eq!(edit_runs("a", "b", true, &[failed, mine]), "mode=failure");
+    assert_eq!(edit_runs(&[failed, mine]), "mode=run");
     let other_app = (9, "forger", "completed", "success", 8);
-    assert_eq!(
-        edit_runs("a", "b", true, &[failed, other_app]),
-        "mode=failure"
-    );
+    assert_eq!(edit_runs(&[failed, other_app]), "mode=run");
     let running = (9, "github-actions", "in_progress", "", 8);
-    assert_eq!(edit_runs("a", "b", true, &[ok, running]), "mode=success");
+    assert_eq!(edit_runs(&[ok, running]), "mode=integrity");
 }
 
 #[test]
@@ -820,12 +784,8 @@ fn the_toolchain_step_installs_the_file_or_the_old_pin() {
     }
 }
 
-/// Runs the plan step: `Some(work output)` when it passes, `None` when it fails the job.
-fn plan(own_ci: &str, docs_only: &str, mode: &str) -> Option<String> {
-    plan_draft(own_ci, "false", docs_only, mode)
-}
-
-fn plan_draft(own_ci: &str, draft: &str, docs_only: &str, mode: &str) -> Option<String> {
+/// Runs the plan step: `Some(outputs)` when it passes, `None` when it fails the job.
+fn plan(own_ci: &str, draft: &str, docs_only: &str, mode: &str) -> Option<String> {
     let files = variant(&["rust"], own_ci);
     let j = yaml_json(file(&files, BOSUN_YML)).unwrap();
     let steps = steps(&j, own_ci);
@@ -833,7 +793,7 @@ fn plan_draft(own_ci: &str, draft: &str, docs_only: &str, mode: &str) -> Option<
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("out");
     let ok = Command::new("bash")
-        .args(["-e", "-c", run])
+        .args(["-eo", "pipefail", "-c", run])
         .env("GITHUB_OUTPUT", &out)
         .env("DRAFT", draft)
         .env("DOCS_ONLY", docs_only)
@@ -846,37 +806,58 @@ fn plan_draft(own_ci: &str, draft: &str, docs_only: &str, mode: &str) -> Option<
 }
 
 #[test]
-fn the_plan_skips_work_only_on_docs_or_a_reused_success() {
+fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
     let files = variant(&["rust"], "");
     let wf = file(&files, BOSUN_YML);
     assert!(
-        !wf.contains("draft\n    runs-on")
-            && !wf.contains(
-                "if: github.event_name != 'pull_request' || !github.event.pull_request.draft"
-            )
+        !wf.contains("if: github.event_name != 'pull_request' || !github.event.pull_request.draft")
     );
     if yaml_json("a: 1").is_none() {
         return;
     }
     for own_ci in ["", "1"] {
-        let work = Some("work=true".to_string());
+        let full = Some("work=true\nsetup=true".to_string());
+        let integrity = Some("work=true\nsetup=false\nonly=test-integrity".to_string());
         let idle = Some("work=false".to_string());
-        assert_eq!(plan(own_ci, "false", "run"), work);
-        assert_eq!(plan(own_ci, "", "run"), work, "not a pull request");
-        assert_eq!(plan(own_ci, "true", "run"), idle);
-        assert_eq!(plan(own_ci, "false", "success"), idle);
+        assert_eq!(plan(own_ci, "false", "false", "run"), full);
+        assert_eq!(plan(own_ci, "false", "", "run"), full, "not a pull request");
+        assert_eq!(plan(own_ci, "", "", "run"), full, "no draft flag");
+        assert_eq!(plan(own_ci, "false", "true", "run"), idle);
+        assert_eq!(plan(own_ci, "false", "false", "integrity"), integrity);
         assert_eq!(
-            plan(own_ci, "true", "failure"),
-            None,
-            "a failed head stays failed"
+            plan(own_ci, "false", "true", "integrity"),
+            idle,
+            "docs only"
         );
-        assert_eq!(plan(own_ci, "false", "failure"), None);
         // A draft fails at once, never skipped: a skipped required check counts as passed.
-        assert_eq!(plan_draft(own_ci, "true", "true", "success"), None);
+        for mode in ["run", "integrity"] {
+            assert_eq!(plan(own_ci, "true", "false", mode), None);
+            assert_eq!(plan(own_ci, "true", "true", mode), None);
+        }
+        // Only the stack setup waits for `setup`; the gates step takes `only`.
+        let j = yaml_json(file(&variant(&["rust", "ts-pnpm"], own_ci), BOSUN_YML)).unwrap();
+        let steps = steps(&j, own_ci);
+        let setup: Vec<_> = steps
+            .iter()
+            .filter(|s| {
+                s["if"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("steps.plan.outputs.setup == 'true'")
+            })
+            .collect();
         assert_eq!(
-            plan_draft(own_ci, "", "false", "run"),
-            work,
-            "not a pull request"
+            setup.len(),
+            7,
+            "toolchain, rust-cache, install-action, 4 ts-pnpm steps"
+        );
+        let gates = step(&steps, "name", "bosun gates");
+        assert_eq!(gates["env"]["ONLY"], "${{ steps.plan.outputs.only }}");
+        assert!(
+            gates["run"]
+                .as_str()
+                .unwrap()
+                .contains("GATES=\"${ONLY:-$GATES}\"")
         );
     }
 }

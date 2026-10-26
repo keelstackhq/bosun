@@ -6,8 +6,8 @@
 #
 # CI minutes (docs/ci-minutes.md in keelstackhq/bosun): a private repo pays for every job, each
 # rounded up to a whole minute, so everything runs in ONE job that carries the required check's
-# name. A draft fails it at once (ready_for_review runs the gates), and a PR body or title edit
-# reuses the result the head already has instead of running the gates again. Run the same gates locally first:
+# name. A draft fails it at once (ready_for_review runs the gates), and after a PR body or title
+# edit only test-integrity (which reads the body) runs again on a head that passed. Run the same gates locally first:
 # AGENTS.md has the one command.
 on:
   pull_request:
@@ -21,9 +21,9 @@ on:
   workflow_call:
 
 # One group per PR. A push (or a retarget) cancels the older run of the PR. A body or title edit
-# never cancels: it waits for the running run, then reuses that run's result on the same head
-# (or runs the gates itself when there is none, or when the edit changed what test-integrity
-# reads). So an edit never leaves a cancelled run and a red aggregate check behind.
+# never cancels: it waits for the running run, then keeps that run's file gates when it passed
+# and runs test-integrity on its own body (else every gate). So an edit never leaves a cancelled
+# run and a red aggregate check behind.
 concurrency:
   group: bosun-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base) }}
@@ -78,32 +78,25 @@ jobs:
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
 {% endraw %}{% endif %}{% raw %}
-      # A body or title edit that did not retarget the PR: reuse the newest finished result of
-      # this check on the head (success or failure) from an earlier run of GitHub Actions. With
-      # none, or when the `snapshot-change:` lines (all test-integrity reads from the body)
-      # changed, mode=run: the gates run as on a push.
+      # A body or title edit that did not retarget the PR changes no file, so the gates that read
+      # only files keep the result of the head's newest finished run of this check (GitHub
+      # Actions, not this run). test-integrity also reads the PR body, and that run may have read
+      # another body (an edit can replace a pending run), so after a success it runs again on the
+      # body of this event (mode=integrity). After anything else, or none, every gate runs.
       - if: github.event.action == 'edited' && !github.event.changes.base
         id: edit
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD: ${{ github.event.pull_request.head.sha }}
           CHECK: ${{ github.job }}
-          OLD_BODY: ${{ github.event.changes.body.from }}
-          BODY_CHANGED: ${{ github.event.changes.body != null }}
-          NEW_BODY: ${{ github.event.pull_request.body }}
         run: |
           mode=run
-          old="$(printf '%s\n' "$OLD_BODY" | grep 'snapshot-change:' || true)"
-          new="$(printf '%s\n' "$NEW_BODY" | grep 'snapshot-change:' || true)"
-          if [ "$BODY_CHANGED" != true ] || [ "$old" = "$new" ]; then
-            prev="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD/check-runs?check_name=$CHECK&filter=all&per_page=100" \
-              --jq "[.check_runs[] | select(.app.slug == \"github-actions\" and .status == \"completed\" and (.details_url | contains(\"/runs/$GITHUB_RUN_ID/\") | not))] | max_by(.id) | .conclusion // \"\"" || true)"
-            case "$prev" in
-              success|failure) mode="$prev" ;;
-            esac
-          fi
+          prev="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD/check-runs?check_name=$CHECK&filter=all&per_page=100" \
+            --jq "[.check_runs[] | select(.app.slug == \"github-actions\" and .status == \"completed\" and (.details_url | contains(\"/runs/$GITHUB_RUN_ID/\") | not))] | max_by(.id) | .conclusion // \"\"" || true)"
+          if [ "$prev" = success ]; then mode=integrity; fi
           echo "the head's earlier $CHECK: ${prev:-none}; mode=$mode"
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      # work: run the pinned bosun and gates; setup: install the stack's tools; only: the gates.
       - id: plan
         env:
           DRAFT: ${{ github.event.pull_request.draft || false }}
@@ -111,16 +104,14 @@ jobs:
           MODE: ${{ steps.edit.outputs.mode || 'run' }}
         run: |
           if [ "$DRAFT" = true ]; then echo "::error::draft: not checked; mark it ready to run the gates"; exit 1; fi
-          case "$MODE" in
-            failure) echo "::error::this head already failed this check (or was a draft); push a fix or re-run this job"; exit 1 ;;
-            success) echo "work=false" >> "$GITHUB_OUTPUT"; echo "this head already passed this check" ;;
-            *)
-              if [ "$DOCS_ONLY" = true ]; then
-                echo "work=false" >> "$GITHUB_OUTPUT"; echo "docs only: no gate runs"
-              else
-                echo "work=true" >> "$GITHUB_OUTPUT"
-              fi ;;
-          esac
+          if [ "$DOCS_ONLY" = true ]; then
+            echo "work=false" >> "$GITHUB_OUTPUT"; echo "docs only: no gate runs"
+          elif [ "$MODE" = integrity ]; then
+            { echo "work=true"; echo "setup=false"; echo "only=test-integrity"; } >> "$GITHUB_OUTPUT"
+            echo "this head passed the file gates; test-integrity runs on this body"
+          else
+            { echo "work=true"; echo "setup=true"; } >> "$GITHUB_OUTPUT"
+          fi
       # The gates run the bosun release pinned in the base commit's .bosun/version, so a change to
       # the pin takes effect only after it merges. (A change to this file runs at once: R-ci.)
       - if: steps.plan.outputs.work == 'true'
@@ -177,7 +168,7 @@ jobs:
       # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
       # old pin (the RUST_VERSION fallback of docs/setup-script.sh; a test keeps them equal): a bare
       # `rustup toolchain install` would install the runner's default (stable).
-      - if: steps.plan.outputs.work == 'true'
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         name: rust toolchain
         working-directory: {{ rust_path }}
         run: |
@@ -194,31 +185,31 @@ jobs:
             rustup default 1.97
           fi
           rustup component add rustfmt clippy
-      - if: steps.plan.outputs.work == 'true'
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: {{ rust_path }}
-      - if: steps.plan.outputs.work == 'true'
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
 {% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack: Node 24, pnpm from package.json `packageManager`, the Turborepo cache
       # through hoard. Skipped while the stack has no lockfile yet (a new repo).
       - uses: pnpm/action-setup@v4
-        if: steps.plan.outputs.work == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
         with:
           package_json_file: {{ ts_path }}/package.json
       - uses: actions/setup-node@v4
-        if: steps.plan.outputs.work == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
         with:
           node-version: 24
           cache: pnpm
           cache-dependency-path: {{ ts_path }}/pnpm-lock.yaml
-      - if: steps.plan.outputs.work == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
         working-directory: {{ ts_path }}
         run: pnpm install --frozen-lockfile
       - uses: keelstackhq/hoard@v0
-        if: steps.plan.outputs.work == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
+        if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true' && hashFiles('{{ ts_path }}/pnpm-lock.yaml') != ''
 {% endif %}{% raw %}      # Every gate runs, also after one fails, so one run reports all failures. The gates that run
       # no PR code come first: lint (build.rs, proc macros) and test run PR code on this runner,
       # and it must not be able to change what test-integrity, deps or fmt report.
@@ -233,11 +224,14 @@ jobs:
           # the caller's, e.g. schedule) runs all five gates.
           GATES: ${{ (vars.BOSUN_ALL_GATES == '1' || github.event_name != 'pull_request') && 'test-integrity deps fmt lint test' || 'test-integrity' }}
 {% endraw %}{% else %}{% raw %}          GATES: test-integrity deps fmt lint test
-{% endraw %}{% endif %}{% raw %}          # test-integrity reads the snapshot-change line from the PR body.
+{% endraw %}{% endif %}{% raw %}          # An edit after a success runs test-integrity only (see the edit step).
+          ONLY: ${{ steps.plan.outputs.only }}
+          # test-integrity reads the snapshot-change line from the PR body.
           BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
           EVENT: ${{ github.event_name }}
         run: |
           bosun="$RUNNER_TEMP/bin/bosun"
+          GATES="${ONLY:-$GATES}"
           # A PR runs each gate on what it changed; main and the queue run it on everything.
           if [ "$EVENT" = "pull_request" ]; then all=""; else all="--all"; fi
           failed=""
