@@ -11,7 +11,7 @@ SPLICE_VERSION=0.2.0
 HOIST_VERSION=0.2.0
 BERTH_VERSION=0.1.0
 # The bosun release this repo pins in .bosun/version.
-BOSUN_VERSION=0.2.1
+BOSUN_VERSION=0.2.2
 
 # Node 24 from NodeSource, unless it is already there.
 if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
