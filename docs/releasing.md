@@ -27,6 +27,11 @@ So a merge to `main` never tags, releases or publishes until the owner sets the 
 
 ## Normal flow (after the one-time setup)
 
+0. Fold the fragments first, in a docs PR to `main`: `scripts/fold-fragments.sh` moves the
+   one-line files of `changelog.d/` and `docs/progress.d/` to the end of `## Unreleased` in
+   CHANGELOG.md and `## Done` in PROGRESS.md. Merge it before the release PR is made or updated,
+   so step 1 moves those entries under the new version (folding after it would leave them under
+   an empty Unreleased).
 1. Change the version in `Cargo.toml` and in all six `npm/*/package.json` files (including the
    launcher's `optionalDependencies`). Add a `## <version> (<date>)` section to `CHANGELOG.md` (the heading hoist writes and reads the release notes from), then run
    `pnpm install --lockfile-only`. `hoist release prepare` does this in a release PR (branch

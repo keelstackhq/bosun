@@ -1,0 +1,1 @@
+- CHANGELOG and PROGRESS entries are one-line fragments (`changelog.d/`, `docs/progress.d/`) that `scripts/fold-fragments.sh` folds in the release PR, so merging main into a PR no longer conflicts on them; the channel ships the script as `.bosun/fold-fragments.sh` and the rule in AGENTS.md.

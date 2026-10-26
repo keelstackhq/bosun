@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# Folds one-line fragments into CHANGELOG.md and docs/PROGRESS.md, then deletes them.
+#
+# A PR never appends to CHANGELOG.md or the Done list of docs/PROGRESS.md: two PRs that both
+# append a line there conflict, and every merge of main costs a re-review. Instead a PR adds a
+# new file, named after its branch with "/" as "-" (claude/foo -> claude-foo.md):
+#   changelog.d/<name>.md       one line "- <entry>", for "## Unreleased" in CHANGELOG.md
+#   docs/progress.d/<name>.md   one line "- <date> · <task> · <what> · <PR>", for "## Done"
+# Fold on main before a release (a docs PR that runs this script), so the release PR then
+# moves the entries from "## Unreleased" under the new version.
+#
+# Rules, all checked before anything is written (it writes both files or neither):
+# - a fragment is a regular *.md file directly in its directory, exactly one line
+#   "- <text>" (LF only, a final newline is optional); README.md is not a fragment; any other
+#   entry in the directory (a subdirectory, a .txt file, a link) is an error, never skipped;
+# - the target file exists and has its heading exactly once.
+# Deterministic: fragments fold in byte order of their file names (LC_ALL=C), at the end of
+# their section, with one blank line before the next heading. Without fragments it changes
+# nothing.
+#
+# Usage: fold-fragments.sh [repo root; default: the git top level, else .]
+set -euo pipefail
+export LC_ALL=C
+root="${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo .)}"
+cd "$root"
+
+die() {
+  echo "fold-fragments: $*" >&2
+  exit 1
+}
+
+# The plan, filled by plan(): per target, its folded temp file and its fragments (tab-separated);
+# tmps lists every temp file for the cleanup.
+targets=()
+outs=()
+fraglists=()
+tmps=()
+cleanup() { if [ "${#tmps[@]}" -gt 0 ]; then rm -f "${tmps[@]}"; fi; }
+trap cleanup EXIT
+
+# plan <target> <heading> <dir>: checks everything and writes the folded text to a temp file
+# next to the target. It runs in this shell (never in $(...)), so `die` stops the script.
+plan() {
+  local target="$1" heading="$2" dir="$3"
+  [ -d "$dir" ] || return 0
+  local frags=() e base
+  while IFS= read -r e; do
+    base="${e##*/}"
+    if [ "$base" = README.md ]; then continue; fi
+    if [ ! -f "$e" ] || [ -L "$e" ] || [ "${base%.md}" = "$base" ]; then
+      die "$e is not a fragment: use a file <branch with / as ->.md directly in $dir/"
+    fi
+    frags+=("$e")
+  done < <(find "$dir" -mindepth 1 -maxdepth 1 | sort)
+  [ "${#frags[@]}" -gt 0 ] || return 0
+  [ -f "$target" ] || die "$target is missing, but $dir/ has fragments"
+  [ "$(grep -cxF -- "$heading" "$target" || true)" = 1 ] ||
+    die "$target must have the line '$heading' exactly once"
+  local lines="" f n line
+  for f in "${frags[@]}"; do
+    n="$(awk 'END { print NR }' "$f")"
+    line="$(head -n 1 "$f")"
+    # No pipe here: a long line must not trip pipefail.
+    case "$line" in
+      *$'\r'*) die "$f must be exactly one line '- <text>' (LF line ending)" ;;
+      "- "[![:space:]]*) ;;
+      *) die "$f must be exactly one line '- <text>' (LF line ending)" ;;
+    esac
+    [ "$n" = 1 ] || die "$f must be exactly one line '- <text>' (LF line ending)"
+    lines+="$line"$'\n'
+  done
+  local tmp add
+  tmp="$(mktemp "$target.fold.XXXXXX")"
+  add="$(mktemp "$target.lines.XXXXXX")"
+  tmps+=("$tmp" "$add")
+  # The new lines go to awk in a file: an environment variable has a size limit.
+  printf '%s' "$lines" > "$add"
+  ADD="$add" HEADING="$heading" awk '
+    function flush() {
+      if (insec && !done) {
+        if (!content) print ""
+        while ((getline l < ENVIRON["ADD"]) > 0) print l
+        done = 1
+      }
+    }
+    insec && /^## / {
+      flush(); if (blank == 0) blank = 1
+      for (i = 0; i < blank; i++) print ""
+      blank = 0; insec = 0; print; next
+    }
+    $0 == ENVIRON["HEADING"] { print; insec = 1; next }
+    insec && $0 == "" { blank++; next }
+    insec { for (i = 0; i < blank; i++) print ""; blank = 0; content = 1; print; next }
+    { print }
+    END { flush(); for (i = 0; i < blank; i++) print "" }
+  ' "$target" > "$tmp"
+  targets+=("$target")
+  outs+=("$tmp")
+  local joined
+  joined="$(printf '%s\t' "${frags[@]}")"
+  fraglists+=("${joined%$'\t'}")
+}
+
+# Phase 1: plan both folds; any error stops here, with nothing written.
+plan CHANGELOG.md "## Unreleased" changelog.d
+plan docs/PROGRESS.md "## Done" docs/progress.d
+
+# Phase 2: write. `cat >` keeps the target's mode and inode.
+for i in "${!targets[@]}"; do
+  cat "${outs[$i]}" > "${targets[$i]}"
+  IFS=$'\t' read -r -a done_frags <<< "${fraglists[$i]}"
+  rm -f "${done_frags[@]}"
+  echo "fold-fragments: ${#done_frags[@]} into ${targets[$i]}"
+done
