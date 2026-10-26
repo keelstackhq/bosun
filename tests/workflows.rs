@@ -865,6 +865,8 @@ fn the_gates_use_the_bases_config() {
     );
     w("crates/y/rust-toolchain", "/opt/evil\n");
     w("crates/x/lib.rs", "changed\n");
+    w(".npmrc", "node-options=--require ./evil.js\n");
+    w("crates/a b/.cargo/config.toml", "[alias]\nfmt = \"run\"\n");
     run(
         "mkdir -p evil && printf '[alias]\\nfmt = \"run\"\\n' > evil/config.toml && mkdir -p crates/z && ln -s ../../evil crates/z/.cargo",
     );
@@ -900,6 +902,11 @@ fn the_gates_use_the_bases_config() {
     );
     assert!(!d.join("crates/y/rust-toolchain").exists());
     assert_eq!(read("crates/x/lib.rs"), "changed\n", "code is the PR's");
+    assert!(!d.join(".npmrc").exists(), "the PR's .npmrc is gone");
+    assert!(
+        !d.join("crates/a b/.cargo/config.toml").exists(),
+        "a path with a space"
+    );
 
     // A setup PR: the base has no .bosun yet, so the change's .bosun is used.
     let dir = tempfile::tempdir().unwrap();

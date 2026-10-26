@@ -978,3 +978,35 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
         );
     }
 }
+
+/// ts-pnpm: no PR code before the gates. pnpm install skips the PR's .pnpmfile.cjs and
+/// lifecycle scripts; `pnpm rebuild` runs the dependencies' scripts right before fmt, the
+/// first gate that runs PR code there (review of #233).
+#[test]
+fn ts_pnpm_installs_without_pr_scripts_and_rebuilds_before_fmt() {
+    for stack in [&["ts-pnpm"][..], &["rust", "ts-pnpm"]] {
+        let files = variant(stack, "");
+        let Some(j) = yaml_json(file(&files, BOSUN_YML)) else {
+            return;
+        };
+        let steps = steps(&j, "");
+        let install = steps
+            .iter()
+            .find(|s| {
+                s["run"]
+                    .as_str()
+                    .is_some_and(|r| r.starts_with("pnpm install"))
+            })
+            .unwrap();
+        assert_eq!(
+            install["run"],
+            "pnpm install --frozen-lockfile --ignore-scripts --ignore-pnpmfile"
+        );
+        let run = step(&steps, "name", "bosun gates")["run"].as_str().unwrap();
+        let rebuild = run.find("pnpm rebuild").expect("rebuild");
+        assert!(run[..rebuild].contains("if [ \"$g\" = fmt ]"), "{run}");
+        assert!(rebuild < run.find("\"$bosun\" gate").unwrap());
+    }
+    let files = variant(&["rust"], "");
+    assert!(!file(&files, BOSUN_YML).contains("pnpm rebuild"));
+}

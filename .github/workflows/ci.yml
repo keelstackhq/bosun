@@ -176,22 +176,23 @@ jobs:
         run: |
           # The gates use the base commit's copies of the files that decide what runs: .bosun/ (the gate
           # commands are in its profiles), every .cargo directory (aliases, includes, rustc wrappers)
-          # and every rust-toolchain(.toml) (a path would run a compiler from the PR). Files the base
+          # every rust-toolchain(.toml) (a path would run a compiler from the PR) and every .npmrc
+          # (node-options would load PR code into each pnpm call). Files the base
           # lacks are deleted, also when the PR made the path a symlink. A PR's changes to them take
           # effect after it merges; they are R-gov or R-ci, so the owner sees them.
-          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|^\.bosun(/|$)'
+          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|^\.bosun(/|$)'
           if ! git cat-file -e "$BASE:.bosun/version" 2>/dev/null; then
             echo "::warning::the base has no .bosun yet (setup PR): this change's .bosun is used"
-            pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$'
+            pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$'
           fi
-          changed="$(git diff --name-only "$BASE" HEAD | grep -E "$pat" | tr '\n' ' ' || true)"
+          changed="$(git diff --name-only -z "$BASE" HEAD | { grep -zE "$pat" || true; } | tr '\0' ' ')"
           if [ -n "$changed" ]; then
             echo "::notice::this change edits ${changed}; its gates run with the base's copies (they apply after merge)"
           fi
-          git ls-tree -r --name-only HEAD | { grep -E "$pat" || true; } | while IFS= read -r p; do
+          git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
             rm -rf -- "$p"
           done
-          git ls-tree -r --name-only "$BASE" | { grep -E "$pat" || true; } | while IFS= read -r p; do
+          git ls-tree -r -z --name-only "$BASE" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
             mkdir -p -- "$(dirname -- "$p")"
             git show "$BASE:$p" > "$p"
           done
