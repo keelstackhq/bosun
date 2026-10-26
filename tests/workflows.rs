@@ -753,6 +753,19 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
             false,
         ),
         (".cargo/config", "alias.deny = \"run --\"\n", false),
+        // TOML unicode escapes and includes hide an alias from a text search (review of #233).
+        (
+            ".cargo/config.toml",
+            "[\"\\u0061lias\"]\nfmt = [\"run\"]\n",
+            false,
+        ),
+        (".cargo/config.toml", "include = [\"x.toml\"]\n", false),
+        (
+            ".cargo/config.toml",
+            "[[include]]\npath = \"x.toml\"\n",
+            false,
+        ),
+        (".cargo/config.toml", "bad = = toml\n", false),
     ] {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join(".cargo")).unwrap();

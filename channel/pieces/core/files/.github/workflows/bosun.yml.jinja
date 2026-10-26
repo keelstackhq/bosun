@@ -191,28 +191,82 @@ jobs:
             if [ "$d" = "$GITHUB_WORKSPACE" ] || [ "$d" = / ]; then break; fi
             d="$(dirname "$d")"
           done
-          # No PR code before the gates. A toolchain file with a `path` (in any TOML spelling)
-          # makes rustup run a compiler from the PR in rust-cache: fail closed on any "path" or
-          # "/" in it. A cargo alias can shadow `cargo fmt` and `cargo deny`: fail closed on any
-          # alias in a .cargo/config(.toml) cargo reads, from here up to the repo root.
-          for f in "$d/rust-toolchain.toml" "$d/rust-toolchain"; do
-            [ -n "$found" ] && [ -f "$f" ] || continue
-            if grep -q -e path -e / "$f"; then
-              echo "::error::$f names a toolchain path; name a released channel instead"
-              exit 1
-            fi
-          done
-          c="$PWD"
-          while :; do
-            for f in "$c/.cargo/config" "$c/.cargo/config.toml"; do
-              if [ -f "$f" ] && grep -q alias "$f"; then
-                echo "::error::$f mentions alias; cargo aliases are not allowed here"
-                exit 1
-              fi
-            done
-            if [ "$c" = "$GITHUB_WORKSPACE" ] || [ "$c" = / ]; then break; fi
-            c="$(dirname "$c")"
-          done
+          # No PR code before the gates. A TOML parser (unicode escapes and all) reads the
+          # toolchain file: only a [toolchain] with a plain channel, components, targets and
+          # profile may pass (a `path` would make rustup run a compiler from the PR in
+          # rust-cache), and later steps get RUSTUP_TOOLCHAIN, so rustup ignores the file. It
+          # also reads each .cargo/config(.toml) cargo reads, from here up to the repo root, and
+          # fails closed on alias (it can shadow `cargo fmt` and `cargo deny`), include,
+          # credential providers or a parse error.
+          ch=1.97
+          if [ -n "$found" ]; then
+            ch="$(python3 -I - "$d" <<'PY'
+          import os, re, sys, tomllib
+          name = re.compile(r"[0-9A-Za-z._-]+")
+          def ok(s):
+              return isinstance(s, str) and name.fullmatch(s) is not None
+          def check(p):
+              with open(p, "rb") as f:
+                  raw = f.read()
+              text = raw.decode("utf-8", "strict")
+              if p.endswith("rust-toolchain") and ok(text.strip()) and "\n" not in text.strip():
+                  return text.strip()
+              t = tomllib.loads(text)
+              tc = t.get("toolchain")
+              if set(t) != {"toolchain"} or not isinstance(tc, dict):
+                  sys.exit(f"{p}: only a [toolchain] table is allowed")
+              extra = set(tc) - {"channel", "components", "targets", "profile"}
+              if extra or not ok(tc.get("channel")):
+                  sys.exit(f"{p}: name a released channel; only channel, components, targets and profile are allowed")
+              for k in ("components", "targets"):
+                  v = tc.get(k, [])
+                  if not isinstance(v, list) or not all(ok(x) for x in v):
+                      sys.exit(f"{p}: {k} must be a list of plain names")
+              if "profile" in tc and not ok(tc["profile"]):
+                  sys.exit(f"{p}: profile must be a plain name")
+              return tc["channel"]
+          d = sys.argv[1]
+          chosen = None
+          # rustup reads rust-toolchain over rust-toolchain.toml when both exist; both must pass.
+          for fn in ("rust-toolchain.toml", "rust-toolchain"):
+              p = os.path.join(d, fn)
+              if os.path.lexists(p):
+                  try:
+                      chosen = check(p)
+                  except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+                      sys.exit(f"{p}: not readable ({e})")
+          print(chosen)
+          PY
+          )"
+          fi
+          python3 -I - "$PWD" "$GITHUB_WORKSPACE" <<'PY'
+          import os, sys, tomllib
+          start, stop = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
+          bad = {"alias", "include", "credential-alias", "credential-provider", "global-credential-providers"}
+          def walk(v, path):
+              if isinstance(v, dict):
+                  for k, x in v.items():
+                      if k in bad:
+                          sys.exit(f"{path}: key {k!r} is not allowed here (it can run PR code before the gates)")
+                      walk(x, path)
+              elif isinstance(v, list):
+                  for x in v:
+                      walk(x, path)
+          d = start
+          while True:
+              for name in ("config", "config.toml"):
+                  p = os.path.join(d, ".cargo", name)
+                  if os.path.lexists(p):
+                      try:
+                          with open(p, "rb") as f:
+                              walk(tomllib.load(f), p)
+                      except (OSError, tomllib.TOMLDecodeError) as e:
+                          sys.exit(f"{p}: not readable TOML ({e})")
+              if d == stop or d == os.path.dirname(d):
+                  break
+              d = os.path.dirname(d)
+          PY
+          echo "RUSTUP_TOOLCHAIN=$ch" >> "$GITHUB_ENV"
           if [ -n "$found" ]; then
             rustup toolchain install
           else

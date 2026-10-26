@@ -755,14 +755,24 @@ fn toolchain_run(root: &std::path::Path, cwd: &std::path::Path) -> (bool, String
         bin.path().display(),
         std::env::var("PATH").unwrap()
     );
+    let env = bin.path().join("env");
     let ok = Command::new("bash")
         .args(["-eo", "pipefail", "-c", run])
         .current_dir(cwd)
         .env("PATH", path)
         .env("GITHUB_WORKSPACE", root)
+        .env("GITHUB_ENV", &env)
         .status()
         .unwrap()
         .success();
+    if ok {
+        // Later steps get the checked channel, so rustup ignores the file from then on.
+        let e = fs::read_to_string(&env).unwrap();
+        assert!(
+            e.starts_with("RUSTUP_TOOLCHAIN=") && e.lines().count() == 1,
+            "{e}"
+        );
+    }
     (ok, fs::read_to_string(log).unwrap_or_default())
 }
 
@@ -789,10 +799,32 @@ fn the_toolchain_step_refuses_a_toolchain_path() {
             "rust-toolchain.toml",
             "toolchain = { path = \"/abs/evil\" }\n",
         ),
+        // TOML unicode escapes hide the key and the slash from a text search (review of #233).
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\n\"\\u0070ath\" = \"\\u002ftmp\\u002fevil\"\n",
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\nchannel = \"../evil\"\n",
+        ),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\nchannel = \"1.97\"\n[other]\nx = 1\n",
+        ),
+        ("rust-toolchain.toml", "not = = toml\n"),
         ("rust-toolchain", "/opt/evil\n"),
         // A cargo alias can shadow `cargo fmt` and `cargo deny`.
         (".cargo/config.toml", "[alias]\nfmt = [\"run\", \"--\"]\n"),
         (".cargo/config", "alias.deny = \"run --\"\n"),
+        (".cargo/config.toml", "[\"\\u0061lias\"]\nfmt = [\"run\"]\n"),
+        (".cargo/config.toml", "include = [\"x.toml\"]\n"),
+        (".cargo/config.toml", "[[include]]\npath = \"x.toml\"\n"),
+        (
+            ".cargo/config.toml",
+            "[registry]\nglobal-credential-providers = [\"./e\"]\n",
+        ),
+        (".cargo/config.toml", "bad = = toml\n"),
     ] {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join(".cargo")).unwrap();
@@ -803,6 +835,11 @@ fn the_toolchain_step_refuses_a_toolchain_path() {
     }
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("rust-toolchain"), "1.97\n").unwrap();
+    fs::write(
+        root.path().join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97\"\ncomponents = [\"rustfmt\", \"clippy\"]\nprofile = \"minimal\"\n",
+    )
+    .unwrap();
     fs::create_dir_all(root.path().join(".cargo")).unwrap();
     fs::write(root.path().join(".cargo/config.toml"), "[net]\nretry = 3\n").unwrap();
     assert!(
