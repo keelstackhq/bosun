@@ -13,8 +13,8 @@ use crate::app::App;
 use crate::app::{Result, kill_switch, main_red};
 use crate::cli::risk_check::{decisive_review, enrolled_keys, owner_comment, owner_logins};
 use crate::core::approve::{
-    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, in_cloud,
-    parse_target, readiness, signed_comment, signed_message,
+    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, batch_message,
+    in_cloud, parse_target, readiness, signed_comment, signed_message,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
@@ -188,7 +188,18 @@ fn exec(
         let b = board(gh)?;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
+        let items: Vec<(u64, String, String)> = b
+            .ready
+            .iter()
+            .map(|r| (r.pr, r.head_sha.clone(), r.title.clone()))
+            .collect();
+        let (message_id, message) = match batch_message(&items) {
+            Some((id, text)) => (json!(id), json!(text)),
+            None => (Value::Null, Value::Null),
+        };
         return Ok(Outcome::data(json!({
+            "message_id": message_id,
+            "message": message,
             "ready": b.ready.iter().map(ready_json).collect::<Vec<_>>(),
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),

@@ -103,6 +103,60 @@ pub fn approve_command(ready: &[(u64, String)]) -> Option<String> {
     Some(format!("bosun approve {}", args.join(" ")))
 }
 
+/// Most PRs one owner message lists; the rest are only counted.
+const MESSAGE_PRS: usize = 10;
+/// Longest title in the owner message, in characters.
+const MESSAGE_TITLE: usize = 50;
+
+/// The owner's chat message for a ready list of `(pr, head_sha, title)`: its id (the first 4 hex
+/// characters of the SHA-256 of the sorted `<pr>@<head>\n` lines) and its text. `None` when empty.
+pub fn batch_message(ready: &[(u64, String, String)]) -> Option<(String, String)> {
+    if ready.is_empty() {
+        return None;
+    }
+    let mut pairs: Vec<String> = ready
+        .iter()
+        .map(|(pr, h, _)| format!("{pr}@{h}\n"))
+        .collect();
+    pairs.sort();
+    let digest = ring::digest::digest(&ring::digest::SHA256, pairs.concat().as_bytes());
+    let id: String = digest.as_ref()[..2]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let noun = if ready.len() == 1 {
+        "1 PR waits"
+    } else {
+        "PRs wait"
+    };
+    let mut text = if ready.len() == 1 {
+        format!("{noun} for your approval (message {id}):")
+    } else {
+        format!("{} {noun} for your approval (message {id}):", ready.len())
+    };
+    let shown = &ready[..ready.len().min(MESSAGE_PRS)];
+    for (pr, head, title) in shown {
+        let clean: String = title
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
+        let title = if clean.chars().count() > MESSAGE_TITLE {
+            let cut: String = clean.chars().take(MESSAGE_TITLE - 1).collect();
+            format!("{cut}…")
+        } else {
+            clean
+        };
+        let short: String = head.chars().take(7).collect();
+        text.push_str(&format!("\n- #{pr}@{short} {title}"));
+    }
+    if ready.len() > shown.len() {
+        text.push_str(&format!("\n- … and {} more", ready.len() - shown.len()));
+    }
+    let nums: Vec<String> = shown.iter().map(|(pr, ..)| pr.to_string()).collect();
+    text.push_str(&format!("\nReply: approve {}", nums.join(" ")));
+    Some((id, text))
+}
+
 /// Whether this is a Claude cloud session, whose agent proxy rewrites GitHub writes (app
 /// attribution and a footer): `CCR_AGENT_PROXY_ENABLED` is `1`/`true`, or
 /// `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`.
@@ -421,6 +475,34 @@ mod tests {
             approve_command(&[(1, "a".into()), (2, "b".into())]).as_deref(),
             Some("bosun approve 1@a 2@b")
         );
+    }
+
+    fn item(pr: u64, head: &str, title: &str) -> (u64, String, String) {
+        (pr, head.into(), title.into())
+    }
+
+    #[test]
+    fn the_batch_message_id_hashes_the_sorted_pairs() {
+        assert_eq!(batch_message(&[]), None);
+        let a = batch_message(&[item(12, "abc1234ff", "a"), item(3, "def5678", "b")]).unwrap();
+        let b = batch_message(&[item(3, "def5678", "x"), item(12, "abc1234ff", "y")]).unwrap();
+        assert_eq!(a.0, b.0, "order and titles do not matter");
+        assert_eq!(a.0.len(), 4);
+        let c = batch_message(&[item(12, "abc1235ff", "a"), item(3, "def5678", "b")]).unwrap();
+        assert_ne!(a.0, c.0);
+        assert!(a.1.ends_with("\nReply: approve 12 3") || a.1.ends_with("\nReply: approve 3 12"));
+    }
+
+    #[test]
+    fn the_batch_message_cuts_titles_and_lists_ten() {
+        let long = format!("a\nb{}", "z".repeat(60));
+        let (_, text) = batch_message(&[item(1, "abcdef0123", &long)]).unwrap();
+        let line = text.lines().nth(1).unwrap();
+        assert_eq!(line, format!("- #1@abcdef0 a b{}…", "z".repeat(46)));
+        let many: Vec<_> = (1..=11).map(|n| item(n, "abcdef0123", "t")).collect();
+        let (_, text) = batch_message(&many).unwrap();
+        assert!(text.contains("- … and 1 more\n"));
+        assert!(text.ends_with("Reply: approve 1 2 3 4 5 6 7 8 9 10"));
     }
 
     #[test]

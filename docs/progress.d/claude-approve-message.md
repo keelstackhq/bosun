@@ -1,0 +1,1 @@
+- 2026-10-27 · Q3c · approve --list adds message and message_id for the owner chat (F7) · PR (claude/approve-message)
