@@ -1,0 +1,1 @@
+- `core::prereqs`: `approvals` estimates which plan tasks will need the owner or a delegate at merge (as risk-check would, from touch paths; `risk: high` needs the owner), in dependency batches; `message` is the short checklist text for the owner's chat.
