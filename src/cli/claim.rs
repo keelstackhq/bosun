@@ -97,6 +97,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         }
     }
 
+    super::prereqs_gate::refuse_if_held(gh, n, &meta)?;
     let touch_raw = if args.touch.is_empty() {
         meta.map(|m| m.touch).unwrap_or_default()
     } else {

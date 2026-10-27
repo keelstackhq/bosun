@@ -160,7 +160,11 @@ fn post(
 }
 
 /// `Some(found)` when the API answered, `None` when it did not (owner, or a 403).
-fn verify(gh: &dyn Github, v: &Verify, branch: &mut Option<String>) -> Result<Option<bool>> {
+pub(crate) fn verify(
+    gh: &dyn Github,
+    v: &Verify,
+    branch: &mut Option<String>,
+) -> Result<Option<bool>> {
     let scoped = |kind: &str, env: &Option<String>, name: &str| match env {
         Some(e) => format!("/environments/{}/{kind}/{}", enc(e), enc(name)),
         None => format!("/actions/{kind}/{}", enc(name)),

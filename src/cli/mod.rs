@@ -22,6 +22,7 @@ pub mod notify;
 pub mod plan;
 pub mod pr;
 pub mod prereqs;
+pub mod prereqs_gate;
 pub mod progress;
 pub mod reap;
 pub mod release;

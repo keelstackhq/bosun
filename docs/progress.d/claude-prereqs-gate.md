@@ -1,0 +1,1 @@
+- 2026-10-27 · Q3a · prerequisites gate in claim, wave plan and spawn · PR (claude/prereqs-gate)
