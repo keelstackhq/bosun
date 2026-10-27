@@ -163,7 +163,8 @@ fn default_push_merge_queue_and_branchless_pipelines_run_all() {
         assert_eq!(v["data"]["ci"]["event"], event);
         assert_eq!(r.calls(), vec![ALL], "{event}");
         if event == "merge-queue" {
-            assert_eq!(v["data"]["ci"]["base"], sha.as_str());
+            let fork = git(&r.root, &["merge-base", "HEAD", "origin/main"]);
+            assert_eq!(v["data"]["ci"]["base"], fork.as_str());
         }
     }
 }
@@ -176,17 +177,26 @@ fn github_and_local_runs_carry_no_ci_block() {
     assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
 }
 
-/// The legacy base (origin/main == HEAD) sees nothing; only the queue's base sha finds the deletion.
+/// A queue sha older than the fork point must not set the base: W..HEAD would miss a test that
+/// main gained after W and the PR deletes.
 #[test]
-fn test_integrity_uses_the_merge_queue_base() {
+fn an_old_ancestor_queue_sha_does_not_hide_a_deleted_test() {
     let r = repo();
-    let sha = git(&r.root, &["rev-parse", "origin/main"]);
-    git(&r.root, &["checkout", "-q", "-b", "queue", "main"]); // the queue builds on the base sha
-    fs::remove_file(r.root.join("tests/t.rs")).unwrap();
+    let w = git(&r.root, &["rev-parse", "work"]);
+    git(&r.root, &["checkout", "-q", "main"]);
+    write(
+        &r.root,
+        "tests/new.rs",
+        "#[test]\nfn n() {\n    assert!(true);\n}\n",
+    );
+    git(&r.root, &["add", "-A"]);
+    git(&r.root, &["commit", "-q", "-m", "add a test"]);
+    git(&r.root, &["update-ref", "refs/remotes/origin/main", "main"]);
+    git(&r.root, &["checkout", "-q", "-b", "pr"]);
+    fs::remove_file(r.root.join("tests/new.rs")).unwrap();
     git(&r.root, &["add", "-A"]);
     git(&r.root, &["commit", "-q", "-m", "drop the test"]);
-    git(&r.root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    let branch = format!("gh-readonly-queue/main/pr-7-{sha}");
+    let branch = format!("gh-readonly-queue/main/pr-1-{w}");
     let env = [("CIRCLECI", "true"), ("CIRCLE_BRANCH", &branch)];
     let (code, v) = r.exec(&env, "test-integrity", &[]);
     assert_eq!(code, 1, "{v}");

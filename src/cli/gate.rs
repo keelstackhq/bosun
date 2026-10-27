@@ -49,18 +49,23 @@ pub(crate) fn resolve_ci(
     let default_ref = resolve_base_in(root, None, None);
     let default_branch = default_ref.strip_prefix("origin/").unwrap_or("main");
     let mut ci = ci_env::detect(&env, default_branch);
-    if let BaseRule::Queue { sha, base } = &ci.base {
-        let on_default = gates::git(root, &["merge-base", "--is-ancestor", sha, &default_ref]);
+    let explicit = flag.is_some_and(|f| !f.trim().is_empty());
+    // A queue name only sets the event (and `all`): the sha never sets the diff base, because an
+    // old ancestor would hide what main gained since. It must still name a sha on the default branch.
+    let queue = match &ci.base {
+        BaseRule::Queue { sha, base } if !explicit => Some((sha.clone(), base.clone())),
+        _ => None,
+    };
+    if let Some((sha, base)) = queue {
+        let on_default = gates::git(root, &["merge-base", "--is-ancestor", &sha, &default_ref]);
         if base != default_branch || on_default.is_err() {
             eprintln!("bosun: the merge-queue branch name is not trusted; treating it as a PR");
             (ci.event, ci.all) = (ci_env::Event::Pr, false);
-            ci.base = BaseRule::MergeBase(default_ref.clone());
         }
+        ci.base = BaseRule::MergeBase(default_ref.clone());
     }
-    let explicit = flag.is_some_and(|f| !f.trim().is_empty());
     let base = match (&ci.base, explicit) {
         (BaseRule::Ref(r), false) => r.clone(),
-        (BaseRule::Queue { sha, .. }, false) => sha.clone(),
         (BaseRule::MergeBase(r), false) => gates::git(root, &["merge-base", "HEAD", r])?
             .trim()
             .to_string(),
