@@ -147,6 +147,9 @@ pub trait Github {
     fn required_status_checks(&self, branch: &str) -> Result<Live>;
     /// Auto-merge through the Claude Code cloud route; `method` is `merge`, `squash` or `rebase`.
     fn enable_auto_merge_rest(&self, number: u64, method: &str) -> Result<()>;
+    /// Whether the repo path `rest` (such as `/actions/secrets/NAME`) exists: 200 is `Some(true)`,
+    /// 404 `Some(false)`, 403 (the token cannot read it) `None`.
+    fn exists(&self, rest: &str) -> Result<Option<bool>>;
 }
 
 /// What the Claude Code cloud proxy says when it refuses GraphQL.
@@ -733,5 +736,12 @@ impl Github for LiveGithub {
         })?;
         let lines: Vec<&str> = text.lines().collect();
         Ok(lines[lines.len().saturating_sub(tail)..].join("\n"))
+    }
+
+    fn exists(&self, rest: &str) -> Result<Option<bool>> {
+        Ok(match self.http.get_json_or_forbidden(&self.path(rest))? {
+            Ok(found) => Some(found.is_some()),
+            Err(()) => None,
+        })
     }
 }
