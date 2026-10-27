@@ -549,16 +549,32 @@ fn out_of_touch(
     Some(outside(&changed, &lease.touch))
 }
 
-/// `owner`'s newest approve, request-changes or dismissed review on `head`.
+/// When a review was submitted; `None` when GitHub gave no time or it does not parse.
+pub fn submitted(r: &Review) -> Option<Timestamp> {
+    r.submitted_at.as_deref().and_then(parse_rfc3339)
+}
+
+/// `owner`'s newest approve, request-changes or dismissed review on `head`, by `submitted_at`
+/// (ties by id), not by list position. If any of them has no usable time the order is unknown, so
+/// the most withdrawing one is returned (the newest request for changes or dismissal, if any).
 fn decisive<'a>(reviews: &'a [Review], owner: &str, head: &str) -> Option<&'a Review> {
-    reviews.iter().rev().find(|r| {
-        r.user.eq_ignore_ascii_case(owner)
-            && r.commit_id == head
-            && matches!(
+    let mine: Vec<&Review> = (reviews.iter())
+        .filter(|r| r.user.eq_ignore_ascii_case(owner) && r.commit_id == head)
+        .filter(|r| {
+            matches!(
                 r.state.as_str(),
                 "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
             )
-    })
+        })
+        .collect();
+    if mine.iter().any(|r| submitted(r).is_none()) {
+        let against = mine.iter().filter(|r| withdrawn(Some(&r.state)));
+        return against
+            .max_by_key(|r| r.id)
+            .or(mine.iter().max_by_key(|r| r.id))
+            .copied();
+    }
+    mine.into_iter().max_by_key(|r| (submitted(r), r.id))
 }
 
 /// The id of `owner`'s decisive review on `head` when it was dismissed.

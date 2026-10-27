@@ -386,11 +386,29 @@ impl FakeGithub {
     }
 
     pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
+        self.review_at(number, user, state, commit_id, None);
+    }
+
+    /// A review submitted at `at`; by default each review is a second later than the one before.
+    /// `Some("")` leaves `submitted_at` out, as GitHub does for a pending review.
+    pub fn review_at(
+        &self,
+        number: u64,
+        user: &str,
+        state: &str,
+        commit_id: &str,
+        at: Option<&str>,
+    ) {
         let mut s = self.state.lock().unwrap();
         let list = s.reviews.entry(number).or_default();
         let id = list.len() + 1;
-        list.push(json!({"id": id, "user": {"login": user}, "state": state,
-            "commit_id": commit_id, "submitted_at": TS}));
+        let default = format!("2026-10-22T10:00:{id:02}Z");
+        let mut r =
+            json!({"id": id, "user": {"login": user}, "state": state, "commit_id": commit_id});
+        if at != Some("") {
+            r["submitted_at"] = json!(at.unwrap_or(&default));
+        }
+        list.push(r);
     }
 
     pub fn dismiss_event(&self, number: u64, review_id: u64, at: &str) {

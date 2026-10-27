@@ -1,0 +1,1 @@
+- risk-check orders an owner's decisive reviews by `submitted_at` (a missing time fails closed), not by list order.

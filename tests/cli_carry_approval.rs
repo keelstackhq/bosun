@@ -184,3 +184,33 @@ fn no_owners(sha: &str, sig: &str) -> bool { let fake = delegate_world(sha, sig,
 #[test] fn an_edited_counted_verdict_record_does_not_carry() {
     let fake = verdicts_world(); two(&fake, H); fake.last_comment(|c| c.updated_at = "2026-10-23T00:00:00Z".into()); assert!(!carries(&fake));
 }
+#[test] fn the_off_path_clause_orders_reviews_by_time_and_fails_closed() {
+    let order = |rs: &[(&str, &str, &str)]| { let fake = world(); for (st, sha, at) in rs { fake.review_at(1, "ada", st, sha, Some(at)); } carries(&fake) };
+    let (e, l) = ("2026-10-22T09:00:00Z", "2026-10-22T09:30:00Z");
+    assert!(order(&[("APPROVED", H, l), ("CHANGES_REQUESTED", OFF, e)])); // the approval is newer though listed first
+    assert!(!order(&[("CHANGES_REQUESTED", OFF, l), ("APPROVED", H, e)])); // the request is newer though listed first
+    for bad in ["", "yesterday"] { assert!(!order(&[("APPROVED", H, l), ("CHANGES_REQUESTED", OFF, bad)]), "{bad:?}"); }
+    assert!(!order(&[("APPROVED", H, ""), ("DISMISSED", OFF, e)])); // a missing time on the approval itself
+}
+const SIG_H2: &str = "3KUbBwi4zcYGaLzGrzfE74jWJ1+HT9oK4TTbc6gyxpc1w8MzWQyfy4RXlwhOMOiAYRtSaD5/+1+UVIOeupxcCA==";
+#[test] fn a_signature_of_a_key_removed_from_the_default_branch_counts_nowhere() {
+    let revoke = |f: &FakeGithub| f.content(".bosun/approvers.toml", "refs/heads/main", "");
+    for (sha, sig) in [(H2, SIG_H2), (H, SIG_H)] { // owner key, on the head and carried
+        let fake = world(); signed(&fake, sha, sig); let kept = carries_or_passes(&fake); revoke(&fake); assert!(kept && !carries_or_passes(&fake), "{sha}");
+    }
+    for (sha, sig) in [(H2, DSIG_H2), (H, DSIG_H)] { // delegate key
+        let fake = delegate_world(sha, sig, 0); let kept = carries_or_passes(&fake); revoke(&fake); assert!(kept && !carries_or_passes(&fake), "{sha}");
+    }
+}
+/// Whether the check passes, on the head itself or by a carry.
+fn carries_or_passes(fake: &FakeGithub) -> bool { let (code, _, _) = go(fake); code == 0 }
+#[test] fn rules_that_need_the_owner_are_not_met_by_a_carried_delegate_signature_or_verdicts() {
+    let fake = delegate_world(H, DSIG_H, 0); assert!(carries(&fake)); // control: a delegate rule alone carries
+    let gate = |f: &FakeGithub| { f.content(".bosun/risk.toml", D, "[[rule]]\nid = \"R-d\"\nwhy = \"d\"\napproval = \"delegate\"\npaths = [\"deny.toml\"]\n[[rule]]\nid = \"R-o\"\nwhy = \"o\"\npaths = [\"src/gates/**\"]\n");
+        f.pull_file(1, "src/gates/x.rs", "modified", 1, 0, Some("@@ -0,0 +1,1 @@\n+x")); };
+    let fake = delegate_world(H, DSIG_H, 0); gate(&fake); assert!(!carries(&fake)); // the owner rule is not a delegate's to approve
+    let fake = delegate_world(H, DSIG_H, 0); gate(&fake); fake.review(1, "ada", "APPROVED", H); assert!(carries(&fake)); // the owner's approval on h is
+    let fake = verdicts_world(); two(&fake, H); fake.pull_file(1, "src/gates/x.rs", "modified", 1, 0, Some("@@ -0,0 +1,1 @@\n+x"));
+    fake.content(".bosun/risk.toml", D, "[[rule]]\nid = \"R-ci-review\"\nwhy = \"r\"\napproval = \"two-verdicts\"\npaths = [\"channel/**\"]\n[[rule]]\nid = \"R-o\"\nwhy = \"o\"\npaths = [\"src/gates/**\"]\n");
+    assert!(!carries(&fake)); // two verdicts do not meet an owner rule beside the class
+}
