@@ -47,6 +47,9 @@ fn secret_paths_and_key_lines_are_r_secrets_and_critical() {
     let cases = [
         ("secrets.toml", "x: 1"), (".sops.yaml", "x: 1"), ("deploy/.sops.yaml", "x: 1"),
         ("access.toml", "x: 1"), ("secrets/prod.sops.yaml", "x: 1"), ("a/b/c.sops.json", "x: 1"),
+        ("prod.sops.yml", "x: 1"), ("a/prod.sops.yml", "x: 1"), ("a/b.sops.env", "x: 1"),
+        ("deploy/secrets.toml", "x: 1"), ("Secrets.toml", "x: 1"), (".SOPS.yaml", "x: 1"),
+        ("svc/Access.toml", "x: 1"), ("A/B.SOPS.JSON", "x: 1"),
         ("notes.txt", &key), ("ci.sh", "SOPS_AGE_KEY=x"), ("ci.sh", "SOPS_AGE_KEY: x"),
     ];
     for (path, line) in cases {
@@ -60,6 +63,17 @@ fn secret_paths_and_key_lines_are_r_secrets_and_critical() {
     }
     let (code, v) = check("ci.sh", "echo SOPS_AGE_KEY_FILE");
     assert_eq!(code, 0, "a mention is not an assignment: {v}");
+}
+
+#[test]
+fn other_ci_providers_are_r_ci() {
+    #[rustfmt::skip]
+    let paths = [".gitlab-ci.yml", ".buildkite/pipeline.yml", "Jenkinsfile",
+        "azure-pipelines.yml", ".github/actions/setup/action.yml", ".CircleCI/config.yml"];
+    for path in paths {
+        let (_, v) = check(path, "x: 1");
+        assert_eq!(seen(&v).0, vec!["R-ci"], "{path}: {v}");
+    }
 }
 
 #[test]

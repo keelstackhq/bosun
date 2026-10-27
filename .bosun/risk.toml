@@ -16,7 +16,7 @@ why = "CI decides what is verified."
 # a delegate decides deny.toml, the toolchain files, .config/** and profiles/**. Delete the
 # delegate key in .bosun/approvers.toml to turn delegation off. Needs .bosun/version 0.2.1+.
 approval = "delegate"
-paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", "azure-pipelines.yml", ".gitlab-ci.yml", ".buildkite/**", "jenkinsfile", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"
@@ -101,7 +101,7 @@ paths = ["channel/**"]
 [[rule]]
 id = "R-secrets"
 why = "A secret in the repo is a leak."
-paths = ["secrets.toml", ".sops.yaml", "access.toml", "**/.sops.yaml", "**/*.sops.yaml", "**/*.sops.json"]
+paths = ["**/secrets.toml", "**/access.toml", "**/*.sops.*"]
 content = '(?i)(api[_-]?key|secret|token)\s*=|AGE-SECRET-KEY-1|SOPS_AGE_KEY\s*[:=]'
 
 [[rule]]

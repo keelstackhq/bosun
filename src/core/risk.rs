@@ -160,7 +160,7 @@ pub fn evaluate(
         for f in files {
             let hit = std::iter::once(&f.path)
                 .chain(f.previous_path.as_ref())
-                .any(|p| rule.paths.iter().any(|g| g.matches(p)));
+                .any(|p| rule.paths.iter().any(|g| matches_any_case(g, p)));
             if hit {
                 evidence.push(format!("path {}", f.path));
             }
@@ -303,12 +303,19 @@ pub fn critical(matches: &[Match], files: &[ChangedFile], bosun_code: bool) -> V
     for f in files {
         let hit = std::iter::once(&f.path)
             .chain(f.previous_path.as_ref())
-            .any(|p| globs.iter().any(|g| g.matches(p)));
+            .any(|p| globs.iter().any(|g| matches_any_case(g, p)));
         if hit {
             why.push(f.path.clone());
         }
     }
     why
+}
+
+/// A risk path also matches its lowercased form: on a case-insensitive filesystem (macOS,
+/// Windows) `Secrets.toml` or `.CircleCI/` is the same file, and a wider match only asks for
+/// more review. Patterns are written in lowercase where case can vary.
+fn matches_any_case(g: &Glob, path: &str) -> bool {
+    g.matches(path) || g.matches(&path.to_lowercase())
 }
 
 /// The floor: on a critical PR every delegate match needs the owner.
