@@ -1,0 +1,1 @@
+- decrypt-lock: a `git grep` pathspec-magic root (`:(exclude)x`, `:!x`, `:/`) is judged as its base, and a `-C`/`--work-tree` base of one segment after two or more `..` (`../../user`) counts as a possible home.

@@ -1583,7 +1583,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         }
         // A key root as the base is outside any repo, so the fallback may apply there whatever
         // config set it (`GIT_CONFIG_PARAMETERS`, a gitconfig file); `../x` is not one here,
-        // but `../../root` and `../../home/x` are.
+        // but `../../root`, `../../home/x` and `../../x` are.
         let key_base = dir.as_deref().map(lexical).is_some_and(|b| {
             let segs: Vec<&str> = b.split('/').collect();
             let top = segs
@@ -1592,7 +1592,9 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 .map(|i| segs.get(i + 1));
             #[rustfmt::skip]
             let home = top.is_none_or(|s| s.is_some_and(|s| matches!(*s, "root" | "home")));
-            key_root(&b) == 2 || key_root(&b) == 1 && home
+            // Two `..` climb past a repo's parent: `../../user` from `~/repo/sub` is home.
+            let deep = segs.iter().take_while(|s| **s == "..").count() >= 2;
+            key_root(&b) == 2 || key_root(&b) == 1 && (home || deep)
         });
         let no_index = fallback || key_base || args.iter().any(|a| long_prefix(a, "--no-index", 6));
         if git && verb == "grep" && no_index {
@@ -1607,6 +1609,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                     _ if !paths && VALUE.contains(a) => drop(it.next()),
                     _ if !paths && a.starts_with('-') => {}
                     _ if !std::mem::replace(&mut pat, true) => {}
+                    // Pathspec magic (`:(exclude)x`, `:!x`, `:/`) searches the whole base.
+                    _ if a.trim_start_matches(['\'', '"']).starts_with(':') => roots.push("."),
                     _ => roots.push(*a),
                 }
             }
@@ -3073,6 +3077,16 @@ mod tests {
         ("git -C ~/projects/x grep x", false), ("git -C ../bosun grep x", false),
         ("git -C ../../root grep x", true), ("git -C ../../home/user grep x", true),
         ("git -C ../../home grep x", true),
+        // A `:` root is pathspec magic (`:(exclude)x`, `:!x`, `:/`): it searches the base.
+        ("git -C ~ grep x -- ':(exclude)foo'", true), ("git -C ~ grep x ':!foo'", true),
+        ("git -C ~ grep --no-index x ':(top)'", true), ("git -C ~ grep x ':/'", true),
+        ("git -C ~ grep x ':^foo'", true), ("git -C /root grep x ':(glob)*'", true),
+        ("git grep --no-index x ':(exclude)y'", false), ("git grep x -- ':(exclude)vendor'", false),
+        ("git -C src grep x ':!tests'", false), ("git -C ~ grep x -- src ':!src/t'", true),
+        // Two or more `..` and one segment may be a home (`../../user` from `~/repo/sub`).
+        ("git -C ../../user grep x", true), ("git -C ../../../root grep x", true),
+        ("git -C ../../bob grep -e x", true), ("git -C ../../../x grep x", true),
+        ("git -C ../other-repo/src grep x", false), ("git -C ../../x/y grep x", false),
         // Vim and nvim init variables run commands in a ugrep view (`-Q`, `--query`, `--view`).
         ("VIMINIT=':!sh' ugrep --view=vim x f", true), ("EXINIT='!sh' ug --view=vi x f", true),
         ("export MYVIMRC=/tmp/e; ugrep --view=vim x f", true), ("GVIMINIT=x ug -Q x f", true),
