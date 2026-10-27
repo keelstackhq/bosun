@@ -6,7 +6,11 @@ pub mod types;
 
 use http::{Http, enc};
 use serde_json::{Value, json};
-pub use types::{CheckRun, Comment, Compare, Issue, Job, Label, PrFile, Pull, Review, Status};
+use types::RawGitCommit;
+pub use types::{
+    CheckRun, Comment, Compare, GitCommit, GitTree, Issue, Job, Label, PrFile, Pull, Review,
+    Status, TreeEntry,
+};
 
 pub use crate::output::BosunError;
 pub type Result<T> = std::result::Result<T, BosunError>;
@@ -55,6 +59,8 @@ pub struct IssuePatch {
 
 /// Compare pages read at most (3000 files, GitHub's own cap).
 const MAX_COMPARE_PAGES: usize = 30;
+/// GitHub lists at most this many files in a comparison.
+const COMPARE_FILE_CAP: usize = 300;
 
 /// What `GET /issues/N` says about one number.
 pub enum Probe {
@@ -107,6 +113,10 @@ pub trait Github {
     fn compare_files(&self, base: &str, head: &str) -> Result<Vec<PrFile>>;
     /// Like `compare_files`, with the comparison's `status` (`ahead` when base is an ancestor).
     fn compare(&self, base: &str, head: &str) -> Result<Compare>;
+    /// The git commit `sha` (tree and parents); `None` when GitHub has no such commit.
+    fn commit(&self, sha: &str) -> Result<Option<GitCommit>>;
+    /// The tree `sha`, recursive; `None` when GitHub has no such tree. Check `truncated`.
+    fn tree(&self, sha: &str) -> Result<Option<GitTree>>;
     /// The shas of the pull request's commits (GitHub lists at most 250).
     fn pull_commits(&self, number: u64) -> Result<Vec<String>>;
     /// The first parent of commit `sha`; `None` when GitHub has no such commit or it has no parent.
@@ -530,6 +540,8 @@ impl Github for LiveGithub {
 
     fn compare(&self, base: &str, head: &str) -> Result<Compare> {
         let mut status = String::new();
+        let mut merge_base = None;
+        let mut truncated = false;
         // The endpoint pages its `files` array; read pages until one is short.
         let mut all: Vec<Value> = Vec::new();
         for page in 1..=MAX_COMPARE_PAGES {
@@ -546,6 +558,7 @@ impl Github for LiveGithub {
             };
             if page == 1 {
                 status = v["status"].as_str().unwrap_or_default().to_string();
+                merge_base = v["merge_base_commit"]["sha"].as_str().map(String::from);
             }
             let files = v["files"].as_array().cloned().unwrap_or_default();
             let short = files.len() < 100;
@@ -553,11 +566,34 @@ impl Github for LiveGithub {
             if short {
                 break;
             }
+            truncated = page == MAX_COMPARE_PAGES;
         }
         Ok(Compare {
             status,
+            truncated: truncated || all.len() >= COMPARE_FILE_CAP,
+            merge_base,
             files: self.parse_all("compared file", all)?,
         })
+    }
+
+    fn commit(&self, sha: &str) -> Result<Option<GitCommit>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/git/commits/{}", enc(sha))))?
+        {
+            Some(v) => Ok(Some(self.parse::<RawGitCommit>("git commit", v)?.into())),
+            None => Ok(None),
+        }
+    }
+
+    fn tree(&self, sha: &str) -> Result<Option<GitTree>> {
+        match self
+            .http
+            .get_json(&self.path(&format!("/git/trees/{}?recursive=1", enc(sha))))?
+        {
+            Some(v) => Ok(Some(self.parse("git tree", v)?)),
+            None => Ok(None),
+        }
     }
 
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {
