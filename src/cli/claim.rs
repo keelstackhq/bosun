@@ -16,8 +16,8 @@ use crate::core::lease::{Lease, TTL_SECS, conflicts, leases_of, members, race_wi
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
 use crate::core::state::{State, state_of};
-use crate::github::Issue;
-use crate::output::{BosunError, CmdResult, Outcome};
+use crate::github::{Github, Issue};
+use crate::output::{BosunError, CmdResult, Exit, Outcome};
 use crate::registry;
 use crate::time::Timestamp;
 
@@ -162,13 +162,50 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         thread_ts: None,
     };
     let body = format!("Claimed by {session}.\n\n{}", record.to_line());
-    let comment = gh.add_comment(n, &body)?;
-    let others: Vec<u64> = active.iter().map(|(i, _)| i.number).collect();
-    settle_race(gh, session, n, comment.id, &touch, &others, now)?;
+    // Claimed first, then the lease, then a fresh list: every lease is posted on an already
+    // active issue, so of two claims at the same time the later poster lists the earlier one
+    // (this relies on the label-filtered issue list reflecting a label change at once).
     set_state(gh, n, &issue, State::Claimed)?;
+    let comment = match gh.add_comment(n, &body) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = revert_to_ready(gh, n, session, now);
+            return Err(e);
+        }
+    };
+    let others: Vec<u64> = active_issues(gh)?.iter().map(|(i, _)| i.number).collect();
+    if let Err(mut e) = settle_race(gh, session, n, comment.id, &touch, &others, now) {
+        if e.exit == Exit::Conflict
+            && let Err(why) = revert_to_ready(gh, n, session, now)
+        {
+            // Still the conflict; `bosun reap` resets a task whose last lease ended lost-race.
+            eprintln!("bosun: warning: could not set #{n} back to ready ({why}); reap will");
+            if let Some(d) = e.data.as_mut() {
+                d["revert_failed"] = json!(true);
+            }
+        }
+        return Err(e);
+    }
     Ok(Outcome::data(lease_data(
         n, session, &expires, &touch_raw, comment.id,
     )))
+}
+
+/// After a lost race: the task was ready before this claim, so put it back, but only while it is
+/// still exactly `claimed` and no other session holds a live lease on it (then the state is theirs).
+fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Result<(), String> {
+    let fresh = gh.get_issue(n).map_err(|e| e.to_string())?;
+    let Some(fresh) = fresh.filter(|i| state_of(&i.labels) == Some(State::Claimed)) else {
+        return Ok(());
+    };
+    let theirs = notes(gh, n).map_err(|e| e.to_string())?;
+    if leases_of(n, &theirs)
+        .iter()
+        .any(|l| l.session != session && l.is_live(now))
+    {
+        return Ok(());
+    }
+    set_state(gh, n, &fresh, State::Ready).map_err(|e| e.to_string())
 }
 
 fn lease_data(issue: u64, session: &str, expires: &str, touch: &[String], id: u64) -> Value {
