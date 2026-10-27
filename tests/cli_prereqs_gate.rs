@@ -160,18 +160,6 @@ fn the_same_item_id_in_another_plan_does_not_count() {
 }
 
 #[test]
-fn spawn_of_an_epic_blocked_as_a_whole_is_exit_5() {
-    let fake = setup(&plan("M1", "owner"));
-    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
-    fake.comment(1, join);
-    checklist(&fake, 20, "plans/x.md", &[line("H1", false, false)]);
-    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
-    assert_eq!(code, 5, "{v}");
-    assert!(v["error"]["message"].as_str().unwrap().contains("H1"));
-    assert!(fake.comments_of(10).is_empty(), "nothing written");
-}
-
-#[test]
 fn a_403_tick_a_stale_sum_and_a_misspelt_heading() {
     let api = plan("M1", "secret release/NPM_TOKEN");
     let sum = digest("token", "add it", "secret release/NPM_TOKEN", "owner");
@@ -193,17 +181,43 @@ fn a_403_tick_a_stale_sum_and_a_misspelt_heading() {
 }
 
 #[test]
-fn only_items_that_block_the_target_count() {
+fn only_blocking_items_count_and_a_broken_link_fails_closed() {
     let fake = setup(&plan("M1/T2", "owner"));
     assert_eq!(
         claim(&fake, "11").0,
         0,
         "H1 blocks only T2: no issue needed for T1"
     );
-    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
-    fake.comment(1, join);
-    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
-    assert_ne!(code, 5, "a task-level block does not hold the epic: {v}");
+    let set = |fake: &FakeGithub, n: u64, text: &str| {
+        let mut st = fake.state.lock().unwrap();
+        st.issues.iter_mut().find(|i| i.number == n).unwrap().body = text.into();
+    };
+    let meta = |item: &str, epic: u64| {
+        format!(
+            r#"<!-- bosun:task {{"item":"{item}","task":"T1","epic":{epic},"touch":["a"]}} -->"#
+        )
+    };
+    let cases = [
+        (11, meta("M1", 99), "the task's epic is gone"),
+        (
+            10,
+            r#"<!-- bosun:epic {"item":"M1"} -->"#.into(),
+            "an epic marker without a plan",
+        ),
+        (
+            10,
+            r#"<!-- bosun:epic {"item":"M1","plan":"plans/x y.md"} -->"#.into(),
+            "a bad path",
+        ),
+        (11, meta("M9", 10), "M9/T1 is not in plans/x.md"),
+    ];
+    for (n, body, why) in cases {
+        let fake = setup(&plan("M1", "owner"));
+        set(&fake, n, &body);
+        let (code, v) = claim(&fake, "11");
+        assert_eq!(code, 5, "{why}: {v}");
+        untouched(&fake, 11);
+    }
 }
 
 #[test]
@@ -236,16 +250,22 @@ fn wave_plan_without_a_checklist_issue_leaves_out_the_plan_with_a_warning() {
 }
 
 #[test]
-fn a_plan_path_that_could_break_a_marker_fails_closed() {
+fn spawn_of_an_epic_blocked_as_a_whole_is_exit_5() {
     let fake = setup(&plan("M1", "owner"));
-    let epic = r#"<!-- bosun:epic {"item":"M1","plan":"plans/x y.md"} -->"#;
-    fake.state
-        .lock()
-        .unwrap()
-        .issues
-        .iter_mut()
-        .find(|i| i.number == 10)
-        .unwrap()
-        .body = epic.into();
-    assert_eq!(claim(&fake, "11").0, 5);
+    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
+    fake.comment(1, join);
+    checklist(&fake, 20, "plans/x.md", &[line("H1", false, false)]);
+    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("H1"));
+    assert!(fake.comments_of(10).is_empty(), "nothing written");
+}
+
+#[test]
+fn spawn_ignores_a_task_level_block() {
+    let fake = setup(&plan("M1/T2", "owner"));
+    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
+    fake.comment(1, join);
+    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
+    assert_ne!(code, 5, "a task-level block does not hold the epic: {v}");
 }

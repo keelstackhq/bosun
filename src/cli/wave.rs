@@ -89,11 +89,14 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         .filter(|i| i.state == Some(State::Ready))
         .collect();
     if let Some(path) = epic_plan(epic_issue.body_text()).filter(|_| !ready.is_empty()) {
-        match open_items(gh, &path, &|_| true) {
+        match open_items(gh, &path, None, &|_| true) {
             Ok(Some((_, ticks))) => {
                 for i in ready {
-                    let (item, task) = i.plan_id.split_once('/').unwrap_or_default();
-                    let needs = blockers(&ticks, item, Some(task));
+                    // A plan id without `/` cannot be matched to its plan: held (fail closed).
+                    let needs = match i.plan_id.split_once('/') {
+                        Some((item, task)) => blockers(&ticks, item, Some(task)),
+                        None => vec!["unknown task id".to_string()],
+                    };
                     if !needs.is_empty() {
                         held.push(json!({"issue": i.issue, "task": i.plan_id, "needs": needs}));
                         left_out.push(i.issue);
