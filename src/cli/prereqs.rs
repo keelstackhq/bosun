@@ -71,7 +71,32 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         let plan_path = plan_key(file, &base, &roots);
         check_plan_path(&plan_path)?;
         let marker = pq::issue_marker(&plan_path);
-        let issue = existing.iter().find(|i| i.body_text().starts_with(&marker));
+        let mut mine = existing
+            .iter()
+            .filter(|i| i.body_text().starts_with(&marker));
+        let issue = mine.next();
+        if args.post && mine.next().is_some() {
+            return Err(BosunError::needs_human(
+                format!("two checklist issues for {plan_path}"),
+                "close one of them; the owner checklist is one issue per plan",
+            ));
+        }
+        if branch.is_none() {
+            branch = Some(default_branch(gh)?);
+        }
+        let main = branch.as_deref().unwrap_or("main");
+        if gh.file_at(&plan_path, main)?.as_deref() != Some(text.as_str()) {
+            let msg = format!("{plan_path} on {main} differs from the local copy");
+            if args.post {
+                return Err(BosunError::conflict(
+                    msg,
+                    "merge the plan change first; --post writes the checklist of the plan on the default branch",
+                ));
+            }
+            warnings.push(format!(
+                "{msg}, or is not there: the checklist is built from the local file"
+            ));
+        }
         let ticks = issue.map_or_else(Vec::new, |i| pq::read_issue(i.body_text()));
         let mut items = Vec::new();
         for p in &prereqs {

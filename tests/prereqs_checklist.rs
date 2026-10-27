@@ -50,6 +50,7 @@ fn items() -> Vec<CheckItem> {
 fn issue_round_trips_ticks_and_groups() {
     let mut it = items();
     it[0].done = true;
+    it[0].state = "owner".into(); // only an owner tick shows as [x]
     pq::sort(&mut it);
     let ids = |it: &[CheckItem]| it.iter().map(|i| i.id.clone()).collect::<Vec<_>>();
     assert_eq!(ids(&it), ["H2", "H1"]);
@@ -68,7 +69,7 @@ fn issue_round_trips_ticks_and_groups() {
     let sum = pq::digest("npm token", "do it", "secret release/NPM_TOKEN", "owner");
     assert_eq!(
         (t[1].id.as_str(), t[1].sum.as_str(), t[1].state.as_str()),
-        ("H1", &*sum, "api")
+        ("H1", &*sum, "owner")
     );
     assert!(pq::ticked(&t, "H1", &sum) && !pq::ticked(&t, "H2", &it[0].sum));
     assert!(pq::ticked(
