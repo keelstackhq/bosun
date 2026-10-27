@@ -16,7 +16,7 @@ CHANGELOG/PROGRESS edits. No new CI job or run (`docs/ci-minutes.md`).
 Each task lists its touch (whole files). Two tasks without `depends` between them have disjoint
 touch lists. #251, #253 and #254 merged on 2026-10-27, and the owner approved P7 and P9, so P7
 (the spec split) goes first: after it, a spec edit touches one section file
-(`docs/spec/04-lifecycle.md` for P2 -> P3 -> P4, `08-risk.md` for P6 -> P9, `09-main-health.md`
+(`docs/spec/04-lifecycle.md` for P2 -> P3 -> P4, `08-risk.md` for P6 -> P9 (P9 also after P8, `src/github`), `09-main-health.md`
 for P8), and only same-section tasks are chained.
 
 ## Tasks

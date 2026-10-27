@@ -144,11 +144,12 @@ In `docs/plan-format.md` (a "Cutting tasks" section), AGENTS.md and the channel'
 - **Flag a PR that became conflicting** (~100 lines): `bosun main-health --result success` already
   re-judges every open PR; it also reads `mergeable_state`, and for a `dirty` PR posts a `conflict`
   record and moves the task to `fixing`, so `bosun status` and `bosun wait --pr` tell the owning
-  session at once (while its context is fresh). Needs `src/github` (open in #251/#254), so after
+  session at once (while its context is fresh). Needs `src/github` (#251/#254 edited it; merged), so after
   they merge.
 - **Approval carry-over across a clean merge of main** (security-sensitive, R-high, owner signs
   off on the rule first). A verdict (review-verdict status) or a signed approval for head `H`
-  also counts for the current head `H2` only when all hold:
+  also counts for the current head `H2` only when all hold (and only when the PR's base is the
+  default branch; any other base means no carry-over):
   1. every commit on the first-parent path from `H2` back to `H` (at most 5) has exactly two
      parents, and its second parent is an ancestor of (or equal to) the default branch tip.
      `M` below is the second parent of `H2`; `B` is the merge-base of `H` and the default branch.
@@ -187,17 +188,17 @@ consumers; the spec split is advice in the guidance ("split append-only and per-
 
 | # | Change | Impact | Lines | Can start |
 | --- | --- | --- | --- | --- |
-| 1 | C4 plan overlap, hotspots, companions (`core::touch`) | medium | ~250 | now |
-| 2 | C2 lease grows on re-claim | high | ~150 | now |
+| 1 | C4 plan overlap, hotspots, companions (`core::touch`) | medium | ~250 | now (no spec edit) |
+| 2 | C2 lease grows on re-claim | high | ~150 | after 7 (spec §4) |
 | 3 | C1 edit hook own-touch rule | high | ~200 | after 1, 2 (companions; spec §4) |
 | 4 | C3 `bosun pr` touch check | high | ~200 | after 1, 3 (`core::touch`; spec §4) |
-| 5 | C5 guidance in plan-format, AGENTS, channel | medium | ~80 | after 1 (plan-format.md) |
-| 6 | C3 risk-check out-of-touch warning | low | ~120 | after 4 |
+| 5 | C5 guidance in plan-format, AGENTS, channel | medium | ~80 | after 1, 7 (plan-format.md, AGENTS.md) |
+| 6 | C3 risk-check out-of-touch warning | low | ~120 | after 4, 7 |
 | 7 | C6 spec split | high | mechanical | first (#251/#253/#254 merged); owner OK |
-| 8 | C7 conflict flag in main-health | medium | ~150 | after #251/#254 (src/github), 6 (spec) |
-| 9 | C7 approval carry-over | medium-high | ~300 | after 7, 8; owner signed off the rule (2026-10-27) |
-| 10 | C6 cli/mod.rs Args split | low-medium | mechanical | last, optional |
+| 8 | C7 conflict flag in main-health | medium | ~150 | after 7 |
+| 9 | C7 approval carry-over | medium-high | ~300 | after 6, 8; owner signed off the rule (2026-10-27) |
+| 10 | C6 cli/mod.rs Args split | low-medium | mechanical | after 1-9, optional |
 
 The PRs of this plan follow the rule they introduce: their touch lists (whole files, the spec
 included) are disjoint unless chained by `depends`. After 7, only tasks that edit the same spec
-section are chained (2 -> 3 -> 4 on §4; 6 -> 9 on §8).
+section or code are chained (2 -> 3 -> 4 on §4; 6 -> 9 on §8; 8 -> 9 on `src/github`).
