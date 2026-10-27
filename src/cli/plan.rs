@@ -708,8 +708,8 @@ fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
 /// Items among `wanted` that a merged intake PR added to the plan file `plan_path`, as item id ->
 /// (intake, PR). An intake counts when it touches this plan file and is merged, or closed as
 /// completed. Its PR is a closed, merged pull request into the default branch that links it; the
-/// plan file at the PR's base and at its merge commit are parsed, and the ids only the later one
-/// has were added by that PR. A file missing at the base has no ids; an unparsable one counts the
+/// plan file at its merge commit's first parent and at the merge commit are parsed, and the ids only the later one
+/// has were added by that PR. A file missing at the parent has no ids; an unparsable one counts the
 /// same. Newest intakes first, and the scan stops once every wanted id has an owner.
 fn intake_added(imp: &Importer, wanted: &[&str]) -> Result<HashMap<String, (u64, u64)>> {
     let want = imp.plan_path.trim_start_matches("./");
@@ -755,11 +755,17 @@ fn intake_added(imp: &Importer, wanted: &[&str]) -> Result<HashMap<String, (u64,
                 continue;
             };
             let after = full.merge_commit_sha.as_deref().unwrap_or(&full.head_sha);
-            let before = ids(imp.gh.file_at(&imp.plan_path, &full.base_sha)?);
+            // What this PR added is the change from the merge commit's first parent, not from the
+            // PR's base: other PRs may have reached the branch in between.
+            let parent = imp
+                .gh
+                .first_parent(after)?
+                .unwrap_or_else(|| full.base_sha.clone());
+            let before = ids(imp.gh.file_at(&imp.plan_path, &parent)?);
             let now = ids(imp.gh.file_at(&imp.plan_path, after)?);
             let (Some(before), Some(now)) = (before, now) else {
                 eprintln!(
-                    "plan: {} does not parse at PR #{}'s base or merge commit; intake #{} is not trusted",
+                    "plan: {} does not parse at PR #{}'s merge commit or its parent; intake #{} is not trusted",
                     imp.plan_path, p.number, intake.number
                 );
                 continue;

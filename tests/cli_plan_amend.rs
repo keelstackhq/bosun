@@ -310,6 +310,7 @@ fn intake_env(mode: &str) -> (tempfile::TempDir, FakeGithub, String) {
             let after = if mode == "not-added" { PLAN } else { &with_m3 };
             fake.content("plan.md", "merge60", after);
             fake.content("plan.md", "main", &with_m3);
+            fake.first_parent("merge60", "base0000");
         }
         fake.close_issue(intake, T0);
     }
@@ -414,6 +415,7 @@ fn landed_intake(
     fake.content("plan.md", shas.0, files.0);
     fake.content("plan.md", shas.1, files.1);
     fake.content("plan.md", "main", files.1);
+    fake.first_parent(shas.1, shas.0);
     fake.close_issue(intake, T0);
 }
 
@@ -526,6 +528,17 @@ fn amend_trusts_a_merged_intake_and_promotes_the_new_tasks_at_once() {
     assert!(p.body.contains("PR #60"), "{}", p.body);
     let t = fake.issue_state(find(&fake, "<!-- bosun:plan M3/T1 -->"));
     assert!(t.labels.contains(&"bosun:state/ready".to_string()));
+}
+
+#[test]
+fn an_item_another_pr_added_between_the_base_and_the_merge_is_not_credited() {
+    let (tmp, fake, file) = intake_env("merged");
+    // The PR's base predates M3, but the merge commit's first parent already has it.
+    fake.content("plan.md", "parent60", &format!("{PLAN}{M3}"));
+    fake.first_parent("merge60", "parent60");
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]), "{v}");
 }
 
 #[test]

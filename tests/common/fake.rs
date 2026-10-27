@@ -107,6 +107,8 @@ pub struct State {
     pub compare_statuses: HashMap<String, String>,
     /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
     pub pull_commits: HashMap<u64, Vec<String>>,
+    /// Commit sha -> first parent (`GET /commits/{sha}`); unset, the commit answers 404.
+    pub parents: HashMap<String, String>,
     /// Branches `GET /branches/<name>` answers 404 for; every other branch exists.
     pub missing_branches: Vec<String>,
 }
@@ -313,6 +315,12 @@ impl FakeGithub {
         let mut s = self.state.lock().unwrap();
         s.pull_commits
             .insert(number, shas.iter().map(|x| x.to_string()).collect());
+    }
+
+    /// The first parent of commit `sha` (`GET /commits/{sha}`).
+    pub fn first_parent(&self, sha: &str, parent: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.parents.insert(sha.into(), parent.into());
     }
 
     pub fn review(&self, number: u64, user: &str, state: &str, commit_id: &str) {
@@ -1134,6 +1142,10 @@ fn route(
                 body["target_url"].clone();
             (201, v, vec![])
         }
+        ("GET", ["commits", sha]) => match s.parents.get(*sha) {
+            Some(p) => ok(json!({"sha": sha, "parents": [{"sha": p}]})),
+            None => msg(404, "Not Found"),
+        },
         ("GET", ["commits", sha, "status"]) => {
             let mut seen = std::collections::HashSet::new();
             let newest: Vec<Value> = s

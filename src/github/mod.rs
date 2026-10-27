@@ -109,6 +109,8 @@ pub trait Github {
     fn compare(&self, base: &str, head: &str) -> Result<Compare>;
     /// The shas of the pull request's commits (GitHub lists at most 250).
     fn pull_commits(&self, number: u64) -> Result<Vec<String>>;
+    /// The first parent of commit `sha`; `None` when GitHub has no such commit or it has no parent.
+    fn first_parent(&self, sha: &str) -> Result<Option<String>>;
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
@@ -488,6 +490,13 @@ impl Github for LiveGithub {
             Some(v) => Ok(Some(self.parse("pull request", v)?)),
             None => Ok(None),
         }
+    }
+
+    fn first_parent(&self, sha: &str) -> Result<Option<String>> {
+        let v = self
+            .http
+            .get_json(&self.path(&format!("/commits/{}", enc(sha))))?;
+        Ok(v.and_then(|v| v["parents"][0]["sha"].as_str().map(String::from)))
     }
 
     fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>> {
