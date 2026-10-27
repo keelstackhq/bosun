@@ -24,6 +24,7 @@ A plan lists them in a `## Prerequisites` section. The plan parser ignores this 
 - `steps:` (required): one line the owner can follow.
 - `blocks:` (required): what waits for it. A task `M4/T2` or a whole item `M5`.
 - `who:` (default `owner`): who does it.
+- `replaces:` (optional): ids of `X` items (added by `bosun hold`) that this item takes over.
 - `verify:` (default `owner` when the line is absent; an empty `verify:` is an error): how bosun
   checks it is done.
 
@@ -40,7 +41,7 @@ A plan lists them in a `## Prerequisites` section. The plan parser ignores this 
 
 bosun writes what it found into the issue (see below). If the API says the item is missing, a
 tick alone does not finish it. If GitHub answers 403 (the token cannot read it), bosun treats the
-item like `owner`: the tick decides. A `file` path is relative to the repo (no `/`, `~` or
+item like `owner`: its marker says `verify=owner` and the tick decides. A `file` path is relative to the repo (no `/`, `~` or
 `..`). Secret and variable names cannot start with `GITHUB_`.
 
 ## blocks
@@ -52,7 +53,8 @@ checklist issue first, and the next import after the item is done makes the task
 
 An agent that finds a human step nobody listed runs `bosun hold <task issue> "<step>"`. bosun
 adds it to the checklist (id `X1`, `X2`, ..., verified by the tick), releases the task, and the
-task waits for it. The agent takes other work.
+task waits for it. The agent takes other work. Rewrites of the checklist keep X items until a
+plan item lists them in `replaces:`.
 
 ## Automatic items
 
@@ -69,7 +71,8 @@ bosun adds these without being asked:
 
 ## The command and the issue
 
-`bosun prereqs <plan>` prints the checklist: the items (open computer items first, then open
+`bosun prereqs <plan>... [--post] [--no-setup]` prints the checklist (`--no-setup` leaves out
+the doctor steps): the items (open computer items first, then open
 phone items, then done), the approvals, and a short message for the owner's chat. With `--post`
 it opens or updates one GitHub issue per plan, labelled `bosun:prereqs`. The owner ticks boxes in
 the GitHub app. bosun reads the ticks back, marks what it verified itself, and closes the issue

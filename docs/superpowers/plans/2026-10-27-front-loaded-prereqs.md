@@ -22,11 +22,14 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
   touch: src/core/prereqs.rs (new), src/core/mod.rs, tests/prereqs_parse.rs (new), fragments
   - `parse(text, &Plan)`: the `## Prerequisites` section, validated against the plan.
   - `blocked_by(prereqs, item, task)`.
-- [ ] **Q1b: approvals and the checklist (F3 approvals, F4 rendering)** — depends Q1a
-  touch: src/core/prereqs.rs, tests/prereqs_checklist.rs (new), fragments
+- [ ] **Q1b: the checklist (F4 rendering, F6 `replaces:`)** — depends Q1a
+  touch: src/core/prereqs.rs, tests/prereqs_checklist.rs (new), tests/prereqs_parse.rs, fragments
+  - `render_issue`, `read_issue`, `sort`, `message`: the checklist as an issue body (one marker
+    per line) and a chat text; the `replaces:` field.
+- [ ] **Q1c: approvals at merge (F3)** — depends Q1b
+  touch: src/core/prereqs.rs, tests/prereqs_approvals.rs (new), fragments
   - `approvals(&Plan, &Rules, bosun_code)`: per task owner/delegate at merge, batch = level.
-  - `render_issue`, `ticks`, `sort`, `message`: the checklist as an issue body and a chat text.
-- [ ] **Q2: `bosun prereqs` (F2, F3 setup items, F4)** — depends Q1b
+- [ ] **Q2: `bosun prereqs` (F2, F3 setup items, F4)** — depends Q1c
   touch: src/cli/prereqs.rs (new), src/cli/mod.rs, src/lib.rs, src/github/mod.rs (`exists`),
   tests/cli_prereqs.rs (new), tests/common/fake.rs, fragments
 - [ ] **Q3a: gating (F5)** — depends Q2

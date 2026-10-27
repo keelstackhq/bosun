@@ -73,7 +73,8 @@ and the issue closes when nothing is open. Why one issue: GitHub mobile notifies
 tappable on a phone, and the orchestrator relays one link. The issue carries the label
 `bosun:prereqs`. Each line's hidden marker, written by bosun, names what the item blocks, how it
 is verified and whether bosun verified it: `<!-- bosun:prereq H1 blocks=M4/T2,M5 verify=api ok -->`
-(`verify=owner` for tick-only items; `ok` only after an API read found it). An item is done when
+(`verify=owner` for tick-only items and for API items whose read got a 403; `ok` only after an
+API read found it). An item is done when
 its marker says `ok` (API items: a tick alone never counts) or, for `verify=owner`, when its box is
 ticked. The gates below read this one issue, never the API. A tick is not authenticated (anyone
 with write access can tick, or edit the marker); that is accepted because a prerequisite only
@@ -81,10 +82,13 @@ schedules work, risk-check still decides every merge, and agents never tick boxe
 
 **F5. Gating, in two places.** (1) `bosun plan import`/`amend` of a plan with a
 `## Prerequisites` section first refreshes its checklist issue exactly as `bosun prereqs --post`
-does (API reads, create or reopen the issue), so every such plan has one; it then keeps a task
+does (API reads, create or reopen the issue), so every such plan has one (`--dry-run` reads and
+writes nothing; `data.held` then comes from those reads); it then keeps a task
 `planned` while an open item blocks it or its item (the epic of a blocked item stays `planned`
 too) and lists it under `data.held`. The next import after the item is done promotes it. (2)
-`bosun claim` refuses (exit 5) a task that an open item of a `bosun:prereqs` issue blocks, and
+`bosun claim` refuses (exit 5) a task that an open item of its plan's checklist blocks (task ->
+epic -> the epic's plan path -> the `bosun:prereqs` issue whose marker names that path; item ids
+repeat across plans, so no other plan's issue counts), and
 `bosun wave plan` leaves it out, because tasks also become ready outside promote (`bosun release
 --to ready`, reap) and an item can appear after a task was promoted. Everything else proceeds.
 
@@ -96,7 +100,9 @@ releases the agent's lease and moves the task to `ready` (the claim gate keeps i
 records a lesson best-effort (a failed lesson, such as the cap's exit 6, is reported in
 `data.lesson_error` and does not undo the hold). The agent takes other work. The orchestrator
 relays the updated checklist once and folds the item into the plan's `## Prerequisites` in the
-next amendment. `bosun ask` remains for decisions, which also go to the orchestrator's batch.
+next amendment, as an H item with `replaces: X1`. Every rewrite of the checklist (`--post`, the
+import refresh) carries over the issue-only X items with their ticks; an X item leaves the issue
+only when a plan item names it in `replaces:`. `bosun ask` remains for decisions, which also go to the orchestrator's batch.
 
 **F7. Approval batches.** `bosun approve --list` adds `data.message`: one short text listing the
 ready PRs (`#12@abc1234`, task, title) and the one reply (`approve 12 15 17`). The orchestrator
