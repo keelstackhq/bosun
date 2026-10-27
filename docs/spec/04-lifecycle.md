@@ -67,7 +67,9 @@ Conflict avoidance (three layers):
    the old touch plus the added globs is written (`data.added`), without changing the state;
    without new globs it changes nothing. A grow that loses the claim race edits its record back
    to the previous one (the lease is never ended) and exits 3 naming the winner; if that edit
-   fails it exits 1 and the fix says to release the task.
+   fails it exits 1 and the fix says to release the task. The grow re-reads the active issues
+   after it writes, and if the task is no longer held (state not active, or a newer `lease-end`
+   of the session) it edits its record back and exits 3.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease

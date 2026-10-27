@@ -248,11 +248,27 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
     };
     let expires = now.plus_secs(TTL_SECS).to_string();
     let comment = gh.add_comment(n, &body(expires.clone(), touch.clone()))?;
-    let mut fresh = vec![(n, notes(gh, n)?)];
-    for (i, _) in active.iter().filter(|(i, _)| i.number != n) {
-        fresh.push((i.number, notes(gh, i.number)?));
+    // Race against the active issues as they are after the write: a rival may have claimed an
+    // issue that was still `ready` when the list was first read.
+    let fresh = active_issues(gh)?;
+    let restored = body(old.expires.to_string(), old.touch.clone());
+    let won = fresh.iter().find(|(i, _)| i.number == n).is_some_and(|(_, c)| {
+        // Still held: a lease-end of this session newer than the old record means a reap or
+        // release ended the lease while the grow was written.
+        !c.iter().any(|x| {
+            x.id > old.comment_id
+                && matches!(parse_record(&x.body), Some(Record::LeaseEnd { session: s, .. }) if &s == session)
+        })
+    });
+    if !won {
+        gh.update_comment(comment.id, &restored)?;
+        return Err(BosunError::conflict(
+            format!("#{n} is no longer held by this session"),
+            format!("claim it again with `bosun claim {n}`"),
+        ));
     }
-    if let Some(w) = race_winner(n, comment.id, &new_globs, &fresh, now) {
+    let ids: Vec<_> = fresh.into_iter().map(|(i, c)| (i.number, c)).collect();
+    if let Some(w) = race_winner(n, comment.id, &new_globs, &ids, now) {
         let list = added.join(", ");
         let lost = format!(
             "#{n}: lost the race for {list} to #{} (session {}, lease until {})",
@@ -260,7 +276,6 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
         );
         let rival = json!({"issue": w.issue, "session": w.session,
             "expires": w.expires.to_string()});
-        let restored = body(old.expires.to_string(), old.touch.clone());
         return Err(match gh.update_comment(comment.id, &restored) {
             Ok(_) => BosunError::conflict(
                 format!("{lost}; your lease keeps its previous touch"),
@@ -271,7 +286,9 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
                 format!(
                     "{lost}, and restoring the old lease failed ({e}); the lease still names {list}"
                 ),
-                format!("run `bosun release {n}`, or re-run the grow after that lease ends"),
+                format!(
+                    "run `bosun release {n}`, or re-run `bosun claim {n}` with the same --touch once that lease ends"
+                ),
             )
             .with_data(json!({"conflicts": [rival], "restored": false})),
         });
