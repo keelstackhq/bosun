@@ -1,0 +1,1 @@
+- `core::prereqs`: parse the `## Prerequisites` section of a plan (who, phone or computer, steps, verify, blocks) and find the prerequisites that block a task.

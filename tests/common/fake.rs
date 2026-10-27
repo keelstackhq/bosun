@@ -74,6 +74,7 @@ pub struct State {
     pub check_runs: HashMap<String, Vec<Value>>,
     pub contents: HashMap<String, String>,
     pub reviews: HashMap<u64, Vec<Value>>,
+    pub timeline: HashMap<u64, Vec<Value>>,
     /// `base...head` -> files of the comparison.
     pub compares: HashMap<String, Vec<Value>>,
     pub runs: Vec<Value>,
@@ -329,6 +330,15 @@ impl FakeGithub {
         let id = list.len() + 1;
         list.push(json!({"id": id, "user": {"login": user}, "state": state,
             "commit_id": commit_id, "submitted_at": TS}));
+    }
+
+    pub fn dismiss_event(&self, number: u64, review_id: u64, at: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.timeline
+            .entry(number)
+            .or_default()
+            .push(json!({"event": "review_dismissed",
+            "created_at": at, "dismissed_review": {"review_id": review_id}}));
     }
 
     pub fn pull_body(&self, number: u64) -> String {
@@ -1133,6 +1143,17 @@ fn route(
         ("GET", ["pulls", n, "reviews"]) => {
             let items = n.parse().ok().and_then(|n: u64| s.reviews.get(&n)).cloned();
             page(items.unwrap_or_default(), &query, base, path, raw_query)
+        }
+        ("GET", ["issues", n, "timeline"]) => {
+            let items = n
+                .parse()
+                .ok()
+                .and_then(|n: u64| s.timeline.get(&n))
+                .cloned();
+            match items {
+                Some(items) => page(items, &query, base, path, raw_query),
+                None => msg(404, "Not Found"),
+            }
         }
         ("POST", ["statuses", sha]) => {
             let f = |k: &str| body[k].as_str().unwrap_or("").to_string();

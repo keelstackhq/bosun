@@ -44,6 +44,10 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   `/` as `-`), so merging main never conflicts. Before a release, a docs PR to main runs
   `bash scripts/fold-fragments.sh`; the release PR then moves Unreleased under the version.
 - Run `git checkout -b <branch>` as its own command before any compound command that commits: the merge-lock reads the branch before the whole command runs, so `git checkout -b X && git commit` on the default branch is refused.
+- Stay inside your task's `touch:`. Put new tests in a new file instead of appending to a
+  shared one, and on a lockfile conflict take main's copy and regenerate it
+  (`git checkout origin/main -- Cargo.lock` then `cargo update -w`), so parallel PRs never
+  conflict. Planning rules: "Cutting tasks for parallel work" in `docs/plan-format.md`.
 - Never skip, delete or weaken a test to get green; test-integrity refuses it.
 - Lessons are not in this file. A review pack carries the lessons that match your files.
 - Read the spec section you touch: `docs/spec/NN-*.md`, one file per section (index `docs/spec.md`).

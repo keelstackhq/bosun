@@ -626,7 +626,8 @@ fn list_works_in_a_cloud_session_and_says_so() {
     assert_eq!(v["data"]["cloud"], false);
 }
 
-const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves again with a GitHub review, or another owner approves with a GitHub review";
+const WITHDRAWN_DISMISSED: &str = "an owner's request for changes on this head was dismissed; it needs a fresh plain owner comment (`bosun approve <pr>@<head>`, with the owner token) or a GitHub review from that owner, or a GitHub review from another owner";
 
 fn repost_of(v: &Value, i: usize) -> Option<&Value> {
     v["data"]["approved"][i].get("repost")
@@ -725,4 +726,19 @@ fn an_owner_review_requesting_changes_withdraws_the_approval() {
     fake.review(1, "octocat", "APPROVED", &sha(1));
     let (_, v) = approve(&fake, &["--list"]);
     assert_eq!(v["data"]["ready"][0]["pr"], 1);
+}
+
+#[test]
+fn an_explicit_approve_is_allowed_after_a_dismissal() {
+    let fake = board();
+    owners(&fake);
+    fake.review(1, "octocat", "CHANGES_REQUESTED", &sha(1));
+    fake.review(1, "octocat", "DISMISSED", &sha(1));
+    let (_, v) = approve(&fake, &["--list"]);
+    let waiting = v["data"]["waiting"].as_array().unwrap();
+    assert!(waiting.contains(&json!({"pr": 1, "why": WITHDRAWN_DISMISSED})));
+    let before = comment_posts(&fake).len();
+    let (code, v) = approve(&fake, &[&at(1)]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(comment_posts(&fake).len(), before + 2, "comment and record");
 }
