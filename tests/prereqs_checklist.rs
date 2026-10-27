@@ -87,8 +87,11 @@ fn issue_round_trips_ticks_and_groups() {
 fn markers_parse_alone_and_verify_is_defused() {
     let mut it = items();
     it[1].verify = "file a <!-- b".into();
+    it[0].steps = "x --> y\u{7}".into();
     let body = pq::render_issue("P", "p.md", &it, &[]);
-    assert!(!body.contains("file a <!-- b"));
+    assert!(
+        !body.contains("file a <!-- b") && !body.contains("x --> y") && !body.contains('\u{7}')
+    );
     let t = pq::read_issue(
         "- [x] a <!-- bosun:prereq X1 -->\n  - [ ] b <!-- bosun:prereq X2 blocks=M1 -->",
     );
@@ -97,4 +100,14 @@ fn markers_parse_alone_and_verify_is_defused() {
         .map(|t| (t.id.as_str(), t.done(), t.blocks.len()))
         .collect();
     assert_eq!(got, [("X1", true, 0), ("X2", false, 1)]);
+}
+
+#[test]
+fn blocked_by_matches_items_and_tasks() {
+    let (t, p) = plan_of(SECTION);
+    let v = pq::parse(&t, &p).unwrap();
+    assert_eq!(pq::blocked_by(&v, "M1", "T2"), ["H1", "H2"]);
+    assert_eq!(pq::blocked_by(&v, "M1", "T1"), ["H2"]);
+    assert_eq!(pq::blocked_by(&v, "M2", "T1"), ["H1"]);
+    assert!(pq::blocked_by(&v, "M3", "T1").is_empty());
 }
