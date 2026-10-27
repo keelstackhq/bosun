@@ -5,8 +5,8 @@
 Seed complete: S1-S10 done, plan `docs/superpowers/plans/2026-10-22-bosun-seed.md` (Tasks 1-19,
 split into PRs of about 400 lines). The whole-branch review of the seed (2026-10-22) found 1
 blocker, 9 majors and 3 minors, tracked as issues #20-#32 (label `review-finding`); fixes A-E
-close all of them. bosun v0.2.2 is released (npm `@keelstackhq/bosun` and its five platform
-packages, crates.io `keel-bosun`, GitHub Release; v0.2.1, v0.2.0 and v0.1.0 before it) and pinned in `.bosun/version`; the gate CI
+close all of them. bosun v0.2.3 is released (npm `@keelstackhq/bosun` and its five platform
+packages, crates.io `keel-bosun`, GitHub Release; v0.2.2 and earlier before it) and pinned in `.bosun/version`; the gate CI
 installs the release pinned in each PR's base commit, and a step of job `ci` checks a PR's own pin.
 
 Follow-ups for M1+ (not findings): a `bosun result` command for child results (D14; the spawn
@@ -204,7 +204,7 @@ Human-only items, in order. Each has the exact action.
    cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
    settings → setup script: paste `docs/setup-script.sh` (again after each pin bump: it now
-   installs `@keelstackhq/bosun@0.2.2` from npm), in every environment, the owner's included.
+   installs `@keelstackhq/bosun@0.2.3` from npm), in every environment, the owner's included.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
    15 min, Haiku). Create them in claude.ai → Routines.
