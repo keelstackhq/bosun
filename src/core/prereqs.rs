@@ -291,6 +291,15 @@ pub fn blocked_by<'a>(prereqs: &'a [Prereq], item: &str, task: &str) -> Vec<&'a 
         .collect()
 }
 
+/// Every `<item>/<task>` the plan has, with `<item>/P` (the item's pull-request task).
+pub fn plan_task_ids(plan: &Plan) -> Vec<String> {
+    let ids = plan.items.iter().flat_map(|i| {
+        let tasks = i.tasks.iter().map(|t| t.id.as_str()).chain(["P"]);
+        tasks.map(|t| format!("{}/{t}", i.id)).collect::<Vec<_>>()
+    });
+    ids.collect()
+}
+
 /// A task whose PR will need an approval at merge: `needs` is `owner` or `delegate`, `batch`
 /// its dependency batch (1 first).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -327,6 +336,12 @@ fn level(key: &str, plan: &Plan, memo: &mut HashMap<String, usize>) -> usize {
     l
 }
 
+/// As risk-check: a touch glob also counts in its lowercased form, since on a case-insensitive
+/// filesystem `.GITHUB/` is `.github/`. Rule and floor paths are written in lowercase.
+fn overlaps_any_case(g: &Glob, p: &Glob) -> bool {
+    g.overlaps(p) || Glob::parse(&g.as_str().to_lowercase()).is_ok_and(|l| l.overlaps(p))
+}
+
 /// The tasks of a plan whose PR will need an approval, in plan order, in dependency batches.
 pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNeed> {
     let glob = |g: &&str| Glob::parse(g).expect("built-in critical glob");
@@ -348,11 +363,15 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
             let hits: Vec<_> = rules
                 .rules
                 .iter()
-                .filter(|r| touch.iter().any(|g| r.paths.iter().any(|p| g.overlaps(p))))
+                .filter(|r| {
+                    touch
+                        .iter()
+                        .any(|g| r.paths.iter().any(|p| overlaps_any_case(g, p)))
+                })
                 .collect();
             let crit: Vec<String> = touch
                 .iter()
-                .filter(|g| floor.iter().any(|f| g.overlaps(f)))
+                .filter(|g| floor.iter().any(|f| overlaps_any_case(g, f)))
                 .map(|g| format!("critical: {}", g.as_str()))
                 .collect();
             let any = |a| hits.iter().any(|r| r.approval == a);

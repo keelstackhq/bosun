@@ -269,3 +269,37 @@ fn spawn_ignores_a_task_level_block() {
     let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
     assert_ne!(code, 5, "a task-level block does not hold the epic: {v}");
 }
+
+#[test]
+fn wave_plan_holds_a_task_that_is_not_in_the_plan_as_claim_refuses_it() {
+    let fake = setup(&plan("M1/T1", "owner"));
+    checklist(&fake, 20, "plans/x.md", &[line("H1", true, false)]);
+    for (n, item, t) in [(13, "M9", "T1"), (14, "M1", "T9")] {
+        let meta = format!(r#"{{"item":"{item}","task":"{t}","epic":10,"touch":["src/{n}/**"]}}"#);
+        let body = format!("<!-- bosun:task {meta} -->");
+        fake.issue(n, "Task", &["bosun:state/ready"], &body);
+    }
+    let (code, v) = run(&fake, "session_a", NOW, &["wave", "plan", "10"]);
+    assert_eq!(code, 0, "{v}");
+    let held = v["data"]["held"].as_array().unwrap();
+    let ids: Vec<u64> = held.iter().map(|h| h["issue"].as_u64().unwrap()).collect();
+    assert_eq!(ids, [13, 14]);
+    let why = held[0]["needs"][0].as_str().unwrap();
+    assert!(why.contains("M9/T1 is not in plans/x.md"), "{why}");
+    assert_eq!(claim(&fake, "13").0, 5, "claim refuses it too");
+}
+
+#[test]
+fn spawn_refuses_an_epic_with_an_item_and_no_plan_path() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    let body = r#"<!-- bosun:epic {"item":"M1"} -->"#;
+    fake.issue(10, "Epic", &["bosun:state/ready"], body);
+    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
+    fake.comment(1, join);
+    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
+    assert_eq!(code, 5, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("no plan path"), "{msg}");
+    assert!(fake.comments_of(10).is_empty(), "nothing written");
+}
