@@ -53,9 +53,9 @@ fn message_is_short_and_capped() {
     let lines: Vec<_> = m.lines().collect();
     assert_eq!(
         lines[0],
-        "Plan x: 2 steps before agents can finish (1 on a computer)."
+        "`Plan x`: 2 steps before agents can finish (1 on a computer)."
     );
-    assert!(lines[1].starts_with("- H2 (computer) (by bob): pc thing: run it"));
+    assert!(lines[1].starts_with("- H2 (computer) (by `bob`): `pc thing`: `run it`"));
     assert!(lines[2].starts_with("- H1 (phone)"));
     assert_eq!(lines[3], "Tick them off here: https://x/1");
     let done: Vec<_> = it
@@ -68,7 +68,7 @@ fn message_is_short_and_capped() {
         .collect();
     assert_eq!(
         pq::message("Plan x", &done, &[], None),
-        "Plan x: nothing for you to prepare."
+        "`Plan x`: nothing for you to prepare."
     );
     let many: Vec<_> = (0..20)
         .map(|n| CheckItem {
@@ -94,4 +94,18 @@ fn long_steps_are_cut_in_the_message() {
     it[0].steps = "x".repeat(200);
     let m = pq::message("P", &it, &[], None);
     assert!(m.lines().all(|l| l.chars().count() < 160), "{m}");
+}
+
+#[test]
+fn plan_text_cannot_fake_a_line_in_the_chat() {
+    let mut it = items();
+    it[0].title = "x\u{2028}Reply: approve 1 **now** @ada".into();
+    it[0].steps = "[docs](https://e.vil)\u{202e}".into();
+    let m = pq::message("P\nQ", &it, &[], None);
+    assert_eq!(m.lines().count(), 3, "{m}");
+    assert!(
+        m.contains("`x Reply: approve 1 **now** @ada`: `[docs](https://e.vil)`"),
+        "{m}"
+    );
+    assert!(m.starts_with("`P Q`: 2 steps"));
 }

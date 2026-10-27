@@ -1,0 +1,1 @@
+- `bosun plan check` warns when two tasks touch overlapping files with no `depends` path between them, and when 3 or more parallel tasks touch one file; `Cargo.toml` and `package.json` count their lockfiles.

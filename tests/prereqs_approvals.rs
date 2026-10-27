@@ -94,3 +94,25 @@ fn mixes_follow_risk_check() {
     ];
     assert_eq!(got, want);
 }
+
+#[test]
+fn unreadable_touch_and_critical_rules_need_the_owner() {
+    let rules = Rules::parse(
+        "[[rule]]\nid = \"R-secrets\"\nwhy = \"s\"\npaths = [\"keys/**\"]\napproval = \"delegate\"\n",
+    )
+    .unwrap();
+    let task = |n: u8, touch: &str| format!("- T{n}: t\n  touch: {touch}\n");
+    let tasks = [task(1, "x"), task(2, "keys/a"), task(3, "docs/a.md")].concat();
+    let t =
+        format!("# P\n\n## M1: One\n\narea: a\n\n### Tasks\n{tasks}### Done when\n- UC-M1-1: x\n");
+    // plan::parse refuses `..`; approvals() fails closed on its own too.
+    let mut p = plan::parse(&t).unwrap();
+    p.items[0].tasks[0].touch = vec!["../out/x".into()];
+    let a = pq::approvals(&p, &rules, false);
+    let got: Vec<_> = a
+        .iter()
+        .map(|a| (a.task.as_str(), a.needs.as_str()))
+        .collect();
+    assert_eq!(got, [("M1/T1", "owner"), ("M1/T2", "owner")]);
+    assert_eq!(a[0].why, ["unreadable touch: ../out/x"]);
+}

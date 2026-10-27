@@ -371,6 +371,7 @@ fn shipped_scripts_are_only_ever_called_through_bash() {
     ] {
         texts.push(root.join(f));
     }
+    files_under(&root.join("docs/spec"), &mut texts);
     files_under(&root.join(".github/workflows"), &mut texts);
     let mut found = 0;
     for path in &texts {
