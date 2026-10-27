@@ -36,6 +36,10 @@ fn a_section_is_parsed_with_defaults() {
     let v = [h1.verify.describe(), h2.verify.describe()];
     assert_eq!(v, ["secret release/NPM_TOKEN", "owner"]);
     assert_eq!(h1.blocks, ["M1/T2", "M2"]);
+    let (t, p) = plan_of(
+        "\n## Prerequisites\n- H1: a\n  on: phone\n  steps: s\n  blocks: M1\n  replaces: X2, X1\n",
+    );
+    assert_eq!(pq::parse(&t, &p).unwrap()[0].replaces, ["X2", "X1"]);
     // The plan parser ignores the section.
     assert_eq!(p.items, plan::parse(PLAN).unwrap().items);
 }
@@ -88,6 +92,16 @@ fn every_error_has_a_line_and_a_fix() {
             "blocks `M9`",
         ),
         ("- H1: a\nOK## Prerequisites\n", 6, "a second"),
+        ("- H1: a\nOK  verify:\n", 6, "empty `verify:`"),
+        ("- H1: a\nOK  verify: file a <!-- b\n", 6, "HTML comment"),
+        (
+            "- H1: a\n  on: phone\n  steps: s\u{2028}x\n  blocks: M1\n",
+            4,
+            "control",
+        ),
+        ("- H1: a\nOK  replaces: X1, H2\n", 6, "not an X item"),
+        ("- H1: a\nOKverify: secret X\n", 6, "not indented"),
+        // A prose line closes the bullet, so the field after it has no bullet.
         (
             "- H1: a <!-- bosun:prereq H1 verify=api ok -->\nOK",
             2,

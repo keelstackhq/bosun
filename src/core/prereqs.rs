@@ -1,7 +1,9 @@
 //! Front-loaded human prerequisites (docs/prerequisites.md): the `## Prerequisites` section of a
-//! plan and the tasks each prerequisite blocks. Pure.
+//! plan, the tasks each prerequisite blocks, and the owner checklist (an issue body and a short
+//! chat message). Pure.
 
 use crate::core::plan::{Plan, PlanError};
+use crate::core::text::inert;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -15,6 +17,8 @@ pub struct Prereq {
     pub steps: String,
     pub verify: Verify,
     pub blocks: Vec<String>,
+    /// Ids of `bosun hold` items (`X1`) this item takes over in the checklist.
+    pub replaces: Vec<String>,
     pub line: usize,
 }
 
@@ -32,6 +36,9 @@ fn re(p: &str) -> regex::Regex {
     regex::Regex::new(p).expect("static regex")
 }
 static ID: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^H[1-9][0-9]{0,2}$"));
+static FIELD: LazyLock<regex::Regex> =
+    LazyLock::new(|| re(r"^(who|on|steps|verify|blocks|replaces):"));
+static HOLD: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^X[1-9][0-9]{0,2}$"));
 static WHO: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,38}$"));
 static LIST: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([-*+]|[0-9]+\.) "));
 static BULLET: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^- ([^:\s]+):\s*(\S.*)$"));
@@ -116,7 +123,7 @@ struct Open {
 fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>) {
     let id = o.id.clone();
     let get = |k: &str| o.kv.get(k).filter(|(v, _)| !v.is_empty());
-    let at = |k: &str| get(k).map_or(o.line, |(_, l)| *l);
+    let at = |k: &str| o.kv.get(k).map_or(o.line, |(_, l)| *l);
     let val = |k: &str| get(k).map_or("", |(v, _)| v.as_str());
     let on = val("on");
     if on.is_empty() {
@@ -128,6 +135,7 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
         ("title", o.title.as_str()),
         ("steps", val("steps")),
         ("who", val("who")),
+        ("verify", val("verify")),
     ];
     for (k, v) in texts {
         if let Some(why) = unsafe_text(v) {
@@ -154,10 +162,17 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
             bad!(errs, at("blocks"); "name an item like M1 or a task like M1/T2" => "{id} blocks `{b}`, which is not an item or task of the plan");
         }
     }
+    if o.kv.get("verify").is_some_and(|(v, _)| v.is_empty()) {
+        bad!(errs, at("verify"); "write how bosun checks it, or leave the line out for owner" => "{id} has an empty `verify:`");
+    }
     let verify = Verify::parse(get("verify").map_or("owner", |(v, _)| v)).unwrap_or_else(|e| {
         bad!(errs, at("verify"); "use owner, secret NAME, variable NAME, environment NAME or file PATH" => "{id}: {e}");
         Verify::Owner
     });
+    let replaces = csv(val("replaces"));
+    if let Some(x) = replaces.iter().find(|x| !HOLD.is_match(x)) {
+        bad!(errs, at("replaces"); "name `bosun hold` items, e.g. `replaces: X1`" => "{id} replaces `{x}`, which is not an X item");
+    }
     out.push(Prereq {
         title: o.title.clone(),
         who: who.into(),
@@ -165,6 +180,7 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
         steps: val("steps").into(),
         verify,
         blocks,
+        replaces,
         line: o.line,
         id,
     });
@@ -172,8 +188,7 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
 
 /// Why `t` cannot go into the checklist issue (a comment hides text or forges a marker; bidi lies).
 fn unsafe_text(t: &str) -> Option<&'static str> {
-    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-    let control = t.chars().any(|c| c.is_control() || bidi(c));
+    let control = crate::core::text::has_hidden(t);
     let html = t.contains("<!--") || t.contains("-->");
     (html.then_some("an HTML comment marker")).or(control.then_some("a control or bidi character"))
 }
@@ -231,11 +246,13 @@ pub fn parse(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
                 continue;
             };
             let k = c[1].to_string();
-            if !["who", "on", "steps", "verify", "blocks"].contains(&k.as_str()) {
-                bad!(errs, n; "use who, on, steps, verify or blocks" => "unknown prerequisite key `{k}`");
+            if !["who", "on", "steps", "verify", "blocks", "replaces"].contains(&k.as_str()) {
+                bad!(errs, n; "use who, on, steps, verify, blocks or replaces" => "unknown prerequisite key `{k}`");
             } else if o.kv.insert(k.clone(), (c[2].trim().into(), n)).is_some() {
                 bad!(errs, n; "keep one line per key" => "`{k}:` is given twice for {}", o.id);
             }
+        } else if FIELD.is_match(line) {
+            bad!(errs, n; "indent field lines under their `- H1: title` bullet" => "field line `{line}` is not indented");
         } else if LIST.is_match(line) {
             match BULLET.captures(line) {
                 Some(c) if ID.is_match(&c[1]) => {
@@ -259,4 +276,197 @@ pub fn parse(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
         finish(o, plan, &mut out, &mut errs);
     }
     if errs.is_empty() { Ok(out) } else { Err(errs) }
+}
+
+/// Ids of the prerequisites that block this task (listed as `<item>/<task>` or as `<item>`).
+pub fn blocked_by<'a>(prereqs: &'a [Prereq], item: &str, task: &str) -> Vec<&'a str> {
+    let full = format!("{item}/{task}");
+    let hit = |b: &String| *b == full || b == item;
+    prereqs
+        .iter()
+        .filter(|p| p.blocks.iter().any(hit))
+        .map(|p| p.id.as_str())
+        .collect()
+}
+
+/// A task whose PR will need an approval at merge: `needs` is `owner` or `delegate`, `batch`
+/// its dependency batch (1 first).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ApprovalNeed {
+    pub task: String,
+    pub needs: String,
+    pub why: Vec<String>,
+    pub batch: usize,
+}
+
+/// The first 8 hex characters of the SHA-256 of an item's title, steps and verify: a tick counts
+/// only on a line whose `sum` matches the plan's item now.
+pub fn digest(title: &str, steps: &str, verify: &str) -> String {
+    let d = ring::digest::digest(
+        &ring::digest::SHA256,
+        format!("{title}\n{steps}\n{verify}").as_bytes(),
+    );
+    d.as_ref()[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CheckItem {
+    pub id: String,
+    pub title: String,
+    pub who: String,
+    pub on: String,
+    pub steps: String,
+    pub verify: String,
+    pub sum: String,
+    /// `owner` (the tick decides), `api`, `api ok` (an API read found it) or `api 403` (the
+    /// token cannot read it: the tick decides).
+    pub state: String,
+    pub done: bool,
+    pub blocks: Vec<String>,
+}
+
+impl From<&Prereq> for CheckItem {
+    fn from(p: &Prereq) -> Self {
+        let verify = p.verify.describe();
+        CheckItem {
+            id: p.id.clone(),
+            sum: digest(&p.title, &p.steps, &verify),
+            title: p.title.clone(),
+            who: p.who.clone(),
+            on: p.on.clone(),
+            steps: p.steps.clone(),
+            state: if p.verify == Verify::Owner {
+                "owner"
+            } else {
+                "api"
+            }
+            .into(),
+            verify,
+            done: false,
+            blocks: p.blocks.clone(),
+        }
+    }
+}
+
+/// Open computer items first, then open phone items, then done ones; stable otherwise.
+pub fn sort(items: &mut [CheckItem]) {
+    items.sort_by_key(|i| {
+        if i.done {
+            2
+        } else {
+            u8::from(i.on != "computer")
+        }
+    });
+}
+
+pub fn issue_marker(plan_path: &str) -> String {
+    format!("<!-- bosun:prereqs {plan_path} -->")
+}
+
+type Group = (&'static str, fn(&CheckItem) -> bool);
+const GROUPS: [Group; 3] = [
+    ("Needs a computer", |i| !i.done && i.on == "computer"),
+    ("On your phone", |i| !i.done && i.on != "computer"),
+    ("Done", |i| i.done),
+];
+
+/// The checklist issue body. Every text a plan or an agent wrote is shown inert.
+pub fn render_issue(
+    plan_title: &str,
+    plan_path: &str,
+    items: &[CheckItem],
+    approvals: &[ApprovalNeed],
+) -> String {
+    let mut s = format!(
+        "{}\nOwner checklist for {}. Tick a box when done; bosun checks what it can itself.\n",
+        issue_marker(plan_path),
+        inert(plan_title, 80)
+    );
+    for (head, f) in GROUPS {
+        let rows: Vec<_> = items.iter().filter(|i| f(i)).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        s += &format!("### {head}\n");
+        for i in rows {
+            let x = if i.done { 'x' } else { ' ' };
+            let (title, steps, verify) = (
+                inert(&i.title, 120),
+                inert(&i.steps, 400),
+                inert(&i.verify, 120),
+            );
+            let (who, blocks) = (by(i), i.blocks.join(", "));
+            s += &format!(
+                "- [{x}] **{}**{who} {title} \u{2014} {steps} _(verify {verify}; blocks {blocks})_ <!-- bosun:prereq {} sum={} state={} -->\n",
+                i.id, i.id, i.sum, i.state
+            );
+        }
+    }
+    if !approvals.is_empty() {
+        s += "### Approvals at merge\n";
+        let last = approvals.iter().map(|a| a.batch).max().unwrap_or(0);
+        for b in 1..=last {
+            let row: Vec<_> = approvals
+                .iter()
+                .filter(|a| a.batch == b)
+                .map(|a| format!("{} ({})", a.task, a.needs))
+                .collect();
+            s += &format!("Batch {b}: {}\n", row.join(", "));
+        }
+    }
+    s
+}
+
+/// ` (by `bob`)` when someone other than the owner does it.
+fn by(i: &CheckItem) -> String {
+    if i.who == "owner" {
+        String::new()
+    } else {
+        format!(" (by {})", inert(&i.who, 40))
+    }
+}
+
+/// One box of a checklist issue: what the owner ticked, on the line bosun wrote.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Tick {
+    pub id: String,
+    pub ticked: bool,
+    pub sum: String,
+    /// Informational only: the gates and bosun read the API themselves.
+    pub state: String,
+}
+
+/// The boxes of a checklist issue body, in order: lines that start with a box and end in bosun's
+/// marker. Ids, blocks and verify kinds never come from here, only from the plan.
+pub fn read_issue(body: &str) -> Vec<Tick> {
+    let mut out = Vec::new();
+    for l in body.lines().map(str::trim) {
+        let ticked = l.starts_with("- [x]") || l.starts_with("- [X]");
+        let Some((_, m)) = l.rsplit_once("<!-- bosun:prereq ") else {
+            continue;
+        };
+        let Some(m) = m
+            .strip_suffix(" -->")
+            .filter(|_| ticked || l.starts_with("- [ ]"))
+        else {
+            continue;
+        };
+        let (m, state) = m.split_once(" state=").unwrap_or((m, ""));
+        let (id, sum) = m.split_once(" sum=").unwrap_or((m, ""));
+        let (id, sum, state) = (id.trim().into(), sum.trim().into(), state.trim().into());
+        out.push(Tick {
+            id,
+            ticked,
+            sum,
+            state,
+        });
+    }
+    out
+}
+
+/// Whether the owner's tick counts for this item: exactly one box with its id, ticked, on a line
+/// whose `sum` matches. A missing, repeated or stale line is open.
+pub fn ticked(ticks: &[Tick], id: &str, sum: &str) -> bool {
+    let mut lines = ticks.iter().filter(|t| t.id == id);
+    matches!((lines.next(), lines.next()), (Some(t), None) if t.ticked && t.sum == sum)
 }
