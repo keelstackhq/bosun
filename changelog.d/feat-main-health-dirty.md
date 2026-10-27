@@ -1,0 +1,1 @@
+- `bosun main-health --result success` flags a queued task whose `task-pr` PR became conflicting (`mergeable_state` dirty): one `conflict` record on the task and one comment on the PR, the task stays queued; `data.conflicts`, `skipped_unknown` and `conflict_errors` report it.
