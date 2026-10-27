@@ -844,3 +844,20 @@ fn a_dropped_task_added_back_reopens_the_epic_reap_closed() {
     assert_eq!(code, 0, "{v}");
     assert_reopened(&fake, &v, epic);
 }
+
+#[test]
+fn amend_reopens_an_epic_closed_as_completed_that_never_got_the_merged_label() {
+    // Reap closed the epic, then setting `merged` failed: it is closed as completed, still `ready`.
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let epic = reaped_epic(&fake);
+    {
+        let mut s = fake.state.lock().unwrap();
+        let e = s.issues.iter_mut().find(|i| i.number == epic).unwrap();
+        e.labels = vec!["bosun:source/plan".into(), "bosun:state/ready".into()];
+    }
+    write_plan(tmp.path(), &plan_with_t2());
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_reopened(&fake, &v, epic);
+}

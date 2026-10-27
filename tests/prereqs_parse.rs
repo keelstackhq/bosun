@@ -93,6 +93,12 @@ fn every_error_has_a_line_and_a_fix() {
         ),
         ("- H1: a\nOK## Prerequisites\n", 6, "a second"),
         ("- H1: a\nOK  verify:\n", 6, "empty `verify:`"),
+        ("- H1: a\nOK  verify: file a <!-- b\n", 6, "HTML comment"),
+        (
+            "- H1: a\n  on: phone\n  steps: s\u{2028}x\n  blocks: M1\n",
+            4,
+            "control",
+        ),
         ("- H1: a\nOK  replaces: X1, H2\n", 6, "not an X item"),
         ("- H1: a\nOKverify: secret X\n", 6, "not indented"),
         // A prose line closes the bullet, so the field after it has no bullet.

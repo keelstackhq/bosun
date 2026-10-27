@@ -4,7 +4,8 @@
 
 use crate::core::glob::Glob;
 use crate::core::plan::{Plan, PlanError};
-use crate::core::risk::{APPROVAL_CODE_PATHS, Approval, CRITICAL_PATHS, Rules};
+use crate::core::risk::{APPROVAL_CODE_PATHS, Approval, CRITICAL_PATHS, CRITICAL_RULES, Rules};
+use crate::core::text::inert;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
@@ -136,6 +137,7 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
         ("title", o.title.as_str()),
         ("steps", val("steps")),
         ("who", val("who")),
+        ("verify", val("verify")),
     ];
     for (k, v) in texts {
         if let Some(why) = unsafe_text(v) {
@@ -188,8 +190,7 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
 
 /// Why `t` cannot go into the checklist issue (a comment hides text or forges a marker; bidi lies).
 fn unsafe_text(t: &str) -> Option<&'static str> {
-    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-    let control = t.chars().any(|c| c.is_control() || bidi(c));
+    let control = crate::core::text::has_hidden(t);
     let html = t.contains("<!--") || t.contains("-->");
     (html.then_some("an HTML comment marker")).or(control.then_some("a control or bidi character"))
 }
@@ -336,6 +337,13 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
     let (mut out, mut memo) = (Vec::new(), HashMap::new());
     for it in &plan.items {
         for t in &it.tasks {
+            // A touch glob bosun cannot read, or one leaving the repo, counts as owner.
+            let bad: Vec<String> = t
+                .touch
+                .iter()
+                .filter(|g| Glob::parse(g).is_err() || outside(g))
+                .map(|g| format!("unreadable touch: {g}"))
+                .collect();
             let touch: Vec<Glob> = t.touch.iter().filter_map(|g| Glob::parse(g).ok()).collect();
             let hits: Vec<_> = rules
                 .rules
@@ -350,10 +358,12 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
             let any = |a| hits.iter().any(|r| r.approval == a);
             let (high, d) = (t.risk == "high", any(Approval::Delegate));
             let tv = any(Approval::TwoVerdicts);
+            let critical_rule = hits.iter().any(|r| CRITICAL_RULES.contains(&r.id.as_str()));
             // As risk-check: the floor only turns delegate matches into owner ones, and a task
             // the plan marks `risk: high` is expected to need the owner whatever it touches.
             let floor_hit = d && !crit.is_empty();
-            let needs = if any(Approval::Owner) || (d && tv) || floor_hit || high {
+            let owner = any(Approval::Owner) || (d && tv) || floor_hit || critical_rule;
+            let needs = if owner || high || !bad.is_empty() {
                 "owner"
             } else if d {
                 "delegate"
@@ -365,6 +375,7 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
                 why.extend(crit);
             }
             why.extend(high.then(|| "risk: high".to_string()));
+            why.extend(bad);
             let task = t.plan_id(&it.id);
             let batch = level(&task, plan, &mut memo);
             out.push(ApprovalNeed {
@@ -382,6 +393,16 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
     out
 }
 
+/// The first 8 hex characters of the SHA-256 of an item's title, steps and verify: a tick counts
+/// only on a line whose `sum` matches the plan's item now.
+pub fn digest(title: &str, steps: &str, verify: &str) -> String {
+    let d = ring::digest::digest(
+        &ring::digest::SHA256,
+        format!("{title}\n{steps}\n{verify}").as_bytes(),
+    );
+    d.as_ref()[..4].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CheckItem {
     pub id: String,
@@ -390,23 +411,31 @@ pub struct CheckItem {
     pub on: String,
     pub steps: String,
     pub verify: String,
-    /// bosun checks it through the API (false for `owner`, and after a 403).
-    pub api: bool,
-    /// Done: verified through the API, or ticked when `api` is false.
+    pub sum: String,
+    /// `owner` (the tick decides), `api`, `api ok` (an API read found it) or `api 403` (the
+    /// token cannot read it: the tick decides).
+    pub state: String,
     pub done: bool,
     pub blocks: Vec<String>,
 }
 
 impl From<&Prereq> for CheckItem {
     fn from(p: &Prereq) -> Self {
+        let verify = p.verify.describe();
         CheckItem {
             id: p.id.clone(),
+            sum: digest(&p.title, &p.steps, &verify),
             title: p.title.clone(),
             who: p.who.clone(),
             on: p.on.clone(),
             steps: p.steps.clone(),
-            verify: p.verify.describe(),
-            api: p.verify != Verify::Owner,
+            state: if p.verify == Verify::Owner {
+                "owner"
+            } else {
+                "api"
+            }
+            .into(),
+            verify,
             done: false,
             blocks: p.blocks.clone(),
         }
@@ -435,6 +464,7 @@ const GROUPS: [Group; 3] = [
     ("Done", |i| i.done),
 ];
 
+/// The checklist issue body. Every text a plan or an agent wrote is shown inert.
 pub fn render_issue(
     plan_title: &str,
     plan_path: &str,
@@ -442,8 +472,9 @@ pub fn render_issue(
     approvals: &[ApprovalNeed],
 ) -> String {
     let mut s = format!(
-        "{}\nOwner checklist for **{plan_title}**. Tick a box when done; bosun checks what it can and ticks it itself.\n",
-        issue_marker(plan_path)
+        "{}\nOwner checklist for {}. Tick a box when done; bosun checks what it can itself.\n",
+        issue_marker(plan_path),
+        inert(plan_title, 80)
     );
     for (head, f) in GROUPS {
         let rows: Vec<_> = items.iter().filter(|i| f(i)).collect();
@@ -453,17 +484,15 @@ pub fn render_issue(
         s += &format!("### {head}\n");
         for i in rows {
             let x = if i.done { 'x' } else { ' ' };
-            let (title, steps, verify) = (safe(&i.title), safe(&i.steps), safe(&i.verify));
-            let who = by(i);
-            let blocks = i.blocks.join(",");
-            let mark = match (i.api, i.done) {
-                (false, _) => "owner",
-                (true, false) => "api",
-                (true, true) => "api ok",
-            };
+            let (title, steps, verify) = (
+                inert(&i.title, 120),
+                inert(&i.steps, 400),
+                inert(&i.verify, 120),
+            );
+            let (who, blocks) = (by(i), i.blocks.join(", "));
             s += &format!(
-                "- [{x}] **{}**{who} {title} \u{2014} {steps} _(verify: {verify}; blocks {blocks})_ <!-- bosun:prereq {} blocks={blocks} verify={mark} -->\n",
-                i.id, i.id
+                "- [{x}] **{}**{who} {title} \u{2014} {steps} _(verify {verify}; blocks {blocks})_ <!-- bosun:prereq {} sum={} state={} -->\n",
+                i.id, i.id, i.sum, i.state
             );
         }
     }
@@ -482,44 +511,27 @@ pub fn render_issue(
     s
 }
 
-/// ` (by bob)` when someone other than the owner does it.
+/// ` (by `bob`)` when someone other than the owner does it.
 fn by(i: &CheckItem) -> String {
     if i.who == "owner" {
         String::new()
     } else {
-        format!(" (by {})", safe(&i.who))
+        format!(" (by {})", inert(&i.who, 40))
     }
 }
 
-/// User text made safe for one checklist line: no HTML comment, no line break.
-fn safe(t: &str) -> String {
-    let t = t
-        .replace("<!--", "<!-\u{200b}-")
-        .replace("-->", "-\u{200b}->");
-    t.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
-}
-
-/// One box of a checklist issue, as bosun wrote it.
+/// One box of a checklist issue: what the owner ticked, on the line bosun wrote.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Tick {
     pub id: String,
     pub ticked: bool,
-    pub api: bool,
-    /// bosun verified it through the API (`verify=api ok`).
-    pub ok: bool,
-    pub blocks: Vec<String>,
+    pub sum: String,
+    /// Informational only: the gates and bosun read the API themselves.
+    pub state: String,
 }
 
-impl Tick {
-    /// An API item is done only when bosun verified it; an owner item when its box is ticked.
-    pub fn done(&self) -> bool {
-        if self.api { self.ok } else { self.ticked }
-    }
-}
-
-/// The boxes of a checklist issue body, in order. Only lines that end in bosun's marker count.
+/// The boxes of a checklist issue body, in order: lines that start with a box and end in bosun's
+/// marker. Ids, blocks and verify kinds never come from here, only from the plan.
 pub fn read_issue(body: &str) -> Vec<Tick> {
     let mut out = Vec::new();
     for l in body.lines().map(str::trim) {
@@ -533,28 +545,21 @@ pub fn read_issue(body: &str) -> Vec<Tick> {
         else {
             continue;
         };
-        let (m, verify) = m.split_once(" verify=").unwrap_or((m, "owner"));
-        let (id, blocks) = m.split_once(" blocks=").unwrap_or((m, ""));
+        let (m, state) = m.split_once(" state=").unwrap_or((m, ""));
+        let (id, sum) = m.split_once(" sum=").unwrap_or((m, ""));
+        let (id, sum, state) = (id.trim().into(), sum.trim().into(), state.trim().into());
         out.push(Tick {
-            id: id.trim().into(),
+            id,
             ticked,
-            api: verify.starts_with("api"),
-            ok: verify == "api ok",
-            blocks: csv(blocks),
+            sum,
+            state,
         });
     }
     out
 }
 
-/// At most `n` characters, with `…` when cut.
-fn cut(t: &str, n: usize) -> String {
-    if t.chars().count() <= n {
-        t.into()
-    } else {
-        t.chars().take(n - 1).collect::<String>() + "\u{2026}"
-    }
-}
-
+/// The short checklist text for the owner's chat. Plan text is shown inert, so a title cannot
+/// fake a line, a link or a mention.
 pub fn message(
     plan_title: &str,
     items: &[CheckItem],
@@ -567,17 +572,18 @@ pub fn message(
     let plural =
         |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
     let mut lines = vec![if open.is_empty() {
-        format!("{plan_title}: nothing for you to prepare.")
+        format!("{}: nothing for you to prepare.", inert(plan_title, 60))
     } else {
         let steps = plural(open.len(), "step", "steps");
-        format!("{plan_title}: {steps} before agents can finish ({computer} on a computer).")
+        let title = inert(plan_title, 60);
+        format!("{title}: {steps} before agents can finish ({computer} on a computer).")
     }];
     for i in open.iter().take(15) {
         let (id, on, who) = (&i.id, &i.on, by(i));
         lines.push(format!(
             "- {id} ({on}){who}: {}: {}",
-            cut(&i.title, 60),
-            cut(&i.steps, 80)
+            inert(&i.title, 60),
+            inert(&i.steps, 80)
         ));
     }
     if open.len() > 15 {
@@ -615,4 +621,11 @@ pub fn message(
     }
     lines.extend(issue_url.map(|u| format!("Tick them off here: {u}")));
     lines.join("\n")
+}
+
+/// Whether the owner's tick counts for this item: exactly one box with its id, ticked, on a line
+/// whose `sum` matches. A missing, repeated or stale line is open.
+pub fn ticked(ticks: &[Tick], id: &str, sum: &str) -> bool {
+    let mut lines = ticks.iter().filter(|t| t.id == id);
+    matches!((lines.next(), lines.next()), (Some(t), None) if t.ticked && t.sum == sum)
 }

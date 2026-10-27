@@ -46,4 +46,4 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 - Run `git checkout -b <branch>` as its own command before any compound command that commits: the merge-lock reads the branch before the whole command runs, so `git checkout -b X && git commit` on the default branch is refused.
 - Never skip, delete or weaken a test to get green; test-integrity refuses it.
 - Lessons are not in this file. A review pack carries the lessons that match your files.
-- Read the spec section you touch: `docs/spec.md`.
+- Read the spec section you touch: `docs/spec/NN-*.md`, one file per section (index `docs/spec.md`).

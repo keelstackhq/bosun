@@ -141,8 +141,9 @@ const QUIET_SECS: i64 = 600;
 /// `epic_complete`): state `merged`, closed as completed. A live lease (an orchestrator's) blocks
 /// it; a `claimed` epic without one is a finished spawned orchestrator's (`result` ends the
 /// lease, not the state). The quiet period does not cover an amend adding a task right now; the
-/// next import or amend reopens the epic. Open plan issues are listed first; all of them only
-/// when an unleased epic has no open task (epics with only dropped tasks pay that every run).
+/// next import or amend reopens the epic. Open plan issues are listed first; with candidates,
+/// every open issue once (an open task of the epic's item blocks it, whatever its labels and
+/// `epic` field), then all plan issues (epics with only dropped tasks pay that every run).
 /// Closed epics go into `closed` as they happen, so an error keeps the progress.
 fn close_done_epics(
     gh: &dyn Github,
@@ -175,6 +176,19 @@ fn close_done_epics(
             candidates.push(e);
         }
     }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    // `plan import` also adopts hand-made issues by item and task; they may lack the `epic`
+    // field and the source label, so look at every open issue once before closing anything.
+    let every_open = gh.list_issues(&[], IssueState::Open)?;
+    let adopted_open = |item: &str| {
+        every_open.iter().any(|t| {
+            parse_task_meta(t.body_text()).is_some_and(|m| m.item == item)
+                && TaskEnd::of(state_of(&t.labels), false, None) == TaskEnd::Open
+        })
+    };
+    candidates.retain(|e| !epic_item(e.body_text()).is_some_and(|item| adopted_open(&item)));
     if candidates.is_empty() {
         return Ok(());
     }
