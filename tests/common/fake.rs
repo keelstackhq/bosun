@@ -64,6 +64,8 @@ pub struct State {
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
     pub variables: HashMap<String, String>,
+    /// Repo paths that answer 200: `actions/secrets/N`, `environments/E[/secrets/N|/variables/N]`.
+    pub present: Vec<String>,
     /// Contexts a ruleset on the default branch requires (`GET /rules/branches/<b>`).
     pub ruleset_checks: Vec<String>,
     /// Contexts classic branch protection requires; empty answers 404.
@@ -525,6 +527,10 @@ impl FakeGithub {
             .unwrap()
             .variables
             .insert(name.into(), value.into());
+    }
+
+    pub fn present(&self, path: &str) {
+        self.state.lock().unwrap().present.push(path.into());
     }
 
     /// Checks the default branch enforces through a ruleset.
@@ -1272,6 +1278,13 @@ fn route(
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
         },
+        ("GET", p @ (["environments", ..] | ["actions", "secrets", _])) => {
+            if s.present.contains(&p.join("/")) {
+                ok(json!({"name": "x"}))
+            } else {
+                msg(404, "Not Found")
+            }
+        }
         _ => msg(404, "Not Found"),
     }
 }

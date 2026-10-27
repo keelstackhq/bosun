@@ -533,7 +533,7 @@ fn slashed(p: &Path) -> String {
 
 /// A plan path as the epics store it: relative to the repo root, with `/`, without `./`.
 /// A relative `file` is resolved against `base`; a path outside every root stays as given.
-fn plan_key(file: &str, base: &Path, roots: &[PathBuf]) -> String {
+pub(super) fn plan_key(file: &str, base: &Path, roots: &[PathBuf]) -> String {
     let joined = clean(&base.join(file));
     let canon = std::fs::canonicalize(&joined).unwrap_or_else(|_| joined.clone());
     for cand in [&canon, &joined] {

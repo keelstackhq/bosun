@@ -4,6 +4,7 @@ use common::{TOKEN_CANARY, bosun, one_object};
 
 /// Minimal valid arguments for every command (S1 Done when).
 const CALLS: &[&[&str]] = &[
+    &["prereqs", "plans/x.md"],
     &["join"],
     &["claim", "4"],
     &["heartbeat"],

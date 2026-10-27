@@ -21,6 +21,7 @@ pub mod msg;
 pub mod notify;
 pub mod plan;
 pub mod pr;
+pub mod prereqs;
 pub mod progress;
 pub mod reap;
 pub mod release;
@@ -145,6 +146,8 @@ pub enum Command {
     ReviewCi(ReviewCiArgs),
     /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
     Notify(NotifyArgs),
+    /// List the human steps a plan needs up front (and its approvals).
+    Prereqs(PrereqsArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -185,6 +188,7 @@ pub const COMMANDS: &[&str] = &[
     "review-ci",
     "notify",
     "answer",
+    "prereqs",
 ];
 
 impl Command {
@@ -236,6 +240,7 @@ impl Command {
             Command::MainHealth(_) => "main-health",
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
+            Command::Prereqs(_) => "prereqs",
         }
     }
 }
@@ -604,6 +609,16 @@ pub struct PlanAmendArgs {
     /// Show what would be created, closed and updated; write nothing.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PrereqsArgs {
+    /// The plan files, for example plans/bosun.md.
+    #[arg(required = true)]
+    pub files: Vec<String>,
+    /// Leave out the `bosun doctor` steps.
+    #[arg(long)]
+    pub no_setup: bool,
 }
 
 #[derive(Debug, Args)]
