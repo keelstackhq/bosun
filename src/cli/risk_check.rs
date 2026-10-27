@@ -6,11 +6,12 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
-use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta};
+use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
     signed_message_v2, trust_files_changed, verify_ed25519,
 };
+use crate::core::lease::leases_of;
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
@@ -18,8 +19,9 @@ use crate::core::risk::{
     new_dependencies, parse_owners, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
+use crate::core::touch::{Changed, outside};
 use crate::ctx::RepoId;
-use crate::github::{Comment, Github, Review, b64};
+use crate::github::{Comment, Github, PrFile, Review, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
 
@@ -113,11 +115,13 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let mut capabilities = capability_labels(&pull.labels);
     // Every linked issue counts: the agent writes the PR body, so a decoy first link must not
     // hide the real task's capabilities.
+    let mut task = None;
     for i in linked_issues(&pull.body) {
         if let Some(issue) = gh.get_issue(i)?
             && let Some(meta) = task_meta(&issue)
         {
             capabilities.extend(meta.capabilities);
+            task.get_or_insert(i);
         }
     }
 
@@ -142,8 +146,25 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     apply_floor(&mut matches, &critical);
     let level = risk::level(&matches);
     let high = level == "high";
+    let out_of_touch = out_of_touch(&app, task, &pr_files, pull.changed_files);
 
-    let note = high.then(|| risk_note(&matches, head));
+    let warning = out_of_touch.as_deref().and_then(touch_warning);
+    if let Some(w) = &warning {
+        eprintln!("bosun: risk-check: {w}");
+    }
+    // A warning only: the status description, the level and the state stay as they are. The
+    // PR body carries it where it already carries a Risk note (high risk).
+    let note = high.then(|| {
+        let note = risk_note(&matches, head);
+        match &warning {
+            Some(w) => note.replacen(
+                "## Risk: high\n\n",
+                &format!("## Risk: high\n\n- **warning:** {w}\n"),
+                1,
+            ),
+            None => note,
+        }
+    });
     let body = replace_note(&pull.body, note.as_deref());
     if body != pull.body {
         gh.update_pull_body(n, &body)?;
@@ -261,7 +282,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     gh.create_status(head, CONTEXT, state, &description, None)?;
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
-        "approved_by": approved_by});
+        "approved_by": approved_by, "out_of_touch": out_of_touch});
     if high {
         data["requirement"] = json!(requirement.name());
         if requirement == Approval::TwoVerdicts {
@@ -310,6 +331,64 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         fix,
     )
     .with_data(data))
+}
+
+/// "N files outside the task's lease: a, b" (ten names at most, then "and N more"); `None` when
+/// there are none.
+fn touch_warning(out: &[String]) -> Option<String> {
+    if out.is_empty() {
+        return None;
+    }
+    let mut names = out.iter().take(10).cloned().collect::<Vec<_>>().join(", ");
+    if out.len() > 10 {
+        names.push_str(&format!(" and {} more", out.len() - 10));
+    }
+    let n = out.len();
+    Some(format!(
+        "{n} file{} outside the task's lease: {names}",
+        if n == 1 { "" } else { "s" }
+    ))
+}
+
+/// The PR files outside the linked task's newest live lease (design C3), for a warning. `None`
+/// when the PR links no task, the task has no live lease with a touch, the file list is cut or
+/// the comments cannot be read. The task is the first linked issue with task metadata; humans'
+/// PRs have no lease and so get `None`.
+fn out_of_touch(
+    app: &App,
+    task: Option<u64>,
+    pr_files: &[PrFile],
+    changed_files: u64,
+) -> Option<Vec<String>> {
+    // GitHub lists at most 3000 files; a shorter list than it reports is cut.
+    if (pr_files.len() as u64) < changed_files || pr_files.len() >= 3000 {
+        return None;
+    }
+    let task = task?;
+    // Only a warning: a failed read costs the warning, never the check.
+    let notes = match notes(app.gh.as_ref(), task) {
+        Ok(notes) => notes,
+        Err(e) => {
+            eprintln!(
+                "bosun: risk-check: no touch warning, cannot read the comments of #{task}: {}",
+                e.message
+            );
+            return None;
+        }
+    };
+    let lease = leases_of(task, &notes)
+        .into_iter()
+        .filter(|l| l.is_live(app.ctx.now) && !l.touch.is_empty())
+        .max_by_key(|l| l.comment_id)?;
+    let changed: Vec<Changed> = pr_files
+        .iter()
+        .map(|f| Changed {
+            path: f.filename.clone(),
+            status: f.status.clone(),
+            previous: f.previous_filename.clone(),
+        })
+        .collect();
+    Some(outside(&changed, &lease.touch))
 }
 
 /// `owner`'s newest approve, request-changes or dismissed review on `head`.
