@@ -24,7 +24,7 @@ use crate::core::risk::{
 use crate::core::touch::{Changed, outside};
 use crate::ctx::RepoId;
 use crate::github::{Comment, Github, PrFile, Pull, Review, b64};
-use crate::output::{BosunError, CmdResult, Outcome};
+use crate::output::{BosunError, CmdResult, Exit, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
 
 const RULES_PATH: &str = ".bosun/risk.toml";
@@ -75,6 +75,27 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             "check the number; `gh pr list` lists the open PRs",
         )
     })?;
+    // In flight, a required check is pending, so auto-merge waits for this run's verdict.
+    if let Err(e) = gh.create_status(&pull.head_sha, CONTEXT, "pending", PENDING, None) {
+        eprintln!(
+            "bosun: risk-check: cannot post the pending status: {}",
+            e.message
+        );
+    }
+    let out = judge(&app, pull.clone());
+    // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
+    if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
+        _ = gh.create_status(&pull.head_sha, CONTEXT, "error", UNFINISHED, None);
+    }
+    out
+}
+
+const PENDING: &str = "risk-check is judging this head";
+const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run the risk workflow";
+
+fn judge(app: &App, pull: Pull) -> CmdResult {
+    let gh = app.gh.as_ref();
+    let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
 
     let rules = match gh.file_at(RULES_PATH, base)? {
@@ -148,7 +169,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     apply_floor(&mut matches, &critical);
     let level = risk::level(&matches);
     let high = level == "high";
-    let out_of_touch = out_of_touch(&app, task, &pr_files, pull.changed_files);
+    let out_of_touch = out_of_touch(app, task, &pr_files, pull.changed_files);
 
     let warning = out_of_touch.as_deref().and_then(touch_warning);
     if let Some(w) = &warning {

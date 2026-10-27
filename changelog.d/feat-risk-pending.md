@@ -1,0 +1,1 @@
+- risk-check posts `pending` on the head while it judges, so auto-merge waits; a run that cannot finish posts `error` instead of leaving `pending`.

@@ -160,7 +160,7 @@ fn newest(fake: &FakeGithub) -> String {
 
 #[test]
 fn a_real_verdict_that_races_the_carry_wins() {
-    for (suffix, n) in [("/status".to_string(), 1), ("/statuses".into(), 0), (format!("/statuses/{H2}"), 1)] {
+    for (suffix, n) in [("/status".to_string(), 1), ("/statuses".into(), 0), (format!("/statuses/{H2}"), 2)] { // the 3rd post: after pending and the verdict
         let fake = honest(); fake.after_requests(&suffix, n, real); // before the re-read, the post-check, or our post
         let (code, v, _) = go(&fake);
         assert_eq!((code, newest(&fake), &v["data"]["verdict_carried_from"]), (0, r#"failure: real "review-verdict""#.into(), &Value::Null), "{suffix}");
