@@ -507,6 +507,16 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
         }
     }
     errs.sort_by_key(|e| e.line);
+    if errs.is_empty() {
+        touch_warnings(&items, &mut warns);
+        warns.sort_by_key(|w| w.line);
+        // The "more pairs" summary sorts last (line MAX); it takes the line of the warning before.
+        if let [.., prev, last] = warns.as_mut_slice()
+            && last.line == usize::MAX
+        {
+            last.line = prev.line;
+        }
+    }
     match title {
         Some(title) if errs.is_empty() => Ok(Plan {
             title,
@@ -515,6 +525,49 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
             warnings: warns,
         }),
         _ => Err(errs),
+    }
+}
+
+const MAX_OVERLAPS: usize = 20;
+
+/// Warnings from the touch lists: parallel overlaps and hotspots of 3 or more tasks.
+fn touch_warnings(items: &[Item], warns: &mut Vec<PlanError>) {
+    use super::touch::{self, TaskTouch};
+    let mut line: HashMap<String, usize> = HashMap::new();
+    let tasks: Vec<TaskTouch> = items
+        .iter()
+        .flat_map(|i| i.tasks.iter().map(move |t| (i, t)))
+        .map(|(i, t)| {
+            line.insert(t.plan_id(&i.id), t.line);
+            TaskTouch {
+                id: t.plan_id(&i.id),
+                item: i.id.clone(),
+                touch: touch::companions(&t.touch),
+                depends: t.depends.clone(),
+            }
+        })
+        .collect();
+    let item_deps: HashMap<String, Vec<String>> = items
+        .iter()
+        .map(|i| (i.id.clone(), i.depends.clone()))
+        .collect();
+    let overlaps = touch::parallel_overlaps(&tasks, &item_deps);
+    for o in overlaps.iter().take(MAX_OVERLAPS) {
+        let l = line[&o.a].max(line[&o.b]);
+        bad!(warns, l; format!("add \"depends: {}\" to {}, or give the file to one task", o.a, o.b)
+            => "{} and {} touch overlapping paths ({} ~ {}) with no depends between them",
+            o.a, o.b, o.glob_a, o.glob_b);
+    }
+    if overlaps.len() > MAX_OVERLAPS {
+        let n = overlaps.len() - MAX_OVERLAPS;
+        bad!(warns, usize::MAX; "chain the tasks with depends or give shared files to one task, then check again"
+            => "{n} more overlapping pair{}", if n == 1 { "" } else { "s" });
+    }
+    for h in touch::hotspots(&tasks, &item_deps, 3) {
+        let (l, n) = (line[&h.tasks[0]], h.globs.len());
+        bad!(warns, l; "give the file to one task and chain the others with depends, or split the file"
+            => "{} {} touched by {} tasks: {}", h.globs.join(", "), if n == 1 { "is" } else { "are" },
+            h.tasks.len(), h.tasks.join(", "));
     }
 }
 
