@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::risk_check::{decisive_review, delegation_blocked, verdict_inputs, withdrawn};
+use super::risk_check::{Found, decisive_review, delegation_blocked, verdict_inputs, withdrawn};
 use super::verdict::CONTEXT;
 use crate::core::approve::TRUST_FILES;
 use crate::core::carry::{self, CarryFacts, Entry, FileChange, Hop, Kind, RawTree, Refusal};
@@ -234,26 +234,83 @@ fn approved_by_independent(comments: &[Comment], excluded: &[String], h: &str) -
     (approved && known && c.unedited() && !excluded.contains(&session)).then_some(c.id)
 }
 
-/// Rule 5: no record on the path, none newer than comment `approval` for a head off it, and no
-/// owner withdrawn (per commit) on the path or `h`.
+/// Rule 5: no owner withdrawn (per commit) on the path or `h`; with verdicts (`approval`: the oldest
+/// counted record) also no record on the path, none newer than it off the path.
 fn standing(
     comments: &[Comment],
     reviews: &[Review],
     owners: &[String],
     path: &[String],
-    (h, approval): (&str, u64),
+    (h, approval): (&str, Option<u64>),
 ) -> bool {
-    let superseded = comments.iter().any(|c| match parse_record(&c.body) {
-        Some(Record::Verdict { head_sha, .. }) => {
-            path.contains(&head_sha) || (c.id > approval && head_sha != h)
-        }
-        _ => false,
+    let superseded = approval.is_some_and(|approval| {
+        comments.iter().any(|c| match parse_record(&c.body) {
+            Some(Record::Verdict { head_sha, .. }) => {
+                path.contains(&head_sha) || (c.id > approval && head_sha != h)
+            }
+            _ => false,
+        })
     });
     let withdrawn_by = |o: &String| {
         let at = |sha: &str| withdrawn(decisive_review(reviews, o, sha).as_deref());
         at(h) || path.iter().any(|sha| at(sha))
     };
     !superseded && !owners.iter().any(withdrawn_by)
+}
+
+/// The oldest of the counted `sessions`' newest records on `h`; `None` if one is missing or edited.
+fn counted_floor(comments: &[Comment], h: &str, sessions: &[String]) -> Option<u64> {
+    let newest = |s: &String| {
+        let mine = |c: &&Comment| match apply_record(&c.body) {
+            Some(Record::Verdict {
+                session, head_sha, ..
+            }) => c.user.eq_ignore_ascii_case(VERDICT_AUTHOR) && head_sha == h && session == *s,
+            _ => false,
+        };
+        let last = comments.iter().filter(mine).max_by_key(|c| c.id)?;
+        last.unedited().then_some(last.id) // an edited record may not be what was reviewed
+    };
+    let ids: Option<Vec<u64>> = sessions.iter().map(newest).collect();
+    ids?.into_iter().min()
+}
+
+/// The older head `h` whose approval carries to `pull.head_sha` if rules 1-5 hold, and who gave
+/// it. `approve` judges a sha with the inputs of the current head and returns `None` on any
+/// error. `check` runs only for a head that is approved; any doubt tries the next head.
+pub(crate) fn carry_approval(
+    gh: &dyn Github,
+    pull: &Pull,
+    default_branch: &str,
+    owners: &[String],
+    approve: &dyn Fn(&str) -> Option<Found>,
+) -> Option<(String, String)> {
+    for h in candidates(gh, pull, default_branch) {
+        let Some(found) = approve(&h).filter(Found::passed) else {
+            continue;
+        };
+        let path = (check(gh, pull, default_branch, &h))
+            .map_err(|why| eprintln!("bosun: risk-check: no carry from {}: {why}", short(&h)));
+        let (comments, reviews) = (gh.list_comments(pull.number), gh.list_reviews(pull.number));
+        let (Ok(path), Ok(mut comments), Ok(mut reviews)) = (path, comments, reviews) else {
+            continue;
+        };
+        comments.sort_by_key(|c| c.id);
+        reviews.sort_by_key(|r| r.id);
+        let approval = match found.counted() {
+            None => Some(None),
+            Some(sessions) => counted_floor(&comments, &h, sessions).map(Some),
+        };
+        let Some(approval) = approval else {
+            continue;
+        };
+        if standing(&comments, &reviews, owners, &path, (&h, approval)) {
+            let who = found
+                .approved_by
+                .unwrap_or_else(|| format!("two verdicts: {}", found.verdicts.join(", ")));
+            return Some((h, who));
+        }
+    }
+    None
 }
 
 /// The head `h` whose approval carries to `pull.head_sha` if rules 1-5 hold; any doubt is `None`.
@@ -278,6 +335,6 @@ pub fn carry_verdict(
         };
         (check(gh, pull, default_branch, h))
             .map_err(|why| eprintln!("bosun: risk-check: no carry from {}: {why}", short(h)))
-            .is_ok_and(|path| standing(&comments, &reviews, owners, &path, (h, id)))
+            .is_ok_and(|path| standing(&comments, &reviews, owners, &path, (h, Some(id))))
     })
 }
