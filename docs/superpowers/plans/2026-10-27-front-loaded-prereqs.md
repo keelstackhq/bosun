@@ -22,6 +22,9 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
   touch: src/core/prereqs.rs (new), src/core/mod.rs, tests/prereqs_parse.rs (new), fragments
   - `parse(text, &Plan)`: the `## Prerequisites` section, validated against the plan.
   - `blocked_by(prereqs, item, task)`.
+- [ ] **Q1t: `core::text::inert`** (off main; Q1b and Q3c merge it in)
+  touch: src/core/text.rs (new), src/core/mod.rs, fragments
+  - Text for the owner made inert: Cc, Cf, Zl, Zp to spaces, shown as an inline code span.
 - [ ] **Q1b: the checklist (F4 rendering, F6 `replaces:`)** — depends Q1a
   touch: src/core/prereqs.rs, tests/prereqs_checklist.rs (new), tests/prereqs_parse.rs, fragments
   - `render_issue`, `read_issue`, `sort`, `message`: the checklist as an issue body (one marker
@@ -39,7 +42,7 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
   epic), tests/cli_prereqs_gate.rs (new), fragments
 - [ ] **Q3d: hook keeps agents out of the checklist (F4)** — depends Q3a
   touch: src/hooks/prereqs_lock.rs (new), src/hooks/pre_tool_use.rs (one call), tests/hook_prereqs.rs
-  (new), fragments
+  (new), fragments; best effort (F4)
 - [ ] **Q3b: `bosun hold` (F6)** — depends Q3a
   touch: src/cli/hold.rs (new), src/cli/mod.rs (command and Args), src/lib.rs (dispatch),
   tests/cli_hold.rs (new), fragments

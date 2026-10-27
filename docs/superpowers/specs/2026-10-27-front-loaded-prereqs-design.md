@@ -57,7 +57,9 @@ when the API says it is missing. Why: "done" should be a fact bosun can read, no
   delegate rule together with a two-verdicts rule, or a delegate rule on the critical floor (the
   floor only turns delegate matches into owner ones, as `risk::apply_floor` does), or when it says
   `risk: high`; with `needs: delegate` when it hits only delegate rules. A task that matches no
-  rule is normal risk and not listed, even on the floor. They are grouped into batches by
+  rule is normal risk and not listed, even on the floor. A rule in `risk::CRITICAL_RULES` that matches
+by path needs the owner. A touch glob bosun cannot parse, or one that leaves the repo (`..`),
+counts as owner (fail closed). They are grouped into batches by
   dependency level, so an orchestrator spawns a batch together and the owner answers once per
   batch. It is an estimate: risk-check also matches added lines (R-secrets), new dependencies
   (R-deps), capabilities and an unseen diff, which a plan cannot predict, and the bosun-code floor
@@ -75,21 +77,32 @@ with `--post`, upserts one issue per plan (marker `<!-- bosun:prereqs <plan path
 in the GitHub app; ticks are read back before each rewrite, verified items are ticked by bosun,
 and the issue closes when nothing is open. Why one issue: GitHub mobile notifies on it, boxes are
 tappable on a phone, and the orchestrator relays one link. The issue carries the label
-`bosun:prereqs`. Each line's hidden marker, written by bosun, names what the item blocks, how it
-is verified and whether bosun verified it: `<!-- bosun:prereq H1 blocks=M4/T2,M5 verify=api ok -->`
-(`verify=owner` for tick-only items and for API items whose read got a 403; `ok` only after an
-API read found it). An item is done when
-its marker says `ok` (API items: a tick alone never counts) or, for `verify=owner`, when its box is
-ticked. The gates below read this one issue, never the API, and read its markers whatever the
-issue's state (open or closed). A tick is not authenticated (anyone with write access can tick,
-or edit a marker); that is accepted because a prerequisite only schedules work and risk-check
-still decides every merge. Agents are kept out mechanically: the PreToolUse hook refuses an
-agent's GitHub write (the GitHub MCP tools, `gh issue edit/comment/close`, `gh api`) whose body
-contains `bosun:prereq`, so an agent can neither tick a box nor forge an `ok` (the boxes live in
-the body, next to the markers); bosun's own writes go through the API, not a tool call. A forged
-`ok` on an API item is also undone by the next refresh, which rewrites every marker from the API.
-Plan text cannot forge a marker either: the parser refuses `<!--`, `-->` and control or bidi
-characters in titles, steps and `who`, and the renderer escapes them again.
+`bosun:prereqs`.
+
+**Trust: the plan decides, the issue only carries ticks.** What an item is (its id, what it
+blocks, how it is verified) comes only from the plan's `## Prerequisites` on the default branch,
+which reached main through a reviewed PR. The issue is a view the owner taps on; it supplies one
+fact per item, the tick. Each line ends with a marker bosun writes:
+`<!-- bosun:prereq H1 sum=1a2b3c4d state=api -->`, where `sum` is the first 8 hex characters of
+the SHA-256 of the item's title, steps and verify, and `state` is `owner`, `api`, `api ok` or
+`api 403` (informational). A tick counts only for an item whose verify is `owner`, or an API item
+whose read got a 403, and only on a line whose `sum` matches the plan's item now (an amendment
+that reuses an id with new steps makes old ticks stale). An API item (secret, variable,
+environment, file) is done only when an API read finds it; bosun and the gates read the API
+themselves and never trust an `ok` in the issue. A missing line, a line whose id appears twice,
+or a stale `sum` is open. bosun reads the markers whatever the issue's state.
+
+A tick is not authenticated: anyone with write access can tick a box. That is accepted because a
+prerequisite only schedules work and risk-check still decides every merge. The PreToolUse hook
+refuses an agent's GitHub write through the tools it can see (the GitHub MCP tools, `gh issue
+edit/comment/close`, `gh api`) whose arguments contain `bosun:prereq`; that is best effort (a
+body read from a file, `--input`, or `curl` with a token escape a string match), so the guarantee
+rests on the rules above: an agent can forge at most a tick on an owner item. All text that
+reaches the owner (titles, steps, `who`, `bosun hold` text, PR titles in an approval message, the
+plan title) is made inert first: control, format and separator characters (Unicode Cc, Cf, Zl,
+Zp, among them U+2028, U+200B, U+202E, U+FEFF) become spaces, and the text is shown as an inline
+code span, so markdown, HTML, links and @mentions render as plain text. The parser also refuses
+`<!--`, `-->` and such characters in plan text.
 
 **F5. Gating, in three places, failing closed.** (1) `bosun plan import`/`amend` of a plan with
 a `## Prerequisites` section first refreshes its checklist issue exactly as `bosun prereqs --post
@@ -97,45 +110,51 @@ a `## Prerequisites` section first refreshes its checklist issue exactly as `bos
 `--dry-run` it does the reads and writes nothing, and `data.held` comes from those reads. It then
 keeps a task `planned` while an open item blocks it or its item (the epic of a blocked item stays
 `planned` too) and lists it under `data.held`. The next import after the item is done promotes
-it. (2) `bosun claim` refuses (exit 5) a task that an open item of its plan's checklist blocks,
-and `bosun wave plan` leaves it out, because tasks also become ready outside promote (`bosun
-release --to ready`, reap) and an item can appear after a task was promoted. The lookup is task
--> epic -> the epic's plan path -> the `bosun:prereqs` issue whose marker names that path (item
-ids repeat across plans, so no other plan's issue counts). When the plan file on the default
-branch has a `## Prerequisites` section but no checklist issue can be read for it (missing,
-deleted, a failed read), both refuse too, with the fix `bosun prereqs <plan> --post`. A plan
-without the section needs no issue. (3) `bosun spawn` refuses an epic that an open item blocks as
-a whole item (`blocks: M5`), with the same lookup and the same fail-closed rule. Everything else
-proceeds. The automatic items (`D<n>` doctor steps, `K1`) block no task: they are setup, listed
-so the owner does them first.
+it. (2) `bosun claim` refuses (exit 5) a task that an open item blocks, and `bosun wave plan`
+leaves it out, because tasks also become ready outside promote (`bosun release --to ready`, reap)
+and an item can appear after a task was promoted. The lookup is task -> epic -> the epic's plan
+path -> that plan file on the default branch (its items) plus the `bosun:prereqs` issue whose
+marker names that path (its ticks); item ids repeat across plans, so no other plan's issue counts.
+They fail closed (exit 5, with the fix `bosun prereqs <plan> --post`): when the plan file cannot be
+read on the default branch (a 404 is not "no section") or does not parse; when a plan with the
+section has no checklist issue and some blocking item needs a tick; and when more than one issue
+carries the plan's marker. A plan without the section needs no issue. (3) `bosun spawn` refuses an
+epic that an open item blocks as a whole item (`blocks: M5`), with the same lookup and rules.
+Everything else proceeds. The automatic items (`D<n>` doctor steps, `K1`) block no task: they are
+setup, listed so the owner does them first.
 
 **F6. No mid-run asks.** An agent that hits an undeclared human step does not stop and wait. It
 runs `bosun hold <task issue> "<what the owner must do>" [--phone]`, a top-level command that
-checks the kill switch, finds the checklist issue of the task's plan (from its epic; created or
-reopened when missing or closed), adds an item `X<n>` (`verify=owner`, blocks: that task),
-releases the agent's lease and moves the task to `ready` (the claim gate keeps it there), and
-records a lesson best-effort (a failed lesson, such as the cap's exit 6, is reported in
-`data.lesson_error` and does not undo the hold). The agent takes other work. The orchestrator
-relays the updated checklist once and folds the item into the plan's `## Prerequisites` in the
-next amendment, as an H item with `replaces: X1`. Every rewrite of the checklist (`--post`, the
-import refresh) carries over the issue-only X items with their ticks; an X item leaves the issue
-only when a plan item names it in `replaces:`. `bosun ask` remains for decisions, which also go to the orchestrator's batch.
+checks the kill switch, refuses text with comment markers or control characters (as plan text),
+and records a hold on the task issue: a record comment `{"bosun":"hold","id":"X<n>",...}` like
+the lease records, so the hold is durable outside the checklist. It adds a box `X<n>` (owner
+verified, blocking that task) to the checklist issue of the task's plan (created or reopened when
+missing or closed), releases the agent's lease, moves the task to `ready` (the claim gate keeps it
+there) and records a lesson best-effort (a failed lesson, such as the cap's exit 6, is reported
+in `data.lesson_error` and does not undo the hold). The gates read the hold records of the task:
+an X item is open until its box is ticked; a missing box is open. The agent takes other work. The
+orchestrator relays the updated checklist once and folds the item into the plan's
+`## Prerequisites` in the next amendment, as an H item with `replaces: X1`, which closes the hold.
+Every rewrite of the checklist carries over the X boxes of open holds. `bosun ask` remains for
+decisions, which also go to the orchestrator's batch.
 
 **F7. Approval batches.** `bosun approve --list` adds `data.message`: one short text listing the
-ready PRs (`#12@abc1234`, task, title), a message id (the first 4 hex characters of a hash of its
-sorted `pr@head` pairs, for example `a1b2`) and the reply to send (`approve 12 15 17`). Only the
-latest message is answerable: the orchestrator keeps the `pr@head` pairs of the last message it
-relayed and forgets the older ones when it relays a new one. A reply is mapped to those pairs; a
-reply that names the id of an older message, or that the owner sent before the latest message was
-relayed, is not signed: the orchestrator says so and relays the latest message again. The id is
-optional in the reply (`approve a1b2: 12 15` is checked against the latest id; plain `approve 12
-15` answers the latest message), so the owner's habit stays short on a phone. PR numbers come
-only from the owner's own chat message, never from text in a PR, an issue or a listing (titles
-are agent-written). Each `(message id, pr)` pair is signed at most once, also after a compaction
-or a re-read of the chat. Signing uses `--sign-key` with the pair's `<pr>@<head>` (a bare number
-stays exit 2); a head that moved after the message is exit 3, and that PR goes into the next
-message. The orchestrator relays a message when a batch from F3 is complete (or at most every few
-hours), not per PR.
+ready PRs it shows (at most 10: `#12@abc1234` and the inert title) and the reply to send
+(`approve 12 15 17`), plus `data.message_id` (the first 8 hex characters of the SHA-256 of the
+shown pairs' sorted `<pr>@<head>` lines) and `data.message_pairs` (exactly those pairs). The id
+names a message; the binding is the stored pairs. Only the latest message is answerable: the
+orchestrator keeps the `message_pairs` of the last message it relayed and forgets the older ones
+when it relays a new one. A reply is mapped to those pairs; a reply that names the id of an older
+message, or that the owner sent before the latest message was relayed, is not signed: the
+orchestrator says so and relays the latest message again. The id is optional in the reply
+(`approve 1a2b3c4d: 12 15` is checked against the latest id; plain `approve 12 15` answers the
+latest message), except when a PR's head changed between the last two messages: then the reply
+must name the id. PR numbers come only from the owner's own chat message, never from text in a
+PR, an issue or a listing (titles are agent-written). Each `(message id, pr)` pair is signed at
+most once, also after a compaction or a re-read of the chat. Signing uses `--sign-key` with the
+pair's `<pr>@<head>` (a bare number stays exit 2); a head that moved after the message is exit 3,
+and that PR goes into the next message. The orchestrator relays a message when a batch from F3 is
+complete (or at most every few hours), not per PR.
 
 **F8. Docs.** A spec section (after the spec split lands), `docs/prerequisites.md`, AGENTS.md
 rules for agents and orchestrators ("front-load human steps; never block mid-run"), the keelstack

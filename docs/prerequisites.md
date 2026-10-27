@@ -87,8 +87,13 @@ the GitHub app. bosun reads the ticks back, marks what it verified itself, and c
 when nothing is open.
 
 Each line ends with a hidden marker that bosun writes, for example
-`<!-- bosun:prereq H1 blocks=M4/T2,M5 verify=api ok -->`. An item is done when its marker says
-`ok` (bosun read it through the API), or when it is `verify=owner` and its box is ticked. The
-gates read only this issue, open or closed. A tick is not authenticated: anyone with write access
-can tick a box or edit a marker. Agents cannot: bosun's hook refuses an agent's GitHub write that
-contains `bosun:prereq`.
+`<!-- bosun:prereq H1 sum=1a2b3c4d state=api -->`. What an item is (its id, what it blocks, how
+it is verified) comes only from the plan on the default branch; the issue supplies only the
+ticks. A tick counts for an `owner` item, or for an API item whose read got a 403, and only when
+the line's `sum` (a digest of the item's title, steps and verify) matches the plan. An API item is
+done only when bosun reads it through the API. A missing line, a duplicate line or a stale `sum`
+is open. A tick is not authenticated: anyone with write access can tick a box. bosun's hook
+refuses an agent's GitHub write that contains `bosun:prereq`, as best effort.
+
+All text bosun shows the owner is made inert: control and format characters become spaces, and
+the text is shown as code, so markdown, links and @mentions do nothing.
