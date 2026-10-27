@@ -12,6 +12,7 @@ pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
+pub mod hold;
 pub mod init;
 pub mod intake;
 pub mod join;
@@ -110,6 +111,8 @@ pub enum Command {
     Status,
     /// Ask the owner a question on an issue (sets needs-human).
     Ask(AskArgs),
+    /// Record a human step found mid-run: the owner's checklist gets a box, the task waits.
+    Hold(HoldArgs),
     /// Record an owner's answer from Slack on a needs-human task and make it ready.
     Answer(AnswerArgs),
     /// Lesson commands.
@@ -173,6 +176,7 @@ pub const COMMANDS: &[&str] = &[
     "ci-log",
     "status",
     "ask",
+    "hold",
     "lesson",
     "hook",
     "doctor",
@@ -218,6 +222,7 @@ impl Command {
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
             Command::Ask(_) => "ask",
+            Command::Hold(_) => "hold",
             Command::Answer(_) => "answer",
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
@@ -471,6 +476,17 @@ pub struct DoctorArgs {
 pub struct AskArgs {
     pub issue: u64,
     pub question: String,
+}
+
+#[derive(Debug, Args)]
+pub struct HoldArgs {
+    /// The task issue number.
+    pub issue: u64,
+    /// What the owner must do (at most 300 characters).
+    pub text: String,
+    /// The owner can do it on a phone.
+    #[arg(long)]
+    pub phone: bool,
 }
 
 #[derive(Debug, Args)]
