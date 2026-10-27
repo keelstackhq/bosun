@@ -350,10 +350,11 @@ fn approver(
     // login through an app, and GitHub marks that in `performed_via_github_app` (spec §8).
     // An edited comment does not count: users with write access can edit others' comments. An
     // owner whose newest decisive review on `head` requests changes, or was dismissed, has
-    // withdrawn the approval; after a dismissal only a comment made later clears it.
+    // withdrawn the approval; after a dismissal only a comment made later than the dismissal
+    // (its time on the issue timeline, not the review's) clears it.
     let by_comment = owners.iter().find(|o| match state(o).as_deref() {
         Some("DISMISSED") => {
-            let newer = newer_than(&comments, decisive_at(&reviews, o, head));
+            let newer = newer_than(&comments, dismissed_at(gh, pr, &reviews, o, head));
             owner_comment(&newer, o, head).is_some()
         }
         s if withdrawn(s) => false,
@@ -371,16 +372,22 @@ fn approver(
     Ok(signed_approver(gh, repo, pr, head, &comments, Role::Owner)?.map(|id| format!("key {id}")))
 }
 
-/// A decisive review in this state withdraws the owner's approvals: a request for changes, or
-/// one that was dismissed (anyone with write access can dismiss, and GitHub then reports
-/// DISMISSED). Only a newer owner approval clears it.
+/// A decisive review in this state withdraws the owner's approvals (anyone with write access can
+/// dismiss a review; GitHub then reports DISMISSED).
 pub fn withdrawn(state: Option<&str>) -> bool {
     matches!(state, Some("CHANGES_REQUESTED" | "DISMISSED"))
 }
 
-/// When `owner`'s newest decisive review on `head` was submitted.
-fn decisive_at(reviews: &[Review], owner: &str, head: &str) -> Option<Timestamp> {
-    parse_rfc3339(decisive(reviews, owner, head)?.submitted_at.as_deref()?)
+/// When `owner`'s decisive review was dismissed (issue timeline); `None` when unknown.
+fn dismissed_at(
+    gh: &dyn Github,
+    pr: u64,
+    reviews: &[Review],
+    owner: &str,
+    head: &str,
+) -> Option<Timestamp> {
+    let id = decisive(reviews, owner, head)?.id;
+    parse_rfc3339(&gh.review_dismissed_at(pr, id).ok()??)
 }
 
 /// The comments created after `since`; with no time nothing is newer (fail closed).
@@ -562,17 +569,4 @@ pub fn owner_comment<'a>(comments: &'a [Comment], owner: &str, head: &str) -> Op
             && c.by_user_token()
             && comment_approves(&c.body, head)
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::withdrawn;
-
-    #[test]
-    fn a_request_for_changes_or_a_dismissal_withdraws() {
-        assert!(withdrawn(Some("CHANGES_REQUESTED")));
-        assert!(withdrawn(Some("DISMISSED")));
-        assert!(!withdrawn(Some("APPROVED")));
-        assert!(!withdrawn(None));
-    }
 }

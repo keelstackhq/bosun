@@ -186,14 +186,13 @@ pub struct PrFile {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Review {
+    #[serde(default)]
+    pub id: u64,
     #[serde(default, deserialize_with = "login")]
     pub user: String,
     pub state: String,
     #[serde(default, deserialize_with = "text_or_empty")]
     pub commit_id: String,
-    /// When the review was submitted (RFC 3339); `None` when GitHub left it out.
-    #[serde(default)]
-    pub submitted_at: Option<String>,
 }
 
 /// One commit status as the combined-status endpoint lists it.

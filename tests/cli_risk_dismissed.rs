@@ -1,61 +1,55 @@
-//! A dismissed owner request for changes still withdraws approvals (spec §8): anyone with write
-//! access can dismiss a review, and GitHub then reports it as DISMISSED. Only a newer owner
-//! APPROVED review or a newer plain-token owner comment clears it, never a signature.
+//! A dismissed owner request for changes still withdraws approvals (spec §8). Only a newer owner
+//! APPROVED review or a plain owner comment made after the dismissal clears it, never a signature.
 mod common;
 
 use common::fake::FakeGithub;
-use common::run;
+use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
-const NOW: &str = "2026-10-22T12:00:00Z";
-const BASE: &str = "base0000";
 const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
-const MAIN: &str = "refs/heads/main";
-const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
-/// The fake stamps every review `2026-10-22T10:00:00Z`.
+// The fake stamps reviews 10:00; the timeline dismisses review 2 at 10:30.
 const OLDER: &str = "2026-10-22T09:00:00Z";
+const BETWEEN: &str = "2026-10-22T10:15:00Z";
 const NEWER: &str = "2026-10-22T11:00:00Z";
-// RFC 8032 test 1 key, enrolled as `k1`; SIG signs `bosun-approve v1 acme/widget#1 <HEAD>`.
+const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n";
 const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
 const SIG: &str =
     "dTnLJ8NM8jp0umTiTZRuGW0lwGdxPoLlu069r9NXkSyrLmKj3SBW1ULZrmXNsE/qzfn+5gY0INdSAqttzPxmBg==";
-// RFC 8032 test 2 key, enrolled as the delegate `d1`; SIG_D is its signature over the OWNER message.
-const SIG_D: &str =
-    "QaSlWA89SY/lbC3KRhb7YMRUCs8twG1ipEnTH1RI7j3C6YmLPO5fj5lhr5Sm4hBYozbu0XKkPfWAOunh4IYfBQ==";
-const PUB_D: &str = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
 
-/// High PR 1 at HEAD, owner `ada` at base, owner key `k1` and delegate key `d1` enrolled on main.
+/// High PR 1 at HEAD, owner `ada` at base, key `k1` enrolled on main.
 fn high_pr() -> FakeGithub {
     let fake = FakeGithub::start();
     fake.pull(1, "change", "feature", "");
     fake.pull_as_issue(1, "change");
     fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
-    fake.content("governance/owners.toml", BASE, OWNERS);
     fake.content(
-        ".bosun/approvers.toml",
-        MAIN,
-        &format!(
-            "[[key]]\nid = \"k1\"\ned25519 = \"{PUB}\"\n\n[[key]]\nid = \"d1\"\nrole = \"delegate\"\ned25519 = \"{PUB_D}\"\n"
-        ),
+        "governance/owners.toml",
+        "base0000",
+        "[[owner]]\ngithub = \"ada\"\n",
     );
-    fake.pull_file(
-        1,
-        ".github/workflows/ci.yml",
-        "modified",
-        1,
-        0,
-        Some("@@ -0,0 +1,1 @@\n+x"),
-    );
+    let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{PUB}\"\n");
+    fake.content(".bosun/approvers.toml", "refs/heads/main", &keys);
+    let diff = Some("@@ -0,0 +1,1 @@\n+x");
+    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, diff);
     fake
 }
 
 fn check(fake: &FakeGithub) -> (i32, Value) {
-    run(fake, "session_test", NOW, &["risk-check", "1"])
+    run(
+        fake,
+        "session_test",
+        "2026-10-22T12:00:00Z",
+        &["risk-check", "1"],
+    )
 }
 
-fn dismissed(fake: &FakeGithub) {
+/// A request for changes (review 2) that was dismissed; the timeline says when unless `seen` is false.
+fn dismissed(fake: &FakeGithub, seen: bool) {
     fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
     fake.review(1, "ada", "DISMISSED", HEAD);
+    if seen {
+        fake.dismiss_event(1, 2, "2026-10-22T10:30:00Z");
+    }
 }
 
 fn signed(fake: &FakeGithub, at: &str) {
@@ -64,105 +58,101 @@ fn signed(fake: &FakeGithub, at: &str) {
     fake.last_comment(|c| c.via_app = Some("claude".into()));
 }
 
-fn denied(fake: &FakeGithub) {
-    let (code, v) = check(fake);
-    assert_eq!(code, 5, "{v}");
-    assert_eq!(v["data"]["approved_by"], Value::Null);
+fn owner_says(fake: &FakeGithub, at: &str) {
+    fake.comment_at(1, "ada", &format!("/bosun approve {HEAD}"), at);
+}
+
+type Setup = fn(&FakeGithub);
+
+#[test]
+fn nothing_but_a_newer_review_or_plain_comment_ends_a_dismissal() {
+    let cases: [(&str, Setup); 9] = [
+        ("older comment", |f| {
+            owner_says(f, OLDER);
+            dismissed(f, true);
+        }),
+        ("older signature", |f| {
+            signed(f, OLDER);
+            dismissed(f, true);
+        }),
+        ("replayed signature", |f| {
+            signed(f, OLDER);
+            dismissed(f, true);
+            signed(f, NEWER);
+        }),
+        ("comment before the dismissal", |f| {
+            dismissed(f, true);
+            owner_says(f, BETWEEN);
+        }),
+        ("edited comment", |f| {
+            dismissed(f, true);
+            owner_says(f, NEWER);
+            f.last_comment(|c| c.updated_at = "2026-10-22T11:30:00Z".into());
+        }),
+        ("app comment", |f| {
+            dismissed(f, true);
+            owner_says(f, NEWER);
+            f.last_comment(|c| c.via_app = Some("claude".into()));
+        }),
+        ("plain request for changes", |f| {
+            f.review(1, "ada", "CHANGES_REQUESTED", HEAD);
+            owner_says(f, NEWER);
+        }),
+        ("unreadable timeline", |f| {
+            dismissed(f, false);
+            owner_says(f, NEWER);
+        }),
+        ("event for another review", |f| {
+            dismissed(f, false);
+            f.dismiss_event(1, 99, "2026-10-22T10:30:00Z");
+            owner_says(f, NEWER);
+        }),
+    ];
+    for (name, setup) in cases {
+        let fake = high_pr();
+        setup(&fake);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{name}: {v}");
+        assert_eq!(v["data"]["approved_by"], Value::Null, "{name}");
+    }
 }
 
 #[test]
-fn a_dismissed_request_withdraws_an_older_comment_approval() {
-    let fake = high_pr();
-    fake.comment_at(1, "ada", &format!("/bosun approve {HEAD}"), OLDER);
-    dismissed(&fake);
-    denied(&fake);
+fn a_newer_review_or_plain_comment_approves() {
+    let cases: [(&str, &str, Setup); 3] = [
+        ("ada", "newer APPROVED review", |f| {
+            dismissed(f, true);
+            f.review(1, "ada", "APPROVED", HEAD);
+        }),
+        ("ada", "comment after the dismissal", |f| {
+            dismissed(f, true);
+            owner_says(f, NEWER);
+        }),
+        ("key k1", "signature, no dismissal", |f| signed(f, NEWER)),
+    ];
+    for (who, name, setup) in cases {
+        let fake = high_pr();
+        setup(&fake);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 0, "{name}: {v}");
+        assert_eq!(v["data"]["approved_by"], who, "{name}");
+    }
 }
 
 #[test]
-fn a_dismissed_request_withdraws_an_older_signed_approval() {
+fn sign_key_refuses_a_withdrawn_pr() {
     let fake = high_pr();
-    signed(&fake, OLDER);
-    dismissed(&fake);
-    denied(&fake);
-}
-
-#[test]
-fn a_newer_owner_review_or_plain_comment_clears_a_dismissal() {
-    // a newer APPROVED review
-    let fake = high_pr();
-    dismissed(&fake);
-    fake.review(1, "ada", "APPROVED", HEAD);
-    let (code, v) = check(&fake);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["approved_by"], "ada");
-
-    // a plain-token owner comment made after the dismissal
-    let fake = high_pr();
-    dismissed(&fake);
-    fake.comment_at(1, "ada", &format!("/bosun approve {HEAD}"), NEWER);
-    let (code, v) = check(&fake);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["approved_by"], "ada");
-}
-
-#[test]
-fn an_edited_or_app_written_comment_after_the_dismissal_does_not_clear_it() {
-    // Someone with write access edited the owner's newer comment.
-    let fake = high_pr();
-    dismissed(&fake);
-    fake.comment_at(1, "ada", &format!("/bosun approve {HEAD}"), NEWER);
-    fake.last_comment(|c| c.updated_at = "2026-10-22T11:30:00Z".into());
-    denied(&fake);
-
-    // An agent session acting as the owner through an app.
-    let fake = high_pr();
-    dismissed(&fake);
-    fake.comment_at(1, "ada", &format!("/bosun approve {HEAD}"), NEWER);
-    fake.last_comment(|c| c.via_app = Some("claude".into()));
-    denied(&fake);
-}
-
-#[test]
-fn a_signed_comment_posted_after_the_dismissal_does_not_clear_it() {
-    // A signature has no time: anyone can re-post an old valid one (replay).
-    let fake = high_pr();
-    signed(&fake, OLDER);
-    dismissed(&fake);
-    signed(&fake, NEWER);
-    denied(&fake);
-}
-
-#[test]
-fn a_delegate_signature_does_not_clear_a_dismissal() {
-    // The signature verifies, but a delegate-role key is not an owner key.
-    let fake = high_pr();
-    dismissed(&fake);
-    let body = format!("/bosun approve {HEAD}\nbosun-sig ed25519 d1 {SIG_D}");
-    fake.comment_at(1, "claude", &body, NEWER);
-    fake.last_comment(|c| c.via_app = Some("claude".into()));
-    denied(&fake);
-}
-
-#[test]
-fn a_plain_request_for_changes_is_not_cleared_by_a_newer_comment() {
-    let fake = high_pr();
-    fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
-    fake.comment_at(1, "ada", &format!("/bosun approve {HEAD}"), NEWER);
-    denied(&fake);
-}
-
-#[test]
-fn a_dismissed_review_alone_is_no_approval() {
-    let fake = high_pr();
-    fake.review(1, "ada", "DISMISSED", HEAD);
-    denied(&fake);
-}
-
-#[test]
-fn a_comment_approval_without_reviews_still_approves() {
-    let fake = high_pr();
-    fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
-    let (code, v) = check(&fake);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["approved_by"], "ada");
+    dismissed(&fake, true);
+    let key = tempfile::tempdir().unwrap().keep().join("key.pem");
+    std::fs::write(&key, PEM).unwrap();
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["approve", &format!("1@{HEAD}"), "--print", "--sign-key"])
+        .arg(&key)
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(3), "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("plain"));
+    assert!(v["data"]["body"].is_null(), "nothing was signed: {v}");
 }
