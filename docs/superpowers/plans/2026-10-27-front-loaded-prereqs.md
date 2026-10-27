@@ -35,13 +35,16 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
 - [ ] **Q3a: gating (F5)** — depends Q2
   touch: src/cli/prereqs_gate.rs (new: open items of `bosun:prereqs` issues per task),
   src/cli/plan.rs (`promote`, refresh before promote, `data.held`), src/cli/claim.rs (one call
-  before the claim), src/cli/wave.rs (leave held tasks out), tests/cli_prereqs_gate.rs (new),
-  fragments
+  before the claim), src/cli/wave.rs (leave held tasks out), src/cli/spawn.rs (refuse a blocked
+  epic), tests/cli_prereqs_gate.rs (new), fragments
+- [ ] **Q3d: hook keeps agents out of the checklist (F4)** — depends Q3a
+  touch: src/hooks/prereqs_lock.rs (new), src/hooks/pre_tool_use.rs (one call), tests/hook_prereqs.rs
+  (new), fragments
 - [ ] **Q3b: `bosun hold` (F6)** — depends Q3a
   touch: src/cli/hold.rs (new), src/cli/mod.rs (command and Args), src/lib.rs (dispatch),
   tests/cli_hold.rs (new), fragments
 - [ ] **Q3c: approval batches (F7)** — depends Q2
-  touch: src/cli/approve.rs (`data.message`), src/cli/intake.rs (next step text),
+  touch: src/cli/approve.rs (`data.message`, `data.message_id`), src/cli/intake.rs (next step text),
   tests/cli_approve_message.rs (new), fragments
 - [ ] **Q4: docs (F6, F8)** — depends Q3b and P5, P7 of
   `docs/superpowers/plans/2026-10-27-parallel-conflicts.md` (branch `docs/parallel-conflicts-design`)
@@ -57,5 +60,6 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
   `src/cli/mod.rs` and every command's Args (its P10 goes after Q2 and Q3b), `src/cli/plan.rs`,
   `src/cli/wave.rs` (P10 Args only). No function is edited by both in parallel; whichever lands
   second merges main.
-- Every Q1-Q3 PR touches `src/**`, so each needs the owner's approval at merge (critical floor).
-  They are meant to be approved as one batch.
+- A Q1-Q3 PR needs the owner at merge when it touches an R-gate path (`src/core/mod.rs`,
+  `src/cli/mod.rs`, `src/lib.rs`, `src/github/**` ...; the floor then turns the
+  delegate rule into an owner one); the Q1 PRs are reviewed and approved as one stacked batch.
