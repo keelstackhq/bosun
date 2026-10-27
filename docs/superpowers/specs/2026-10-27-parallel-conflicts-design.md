@@ -157,19 +157,26 @@ In `docs/plan-format.md` (a "Cutting tasks" section), AGENTS.md and the channel'
      `identical`), and each hop's second parent descends from the previous hop's. Otherwise a merge
      with an old main commit would pass rules 2-3 and silently revert main.
   2. Main did not touch the PR's files: the PR's paths `P` (every `filename` and
-     `previous_filename` of `compare(B...H)`) are disjoint from the paths of `compare(B...M)`.
+     `previous_filename` of `compare(B...H)`) are disjoint from main's paths: every `filename` and
+     `previous_filename` of `compare(B...M)`, whatever the status (a main rename or deletion of
+     a path in `P` blocks carry-over, so a merge cannot resurrect a file main moved away).
   3. `H2`'s tree is exactly the expected merge: take the recursive tree of `M`; for each path in
      `P`, set it to `H`'s entry (mode, type, blob sha) or remove it when `H` has none. Every entry
      of `H2`'s recursive tree (mode, type, sha) equals that, and nothing else is in it. Gitlinks
      (submodules) count as entries, so a changed one fails. When the expected tree cannot be
      built (a path of `P` or one of its parent directories is a file, symlink or gitlink in `M`,
      or the reverse), there is no carry-over.
-  4. No compare or tree read is truncated (R-unseen), no trust file is in `P` (TRUST_FILES), and
-     the newest decisive owner review on `H2` does not request changes.
+  4. No compare or tree read is truncated (R-unseen), and no trust file is in `P` (TRUST_FILES).
+  5. Nothing withdrew it: no owner's newest decisive review on any commit of the first-parent
+     path from `H` to `H2` (both included) requests changes; a carried verdict is its session's
+     newest verdict on `H`, and no later verdict on any commit of that path supersedes it.
+  The carried verdict or signature only stands in for the one on `H2`: risk-check recomputes
+  everything else on `H2` as usual (risk rules, owners and approvers read at the default branch,
+  the requirement and the critical floor), so a rule tightened on main applies to it too.
   Why it is safe: the merge author chooses `H2`'s tree, so bosun never trusts it; it recomputes
   the tree from `M` and `H`, which were already judged (main by its own review and CI, `H` by
   this approval). Rule 2 stops a "take ours" merge from silently reverting a main change to a PR
-  file (with overlapping paths the merged content is new, so no carry-over); rule 3 catches any
+  file or resurrecting one main renamed or deleted; rule 3 catches any
   extra byte, mode bit, symlink or submodule change. CI (`ci-ok`) and `main-open` still run on
   `H2`. Residual risk: a semantic interaction between main's change and the PR's in *different*
   files, which auto-merge of a PR that is behind main already accepts today. Cost: two compares
