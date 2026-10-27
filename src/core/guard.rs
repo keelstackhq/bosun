@@ -1328,20 +1328,27 @@ fn pagers_ok(name: &str, words: &[String], args: &[&str]) -> bool {
     let mut opts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     let mut cmds: Vec<(String, bool)> = Vec::new();
     let ugrep = name.starts_with('u');
+    // ugrep opens a viewer only from its query TUI: `-Q` (also in a cluster), `--query`, `--view`.
+    #[rustfmt::skip]
+    let views = ugrep && args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('Q') || long_prefix(a, "--query", 5) || long_prefix(a, "--view", 4));
     for (k, v) in words
         .iter()
         .filter_map(|w| Some((assigned(w)?, w.split_once('=')?.1)))
     {
         match k {
             "ACK_PAGER" | "ACK_PAGER_COLOR" | "PAGER" => cmds.push((v.to_string(), false)),
-            "EDITOR" | "VISUAL" if ugrep => cmds.push((v.to_string(), true)),
+            "EDITOR" | "VISUAL" if views => cmds.push((v.to_string(), true)),
             "ACK_OPTIONS" => opts.extend(shell_words(v)),
             "LESS" if shell_words(v).iter().all(|a| pager_flag(a)) => {}
             "LESS" | "LESSOPEN" | "LESSCLOSE" | "LESSKEY" | "LESSKEYIN" | "LESSKEY_SYSTEM"
             | "LESSSECURE" | "BAT_PAGER" => return false,
             // Vim and nvim init commands and files (`init.lua` under `XDG_CONFIG_HOME`).
             "VIMINIT" | "EXINIT" | "MYVIMRC" | "GVIMINIT" | "VIM" | "VIMRUNTIME"
-            | "XDG_CONFIG_HOME" | "NVIM_APPNAME" => return false,
+            | "XDG_CONFIG_HOME" | "NVIM_APPNAME"
+                if views =>
+            {
+                return false;
+            }
             _ => {}
         }
     }
@@ -1575,9 +1582,18 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
         }
         // A key root as the base is outside any repo, so the fallback may apply there whatever
-        // config set it (`GIT_CONFIG_PARAMETERS`, a gitconfig file); `../x` is not one here.
-        #[rustfmt::skip]
-        let key_base = dir.as_deref().map(lexical).is_some_and(|b| key_root(&b) == 2 || key_root(&b) == 1 && !b.split('/').any(|s| s == ".."));
+        // config set it (`GIT_CONFIG_PARAMETERS`, a gitconfig file); `../x` is not one here,
+        // but `../../root` and `../../home/x` are.
+        let key_base = dir.as_deref().map(lexical).is_some_and(|b| {
+            let segs: Vec<&str> = b.split('/').collect();
+            let top = segs
+                .iter()
+                .rposition(|s| *s == "..")
+                .map(|i| segs.get(i + 1));
+            #[rustfmt::skip]
+            let home = top.is_none_or(|s| s.is_some_and(|s| matches!(*s, "root" | "home")));
+            key_root(&b) == 2 || key_root(&b) == 1 && home
+        });
         let no_index = fallback || key_base || args.iter().any(|a| long_prefix(a, "--no-index", 6));
         if git && verb == "grep" && no_index {
             #[rustfmt::skip]
@@ -3054,13 +3070,17 @@ mod tests {
         ("git --work-tree=~ grep x", true), ("git -C .. grep x", true), ("git -C~ grep x", true),
         ("git grep x", false), ("git grep x src", false), ("git -C src grep x", false),
         ("git -C ../other-repo grep x", false), ("git -C ~ grep x src", false),
-        ("git -C ~/projects/x grep x", false),
-        // Vim and nvim init variables run commands in a ugrep view.
+        ("git -C ~/projects/x grep x", false), ("git -C ../bosun grep x", false),
+        ("git -C ../../root grep x", true), ("git -C ../../home/user grep x", true),
+        ("git -C ../../home grep x", true),
+        // Vim and nvim init variables run commands in a ugrep view (`-Q`, `--query`, `--view`).
         ("VIMINIT=':!sh' ugrep --view=vim x f", true), ("EXINIT='!sh' ug --view=vi x f", true),
-        ("export MYVIMRC=/tmp/e; ugrep --view=vim x f", true), ("GVIMINIT=x ug x f", true),
-        ("XDG_CONFIG_HOME=/tmp/c ugrep --view=nvim x f", true), ("VIMRUNTIME=/tmp ug x f", true),
+        ("export MYVIMRC=/tmp/e; ugrep --view=vim x f", true), ("GVIMINIT=x ug -Q x f", true),
+        ("XDG_CONFIG_HOME=/tmp/c ugrep --view=nvim x f", true), ("VIMRUNTIME=/tmp ug -rQ x", true),
         ("EDITOR=sh ugrep --view x f", true), ("VISUAL='vim -c x' ug --view x f", true),
-        ("EDITOR=vim ugrep --view x f", false), ("VIMINIT=x vim f", false),
+        ("EDITOR=sh ugrep --query x", true), ("EDITOR=vim ugrep --view x f", false),
+        ("VIMINIT=x vim f", false), ("EDITOR=true ugrep x src", false),
+        ("XDG_CONFIG_HOME=/tmp/x ugrep x src", false), ("VIMINIT=x ack x", false),
         // ugrep's pager and view take a value only with `=`; ack's pager takes the next word.
         ("ugrep --pager TODO src", false), ("ugrep --view TODO src", false), ("ug --view x f", false),
         ("ugrep --pag TODO src", false), ("ugrep --pager=sh x f", true), ("ug --view=zsh x f", true),
