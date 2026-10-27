@@ -22,6 +22,8 @@ Rule evaluation:
 
 Approval classes (mechanism): a rule has `approval = "owner"` (the default), `"two-verdicts"` or `"delegate"`; any other value is a parse error naming the rule (risk-check exits 1 and posts no status). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else a delegate when any match is `delegate` (see delegated decisions below), else two verdicts. `risk-check` sets `data.requirement` (`owner`, `delegate` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). The built-in rules use the two-verdicts class for R-ci-review only and never delegate; this repo's `.bosun/risk.toml` also makes R-ci, R-gate and R-deps `delegate` (risk.yml judges every PR with the release pinned in `.bosun/version`, so the rules on main must parse with the pin: `delegate` needs 0.2.1 or later; `tests/governance.rs` checks it). A test keeps the two files equal apart from that opt-in.
 
+Touch warning (design C3): `risk-check` takes the first linked issue with task metadata, its newest live lease (any session) and applies the same `touch::outside` rules as `bosun pr` to the PR's files (added and copied files, lockfile companions and the fragments pass; a rename is checked by its old name). `data.out_of_touch` lists the paths outside, and a high-risk PR's Risk note gains the line `- **warning:** <n> files outside the task's lease: <paths>` (ten names at most, then `and N more`), one stderr line is printed, and the status description is unchanged. It is a warning only: it never changes the level or the state. With no linked task, no live lease or a cut file list (fewer files listed than the PR changes) it is `null` and nothing is added. The linked task is the first linked issue with task metadata; leases with an empty touch are ignored. It costs one paginated comments read of that task issue, and a failed read only logs to stderr and gives `null`.
+
 Two verdicts:
 - The class passes when, on the PR's current head, verdict records of at least two distinct sessions have `approved = true` and `confidence >= 0.9`. An owner approval (below) also passes it. The status is `high risk, two verdicts needed (<n>/2): <ids>` (failure, exit 5) while waiting, and `high risk (<ids>), approved by two verdicts: <s1>, <s2>` when met. The owner status text is `high risk, owner approval needed: <ids>`.
 - A record counts only when `bosun verdict apply` wrote it: the comment author is `github-actions[bot]`, the first line starts with `Review verdict: `, the record is the last non-empty line, and no other line is a record. A session's newest such record for the head decides, so a later disapproval withdraws its approval. A record without `confidence` never counts.
@@ -130,7 +132,9 @@ High-risk PRs:
   several owners every dismissed owner review needs its own v2 (any owner's request for changes
   still blocks all signatures). Outside a withdrawal a valid owner v2 is a normal signed
   approval, `approved by key <id>`. The same trust-file and R-unseen exclusions apply. A
-  delegate has no v2.
+  delegate has no v2. Keys stand for the owners: any enrolled owner key's v2 clears any
+  owner's dismissed review, whichever owner the key belongs to. A v2 signed for another PR
+  number or another repo does not verify and clears nothing.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

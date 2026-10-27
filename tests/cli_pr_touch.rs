@@ -208,3 +208,16 @@ fn an_unreadable_diff_is_skipped() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["touch_check"], "skipped (diff unavailable)");
 }
+
+#[test]
+fn an_own_lease_with_an_empty_touch_skips_the_check() {
+    // A spawn's epic lease has `touch: []`; the edit hook treats it as unrestricted, so does pr.
+    let empty = LEASE.replace(r#"["src/cli/pr.rs","crates/a/Cargo.toml"]"#, "[]");
+    let fake = FakeGithub::start();
+    fake.issue(7, "the task", &[BUILDING], "Do it.");
+    fake.comment(7, &empty);
+    fake.compare_file("main", BRANCH, "src/cli/claim.rs", "@@ -1 +1 @@");
+    let (code, v) = run_pr(&fake, &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["touch_check"], "skipped (no lease)");
+}
