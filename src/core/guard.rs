@@ -1018,6 +1018,61 @@ const WRAPPERS: &[&str] = &[
     "if", "while", "until",
 ];
 
+/// Commands that run the command after their options: name, options with a separate value,
+/// positionals before the command (`timeout 5`), options that change directory.
+#[rustfmt::skip]
+const RUNNERS: &[(&str, &[&str], usize, &[&str])] = &[
+    ("env", &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"], 0, &["-C", "--chdir"]),
+    ("sudo", &["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"], 0, &["-D", "--chdir"]),
+    ("nice", &["-n", "--adjustment"], 0, &[]), ("command", &[], 0, &[]), ("exec", &["-a"], 0, &[]),
+    ("nohup", &[], 0, &[]), ("setsid", &[], 0, &[]), ("time", &["-f", "--format", "-o", "--output"], 0, &[]),
+    ("timeout", &["-k", "--kill-after", "-s", "--signal"], 1, &[]),
+    ("stdbuf", &["-i", "--input", "-o", "--output", "-e", "--error"], 0, &[]),
+    ("ionice", &["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"], 0, &[]),
+    ("xargs", &["-I", "-n", "-L", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-lines", "--max-procs", "--max-chars", "--delimiter", "--arg-file", "--eof"], 0, &[]),
+];
+
+/// The command after leading runners (`nice -n 5 sudo -u x grep ..`), and the directories
+/// their options move to (`env -C dir`, `--chdir=dir`, `sudo -D dir`).
+fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>) {
+    let mut dirs = Vec::new();
+    while let Some(&(_, vals, mut pos, cd)) = cmd.first().and_then(|w| {
+        let w = w.rsplit('/').next().unwrap_or(w);
+        RUNNERS.iter().find(|r| r.0 == w)
+    }) {
+        let mut i = 1;
+        while let Some(&a) = cmd.get(i) {
+            i += 1;
+            if !a.starts_with('-') && assigned(a).is_none() {
+                match pos {
+                    0 => {
+                        i -= 1;
+                        break;
+                    }
+                    _ => pos -= 1,
+                }
+                continue;
+            }
+            let (opt, val) = match a.split_once('=') {
+                Some((o, v)) if a.starts_with("--") => (o, Some(v)),
+                _ if a.len() > 2 && a.get(..2).is_some_and(|o| vals.contains(&o)) => {
+                    (&a[..2], Some(&a[2..]))
+                }
+                _ => (a, None),
+            };
+            let val = match val {
+                None if vals.contains(&opt) => cmd.get(i).inspect(|_| i += 1).copied(),
+                v => v,
+            };
+            if let Some(v) = val.filter(|_| cd.contains(&opt)) {
+                dirs.push(v);
+            }
+        }
+        cmd = &cmd[i.min(cmd.len())..];
+    }
+    (cmd, dirs)
+}
+
 /// Mutations and endpoints that merge, tag or move refs through the GitHub API.
 const GRAPHQL_WRITES: &[&str] = &[
     "mergePullRequest",
@@ -1510,12 +1565,16 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if dump {
             return Some(decrypt_reason("the environment"));
         }
-        // `env [-i] [-u N] [K=V].. git ..` runs git: judge its args as git's.
-        #[rustfmt::skip]
-        let skip = args.iter().scan(false, |val, a| Some(std::mem::replace(val, matches!(*a, "-u" | "-C" | "-S")) || a.starts_with('-') || assigned(a).is_some())).take_while(|s| *s).count();
-        let (name, args) = match args.get(skip) {
-            Some(g) if name == "env" && base(g) == "git" => (base(g), &args[skip + 1..]),
-            _ => (name, args),
+        // Runners (`env`, `nice -n 5`, `timeout 5`, `sudo -u x`, `xargs`) run the command after
+        // them: judge it as the command, in the directory `env -C` or `sudo -D` moves to.
+        let (cmd, cds) = unwrap_runners(&rest);
+        let (name, args, da) = match cmd.first() {
+            Some(c) if cmd.len() < rest.len() => {
+                let args = &cmd[1..];
+                let da = &args[..args.iter().position(|a| redirect(a)).unwrap_or(args.len())];
+                (base(c), args, da)
+            }
+            _ => (name, args, da),
         };
         // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
         let (mut it, git) = (args.iter(), name == "git");
@@ -1575,7 +1634,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             true => r.to_string(),
             false => format!("{b}/{r}"),
         };
-        let (mut dir, mut gi) = (None::<String>, args.iter());
+        #[rustfmt::skip]
+        let (mut dir, mut gi) = (cds.iter().fold(None::<String>, |d, v| Some(d.map_or(v.to_string(), |b| at(&b, v)))), args.iter());
         while let Some(a) = gi.next() {
             #[rustfmt::skip]
             let v = match *a {
@@ -1609,15 +1669,17 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if git && verb == "grep" && no_index {
             #[rustfmt::skip]
             const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
-            // `GIT_ICASE_PATHSPECS` and `GIT_GLOB_PATHSPECS` widen every path (`.CONFIG`).
+            // `GIT_ICASE_PATHSPECS`, `GIT_GLOB_PATHSPECS` and their global flags widen every
+            // path (`.CONFIG`).
             #[rustfmt::skip]
-            let wide = words.iter().any(|w| matches!(assigned(w).unwrap_or(w), "GIT_ICASE_PATHSPECS" | "GIT_GLOB_PATHSPECS"));
+            let wide = words.iter().any(|w| matches!(assigned(w).unwrap_or(w), "GIT_ICASE_PATHSPECS" | "GIT_GLOB_PATHSPECS" | "--icase-pathspecs" | "--glob-pathspecs"));
             if wide {
                 return Some(decrypt_reason("a pathspec env var on a git grep search"));
             }
-            // The first bare word is the pattern, unless `-e` or `-f` gave it (`-eX`, `-fpat`).
+            // The first bare word is the pattern, unless `-e` or `-f` gave it, also in a short
+            // cluster (`-eX`, `-ieX`, `-ifpat`).
             #[rustfmt::skip]
-            let mut pat = args.iter().any(|a| !a.starts_with("--") && (a.starts_with("-e") || a.starts_with("-f")));
+            let mut pat = args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(['e', 'f']));
             let (mut roots, mut it, mut paths) = (Vec::new(), it.clone(), false);
             while let Some(a) = it.next() {
                 match *a {
@@ -1751,7 +1813,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // value of a long option.
         let paged = PAGED.contains(&name.as_str());
         if paged {
-            let (a0, mut seen) = (segment.len() - rest.len() + 1, false);
+            let (a0, mut seen) = (segment.len() - args.len(), false);
             let e = da
                 .iter()
                 .any(|a| matches!(*a, "-e" | "--regexp") || a.starts_with("--regexp="));
@@ -3109,6 +3171,23 @@ mod tests {
         ("export GIT_GLOB_PATHSPECS=1; git -C ~ grep x src", true),
         ("env GIT_ICASE_PATHSPECS=1 git grep --no-index x src", true),
         ("env git grep --no-index x ~", true), ("env -i X=1 git -C ~ grep x", true),
+        // `env -C dir` is a leading `git -C dir`; wrappers run the search tool after them.
+        ("env -C ~ git grep x", true), ("env --chdir=~ git grep x", true),
+        ("env --chdir ~ git grep x", true), ("env -C ~ git grep --no-index x", true),
+        ("env -C~ git grep x", true), ("env -C src git grep x", false),
+        ("command git grep --no-index x ~", true), ("nice git grep --no-index x ~", true),
+        ("timeout 5 git grep --no-index x ~", true), ("nice -n 5 git -C ~ grep x", true),
+        ("sudo git -C ~ grep x", true), ("nohup git -C ~ grep x", true),
+        ("command grep -r x ~/.config", true), ("nice rg -uu x ~", true),
+        ("timeout 5 grep -r x ~", true), ("xargs grep -r x ~", true),
+        ("timeout -k 1 -s KILL 5 grep -r x ~", true), ("sudo -u bob nice -n5 grep -r x ~", true),
+        ("stdbuf -oL ionice -c 3 setsid rg -uu x ~", true), ("xargs -I x -n 1 grep -r y ~", true),
+        ("nice cargo test", false), ("timeout 60 cargo nextest run", false),
+        ("command -v git", false), ("time rg pattern src", false), ("sudo apt-get install x", false),
+        ("timeout 5 grep -r x src", false), ("xargs -n 1 grep -l x", false),
+        ("git -C ~ grep -ieSECRET .config src", true), ("git -C ~ grep -ifpat .config src", true),
+        ("git --icase-pathspecs -C ~ grep x -- .CONFIG", true),
+        ("git --glob-pathspecs grep --no-index x src", true),
         ("GIT_ICASE_PATHSPECS=1 git grep x src", false), ("git grep -n foo ':!tests'", false),
         ("git -C src grep x ':/'", false), ("git -C ../bosun grep foo", false),
         ("git -C $PWD/../../x grep x", true), ("git -C /proc/self/cwd/../../x grep x", true),
