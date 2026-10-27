@@ -1141,10 +1141,9 @@ const PKG_SUBS: &[&str] = &["install", "add", "remove", "uninstall", "upgrade", 
 #[rustfmt::skip]
 const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-field", "field",
     "search", "q", "jq"];
-/// The pagers and viewers ack and ugrep may run (by basename); any other is refused.
-#[rustfmt::skip]
-const PAGERS_OK: &[&str] = &["less", "more", "most", "cat", "bat", "vi", "vim", "nvim", "view",
-    "nano", "emacs", "code"];
+/// The pagers ack and ugrep may run, and the editors ugrep `--view` may run with no arguments.
+const PAGERS_OK: &[&str] = &["less", "more", "most", "cat"];
+const VIEWERS_OK: &[&str] = &["vi", "vim", "nvim", "view", "nano", "emacs", "code"];
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
     "node", "deno", "bun", "php", "source", "xargs", "eval",
@@ -1317,18 +1316,22 @@ fn long_values<'a>(args: &[&'a str], full: &str, min: usize) -> Vec<&'a str> {
     v.collect()
 }
 
-/// The commands ack and ugrep run on their output or files: `--pager` and ugrep's `--view`
-/// (also abbreviated), `ACK_PAGER`, `ACK_PAGER_COLOR` and the options in `ACK_OPTIONS`.
-fn pagers(name: &str, segment: &[String], args: &[&str]) -> Vec<String> {
+/// Whether the commands ack and ugrep run on their output or files are all known pagers:
+/// `--pager` and ugrep's `--view` (also abbreviated), `ACK_PAGER`, `ACK_PAGER_COLOR` and the
+/// options in `ACK_OPTIONS` (set anywhere in the command); `LESS`, `LESSOPEN`, `LESSCLOSE`,
+/// `BAT_PAGER` and `PAGER` may not be set. A pager is a known name, bare or in `/usr/bin` or
+/// `/bin`, with plain flag clusters (`-R`, `-`); an editor may only view, with no arguments.
+fn pagers_ok(name: &str, words: &[String], args: &[&str]) -> bool {
     let mut opts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-    let mut out = Vec::new();
-    for (k, v) in segment
+    let mut cmds: Vec<(String, bool)> = Vec::new();
+    for (k, v) in words
         .iter()
         .filter_map(|w| Some((assigned(w)?, w.split_once('=')?.1)))
     {
         match k {
-            "ACK_PAGER" | "ACK_PAGER_COLOR" => out.push(v.to_string()),
+            "ACK_PAGER" | "ACK_PAGER_COLOR" => cmds.push((v.to_string(), false)),
             "ACK_OPTIONS" => opts.extend(shell_words(v)),
+            "LESS" | "LESSOPEN" | "LESSCLOSE" | "BAT_PAGER" | "PAGER" => return false,
             _ => {}
         }
     }
@@ -1337,9 +1340,20 @@ fn pagers(name: &str, segment: &[String], args: &[&str]) -> Vec<String> {
         true => long_values(&opts, "--view", 4),
         false => Vec::new(),
     };
-    let pager = long_values(&opts, "--pager", 5);
-    out.extend(pager.into_iter().chain(view).map(String::from));
-    out
+    #[rustfmt::skip]
+    cmds.extend(long_values(&opts, "--pager", 5).into_iter().map(|c| (c.to_string(), false))
+        .chain(view.into_iter().map(|c| (c.to_string(), true))));
+    cmds.iter().all(|(c, view)| {
+        let w = shell_words(c);
+        let Some((cmd, rest)) = w.split_first() else { return false };
+        #[rustfmt::skip]
+        let cmd = ["/usr/bin/", "/bin/"].iter().find_map(|d| cmd.strip_prefix(d)).unwrap_or(cmd);
+        #[rustfmt::skip]
+        let flags = |a: &String| a == "-" || a.len() > 1 && a.starts_with('-') && a[1..].chars().all(|c| c.is_ascii_alphabetic());
+        let pager = PAGERS_OK.contains(&cmd) && rest.iter().all(flags);
+        let editor = *view && VIEWERS_OK.contains(&cmd) && rest.is_empty();
+        !c.contains(['|', ';', '&', '<', '>', '(', ')', '`', '$', '\n']) && (pager || editor)
+    })
 }
 
 /// `sops` may print info or encrypt; `sops FILE` decrypts, so any other argument is refused.
@@ -1480,6 +1494,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                                 | "--work-tree"
                                 | "--namespace"
                                 | "--exec-path"
+                                | "--config-env"
                         ) =>
                 {
                     it.next();
@@ -1508,21 +1523,16 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // A pager or view runs on a file, and a shell there runs the search output as a
         // script: only known pagers pass, without expansions (`$SHELL`, `` `which sh` ``).
         let paged_at = rest.iter().position(|w| PAGED.contains(&base(w).as_str()));
-        for c in paged_at.map_or(Vec::new(), |p| {
-            pagers(&base(rest[p]), &words, &rest[p + 1..])
-        }) {
-            let cmd = shell_words(&c).first().map(|w| base(w)).unwrap_or_default();
-            if c.contains(['$', '`']) || !PAGERS_OK.contains(&cmd.as_str()) {
-                return Some(decrypt_reason("an unknown or expanded pager"));
-            }
-            if let Some(why) = decrypt_rule(&format!("{c} FILE"), depth + 1) {
-                return Some(why);
-            }
+        if paged_at.is_some_and(|p| !pagers_ok(&base(rest[p]), &words, &rest[p + 1..])) {
+            return Some(decrypt_reason("an unknown or expanded pager"));
         }
         // `git grep --no-index` searches its paths (or the cwd) like `grep -r`, hidden ones too.
-        // `-c grep.fallbackToNoIndex=..` makes it fall back to that outside a repository.
+        // `grep.fallbackToNoIndex` (`-c`, `--config-env`, `GIT_CONFIG_KEY_<n>`) falls back to it.
         #[rustfmt::skip]
-        let fallback = args.windows(2).filter(|w| w[0] == "-c").map(|w| w[1]).chain(args.iter().filter_map(|a| a.strip_prefix("-c")))
+        let keys = words.iter().filter(|w| assigned(w).is_some_and(|k| k.starts_with("GIT_CONFIG_KEY_"))).filter_map(|w| w.split_once('=').map(|p| p.1));
+        #[rustfmt::skip]
+        let fallback = args.windows(2).filter(|w| matches!(w[0], "-c" | "--config-env")).map(|w| w[1])
+            .chain(args.iter().filter_map(|a| a.strip_prefix("-c").or(a.strip_prefix("--config-env=")))).chain(keys)
             .any(|v| v.to_lowercase().starts_with("grep.fallbacktonoindex"));
         let no_index = fallback || args.iter().any(|a| long_prefix(a, "--no-index", 6));
         if git && verb == "grep" && no_index {
@@ -1550,7 +1560,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 #[rustfmt::skip]
                 let v = match *a {
                     "-C" | "--work-tree" => gi.next().copied(),
-                    "-c" | "--git-dir" | "--namespace" | "--exec-path" => { gi.next(); None }
+                    "-c" | "--git-dir" | "--namespace" | "--exec-path" | "--config-env" => { gi.next(); None }
                     _ if a.starts_with('-') => a.strip_prefix("--work-tree=").or_else(|| a.strip_prefix("-C").filter(|v| !v.is_empty())),
                     _ => break,
                 };
@@ -2976,13 +2986,29 @@ mod tests {
         ("ack --pager=mksh x", true), ("ack --pager=/bin/ash x", true), ("ack --pager=csh x", true),
         ("ack --pager=tcsh x", true), ("ugrep --pager=python3.12 x f", true),
         ("ack --pager=lua x", true), ("ugrep --view=tclsh x f", true), ("ack --pager=pwsh x", true),
-        ("ack --pager='less -R' x", false), ("ugrep --view='nvim -R' x f", false),
-        ("ack --pager=/usr/bin/bat x", false), ("grep -nd skip x ~", false),
+        ("ack --pager='less -R' x", false), ("ugrep --view='nvim -R' x f", true),
+        ("ack --pager=/usr/bin/bat x", true), ("grep -nd skip x ~", false),
         ("export ACK_PAGER=sh; ack x", true), ("declare -x ACK_PAGER=sh; ack x", true),
         ("export ACK_OPTIONS=--pager=sh; ack x", true), ("export ACK_PAGER=less; ack x", false),
         ("git -C ~ -c grep.fallbackToNoIndex=true grep x", true),
         ("git -c grep.fallbackToNoIndex=1 -C /root grep -e x", true),
         ("git -c grep.fallbackToNoIndex=true grep x src", false),
+        // Re-review: shell syntax, strict pager and view allowlists, pager env, git env config.
+        ("ack --pager='less|sh' x", true), ("ack --pager='less;sh' x", true),
+        ("ack --pager='less && sh' x", true), ("ack --pager='less & sh' x", true),
+        ("ACK_PAGER='less|sh' ack x", true), ("ack --pager='less\nsh' x", true),
+        ("ack --pager=\"vim -c ':%!sh' -\" x", true), ("ack --pager=\"nvim '+%!sh' -\" x", true),
+        ("ack --pager=\"emacs -l evil.el\" x", true), ("ack --pager=\"bat --pager=sh\" x", true),
+        ("ack --pager=\"less +!sh\" x", true), ("LESS='+!sh' ack --pager=less x", true),
+        ("ack --pager=\"code --install-extension x\" x", true), ("ack --pager=/tmp/less x", true),
+        ("ugrep --view='vim -c x' x f", true), ("ack --pager=./less x", true),
+        ("ack --pager=vim x", true), ("export LESSOPEN=x; ack x", true),
+        ("env PAGER=sh ack x", true), ("BAT_PAGER=sh ug x f", true),
+        ("ack --pager=/usr/bin/less x", false), ("ack --nopager TODO src", false),
+        ("ack --pager='less -' x", false), ("ugrep --view=/usr/bin/nvim x f", false),
+        ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=grep.fallbackToNoIndex GIT_CONFIG_VALUE_0=true git -C ~ grep x", true),
+        ("git --config-env=grep.fallbackToNoIndex=X -C ~ grep x", true),
+        ("git --config-env grep.FallbackToNoIndex=X -C ~ grep x", true),
     ];
 
     #[test]
