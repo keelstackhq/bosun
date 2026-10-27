@@ -482,7 +482,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
 }
 
 /// The `plan` file named in the metadata of an epic body.
-fn epic_plan(body: &str) -> Option<String> {
+pub(crate) fn epic_plan(body: &str) -> Option<String> {
     let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
     let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
     v["plan"].as_str().map(str::to_string)
