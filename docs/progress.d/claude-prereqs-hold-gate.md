@@ -1,0 +1,1 @@
+- 2026-10-27 Hold gate: claim keeps held tasks until their box is ticked; unique hold ids, task-scoped `replaces`, plan paths deduped.

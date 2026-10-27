@@ -20,6 +20,21 @@ pub(crate) struct Holds {
     pub records: Vec<(String, String)>,
 }
 
+/// Whether a plan item takes over hold `id` of the task `key` (`M1/T1`): it names the hold in
+/// `replaces` and blocks that task or its item, so it never releases another task's hold.
+pub(crate) fn replaces_hold(prereqs: &[pq::Prereq], id: &str, key: &str) -> bool {
+    let item = key.split('/').next().unwrap_or(key);
+    prereqs.iter().any(|p| {
+        p.replaces.iter().any(|r| r == id) && p.blocks.iter().any(|b| b == key || b == item)
+    })
+}
+
+/// The plan key (`M1/T1`) of task issue `n`; `None` when it is not a plan task.
+pub(crate) fn task_key(gh: &dyn Github, n: u64) -> Result<Option<String>> {
+    let meta = gh.get_issue(n)?.as_ref().and_then(crate::app::task_meta);
+    Ok(meta.map(|m| format!("{}/{}", m.item, m.task)))
+}
+
 /// An open prerequisite: its id and what it blocks, from the plan.
 pub(crate) struct Held {
     pub id: String,
@@ -92,7 +107,7 @@ pub(crate) fn open_items(
     let mut known = Some(branch.clone());
     // A hold is open until its box is ticked; an H item that `replaces` it governs instead.
     if let Some(h) = holds {
-        let replaced = |id: &str| prereqs.iter().any(|p| p.replaces.iter().any(|r| r == id));
+        let replaced = |id: &str| replaces_hold(&prereqs, id, &h.key);
         let mut sums: Vec<(String, String)> = h.records.clone();
         let boxes = ticks
             .iter()

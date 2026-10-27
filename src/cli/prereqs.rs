@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use super::PrereqsArgs;
 use super::plan::{plan_errors, plan_key};
+use super::prereqs_gate::{replaces_hold, task_key};
 use crate::app::{App, Result, default_branch, kill_switch};
 use crate::core::approve::{APPROVERS_PATH, Role, parse_approvers};
 use crate::core::plan;
@@ -200,9 +201,16 @@ impl Env {
         pq::sort(&mut items);
         // The boxes of `bosun hold` ride along on every rewrite (each re-rendered from its
         // marker, with its tick), unless a plan item `replaces` the hold.
-        let replaced = |id: &str| prereqs.iter().any(|p| p.replaces.iter().any(|r| r == id));
-        let (_, found) = issue.map_or_else(Default::default, |i| pq::split_found(i.body_text()));
-        let found: Vec<HoldBox> = found.into_iter().filter(|b| !replaced(&b.id)).collect();
+        // Only an item that blocks the hold's own task replaces it; an unknown task keeps it.
+        let (_, boxes) = issue.map_or_else(Default::default, |i| pq::split_found(i.body_text()));
+        let mut found: Vec<HoldBox> = Vec::new();
+        for b in boxes {
+            let named = prereqs.iter().any(|p| p.replaces.contains(&b.id));
+            let key = if named { task_key(gh, b.task)? } else { None };
+            if !key.is_some_and(|k| replaces_hold(&prereqs, &b.id, &k)) {
+                found.push(b);
+            }
+        }
         let open =
             items.iter().filter(|i| !i.done).count() + found.iter().filter(|b| !b.ticked).count();
         let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
@@ -274,6 +282,15 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         // Setup steps belong to the repo: listed once.
         let first = if k == 0 { &setup[..] } else { &[] };
         let p = env.prepare(&app, file, &text, args.post, first, &mut warnings)?;
+        // The same plan named twice (`plans/x.md ./plans/x.md`) is one checklist.
+        let path = &p.list.plan_path;
+        if prepared
+            .iter()
+            .any(|(_, q): &(_, Prepared)| q.list.plan_path == *path)
+        {
+            warnings.push(format!("{file} names {path} again: listed once"));
+            continue;
+        }
         prepared.push((file, p));
     }
     // Every plan passed its refusal checks: only now write.

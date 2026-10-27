@@ -56,7 +56,8 @@ pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
         |i| pq::split_found(i.body_text()),
     );
 
-    // X<n>: one more than the highest number on the task's hold records and in the checklist.
+    // X<n>: one more than the highest number on the task's hold records, in the checklist and in
+    // the plan's `replaces`.
     let on_task = comments.iter().filter_map(|c| match parse_record(&c.body) {
         Some(Record::Hold { id, .. }) => pq::hold_number(&id),
         _ => None,
@@ -64,8 +65,12 @@ pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
     let in_issue = existing
         .into_iter()
         .flat_map(|i| pq::read_issue(i.body_text()));
+    // The plan's `replaces` ids too: a box it replaced is gone from the checklist, and its id
+    // must never come back for another step.
+    let (title, replaced) = plan_of(&app, &plan_path)?;
     let top = on_task
         .chain(in_issue.filter_map(|t| pq::hold_number(&t.id)))
+        .chain(replaced)
         .max();
     let id = format!("X{}", top.unwrap_or(0) + 1);
     if !pq::is_hold_id(&id) {
@@ -93,13 +98,27 @@ pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
     boxes.push(HoldBox::new(&id, step, n, args.phone));
     let (rest, title) = match existing {
         Some(_) => (rest, String::new()),
-        None => {
-            let title = plan_title(&app, &plan_path)?;
-            (pq::render_issue(&title, &plan_path, &[], &[]), title)
-        }
+        None => (pq::render_issue(&title, &plan_path, &[], &[]), title),
     };
     let body = pq::with_found(&rest, &boxes);
     let (number, _) = post(gh, existing, &title, &body, 1, true)?.expect("an issue with a box");
+    // Read back once: a hold or `prereqs --post` running at the same time can have rewritten
+    // the checklist without this box. The record still holds the task; the box lets the owner
+    // tick it.
+    if let Some(now) = gh.get_issue(number)? {
+        let (rest, mut boxes) = pq::split_found(now.body_text());
+        if !boxes.iter().any(|b| b.id == id && b.task == n) {
+            boxes.push(HoldBox::new(&id, step, n, args.phone));
+            post(
+                gh,
+                Some(&now),
+                &title,
+                &pq::with_found(&rest, &boxes),
+                1,
+                true,
+            )?;
+        }
+    }
     let url = format!("https://github.com/{}/issues/{number}", app.ctx.repo);
 
     release_to(gh, n, &issue, session, &comments, State::Ready)?;
@@ -128,8 +147,9 @@ fn check_text(t: &str) -> Result<()> {
     ))
 }
 
-/// The plan's title, from the plan file on the default branch.
-fn plan_title(app: &App, plan_path: &str) -> Result<String> {
+/// The plan's title and the numbers of the holds it `replaces`, from the plan file on the
+/// default branch.
+fn plan_of(app: &App, plan_path: &str) -> Result<(String, Vec<u64>)> {
     let gh = app.gh.as_ref();
     let branch = default_branch(gh)?;
     let fail = |why: String| {
@@ -142,7 +162,10 @@ fn plan_title(app: &App, plan_path: &str) -> Result<String> {
         .file_at(plan_path, &branch)?
         .ok_or_else(|| fail(format!("not on {branch}")))?;
     let parsed = plan::parse(&text).map_err(|e| fail(e[0].message.clone()))?;
-    Ok(parsed.title)
+    let prereqs = pq::parse(&text, &parsed).map_err(|e| fail(e[0].message.clone()))?;
+    let replaced = prereqs.iter().flat_map(|p| &p.replaces);
+    let numbers = replaced.filter_map(|x| pq::hold_number(x)).collect();
+    Ok((parsed.title, numbers))
 }
 
 /// A lesson that the plan missed a step; best effort, the error text on failure.

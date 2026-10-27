@@ -194,3 +194,38 @@ fn a_plan_item_that_replaces_the_hold_governs_the_task() {
         "H1 done frees the task although X1 never was ticked: {v}"
     );
 }
+
+/// The plan replaces X1 (on #11), and `--post` drops its box.
+fn replaced(fake: &FakeGithub, dir: &Path, blocks: &str) {
+    held(fake, dir);
+    let plan = format!("{BASE}{}", REPLACED.replace("M1/T1", blocks));
+    fake.content("plans/x.md", "main", &plan);
+    std::fs::write(dir.join("plans/x.md"), &plan).unwrap();
+    let post = ["prereqs", "plans/x.md", "--post", "--no-setup"];
+    assert_eq!(bosun(fake, dir, &post).0, 0);
+}
+
+#[test]
+fn a_hold_after_a_replaced_one_gets_a_new_id_and_keeps_its_task_held() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = setup(tmp.path());
+    replaced(&fake, tmp.path(), "M1/T1");
+    assert_eq!(bosun(&fake, tmp.path(), &["claim", "12"]).0, 0);
+    let (code, v) = bosun(&fake, tmp.path(), &["hold", "12", "Enroll the key"]);
+    assert_eq!((code, &v["data"]["id"]), (0, &"X2".into()), "{v}");
+    let (code, v) = bosun(&fake, tmp.path(), &["claim", "12"]);
+    assert_eq!(code, 5, "{v}");
+}
+
+#[test]
+fn replaces_only_releases_a_hold_of_a_task_the_item_blocks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = setup(tmp.path());
+    // H1 names X1 (a hold of #11, M1/T1) but blocks only M1/T2: X1 still holds #11.
+    replaced(&fake, tmp.path(), "M1/T2");
+    assert!(checklist_body(&fake).contains("**X1**"), "the box stays");
+    tick(&fake, "H1");
+    let (code, v) = bosun(&fake, tmp.path(), &["claim", "11"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("X1"));
+}
