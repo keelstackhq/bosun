@@ -221,18 +221,24 @@ fn writes_issue_text(words: &[String]) -> bool {
         || args
             .iter()
             .any(|a| a.starts_with("-b") && !a.starts_with("--"));
-    let explicit = args.iter().enumerate().find_map(|(i, a)| {
-        if ["-X", "--method", "--request"].contains(a) {
-            args.get(i + 1).copied()
-        } else {
-            a.strip_prefix("--method=")
-                .or_else(|| a.strip_prefix("--request="))
-                .or_else(|| a.strip_prefix("-X"))
-        }
-    });
+    // gh and curl use the last method flag; any write method among them counts as a write.
+    let methods: Vec<&str> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            if ["-X", "--method", "--request"].contains(a) {
+                args.get(i + 1).copied()
+            } else {
+                a.strip_prefix("--method=")
+                    .or_else(|| a.strip_prefix("--request="))
+                    .or_else(|| a.strip_prefix("-X"))
+            }
+        })
+        .collect();
     let write = |v: &str| ["POST", "PATCH", "PUT"].contains(&v.to_ascii_uppercase().as_str());
+    let explicit = (!methods.is_empty()).then(|| methods.iter().any(|m| write(m)));
     if name(&words[at]) == "curl" {
-        return explicit.is_some_and(write)
+        return explicit == Some(true)
             || args.iter().any(|a| {
                 a.starts_with("-d") || a.starts_with("--data") || a.starts_with("--json")
             });
@@ -244,7 +250,7 @@ fn writes_issue_text(words: &[String]) -> bool {
             .iter()
             .any(|a| a.to_ascii_lowercase().contains("mutation")),
         Some("api") => match explicit {
-            Some(m) => write(m),
+            Some(w) => w,
             None => {
                 has(&["-f", "-F", "--field", "--raw-field"])
                     || flag("--field")
@@ -269,11 +275,13 @@ fn writes_marker(command: &str, depth: usize) -> bool {
 /// marker (`MARKER`: `<!-- bosun:prereq|prereqs|task|epic`; prose that names one is allowed).
 /// Only writes are judged: `gh|hub issue edit|comment|create|close` and `gh pr comment` with
 /// `--body`/`-b` (also `-bTEXT`), `gh|hub api` with a write method or field flag (never with an
-/// explicit GET; `gh api graphql` only with a `mutation`), `curl` with a write method or a data
+/// explicit GET; with several method flags any write method counts; `gh api graphql` only with a
+/// `mutation`), `curl` with a write method or a data
 /// flag (`-d`, `--data*`, `--json`), the same inside `bash -c`, `eval` and `$( )`, and the MCP
 /// tools in `ISSUE_TEXT_TOOLS` (their `body` and `comment` fields only). Best effort. Known and
 /// accepted bypasses: `--body-file`, `--input`, `curl` or `gh api` with the text in a variable or
-/// a file, a marker split by quotes (`'bosun:'"task"`) or built by `printf` in `$( )`, wget,
+/// a file, a marker split by quotes (`'bosun:'"task"`) or built by `printf` in `$( )`, a
+/// `gh api graphql -F query=@file` mutation (the text is in the file), wget,
 /// httpie and python urllib. The real guarantees are elsewhere: bosun re-reads the checklist and
 /// trusts only its own writes.
 pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
@@ -1733,6 +1741,18 @@ mod tests {
         assert!(!sh("gh api -X GET search/issues -f q='<!-- bosun:task'"));
         assert!(!sh(
             "gh api --method GET search/issues -f q='<!-- bosun:task'"
+        ));
+        // gh and curl use the last method flag: any write method among them is a write.
+        for cmd in [
+            "gh api -X GET --method PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "gh api -XGET -XPATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "gh api --method=GET -X PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "curl -X GET -X PATCH -H 'x: <!-- bosun:task {} -->' https://api.github.com/x",
+        ] {
+            assert!(sh(cmd), "{cmd}");
+        }
+        assert!(!sh(
+            "gh api -X GET --method GET search/issues -f q='<!-- bosun:task'"
         ));
         assert!(!sh(
             "gh api graphql -f query='{ search(query: \"<!-- bosun:task\") { issueCount } }'"
