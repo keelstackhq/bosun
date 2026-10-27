@@ -75,12 +75,18 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         let mut items = Vec::new();
         for p in &prereqs {
             let mut it = CheckItem::from(p);
-            let tick = ticks.iter().find(|t| t.id == it.id);
-            it.done = match verify(gh, &p.verify, &mut branch)? {
-                Some(found) => found,
+            // An API item is done only when the API finds it; an owner item, or an API item the
+            // token cannot read (403), when its one box with a matching sum is ticked.
+            (it.state, it.done) = match verify(gh, &p.verify, &mut branch)? {
+                Some(true) => ("api ok".into(), true),
+                Some(false) => ("api".into(), false),
                 None => {
-                    it.api = false;
-                    tick.is_some_and(|t| t.ticked)
+                    let state = if p.verify == Verify::Owner {
+                        "owner"
+                    } else {
+                        "api 403"
+                    };
+                    (state.into(), pq::ticked(&ticks, &it.id, &it.sum))
                 }
             };
             items.push(it);
@@ -190,16 +196,15 @@ fn doctor_items(dir: Option<&Path>, warnings: &mut Vec<String>) -> Vec<CheckItem
     let text = |i: &Value, k: &str| i[k].as_str().unwrap_or("").to_string();
     let items = data["items"].as_array().cloned().unwrap_or_default();
     let missing = items.iter().filter(|i| i["status"] == "missing");
-    missing
-        .map(|i| {
-            auto(
-                format!("D{}", i["step"]),
-                &text(i, "name"),
-                &text(i, "fix"),
-                "doctor",
-            )
-        })
-        .collect()
+    let d = |i: &Value| {
+        auto(
+            format!("D{}", i["step"]),
+            &text(i, "name"),
+            &text(i, "fix"),
+            "doctor",
+        )
+    };
+    missing.map(d).collect()
 }
 
 /// An item bosun adds itself: the owner does it on a computer.
@@ -213,7 +218,8 @@ fn auto(id: String, title: &str, steps: &str, verify: &str) -> CheckItem {
         on,
         steps,
         verify,
-        api: true,
+        sum: String::new(),
+        state: "api".into(),
         done: false,
         blocks: vec![],
     }

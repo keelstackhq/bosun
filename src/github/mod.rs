@@ -498,7 +498,7 @@ impl Github for LiveGithub {
     fn first_parent(&self, sha: &str) -> Result<Option<String>> {
         let v = self
             .http
-            .get_json(&self.path(&format!("/commits/{}", enc(sha))))?;
+            .get_json_or_unknown(&self.path(&format!("/commits/{}", enc(sha))))?;
         Ok(v.and_then(|v| v["parents"][0]["sha"].as_str().map(String::from)))
     }
 

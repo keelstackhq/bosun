@@ -4,9 +4,10 @@ Orchestration helper for repos where agents write all the code. A session calls 
 and acts on the one JSON object it prints. One static Rust binary. Part of the keelstackhq family
 (splice, hull, hoard, hoist, berth).
 
-- Spec: `docs/spec.md` — source of truth. Read only the section you touch (§1 decisions and
-  output, §4 lifecycle and leases, §5 spawn and limits, §7 gates, §8 risk); update it in the same
-  PR when behaviour changes.
+- Spec: `docs/spec/NN-*.md`, one file per section (index: `docs/spec.md`) — source of truth.
+  Read only the section you touch (§1 decisions and output, §4 lifecycle and leases, §5 spawn
+  and limits, §7 gates, §8 risk); update that file in the same PR when behaviour changes, and
+  list it in the task's touch.
 - Defaults and their evidence: `docs/defaults.md`. Plan format: `docs/plan-format.md`.
 - Plans: `docs/superpowers/plans/` (the seed plan splits S1-S10 into PRs). Tick tasks as they land.
 - Progress: `docs/PROGRESS.md` — Status, Done (one line per task), Blocked (human-only items).

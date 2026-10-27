@@ -1,0 +1,1 @@
+- Design and plan for parallel PRs without merge conflicts (truthful leases, plan overlap, spec split, approval carry-over).

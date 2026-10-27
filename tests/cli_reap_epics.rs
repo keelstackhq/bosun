@@ -85,6 +85,25 @@ fn reap_closes_a_claimed_epic_without_a_lease_and_leaves_the_rest() {
 }
 
 #[test]
+fn a_hand_made_open_task_of_the_item_keeps_the_epic_open() {
+    let fake = FakeGithub::start();
+    epic(&fake, 1, "ready");
+    task(&fake, 2, 1, "merged");
+    // Adopted by `plan import` through item and task, but no source/plan label and no `epic`.
+    let meta = r#"<!-- bosun:task {"item":"C1","task":"T9"} -->"#;
+    fake.issue(3, "hand-made", &["bosun:state/ready"], meta);
+    for _ in 0..2 {
+        assert_eq!(reap(&fake)["data"]["epics_closed"], json!([]));
+        assert_eq!(fake.issue_state(1).state, "open");
+    }
+    // Once it is closed the epic closes (a task of another item never blocked it).
+    fake.close_issue_as(3, NOW, "completed");
+    let other = r#"<!-- bosun:task {"item":"Z","task":"T1"} -->"#;
+    fake.issue(4, "other item", &["bosun:state/ready"], other);
+    assert_eq!(reap(&fake)["data"]["epics_closed"], json!([1]));
+}
+
+#[test]
 fn a_failure_closing_an_epic_keeps_the_rest_of_the_reap() {
     let fake = FakeGithub::start();
     epic(&fake, 1, "ready");

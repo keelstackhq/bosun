@@ -113,6 +113,17 @@ impl Http {
         }
     }
 
+    /// Like `get_json`, but 422 is `None` too: GitHub answers 422 ("No commit found for SHA"),
+    /// not 404, for a commit it does not know.
+    pub fn get_json_or_unknown(&self, path: &str) -> Result<Option<Value>> {
+        let r = self.request("GET", path, None)?;
+        match r.status {
+            200..=299 => Ok(Some(r.json())),
+            404 | 422 => Ok(None),
+            _ => Err(self.fail("GET", path, &r)),
+        }
+    }
+
     /// Like `get_json`, but 301 (transferred) and 410 (deleted) are `Ok(Err(()))`: the number is
     /// gone, not an error.
     pub fn get_json_or_gone(&self, path: &str) -> Result<std::result::Result<Option<Value>, ()>> {

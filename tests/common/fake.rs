@@ -109,7 +109,7 @@ pub struct State {
     pub compare_statuses: HashMap<String, String>,
     /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
     pub pull_commits: HashMap<u64, Vec<String>>,
-    /// Commit sha -> first parent (`GET /commits/{sha}`); unset, the commit answers 404.
+    /// Commit sha -> first parent (`GET /commits/{sha}`); unset, the commit answers 422 as GitHub does.
     pub parents: HashMap<String, String>,
     /// Branches `GET /branches/<name>` answers 404 for; every other branch exists.
     pub missing_branches: Vec<String>,
@@ -1150,7 +1150,8 @@ fn route(
         }
         ("GET", ["commits", sha]) => match s.parents.get(*sha) {
             Some(p) => ok(json!({"sha": sha, "parents": [{"sha": p}]})),
-            None => msg(404, "Not Found"),
+            // Real GitHub answers 422, not 404, for a sha it does not know.
+            None => msg(422, &format!("No commit found for SHA: {sha}")),
         },
         ("GET", ["commits", sha, "status"]) => {
             let mut seen = std::collections::HashSet::new();
