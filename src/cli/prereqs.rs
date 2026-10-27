@@ -33,6 +33,14 @@ pub(crate) struct PlanChecklist {
     pub message: String,
 }
 
+/// A plan checked but maybe not yet written.
+pub(crate) struct Prepared {
+    pub list: PlanChecklist,
+    existing: Option<Issue>,
+    body: String,
+    any: bool,
+}
+
 /// What every plan of one run shares: rules, approvers, the existing checklist issues.
 pub(crate) struct Env {
     rules: Rules,
@@ -102,17 +110,59 @@ impl Env {
         text: &str,
         post_it: bool,
         setup: &[CheckItem],
+        warnings: &mut Vec<String>,
     ) -> Result<PlanChecklist> {
+        let mut p = self.prepare(app, file, text, post_it, setup, warnings)?;
+        if post_it {
+            self.write(app, &mut p)?;
+        }
+        Ok(p.list)
+    }
+
+    /// Everything `checklist` does but the write. With `post_it` it also runs the refusal checks,
+    /// so a caller with several plans can check them all before writing any.
+    pub(crate) fn prepare(
+        &mut self,
+        app: &App,
+        file: &str,
+        text: &str,
+        post_it: bool,
+        setup: &[CheckItem],
+        warnings: &mut Vec<String>,
+    ) -> Result<Prepared> {
         let gh = app.gh.as_ref();
         let plan = plan::parse(text).map_err(|e| plan_errors(file, &e))?;
         let prereqs = pq::parse(text, &plan).map_err(|e| plan_errors(file, &e))?;
         let plan_path = plan_key(file, &self.base, &self.roots);
         check_plan_path(&plan_path)?;
         let marker = pq::issue_marker(&plan_path);
-        let issue = self
+        let mut mine = self
             .existing
             .iter()
-            .find(|i| i.body_text().starts_with(&marker));
+            .filter(|i| i.body_text().starts_with(&marker));
+        let issue = mine.next();
+        if post_it && mine.next().is_some() {
+            return Err(BosunError::needs_human(
+                format!("two checklist issues for {plan_path}"),
+                "close one of them; the owner checklist is one issue per plan",
+            ));
+        }
+        if self.branch.is_none() {
+            self.branch = Some(default_branch(gh)?);
+        }
+        let main = self.branch.as_deref().unwrap_or("main");
+        if gh.file_at(&plan_path, main)?.as_deref() != Some(text) {
+            let msg = format!("{plan_path} on {main} differs from the local copy");
+            if post_it {
+                return Err(BosunError::conflict(
+                    msg,
+                    "merge the plan change first; --post writes the checklist of the plan on the default branch",
+                ));
+            }
+            warnings.push(format!(
+                "{msg}, or is not there: the checklist is built from the local file"
+            ));
+        }
         let ticks = issue.map_or_else(Vec::new, |i| pq::read_issue(i.body_text()));
         let mut items = Vec::new();
         for p in &prereqs {
@@ -141,25 +191,46 @@ impl Env {
         }
         pq::sort(&mut items);
         let open = items.iter().filter(|i| !i.done).count();
-        let issue = if post_it {
-            let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
-            let any = !items.is_empty() || !approvals.is_empty();
-            post(gh, issue, &plan.title, &body, open, any)?
-        } else {
-            issue.map(|i| (i.number, false))
-        };
-        let url = issue.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
+        let issue = issue.cloned();
+        let existing = issue.as_ref().map(|i| (i.number, false));
+        let url = existing.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
         let message = pq::message(&plan.title, &items, &approvals, url.as_deref());
-        Ok(PlanChecklist {
+        let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
+        let any = !items.is_empty() || !approvals.is_empty();
+        let list = PlanChecklist {
             plan_path,
             title: plan.title,
             items,
             approvals,
             open,
-            issue,
+            issue: existing,
             url,
             message,
+        };
+        Ok(Prepared {
+            list,
+            existing: issue,
+            body,
+            any,
         })
+    }
+
+    /// Write the checklist issue of a prepared plan and fill in its number, url and message.
+    pub(crate) fn write(&self, app: &App, p: &mut Prepared) -> Result<()> {
+        let l = &mut p.list;
+        l.issue = post(
+            app.gh.as_ref(),
+            p.existing.as_ref(),
+            &l.title,
+            &p.body,
+            l.open,
+            p.any,
+        )?;
+        l.url = l
+            .issue
+            .map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
+        l.message = pq::message(&l.title, &l.items, &l.approvals, l.url.as_deref());
+        Ok(())
     }
 }
 
@@ -175,7 +246,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
     } else {
         doctor_items(dir, &mut warnings)
     };
-    let (mut plans, mut open) = (Vec::new(), 0);
+    let mut prepared = Vec::new();
     for (k, file) in args.files.iter().enumerate() {
         let path = dir.map_or_else(|| file.into(), |d| d.join(file));
         let text = std::fs::read_to_string(&path).map_err(|e| {
@@ -186,7 +257,16 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         })?;
         // Setup steps belong to the repo: listed once.
         let first = if k == 0 { &setup[..] } else { &[] };
-        let c = env.checklist(&app, file, &text, args.post, first)?;
+        let p = env.prepare(&app, file, &text, args.post, first, &mut warnings)?;
+        prepared.push((file, p));
+    }
+    // Every plan passed its refusal checks: only now write.
+    let (mut plans, mut open) = (Vec::new(), 0);
+    for (file, mut p) in prepared {
+        if args.post {
+            env.write(&app, &mut p)?;
+        }
+        let c = p.list;
         open += c.open;
         let issue = c
             .issue

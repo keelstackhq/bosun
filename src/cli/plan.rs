@@ -529,7 +529,7 @@ fn refresh_checklist(
 ) -> Result<()> {
     let mut env = Env::load(app, dir, &mut imp.warnings)?;
     env.one_issue(&imp.plan_path)?;
-    let c = env.checklist(app, &a.file, text, !a.dry_run, &[])?;
+    let c = env.checklist(app, &a.file, text, !a.dry_run, &[], &mut imp.warnings)?;
     let open = c.items.into_iter().filter(|i| !i.done);
     imp.open_items = open
         .map(|i| Held {

@@ -29,6 +29,7 @@ fn import(fake: &FakeGithub, dir: &Path, extra: &[&str]) -> (i32, Value) {
 fn setup(text: &str) -> (tempfile::TempDir, FakeGithub) {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     std::fs::write(tmp.path().join("plan.md"), text).unwrap();
+    fake.content("plan.md", "main", text); // the import runs on the merged plan
     (tmp, fake)
 }
 
@@ -240,4 +241,16 @@ fn two_checklist_issues_need_a_human() {
             .unwrap()
             .contains("two checklist issues")
     );
+}
+
+#[test]
+fn import_refuses_a_plan_that_differs_from_the_default_branch() {
+    let (tmp, fake) = setup(&with_h1("M1/T2"));
+    fake.content("plan.md", "main", BASE);
+    let (code, v) = import(&fake, tmp.path(), &[]);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("differs"));
+    assert_eq!(checklists(&fake), 0, "nothing was written");
+    let (code, v) = import(&fake, tmp.path(), &["--dry-run"]);
+    assert_eq!(code, 0, "{v}");
 }
