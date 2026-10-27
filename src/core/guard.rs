@@ -941,7 +941,10 @@ const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "r
 const READERS: &[&str] = &[
     "grep", "rg", "ag", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type",
 ];
-const INTERPS: &[&str] = &["python", "python3", "perl", "ruby", "node", "deno"];
+#[rustfmt::skip]
+const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
+    "Deno.env", ").env", "$_ENV", "$_SERVER"];
+const INTERPS: &[&str] = &["python", "python3", "perl", "ruby", "node", "deno", "php"];
 const FILE_TOOLS: &[&str] = &[
     "mv", "cp", "install", "chmod", "chown", "ln", "mkdir", "rmdir", "rm", "touch", "tar", "unzip",
     "gzip", "gunzip", "curl", "wget", "stat", "file", "du", "df",
@@ -959,8 +962,21 @@ const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-fi
     "search", "q", "jq"];
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
-    "node", "deno", "source", "xargs", "eval",
+    "node", "deno", "php", "source", "xargs", "eval",
 ];
+
+fn procenv(w: &str) -> bool {
+    w.contains("/proc/") && w.contains("env")
+}
+
+/// Whether an interpreter or shell command line has code on it (`-c`, `-e`, `--eval`, `eval`, `php -r`).
+fn runs_code(n: &str, after: &[&str]) -> bool {
+    let dash = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
+    let interp = INTERPS.contains(&n);
+    #[rustfmt::skip]
+    let code = |a: &&str| dash(a, 'c') || interp && (dash(a, 'e') || *a == "--eval" || *a == "eval" || n == "php" && dash(a, 'r'));
+    after.iter().any(code)
+}
 
 /// A flag without its dashes and value: `--decrypt=x` and `-decrypt` are `decrypt`.
 fn flag(arg: &str) -> Option<&str> {
@@ -1023,8 +1039,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some(decrypt_reason("commands nested too deep"));
     }
-    let text = strip_data_heredocs(command);
-    let text = text.as_str();
+    let (text, bodies, targets) = strip_data_heredocs(command);
+    let (text, wrote) = (text.as_str(), mentions_secrets(&bodies));
     for inner in nested(text) {
         if let Some(why) = decrypt_rule(&inner, depth + 1) {
             return Some(why);
@@ -1032,12 +1048,18 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
     }
     let low = text.to_lowercase();
     #[rustfmt::skip]
-    let key_dir = ["sops/age", "age/keys.txt"].iter().any(|k| text.contains(k)) || text.contains("keys.txt") && low.contains("sops");
+    let key_dir = ["sops/age", "age/keys.txt"].iter().any(|k| text.contains(k)) || text.contains("keys.txt") && (low.contains("sops") || text.contains(".config") || text.contains("find"));
     if key_dir {
         return Some(decrypt_reason("the age key directory"));
     }
     if text.contains("$SOPS_AGE_KEY") || text.contains("${SOPS_AGE_KEY") {
         return Some(decrypt_reason("the age key"));
+    }
+    // Indirect expansion can name the variable at run time.
+    if text.contains("${!")
+        && (mentions_secrets(&low) || low.contains("ops_age") || text.contains("${!S"))
+    {
+        return Some(decrypt_reason("an indirect expansion"));
     }
     let (named, mentions) = (low.contains("sops"), mentions_secrets(text));
     let words = shell_words(text);
@@ -1047,20 +1069,63 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             rest.remove(0);
         }
         let Some(first) = rest.first() else { continue };
-        let base = |w: &str| w.rsplit(['/', '#']).next().unwrap_or(w).to_string();
+        let base = |w: &str| {
+            w.rsplit(['/', '#'])
+                .next()
+                .unwrap_or(w)
+                .split('@')
+                .next()
+                .unwrap_or(w)
+                .to_string()
+        };
         let name = base(first);
         let args = &rest[1..];
+        #[rustfmt::skip]
+        let da = &args[..args.iter().position(|a| a.starts_with(['>', '<'])).unwrap_or(args.len())];
         let dump = match name.as_str() {
-            "printenv" | "compgen" => true,
-            #[rustfmt::skip]
-            "env" => args.iter().all(|a| a.starts_with('-') || assigned(a).is_some()),
-            "set" => args.is_empty(),
-            "export" | "declare" | "typeset" => args.is_empty() || args.contains(&"-p"),
+            "printenv" => da.is_empty() || named,
+            "compgen" => da.iter().any(|a| matches!(*a, "-e" | "-v")),
+            "env" => da
+                .iter()
+                .all(|a| a.starts_with('-') || assigned(a).is_some()),
+            "set" => da.is_empty(),
+            "export" | "declare" | "typeset" => {
+                da.is_empty()
+                    || da.iter().any(|a| matches!(*a, "-p" | "-x"))
+                        && (named || da.iter().all(|a| a.starts_with('-')))
+            }
+            "ps" => da.iter().any(|a| {
+                *a == "-E"
+                    || !a.starts_with('-')
+                        && a.contains('e')
+                        && a.chars().all(|c| "aeuxwfl".contains(c))
+            }),
             _ => false,
         };
-        if dump && named {
+        if dump {
             return Some(decrypt_reason("the environment"));
         }
+        // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
+        let (mut it, git) = (args.iter(), name == "git");
+        let verb = loop {
+            match it.next() {
+                Some(a)
+                    if git
+                        && matches!(
+                            *a,
+                            "-C" | "-c"
+                                | "--git-dir"
+                                | "--work-tree"
+                                | "--namespace"
+                                | "--exec-path"
+                        ) =>
+                {
+                    it.next();
+                }
+                Some(a) if a.starts_with('-') => {}
+                other => break other.copied().unwrap_or(""),
+            }
+        };
         let long = |name: &str| {
             args.iter().enumerate().find_map(|(i, a)| {
                 let v = a.strip_prefix(name).and_then(|r| r.strip_prefix('='));
@@ -1071,6 +1136,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         let run = match name.as_str() {
             "bosun" => long("--run").map(str::to_string),
             "rg" => long("--pre").map(|c| format!("{c} FILE")),
+            #[rustfmt::skip]
+            "git" if verb == "grep" => long("--open-files-in-pager").or_else(|| args.iter().enumerate().find_map(|(i, a)| a.strip_prefix("-O").map(|v| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v }))).map(|c| format!("{c} FILE")),
             _ => None,
         };
         if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
@@ -1080,7 +1147,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             continue;
         }
         if READERS.contains(&name.as_str()) {
-            let env = |w: &&str| w.contains("/proc/") && w.contains("/environ");
+            let env = |w: &&str| procenv(w);
             #[rustfmt::skip]
             let pos: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with('-')).collect();
             #[rustfmt::skip]
@@ -1093,28 +1160,62 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
             continue;
         }
-        // Options run command strings: a word or option value with whitespace is a command.
-        let (msg, mut skip) = (matches!(name.as_str(), "git" | "gh"), false);
-        for w in segment {
-            let (w, opt) = (w.as_str(), w.trim_start_matches('-'));
-            if std::mem::take(&mut skip) {
-                continue;
+        #[rustfmt::skip]
+        let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
+        let safe = FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub;
+        // Data words: message and query option values, search patterns.
+        let (msg, vi) = (
+            matches!(name.as_str(), "git" | "gh"),
+            segment.iter().position(|x| x == verb),
+        );
+        let (gs, ss) = (
+            name == "git" && verb == "grep",
+            name == "gh" && verb == "search",
+        );
+        let api = (name.as_str(), verb) == ("gh", "api");
+        let mut data = vec![false; segment.len()];
+        let (mut skip, mut pat_done) = (false, false);
+        for (i, w) in segment.iter().enumerate() {
+            let opt = w.trim_start_matches('-').split('=').next().unwrap_or("");
+            let opts: &[&str] = match (name.as_str(), verb) {
+                ("gh", _) => GH_DATA,
+                ("git", "log") => &["S", "G", "grep"],
+                ("git", "grep") => &["e"],
+                _ => &["m", "message"],
+            };
+            let pat = !w.starts_with('-') && vi.is_some_and(|v| i > v) && (ss || gs && !pat_done);
+            pat_done |= pat;
+            if std::mem::take(&mut skip) || pat {
+                data[i] = true;
+            } else if msg && w.starts_with('-') && opts.contains(&opt) {
+                (data[i], skip) = (true, !w.contains('='));
             }
-            if w.contains("/proc/") && w.contains("/environ") {
+        }
+        // Options run command strings: a word or option value with whitespace is a command.
+        for w in segment
+            .iter()
+            .zip(&data)
+            .filter(|(_, d)| !**d)
+            .map(|(w, _)| w)
+        {
+            let w = w.as_str();
+            if procenv(w) {
                 return Some(decrypt_reason("the process environment"));
             }
-            let data = if name == "gh" {
-                GH_DATA
+            let t = if assigned(w).is_some() {
+                w.split_once('=').map_or(w, |p| p.1)
             } else {
-                &["m", "message"][..]
+                w
             };
-            if msg && w.starts_with('-') && data.contains(&opt.split('=').next().unwrap_or("")) {
-                skip = !opt.contains('=');
-                continue;
+            if !safe && !(api && !w.starts_with('-')) && t.contains("SOPS_AGE_KEY") {
+                return Some(decrypt_reason("the age key"));
+            }
+            if w.contains(".config/") && w.contains(['*', '?', '[']) {
+                return Some(decrypt_reason("a glob in .config"));
             }
             let value = w.split_once('=').map(|(_, v)| v);
             let strs = [
-                Some(w).filter(|w| w.contains(char::is_whitespace)),
+                Some(w.strip_prefix("-O").unwrap_or(w)).filter(|w| w.contains(char::is_whitespace)),
                 value.filter(|v| v.contains(char::is_whitespace) || v.starts_with(['|', '!'])),
             ];
             for c in strs.into_iter().flatten() {
@@ -1123,21 +1224,31 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 }
             }
         }
-        #[rustfmt::skip]
-        let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
-        let safe = FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub;
+        let off = segment.len() - rest.len();
         for i in 0..if safe { 0 } else { rest.len() } {
+            if data[i + off] {
+                continue;
+            }
             let (n, after) = (base(rest[i]), &rest[i + 1..]);
+            let tgt = |a: &str| {
+                targets
+                    .iter()
+                    .any(|t| t.trim_start_matches("./") == a.trim_start_matches("./"))
+            };
             #[rustfmt::skip]
             let refused = match n.as_str() {
                 "sops" => !sops_ok(after),
                 "age" | "rage" => !age_ok(after),
-                "hoist" => after.iter().position(|a| *a == "secrets")
-                    .is_some_and(|p| after.get(p + 1).is_some_and(|a| HOIST_SECRETS.contains(a))),
+                "hoist" => after.iter().position(|a| *a == "secrets").is_some_and(|p| after[p + 1..].iter().take_while(|a| **a != "--" && **a != "exec").any(|a| HOIST_SECRETS.contains(a))),
+                "alias" => after.iter().filter_map(|a| a.split_once('=')).any(|(_, v)| matches!(base(v.split(' ').next().unwrap_or("")).as_str(), "sops" | "age" | "rage")),
+                "awk" | "gawk" | "mawk" => after.iter().any(|a| a.contains("ENVIRON")),
+                "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t.starts_with("env."))),
+                n if INTERPS.contains(&n) && after.iter().any(|a| ENV_READS.iter().any(|e| a.contains(e) && (*e != "environ" || runs_code(n, after)))) => true,
+                _ if wrote && i == 0 && tgt(rest[0]) => true,
+                n if wrote && (SHELLS.contains(&n) || n == ".") => after.iter().any(|a| tgt(a)),
                 n if SHELLS.contains(&n) && mentions => {
-                    let dash = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
                     let interp = INTERPS.contains(&n);
-                    let code = after.iter().any(|a| dash(a, 'c') || interp && (dash(a, 'e') || *a == "--eval"));
+                    let code = runs_code(n, after);
                     let file = after.iter().any(|a| !a.starts_with(['-', '<']));
                     let stdin = after.iter().any(|a| matches!(*a, "-s" | "-") || a.starts_with('<'));
                     if code { interp || after.iter().any(|a| a.contains("{}") || a.contains('$')) } else { !file || stdin }
@@ -1170,15 +1281,19 @@ fn heredoc_at(line: &str) -> Option<usize> {
     None
 }
 
-/// The text without the bodies of quoted-delimiter heredocs, unless their line has a shell.
-fn strip_data_heredocs(command: &str) -> String {
-    let (mut out, mut skip) = (String::new(), None::<(String, bool)>);
+/// The text without the bodies of quoted-delimiter heredocs (unless their line has a shell),
+/// those bodies, and the files the opening lines write (`> f`, `>> f`, `tee f`).
+fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
+    let (mut out, mut bodies, mut skip) = (String::new(), String::new(), None::<(String, bool)>);
+    let mut targets = Vec::new();
     for line in command.split_inclusive('\n') {
         if let Some((delim, dash)) = &skip {
             let l = line.trim_end_matches('\n');
             if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
                 skip = None;
                 out.push_str(line);
+            } else {
+                bodies.push_str(line);
             }
             continue;
         }
@@ -1195,10 +1310,29 @@ fn strip_data_heredocs(command: &str) -> String {
                 && let Some(end) = spec[1..].find(q)
             {
                 skip = Some((spec[1..=end].to_string(), dash));
+                let w = shell_words(line);
+                for (i, x) in w.iter().enumerate() {
+                    let r = x.trim_start_matches('>');
+                    let t = if x.starts_with('>') {
+                        if r.is_empty() {
+                            w.get(i + 1).map(String::as_str)
+                        } else {
+                            Some(r)
+                        }
+                    } else if x == "tee" {
+                        w[i + 1..]
+                            .iter()
+                            .map(String::as_str)
+                            .find(|a| !a.starts_with('-'))
+                    } else {
+                        None
+                    };
+                    targets.extend(t.map(str::to_string));
+                }
             }
         }
     }
-    out
+    (out, bodies, targets)
 }
 
 fn http_rule(segment: &str) -> Option<&'static str> {
@@ -2108,6 +2242,63 @@ mod tests {
         ("cat ~/.config/so\"ps/age/keys.txt\"", true), ("sops --age -e f", true),
         ("sops --age encrypt f", true), ("sops --unencrypted-suffix -e f", true),
         ("sops --age=age1abc -e f", false), ("sops --verbose -e f.yaml", false),
+        ("awk 'BEGIN{print ENVIRON[\"SOPS_AGE_KEY\"]}'", true), ("jq -n 'env.SOPS_AGE_KEY'", true),
+        ("jq -n '$ENV.SOPS_AGE_KEY'", true), ("jq -n 'env.HOME'", true),
+        ("printenv | grep -i age", true), ("env | sort", true), ("set | grep -i age", true),
+        ("declare -x | grep age", true), ("compgen -e | head", true), ("env > /tmp/e", true),
+        ("export -p > /tmp/e", true), ("python3 -c \"import os;print(os.environ)\"", true),
+        ("node -e \"console.log(process.env)\"", true), ("ruby -e 'p ENV[\"A\"]'", true),
+        ("perl -e 'print $ENV{A}'", true), ("python3 -c \"import os;os.getenv('A')\"", true),
+        ("p=S\"OPS_AGE_KEY\"; echo ${!p}", true), ("cat /proc/self/env*", true),
+        ("tar cf x.tar ~/.config/s*/a", true), ("find ~ -name keys.txt", true),
+        ("find / -name keys.txt -print", true), ("cat keys.txt ~/.config/x", true),
+        ("FOO=SOPS_AGE_KEY_FILE true", true), ("hoist secrets --env prod edit", true),
+        ("hoist secrets --env=prod edit", true), ("hoist secrets --repo x rotate-key", true),
+        ("alias s=sops", true), ("alias d='age -d'", true), ("alias r=rage", true),
+        ("go run github.com/getsops/sops/v3/cmd/sops@v3.8.1 -d f", true),
+        ("cat > /tmp/x.sh <<'EOF'\nsops -d f\nEOF\nbash /tmp/x.sh", true),
+        ("cat > /tmp/x <<'EOF'\nsops -d f\nEOF\n. /tmp/x", true),
+        ("cat > x.py <<'EOF'\nsops -d f\nEOF\npython3 x.py", true),
+        ("cat > x <<'EOF'\nsops -d f\nEOF\nsource x", true), ("hoist secrets --env prod check", false),
+        ("alias ll='ls -l'", false), ("cat > d.md <<'EOF'\nsops -d f\nEOF\ncargo test", false),
+        ("cargo test", false), ("cargo nextest run", false), ("grep -rn age src/", false),
+        ("rg sops", false), ("git log --grep sops", false), ("ls ~/.config", false),
+        ("npm run build", false), ("pnpm test -- age", false), ("python3 scripts/check.py", false),
+        ("node --test", false), ("printenv HOME", false), ("export PATH=$PATH:/x", false),
+        ("printenv", true), ("env", true), ("env -0", true), ("set", true), ("export -p", true),
+        ("declare -p", true), ("declare -x", true), ("typeset -p", true), ("typeset -x", true),
+        ("compgen -e", true), ("compgen -v", true), ("ps e", true), ("ps eww", true), ("ps -E", true),
+        ("ps axe", true), ("echo ${!SOPS*}", true), ("v=SOPS_AGE_KEY; echo ${!v}", true),
+        ("for i in \"${!pkgs[@]}\"; do echo \"package $i\"; done", false),
+        ("echo \"${!prefix@}\" # usage", false), ("git grep SOPS_AGE_KEY", false),
+        ("git log -S SOPS_AGE_KEY --oneline", false), ("git log --grep 'SOPS_AGE_KEY' --oneline", false),
+        ("gh search code SOPS_AGE_KEY", false), ("sed -n s/SOPS_AGE_KEY//p f", true),
+        ("gh api repos/o/r/environments/prod/secrets/SOPS_AGE_KEY", false),
+        ("cat > x.sh <<'EOF'\nsops -d f\nEOF\nchmod +x x.sh && ./x.sh", true),
+        ("cat > x.sh <<'EOF'\nsops -d f\nEOF\nbash x.sh", true),
+        ("cat <<'EOF' > x.py\nsops -d f\nEOF\npython3 x.py", true),
+        ("tee x.sh <<'EOF'\nsops -d f\nEOF\nsh x.sh", true),
+        ("cat > docs/s.md <<'EOF'\nmention sops -d here\nEOF\nbash scripts/check.sh", false),
+        ("cat > notes.md <<'EOF'\nsops\nEOF\ngit ls-files | xargs wc -l", false),
+        ("hoist secrets --manifest secrets.toml edit", true), ("hoist secrets --keys A,B edit", true),
+        ("hoist --env prod secrets sync", true), ("hoist secrets exec --env prod -- cargo test", false),
+        ("python3 -c \"from os import environ\"", true), ("deno eval \"Deno.env.get('A')\"", true),
+        ("node -e \"require('process').env\"", true), ("php -r 'echo getenv(\"A\");'", true),
+        ("php -r 'echo $_SERVER[\"A\"];'", true), ("jq '.env' f.json", false), ("make ENV=prod", false),
+        ("docker compose --env-file .env up", false), ("ps aux", false), ("ps -e", false),
+        ("python3 -c 'import os; print(os.getcwd())'", false),
+        ("node -e 'console.log(process.argv)'", false), ("cargo build --package age", false),
+        ("git grep --open-files-in-pager='sops -d' x", true), ("git grep -O'sops -d' x", true),
+        ("git grep -O sops x", true), ("git grep --open-files-in-pager=sops x", true),
+        ("python3 -c \"from os import environ as e; print(e)\"", true),
+        ("declare -p SOPS_AGE_KEY", true), ("git grep -n sops docs/", false),
+        ("gh search code sops", false), ("git log --grep sops --oneline", false),
+        ("python3 -m pytest tests/test_environ.py", false), ("declare -p arr", false),
+        ("typeset -p x", false),
+        ("git -C . grep -O'sops -d' x", true), ("git -c core.quotepath=off grep -O'sops -d' x", true),
+        ("git --git-dir=.git grep --open-files-in-pager=sops x", true),
+        ("git -C . grep SOPS_AGE_KEY", false), ("git --no-pager grep -n sops docs/", false),
+        ("git -C . log --grep sops --oneline", false),
     ];
 
     #[test]
