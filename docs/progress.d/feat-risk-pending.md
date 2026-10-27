@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P9c · risk-check pending at run start, error on an unfinished run · PR (feat/risk-pending)

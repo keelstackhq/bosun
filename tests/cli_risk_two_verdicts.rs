@@ -269,7 +269,7 @@ fn a_rename_from_an_owner_path_into_a_review_path_needs_the_owner() {
 }
 
 #[test]
-fn an_unknown_approval_value_in_the_base_rules_is_an_error_without_a_status() {
+fn an_unknown_approval_value_in_the_base_rules_is_an_error_with_an_error_status() {
     let fake = review_pr();
     fake.content(
         ".bosun/risk.toml",
@@ -280,7 +280,13 @@ fn an_unknown_approval_value_in_the_base_rules_is_an_error_without_a_status() {
     assert_eq!(code, 1, "{v}");
     assert!(v["error"]["message"].as_str().unwrap().contains("R-x"));
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
-    assert!(fake.statuses_of(HEAD).is_empty());
+    // Pending while judging, then `error`: never a verdict, never a pending left behind.
+    let st: Vec<_> = fake
+        .statuses_of(HEAD)
+        .iter()
+        .map(|s| s["state"].clone())
+        .collect();
+    assert_eq!(st, ["pending", "error"]);
 }
 
 #[test]
