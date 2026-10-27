@@ -1,7 +1,7 @@
 //! `bosun prereqs <plan>... [--post] [--no-setup]`: the human steps a plan needs up front, checked
 //! through the API, and with `--post` kept in one checklist issue per plan (design F2-F4).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -20,74 +20,128 @@ const LABEL: &str = "bosun:prereqs";
 const RULES_PATH: &str = ".bosun/risk.toml";
 const BOSUN_CODE_MARKER: &str = "src/cli/risk_check.rs";
 
-pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
-    let app = App::load(dir)?;
-    let gh = app.gh.as_ref();
-    if args.post {
-        kill_switch(gh)?;
+/// What `Env::checklist` found for one plan.
+pub(crate) struct PlanChecklist {
+    pub plan_path: String,
+    pub title: String,
+    pub items: Vec<CheckItem>,
+    pub approvals: Vec<pq::ApprovalNeed>,
+    pub open: usize,
+    /// The checklist issue: its number and whether this call created it.
+    pub issue: Option<(u64, bool)>,
+    pub url: Option<String>,
+    pub message: String,
+}
+
+/// A plan checked but maybe not yet written.
+pub(crate) struct Prepared {
+    pub list: PlanChecklist,
+    existing: Option<Issue>,
+    body: String,
+    any: bool,
+}
+
+/// What every plan of one run shares: rules, approvers, the existing checklist issues.
+pub(crate) struct Env {
+    rules: Rules,
+    bosun_code: bool,
+    has_delegate: bool,
+    base: PathBuf,
+    roots: Vec<PathBuf>,
+    existing: Vec<Issue>,
+    branch: Option<String>,
+}
+
+impl Env {
+    pub(crate) fn load(app: &App, dir: Option<&Path>, warnings: &mut Vec<String>) -> Result<Env> {
+        let root = app.ctx.dir.as_path();
+        let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
+        let rules = match read(RULES_PATH) {
+            Some(t) => Rules::parse(&t).map_err(|e| {
+                BosunError::error(
+                    format!("{RULES_PATH}: {e}"),
+                    format!("fix {RULES_PATH}, or remove it to use the built-in rules"),
+                )
+            })?,
+            None => Rules::defaults(),
+        };
+        let bosun_code = root.join(BOSUN_CODE_MARKER).is_file();
+        let keys = read(APPROVERS_PATH).map(|t| parse_approvers(&t));
+        if let Some(Err(e)) = &keys {
+            warnings.push(format!("{APPROVERS_PATH}: {e}"));
+        }
+        let has_delegate = keys
+            .and_then(|k| k.ok())
+            .is_some_and(|k| k.iter().any(|k| k.role == Role::Delegate));
+        let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
+            .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
+        let mut roots = vec![root.to_path_buf()];
+        roots.extend(std::fs::canonicalize(root).ok());
+        let existing = app.gh.list_issues(&[LABEL], IssueState::All)?;
+        Ok(Env {
+            rules,
+            bosun_code,
+            has_delegate,
+            base,
+            roots,
+            existing,
+            branch: None,
+        })
     }
-    let root = app.ctx.dir.as_path();
-    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
-    let rules = match read(RULES_PATH) {
-        Some(t) => Rules::parse(&t).map_err(|e| {
-            BosunError::error(
-                format!("{RULES_PATH}: {e}"),
-                format!("fix {RULES_PATH}, or remove it to use the built-in rules"),
-            )
-        })?,
-        None => Rules::defaults(),
-    };
-    let bosun_code = root.join(BOSUN_CODE_MARKER).is_file();
-    let mut warnings = Vec::new();
-    let keys = read(APPROVERS_PATH).map(|t| parse_approvers(&t));
-    if let Some(Err(e)) = &keys {
-        warnings.push(format!("{APPROVERS_PATH}: {e}"));
+
+    /// The items, approvals and (with `post_it`) the issue of one plan. `setup` items are added.
+    #[allow(dead_code)] // the plan import and amend refresh (claude/prereqs-promote) call it
+    pub(crate) fn checklist(
+        &mut self,
+        app: &App,
+        file: &str,
+        text: &str,
+        post_it: bool,
+        setup: &[CheckItem],
+        warnings: &mut Vec<String>,
+    ) -> Result<PlanChecklist> {
+        let mut p = self.prepare(app, file, text, post_it, setup, warnings)?;
+        if post_it {
+            self.write(app, &mut p)?;
+        }
+        Ok(p.list)
     }
-    let has_delegate = keys
-        .and_then(|k| k.ok())
-        .is_some_and(|k| k.iter().any(|k| k.role == Role::Delegate));
-    let setup = if args.no_setup {
-        vec![]
-    } else {
-        doctor_items(dir, &mut warnings)
-    };
-    let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
-        .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
-    let mut roots = vec![root.to_path_buf()];
-    roots.extend(std::fs::canonicalize(root).ok());
-    let existing = gh.list_issues(&[LABEL], IssueState::All)?;
-    let mut branch = None;
-    let (mut plans, mut open) = (Vec::new(), 0);
-    for (k, file) in args.files.iter().enumerate() {
-        let path = dir.map_or_else(|| file.into(), |d| d.join(file));
-        let text = std::fs::read_to_string(&path).map_err(|e| {
-            BosunError::error(
-                format!("cannot read {file}: {e}"),
-                "pass the path of a plan file, for example plans/bosun.md",
-            )
-        })?;
-        let plan = plan::parse(&text).map_err(|e| plan_errors(file, &e))?;
-        let prereqs = pq::parse(&text, &plan).map_err(|e| plan_errors(file, &e))?;
-        let plan_path = plan_key(file, &base, &roots);
+
+    /// Everything `checklist` does but the write. With `post_it` it also runs the refusal checks,
+    /// so a caller with several plans can check them all before writing any.
+    pub(crate) fn prepare(
+        &mut self,
+        app: &App,
+        file: &str,
+        text: &str,
+        post_it: bool,
+        setup: &[CheckItem],
+        warnings: &mut Vec<String>,
+    ) -> Result<Prepared> {
+        let gh = app.gh.as_ref();
+        let plan = plan::parse(text).map_err(|e| plan_errors(file, &e))?;
+        let prereqs = pq::parse(text, &plan).map_err(|e| plan_errors(file, &e))?;
+        let plan_path = plan_key(file, &self.base, &self.roots);
         check_plan_path(&plan_path)?;
         let marker = pq::issue_marker(&plan_path);
-        let mut mine = existing
+        let mut mine = self
+            .existing
             .iter()
             .filter(|i| i.body_text().starts_with(&marker));
         let issue = mine.next();
-        if args.post && mine.next().is_some() {
+        if post_it && mine.next().is_some() {
             return Err(BosunError::needs_human(
                 format!("two checklist issues for {plan_path}"),
                 "close one of them; the owner checklist is one issue per plan",
             ));
         }
-        if branch.is_none() {
-            branch = Some(default_branch(gh)?);
+        if self.branch.is_none() {
+            self.branch = Some(default_branch(gh)?);
         }
-        let main = branch.as_deref().unwrap_or("main");
-        if gh.file_at(&plan_path, main)?.as_deref() != Some(text.as_str()) {
+        let main = self.branch.as_deref().unwrap_or("main");
+        if gh.file_at(&plan_path, main)?.as_deref() != Some(text) {
             let msg = format!("{plan_path} on {main} differs from the local copy");
-            if args.post {
+            if post_it {
                 return Err(BosunError::conflict(
                     msg,
                     "merge the plan change first; --post writes the checklist of the plan on the default branch",
@@ -103,7 +157,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
             let mut it = CheckItem::from(p);
             // An API item is done only when the API finds it; an owner item, or an API item the
             // token cannot read (403), when its one box with a matching sum is ticked.
-            (it.state, it.done) = match verify(gh, &p.verify, &mut branch)? {
+            (it.state, it.done) = match verify(gh, &p.verify, &mut self.branch)? {
                 Some(true) => ("api ok".into(), true),
                 Some(false) => ("api".into(), false),
                 None => {
@@ -118,34 +172,98 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
             };
             items.push(it);
         }
-        if k == 0 {
-            items.extend(setup.iter().cloned()); // setup steps belong to the repo: listed once
-        }
-        let approvals = pq::approvals(&plan, &rules, bosun_code);
-        if !has_delegate && approvals.iter().any(|a| a.needs == "delegate") {
+        items.extend(setup.iter().cloned());
+        let approvals = pq::approvals(&plan, &self.rules, self.bosun_code);
+        if !self.has_delegate && approvals.iter().any(|a| a.needs == "delegate") {
             items.push(delegate_key());
         }
         pq::sort(&mut items);
-        let n_open = items.iter().filter(|i| !i.done).count();
-        open += n_open;
-        let posted = if args.post {
-            let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
-            post(
-                gh,
-                issue,
-                &plan.title,
-                &body,
-                n_open,
-                !items.is_empty() || !approvals.is_empty(),
-            )?
-        } else {
-            issue.map(|i| (i.number, false))
-        };
-        let url = posted.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
+        let open = items.iter().filter(|i| !i.done).count();
+        let issue = issue.cloned();
+        let existing = issue.as_ref().map(|i| (i.number, false));
+        let url = existing.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
         let message = pq::message(&plan.title, &items, &approvals, url.as_deref());
-        plans.push(json!({"file": file, "plan_path": plan_path, "title": plan.title,
-            "items": items, "approvals": approvals, "open": n_open, "message": message,
-            "issue": posted.map(|(number, created)| json!({"number": number, "url": url, "created": created}))}));
+        let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
+        let any = !items.is_empty() || !approvals.is_empty();
+        let list = PlanChecklist {
+            plan_path,
+            title: plan.title,
+            items,
+            approvals,
+            open,
+            issue: existing,
+            url,
+            message,
+        };
+        Ok(Prepared {
+            list,
+            existing: issue,
+            body,
+            any,
+        })
+    }
+
+    /// Write the checklist issue of a prepared plan and fill in its number, url and message.
+    pub(crate) fn write(&self, app: &App, p: &mut Prepared) -> Result<()> {
+        let l = &mut p.list;
+        l.issue = post(
+            app.gh.as_ref(),
+            p.existing.as_ref(),
+            &l.title,
+            &p.body,
+            l.open,
+            p.any,
+        )?;
+        l.url = l
+            .issue
+            .map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
+        l.message = pq::message(&l.title, &l.items, &l.approvals, l.url.as_deref());
+        Ok(())
+    }
+}
+
+pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
+    let app = App::load(dir)?;
+    if args.post {
+        kill_switch(app.gh.as_ref())?;
+    }
+    let mut warnings = Vec::new();
+    let mut env = Env::load(&app, dir, &mut warnings)?;
+    let setup = if args.no_setup {
+        vec![]
+    } else {
+        doctor_items(dir, &mut warnings)
+    };
+    let mut prepared = Vec::new();
+    for (k, file) in args.files.iter().enumerate() {
+        let path = dir.map_or_else(|| file.into(), |d| d.join(file));
+        let text = std::fs::read_to_string(&path).map_err(|e| {
+            BosunError::error(
+                format!("cannot read {file}: {e}"),
+                "pass the path of a plan file, for example plans/bosun.md",
+            )
+        })?;
+        // Setup steps belong to the repo: listed once.
+        let first = if k == 0 { &setup[..] } else { &[] };
+        let p = env.prepare(&app, file, &text, args.post, first, &mut warnings)?;
+        prepared.push((file, p));
+    }
+    // Every plan passed its refusal checks: only now write.
+    let (mut plans, mut open) = (Vec::new(), 0);
+    for (file, mut p) in prepared {
+        if args.post {
+            env.write(&app, &mut p)?;
+        }
+        let c = p.list;
+        open += c.open;
+        let issue = c
+            .issue
+            .map(|(number, created)| json!({"number": number, "url": c.url, "created": created}));
+        plans.push(
+            json!({"file": file, "plan_path": c.plan_path, "title": c.title,
+            "items": c.items, "approvals": c.approvals, "open": c.open, "message": c.message,
+            "issue": issue}),
+        );
     }
     let message: Vec<&str> = plans.iter().filter_map(|p| p["message"].as_str()).collect();
     Ok(Outcome::data(json!({"message": message.join("\n\n"),
