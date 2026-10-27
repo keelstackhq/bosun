@@ -81,6 +81,7 @@ fn carries(fake: &FakeGithub) -> bool {
     let fake = verdicts_world(); two(&fake, H);
     let (code, v, st) = go(&fake);
     assert_eq!((code, st.as_str()), (0, "success: high risk (R-ci-review), approved by two verdicts: session_r, session_s (carried from a000000)"), "{v}");
+    assert_eq!(v["data"]["verdicts"], json!(["session_r", "session_s"]));
     let fake = verdicts_world(); verdict(&fake, H, "session_r", true); assert!(!carries(&fake)); // one is not enough
 }
 /// How many compares and tree reads `carry_over::check` made.
@@ -100,7 +101,7 @@ fn checks(fake: &FakeGithub) -> usize { fake.requests().iter().filter(|r| r.path
 }
 #[test] fn an_owner_who_withdrew_anywhere_on_the_path_blocks_the_carry() {
     for (state, sha, blocks) in [("CHANGES_REQUESTED", H2, true), ("DISMISSED", H2, true), ("DISMISSED", H, true), ("CHANGES_REQUESTED", H, true),
-        ("CHANGES_REQUESTED", M, false) /* off the first-parent path */, ("COMMENTED", H2, false)] {
+        ("CHANGES_REQUESTED", M, true) /* off the path: refused too */, ("COMMENTED", H2, false)] {
         let fake = world(); fake.review(1, "ada", "APPROVED", H); fake.review(1, "ada", state, sha);
         assert_eq!(!carries(&fake), blocks, "{state} on {sha}");
     }
@@ -142,15 +143,43 @@ fn verdicts_world() -> FakeGithub { world_of("channel/x.toml") }
     }
 }
 const DSIG_H: &str = "7eBGpBbT6Rte+wYI0WlDix0/r6VfQwXQ37+ml3p2mNKDrvnb3k6mjEaZOJHKM6bQ+Ex7yLNBc3UOUw8d3RG0CA=="; const DSIG_H2: &str = "v8nTMrF8x55j1N9vefhXen1154RY//XXdjrCIT1ynjYGSOYDTWaXCNeynmEwSC5GgcHkb8nswFRbYPbVi6TzDA==";
-fn delegate_world(sha: &str, sig: &str) -> FakeGithub { // R-d is a delegate rule; key k1 is a delegate key; one clean verdict and its signature on `sha`
+const DSIG_PR2: &str = "5AGwpJkyHt3Z8i8eXXwQnNBQi5ygi+z/2j1bj7qwdGse4hZ1fKyU9039EzVMMOEwLftUa1g9rAJuprP14rbuCQ==";
+/// R-d is a delegate rule and k1 a delegate key; session_r's verdict (`major` findings) and the delegate's signature are on `sha`.
+fn delegate_world(sha: &str, sig: &str, major: u32) -> FakeGithub {
     let fake = world_of("deny.toml"); fake.content(".bosun/risk.toml", D, "[[rule]]\nid = \"R-d\"\nwhy = \"d\"\napproval = \"delegate\"\npaths = [\"deny.toml\"]\n");
     fake.content(".bosun/approvers.toml", "refs/heads/main", "[[key]]\nid = \"k1\"\ned25519 = \"PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=\"\nrole = \"delegate\"\n");
-    verdict(&fake, sha, "session_r", true); signed(&fake, sha, sig); fake
+    let r = Record::Verdict { session: "session_r".into(), head_sha: sha.into(), approved: true, confidence: Some(0.95), major: Some(major) };
+    fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line())); signed(&fake, sha, sig); fake
 }
-#[test] fn the_delegate_class_does_not_carry_yet() {
-    let (code, v, st) = go(&delegate_world(H2, DSIG_H2)); // the same approval on the head itself passes
+#[test] fn a_delegate_signature_and_one_clean_verdict_on_h_carry() {
+    let (code, v, st) = go(&delegate_world(H2, DSIG_H2, 0)); // the same approval on the head itself passes
     assert_eq!((code, st.as_str(), &v["data"]["approval_carried_from"]), (0, "success: high risk (R-d), approved by delegate k1", &Value::Null), "{v}");
-    assert!(!carries(&delegate_world(H, DSIG_H)));
+    let (code, v, st) = go(&delegate_world(H, DSIG_H, 0));
+    assert_eq!((code, st.as_str(), &v["data"]["approval_carried_from"]), (0, "success: high risk (R-d), approved by delegate k1 (carried from a000000)", &json!(H)), "{v}");
+}
+#[test] fn a_delegate_carry_is_refused_for_any_doubt() {
+    let refused = |f: &dyn Fn(&FakeGithub), sig: &str, major: u32| { let fake = delegate_world(H, sig, major); f(&fake); !carries(&fake) };
+    assert!(refused(&|f| _ = f.comment(7, &LEASE.replace("session_a", "session_r")), DSIG_H, 0)); // the verdict session holds a lease
+    assert!(refused(&|f| f.review(1, "ada", "CHANGES_REQUESTED", H2), DSIG_H, 0)); // an owner withdrew on the path
+    assert!(refused(&|f| f.close_issue(7, "2026-10-22T09:00:00Z"), DSIG_H, 0)); // the linked task is not open: the delegate is blocked
+    assert!(refused(&|f| f.pull_file(1, ".bosun/approvers.toml", "modified", 1, 0, Some("@@ -1 +1 @@\n+x")), DSIG_H, 0)); // trust file: signed_ok
+    assert!(refused(&|_| (), DSIG_H2, 0)); // the delegate signed H2, not h
+    assert!(refused(&|_| (), DSIG_PR2, 0)); // the delegate signed h for another PR
+    assert!(refused(&|_| (), DSIG_H, 1)); // the verdict has a major finding
+    let fake = hops(delegate_world(H, DSIG_H, 0)); verdict(&fake, X1, "session_t", false); assert!(!carries(&fake)); // a record on a hop
+    let fake = delegate_world(H, DSIG_H, 0); verdict(&fake, OFF, "session_t", false); assert!(!carries(&fake)); // newer, off the path
+}
+fn no_owners(sha: &str, sig: &str) -> bool { let fake = delegate_world(sha, sig, 0); fake.content("governance/owners.toml", D, ""); carries(&fake) }
+#[test] fn a_delegate_approves_nothing_on_the_head_where_the_repo_has_no_owners() { assert!(!no_owners(H2, DSIG_H2)); }
+#[test] fn a_delegate_carries_nothing_where_the_repo_has_no_owners() { assert!(!no_owners(H, DSIG_H)); }
+#[test] fn a_later_approval_of_h_clears_an_older_request_for_changes() {
+    for state in ["CHANGES_REQUESTED", "DISMISSED"] { let fake = world(); fake.review(1, "ada", state, OFF); fake.review(1, "ada", "APPROVED", H); assert!(carries(&fake), "{state}"); }
+}
+#[test] fn an_owner_withdrawal_on_a_commit_off_the_path_refuses_every_class() {
+    for f in [|f: &FakeGithub| f.review(1, "ada", "APPROVED", H), |f: &FakeGithub| signed(f, H, SIG_H)] {
+        for state in ["CHANGES_REQUESTED", "DISMISSED"] { let fake = world(); f(&fake); fake.review(1, "ada", state, OFF); assert!(!carries(&fake), "{state}"); }
+        let fake = world(); f(&fake); fake.review(1, "bob", "CHANGES_REQUESTED", OFF); assert!(carries(&fake)); // not an owner
+    }
 }
 #[test] fn an_edited_counted_verdict_record_does_not_carry() {
     let fake = verdicts_world(); two(&fake, H); fake.last_comment(|c| c.updated_at = "2026-10-23T00:00:00Z".into()); assert!(!carries(&fake));

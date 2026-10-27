@@ -283,7 +283,7 @@ pub(crate) fn carry_approval(
     default_branch: &str,
     owners: &[String],
     approve: &dyn Fn(&str) -> Option<Found>,
-) -> Option<(String, String)> {
+) -> Option<(String, String, Vec<String>)> {
     for h in candidates(gh, pull, default_branch) {
         let Some(found) = approve(&h).filter(Found::passed) else {
             continue;
@@ -303,11 +303,25 @@ pub(crate) fn carry_approval(
         let Some(approval) = approval else {
             continue;
         };
-        if standing(&comments, &reviews, owners, &path, (&h, approval)) {
+        // An owner whose newest decisive review on any commit (by id) withdraws, even one off the
+        // path (a force-pushed-away head), refuses; a later approval of h clears an older one.
+        let anywhere = owners.iter().any(|o| {
+            let decisive = |r: &&Review| {
+                r.user.eq_ignore_ascii_case(o)
+                    && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains(&r.state.as_str())
+            };
+            reviews
+                .iter()
+                .rev()
+                .find(decisive)
+                .is_some_and(|r| withdrawn(Some(&r.state)))
+        });
+        if !anywhere && standing(&comments, &reviews, owners, &path, (&h, approval)) {
+            let counted = found.counted().unwrap_or_default().to_vec();
             let who = found
                 .approved_by
-                .unwrap_or_else(|| format!("two verdicts: {}", found.verdicts.join(", ")));
-            return Some((h, who));
+                .unwrap_or_else(|| format!("two verdicts: {}", counted.join(", ")));
+            return Some((h, who, counted));
         }
     }
     None
