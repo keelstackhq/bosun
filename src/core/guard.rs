@@ -1510,6 +1510,13 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if dump {
             return Some(decrypt_reason("the environment"));
         }
+        // `env [-i] [-u N] [K=V].. git ..` runs git: judge its args as git's.
+        #[rustfmt::skip]
+        let skip = args.iter().scan(false, |val, a| Some(std::mem::replace(val, matches!(*a, "-u" | "-C" | "-S")) || a.starts_with('-') || assigned(a).is_some())).take_while(|s| *s).count();
+        let (name, args) = match args.get(skip) {
+            Some(g) if name == "env" && base(g) == "git" => (base(g), &args[skip + 1..]),
+            _ => (name, args),
+        };
         // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
         let (mut it, git) = (args.iter(), name == "git");
         let verb = loop {
@@ -1593,24 +1600,37 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             #[rustfmt::skip]
             let home = top.is_none_or(|s| s.is_some_and(|s| matches!(*s, "root" | "home")));
             // Two `..` climb past a repo's parent: `../../user` from `~/repo/sub` is home.
-            let deep = segs.iter().take_while(|s| **s == "..").count() >= 2;
+            #[rustfmt::skip]
+            let rel = ["$PWD/", "${PWD}/", "\"$PWD\"/", "/proc/self/cwd/"].iter().find_map(|p| b.strip_prefix(p)).unwrap_or(&b);
+            let deep = rel.split('/').take_while(|s| *s == "..").count() >= 2;
             key_root(&b) == 2 || key_root(&b) == 1 && (home || deep)
         });
         let no_index = fallback || key_base || args.iter().any(|a| long_prefix(a, "--no-index", 6));
         if git && verb == "grep" && no_index {
             #[rustfmt::skip]
             const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
-            // The first bare word is the pattern, unless `-e` or `-f` gave it.
-            let mut pat = args.iter().any(|a| matches!(*a, "-e" | "-f"));
+            // `GIT_ICASE_PATHSPECS` and `GIT_GLOB_PATHSPECS` widen every path (`.CONFIG`).
+            #[rustfmt::skip]
+            let wide = words.iter().any(|w| matches!(assigned(w).unwrap_or(w), "GIT_ICASE_PATHSPECS" | "GIT_GLOB_PATHSPECS"));
+            if wide {
+                return Some(decrypt_reason("a pathspec env var on a git grep search"));
+            }
+            // The first bare word is the pattern, unless `-e` or `-f` gave it (`-eX`, `-fpat`).
+            #[rustfmt::skip]
+            let mut pat = args.iter().any(|a| !a.starts_with("--") && (a.starts_with("-e") || a.starts_with("-f")));
             let (mut roots, mut it, mut paths) = (Vec::new(), it.clone(), false);
             while let Some(a) = it.next() {
                 match *a {
                     "--" if !paths => paths = true,
                     _ if !paths && VALUE.contains(a) => drop(it.next()),
                     _ if !paths && a.starts_with('-') => {}
+                    // Pathspec magic (`:(exclude)x`, `:!x`, `:/`) searches the whole base; as the
+                    // pattern it is judged as a root too, and the next word is a root.
+                    _ if a.trim_start_matches(['$', '\'', '"']).starts_with(':') => {
+                        pat = true;
+                        roots.push(".");
+                    }
                     _ if !std::mem::replace(&mut pat, true) => {}
-                    // Pathspec magic (`:(exclude)x`, `:!x`, `:/`) searches the whole base.
-                    _ if a.trim_start_matches(['\'', '"']).starts_with(':') => roots.push("."),
                     _ => roots.push(*a),
                 }
             }
@@ -3083,6 +3103,16 @@ mod tests {
         ("git -C ~ grep x ':^foo'", true), ("git -C /root grep x ':(glob)*'", true),
         ("git grep --no-index x ':(exclude)y'", false), ("git grep x -- ':(exclude)vendor'", false),
         ("git -C src grep x ':!tests'", false), ("git -C ~ grep x -- src ':!src/t'", true),
+        ("git -C ~ grep -eSECRET ':(top)' src", true), ("git -C ~ grep -eSECRET ':/' src", true),
+        ("git -C ~ grep -fpat ':(top)' src", true), ("git -C ~ grep x src $':(top)'", true),
+        ("git grep --no-index ':x' ~", true), ("git -C ~ grep ':x' src", true), ("GIT_ICASE_PATHSPECS=1 git -C ~ grep x -- .CONFIG", true),
+        ("export GIT_GLOB_PATHSPECS=1; git -C ~ grep x src", true),
+        ("env GIT_ICASE_PATHSPECS=1 git grep --no-index x src", true),
+        ("env git grep --no-index x ~", true), ("env -i X=1 git -C ~ grep x", true),
+        ("GIT_ICASE_PATHSPECS=1 git grep x src", false), ("git grep -n foo ':!tests'", false),
+        ("git -C src grep x ':/'", false), ("git -C ../bosun grep foo", false),
+        ("git -C $PWD/../../x grep x", true), ("git -C /proc/self/cwd/../../x grep x", true),
+        ("git -C ${PWD}/../../x grep x", true), ("git -C \"$PWD\"/../../x grep x", true),
         // Two or more `..` and one segment may be a home (`../../user` from `~/repo/sub`).
         ("git -C ../../user grep x", true), ("git -C ../../../root grep x", true),
         ("git -C ../../bob grep -e x", true), ("git -C ../../../x grep x", true),
