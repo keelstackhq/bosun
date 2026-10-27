@@ -16,41 +16,41 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
 
 ## Tasks
 
-- [ ] **Q0: design, plan, format reference** (docs only)
+- [x] **Q0: design, plan, format reference** (docs only) (#258)
   touch: the design, this plan, docs/prerequisites.md (new), fragments
-- [ ] **Q1a: `core::prereqs` parser (F1)**
+- [x] **Q1a: `core::prereqs` parser (F1)** (#259)
   touch: src/core/prereqs.rs (new), src/core/mod.rs, tests/prereqs_parse.rs (new), fragments
   - `parse(text, &Plan)`: the `## Prerequisites` section, validated against the plan.
   - `blocked_by(prereqs, item, task)`.
-- [ ] **Q1t: `core::text::inert`** (off main; Q1b and Q3c merge it in)
+- [x] **Q1t: `core::text::inert`** (off main; Q1b and Q3c merge it in) (#272)
   touch: src/core/text.rs (new), src/core/mod.rs, fragments
   - Text for the owner made inert: Cc, Cf, Zl, Zp to spaces, shown as an inline code span.
-- [ ] **Q1b: the checklist (F4 rendering, F6 `replaces:`)** — depends Q1a
+- [x] **Q1b: the checklist (F4 rendering, F6 `replaces:`)** — depends Q1a (#261)
   touch: src/core/prereqs.rs, tests/prereqs_checklist.rs (new), tests/prereqs_parse.rs, fragments
   - `render_issue`, `read_issue`, `sort`, `message`: the checklist as an issue body (one marker
     per line) and a chat text; the `replaces:` field.
-- [ ] **Q1c: approvals at merge (F3)** — depends Q1b
+- [x] **Q1c: approvals at merge (F3)** — depends Q1b (#262)
   touch: src/core/prereqs.rs, tests/prereqs_approvals.rs (new), fragments
   - `approvals(&Plan, &Rules, bosun_code)`: per task owner/delegate at merge, batch = level.
-- [ ] **Q2: `bosun prereqs` (F2, F3 setup items, F4)** — depends Q1c
+- [x] **Q2: `bosun prereqs` (F2, F3 setup items, F4)** — depends Q1c (#268, #269, #280)
   touch: src/cli/prereqs.rs (new), src/cli/mod.rs, src/lib.rs, src/github/mod.rs (`exists`),
   tests/cli_prereqs.rs (new), tests/common/fake.rs, fragments
-- [ ] **Q3a: gating (F5)** — depends Q2
+- [x] **Q3a: gating (F5)** — depends Q2 (#277, #278, #281, #288)
   touch: src/cli/prereqs_gate.rs (new: open items of `bosun:prereqs` issues per task),
   src/cli/plan.rs (`promote`, refresh before promote, `data.held`), src/cli/claim.rs (one call
   before the claim), src/cli/wave.rs (leave held tasks out), src/cli/spawn.rs (refuse a blocked
   epic), tests/cli_prereqs_gate.rs (new), fragments
-- [ ] **Q3d: hook keeps agents out of the checklist (F4)** — depends Q3a
+- [x] **Q3d: hook keeps agents out of the checklist (F4)** — depends Q3a (#279, #294)
   touch: src/hooks/prereqs_lock.rs (new), src/hooks/pre_tool_use.rs (one call), tests/hook_prereqs.rs
   (new), fragments; best effort (F4)
-- [ ] **Q3b: `bosun hold` (F6)** — depends Q3a
+- [x] **Q3b: `bosun hold` (F6)** — depends Q3a (#289, #290, #291)
   touch: src/cli/hold.rs (new), src/cli/mod.rs (command and Args), src/lib.rs (dispatch),
   tests/cli_hold.rs (new), fragments
-- [ ] **Q3c: approval batches (F7)** — depends Q2
+- [x] **Q3c: approval batches (F7)** — depends Q2 (#273)
   touch: src/cli/approve.rs (`data.message`, `data.message_id`), src/cli/intake.rs (next step text),
   tests/cli_approve_message.rs (new), fragments
-- [ ] **Q4: docs (F6, F8)** — depends Q3b and P5, P7 of
-  `docs/superpowers/plans/2026-10-27-parallel-conflicts.md` (branch `docs/parallel-conflicts-design`)
+- [x] **Q4: docs (F6, F8)** — depends Q3b and P5, P7 of
+  `docs/superpowers/plans/2026-10-27-parallel-conflicts.md` (branch `docs/parallel-conflicts-design`); landed in #292
   touch: AGENTS.md, channel/pieces/core/files/sections/agents.md, docs/plan-format.md (link),
   docs/spec/<section> (new section), fragments
 - [ ] **Q5: org docs** (other repos): D-009 in keelstackhq/decisions; playbook and Start here in
