@@ -86,3 +86,22 @@ fn a_failed_pending_post_does_not_stop_the_run() {
     let st = risk_statuses(&fake);
     assert_eq!((st.len(), st[0].0.as_str()), (1, "success"), "{st:?}");
 }
+
+#[test]
+fn a_high_risk_run_waiting_for_the_owner_keeps_failure_not_error() {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "Closes #7");
+    fake.pull_file(
+        1,
+        "src/cli/risk_check.rs",
+        "modified",
+        1,
+        0,
+        Some("@@ -0,0 +1,1 @@\n+// x"),
+    );
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 5, "{v}");
+    let st = risk_statuses(&fake);
+    assert_eq!(st[0].0, "pending");
+    assert_eq!(st.last().unwrap().0, "failure", "{st:?}");
+}
