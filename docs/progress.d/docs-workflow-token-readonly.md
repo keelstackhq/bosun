@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P9 follow-up · spec 08: a read-only default workflow token; verdict-run binding is #298 · PR (docs/workflow-token-readonly)
