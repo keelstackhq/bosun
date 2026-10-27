@@ -1,5 +1,5 @@
-//! `bosun prereqs <plan>... [--no-setup]`: the human steps a plan needs up front, checked through
-//! the API and the ticks of the plan's checklist issue (design F2-F4).
+//! `bosun prereqs <plan>... [--post] [--no-setup]`: the human steps a plan needs up front, checked
+//! through the API, and with `--post` kept in one checklist issue per plan (design F2-F4).
 
 use std::path::Path;
 
@@ -7,13 +7,13 @@ use serde_json::{Value, json};
 
 use super::PrereqsArgs;
 use super::plan::{plan_errors, plan_key};
-use crate::app::{App, Result, default_branch};
+use crate::app::{App, Result, default_branch, kill_switch};
 use crate::core::approve::{APPROVERS_PATH, Role, parse_approvers};
 use crate::core::plan;
 use crate::core::prereqs::{self as pq, CheckItem, Verify};
 use crate::core::risk::Rules;
 use crate::github::http::enc;
-use crate::github::{Github, IssueState};
+use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const LABEL: &str = "bosun:prereqs";
@@ -23,6 +23,9 @@ const BOSUN_CODE_MARKER: &str = "src/cli/risk_check.rs";
 pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
+    if args.post {
+        kill_switch(gh)?;
+    }
     let root = app.ctx.dir.as_path();
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
     let rules = match read(RULES_PATH) {
@@ -92,7 +95,19 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         pq::sort(&mut items);
         let n_open = items.iter().filter(|i| !i.done).count();
         open += n_open;
-        let posted = issue.map(|i| (i.number, false));
+        let posted = if args.post {
+            let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
+            post(
+                gh,
+                issue,
+                &plan.title,
+                &body,
+                n_open,
+                !items.is_empty() || !approvals.is_empty(),
+            )?
+        } else {
+            issue.map(|i| (i.number, false))
+        };
         let url = posted.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
         let message = pq::message(&plan.title, &items, &approvals, url.as_deref());
         plans.push(json!({"file": file, "plan_path": plan_path, "title": plan.title,
@@ -102,6 +117,40 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
     let message: Vec<&str> = plans.iter().filter_map(|p| p["message"].as_str()).collect();
     Ok(Outcome::data(json!({"message": message.join("\n\n"),
         "plans": plans, "open": open, "warnings": warnings})))
+}
+
+/// Create the issue or update it (body, and open or closed to match the open count).
+/// Returns its number and whether it was created.
+fn post(
+    gh: &dyn Github,
+    issue: Option<&Issue>,
+    title: &str,
+    body: &str,
+    open: usize,
+    any: bool,
+) -> Result<Option<(u64, bool)>> {
+    let Some(i) = issue else {
+        if !any {
+            return Ok(None);
+        }
+        gh.ensure_label(LABEL, "0e8a16", "the owner checklist of a plan")?;
+        let made = gh.create_issue(&format!("Owner checklist: {title}"), body, &[LABEL])?;
+        return Ok(Some((made.number, true)));
+    };
+    let is_open = i.state == "open";
+    let (state, state_reason) = match (open, is_open) {
+        (0, true) => (Some(PatchState::Closed), Some("completed".to_string())),
+        (1.., false) => (Some(PatchState::Open), None),
+        _ => (None, None),
+    };
+    let patch = IssuePatch {
+        body: Some(body.into()),
+        state,
+        state_reason,
+        ..IssuePatch::default()
+    };
+    gh.update_issue(i.number, patch)?;
+    Ok(Some((i.number, false)))
 }
 
 /// `Some(found)` when the API answered, `None` when it did not (owner, or a 403).

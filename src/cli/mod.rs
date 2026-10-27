@@ -146,7 +146,7 @@ pub enum Command {
     ReviewCi(ReviewCiArgs),
     /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
     Notify(NotifyArgs),
-    /// List the human steps a plan needs up front (and its approvals).
+    /// List the human steps a plan needs up front (and its approvals); --post opens the checklist issue.
     Prereqs(PrereqsArgs),
 }
 
@@ -616,6 +616,9 @@ pub struct PrereqsArgs {
     /// The plan files, for example plans/bosun.md.
     #[arg(required = true)]
     pub files: Vec<String>,
+    /// Create or update the checklist issue of each plan.
+    #[arg(long)]
+    pub post: bool,
     /// Leave out the `bosun doctor` steps.
     #[arg(long)]
     pub no_setup: bool,
