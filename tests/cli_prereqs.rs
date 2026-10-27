@@ -25,6 +25,7 @@ fn write(dir: &Path, rel: &str, text: &str) {
 fn setup() -> (tempfile::TempDir, FakeGithub) {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     write(tmp.path(), "plans/x.md", PLAN);
+    fake.content("plans/x.md", "main", PLAN);
     (tmp, fake)
 }
 
@@ -137,6 +138,58 @@ fn a_403_falls_back_to_the_tick() {
     tick(&fake, "H1");
     let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
     assert_eq!(item(&v, "H1")["done"], true);
+}
+
+#[test]
+fn an_api_item_found_by_the_api_stays_unticked() {
+    let (tmp, fake) = setup();
+    fake.present(SECRET);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(item(&v, "H1")["done"], true);
+    let body = fake.issue_state(1).body;
+    let h1 = body.lines().find(|l| l.contains("**H1**")).unwrap();
+    assert!(
+        h1.starts_with("- [ ] ") && h1.contains("verified by bosun"),
+        "{h1}"
+    );
+    // Later the token cannot read it and nobody ticked: open.
+    fake.state.lock().unwrap().present.clear();
+    fake.fail_path("secrets/NPM_TOKEN", 403);
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(item(&v, "H1")["done"], false);
+}
+
+#[test]
+fn post_needs_the_plan_on_the_default_branch() {
+    let (tmp, fake) = setup();
+    let local = PLAN.replace("add it", "add it twice");
+    write(tmp.path(), "plans/x.md", &local);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(
+        v["error"]["message"],
+        "plans/x.md on main differs from the local copy"
+    );
+    assert!(fake.state.lock().unwrap().issues.is_empty());
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["warnings"].as_array().unwrap().len(), 1);
+    fake.content("plans/x.md", "main", &local);
+    assert_eq!(go(&fake, tmp.path(), &["--no-setup", "--post"]).0, 0);
+    assert_eq!(fake.state.lock().unwrap().issues.len(), 1);
+}
+
+#[test]
+fn two_checklist_issues_need_a_human() {
+    let (tmp, fake) = setup();
+    let body = "<!-- bosun:prereqs plans/x.md -->\n";
+    fake.issue(7, "Owner checklist: x", &["bosun:prereqs"], body);
+    fake.issue(8, "Owner checklist: x", &["bosun:prereqs"], body);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["error"]["message"], "two checklist issues for plans/x.md");
+    assert_eq!(fake.state.lock().unwrap().issues[0].body, body);
 }
 
 #[test]

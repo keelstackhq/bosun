@@ -481,7 +481,14 @@ pub fn render_issue(
         }
         s += &format!("### {head}\n");
         for i in rows {
-            let x = if i.done { 'x' } else { ' ' };
+            // Only an owner's tick shows: bosun never draws a box for what the API found.
+            let shown = i.done && matches!(i.state.as_str(), "owner" | "api 403");
+            let x = if shown { 'x' } else { ' ' };
+            let seen = if i.state == "api ok" {
+                " \u{2014} verified by bosun"
+            } else {
+                ""
+            };
             let (title, steps, verify) = (
                 inert(&i.title, 120),
                 inert(&i.steps, 400),
@@ -489,7 +496,7 @@ pub fn render_issue(
             );
             let (who, blocks) = (by(i), i.blocks.join(", "));
             s += &format!(
-                "- [{x}] **{}**{who} {title} \u{2014} {steps} _(verify {verify}; blocks {blocks})_ <!-- bosun:prereq {} sum={} state={} -->\n",
+                "- [{x}] **{}**{who} {title} \u{2014} {steps}{seen} _(verify {verify}; blocks {blocks})_ <!-- bosun:prereq {} sum={} state={} -->\n",
                 i.id, i.id, i.sum, i.state
             );
         }
