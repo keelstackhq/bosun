@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/followups · a lost claim re-checks for a third winner after its revert; the edit hook judges canonical paths (symlinks, `link/../x`); spec lists the remaining limits · PR (fix/claim-hook-followups)

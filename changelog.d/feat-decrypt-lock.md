@@ -1,0 +1,1 @@
+- The hook refuses decrypting secrets for agents (`sops` other than version/help/encrypt, `age -d`, `hoist secrets edit|sync|grant|revoke|rotate*`), reading the sops age key and printing `SOPS_AGE_KEY`.

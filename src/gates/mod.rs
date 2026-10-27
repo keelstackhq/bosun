@@ -2,6 +2,7 @@
 //! it to the affected packages, runs it with its output on stderr, and reports one JSON object.
 
 pub mod adapters;
+pub mod ci_env;
 pub mod integrity;
 pub mod main_open;
 pub mod packages;

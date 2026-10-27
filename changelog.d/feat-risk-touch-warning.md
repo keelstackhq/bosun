@@ -1,0 +1,1 @@
+- `bosun risk-check` warns (data.out_of_touch, a line in the Risk note of a high-risk PR body, one stderr line) about PR files outside the linked task's live lease; it never changes the risk level or the status state. `bosun pr` skips the touch check for a lease with an empty touch (a spawn's epic lease).
