@@ -22,5 +22,6 @@ pub mod spawn;
 pub mod state;
 pub mod stop;
 pub mod title;
+pub mod touch;
 pub mod verdict;
 pub mod wave;
