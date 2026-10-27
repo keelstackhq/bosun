@@ -772,6 +772,35 @@ fn intake_added(imp: &Importer, wanted: &[&str]) -> Result<HashMap<String, (u64,
     Ok(added)
 }
 
+/// Whether two parses of an item agree on everything that decides what gets built (line numbers
+/// and the free-text description aside).
+fn same_item(a: &plan::Item, b: &plan::Item) -> bool {
+    let task = |t: &plan::Task| {
+        (
+            t.id.clone(),
+            t.title.clone(),
+            t.touch.clone(),
+            t.depends.clone(),
+            t.size,
+            t.kind.clone(),
+            t.risk.clone(),
+        )
+    };
+    let uc = |u: &plan::Uc| (u.id.clone(), u.text.clone());
+    (&a.id, &a.title, &a.area, &a.depends) == (&b.id, &b.title, &b.area, &b.depends)
+        && a.tasks.iter().map(task).eq(b.tasks.iter().map(task))
+        && a.ucs.iter().map(uc).eq(b.ucs.iter().map(uc))
+}
+
+/// The plan file on the default branch; `None` when it is missing or does not parse.
+fn plan_on_default(imp: &Importer) -> Result<Option<Plan>> {
+    let head = default_branch(imp.gh)?;
+    Ok(imp
+        .gh
+        .file_at(&imp.plan_path, &head)?
+        .and_then(|t| plan::parse(&t).ok()))
+}
+
 fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
     let m = marker(pid);
     issues.iter().any(|i| i.body_text().contains(&m))
@@ -780,6 +809,8 @@ fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     let plan_path = imp.plan_path.clone();
     let mut added: Option<HashMap<String, (u64, u64)>> = None;
+    // The plan file on the default branch, read once: an intake vouches only for what merged.
+    let mut on_default: Option<Option<Plan>> = None;
     for item in p
         .items
         .iter()
@@ -804,7 +835,20 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 .collect();
             added = Some(intake_added(imp, &wanted)?);
         }
-        let done_by = added.as_ref().and_then(|m| m.get(&item.id)).copied();
+        let mut done_by = added.as_ref().and_then(|m| m.get(&item.id)).copied();
+        if done_by.is_some() {
+            if on_default.is_none() {
+                on_default = Some(plan_on_default(imp)?);
+            }
+            let merged = on_default.as_ref().and_then(Option::as_ref);
+            if !merged.is_some_and(|m| m.items.iter().any(|i| same_item(i, item))) {
+                eprintln!(
+                    "plan: {} differs from {} on the default branch; {} is not trusted as merged",
+                    item.id, imp.plan_path, item.id
+                );
+                done_by = None;
+            }
+        }
         let pslot = imp.slot(&pid, (&item.id, Some("P")), || {
             let by = done_by
                 .map(|(n, pr)| {

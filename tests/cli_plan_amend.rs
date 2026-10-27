@@ -309,6 +309,7 @@ fn intake_env(mode: &str) -> (tempfile::TempDir, FakeGithub, String) {
             }
             let after = if mode == "not-added" { PLAN } else { &with_m3 };
             fake.content("plan.md", "merge60", after);
+            fake.content("plan.md", "main", &with_m3);
         }
         fake.close_issue(intake, T0);
     }
@@ -412,6 +413,7 @@ fn landed_intake(
     );
     fake.content("plan.md", shas.0, files.0);
     fake.content("plan.md", shas.1, files.1);
+    fake.content("plan.md", "main", files.1);
     fake.close_issue(intake, T0);
 }
 
@@ -524,6 +526,45 @@ fn amend_trusts_a_merged_intake_and_promotes_the_new_tasks_at_once() {
     assert!(p.body.contains("PR #60"), "{}", p.body);
     let t = fake.issue_state(find(&fake, "<!-- bosun:plan M3/T1 -->"));
     assert!(t.labels.contains(&"bosun:state/ready".to_string()));
+}
+
+#[test]
+fn amend_trusts_only_what_the_default_branch_has() {
+    let (tmp, fake, file) = intake_env("merged");
+    let extra = M3.replace(
+        "### Done when",
+        "- T2: Unreviewed\n  touch: .github/workflows/ci.yml\n\n### Done when",
+    );
+    write_plan(tmp.path(), &format!("{PLAN}{extra}"));
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]), "{v}");
+    let p = fake.issue_state(find(&fake, "<!-- bosun:plan M3/P -->"));
+    assert!(p.labels.contains(&"bosun:state/ready".to_string()));
+    assert_eq!(p.state, "open");
+    let t = fake.issue_state(find(&fake, "<!-- bosun:plan M3/T2 -->"));
+    assert!(t.labels.contains(&"bosun:state/planned".to_string()));
+}
+
+#[test]
+fn amend_trusts_nothing_when_the_default_branch_has_no_parsable_plan() {
+    for text in [None, Some("not a plan\n")] {
+        let (tmp, fake, file) = intake_env("merged");
+        {
+            let mut s = fake.state.lock().unwrap();
+            s.contents.remove("main:plan.md");
+            if let Some(t) = text {
+                s.contents.insert("main:plan.md".into(), t.into());
+            }
+        }
+        let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+        assert_eq!(code, 0, "{v}");
+        assert_eq!(
+            v["data"]["promoted"],
+            serde_json::json!([]),
+            "{text:?}: {v}"
+        );
+    }
 }
 
 #[test]
