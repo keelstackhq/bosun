@@ -62,7 +62,14 @@ Conflict avoidance (three layers):
 2. Claim check: `bosun claim` refuses a task if its touch paths overlap a live lease, or if another
    orchestrator owns its area. Exit 3 with a JSON reason. An area owner that is the
    parent of the claiming session does not block it, so spawned workers can claim in their
-   orchestrator's area.
+   orchestrator's area. A re-claim of an own active task with `--touch` grows the lease: the
+   globs it lacks pass the same overlap check (exit 3 on a clash), then a new lease record with
+   the old touch plus the added globs is written (`data.added`), without changing the state;
+   without new globs it changes nothing. A grow that loses the claim race edits its record back
+   to the previous one (the lease is never ended) and exits 3 naming the winner; if that edit
+   fails it exits 1 and the fix says to release the task. The grow re-reads the active issues
+   after it writes, and if the task is no longer held (state not active, or a newer `lease-end`
+   of the session) it edits its record back and exits 3.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
