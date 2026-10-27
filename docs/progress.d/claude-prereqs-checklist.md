@@ -1,0 +1,1 @@
+- 2026-10-27 · Q1b · core::prereqs: approval batches, the checklist issue and the chat message · PR (claude/prereqs-checklist)

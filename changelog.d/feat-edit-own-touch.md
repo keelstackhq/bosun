@@ -1,0 +1,1 @@
+- The edit hook keeps a session with a lease inside its own touch: an existing file outside it (and its lockfile companions) is denied with the `bosun claim --touch` fix; fragments and new files stay free.

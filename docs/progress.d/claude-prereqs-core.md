@@ -1,0 +1,1 @@
+- 2026-10-27 · Q1a · core::prereqs: the Prerequisites section parser and blocked_by · PR (claude/prereqs-core)
