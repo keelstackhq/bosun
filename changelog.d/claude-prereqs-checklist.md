@@ -1,1 +1,1 @@
-- `core::prereqs`: the owner checklist as an issue body: one bosun marker per line naming what an item blocks and whether bosun verified it, read back so that an API item is done only when verified; the parser takes `replaces:`.
+- `core::prereqs`: the owner checklist as an issue body. Plan and agent text is shown inert. Each line carries a bosun marker with a content digest; `read_issue` and `ticked` count a tick only on a single line whose digest matches the plan. Ids, blocks and verify kinds come only from the plan. The parser takes `replaces:`.
