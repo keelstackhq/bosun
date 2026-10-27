@@ -257,6 +257,8 @@ Trust in records: a `{"bosun":…}` record in a comment is trusted from any comm
 Touch paths are repo-relative globs (`*` within a segment, `**` across segments). Two touch lists
 overlap when a path of one matches a glob of the other, or two globs can match a common path.
 
+`bosun reap` closes an open epic (marker `bosun:epic`; state ready, planned, claimed or none; no live lease: a spawned orchestrator's epic stays `claimed` after `result`, so it closes once its lease ended) whose tasks are all merged or closed and at least one is merged or closed as completed (a task closed with no reason or as not planned counts as dropped), and whose tasks have not changed for 10 minutes (an amend may be adding one): it gets state `merged`, is closed as completed and is listed in `data.epics_closed`. Open plan issues are listed first; all of them only when an unleased epic has no open task. This is housekeeping: a failure there is logged to stderr and put in `data.epics_error`, and the rest of the reap stands (exit 0). When `plan import` or `plan amend` leaves such a closed epic with an open task (a new task, a reopened or re-added one; decided from what the run made or found, with no new list, since GitHub's list lags), the epic is opened again as `ready` and listed in `data.reopened` (`data.would_reopen` in a dry run), which also repairs an epic that reap closed mid-amend (the quiet period narrows that race, the next import or amend repairs it).
+
 Intake: intake is the only way that new work enters. `bosun intake` (from Slack, a lesson, a flake
 or a human) writes a plan amendment as a kind/plan task. Only a merged plan task makes its tasks
 ready. After an amendment merges, `bosun plan amend` imports the new work and closes what the plan dropped.

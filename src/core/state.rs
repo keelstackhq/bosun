@@ -119,10 +119,50 @@ pub fn transition_allowed(from: State, to: State) -> bool {
     )
 }
 
+/// How a task of an epic ended: `Done` (merged, or closed as completed), `Dropped` (closed some
+/// other way, for example not planned) or `Open`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskEnd {
+    Done,
+    Dropped,
+    Open,
+}
+
+impl TaskEnd {
+    pub fn of(state: Option<State>, closed: bool, reason: Option<&str>) -> TaskEnd {
+        if state == Some(State::Merged) || (closed && reason == Some("completed")) {
+            TaskEnd::Done
+        } else if closed {
+            TaskEnd::Dropped
+        } else {
+            TaskEnd::Open
+        }
+    }
+}
+
+/// Whether an epic is complete: no task is open and at least one was done (an epic whose tasks
+/// were all dropped completed nothing).
+pub fn epic_complete(tasks: &[TaskEnd]) -> bool {
+    tasks.iter().all(|t| *t != TaskEnd::Open) && tasks.contains(&TaskEnd::Done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use State::*;
+
+    #[test]
+    fn epic_complete_needs_a_done_task_and_none_open() {
+        use TaskEnd::*;
+        assert!(!epic_complete(&[]));
+        assert!(epic_complete(&[Done, Dropped]));
+        assert!(!epic_complete(&[Done, Open]));
+        assert!(!epic_complete(&[Dropped]));
+        assert_eq!(TaskEnd::of(Some(Merged), false, None), Done);
+        assert_eq!(TaskEnd::of(Some(Ready), true, Some("completed")), Done);
+        assert_eq!(TaskEnd::of(Some(Ready), true, Some("not_planned")), Dropped);
+        assert_eq!(TaskEnd::of(Some(Ready), false, None), Open);
+    }
 
     #[test]
     fn names_round_trip() {

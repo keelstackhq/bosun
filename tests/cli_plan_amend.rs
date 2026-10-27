@@ -429,3 +429,83 @@ fn wave_plan_does_not_count_not_planned_as_merged() {
     let (_, v) = common::run(&fake, "session_test", T0, &["wave", "plan", "10"]);
     assert_eq!(v["data"]["run"][0]["issue"], 12, "{v}");
 }
+
+/// PLAN with a second task in M2.
+fn plan_with_t2() -> String {
+    PLAN.replace(
+        "- T1: Import\n  touch: src/cli/plan.rs\n",
+        "- T1: Import\n  touch: src/cli/plan.rs\n- T2: More\n  touch: src/cli/more.rs\n",
+    )
+}
+
+/// Mark the plan issue `id` merged and closed, as a merged PR leaves it.
+fn finish(fake: &FakeGithub, id: &str) {
+    let n = find(fake, &format!("<!-- bosun:plan {id} -->"));
+    let labels = vec!["bosun:source/plan".into(), "bosun:state/merged".into()];
+    let mut s = fake.state.lock().unwrap();
+    s.issues.iter_mut().find(|i| i.number == n).unwrap().labels = labels;
+    drop(s);
+    fake.close_issue(n, T0);
+}
+
+/// Reap closes the epic of M2, whose plan task and T1 are finished; returns its number.
+fn reaped_epic(fake: &FakeGithub) -> u64 {
+    let epic = find(fake, "<!-- bosun:plan M2 -->");
+    finish(fake, "M2/P");
+    finish(fake, "M2/T1");
+    let (_, v) = common::run(fake, "janitor", T0, &["reap"]);
+    assert_eq!(v["data"]["epics_closed"], serde_json::json!([epic]), "{v}");
+    epic
+}
+
+fn assert_reopened(fake: &FakeGithub, v: &Value, epic: u64) {
+    let e = fake.issue_state(epic);
+    assert_eq!(e.state, "open");
+    let l = &e.labels;
+    assert!(l.contains(&"bosun:state/ready".into()) && !l.contains(&"bosun:state/merged".into()));
+    assert!(ids(&v["data"]["reopened"]).contains(&"M2"), "{v}");
+    assert_eq!(v["data"]["epics"][1]["state"], "ready", "{v}");
+    let t2 = fake.issue_state(find(fake, "<!-- bosun:plan M2/T2 -->"));
+    assert_eq!(t2.state, "open");
+}
+
+#[test]
+fn amend_reopens_an_epic_reap_closed_when_it_gets_a_new_task() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let epic = reaped_epic(&fake);
+    write_plan(tmp.path(), &plan_with_t2());
+    let before = writes(&fake);
+    let (_, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run"]);
+    assert_eq!(writes(&fake), before);
+    assert!(ids(&v["data"]["would_reopen"]).contains(&"M2"), "{v}");
+    // GitHub's list lags: the new T2 (#8) is not listed right after it was made.
+    fake.after_requests("/issues/8/labels", 0, |s| {
+        s.issues
+            .iter_mut()
+            .filter(|i| i.number == 8)
+            .for_each(|i| i.hidden = true);
+    });
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_reopened(&fake, &v, epic);
+    let t2 = fake.issue_state(find(&fake, "<!-- bosun:plan M2/T2 -->"));
+    assert!(t2.labels.contains(&"bosun:state/ready".to_string()));
+}
+
+#[test]
+fn a_dropped_task_added_back_reopens_the_epic_reap_closed() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = write_plan(tmp.path(), &plan_with_t2());
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(code, 0, "{v}");
+    // The amendment drops T2 (closed as not planned); reap then finds the epic complete.
+    write_plan(tmp.path(), PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    let epic = reaped_epic(&fake);
+    write_plan(tmp.path(), &plan_with_t2());
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_reopened(&fake, &v, epic);
+}

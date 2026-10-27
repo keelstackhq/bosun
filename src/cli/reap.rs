@@ -8,13 +8,15 @@ use serde_json::json;
 use crate::app::{
     App, active_issues, default_branch, end_lease, merge_counts, notes, set_state, sync_merged,
 };
+use crate::cli::plan::epic_item;
 use crate::core::lease::{leases_of, members};
-use crate::core::meta::linked_issues;
+use crate::core::meta::{linked_issues, parse_task_meta};
 use crate::core::records::{Record, parse_record};
-use crate::core::state::{State, state_of};
-use crate::github::{Issue, IssueState};
+use crate::core::state::{State, TaskEnd, epic_complete, labels_to_remove, state_of};
+use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
+use crate::time::{Timestamp, parse_rfc3339};
 
 pub fn run(dir: Option<&Path>) -> CmdResult {
     let app = App::load(dir)?;
@@ -120,7 +122,94 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             left.push(m.session);
         }
     }
-    Ok(Outcome::data(
-        json!({"reaped": reaped, "left": left, "merged": merged}),
-    ))
+    // Closing epics is housekeeping: a failure there must not undo or hide the work above.
+    let mut epics_closed = Vec::new();
+    let epics_error = close_done_epics(gh, now, &mut epics_closed).err();
+    epics_closed.sort_unstable();
+    let mut data =
+        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": epics_closed});
+    if let Some(e) = epics_error {
+        eprintln!("reap: closing finished epics failed: {e}");
+        data["epics_error"] = json!(e.to_string());
+    }
+    Ok(Outcome::data(data))
+}
+
+const QUIET_SECS: i64 = 600;
+
+/// Close each open epic whose tasks are all merged or closed, one at least done (see
+/// `epic_complete`): state `merged`, closed as completed. A live lease (an orchestrator's) blocks
+/// it; a `claimed` epic without one is a finished spawned orchestrator's (`result` ends the
+/// lease, not the state). The quiet period does not cover an amend adding a task right now; the
+/// next import or amend reopens the epic. Open plan issues are listed first; all of them only
+/// when an unleased epic has no open task (epics with only dropped tasks pay that every run).
+/// Closed epics go into `closed` as they happen, so an error keeps the progress.
+fn close_done_epics(
+    gh: &dyn Github,
+    now: Timestamp,
+    closed: &mut Vec<u64>,
+) -> crate::app::Result<()> {
+    let epic_of = |i: &Issue| parse_task_meta(i.body_text()).and_then(|m| m.epic);
+    let open = gh.list_issues(&["bosun:source/plan"], IssueState::Open)?;
+    let mut candidates: Vec<&Issue> = Vec::new();
+    for e in open
+        .iter()
+        .filter(|i| !i.pull_request && epic_item(i.body_text()).is_some())
+        .filter(|i| {
+            matches!(
+                state_of(&i.labels),
+                None | Some(State::Ready | State::Planned | State::Claimed)
+            )
+        })
+        .filter(|e| {
+            !open.iter().any(|t| {
+                epic_of(t) == Some(e.number)
+                    && TaskEnd::of(state_of(&t.labels), false, None) == TaskEnd::Open
+            })
+        })
+    {
+        if !leases_of(e.number, &notes(gh, e.number)?)
+            .iter()
+            .any(|l| l.is_live(now))
+        {
+            candidates.push(e);
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let all = gh.list_issues(&["bosun:source/plan"], IssueState::All)?;
+    for epic in candidates {
+        let tasks = all.iter().filter(|t| epic_of(t) == Some(epic.number));
+        let end = |t: &Issue| {
+            let reason = t.state_reason.as_deref();
+            TaskEnd::of(state_of(&t.labels), t.state == "closed", reason)
+        };
+        if !epic_complete(&tasks.clone().map(end).collect::<Vec<_>>()) {
+            continue;
+        }
+        // Quiet period: an amend may be adding a task right now (GitHub's list lags).
+        let newest = tasks
+            .filter_map(|t| parse_rfc3339(&t.updated_at))
+            .max_by_key(|t| t.0);
+        if newest.is_some_and(|n| n.0 > now.minus_secs(QUIET_SECS).0) {
+            continue;
+        }
+        // Close first: an epic labelled merged but still open would never be a candidate again.
+        gh.update_issue(
+            epic.number,
+            IssuePatch {
+                state: Some(PatchState::Closed),
+                state_reason: Some("completed".into()),
+                ..IssuePatch::default()
+            },
+        )?;
+        closed.push(epic.number);
+        gh.ensure_label(&State::Merged.label(), "ededed", "bosun task state")?;
+        for label in labels_to_remove(&epic.labels, State::Merged) {
+            gh.remove_label(epic.number, &label)?;
+        }
+        gh.add_labels(epic.number, &[&State::Merged.label()])?;
+    }
+    Ok(())
 }

@@ -23,6 +23,9 @@ pub struct Issue {
     /// Why a closed issue was closed: `completed`, `not_planned` or `duplicate`.
     #[serde(default)]
     pub state_reason: Option<String>,
+    /// RFC 3339 time of the last change; empty when GitHub did not say.
+    #[serde(default)]
+    pub updated_at: String,
     /// The slug of the GitHub App that wrote the issue or PR (`performed_via_github_app`).
     #[serde(
         default,
