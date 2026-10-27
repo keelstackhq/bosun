@@ -1,0 +1,1 @@
+- 2026-10-27 · Gates on CircleCI · `gates::ci_env` detects CircleCI and picks the base (merge-base, queue sha, or all); `bosun gate` and `test-integrity` use it; spec §7 updated · PR (feat/gates-circleci)

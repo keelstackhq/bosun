@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P3 · edit lock denies edits outside the session's own lease touch · PR (feat/edit-own-touch)
