@@ -146,6 +146,7 @@ fn spawn_on(app: &App, n: u64, args: &SpawnArgs, thread: Option<&str>) -> CmdRes
         leases,
         area,
     } = gather(app, args, n, Some(&epic), thread.is_some())?;
+    super::prereqs_gate::refuse_epic_if_held(app.gh.as_ref(), &epic)?;
     let depth = input.parent_depth + 1;
     // A plan task from Slack has the request's first line in its title: not in the prompt.
     let plan_task = task_meta(&epic).is_some_and(|m| m.kind == "plan")

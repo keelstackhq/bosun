@@ -4,6 +4,8 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::plan::epic_plan;
+use super::prereqs_gate::{blockers, open_items};
 use super::{EpicArg, WaveCmd};
 use crate::app::{App, active_issues, limits_from_default, main_red, task_meta};
 use crate::cli::status::process_red;
@@ -80,9 +82,38 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             format!("close #{red} by merging its process-fix, or plan a process-fix epic"),
         ));
     }
+    // Owner prerequisites (design F5): the epic's plan checklist is read once; ready tasks that
+    // an open item blocks are left out. A gate error leaves out every ready task of the plan.
+    let (mut held, mut warnings, mut left_out) = (Vec::new(), Vec::new(), Vec::new());
+    let ready: Vec<&TaskInfo> = (tasks.iter().map(|t| &t.0))
+        .filter(|i| i.state == Some(State::Ready))
+        .collect();
+    if let Some(path) = epic_plan(epic_issue.body_text()).filter(|_| !ready.is_empty()) {
+        match open_items(gh, &path, None, &|_| true) {
+            Ok(Some((_, ticks))) => {
+                for i in ready {
+                    // A plan id without `/` cannot be matched to its plan: held (fail closed).
+                    let needs = match i.plan_id.split_once('/') {
+                        Some((item, task)) => blockers(&ticks, item, Some(task)),
+                        None => vec!["unknown task id".to_string()],
+                    };
+                    if !needs.is_empty() {
+                        held.push(json!({"issue": i.issue, "task": i.plan_id, "needs": needs}));
+                        left_out.push(i.issue);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                warnings.push(format!("{}; fix: {}", e.message, e.fix));
+                left_out.extend(ready.iter().map(|i| i.issue));
+            }
+        }
+    }
     let infos: Vec<TaskInfo> = tasks
         .iter()
         .filter(|t| only_fix.is_none() || fix_tasks.contains(&t.0.issue) || active(t))
+        .filter(|t| !left_out.contains(&t.0.issue))
         .map(|t| t.0.clone())
         .collect();
     let mut leased = Vec::new();
@@ -117,6 +148,6 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         }
     }
     Ok(Outcome::data(
-        json!({"epic": epic, "run": run, "waiting": waiting}),
+        json!({"epic": epic, "run": run, "waiting": waiting, "held": held, "warnings": warnings}),
     ))
 }

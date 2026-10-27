@@ -6,7 +6,7 @@ mod common;
 use bosun::core::prereqs::digest;
 use common::fake::FakeGithub;
 use common::run;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 const NOW: &str = "2026-10-27T10:00:00Z";
 const BASE: &str = "# Plan: X\n\nproject: x\n\n## M1: One\n\narea: core\ndepends: seed\n\nWords.\n\n\
@@ -218,4 +218,54 @@ fn only_blocking_items_count_and_a_broken_link_fails_closed() {
         assert_eq!(code, 5, "{why}: {v}");
         untouched(&fake, 11);
     }
+}
+
+#[test]
+fn wave_plan_leaves_out_the_held_task_and_lists_it() {
+    let fake = setup(&plan("M1/T1", "owner"));
+    checklist(&fake, 20, "plans/x.md", &[line("H1", false, false)]);
+    let (code, v) = run(&fake, "session_a", NOW, &["wave", "plan", "10"]);
+    assert_eq!(code, 0, "{v}");
+    let ids = v["data"]["run"].as_array().unwrap().iter();
+    let ids: Vec<u64> = ids.map(|t| t["issue"].as_u64().unwrap()).collect();
+    assert_eq!(ids, [12]);
+    assert_eq!(
+        v["data"]["held"],
+        json!([{"issue": 11, "task": "M1/T1", "needs": ["H1"]}])
+    );
+    assert_eq!(v["data"]["warnings"], json!([]));
+}
+
+#[test]
+fn wave_plan_without_a_checklist_issue_leaves_out_the_plan_with_a_warning() {
+    let fake = setup(&plan("M1/T1", "owner"));
+    let (code, v) = run(&fake, "session_a", NOW, &["wave", "plan", "10"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["run"], json!([]));
+    let w = v["data"]["warnings"][0].as_str().unwrap();
+    assert!(
+        w.contains("has prerequisites but no checklist issue"),
+        "{w}"
+    );
+}
+
+#[test]
+fn spawn_of_an_epic_blocked_as_a_whole_is_exit_5() {
+    let fake = setup(&plan("M1", "owner"));
+    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
+    fake.comment(1, join);
+    checklist(&fake, 20, "plans/x.md", &[line("H1", false, false)]);
+    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("H1"));
+    assert!(fake.comments_of(10).is_empty(), "nothing written");
+}
+
+#[test]
+fn spawn_ignores_a_task_level_block() {
+    let fake = setup(&plan("M1/T2", "owner"));
+    let join = r#"{"bosun":"join","session":"session_a","origin":"spawned","depth":1,"expires":"2026-10-27T11:00:00Z"}"#;
+    fake.comment(1, join);
+    let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
+    assert_ne!(code, 5, "a task-level block does not hold the epic: {v}");
 }

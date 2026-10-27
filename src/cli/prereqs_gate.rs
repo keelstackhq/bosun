@@ -2,7 +2,7 @@
 //! that an open prerequisite of the task's plan blocks. It fails closed. Ids, blocks and verify
 //! kinds come from the plan file on the default branch; the checklist issue only supplies ticks.
 
-use super::plan::epic_plan;
+use super::plan::{epic_item, epic_plan};
 use super::prereqs::verify;
 use crate::app::{Result, default_branch};
 use crate::core::meta::TaskMeta;
@@ -131,6 +131,31 @@ pub(crate) fn plan_of_task(gh: &dyn Github, meta: &TaskMeta) -> Result<Option<St
         ))),
         plan => Ok(plan),
     }
+}
+
+/// Exit 5 when an open item blocks the epic's whole item (`blocks: M5`).
+pub(crate) fn refuse_epic_if_held(gh: &dyn Github, epic: &Issue) -> Result<()> {
+    let (body, n) = (epic.body_text(), epic.number);
+    let (Some(plan_path), Some(item)) = (epic_plan(body), epic_item(body)) else {
+        return Ok(());
+    };
+    let wants = |b: &[String]| b.contains(&item);
+    let Some((issue, ticks)) = open_items(gh, &plan_path, Some((&item, None)), &wants)? else {
+        return Ok(());
+    };
+    let ids = blockers(&ticks, &item, None);
+    if ids.is_empty() {
+        return Ok(());
+    }
+    Err(BosunError::needs_human(
+        format!(
+            "epic #{n} ({item}) waits for owner steps {} of {plan_path}",
+            ids.join(", ")
+        ),
+        format!(
+            "spawn another epic; the owner checklist {issue} lists the steps; after they are done the epic can be spawned"
+        ),
+    ))
 }
 
 /// Exit 5 when an open item of the task's plan blocks it.
