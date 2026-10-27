@@ -11,7 +11,7 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", "azure-pipelines.yml", ".gitlab-ci.yml", ".buildkite/**", "jenkinsfile"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
 
 [[rule]]
 id = "R-secrets"

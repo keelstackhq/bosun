@@ -9,7 +9,7 @@ use super::PrArg;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
-    trust_files_changed, verify_ed25519,
+    signed_message_v2, trust_files_changed, verify_ed25519,
 };
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
@@ -219,8 +219,10 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             &excluded,
         );
         if !delegate_verdicts.is_empty() && !owners_withdrawn(gh, n, head, &owners)? {
-            approved_by = signed_approver(gh, &app.ctx.repo, n, head, &comments, Role::Delegate)?
-                .map(|id| format!("delegate {id}"));
+            let v1 = |after: Option<u64>| after.is_none();
+            approved_by =
+                signed_approver(gh, &app.ctx.repo, n, head, &comments, Role::Delegate, &v1)?
+                    .map(|id| format!("delegate {id}"));
         }
     }
     let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
@@ -322,6 +324,13 @@ fn decisive<'a>(reviews: &'a [Review], owner: &str, head: &str) -> Option<&'a Re
     })
 }
 
+/// The id of `owner`'s decisive review on `head` when it was dismissed.
+pub fn dismissed_review(reviews: &[Review], owner: &str, head: &str) -> Option<u64> {
+    decisive(reviews, owner, head)
+        .filter(|r| r.state == "DISMISSED")
+        .map(|r| r.id)
+}
+
 /// The state of `owner`'s newest approve, request-changes or dismissed review on `head`.
 pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<String> {
     decisive(reviews, owner, head).map(|r| r.state.clone())
@@ -364,12 +373,37 @@ fn approver(
         return Ok(Some(o.clone()));
     }
     // A signed approval stands for the owner: with no owners it counts for no one, and any
-    // owner's request for changes, dismissed or not, withdraws it. A signature carries no time,
-    // so a re-posted old one could pass for new: no signature ever clears a dismissal.
-    if !signed_ok || owners.is_empty() || owners.iter().any(|o| withdrawn(state(o).as_deref())) {
+    // owner's request for changes withdraws it. A v1 signature carries no time, so a re-posted
+    // old one could pass for new: it never clears a dismissal. Each dismissed owner review needs
+    // an owner v2 signature naming its id, and the timeline must show the dismissal.
+    let changes = |o: &String| state(o).as_deref() == Some("CHANGES_REQUESTED");
+    if !signed_ok || owners.is_empty() || owners.iter().any(changes) {
         return Ok(None);
     }
-    Ok(signed_approver(gh, repo, pr, head, &comments, Role::Owner)?.map(|id| format!("key {id}")))
+    let sign = |accept: &dyn Fn(Option<u64>) -> bool| {
+        signed_approver(gh, repo, pr, head, &comments, Role::Owner, accept)
+    };
+    let ids: Vec<u64> = (owners.iter())
+        .filter_map(|o| dismissed_review(&reviews, o, head))
+        .collect();
+    if ids.is_empty() {
+        return Ok(sign(&|_| true)?.map(|id| format!("key {id}")));
+    }
+    let mut by = None;
+    for id in ids {
+        let seen = (gh.review_dismissed_at(pr, id))
+            .map_err(|e| eprintln!("bosun: risk-check: cannot read the timeline: {}", e.message))
+            .ok()
+            .flatten();
+        if id == 0 || seen.and_then(|t| parse_rfc3339(&t)).is_none() {
+            return Ok(None);
+        }
+        let Some(key) = sign(&|after| after == Some(id))? else {
+            return Ok(None);
+        };
+        by.get_or_insert(key);
+    }
+    Ok(by.map(|id| format!("key {id}")))
 }
 
 /// A decisive review in this state withdraws the owner's approvals (anyone with write access can
@@ -466,9 +500,10 @@ fn verdict_inputs(gh: &dyn Github, n: u64, linked: &[u64]) -> Result<(Vec<Commen
 }
 
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
-/// approvals). The keys come from the default branch only, so a PR cannot enroll its own.
-/// Any author and app count: the signature is the proof. A missing or malformed key file, an
-/// unknown key or a bad signature is no approval, logged to stderr, never an error.
+/// approvals); `accept` takes the review a v2 names (`None`: v1). Only an owner key signs v2.
+/// The keys come from the default branch only, so a PR cannot enroll its own. Any author and app
+/// count: the signature is the proof. A missing or malformed key file, an unknown key or a bad
+/// signature is no approval, logged to stderr, never an error.
 fn signed_approver(
     gh: &dyn Github,
     repo: &RepoId,
@@ -476,13 +511,14 @@ fn signed_approver(
     head: &str,
     comments: &[Comment],
     role: Role,
+    accept: &dyn Fn(Option<u64>) -> bool,
 ) -> Result<Option<String>> {
-    let sigs: Vec<(u64, &str, &str)> = comments
+    let sigs: Vec<(u64, Option<u64>, &str, &str)> = comments
         .iter()
         .flat_map(|c| {
             signature_lines(&c.body, head)
                 .into_iter()
-                .map(move |(id, sig)| (c.id, id, sig))
+                .map(move |(after, id, sig)| (c.id, after, id, sig))
         })
         .collect();
     if sigs.is_empty() {
@@ -495,8 +531,17 @@ fn signed_approver(
             return Ok(None);
         }
     };
-    let msg = signed_message(role, &repo.owner, &repo.name, pr, head);
-    for (comment, id, sig) in sigs {
+    for (comment, after, id, sig) in sigs {
+        let msg = match after {
+            None => signed_message(role, &repo.owner, &repo.name, pr, head),
+            Some(r) if role == Role::Owner => {
+                signed_message_v2(&repo.owner, &repo.name, pr, head, r)
+            }
+            Some(_) => continue,
+        };
+        if !accept(after) {
+            continue;
+        }
         let Some(key) = keys.iter().find(|k| k.id == id) else {
             eprintln!("bosun: risk-check: comment {comment}: unknown key {id:?}, not counted");
             continue;

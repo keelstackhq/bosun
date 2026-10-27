@@ -1,0 +1,1 @@
+- `core::text::inert`: text an agent or a plan wrote, shown to a person as one plain line (control, format and separator characters as spaces, as an inline code span, cut to a length).
