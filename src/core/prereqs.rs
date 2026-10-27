@@ -393,13 +393,11 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
     out
 }
 
-/// The first 8 hex characters of the SHA-256 of an item's title, steps and verify: a tick counts
-/// only on a line whose `sum` matches the plan's item now.
-pub fn digest(title: &str, steps: &str, verify: &str) -> String {
-    let d = ring::digest::digest(
-        &ring::digest::SHA256,
-        format!("{title}\n{steps}\n{verify}").as_bytes(),
-    );
+/// The first 8 hex characters of the SHA-256 of an item's title, steps, verify and who: a tick
+/// counts only on a line whose `sum` matches the plan's item now.
+pub fn digest(title: &str, steps: &str, verify: &str, who: &str) -> String {
+    let text = format!("{title}\n{steps}\n{verify}\n{who}");
+    let d = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
     d.as_ref()[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -424,7 +422,7 @@ impl From<&Prereq> for CheckItem {
         let verify = p.verify.describe();
         CheckItem {
             id: p.id.clone(),
-            sum: digest(&p.title, &p.steps, &verify),
+            sum: digest(&p.title, &p.steps, &verify, &p.who),
             title: p.title.clone(),
             who: p.who.clone(),
             on: p.on.clone(),

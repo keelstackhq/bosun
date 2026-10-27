@@ -98,7 +98,7 @@ fn post_creates_one_issue_and_updates_it_from_the_ticks() {
     assert_eq!(i.title, "Owner checklist: Plan: Ship it");
     assert_eq!(fake.labels_of(1), ["bosun:prereqs"]);
     assert!(i.body.starts_with("<!-- bosun:prereqs plans/x.md -->\n"));
-    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN");
+    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN", "owner");
     assert!(
         i.body
             .contains(&format!("<!-- bosun:prereq H1 sum={h1} state=api -->"))
@@ -132,7 +132,8 @@ fn a_403_falls_back_to_the_tick() {
     let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(item(&v, "H1")["state"], "api 403");
-    assert!(fake.issue_state(1).body.contains(" state=api 403 -->"));
+    let body = fake.issue_state(1).body;
+    assert!(body.contains(" state=api 403 -->") && body.contains("your tick decides"));
     tick(&fake, "H1");
     let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
     assert_eq!(item(&v, "H1")["done"], true);
@@ -141,8 +142,8 @@ fn a_403_falls_back_to_the_tick() {
 #[test]
 fn ticks_count_for_owner_items_only() {
     let (tmp, fake) = setup();
-    let h2 = digest("pc thing", "run it", "owner");
-    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN");
+    let h2 = digest("pc thing", "run it", "owner", "owner");
+    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN", "owner");
     let body = format!(
         "<!-- bosun:prereqs plans/x.md -->\n\
          - [x] **H2** a <!-- bosun:prereq H2 sum={h2} state=owner -->\n\
@@ -173,6 +174,19 @@ fn errors_and_the_kill_switch() {
         &PLAN.replace("  on: computer\n", ""),
     );
     assert_eq!(go(&fake, tmp.path(), &["--no-setup"]).0, 1);
+    write(tmp.path(), "plans/a-->b.md", PLAN);
+    let a = [
+        "-C",
+        tmp.path().to_str().unwrap(),
+        "prereqs",
+        "plans/a-->b.md",
+        "--no-setup",
+    ];
+    assert_eq!(
+        run(&fake, "session_a", "2026-10-27T10:00:00Z", &a).0,
+        2,
+        "a marker-breaking path"
+    );
 }
 
 #[test]

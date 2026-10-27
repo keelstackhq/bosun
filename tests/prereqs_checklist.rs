@@ -65,7 +65,7 @@ fn issue_round_trips_ticks_and_groups() {
     assert!(body.contains("(verify `secret release/NPM_TOKEN`; blocks M1/T2, M2)"));
     assert!(body.contains("Batch 1: M1/T1 (delegate), M1/T3 (delegate)\nBatch 2: M1/T2 (owner)"));
     let t = pq::read_issue(&body);
-    let sum = pq::digest("npm token", "do it", "secret release/NPM_TOKEN");
+    let sum = pq::digest("npm token", "do it", "secret release/NPM_TOKEN", "owner");
     assert_eq!(
         (t[1].id.as_str(), t[1].sum.as_str(), t[1].state.as_str()),
         ("H1", &*sum, "api")

@@ -1,13 +1,16 @@
 //! Text that bosun shows a person (an issue body, a chat message) when an agent or a plan wrote
 //! it: made inert so it cannot hide, reorder or fake lines, links or mentions. Pure.
 
-/// Control, format and separator characters (Unicode Cc, Cf, Zl, Zp): they break lines in a
-/// chat (U+2028), hide text (U+200B, U+FEFF) or reorder it (U+202E).
+/// Control, format and separator characters (Unicode Cc, Cf, Zl, Zp; Cf as of Unicode 15.1):
+/// they break lines in a chat (U+2028), hide text (U+200B, U+FEFF) or reorder it (U+202E).
 fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(c,
-            '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}'
-            | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{e0000}'..='\u{e007f}')
+            '\u{00ad}' | '\u{0600}'..='\u{0605}' | '\u{061c}' | '\u{06dd}' | '\u{070f}'
+            | '\u{0890}'..='\u{0891}' | '\u{08e2}' | '\u{180e}' | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}'
+            | '\u{110bd}' | '\u{110cd}' | '\u{13430}'..='\u{1343f}' | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}' | '\u{e0000}'..='\u{e007f}')
 }
 
 /// Whether `t` holds a character [`inert`] would replace.
@@ -63,6 +66,15 @@ mod tests {
         );
         assert!(!has_hidden(&out) && has_hidden(t));
         assert_eq!(out.lines().count(), 1);
+        for c in [
+            '\u{0600}',
+            '\u{13430}',
+            '\u{1bca0}',
+            '\u{1d173}',
+            '\u{06dd}',
+        ] {
+            assert!(has_hidden(&c.to_string()), "{c:?}");
+        }
         for c in [
             '\u{200b}',
             '\u{feff}',
