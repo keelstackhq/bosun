@@ -147,3 +147,14 @@ fn crlf_tabs_and_the_section_end_are_handled() {
     let v = pq::parse(&t, &p).unwrap();
     assert_eq!((v.len(), &*v[0].on, &*v[0].blocks[0]), (1, "phone", "M1"));
 }
+
+#[test]
+fn plan_task_ids_hold_item_slash_task_only() {
+    let (_, p) = plan_of("");
+    let ids = pq::plan_task_ids(&p);
+    assert_eq!(ids, ["M1/T1", "M1/T2", "M1/T3", "M1/P", "M2/T1", "M2/P"]);
+    assert!(
+        !ids.iter().any(|i| i == "M1"),
+        "an id without `/` is unknown"
+    );
+}

@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::plan::epic_plan;
-use super::prereqs_gate::{blockers, open_items};
+use super::prereqs_gate::{blockers, open_items, plan_ids};
 use super::{EpicArg, WaveCmd};
 use crate::app::{App, active_issues, limits_from_default, main_red, task_meta};
 use crate::cli::status::process_red;
@@ -91,10 +91,16 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     if let Some(path) = epic_plan(epic_issue.body_text()).filter(|_| !ready.is_empty()) {
         match open_items(gh, &path, None, &|_| true) {
             Ok(Some((_, ticks))) => {
+                // open_items just read the plan; if it cannot be read again, all are held.
+                let known = plan_ids(gh, &path).unwrap_or_default();
                 for i in ready {
-                    // A plan id without `/` cannot be matched to its plan: held (fail closed).
+                    // As claim: a task the plan does not have, or a plan id without `/`, is
+                    // held (fail closed).
                     let needs = match i.plan_id.split_once('/') {
-                        Some((item, task)) => blockers(&ticks, item, Some(task)),
+                        Some((item, task)) if known.contains(&i.plan_id) => {
+                            blockers(&ticks, item, Some(task))
+                        }
+                        Some(_) => vec![format!("{} is not in {path}", i.plan_id)],
                         None => vec!["unknown task id".to_string()],
                     };
                     if !needs.is_empty() {

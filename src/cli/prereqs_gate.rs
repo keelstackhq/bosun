@@ -111,6 +111,17 @@ pub(crate) fn blockers(ticks: &[Held], item: &str, task: Option<&str>) -> Vec<St
     held.map(|t| t.id.clone()).collect()
 }
 
+/// The `<item>/<task>` ids of the plan on the default branch (what `open_items` checks a
+/// `target` against).
+pub(crate) fn plan_ids(gh: &dyn Github, plan_path: &str) -> Result<Vec<String>> {
+    let branch = default_branch(gh)?;
+    let text = gh.file_at(plan_path, &branch)?;
+    let text = text.ok_or_else(|| closed(plan_path, format!("{plan_path} is not on {branch}")))?;
+    let parsed = plan::parse(&text)
+        .map_err(|e| closed(plan_path, format!("{plan_path}: {}", e[0].message)))?;
+    Ok(pq::plan_task_ids(&parsed))
+}
+
 /// The plan path of the task's epic; `None` for hand-made work (no epic, or no epic marker). A
 /// gone epic or a marker without a plan fails closed. Bodies are agent-editable (design F4).
 pub(crate) fn plan_of_task(gh: &dyn Github, meta: &TaskMeta) -> Result<Option<String>> {
@@ -136,8 +147,16 @@ pub(crate) fn plan_of_task(gh: &dyn Github, meta: &TaskMeta) -> Result<Option<St
 /// Exit 5 when an open item blocks the epic's whole item (`blocks: M5`).
 pub(crate) fn refuse_epic_if_held(gh: &dyn Github, epic: &Issue) -> Result<()> {
     let (body, n) = (epic.body_text(), epic.number);
-    let (Some(plan_path), Some(item)) = (epic_plan(body), epic_item(body)) else {
-        return Ok(());
+    let (plan_path, item) = match (epic_plan(body), epic_item(body)) {
+        (Some(p), Some(i)) => (p, i),
+        // As `plan_of_task`: bosun's marker without a plan path fails closed.
+        (None, Some(_)) => {
+            return Err(BosunError::needs_human(
+                format!("epic #{n} has bosun's marker but no plan path"),
+                "ask the orchestrator to run `bosun plan amend <plan>` for this epic",
+            ));
+        }
+        _ => return Ok(()),
     };
     let wants = |b: &[String]| b.contains(&item);
     let Some((issue, ticks)) = open_items(gh, &plan_path, Some((&item, None)), &wants)? else {
