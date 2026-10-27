@@ -1141,6 +1141,10 @@ const PKG_SUBS: &[&str] = &["install", "add", "remove", "uninstall", "upgrade", 
 #[rustfmt::skip]
 const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-field", "field",
     "search", "q", "jq"];
+/// The pagers and viewers ack and ugrep may run (by basename); any other is refused.
+#[rustfmt::skip]
+const PAGERS_OK: &[&str] = &["less", "more", "most", "cat", "bat", "vi", "vim", "nvim", "view",
+    "nano", "emacs", "code"];
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
     "node", "deno", "bun", "php", "source", "xargs", "eval",
@@ -1501,24 +1505,27 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
             return Some(why);
         }
-        // A pager or view runs on a file; a shell there runs the search output as a script.
+        // A pager or view runs on a file, and a shell there runs the search output as a
+        // script: only known pagers pass, without expansions (`$SHELL`, `` `which sh` ``).
         let paged_at = rest.iter().position(|w| PAGED.contains(&base(w).as_str()));
         for c in paged_at.map_or(Vec::new(), |p| {
-            pagers(&base(rest[p]), segment, &rest[p + 1..])
+            pagers(&base(rest[p]), &words, &rest[p + 1..])
         }) {
-            if let Some(sh) = shell_words(&c)
-                .iter()
-                .map(|w| base(w))
-                .find(|w| SHELLS.contains(&w.as_str()))
-            {
-                return Some(decrypt_reason(&format!("`{sh}` as a pager")));
+            let cmd = shell_words(&c).first().map(|w| base(w)).unwrap_or_default();
+            if c.contains(['$', '`']) || !PAGERS_OK.contains(&cmd.as_str()) {
+                return Some(decrypt_reason("an unknown or expanded pager"));
             }
             if let Some(why) = decrypt_rule(&format!("{c} FILE"), depth + 1) {
                 return Some(why);
             }
         }
         // `git grep --no-index` searches its paths (or the cwd) like `grep -r`, hidden ones too.
-        if git && verb == "grep" && args.iter().any(|a| long_prefix(a, "--no-index", 6)) {
+        // `-c grep.fallbackToNoIndex=..` makes it fall back to that outside a repository.
+        #[rustfmt::skip]
+        let fallback = args.windows(2).filter(|w| w[0] == "-c").map(|w| w[1]).chain(args.iter().filter_map(|a| a.strip_prefix("-c")))
+            .any(|v| v.to_lowercase().starts_with("grep.fallbacktonoindex"));
+        let no_index = fallback || args.iter().any(|a| long_prefix(a, "--no-index", 6));
+        if git && verb == "grep" && no_index {
             #[rustfmt::skip]
             const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
             // The first bare word is the pattern, unless `-e` or `-f` gave it.
@@ -1592,10 +1599,12 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             );
             // Long options by unique prefix (`--rec`, `--der`, `--dir=rec`, ag `--hi`, `--u`).
             let short = |a: &&str| a.starts_with('-') && !a.starts_with("--");
-            let d = args.windows(2).filter(|w| w[0] == "-d").map(|w| w[1]);
+            // `-d` in a short cluster takes the rest of it, or the next word (`-nd recurse`).
+            #[rustfmt::skip]
+            let d = args.iter().enumerate().filter(|(_, a)| short(a)).filter_map(|(i, a)| Some((i, a[1..].split_once('d')?)))
+                .map(|(i, (_, v))| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v });
             #[rustfmt::skip]
             let dirs = long_values(args, "--directories", 4).into_iter().chain(d)
-                .chain(args.iter().filter_map(|a| a.strip_prefix("-d").filter(|v| !v.is_empty())))
                 .any(|v| v.len() >= 3 && "recurse".starts_with(v));
             let long =
                 |a: &&str, opts: &[(&str, usize)]| opts.iter().any(|(f, m)| long_prefix(a, f, *m));
@@ -2959,6 +2968,21 @@ mod tests {
         ("ack --type rust TODO src", false), ("grep --recursive foo src", false),
         // Over-denial: a sibling repo reads as a home.
         ("grep -rn foo ../other-repo/*", true), ("echo ack --pager=sh", true),
+        // Review: expanded and unknown pagers, `-nd`, exported pagers, fallbackToNoIndex.
+        ("ack --pager=$SHELL x", true), ("ack --pager=\"${SHELL}\" x", true),
+        ("ack --pager=$0 x", true), ("ack --pager=`which sh` x", true),
+        ("ack --pager=\"$(which sh)\" x", true), ("ugrep --view=\"$EDITOR\" x f", true),
+        ("grep -nd recurse x ~/.config", true), ("grep -hd recurse x ~", true),
+        ("ack --pager=mksh x", true), ("ack --pager=/bin/ash x", true), ("ack --pager=csh x", true),
+        ("ack --pager=tcsh x", true), ("ugrep --pager=python3.12 x f", true),
+        ("ack --pager=lua x", true), ("ugrep --view=tclsh x f", true), ("ack --pager=pwsh x", true),
+        ("ack --pager='less -R' x", false), ("ugrep --view='nvim -R' x f", false),
+        ("ack --pager=/usr/bin/bat x", false), ("grep -nd skip x ~", false),
+        ("export ACK_PAGER=sh; ack x", true), ("declare -x ACK_PAGER=sh; ack x", true),
+        ("export ACK_OPTIONS=--pager=sh; ack x", true), ("export ACK_PAGER=less; ack x", false),
+        ("git -C ~ -c grep.fallbackToNoIndex=true grep x", true),
+        ("git -c grep.fallbackToNoIndex=1 -C /root grep -e x", true),
+        ("git -c grep.fallbackToNoIndex=true grep x src", false),
     ];
 
     #[test]
