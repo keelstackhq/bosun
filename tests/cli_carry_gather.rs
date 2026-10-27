@@ -28,7 +28,7 @@ struct W { fake: FakeGithub, gh: LiveGithub, pull: Pull }
 
 impl W {
     fn cmp(&self, a: &str, b: &str, status: &str, base: Option<&str>, files: &[Value]) {
-        let k = format!("{a}...{b}");
+        let k = format!("{a}...{}", if b == "main" { "refs/heads/main" } else { b }); // the default branch by full ref
         let mut s = self.fake.state.lock().unwrap();
         s.compares.insert(k.clone(), files.to_vec());
         s.compare_statuses.insert(k.clone(), status.into());
@@ -186,7 +186,7 @@ fn a_commit_that_is_not_the_one_asked_for_is_refused() {
 fn github_errors_and_missing_objects_refuse_without_leaking() {
     let mut reads: Vec<String> = [H2, H, M, B].map(|s| format!("/git/commits/{s}")).to_vec();
     reads.extend([TB, TM, TH, TH2].map(|s| format!("/git/trees/{s}")));
-    reads.extend([(D, "main"), (M, D), (D, H), (B, M), (B, H)].map(|(a, b)| format!("/compare/{a}...{b}")));
+    reads.extend([(D, "refs%2Fheads%2Fmain"), (M, D), (D, H), (B, M), (B, H)].map(|(a, b)| format!("/compare/{a}...{b}")));
     for r in &reads {
         let w = honest();
         w.fake.fail_path_message(r, 500, "SECRET-GITHUB-TEXT");
@@ -207,7 +207,7 @@ fn every_read_is_by_full_sha_and_a_short_sha_refuses() {
         let p = r.path.split('?').next().unwrap();
         let ids: Vec<&str> = p.rsplit('/').next().unwrap().split("...").collect();
         let pinned = ids.iter().all(|i| i.len() == 40 && i.bytes().all(|b| b.is_ascii_hexdigit()));
-        assert!(pinned || p.ends_with(&format!("/compare/{D}...main")), "{p}");
+        assert!(pinned || p.ends_with(&format!("/compare/{D}...refs%2Fheads%2Fmain")), "{p}");
     }
     let mut w = honest(); w.pull.head_sha = "d000000".into();
     assert!(w.refused().contains("not a full sha"));

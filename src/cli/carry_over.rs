@@ -4,9 +4,13 @@
 
 use std::collections::HashMap;
 
+use super::risk_check::{decisive_review, delegation_blocked, verdict_inputs, withdrawn};
+use super::verdict::CONTEXT;
 use crate::core::approve::TRUST_FILES;
 use crate::core::carry::{self, CarryFacts, Entry, FileChange, Hop, Kind, RawTree, Refusal};
-use crate::github::{Compare, GitCommit, Github, PrFile, Pull};
+use crate::core::records::{Record, parse_record};
+use crate::core::risk::{VERDICT_AUTHOR, apply_record};
+use crate::github::{Comment, Compare, GitCommit, Github, PrFile, Pull, Review, Status};
 
 /// Seven hex characters of a sha taken from GitHub data, else `?`.
 fn short(sha: &str) -> String {
@@ -106,7 +110,7 @@ pub fn check(
         return Err("the approved head is the current head".into());
     }
     // D vouches for every merge parent, so it must still be on the default branch tip.
-    if !r.ancestor(d, default_branch) {
+    if !r.ancestor(d, &format!("refs/heads/{default_branch}")) {
         return Err("the PR's base commit is not on the default branch now".into());
     }
     // Rule 1: the first-parent chain from H2 down to the commit whose first parent is `h`.
@@ -174,4 +178,106 @@ pub fn check(
     };
     carry::check(&facts).map_err(|e| e.message())?;
     Ok(chain.into_iter().map(|c| c.sha).collect())
+}
+
+pub fn is_verdict(s: &Status) -> bool {
+    s.context.eq_ignore_ascii_case(CONTEXT)
+}
+
+/// Whether `sha` has a `review-verdict`; an error, no statuses (risk-check posted one) or 100+ count as yes.
+pub fn has_verdict(gh: &dyn Github, sha: &str) -> bool {
+    !gh.statuses(sha)
+        .is_ok_and(|l| (1..100).contains(&l.len()) && !l.iter().any(is_verdict))
+}
+
+/// The heads an approval could carry from, nearest first: first parents of the merges on top of
+/// the PR (at most `MAX_HOPS`). Empty off the default branch; the walk ends at any doubt.
+pub fn candidates(gh: &dyn Github, pull: &Pull, default_branch: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if pull.base_ref != default_branch {
+        return out;
+    }
+    let mut sha = pull.head_sha.clone();
+    while out.len() < carry::MAX_HOPS {
+        let c = gh.commit(&sha).ok().flatten();
+        let Some(c) = c.filter(|c| {
+            c.sha == sha && c.parents.len() == 2 && sha40(&sha) && sha40(&c.parents[0])
+        }) else {
+            break;
+        };
+        sha = c.parents[0].clone();
+        out.push(sha.clone());
+    }
+    out
+}
+
+/// The id of the newest verdict record on `h` (workflow, unedited) if it approves independently.
+fn approved_by_independent(comments: &[Comment], excluded: &[String], h: &str) -> Option<u64> {
+    let bot = |c: &&Comment| c.user.eq_ignore_ascii_case(VERDICT_AUTHOR);
+    let on_h = |c: &Comment| match apply_record(&c.body) {
+        Some(Record::Verdict {
+            session,
+            head_sha,
+            approved,
+            confidence,
+            ..
+        }) if head_sha == h => Some((session, approved && confidence.is_some())),
+        _ => None,
+    };
+    let newest = comments
+        .iter()
+        .filter(bot)
+        .filter_map(|c| Some((c, on_h(c)?)))
+        .next_back();
+    let (c, (session, approved)) = newest?;
+    let known = !session.is_empty() && session != "unknown";
+    (approved && known && c.unedited() && !excluded.contains(&session)).then_some(c.id)
+}
+
+/// Rule 5: no record on the path, none newer than comment `approval` for a head off it, and no
+/// owner withdrawn (per commit) on the path or `h`.
+fn standing(
+    comments: &[Comment],
+    reviews: &[Review],
+    owners: &[String],
+    path: &[String],
+    (h, approval): (&str, u64),
+) -> bool {
+    let superseded = comments.iter().any(|c| match parse_record(&c.body) {
+        Some(Record::Verdict { head_sha, .. }) => {
+            path.contains(&head_sha) || (c.id > approval && head_sha != h)
+        }
+        _ => false,
+    });
+    let withdrawn_by = |o: &String| {
+        let at = |sha: &str| withdrawn(decisive_review(reviews, o, sha).as_deref());
+        at(h) || path.iter().any(|sha| at(sha))
+    };
+    !superseded && !owners.iter().any(withdrawn_by)
+}
+
+/// The head `h` whose approval carries to `pull.head_sha` if rules 1-5 hold; any doubt is `None`.
+pub fn carry_verdict(
+    gh: &dyn Github,
+    pull: &Pull,
+    default_branch: &str,
+    linked: &[u64],
+    owners: &[String],
+) -> Option<String> {
+    let cands = candidates(gh, pull, default_branch);
+    let open = || matches!(delegation_blocked(gh, &pull.base_ref, linked), Ok(None));
+    if cands.is_empty() || linked.is_empty() || has_verdict(gh, &pull.head_sha) || !open() {
+        return None;
+    }
+    let (comments, excluded) = verdict_inputs(gh, pull.number, linked).ok()?;
+    let mut reviews = gh.list_reviews(pull.number).ok()?;
+    reviews.sort_by_key(|r| r.id);
+    cands.into_iter().find(|h| {
+        let Some(id) = approved_by_independent(&comments, &excluded, h) else {
+            return false;
+        };
+        (check(gh, pull, default_branch, h))
+            .map_err(|why| eprintln!("bosun: risk-check: no carry from {}: {why}", short(h)))
+            .is_ok_and(|path| standing(&comments, &reviews, owners, &path, (h, id)))
+    })
 }

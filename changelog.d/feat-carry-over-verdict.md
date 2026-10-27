@@ -1,0 +1,1 @@
+- `bosun risk-check` carries the `review-verdict` status across a clean merge of the default branch (`data.verdict_carried_from`), and restores a real verdict that raced the carry.

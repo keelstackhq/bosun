@@ -6,6 +6,8 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
+use super::carry_over::{candidates, carry_verdict, has_verdict, is_verdict};
+use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
@@ -21,7 +23,7 @@ use crate::core::risk::{
 };
 use crate::core::touch::{Changed, outside};
 use crate::ctx::RepoId;
-use crate::github::{Comment, Github, PrFile, Review, b64};
+use crate::github::{Comment, Github, PrFile, Pull, Review, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
 
@@ -280,9 +282,12 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     };
     let state = if passed { "success" } else { "failure" };
     gh.create_status(head, CONTEXT, state, &description, None)?;
+    // After the check is posted, and never an error: a doubt or a failed read is no carry.
+    let carried = carry_status(gh, &pull, &linked);
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
-        "approved_by": approved_by, "out_of_touch": out_of_touch});
+        "approved_by": approved_by, "out_of_touch": out_of_touch,
+        "verdict_carried_from": carried});
     if high {
         data["requirement"] = json!(requirement.name());
         if requirement == Approval::TwoVerdicts {
@@ -331,6 +336,55 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         fix,
     )
     .with_data(data))
+}
+
+/// Carries `review-verdict` of an older head onto exactly `pull.head_sha` (design §3 C7), checking
+/// its statuses before and after posting (verdict.yml is not serialized with us). Never an error.
+fn carry_status(gh: &dyn Github, pull: &Pull, linked: &[u64]) -> Option<String> {
+    let head = pull.head_sha.as_str();
+    // A carried status on top of a real verdict (a run was cancelled mid-post) is repaired first.
+    let top = gh
+        .statuses(head)
+        .ok()
+        .and_then(|l| l.into_iter().find(is_verdict));
+    if let Some(s) = top.filter(|s| s.description.starts_with(CARRIED)) {
+        settle(gh, head, &s.description);
+        return None;
+    }
+    let branch = default_branch(gh).ok()?;
+    if candidates(gh, pull, &branch).is_empty() {
+        return None;
+    }
+    let owners = owner_logins(gh, &pull.base_sha).ok()?;
+    let h = carry_verdict(gh, pull, &branch, linked, &owners)?;
+    let short: String = h.chars().take(7).collect();
+    let text = format!("{CARRIED}{short}: clean merge of the default branch");
+    if has_verdict(gh, head) {
+        return None;
+    }
+    gh.create_status(head, VERDICT, "success", &text, None)
+        .ok()?;
+    settle(gh, head, &text).then_some(h)
+}
+
+const CARRIED: &str = "carried from ";
+const UNSURE: &str = "carry withdrawn: could not confirm no verdict raced it";
+
+/// True only when `ours` stands unchallenged on `head`. Another review-verdict is a real verdict
+/// that raced us: the newest is posted again. If that fails, or the history is unreadable: withdraw.
+fn settle(gh: &dyn Github, head: &str, ours: &str) -> bool {
+    let post = |state: &str, text: &str| gh.create_status(head, VERDICT, state, text, None);
+    let seen = gh.status_history(head).map(|l| {
+        l.into_iter()
+            .find(|s| is_verdict(s) && s.description != ours && !s.description.starts_with(CARRIED))
+    });
+    match seen {
+        Ok(None) => return true,
+        Ok(Some(f)) if post(&f.state, &f.description).is_ok() => {}
+        _ => _ = post("failure", UNSURE),
+    }
+    eprintln!("bosun: risk-check: a verdict raced the carry-over; it was not kept");
+    false
 }
 
 /// "N files outside the task's lease: a, b" (ten names at most, then "and N more"); `None` when
@@ -520,7 +574,11 @@ fn newer_than(comments: &[Comment], since: Option<Timestamp>) -> Vec<Comment> {
 /// with a lease record (a decoy link would hide the real task's capabilities and its lease
 /// holders). An unreadable task issue is a reason; an error listing its comments errors the
 /// check (fail closed, as every other read here).
-fn delegation_blocked(gh: &dyn Github, base_ref: &str, linked: &[u64]) -> Result<Option<String>> {
+pub(crate) fn delegation_blocked(
+    gh: &dyn Github,
+    base_ref: &str,
+    linked: &[u64],
+) -> Result<Option<String>> {
     match halt_reason(gh) {
         Ok(None) => {}
         Ok(Some((why, _))) => return Ok(Some(format!("bosun is halted ({why})"))),
@@ -567,11 +625,11 @@ fn owners_withdrawn(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> 
 /// The PR's comments oldest first, and the sessions that cannot review it independently: every
 /// session with a lease record (past or live) on a linked issue. `bosun pr` records no session
 /// for the PR author, so the lease is the only trace of who wrote the change.
-fn verdict_inputs(gh: &dyn Github, n: u64, linked: &[u64]) -> Result<(Vec<Comment>, Vec<String>)> {
+pub fn verdict_inputs(gh: &dyn Github, n: u64, ls: &[u64]) -> Result<(Vec<Comment>, Vec<String>)> {
     let mut comments = gh.list_comments(n)?;
     comments.sort_by_key(|c| c.id);
     let mut excluded = Vec::new();
-    for i in linked {
+    for i in ls {
         let notes = gh.list_comments(*i)?;
         excluded.extend(lease_sessions(notes.iter().map(|c| c.body.as_str())));
     }
