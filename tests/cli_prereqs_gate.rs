@@ -233,6 +233,9 @@ fn wave_plan_without_a_checklist_issue_leaves_out_the_plan_with_a_warning() {
         w.contains("has prerequisites but no checklist issue"),
         "{w}"
     );
+}
+
+#[test]
 fn a_plan_path_that_could_break_a_marker_fails_closed() {
     let fake = setup(&plan("M1", "owner"));
     let epic = r#"<!-- bosun:epic {"item":"M1","plan":"plans/x y.md"} -->"#;
