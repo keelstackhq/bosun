@@ -176,7 +176,11 @@ High-risk PRs:
   owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one
   line `bosun approve 199@<head> 200@<head>` (null when nothing is ready), and `data.hint` says
   to approve only by running `data.approve_command` or in the GitHub UI: a `/bosun approve` comment posted through the Claude
-  GitHub tool goes through an app and carries a footer, so it never counts. `--list` shows each
+  GitHub tool goes through an app and carries a footer, so it never counts. `--list` also gives
+  `message`, `message_id` (8 hex characters of the SHA-256 of the shown pairs' sorted
+  `<pr>@<head>` lines) and `message_pairs` (at most 10, the binding). Titles are untrusted and
+  shown inert; only the latest relayed message is answerable, PR numbers come only from the
+  owner's chat, and each (id, pr) is signed at most once (design F7). `--list` shows each
   open PR whose `risk-check` status is `failure` with a description that starts `high risk,
   owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
   statuses created by `github-actions[bot]` count (anyone with write access can post a status

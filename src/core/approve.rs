@@ -103,6 +103,61 @@ pub fn approve_command(ready: &[(u64, String)]) -> Option<String> {
     Some(format!("bosun approve {}", args.join(" ")))
 }
 
+/// Most PRs one owner message lists; the rest are only counted.
+const MESSAGE_PRS: usize = 10;
+/// Longest title in the owner message, in characters.
+const MESSAGE_TITLE: usize = 50;
+
+/// The owner's chat message (design F7) for a ready list of `(pr, head_sha, title)`.
+pub struct BatchMessage {
+    /// First 8 hex characters of the SHA-256 of the shown pairs' sorted `<pr>@<head>\n` lines.
+    pub id: String,
+    pub text: String,
+    /// The shown `<pr>@<full head>` pairs, in the order shown: the binding of the message.
+    pub pairs: Vec<String>,
+}
+
+/// The message id of shown `<pr>@<head>` pairs.
+pub fn message_id(pairs: &[String]) -> String {
+    let mut lines: Vec<String> = pairs.iter().map(|p| format!("{p}\n")).collect();
+    lines.sort();
+    let digest = ring::digest::digest(&ring::digest::SHA256, lines.concat().as_bytes());
+    digest.as_ref()[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The chat message for `ready`; titles are shown inert. `None` when nothing is ready.
+pub fn batch_message(ready: &[(u64, String, String)]) -> Option<BatchMessage> {
+    if ready.is_empty() {
+        return None;
+    }
+    let shown = &ready[..ready.len().min(MESSAGE_PRS)];
+    let pairs: Vec<String> = shown.iter().map(|(pr, h, _)| format!("{pr}@{h}")).collect();
+    let id = message_id(&pairs);
+    let mut text = if ready.len() == 1 {
+        format!("1 PR waits for your approval (message {id}):")
+    } else {
+        format!("{} PRs wait for your approval (message {id}):", ready.len())
+    };
+    for (pr, head, title) in shown {
+        let short: String = head.chars().take(7).collect();
+        let title = crate::core::text::inert(title, MESSAGE_TITLE);
+        text.push_str(&format!("\n- #{pr}@{short}"));
+        if !title.is_empty() {
+            text.push(' ');
+            text.push_str(&title);
+        }
+    }
+    if ready.len() > shown.len() {
+        text.push_str(&format!("\n- … and {} more", ready.len() - shown.len()));
+    }
+    let nums: Vec<String> = shown.iter().map(|(pr, ..)| pr.to_string()).collect();
+    text.push_str(&format!("\nReply: approve {}", nums.join(" ")));
+    Some(BatchMessage { id, text, pairs })
+}
+
 /// Whether this is a Claude cloud session, whose agent proxy rewrites GitHub writes (app
 /// attribution and a footer): `CCR_AGENT_PROXY_ENABLED` is `1`/`true`, or
 /// `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE` starts with `cloud`.
@@ -421,6 +476,38 @@ mod tests {
             approve_command(&[(1, "a".into()), (2, "b".into())]).as_deref(),
             Some("bosun approve 1@a 2@b")
         );
+    }
+
+    fn item(pr: u64, head: &str, title: &str) -> (u64, String, String) {
+        (pr, head.into(), title.into())
+    }
+
+    #[test]
+    fn the_message_id_is_a_known_answer() {
+        // printf '12@<40 a>\n3@<40 b>\n' | sha256sum | cut -c1-8   ("12@" sorts before "3@")
+        let pairs = vec![
+            format!("3@{}", "b".repeat(40)),
+            format!("12@{}", "a".repeat(40)),
+        ];
+        assert_eq!(message_id(&pairs), "77926130");
+    }
+
+    #[test]
+    fn the_batch_message_binds_the_shown_pairs() {
+        assert!(batch_message(&[]).is_none());
+        let h = "abcdef0123".repeat(4);
+        let m = batch_message(&[item(1, &h, "`**x**`"), item(2, &h, " ")]).unwrap();
+        assert_eq!(m.pairs, vec![format!("1@{h}"), format!("2@{h}")]);
+        assert_eq!(m.id, message_id(&m.pairs));
+        assert!(
+            m.text
+                .contains("\n- #1@abcdef0 `ˋ**x**ˋ`\n- #2@abcdef0\nReply")
+        );
+        let many: Vec<_> = (1..=11).map(|n| item(n, &h, "t")).collect();
+        let m = batch_message(&many).unwrap();
+        assert_eq!(m.pairs.len(), 10);
+        assert!(m.text.contains("- … and 1 more\n"));
+        assert!(m.text.ends_with("Reply: approve 1 2 3 4 5 6 7 8 9 10"));
     }
 
     #[test]
