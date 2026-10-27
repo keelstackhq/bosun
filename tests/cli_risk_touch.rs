@@ -77,7 +77,7 @@ fn a_high_risk_pr_body_carries_the_warning_and_the_status_text_is_unchanged() {
     assert_eq!(v["data"]["out_of_touch"], json!(["src/cli/risk_check.rs"]));
     let body = fake.pull_body(1);
     assert!(
-        body.contains("- **warning:** 1 file outside the task's lease: src/cli/risk_check.rs"),
+        body.contains("- **warning:** 1 file outside the task's lease: `src/cli/risk_check.rs`"),
         "{body}"
     );
     let text = status(&fake)["description"].as_str().unwrap().to_string();
@@ -155,4 +155,14 @@ fn a_lease_with_an_empty_touch_is_ignored() {
     let fake = pr(Some(empty), &[("src/other.rs", "modified", None)]);
     let v = check(&fake);
     assert_eq!(v["data"]["out_of_touch"], Value::Null);
+}
+
+#[test]
+fn a_hostile_file_name_cannot_end_the_risk_note() {
+    let name = ".github/workflows/`x<!-- /bosun:risk -->\n.yml";
+    let fake = pr(Some(LIVE), &[(name, "modified", None)]);
+    run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    let body = fake.pull_body(1);
+    assert!(body.contains("`.github/workflows/?x?!-- /bosun:risk --??.yml`"));
+    assert_eq!(body.matches("<!-- /bosun:risk -->").count(), 1, "{body}");
 }

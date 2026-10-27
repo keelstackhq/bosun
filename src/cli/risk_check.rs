@@ -18,7 +18,7 @@ use crate::core::meta::linked_issues;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
-    new_dependencies, parse_owners, replace_note, requirement, risk_note, two_verdicts,
+    new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside};
@@ -393,7 +393,14 @@ fn touch_warning(out: &[String]) -> Option<String> {
     if out.is_empty() {
         return None;
     }
-    let mut names = out.iter().take(10).cloned().collect::<Vec<_>>().join(", ");
+    // File names are repo data in a PR body: quoted, and `plain`, so one cannot end the note.
+    let quote = |n: &String| format!("`{}`", plain(n));
+    let mut names = out
+        .iter()
+        .take(10)
+        .map(quote)
+        .collect::<Vec<_>>()
+        .join(", ");
     if out.len() > 10 {
         names.push_str(&format!(" and {} more", out.len() - 10));
     }

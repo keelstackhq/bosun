@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P9 follow-up · Risk-note file names quoted and escaped (#286 reviewer nit) · PR (fix/risk-note-escape)
