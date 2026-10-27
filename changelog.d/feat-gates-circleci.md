@@ -1,0 +1,1 @@
+- `bosun gate` and `test-integrity` find their base on CircleCI (`CIRCLECI=true`): merge-base with the default branch for a PR, `--all` for a push to the default branch or a merge-queue branch (queue base sha); the output carries `data.ci`. GitHub and local runs are unchanged.
