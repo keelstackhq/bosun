@@ -56,6 +56,22 @@ for P8), and only same-section tasks are chained.
   off the rule (R-high; an independent adversarial security review before merge, a test per bypass)
   touch: src/cli/risk_check.rs, src/core/approve.rs, src/github/* (trees API), tests/cli_carry_over.rs
   (new), docs/spec/08-risk.md
+  - Implements exactly the five rules of design §3 C7. Required tests, one per case, each must
+    fail to carry over (and the honest merge must carry over):
+    1. honest merge of main into H, main touched only other files: carries;
+    2. "take ours" merge that keeps H's blob for a file main also changed: no carry (rule 2);
+    3. main renamed or deleted a path of P (X -> Z, X in P): no carry (rule 2, previous_filename);
+    4. merge with an old main commit (M an ancestor of B): no carry (rule 1);
+    5. a mode-only change (100644 -> 100755), a symlink or a gitlink change in H2: no carry (rule 3);
+    6. an extra file or byte outside M and P in H2: no carry (rule 3);
+    7. a dir/file clash between P and M: no carry (rule 3);
+    8. an octopus merge or a non-merge commit on the path H..H2: no carry (rule 1);
+    9. a truncated compare or tree, or a trust file in P: no carry (rule 4);
+    10. the owner requested changes on H, or on a commit between H and H2: no carry (rule 5);
+    11. a newer verdict on H or a later commit supersedes the carried one: no carry (rule 5);
+    12. the PR's base is not the default branch: no carry;
+    13. a rule tightened on main applies to H2 (the requirement is recomputed, only the
+        verdict or signature is carried).
 - [ ] **P10: `src/cli/mod.rs` Args split (C6)** — depends P1-P9, optional
   touch: src/cli/mod.rs, src/cli/*.rs (each command's Args)
 
