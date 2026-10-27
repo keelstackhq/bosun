@@ -205,7 +205,7 @@ fn an_unstaged_edit_of_a_tracked_file_selects_the_gate() {
 }
 
 #[test]
-fn the_diff_file_includes_uncommitted_edits() {
+fn the_diff_file_describes_the_files_on_disk() {
     let r = repo();
     let out = r.root.join("seen.diff");
     let profile = format!(
@@ -214,10 +214,17 @@ fn the_diff_file_includes_uncommitted_edits() {
     );
     write(&r.root, ".bosun/profiles/rust.toml", &profile);
     write(&r.root, "a/src/lib.rs", "// only in the working tree\n");
+    write(&r.root, "a/src/new.rs", "// untracked file\n");
+    // A committed change that the working tree reverted is not on disk, so not in the diff.
+    r.change("b/src/lib.rs");
+    write(&r.root, "b/src/lib.rs", "");
     let (code, v, _) = r.gate(&["mutants", "--base", "main"], "0");
     assert_eq!(code, 0, "{v}");
     let seen = fs::read_to_string(out).unwrap();
-    assert!(seen.contains("only in the working tree"), "{seen}");
+    for text in ["only in the working tree", "untracked file"] {
+        assert!(seen.contains(text), "{text}: {seen}");
+    }
+    assert!(!seen.contains("// changed"), "{seen}");
 }
 
 #[test]

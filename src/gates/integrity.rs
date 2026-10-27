@@ -34,34 +34,35 @@ struct Change {
     new: Option<String>,
 }
 
-/// Parse `git diff --name-status -M` output.
+/// Parse `git diff --name-status -M -z` output: NUL-separated, a rename or copy has two paths.
+/// Raw paths, so names with non-ASCII characters, quotes or tabs are not skipped.
 fn parse_changes(text: &str) -> Vec<Change> {
-    text.lines()
-        .filter_map(|line| {
-            let mut parts = line.split('\t');
-            let status = parts.next()?;
-            let first = parts.next()?.to_string();
-            let second = parts.next().map(String::from);
-            Some(match status.chars().next()? {
-                'A' => Change {
-                    old: None,
-                    new: Some(first),
-                },
-                'D' => Change {
-                    old: Some(first),
-                    new: None,
-                },
-                'R' | 'C' => Change {
-                    old: Some(first),
-                    new: second,
-                },
-                _ => Change {
-                    old: Some(first.clone()),
-                    new: Some(first),
-                },
-            })
-        })
-        .collect()
+    let mut tokens = text.split('\0').filter(|t| !t.is_empty());
+    let mut out = Vec::new();
+    while let Some(status) = tokens.next() {
+        let Some(first) = tokens.next().map(String::from) else {
+            break;
+        };
+        out.push(match status.chars().next() {
+            Some('A') => Change {
+                old: None,
+                new: Some(first),
+            },
+            Some('D') => Change {
+                old: Some(first),
+                new: None,
+            },
+            Some('R' | 'C') => Change {
+                old: Some(first),
+                new: tokens.next().map(String::from),
+            },
+            _ => Change {
+                old: Some(first.clone()),
+                new: Some(first),
+            },
+        });
+    }
+    out
 }
 
 /// The text of `path` at `base`, or none when it did not exist there.
@@ -232,11 +233,24 @@ fn finding(
 
 pub fn run(req: &Request) -> CmdResult {
     // Compare with the merge base: a branch behind its base must not look like it lost tests.
-    // The diff runs to the working tree, so staged and unstaged edits of tracked files count.
+    // Three views are judged, and any finding refuses: the commits (merge base to HEAD), the
+    // index (merge base to what is staged) and the working tree (merge base to the files on
+    // disk). Restoring a file in a later view must not hide a weakening in an earlier one.
     let merge_base = git(req.root, &["merge-base", req.base, "HEAD"])?
         .trim()
         .to_string();
-    let diff = git(req.root, &["diff", "--name-status", "-M", &merge_base])?;
+    let name_status = |extra: &[&str]| {
+        let mut args = vec!["diff", "--name-status", "-M", "-z"];
+        args.extend_from_slice(extra);
+        git(req.root, &args)
+    };
+    // The second item is the revision the new text is read from: "HEAD", the index (""), or the
+    // files on disk (None).
+    let views = [
+        (name_status(&[&merge_base, "HEAD"])?, Some("HEAD")),
+        (name_status(&["--cached", &merge_base])?, Some("")),
+        (name_status(&[&merge_base])?, None),
+    ];
     let kits = kits(req.root, req.stacks)?;
     // Each side is read with the kit of the innermost stack holding its own path.
     let is_test_file = |p: &str, t: &str| kit_for(&kits, p).is_test_file(p, t);
@@ -246,128 +260,141 @@ pub fn run(req: &Request) -> CmdResult {
     let only_count = |p: &str, t: &str| kit_for(&kits, p).only_count(p, t);
     let allows = |name: &str| req.allow.iter().any(|a| a == name);
     let mut findings: Vec<Value> = Vec::new();
-    let mut files_checked = 0;
+    let mut checked: std::collections::BTreeSet<String> = Default::default();
 
-    for change in parse_changes(&diff) {
-        let old_text = change
-            .old
-            .as_deref()
-            .and_then(|p| base_text(req.root, &merge_base, p));
-        let new_text = change
-            .new
-            .as_deref()
-            .and_then(|p| std::fs::read_to_string(req.root.join(p)).ok());
+    for (diff, new_rev) in &views {
+        for change in parse_changes(diff) {
+            let old_text = change
+                .old
+                .as_deref()
+                .and_then(|p| base_text(req.root, &merge_base, p));
+            let new_text = change.new.as_deref().and_then(|p| match new_rev {
+                Some(rev) => base_text(req.root, rev, p),
+                None => std::fs::read_to_string(req.root.join(p)).ok(),
+            });
 
-        if let Some(new) = &change.new
-            && new.ends_with(".snap")
-            && !has_reason(req.body)
-        {
-            findings.push(finding("snapshot-change", new, None, None, false));
-        }
+            if let Some(new) = &change.new
+                && new.ends_with(".snap")
+                && !has_reason(req.body)
+            {
+                findings.push(finding("snapshot-change", new, None, None, false));
+            }
 
-        // Each side is read with the adapter for its own path: a rename out of the test file
-        // pattern (`a.test.ts` -> `a.test.ts.disabled`) must not hide what the base had.
-        let was_test = matches!((&change.old, &old_text), (Some(p), Some(t)) if is_test_file(p, t));
-        let is_test = matches!((&change.new, &new_text), (Some(p), Some(t)) if is_test_file(p, t));
-        if !was_test && !is_test {
-            continue;
-        }
-        files_checked += 1;
-        let file = change
-            .new
-            .as_deref()
-            .or(change.old.as_deref())
-            .unwrap_or("");
-        let (old_path, new_path) = (
-            change.old.as_deref().unwrap_or(file),
-            change.new.as_deref().unwrap_or(file),
-        );
-        let base_text = old_text.as_deref().filter(|_| was_test);
-        let base_asserts = base_text.map_or(0, |t| assertions(old_path, t));
-
-        let head = match &new_text {
-            Some(h) if is_test => h,
-            _ => {
-                // Deleted, or no longer a test file: the base tests are gone.
-                let allowed = allows("delete-test");
-                findings.push(finding(
-                    "deleted-test",
-                    file,
-                    Some(base_asserts),
-                    None,
-                    allowed,
-                ));
+            // Each side is read with the adapter for its own path: a rename out of the test file
+            // pattern (`a.test.ts` -> `a.test.ts.disabled`) must not hide what the base had.
+            let was_test =
+                matches!((&change.old, &old_text), (Some(p), Some(t)) if is_test_file(p, t));
+            let is_test =
+                matches!((&change.new, &new_text), (Some(p), Some(t)) if is_test_file(p, t));
+            if !was_test && !is_test {
                 continue;
             }
-        };
-        // Plain skips are counted; a UC marker in head that base lacks (by id, with
-        // multiplicity) is a skip too. Removing UC markers is fine.
-        let plain = |p: &str, t: &str| {
-            pending_markers(p, t)
-                .iter()
-                .filter(|m| m.uc.is_none())
-                .count()
-        };
-        let ucs = |p: &str, t: &str| {
-            let mut m: BTreeMap<String, usize> = BTreeMap::new();
-            for id in pending_markers(p, t).into_iter().filter_map(|m| m.uc) {
-                *m.entry(id).or_default() += 1;
+            checked.insert(
+                change
+                    .new
+                    .clone()
+                    .or(change.old.clone())
+                    .unwrap_or_default(),
+            );
+            let file = change
+                .new
+                .as_deref()
+                .or(change.old.as_deref())
+                .unwrap_or("");
+            let (old_path, new_path) = (
+                change.old.as_deref().unwrap_or(file),
+                change.new.as_deref().unwrap_or(file),
+            );
+            let base_text = old_text.as_deref().filter(|_| was_test);
+            let base_asserts = base_text.map_or(0, |t| assertions(old_path, t));
+
+            let head = match &new_text {
+                Some(h) if is_test => h,
+                _ => {
+                    // Deleted, or no longer a test file: the base tests are gone.
+                    let allowed = allows("delete-test");
+                    findings.push(finding(
+                        "deleted-test",
+                        file,
+                        Some(base_asserts),
+                        None,
+                        allowed,
+                    ));
+                    continue;
+                }
+            };
+            // Plain skips are counted; a UC marker in head that base lacks (by id, with
+            // multiplicity) is a skip too. Removing UC markers is fine.
+            let plain = |p: &str, t: &str| {
+                pending_markers(p, t)
+                    .iter()
+                    .filter(|m| m.uc.is_none())
+                    .count()
+            };
+            let ucs = |p: &str, t: &str| {
+                let mut m: BTreeMap<String, usize> = BTreeMap::new();
+                for id in pending_markers(p, t).into_iter().filter_map(|m| m.uc) {
+                    *m.entry(id).or_default() += 1;
+                }
+                m
+            };
+            let base_ucs = base_text.map(|t| ucs(old_path, t)).unwrap_or_default();
+            let new_ucs: usize = ucs(new_path, head)
+                .into_iter()
+                .map(|(id, n)| n.saturating_sub(base_ucs.get(&id).copied().unwrap_or(0)))
+                .sum();
+            let base_skips = base_text.map_or(0, |t| plain(old_path, t));
+            let head_skips = plain(new_path, head);
+            if head_skips > base_skips || new_ucs > 0 {
+                let allowed = allows("skip");
+                findings.push(finding(
+                    "new-skip",
+                    file,
+                    Some(base_skips),
+                    Some(head_skips + new_ucs),
+                    allowed,
+                ));
             }
-            m
-        };
-        let base_ucs = base_text.map(|t| ucs(old_path, t)).unwrap_or_default();
-        let new_ucs: usize = ucs(new_path, head)
-            .into_iter()
-            .map(|(id, n)| n.saturating_sub(base_ucs.get(&id).copied().unwrap_or(0)))
-            .sum();
-        let base_skips = base_text.map_or(0, |t| plain(old_path, t));
-        let head_skips = plain(new_path, head);
-        if head_skips > base_skips || new_ucs > 0 {
-            let allowed = allows("skip");
-            findings.push(finding(
-                "new-skip",
-                file,
-                Some(base_skips),
-                Some(head_skips + new_ucs),
-                allowed,
-            ));
-        }
-        let base_only = base_text.map_or(0, |t| only_count(old_path, t));
-        let head_only = only_count(new_path, head);
-        if head_only > base_only {
-            let allowed = allows("only");
-            findings.push(finding(
-                "new-only",
-                file,
-                Some(base_only),
-                Some(head_only),
-                allowed,
-            ));
-        }
-        let base_tests = base_text.map_or(0, |t| test_count(old_path, t));
-        let head_tests = test_count(new_path, head);
-        if head_tests < base_tests {
-            let allowed = allows("delete-test");
-            findings.push(finding(
-                "fewer-tests",
-                file,
-                Some(base_tests),
-                Some(head_tests),
-                allowed,
-            ));
-        }
-        let head_asserts = assertions(new_path, head);
-        if head_asserts < base_asserts {
-            let allowed = allows("fewer-asserts");
-            findings.push(finding(
-                "fewer-asserts",
-                file,
-                Some(base_asserts),
-                Some(head_asserts),
-                allowed,
-            ));
+            let base_only = base_text.map_or(0, |t| only_count(old_path, t));
+            let head_only = only_count(new_path, head);
+            if head_only > base_only {
+                let allowed = allows("only");
+                findings.push(finding(
+                    "new-only",
+                    file,
+                    Some(base_only),
+                    Some(head_only),
+                    allowed,
+                ));
+            }
+            let base_tests = base_text.map_or(0, |t| test_count(old_path, t));
+            let head_tests = test_count(new_path, head);
+            if head_tests < base_tests {
+                let allowed = allows("delete-test");
+                findings.push(finding(
+                    "fewer-tests",
+                    file,
+                    Some(base_tests),
+                    Some(head_tests),
+                    allowed,
+                ));
+            }
+            let head_asserts = assertions(new_path, head);
+            if head_asserts < base_asserts {
+                let allowed = allows("fewer-asserts");
+                findings.push(finding(
+                    "fewer-asserts",
+                    file,
+                    Some(base_asserts),
+                    Some(head_asserts),
+                    allowed,
+                ));
+            }
         }
     }
+    let mut seen = std::collections::HashSet::new();
+    findings.retain(|f| seen.insert(f.to_string()));
+    let files_checked = checked.len();
 
     let refused = findings.iter().filter(|f| f["allowed"] == false).count();
     let mut data = json!({"base": req.base, "files_checked": files_checked, "findings": findings});
@@ -394,7 +421,7 @@ mod tests {
 
     #[test]
     fn name_status_lines_parse() {
-        let c = parse_changes("M\ta.rs\nA\tb.rs\nD\tc.rs\nR087\td.rs\te.rs\n");
+        let c = parse_changes("M\0a.rs\0A\0b.rs\0D\0c.rs\0R087\0d.rs\0e.rs\0");
         assert_eq!(c.len(), 4);
         assert_eq!(c[0].old.as_deref(), Some("a.rs"));
         assert_eq!(c[1].old, None);

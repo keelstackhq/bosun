@@ -312,3 +312,51 @@ fn uncommitted_changes_to_tracked_tests_are_checked() {
     k.sort();
     assert_eq!(k, vec!["deleted-test", "fewer-asserts"], "{v}");
 }
+
+#[test]
+fn a_committed_weakening_is_not_hidden_by_restoring_the_file_in_the_working_tree() {
+    let r = repo();
+    r.edit("tests/t.rs", "#[test]\nfn t() {\n    assert!(true);\n}\n");
+    // The old content comes back without being committed: the worktree matches the base.
+    r.put("tests/t.rs", TWO_ASSERTS);
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["fewer-asserts"], "{v}");
+}
+
+#[test]
+fn a_finding_in_both_views_is_reported_once() {
+    let r = repo();
+    fs::remove_file(r.root.join("tests/t.rs")).unwrap();
+    r.commit();
+    let (_, v) = r.check(&[]);
+    assert_eq!(kinds(&v), vec!["deleted-test"], "{v}");
+}
+
+#[test]
+fn a_weakened_test_with_an_unusual_name_is_still_refused() {
+    let r = repo();
+    git(&r.root, &["checkout", "-q", "main"]);
+    r.put("tests/t\u{e9} \"q\".rs", TWO_ASSERTS);
+    r.commit();
+    git(&r.root, &["checkout", "-q", "work"]);
+    git(&r.root, &["merge", "-q", "main"]);
+    r.edit(
+        "tests/t\u{e9} \"q\".rs",
+        "#[test]\nfn t() {\n    assert!(true);\n}\n",
+    );
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["fewer-asserts"], "{v}");
+}
+
+#[test]
+fn a_staged_weakening_is_not_hidden_by_restoring_the_file_on_disk() {
+    let r = repo();
+    r.put("tests/t.rs", "#[test]\nfn t() {\n    assert!(true);\n}\n");
+    git(&r.root, &["add", "tests/t.rs"]);
+    r.put("tests/t.rs", TWO_ASSERTS);
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(kinds(&v), vec!["fewer-asserts"], "{v}");
+}

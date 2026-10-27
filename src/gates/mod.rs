@@ -253,9 +253,35 @@ fn execute(
 
     let diff = if gate.needs_diff() {
         let path = std::env::temp_dir().join(format!("bosun-gate-{}.diff", std::process::id()));
-        // From the merge base to the working tree: staged and unstaged edits count too.
+        // The files on disk against the merge base, with untracked files as new files:
+        // `cargo mutants --in-diff` reads the diff against the working tree.
         let merge_base = git(req.root, &["merge-base", req.base, "HEAD"])?;
-        let text = git(req.root, &["diff", merge_base.trim()])?;
+        let mut text = git(req.root, &["diff", merge_base.trim()])?;
+        for f in git(
+            req.root,
+            &["ls-files", "-z", "--others", "--exclude-standard"],
+        )?
+        .split('\0')
+        .filter(|f| !f.is_empty())
+        {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(req.root)
+                .args(["diff", "--no-index", "--", "/dev/null", f])
+                .output()
+                .map_err(|e| BosunError::error(format!("cannot run git: {e}"), "install git"))?;
+            // `--no-index` exits 1 when the files differ, which is the expected case here.
+            if !matches!(out.status.code(), Some(0 | 1)) {
+                return Err(BosunError::error(
+                    format!(
+                        "git diff --no-index {f} failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    ),
+                    "check that the untracked file is readable, or remove it",
+                ));
+            }
+            text.push_str(&String::from_utf8_lossy(&out.stdout));
+        }
         std::fs::write(&path, text).map_err(|e| {
             BosunError::error(
                 format!("cannot write {}: {e}", path.display()),
