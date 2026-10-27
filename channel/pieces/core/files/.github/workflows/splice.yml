@@ -21,6 +21,6 @@ jobs:
         with:
           scope: all
           # Pinned: this job can write. Move it with the setup script's SPLICE_VERSION.
-          version: 0.2.0
+          version: 0.2.1
           # GITHUB_TOKEN works, but its PRs do not trigger CI.
           token: ${{ secrets.SPLICE_BOT_TOKEN || github.token }}

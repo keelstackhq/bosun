@@ -310,7 +310,17 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     }
     // The update bot can write: its splice is pinned.
     let bot = fs::read_to_string(wf.join("splice.yml")).unwrap();
-    assert!(bot.contains("version: 0.2.0"));
+    let script =
+        fs::read_to_string(channel().join("pieces/core/files/docs/setup-script.sh.jinja")).unwrap();
+    let pinned = script
+        .lines()
+        .find_map(|l| l.strip_prefix("SPLICE_VERSION="))
+        .expect("the setup script pins SPLICE_VERSION");
+    assert_eq!(pinned, "0.2.1");
+    assert!(
+        bot.contains(&format!("version: {pinned}\n")),
+        "splice.yml moves with the setup script's SPLICE_VERSION"
+    );
 }
 
 /// Every occurrence of `script` in `text` is a call through bash: `bash <script>`.

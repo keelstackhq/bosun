@@ -1,0 +1,1 @@
+- 2026-10-27 · Canary G2/G4/G5/G10/G11 · pr: auto-merge-off and unpushed-branch fixes, conventional title, escalate_risk instruction, splice 0.2.1 pin · PR (fix/pr-messages)

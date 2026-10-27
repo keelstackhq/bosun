@@ -84,6 +84,8 @@ pub trait Github {
     fn remove_label(&self, number: u64, label: &str) -> Result<()>;
     /// Whether the repository has the label.
     fn label_exists(&self, name: &str) -> Result<bool>;
+    /// Whether the branch exists on GitHub (is pushed).
+    fn branch_exists(&self, name: &str) -> Result<bool>;
     /// Create the label; one that already exists is fine.
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()>;
     fn list_comments(&self, number: u64) -> Result<Vec<Comment>>;
@@ -368,6 +370,11 @@ impl Github for LiveGithub {
         Ok(self.http.get_json(&path)?.is_some())
     }
 
+    fn branch_exists(&self, name: &str) -> Result<bool> {
+        let path = self.path(&format!("/branches/{}", enc(name)));
+        Ok(self.http.get_json(&path)?.is_some())
+    }
+
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()> {
         let body = json!({"name": name, "color": color, "description": description});
         self.http
@@ -647,13 +654,18 @@ impl Github for LiveGithub {
         let body = json!({"query": AUTO_MERGE, "variables": {"id": node_id, "method": method}});
         let v = self.http.send_json("POST", "/graphql", &body)?;
         match v["errors"].as_array().and_then(|e| e.first()) {
-            Some(first) => Err(BosunError::error(
-                format!(
-                    "GitHub refused auto-merge: {}",
-                    first["message"].as_str().unwrap_or("unknown GraphQL error")
-                ),
-                "enable 'Allow auto-merge' in the repository settings and require status checks on the base branch",
-            )),
+            Some(first) => {
+                let why = first["message"].as_str().unwrap_or("unknown GraphQL error");
+                let fix = if http::auto_merge_off(why) {
+                    http::AUTO_MERGE_OFF_FIX
+                } else {
+                    "enable 'Allow auto-merge' in the repository settings and require status checks on the base branch"
+                };
+                Err(BosunError::error(
+                    format!("GitHub refused auto-merge: {why}"),
+                    fix,
+                ))
+            }
             None => Ok(()),
         }
     }
