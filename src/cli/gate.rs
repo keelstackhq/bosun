@@ -6,6 +6,7 @@ use std::process::Command;
 
 use crate::cli::GateArgs;
 use crate::config::Config;
+use crate::gates::ci_env::{self, BaseRule, CiContext, Provider};
 use crate::gates::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
@@ -36,6 +37,26 @@ pub fn resolve_base_in(root: &Path, flag: Option<&str>, github_base_ref: Option<
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|b| b.starts_with("origin/") && b.len() > "origin/".len())
         .unwrap_or_else(|| resolve_base(None, None))
+}
+
+/// Base and CI context: `--base` wins; on CircleCI `ci_env` decides; elsewhere `resolve_base_in`.
+pub(crate) fn resolve_ci(root: &Path, flag: Option<&str>) -> (String, CiContext) {
+    let env = |k: &str| std::env::var(k).ok();
+    let default_ref = resolve_base_in(root, None, None);
+    let default_branch = default_ref.strip_prefix("origin/").unwrap_or("main");
+    let ci = ci_env::detect(&env, default_branch);
+    let explicit = flag.is_some_and(|f| !f.trim().is_empty());
+    let base = match (&ci.base, explicit) {
+        (BaseRule::Ref(r), false) => r.clone(),
+        (BaseRule::MergeBase(r), false) => gates::git(root, &["merge-base", "HEAD", r])
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| {
+                eprintln!("bosun: no merge base with {r}; diffing against {r} itself");
+                r.clone()
+            }),
+        _ => resolve_base_in(root, flag, env("GITHUB_BASE_REF").as_deref()),
+    };
+    (base, ci)
 }
 
 pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
@@ -71,18 +92,19 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
     let config = Config::load(&root)?;
-    let base = resolve_base_in(
-        &root,
-        args.base.as_deref(),
-        std::env::var("GITHUB_BASE_REF").ok().as_deref(),
-    );
-    gates::run(&Request {
+    let (base, ci) = resolve_ci(&root, args.base.as_deref());
+    let mut out = gates::run(&Request {
         root: &root,
         stacks: &config.stack,
         gate: &args.name,
         base: &base,
-        all: args.all,
-    })
+        all: args.all || ci.all,
+    })?;
+    if ci.provider == Provider::CircleCi {
+        let (p, e) = (ci.provider.name(), ci.event.name());
+        out.data["ci"] = serde_json::json!({"provider": p, "event": e, "base": base});
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
