@@ -291,6 +291,15 @@ pub fn blocked_by<'a>(prereqs: &'a [Prereq], item: &str, task: &str) -> Vec<&'a 
         .collect()
 }
 
+/// Every `<item>/<task>` the plan has, with `<item>/P` (the item's pull-request task).
+pub fn plan_task_ids(plan: &Plan) -> Vec<String> {
+    let ids = plan.items.iter().flat_map(|i| {
+        let tasks = i.tasks.iter().map(|t| t.id.as_str()).chain(["P"]);
+        tasks.map(|t| format!("{}/{t}", i.id)).collect::<Vec<_>>()
+    });
+    ids.collect()
+}
+
 /// A task whose PR will need an approval at merge: `needs` is `owner` or `delegate`, `batch`
 /// its dependency batch (1 first).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -327,6 +336,12 @@ fn level(key: &str, plan: &Plan, memo: &mut HashMap<String, usize>) -> usize {
     l
 }
 
+/// As risk-check: a touch glob also counts in its lowercased form, since on a case-insensitive
+/// filesystem `.GITHUB/` is `.github/`. Rule and floor paths are written in lowercase.
+fn overlaps_any_case(g: &Glob, p: &Glob) -> bool {
+    g.overlaps(p) || Glob::parse(&g.as_str().to_lowercase()).is_ok_and(|l| l.overlaps(p))
+}
+
 /// The tasks of a plan whose PR will need an approval, in plan order, in dependency batches.
 pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNeed> {
     let glob = |g: &&str| Glob::parse(g).expect("built-in critical glob");
@@ -348,11 +363,15 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
             let hits: Vec<_> = rules
                 .rules
                 .iter()
-                .filter(|r| touch.iter().any(|g| r.paths.iter().any(|p| g.overlaps(p))))
+                .filter(|r| {
+                    touch
+                        .iter()
+                        .any(|g| r.paths.iter().any(|p| overlaps_any_case(g, p)))
+                })
                 .collect();
             let crit: Vec<String> = touch
                 .iter()
-                .filter(|g| floor.iter().any(|f| g.overlaps(f)))
+                .filter(|g| floor.iter().any(|f| overlaps_any_case(g, f)))
                 .map(|g| format!("critical: {}", g.as_str()))
                 .collect();
             let any = |a| hits.iter().any(|r| r.approval == a);
@@ -393,13 +412,11 @@ pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNe
     out
 }
 
-/// The first 8 hex characters of the SHA-256 of an item's title, steps and verify: a tick counts
-/// only on a line whose `sum` matches the plan's item now.
-pub fn digest(title: &str, steps: &str, verify: &str) -> String {
-    let d = ring::digest::digest(
-        &ring::digest::SHA256,
-        format!("{title}\n{steps}\n{verify}").as_bytes(),
-    );
+/// The first 8 hex characters of the SHA-256 of an item's title, steps, verify and who: a tick
+/// counts only on a line whose `sum` matches the plan's item now.
+pub fn digest(title: &str, steps: &str, verify: &str, who: &str) -> String {
+    let text = format!("{title}\n{steps}\n{verify}\n{who}");
+    let d = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
     d.as_ref()[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -424,7 +441,7 @@ impl From<&Prereq> for CheckItem {
         let verify = p.verify.describe();
         CheckItem {
             id: p.id.clone(),
-            sum: digest(&p.title, &p.steps, &verify),
+            sum: digest(&p.title, &p.steps, &verify, &p.who),
             title: p.title.clone(),
             who: p.who.clone(),
             on: p.on.clone(),
@@ -483,7 +500,14 @@ pub fn render_issue(
         }
         s += &format!("### {head}\n");
         for i in rows {
-            let x = if i.done { 'x' } else { ' ' };
+            // Only an owner's tick shows: bosun never draws a box for what the API found.
+            let shown = i.done && matches!(i.state.as_str(), "owner" | "api 403");
+            let x = if shown { 'x' } else { ' ' };
+            let seen = if i.state == "api ok" {
+                " \u{2014} verified by bosun"
+            } else {
+                ""
+            };
             let (title, steps, verify) = (
                 inert(&i.title, 120),
                 inert(&i.steps, 400),
@@ -491,7 +515,7 @@ pub fn render_issue(
             );
             let (who, blocks) = (by(i), i.blocks.join(", "));
             s += &format!(
-                "- [{x}] **{}**{who} {title} \u{2014} {steps} _(verify {verify}; blocks {blocks})_ <!-- bosun:prereq {} sum={} state={} -->\n",
+                "- [{x}] **{}**{who} {title} \u{2014} {steps}{seen} _(verify {verify}; blocks {blocks})_ <!-- bosun:prereq {} sum={} state={} -->\n",
                 i.id, i.id, i.sum, i.state
             );
         }
@@ -528,6 +552,8 @@ pub struct Tick {
     pub sum: String,
     /// Informational only: the gates and bosun read the API themselves.
     pub state: String,
+    /// The task a `bosun hold` box (`X1`) blocks, from a trailing ` task=<n>`.
+    pub task: Option<u64>,
 }
 
 /// The boxes of a checklist issue body, in order: lines that start with a box and end in bosun's
@@ -546,6 +572,10 @@ pub fn read_issue(body: &str) -> Vec<Tick> {
             continue;
         };
         let (m, state) = m.split_once(" state=").unwrap_or((m, ""));
+        let (state, task) = match state.rsplit_once(" task=") {
+            Some((s, t)) => (s, t.trim().parse().ok()),
+            None => (state, None),
+        };
         let (id, sum) = m.split_once(" sum=").unwrap_or((m, ""));
         let (id, sum, state) = (id.trim().into(), sum.trim().into(), state.trim().into());
         out.push(Tick {
@@ -553,6 +583,7 @@ pub fn read_issue(body: &str) -> Vec<Tick> {
             ticked,
             sum,
             state,
+            task,
         });
     }
     out
@@ -628,4 +659,129 @@ pub fn message(
 pub fn ticked(ticks: &[Tick], id: &str, sum: &str) -> bool {
     let mut lines = ticks.iter().filter(|t| t.id == id);
     matches!((lines.next(), lines.next()), (Some(t), None) if t.ticked && t.sum == sum)
+}
+
+/// Whether `id` names a `bosun hold` box (`X1`).
+pub fn is_hold_id(id: &str) -> bool {
+    HOLD.is_match(id)
+}
+
+/// The number of an `X<n>` id.
+pub fn hold_number(id: &str) -> Option<u64> {
+    id.strip_prefix('X')?
+        .parse()
+        .ok()
+        .filter(|_| is_hold_id(id))
+}
+
+/// The sum of a hold box: its text is the only content, owner verified.
+pub fn hold_sum(step: &str) -> String {
+    digest(step, "", "owner", "owner")
+}
+
+/// The heading of the boxes `bosun hold` adds.
+pub const FOUND: &str = "### Found during the work";
+
+static HOLD_LINE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    re(
+        r"^- \[( |x|X)\] \*\*(X[1-9][0-9]{0,2})\*\* (`[^`\n]*`) _\(task #([0-9]+)(, phone)?\)_ <!-- bosun:prereq (X[1-9][0-9]{0,2}) sum=([0-9a-f]{8}) state=owner task=([0-9]+) -->$",
+    )
+});
+
+/// One box of `bosun hold`: read back from the issue and rendered again, so it is always
+/// exactly the shape bosun writes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoldBox {
+    pub id: String,
+    /// The inert text, without the backticks of its code span.
+    pub text: String,
+    pub sum: String,
+    pub task: u64,
+    pub phone: bool,
+    pub ticked: bool,
+}
+
+impl HoldBox {
+    /// `None` for a line that is not exactly what [`HoldBox::line`] writes.
+    pub fn parse(line: &str) -> Option<HoldBox> {
+        let c = HOLD_LINE.captures(line.trim())?;
+        let (id, task) = (c[2].to_string(), c[4].parse().ok()?);
+        if c[6] != id || c[8].parse::<u64>().ok()? != task {
+            return None;
+        }
+        Some(HoldBox {
+            text: c[3].trim_matches('`').to_string(),
+            sum: c[7].to_string(),
+            phone: c.get(5).is_some(),
+            ticked: &c[1] != " ",
+            id,
+            task,
+        })
+    }
+
+    /// The box for a new hold: `span` is the text made inert, `step` the raw text.
+    pub fn new(id: &str, step: &str, task: u64, phone: bool) -> HoldBox {
+        HoldBox {
+            id: id.into(),
+            text: inert(step, 300).trim_matches('`').to_string(),
+            sum: hold_sum(step),
+            task,
+            phone,
+            ticked: false,
+        }
+    }
+
+    pub fn line(&self) -> String {
+        let (x, on) = (
+            if self.ticked { 'x' } else { ' ' },
+            if self.phone { ", phone" } else { "" },
+        );
+        let (id, text, sum, task) = (&self.id, &self.text, &self.sum, self.task);
+        format!(
+            "- [{x}] **{id}** `{text}` _(task #{task}{on})_ <!-- bosun:prereq {id} sum={sum} state=owner task={task} -->"
+        )
+    }
+
+    /// As a checklist item: it counts as open or done, and blocks no plan item.
+    pub fn item(&self) -> CheckItem {
+        CheckItem {
+            id: self.id.clone(),
+            title: self.text.clone(),
+            who: "owner".into(),
+            on: if self.phone { "phone" } else { "computer" }.into(),
+            steps: String::new(),
+            verify: "owner".into(),
+            sum: self.sum.clone(),
+            state: "owner".into(),
+            done: self.ticked,
+            blocks: vec![],
+        }
+    }
+}
+
+/// `body` without the "Found during the work" heading and the hold boxes, and those boxes. A
+/// line that is not exactly a box bosun wrote is dropped (fail closed).
+pub fn split_found(body: &str) -> (String, Vec<HoldBox>) {
+    let (mut rest, mut boxes) = (String::new(), Vec::new());
+    for l in body.lines() {
+        if l.trim() == FOUND {
+            continue;
+        }
+        if l.contains("<!-- bosun:prereq X") && l.trim_start().starts_with("- [") {
+            boxes.extend(HoldBox::parse(l));
+            continue;
+        }
+        rest += l;
+        rest.push('\n');
+    }
+    (rest, boxes)
+}
+
+/// `rest` with the hold boxes under their heading, at the end.
+pub fn with_found(rest: &str, boxes: &[HoldBox]) -> String {
+    if boxes.is_empty() {
+        return rest.to_string();
+    }
+    let lines: Vec<String> = boxes.iter().map(HoldBox::line).collect();
+    format!("{rest}{FOUND}\n{}\n", lines.join("\n"))
 }

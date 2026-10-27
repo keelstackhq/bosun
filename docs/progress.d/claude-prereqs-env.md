@@ -1,0 +1,1 @@
+- 2026-10-27 · Q3a part 1 · one plan's checklist is a reusable function · PR (claude/prereqs-env)

@@ -7,10 +7,12 @@ pub mod answer;
 pub mod approve;
 pub mod ask;
 pub mod budget;
+pub mod carry_over;
 pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod heartbeat;
+pub mod hold;
 pub mod init;
 pub mod intake;
 pub mod join;
@@ -21,6 +23,8 @@ pub mod msg;
 pub mod notify;
 pub mod plan;
 pub mod pr;
+pub mod prereqs;
+pub mod prereqs_gate;
 pub mod progress;
 pub mod reap;
 pub mod release;
@@ -107,6 +111,8 @@ pub enum Command {
     Status,
     /// Ask the owner a question on an issue (sets needs-human).
     Ask(AskArgs),
+    /// Record a human step found mid-run: the owner's checklist gets a box, the task waits.
+    Hold(HoldArgs),
     /// Record an owner's answer from Slack on a needs-human task and make it ready.
     Answer(AnswerArgs),
     /// Lesson commands.
@@ -145,6 +151,8 @@ pub enum Command {
     ReviewCi(ReviewCiArgs),
     /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
     Notify(NotifyArgs),
+    /// List the human steps a plan needs up front (and its approvals); --post opens the checklist issue.
+    Prereqs(PrereqsArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -168,6 +176,7 @@ pub const COMMANDS: &[&str] = &[
     "ci-log",
     "status",
     "ask",
+    "hold",
     "lesson",
     "hook",
     "doctor",
@@ -185,6 +194,7 @@ pub const COMMANDS: &[&str] = &[
     "review-ci",
     "notify",
     "answer",
+    "prereqs",
 ];
 
 impl Command {
@@ -212,6 +222,7 @@ impl Command {
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
             Command::Ask(_) => "ask",
+            Command::Hold(_) => "hold",
             Command::Answer(_) => "answer",
             Command::Lesson(LessonCmd::Add(_)) => "lesson add",
             Command::Lesson(LessonCmd::Hit(_)) => "lesson hit",
@@ -236,6 +247,7 @@ impl Command {
             Command::MainHealth(_) => "main-health",
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
+            Command::Prereqs(_) => "prereqs",
         }
     }
 }
@@ -467,6 +479,17 @@ pub struct AskArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct HoldArgs {
+    /// The task issue number.
+    pub issue: u64,
+    /// What the owner must do (at most 300 characters).
+    pub text: String,
+    /// The owner can do it on a phone.
+    #[arg(long)]
+    pub phone: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct AnswerArgs {
     /// The task issue number.
     pub issue: u64,
@@ -604,6 +627,19 @@ pub struct PlanAmendArgs {
     /// Show what would be created, closed and updated; write nothing.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PrereqsArgs {
+    /// The plan files, for example plans/bosun.md.
+    #[arg(required = true)]
+    pub files: Vec<String>,
+    /// Create or update the checklist issue of each plan.
+    #[arg(long)]
+    pub post: bool,
+    /// Leave out the `bosun doctor` steps.
+    #[arg(long)]
+    pub no_setup: bool,
 }
 
 #[derive(Debug, Args)]

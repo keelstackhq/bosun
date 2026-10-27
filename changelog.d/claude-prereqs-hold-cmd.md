@@ -1,0 +1,1 @@
+- `bosun hold <task> "<what the owner must do>" [--phone]`: an agent that meets a human step nobody listed records it on the task, adds a box to the plan's owner checklist and puts the task back to ready, instead of stopping to ask.

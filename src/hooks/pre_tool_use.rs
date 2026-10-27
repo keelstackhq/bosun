@@ -152,8 +152,9 @@ fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
     });
     if let Some(real) = real {
         let r = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let text = real.strip_prefix(&r).ok()?.to_str()?.replace('\\', "/");
-        return (!text.starts_with("..")).then_some(text);
+        let rel = real.strip_prefix(&r).ok()?;
+        let text = rel.to_str()?.replace('\\', "/");
+        return (!rel.components().any(|c| c == Component::ParentDir)).then_some(text);
     }
     let mut abs = std::path::PathBuf::new();
     for c in joined.components() {
@@ -173,7 +174,7 @@ fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
         strip(&a, &r)
     })?;
     let text = rel.to_str()?.replace('\\', "/");
-    (!text.starts_with("..")).then_some(text)
+    (!rel.components().any(|c| c == Component::ParentDir)).then_some(text)
 }
 
 #[cfg(test)]

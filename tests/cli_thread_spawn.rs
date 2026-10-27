@@ -12,7 +12,7 @@ const NOW: &str = "2026-10-22T10:00:00Z";
 const SLACK_ON: &str = "[slack]\nchannel = \"C1\"\n";
 const OWNER: &str = "U0ADA1";
 const PLAN: &str = "# Plan: widget\n\nproject: widget\n\n## M1: Lifecycle\n\narea: lifecycle\n\n### Tasks\n\n- T1: State machine\n  touch: src/core/state.rs\n\n### Done when\n\n- UC-M1-1: a task moves planned -> merged.\n";
-const EPIC_BODY: &str = "Epic.\n<!-- bosun:epic {\"item\":\"M1\"} -->";
+const EPIC_BODY: &str = "Epic.\n<!-- bosun:epic {\"item\":\"M1\",\"plan\":\"plans/x.md\"} -->";
 
 /// A fake with the registry (#1), `session_test` joined at depth 1 and the owner's Slack ID.
 fn setup() -> FakeGithub {
@@ -25,6 +25,7 @@ fn setup() -> FakeGithub {
         ),
     );
     fake.content(".bosun/bosun.toml", "main", SLACK_ON);
+    fake.content("plans/x.md", "main", PLAN);
     fake.content(
         "governance/owners.toml",
         "main",

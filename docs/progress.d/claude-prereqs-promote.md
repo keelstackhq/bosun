@@ -1,0 +1,1 @@
+- 2026-10-27 · Q3a part 2 · plan import refreshes the checklist and holds blocked tasks · PR (claude/prereqs-promote)

@@ -221,18 +221,24 @@ fn writes_issue_text(words: &[String]) -> bool {
         || args
             .iter()
             .any(|a| a.starts_with("-b") && !a.starts_with("--"));
-    let explicit = args.iter().enumerate().find_map(|(i, a)| {
-        if ["-X", "--method", "--request"].contains(a) {
-            args.get(i + 1).copied()
-        } else {
-            a.strip_prefix("--method=")
-                .or_else(|| a.strip_prefix("--request="))
-                .or_else(|| a.strip_prefix("-X"))
-        }
-    });
+    // gh and curl use the last method flag; any write method among them counts as a write.
+    let methods: Vec<&str> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            if ["-X", "--method", "--request"].contains(a) {
+                args.get(i + 1).copied()
+            } else {
+                a.strip_prefix("--method=")
+                    .or_else(|| a.strip_prefix("--request="))
+                    .or_else(|| a.strip_prefix("-X"))
+            }
+        })
+        .collect();
     let write = |v: &str| ["POST", "PATCH", "PUT"].contains(&v.to_ascii_uppercase().as_str());
+    let explicit = (!methods.is_empty()).then(|| methods.iter().any(|m| write(m)));
     if name(&words[at]) == "curl" {
-        return explicit.is_some_and(write)
+        return explicit == Some(true)
             || args.iter().any(|a| {
                 a.starts_with("-d") || a.starts_with("--data") || a.starts_with("--json")
             });
@@ -244,7 +250,7 @@ fn writes_issue_text(words: &[String]) -> bool {
             .iter()
             .any(|a| a.to_ascii_lowercase().contains("mutation")),
         Some("api") => match explicit {
-            Some(m) => write(m),
+            Some(w) => w,
             None => {
                 has(&["-f", "-F", "--field", "--raw-field"])
                     || flag("--field")
@@ -269,11 +275,13 @@ fn writes_marker(command: &str, depth: usize) -> bool {
 /// marker (`MARKER`: `<!-- bosun:prereq|prereqs|task|epic`; prose that names one is allowed).
 /// Only writes are judged: `gh|hub issue edit|comment|create|close` and `gh pr comment` with
 /// `--body`/`-b` (also `-bTEXT`), `gh|hub api` with a write method or field flag (never with an
-/// explicit GET; `gh api graphql` only with a `mutation`), `curl` with a write method or a data
+/// explicit GET; with several method flags any write method counts; `gh api graphql` only with a
+/// `mutation`), `curl` with a write method or a data
 /// flag (`-d`, `--data*`, `--json`), the same inside `bash -c`, `eval` and `$( )`, and the MCP
 /// tools in `ISSUE_TEXT_TOOLS` (their `body` and `comment` fields only). Best effort. Known and
 /// accepted bypasses: `--body-file`, `--input`, `curl` or `gh api` with the text in a variable or
-/// a file, a marker split by quotes (`'bosun:'"task"`) or built by `printf` in `$( )`, wget,
+/// a file, a marker split by quotes (`'bosun:'"task"`) or built by `printf` in `$( )`, a
+/// `gh api graphql -F query=@file` mutation (the text is in the file), wget,
 /// httpie and python urllib. The real guarantees are elsewhere: bosun re-reads the checklist and
 /// trusts only its own writes.
 pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
@@ -1102,13 +1110,22 @@ fn decrypt_reason(what: &str) -> String {
 
 const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
 /// Readers: their arguments are data (patterns, text).
-const READERS: &[&str] = &[
-    "grep", "rg", "ag", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type",
-];
+#[rustfmt::skip]
+const READERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "pcregrep",
+    "pcre2grep", "rg", "ag", "ack", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which",
+    "type"];
+/// The grep family; rg, ag, ack and rgrep always recurse, rg and ag skip hidden directories.
+#[rustfmt::skip]
+const SEARCHERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "pcregrep",
+    "pcre2grep", "rg", "ag", "ack"];
+/// Searchers whose options and environment run commands: only their pattern is data.
+const PAGED: &[&str] = &["ack", "ugrep", "ug"];
 #[rustfmt::skip]
 const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
     "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
-const INTERPS: &[&str] = &["python", "python3", "perl", "ruby", "node", "deno", "php"];
+const INTERPS: &[&str] = &[
+    "python", "python3", "perl", "ruby", "node", "deno", "bun", "php",
+];
 const FILE_TOOLS: &[&str] = &[
     "mv", "cp", "install", "chmod", "chown", "ln", "mkdir", "rmdir", "rm", "touch", "tar", "unzip",
     "gzip", "gunzip", "curl", "wget", "stat", "file", "du", "df",
@@ -1126,7 +1143,7 @@ const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-fi
     "search", "q", "jq"];
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
-    "node", "deno", "php", "source", "xargs", "eval",
+    "node", "deno", "bun", "php", "source", "xargs", "eval",
 ];
 
 /// The files that `> f`, `>> f` and `tee f` write in these words.
@@ -1148,6 +1165,114 @@ fn keyline(w: &str) -> bool {
     w.contains("age-secret") || w.contains("secret-key-1")
 }
 
+/// A word naming `.config/sops` as a whole path segment (`.config/sops-test` is another dir).
+fn sops_dir(w: &str) -> bool {
+    w.match_indices(".config/sops")
+        .any(|(i, m)| w[i + m.len()..].is_empty() || w[i + m.len()..].starts_with('/'))
+}
+
+/// A path with `//`, `.` and `dir/..` collapsed, lexically (no fs). `..` stays after `~`, `$X`,
+/// a glob or another `..`, and anywhere under `/proc` (its links are symlinks); `/..` is `/`.
+fn lexical(path: &str) -> String {
+    let (abs, proc) = (path.starts_with('/'), path.starts_with("/proc/"));
+    let mut out: Vec<&str> = Vec::new();
+    for s in path.split('/') {
+        #[rustfmt::skip]
+        let plain = |l: &&str| !proc && *l != ".." && !l.starts_with(['~', '$']) && !l.contains(['*', '?', '[']);
+        match s {
+            "" | "." => {}
+            ".." if out.last().is_some_and(plain) => drop(out.pop()),
+            ".." if abs && out.is_empty() => {}
+            _ => out.push(s),
+        }
+    }
+    let j = out.join("/");
+    match (abs, j.is_empty() && !path.is_empty()) {
+        (true, _) => format!("/{j}"),
+        (false, true) => ".".to_string(),
+        _ => j,
+    }
+}
+
+/// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
+/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), or a pure `..` chain above
+/// an unknown place (`..`, `$PWD/..`) or a glob there (`/*`, `../*`); 1 for home or above it
+/// (`~`, `~user`, `/root`, `/home/<user>`, `/home`, `/`, `../bob`, `../home/bob`); 0 for
+/// anything else (`~/projects/x`, `../x/src`).
+fn key_root(word: &str) -> u8 {
+    let n = lexical(word.trim_matches(|c| c == '"' || c == '\''));
+    let word = n.as_str();
+    let t = word.trim_end_matches('/');
+    // A `..` left after `lexical` climbs from an unknown place: what follows the last one is
+    // judged as under `/` and as under a home (`..` alone is above it, `../bob` may be a home).
+    let segs: Vec<&str> = t.split('/').collect();
+    if let Some(i) = segs.iter().rposition(|s| *s == "..") {
+        let tail = &segs[i + 1..];
+        #[rustfmt::skip]
+        let key = tail.iter().any(|s| matches!(*s, ".config" | "sops" | "age") || s.contains(['*', '?', '[']));
+        let j = tail.join("/");
+        let as_root = key_root(&format!("/{j}")).max(key_root(&format!("~/{j}")));
+        return if tail.is_empty() || key {
+            2
+        } else {
+            as_root.max(u8::from(tail.len() == 1))
+        };
+    }
+    let odd = t.contains(['*', '?', '[']);
+    // A glob in a segment of home or above it may match the key directory (`/*`, `/r*`).
+    if let Some(g) = t.find(['*', '?', '[']) {
+        let dir = t[..g]
+            .rfind('/')
+            .map_or("", |i| if i == 0 { "/" } else { &t[..i] });
+        if !dir.is_empty() && key_root(dir) == 1 {
+            return 2;
+        }
+    }
+    let under = |r: &str, own: &str| {
+        r == own
+            || r.strip_prefix(own)
+                .is_some_and(|x| x == "/sops" || x.starts_with("/sops/"))
+    };
+    if t.is_empty() || t == "/home" {
+        return u8::from(word.starts_with('/') || word.is_empty());
+    }
+    if let Some(r) = ["$XDG_CONFIG_HOME", "${XDG_CONFIG_HOME}"]
+        .iter()
+        .find_map(|h| t.strip_prefix(h))
+    {
+        return if odd || r.is_empty() || r.starts_with("/sops/") || r == "/sops" {
+            2
+        } else {
+            0
+        };
+    }
+    let rest = ["$HOME", "${HOME}", "/root"]
+        .iter()
+        .find_map(|h| t.strip_prefix(h))
+        .or_else(|| {
+            let user = t.strip_prefix('~')?;
+            Some(user.find('/').map_or("", |i| &user[i..]))
+        })
+        .or_else(|| {
+            let user = t.strip_prefix("/home/")?;
+            Some(user.find('/').map_or("", |i| &user[i..]))
+        });
+    match rest {
+        Some(_) if odd => 2,
+        Some("") => 1,
+        Some(r) if under(r, "/.config") => 2,
+        None if under(t.trim_start_matches("./"), ".config") => 2,
+        _ => 0,
+    }
+}
+
+/// Whether a search of these roots reads the age key: one is under `.config/sops`, or the
+/// search recurses into `.config` or an ancestor (home or above only when it enters hidden dirs).
+fn key_search(roots: &[&str], recursive: bool, hidden: bool) -> bool {
+    let root = roots.iter().map(|a| key_root(a)).max().unwrap_or(0);
+    roots.iter().any(|a| sops_dir(a)) || recursive && (root == 2 || root == 1 && hidden)
+}
+
 /// A redirect word: `>`, `>>`, `2>`, `&>`, `<`, `2>&1`, `>file`.
 fn redirect(a: &str) -> bool {
     a.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&')
@@ -1163,7 +1288,7 @@ fn runs_code(n: &str, after: &[&str]) -> bool {
     let dash = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
     let interp = INTERPS.contains(&n);
     #[rustfmt::skip]
-    let code = |a: &&str| dash(a, 'c') || interp && (dash(a, 'e') || *a == "--eval" || *a == "eval" || n == "php" && dash(a, 'r'));
+    let code = |a: &&str| dash(a, 'c') || n == "bun" && (dash(a, 'p') || *a == "--print") || interp && (dash(a, 'e') || *a == "--eval" || *a == "eval" || n == "php" && dash(a, 'r'));
     after.iter().any(code)
 }
 
@@ -1328,6 +1453,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // `bosun main-triage --run CMD` and `rg --pre CMD FILE` run a command.
         let run = match name.as_str() {
             "bosun" => long("--run").map(str::to_string),
+            "ack" | "ugrep" | "ug" => long("--pager").map(str::to_string),
             "rg" => long("--pre").map(|c| format!("{c} FILE")),
             #[rustfmt::skip]
             "git" if verb == "grep" => long("--open-files-in-pager").or_else(|| args.iter().enumerate().find_map(|(i, a)| a.strip_prefix("-O").map(|v| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v }))).map(|c| format!("{c} FILE")),
@@ -1335,6 +1461,50 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         };
         if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
             return Some(why);
+        }
+        // `git grep --no-index` searches its paths (or the cwd) like `grep -r`, hidden ones too.
+        if git && verb == "grep" && args.contains(&"--no-index") {
+            #[rustfmt::skip]
+            const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
+            // The first bare word is the pattern, unless `-e` or `-f` gave it.
+            let mut pat = args.iter().any(|a| matches!(*a, "-e" | "-f"));
+            let (mut roots, mut it, mut paths) = (Vec::new(), it.clone(), false);
+            while let Some(a) = it.next() {
+                match *a {
+                    "--" if !paths => paths = true,
+                    _ if !paths && VALUE.contains(a) => drop(it.next()),
+                    _ if !paths && a.starts_with('-') => {}
+                    _ if !std::mem::replace(&mut pat, true) => {}
+                    _ => roots.push(*a),
+                }
+            }
+            // `-C dir` and `--work-tree dir` move where it searches: join them with each root.
+            let at = |b: &str, r: &str| match r.starts_with(['/', '~', '$']) {
+                true => r.to_string(),
+                false => format!("{b}/{r}"),
+            };
+            let (mut base, mut gi) = (None::<String>, args.iter());
+            while let Some(a) = gi.next() {
+                #[rustfmt::skip]
+                let v = match *a {
+                    "-C" | "--work-tree" => gi.next().copied(),
+                    "-c" | "--git-dir" | "--namespace" | "--exec-path" => { gi.next(); None }
+                    _ if a.starts_with('-') => a.strip_prefix("--work-tree=").or_else(|| a.strip_prefix("-C").filter(|v| !v.is_empty())),
+                    _ => break,
+                };
+                if let Some(v) = v {
+                    base = Some(base.map_or(v.to_string(), |b| at(&b, v)));
+                }
+            }
+            let joined: Vec<String> = match &base {
+                Some(b) if roots.is_empty() => vec![lexical(b)],
+                Some(b) => roots.iter().map(|r| lexical(&at(b, r))).collect(),
+                None => Vec::new(),
+            };
+            roots.extend(joined.iter().map(String::as_str));
+            if key_search(&roots, true, true) {
+                return Some(decrypt_reason("a search of the age key directory"));
+            }
         }
         if name == "bosun" {
             continue;
@@ -1345,7 +1515,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             let pos: Vec<&str> = da.iter().copied().filter(|a| !a.starts_with('-')).collect();
             #[rustfmt::skip]
             let pat_flag = args.iter().any(|a| matches!(*a, "-e" | "-f") || a.starts_with("--file"));
-            let search = matches!(name.as_str(), "grep" | "rg" | "ag") && !pat_flag;
+            let finds = SEARCHERS.contains(&name.as_str());
+            let search = finds && !pat_flag;
             // A search pattern naming the key marker is data, unless it searches home or `.config`.
             let home = |a: &&str| {
                 a.starts_with(['~', '/']) || a.contains("$HOME") || a.contains(".config")
@@ -1357,6 +1528,33 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             {
                 return Some(decrypt_reason("an age secret key"));
             }
+            // A recursive search whose root holds the age key reads it, whatever the pattern:
+            // `.config` and its ancestors always; home (hidden dirs included) for the grep
+            // family, and for rg and ag only with --hidden, -u or -. .
+            let (rg, always) = (
+                matches!(name.as_str(), "rg" | "ag"),
+                matches!(name.as_str(), "rg" | "ag" | "ack" | "rgrep"),
+            );
+            let dirs = args
+                .windows(2)
+                .any(|w| matches!(w[0], "-d" | "--directories") && w[1] == "recurse")
+                || args
+                    .iter()
+                    .any(|a| matches!(*a, "-drecurse" | "--directories=recurse"));
+            let recursive = always
+                || dirs
+                || args.iter().any(|a| {
+                    matches!(*a, "--recursive" | "--dereference-recursive")
+                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['r', 'R'])
+                });
+            let hidden = !rg
+                || args.iter().any(|a| {
+                    matches!(*a, "--hidden" | "--unrestricted")
+                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['u', '.'])
+                });
+            if finds && key_search(&pos, recursive, hidden) {
+                return Some(decrypt_reason("a search of the age key directory"));
+            }
             let cfg = |a: &&str| a.contains(".config/") && a.contains(['*', '?', '[', ']']);
             if matches!(name.as_str(), "cat" | "head" | "tail") && args.iter().any(cfg) {
                 return Some(decrypt_reason("a glob in .config"));
@@ -1366,7 +1564,22 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             {
                 return Some(decrypt_reason("the process environment"));
             }
-            continue;
+            // ack and ugrep take commands in options (`--pager`, `--view`, `--filter`, abbreviated)
+            // and from the environment, so only their pattern is data.
+            if !PAGED.contains(&name.as_str()) {
+                continue;
+            }
+            #[rustfmt::skip]
+            let filters = args.iter().enumerate().filter_map(|(i, a)| {
+                let (n, v) = a.split_once('=').map_or((*a, None), |(n, v)| (n, Some(v)));
+                (name.starts_with('u') && n.len() >= 6 && "--filter".starts_with(n)).then(|| v.or_else(|| args.get(i + 1).copied())).flatten()
+            });
+            for c in filters.flat_map(|f| f.split(',')) {
+                let c = c.split_once(':').map_or(c, |p| p.1);
+                if let Some(why) = decrypt_rule(c, depth + 1) {
+                    return Some(why);
+                }
+            }
         }
         #[rustfmt::skip]
         let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
@@ -1397,6 +1610,24 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 data[i] = true;
             } else if msg && w.starts_with('-') && opts.contains(&opt) {
                 (data[i], skip) = (true, !w.contains('='));
+            }
+        }
+        // ack and ugrep: the `-e`/`--regexp` values, else the first bare word that is not the
+        // value of a long option.
+        let paged = PAGED.contains(&name.as_str());
+        if paged {
+            let (a0, mut seen) = (segment.len() - rest.len() + 1, false);
+            let e = da
+                .iter()
+                .any(|a| matches!(*a, "-e" | "--regexp") || a.starts_with("--regexp="));
+            for (j, a) in da.iter().enumerate() {
+                let prev = if j == 0 { "" } else { da[j - 1] };
+                let value = prev.starts_with("--") && !prev.contains('=');
+                #[rustfmt::skip]
+                let pat = if e { matches!(prev, "-e" | "--regexp") || a.starts_with("--regexp=") }
+                    else { !seen && !a.starts_with('-') && !value };
+                seen |= pat;
+                data[a0 + j] |= pat;
             }
         }
         // Options run command strings: a word or option value with whitespace is a command.
@@ -1436,7 +1667,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
         }
         let off = segment.len() - rest.len();
-        for i in 0..if safe { 0 } else { rest.len() } {
+        for i in 0..if safe || paged { 0 } else { rest.len() } {
             if data[i + off] {
                 continue;
             }
@@ -1733,6 +1964,18 @@ mod tests {
         assert!(!sh("gh api -X GET search/issues -f q='<!-- bosun:task'"));
         assert!(!sh(
             "gh api --method GET search/issues -f q='<!-- bosun:task'"
+        ));
+        // gh and curl use the last method flag: any write method among them is a write.
+        for cmd in [
+            "gh api -X GET --method PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "gh api -XGET -XPATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "gh api --method=GET -X PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "curl -X GET -X PATCH -H 'x: <!-- bosun:task {} -->' https://api.github.com/x",
+        ] {
+            assert!(sh(cmd), "{cmd}");
+        }
+        assert!(!sh(
+            "gh api -X GET --method GET search/issues -f q='<!-- bosun:task'"
         ));
         assert!(!sh(
             "gh api graphql -f query='{ search(query: \"<!-- bosun:task\") { issueCount } }'"
@@ -2578,7 +2821,103 @@ mod tests {
         ("sops --version > /dev/null", false), ("age --version 2>/dev/null", false),
         ("sops --version > v.txt && cat v.txt", false), ("sops -d f > out.yaml", true),
         ("sops f 2>/dev/null", true),
+        ("grep -r SECRET-KEY ~", true), ("grep -ri secret-key $HOME", true),
+        ("rg SECRET-KEY ~/.config", true), ("grep -r x ~/.config/sops", true),
+        ("grep -R SECRET-K ${HOME}", true), ("rg AGE-SE /root", false), ("ag age-sec /home/bob", false),
+        ("grep --recursive SECRET-KEY $XDG_CONFIG_HOME", true), ("rg secret ~", false),
+        ("grep -rn SECRET-KEY ~/.config/nvim", false), ("rg x ~/.config/sops/foo", true),
+        ("grep -rn SECRET-KEY src/", false), ("rg secret ~/projects/x", false),
+        ("grep -r TODO ~/.config/nvim", false), ("grep -r TODO ~", true),
+        ("grep SECRET-KEY ~/notes.txt", false), ("rg AGE ~", false),
+        ("bun -e 'console.log(Bun.env)'", true), ("bun -p 'Bun.env.HOME'", true),
+        ("bun --eval 'console.log(process.env)'", true), ("bun --print 'Bun.env'", true),
+        ("bun -e \"require('child_process').execSync('sops -d f')\"", true),
+        ("grep -r AGE ~", true), ("grep -ri age ~/.config", true), ("grep -r . ~/.config", true),
+        ("grep -r '' ~/.config", true), ("rg --hidden . ~/.config", true), ("rg -uu KEY ~", true),
+        ("grep -rE 'SECRET.KEY' ~", true), ("rg x ~/.config", true), ("rg x .config", true),
+        ("grep -r x ${XDG_CONFIG_HOME}", true), ("rg --hidden x $HOME", true), ("rg -. x ~", true),
+        ("grep -r x /home", true), ("rg TODO ~", false), ("rg AGE src/", false),
+        ("rg x ~/.config/nvim", false), ("grep -r x $XDG_CONFIG_HOME/nvim", false),
+        ("bun -e \"Bun.spawnSync(['sops','-d','f'])\"", true), ("bun -p \"Bun.spawnSync(['sops','-d','f'])\"", true),
+        ("grep -r x ~/.config/../.config", true), ("grep -r x ~/.config/./", true),
+        ("grep -r x ~/./.config", true), ("grep -r x ~//.config", true),
+        ("grep -d recurse x ~/.config", true), ("grep -drecurse x ~/.config", true),
+        ("grep --directories=recurse x ~/.config", true), ("grep --directories recurse x ~/.config", true),
+        ("grep -r x ~/.conf*", true), ("grep -r x ~/../bob", true),
+        ("grep -ri secret ~/.config/sops-test", false), ("grep -r x ~/.config/sops/", true),
+        ("bun test", false), ("bun run build", false), ("bun install", false),
+        ("bun -e 'console.log(1)'", false),
+        ("egrep -r AGE ~/.config", true), ("fgrep -r x ~", true), ("rgrep x ~/.config", true),
+        ("rgrep x ~", true), ("zgrep -r x ~/.config", true), ("ugrep -r x ~", true),
+        ("ugrep -R x ~/.config", true), ("ack x ~/.config", true), ("ack x ~", true),
+        ("git grep --no-index x ~/.config", true), ("git grep --no-index -e x -- ~", true),
+        ("git -C . grep --no-index -n x /root", true), ("egrep x ~/.config", false),
+        ("fgrep -r x src/", false), ("rgrep TODO src", false), ("zgrep x f.gz", false),
+        ("ugrep x f.txt", false), ("ugrep -r x src", false), ("ack TODO src", false),
+        ("ack AGE-SECRET-KEY src/", false), ("git grep --no-index x src", false),
+        ("git grep --no-index x", false), ("git grep -n x ~/.config", false),
+        ("ack --pager='sops -d f' x", true), ("ugrep --pager='sops -d f' x f", true),
+        ("grep -r AGE ..", true), ("rg x ../..", true), ("grep -R x ../", true),
+        ("rg x src/../..", true), ("grep x ../f.txt", false), ("rg x ./src", false),
+        ("grep -r x ~root", true), ("rg x ~root/.config", true), ("grep -r x ~bob/.config", true),
+        ("rg x ~root", false), ("grep -r x ~bob/.config/nvim", false), ("rg x ~bob/src", false),
+        ("grep -r x /etc/../root/.config", true), ("rg x /etc/../root/.config/./sops", true),
+        ("grep -r x /etc/../home/bob", true), ("rg x /tmp/../../..", false),
+        ("grep -r x /root/../tmp", false), ("rg x src/../src", false), ("grep -r x ~/../bob", true),
+        ("ugrep --view='sops -d' x f", true), ("ugrep -Q --view='sops -d' x", true),
+        ("ugrep --filter='*:sh -c \"sops -d %\"' x f", true), ("ack --pag='sops -d f' x", true),
+        ("ack --page='sops -d f' x", true), ("ugrep --pag='sops -d f' x f", true),
+        ("ACK_PAGER='sops -d f' ack x", true), ("ACK_OPTIONS=\"--pager='sops -d f'\" ack x", true),
+        ("ack --pag 'sops -d f' x", true), ("ack 'a b' src", false), ("ack sops docs/", false),
+        ("ugrep -e 'sops -d' src", false), ("ugrep --filter='pdf:pdftotext % -' x f", false),
+        ("ugrep --filter='yaml:sops -d %' '' secrets.enc.yaml", true),
+        ("ugrep --filter=\"yaml:age -d -i k %\" x f.age", true),
+        ("grep -r x $PWD/..", true), ("rg x ${PWD}/../..", true), ("rg x \"$PWD/..\"", true),
+        ("rg x /proc/self/cwd/../..", true), ("rg x ..", true), ("rg x ../.config", true),
+        ("grep -r x ../bob/.config", true), ("grep -r x ../bosun", true),
+        ("grep -rn foo ../other-repo/src", false), ("rg x ../bosun/src", false),
+        ("git -C ~/.config grep --no-index -e x .", true), ("git -C ~ grep --no-index x", true),
+        ("git --work-tree=/root grep --no-index x", true), ("git -C src grep --no-index x", false),
+        ("ug -r x ~", true), ("pcregrep -r x ~/.config", true), ("pcre2grep -r x ~", true),
+        ("ug --pager='sops -d f' x f", true), ("pcregrep x f.txt", false), ("ug x src", false),
+        ("grep -r x ../home/bob", true), ("grep -r x ../../home/bob", true),
+        ("rg -uu x ../../../home/user", true), ("grep -r x ../*/*", true),
+        ("grep -r x ../../*/*", true), ("rg TODO ../bosun", false), ("rg x ../.claude", false),
+        ("grep -r x /*", true), ("grep -r x /r*", true), ("grep -r x /ro?t", true),
+        ("grep -r x /home/b*", true), ("grep -r x /tmp/*", false), ("grep -r x src/*", false),
     ];
+
+    #[test]
+    fn key_root_resolves_dot_dot_lexically() {
+        for (root, want) in [
+            ("/etc/../root/.config", 2),
+            ("/etc/../root", 1),
+            ("/root/../tmp", 0),
+            ("/..", 1),
+            ("a/../..", 2),
+            ("../x", 1),
+            ("~/../bob", 1),
+            ("../other/src", 0),
+            ("../home/bob", 1),
+            ("../root/.config", 2),
+            ("../*/*", 2),
+            ("/r*", 2),
+            ("/tmp/*", 0),
+            ("../.config", 2),
+            ("../a/sops", 2),
+            ("$PWD/..", 2),
+            ("${PWD}/../..", 2),
+            ("/proc/self/cwd/../..", 2),
+            ("~root", 1),
+            ("~root/.config/", 2),
+            ("~+/src", 0),
+            (".", 0),
+            ("./.config", 2),
+            ("src/..", 0),
+        ] {
+            assert_eq!(key_root(root), want, "{root}");
+        }
+    }
 
     #[test]
     fn decrypt_lock_table() {

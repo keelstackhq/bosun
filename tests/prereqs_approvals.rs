@@ -116,3 +116,17 @@ fn unreadable_touch_and_critical_rules_need_the_owner() {
     assert_eq!(got, [("M1/T1", "owner"), ("M1/T2", "owner")]);
     assert_eq!(a[0].why, ["unreadable touch: ../out/x"]);
 }
+
+#[test]
+fn touch_globs_match_rules_and_the_floor_case_insensitively() {
+    let task = |n: u8, touch: &str| format!("- T{n}: t\n  touch: {touch}\n");
+    let tasks = [task(1, ".GITHUB/workflows/x"), task(2, "DOCS/A.md")].concat();
+    let t =
+        format!("# P\n\n## M1: One\n\narea: a\n\n### Tasks\n{tasks}### Done when\n- UC-M1-1: x\n");
+    let a = pq::approvals(&plan::parse(&t).unwrap(), &rules(), false);
+    let got: Vec<_> = a
+        .iter()
+        .map(|a| (a.task.as_str(), a.needs.as_str()))
+        .collect();
+    assert_eq!(got, [("M1/T1", "owner"), ("M1/T2", "delegate")]);
+}

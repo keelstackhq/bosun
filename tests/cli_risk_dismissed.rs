@@ -22,6 +22,11 @@ const SIG_V2_R4: &str =
 /// `bosun-approve v2 acme/widget#1 <OLD_HEAD> after-review 2`.
 const SIG_V2_OLD_HEAD: &str =
     "kZrauGSNziVxBKtBxWEu92JllOOr6+uo9qJ6uCBtUmieerOohkuBd98LaRa66zAQJMOVBFkuTn826cj+rgEvDg==";
+/// The same key over the v2 message for `acme/widget#2` and for `acme/other#1` (review 2).
+const SIG_V2_OTHER_PR: &str =
+    "4+zgKwTC+GGWZXUZDANk+TmTV4BZWfcA8FIuZjsG17TGgLnWgjRc2iEpMG56ZK8fpQ0Hl210WzMNeZw4sSQSAA==";
+const SIG_V2_OTHER_REPO: &str =
+    "64dss7h/7TbXioRrhyERtHMWNKPCmzFzJnYh5i6r43QA82+7SRcH9PMzPIgfaeyYCkkXM3KaZsfuQro8HSGoBQ==";
 const SIG: &str =
     "dTnLJ8NM8jp0umTiTZRuGW0lwGdxPoLlu069r9NXkSyrLmKj3SBW1ULZrmXNsE/qzfn+5gY0INdSAqttzPxmBg==";
 
@@ -99,7 +104,7 @@ type Setup = fn(&FakeGithub);
 
 #[test]
 fn nothing_but_a_newer_review_or_plain_comment_ends_a_dismissal() {
-    let cases: [(&str, Setup); 17] = [
+    let cases: [(&str, Setup); 19] = [
         ("older comment", |f| {
             owner_says(f, OLDER);
             dismissed(f, true);
@@ -154,6 +159,14 @@ fn nothing_but_a_newer_review_or_plain_comment_ends_a_dismissal() {
         ("v2 for another head", |f| {
             dismissed(f, true);
             v2(f, OLD_HEAD, "2", SIG_V2_OLD_HEAD, NEWER);
+        }),
+        ("v2 for another PR number", |f| {
+            dismissed(f, true);
+            v2(f, HEAD, "2", SIG_V2_OTHER_PR, NEWER);
+        }),
+        ("v2 for another repo", |f| {
+            dismissed(f, true);
+            v2(f, HEAD, "2", SIG_V2_OTHER_REPO, NEWER);
         }),
         ("v2 with an unparseable id", |f| {
             dismissed(f, true);

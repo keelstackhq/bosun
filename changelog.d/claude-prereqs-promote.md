@@ -1,0 +1,1 @@
+- `bosun plan import` and `plan amend` refresh the owner checklist of a plan with a `## Prerequisites` section (`--dry-run` only reads) and keep a task `planned` while an open item blocks it or its item; they are listed under `data.held`.

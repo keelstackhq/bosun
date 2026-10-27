@@ -1,0 +1,1 @@
+- The edit hook judges a repo-root file named `..x` as inside the repo (only a real `..` path component means outside).

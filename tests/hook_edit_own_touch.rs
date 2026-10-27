@@ -171,3 +171,20 @@ fn paths_are_judged_by_their_real_target() {
     std::os::unix::fs::symlink(out.path().join("o.rs"), r.join("src/cli/o.rs")).unwrap();
     assert_eq!(edit(&fake, r, "src/cli/o.rs"), None);
 }
+
+#[test]
+fn a_root_file_named_dot_dot_x_is_inside_the_repo() {
+    let (fake, tmp) = setup("session_me", "src/core/**");
+    // On the base branch, so it counts as existing.
+    fs::write(tmp.path().join("..x"), "x").unwrap();
+    git(tmp.path(), &["add", "-A"]);
+    git(tmp.path(), &["commit", "-q", "-m", "add ..x"]);
+    git(
+        tmp.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    let why = edit(&fake, tmp.path(), "..x").expect("`..x` is a repo file outside the touch");
+    assert!(why.starts_with("..x is outside your lease"), "{why}");
+    // A real parent directory is outside the repo: not claimable, allowed.
+    assert_eq!(edit(&fake, tmp.path(), "../x"), None);
+}

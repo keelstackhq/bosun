@@ -64,6 +64,8 @@ pub struct State {
     pub comments: Vec<FakeComment>,
     pub labels: Vec<(String, String)>,
     pub variables: HashMap<String, String>,
+    /// Repo paths that answer 200: `actions/secrets/N`, `environments/E[/secrets/N|/variables/N]`.
+    pub present: Vec<String>,
     /// Contexts a ruleset on the default branch requires (`GET /rules/branches/<b>`).
     pub ruleset_checks: Vec<String>,
     /// Contexts classic branch protection requires; empty answers 404.
@@ -106,6 +108,12 @@ pub struct State {
     pub hooks: Vec<Hook>,
     /// `base...head` -> `status` of the comparison (default `ahead`).
     pub compare_statuses: HashMap<String, String>,
+    /// `base...head` -> `merge_base_commit.sha` of the comparison; unset, the field is left out.
+    pub compare_bases: HashMap<String, String>,
+    /// Commit sha -> `GET /git/commits/{sha}`; unset answers 404.
+    pub git_commits: HashMap<String, Value>,
+    /// Tree sha -> `GET /git/trees/{sha}`; unset answers 404.
+    pub git_trees: HashMap<String, Value>,
     /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
     pub pull_commits: HashMap<u64, Vec<String>>,
     /// Commit sha -> first parent (`GET /commits/{sha}`); unset, the commit answers 422 as GitHub does.
@@ -321,6 +329,47 @@ impl FakeGithub {
         let mut s = self.state.lock().unwrap();
         s.compare_statuses
             .insert(format!("{base}...{head}"), status.into());
+    }
+
+    /// The merge base GitHub reports for the comparison `base...head`.
+    pub fn compare_merge_base(&self, base: &str, head: &str, sha: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.compare_bases
+            .insert(format!("{base}...{head}"), sha.into());
+    }
+
+    /// A git commit object (`GET /git/commits/{sha}`).
+    pub fn git_commit(&self, sha: &str, tree: &str, parents: &[&str]) {
+        let parents: Vec<Value> = parents.iter().map(|p| json!({"sha": p})).collect();
+        let mut s = self.state.lock().unwrap();
+        s.git_commits.insert(
+            sha.into(),
+            json!({"sha": sha, "tree": {"sha": tree}, "parents": parents}),
+        );
+    }
+
+    /// A tree (`GET /git/trees/{sha}`); entries are `(path, mode, type, sha)`.
+    pub fn git_tree(&self, sha: &str, entries: &[(&str, &str, &str, &str)], truncated: bool) {
+        let tree: Vec<Value> = entries
+            .iter()
+            .map(|(path, mode, kind, sha)| {
+                json!({"path": path, "mode": mode, "type": kind, "sha": sha})
+            })
+            .collect();
+        let mut s = self.state.lock().unwrap();
+        s.git_trees.insert(
+            sha.into(),
+            json!({"sha": sha, "tree": tree, "truncated": truncated}),
+        );
+    }
+
+    /// A raw JSON body for tree `sha`, to test malformed answers.
+    pub fn git_tree_raw(&self, sha: &str, body: Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .git_trees
+            .insert(sha.into(), body);
     }
 
     /// The commits of PR `number` (`GET /pulls/{n}/commits`).
@@ -547,6 +596,10 @@ impl FakeGithub {
             .unwrap()
             .variables
             .insert(name.into(), value.into());
+    }
+
+    pub fn present(&self, path: &str) {
+        self.state.lock().unwrap().present.push(path.into());
     }
 
     /// Checks the default branch enforces through a ruleset.
@@ -1148,8 +1201,23 @@ fn route(
                     .compare_statuses
                     .get(*range)
                     .map_or("ahead", |x| x.as_str());
-                ok(json!({"status": status, "files": chunk}))
+                let mut body = json!({"status": status, "files": chunk});
+                if let Some(b) = s.compare_bases.get(*range) {
+                    body["merge_base_commit"] = json!({"sha": b});
+                }
+                ok(body)
             }
+            None => msg(404, "Not Found"),
+        },
+        ("GET", ["git", "commits", sha]) => match s.git_commits.get(*sha) {
+            Some(c) => ok(c.clone()),
+            None => msg(404, "Not Found"),
+        },
+        ("GET", ["git", "trees", _]) if query.get("recursive").map(String::as_str) != Some("1") => {
+            msg(400, "the fake serves recursive trees only")
+        }
+        ("GET", ["git", "trees", sha]) => match s.git_trees.get(*sha) {
+            Some(t) => ok(t.clone()),
             None => msg(404, "Not Found"),
         },
         ("GET", ["pulls", n, "reviews"]) => {
@@ -1306,6 +1374,13 @@ fn route(
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
         },
+        ("GET", p @ (["environments", ..] | ["actions", "secrets", _])) => {
+            if s.present.contains(&p.join("/")) {
+                ok(json!({"name": "x"}))
+            } else {
+                msg(404, "Not Found")
+            }
+        }
         _ => msg(404, "Not Found"),
     }
 }
