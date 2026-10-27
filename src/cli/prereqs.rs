@@ -89,8 +89,20 @@ impl Env {
         })
     }
 
+    /// Exit 5 when more than one checklist issue (any state) belongs to the plan.
+    pub(crate) fn one_issue(&self, plan_path: &str) -> Result<()> {
+        let marker = pq::issue_marker(plan_path);
+        let n = (self.existing.iter()).filter(|i| i.body_text().starts_with(&marker));
+        if n.count() > 1 {
+            return Err(BosunError::needs_human(
+                format!("two checklist issues for {plan_path}"),
+                "close one of them; the owner checklist is one issue per plan",
+            ));
+        }
+        Ok(())
+    }
+
     /// The items, approvals and (with `post_it`) the issue of one plan. `setup` items are added.
-    #[allow(dead_code)] // the plan import and amend refresh (claude/prereqs-promote) call it
     pub(crate) fn checklist(
         &mut self,
         app: &App,
