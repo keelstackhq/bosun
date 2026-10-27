@@ -25,6 +25,7 @@ fn write(dir: &Path, rel: &str, text: &str) {
 fn setup() -> (tempfile::TempDir, FakeGithub) {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     write(tmp.path(), "plans/x.md", PLAN);
+    fake.content("plans/x.md", "main", PLAN);
     (tmp, fake)
 }
 
@@ -52,6 +53,11 @@ fn item<'a>(v: &'a Value, id: &str) -> &'a Value {
     items(v).iter().find(|i| i["id"] == id).unwrap()
 }
 
+fn tick(fake: &FakeGithub, id: &str) {
+    let b = &mut fake.state.lock().unwrap().issues[0].body;
+    *b = b.replace(&format!("- [ ] **{id}**"), &format!("- [x] **{id}**"));
+}
+
 #[test]
 fn verifies_through_the_api_and_writes_nothing_without_post() {
     let (tmp, fake) = setup();
@@ -75,10 +81,122 @@ fn verifies_through_the_api_and_writes_nothing_without_post() {
 }
 
 #[test]
+fn post_creates_one_issue_and_updates_it_from_the_ticks() {
+    let (tmp, fake) = setup();
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 0, "{v}");
+    let issue = &v["data"]["plans"][0]["issue"];
+    assert_eq!(issue["number"], 1);
+    assert_eq!(issue["created"], true);
+    assert_eq!(issue["url"], "https://github.com/acme/widget/issues/1");
+    assert!(
+        v["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("acme/widget/issues/1")
+    );
+    let i = fake.issue_state(1);
+    assert_eq!(i.title, "Owner checklist: Plan: Ship it");
+    assert_eq!(fake.labels_of(1), ["bosun:prereqs"]);
+    assert!(i.body.starts_with("<!-- bosun:prereqs plans/x.md -->\n"));
+    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN", "owner");
+    assert!(
+        i.body
+            .contains(&format!("<!-- bosun:prereq H1 sum={h1} state=api -->"))
+    );
+    // A tick finishes an owner item, not an item the API reports missing.
+    tick(&fake, "H1");
+    tick(&fake, "H2");
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(v["data"]["plans"][0]["issue"]["created"], false);
+    assert_eq!(item(&v, "H2")["done"], true);
+    assert_eq!(item(&v, "H1")["done"], false);
+    assert_eq!(fake.state.lock().unwrap().issues.len(), 1);
+    // Everything done: the issue closes; it reopens when an item opens again.
+    fake.present(SECRET);
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(v["data"]["open"], 0);
+    assert_eq!(fake.issue_state(1).state, "closed");
+    assert_eq!(
+        fake.issue_state(1).state_reason.as_deref(),
+        Some("completed")
+    );
+    fake.state.lock().unwrap().present.clear();
+    go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(fake.issue_state(1).state, "open");
+}
+
+#[test]
+fn a_403_falls_back_to_the_tick() {
+    let (tmp, fake) = setup();
+    fake.fail_path("secrets/NPM_TOKEN", 403);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(item(&v, "H1")["state"], "api 403");
+    let body = fake.issue_state(1).body;
+    assert!(body.contains(" state=api 403 -->") && body.contains("your tick decides"));
+    tick(&fake, "H1");
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
+    assert_eq!(item(&v, "H1")["done"], true);
+}
+
+#[test]
+fn an_api_item_found_by_the_api_stays_unticked() {
+    let (tmp, fake) = setup();
+    fake.present(SECRET);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(item(&v, "H1")["done"], true);
+    let body = fake.issue_state(1).body;
+    let h1 = body.lines().find(|l| l.contains("**H1**")).unwrap();
+    assert!(
+        h1.starts_with("- [ ] ") && h1.contains("verified by bosun"),
+        "{h1}"
+    );
+    // Later the token cannot read it and nobody ticked: open.
+    fake.state.lock().unwrap().present.clear();
+    fake.fail_path("secrets/NPM_TOKEN", 403);
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(item(&v, "H1")["done"], false);
+}
+
+#[test]
+fn post_needs_the_plan_on_the_default_branch() {
+    let (tmp, fake) = setup();
+    let local = PLAN.replace("add it", "add it twice");
+    write(tmp.path(), "plans/x.md", &local);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(
+        v["error"]["message"],
+        "plans/x.md on main differs from the local copy"
+    );
+    assert!(fake.state.lock().unwrap().issues.is_empty());
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["warnings"].as_array().unwrap().len(), 1);
+    fake.content("plans/x.md", "main", &local);
+    assert_eq!(go(&fake, tmp.path(), &["--no-setup", "--post"]).0, 0);
+    assert_eq!(fake.state.lock().unwrap().issues.len(), 1);
+}
+
+#[test]
+fn two_checklist_issues_need_a_human() {
+    let (tmp, fake) = setup();
+    let body = "<!-- bosun:prereqs plans/x.md -->\n";
+    fake.issue(7, "Owner checklist: x", &["bosun:prereqs"], body);
+    fake.issue(8, "Owner checklist: x", &["bosun:prereqs"], body);
+    let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["error"]["message"], "two checklist issues for plans/x.md");
+    assert_eq!(fake.state.lock().unwrap().issues[0].body, body);
+}
+
+#[test]
 fn ticks_count_for_owner_items_only() {
     let (tmp, fake) = setup();
-    let h2 = digest("pc thing", "run it", "owner");
-    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN");
+    let h2 = digest("pc thing", "run it", "owner", "owner");
+    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN", "owner");
     let body = format!(
         "<!-- bosun:prereqs plans/x.md -->\n\
          - [x] **H2** a <!-- bosun:prereq H2 sum={h2} state=owner -->\n\
@@ -91,17 +209,37 @@ fn ticks_count_for_owner_items_only() {
     let done = |id| item(&v, id)["done"].as_bool();
     assert_eq!((done("H2"), done("H1")), (Some(true), Some(false)));
     assert_eq!(v["data"]["plans"][0]["issue"]["number"], 7);
+    // A tick on a line whose sum is stale (the plan changed the steps) does not count.
+    fake.state.lock().unwrap().issues[0].body = body.replace(&h2, "00000000");
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
+    assert_eq!(item(&v, "H2")["done"], false);
 }
 
 #[test]
-fn a_parse_error_is_exit_1() {
+fn errors_and_the_kill_switch() {
     let (tmp, fake) = setup();
+    fake.variable("BOSUN_HALT", "1");
+    assert_eq!(go(&fake, tmp.path(), &["--no-setup", "--post"]).0, 4);
+    assert!(fake.state.lock().unwrap().issues.is_empty());
     write(
         tmp.path(),
         "plans/x.md",
         &PLAN.replace("  on: computer\n", ""),
     );
     assert_eq!(go(&fake, tmp.path(), &["--no-setup"]).0, 1);
+    write(tmp.path(), "plans/a-->b.md", PLAN);
+    let a = [
+        "-C",
+        tmp.path().to_str().unwrap(),
+        "prereqs",
+        "plans/a-->b.md",
+        "--no-setup",
+    ];
+    assert_eq!(
+        run(&fake, "session_a", "2026-10-27T10:00:00Z", &a).0,
+        2,
+        "a marker-breaking path"
+    );
 }
 
 #[test]

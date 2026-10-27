@@ -1,5 +1,5 @@
-//! `bosun prereqs <plan>... [--no-setup]`: the human steps a plan needs up front, checked through
-//! the API and the ticks of the plan's checklist issue (design F2-F4).
+//! `bosun prereqs <plan>... [--post] [--no-setup]`: the human steps a plan needs up front, checked
+//! through the API, and with `--post` kept in one checklist issue per plan (design F2-F4).
 
 use std::path::Path;
 
@@ -7,13 +7,13 @@ use serde_json::{Value, json};
 
 use super::PrereqsArgs;
 use super::plan::{plan_errors, plan_key};
-use crate::app::{App, Result, default_branch};
+use crate::app::{App, Result, default_branch, kill_switch};
 use crate::core::approve::{APPROVERS_PATH, Role, parse_approvers};
 use crate::core::plan;
 use crate::core::prereqs::{self as pq, CheckItem, Verify};
 use crate::core::risk::Rules;
 use crate::github::http::enc;
-use crate::github::{Github, IssueState};
+use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const LABEL: &str = "bosun:prereqs";
@@ -23,6 +23,9 @@ const BOSUN_CODE_MARKER: &str = "src/cli/risk_check.rs";
 pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
+    if args.post {
+        kill_switch(gh)?;
+    }
     let root = app.ctx.dir.as_path();
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
     let rules = match read(RULES_PATH) {
@@ -66,8 +69,34 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         let plan = plan::parse(&text).map_err(|e| plan_errors(file, &e))?;
         let prereqs = pq::parse(&text, &plan).map_err(|e| plan_errors(file, &e))?;
         let plan_path = plan_key(file, &base, &roots);
+        check_plan_path(&plan_path)?;
         let marker = pq::issue_marker(&plan_path);
-        let issue = existing.iter().find(|i| i.body_text().starts_with(&marker));
+        let mut mine = existing
+            .iter()
+            .filter(|i| i.body_text().starts_with(&marker));
+        let issue = mine.next();
+        if args.post && mine.next().is_some() {
+            return Err(BosunError::needs_human(
+                format!("two checklist issues for {plan_path}"),
+                "close one of them; the owner checklist is one issue per plan",
+            ));
+        }
+        if branch.is_none() {
+            branch = Some(default_branch(gh)?);
+        }
+        let main = branch.as_deref().unwrap_or("main");
+        if gh.file_at(&plan_path, main)?.as_deref() != Some(text.as_str()) {
+            let msg = format!("{plan_path} on {main} differs from the local copy");
+            if args.post {
+                return Err(BosunError::conflict(
+                    msg,
+                    "merge the plan change first; --post writes the checklist of the plan on the default branch",
+                ));
+            }
+            warnings.push(format!(
+                "{msg}, or is not there: the checklist is built from the local file"
+            ));
+        }
         let ticks = issue.map_or_else(Vec::new, |i| pq::read_issue(i.body_text()));
         let mut items = Vec::new();
         for p in &prereqs {
@@ -81,6 +110,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
                     let state = if p.verify == Verify::Owner {
                         "owner"
                     } else {
+                        it.verify += " (bosun cannot read it: your tick decides)";
                         "api 403"
                     };
                     (state.into(), pq::ticked(&ticks, &it.id, &it.sum))
@@ -98,7 +128,19 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         pq::sort(&mut items);
         let n_open = items.iter().filter(|i| !i.done).count();
         open += n_open;
-        let posted = issue.map(|i| (i.number, false));
+        let posted = if args.post {
+            let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
+            post(
+                gh,
+                issue,
+                &plan.title,
+                &body,
+                n_open,
+                !items.is_empty() || !approvals.is_empty(),
+            )?
+        } else {
+            issue.map(|i| (i.number, false))
+        };
         let url = posted.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
         let message = pq::message(&plan.title, &items, &approvals, url.as_deref());
         plans.push(json!({"file": file, "plan_path": plan_path, "title": plan.title,
@@ -108,6 +150,52 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
     let message: Vec<&str> = plans.iter().filter_map(|p| p["message"].as_str()).collect();
     Ok(Outcome::data(json!({"message": message.join("\n\n"),
         "plans": plans, "open": open, "warnings": warnings})))
+}
+
+/// Create the issue or update it (body, and open or closed to match the open count).
+/// Returns its number and whether it was created.
+fn post(
+    gh: &dyn Github,
+    issue: Option<&Issue>,
+    title: &str,
+    body: &str,
+    open: usize,
+    any: bool,
+) -> Result<Option<(u64, bool)>> {
+    let Some(i) = issue else {
+        if !any {
+            return Ok(None);
+        }
+        gh.ensure_label(LABEL, "0e8a16", "the owner checklist of a plan")?;
+        let made = gh.create_issue(&format!("Owner checklist: {title}"), body, &[LABEL])?;
+        return Ok(Some((made.number, true)));
+    };
+    let is_open = i.state == "open";
+    let (state, state_reason) = match (open, is_open) {
+        (0, true) => (Some(PatchState::Closed), Some("completed".to_string())),
+        (1.., false) => (Some(PatchState::Open), None),
+        _ => (None, None),
+    };
+    let patch = IssuePatch {
+        body: Some(body.into()),
+        state,
+        state_reason,
+        ..IssuePatch::default()
+    };
+    gh.update_issue(i.number, patch)?;
+    Ok(Some((i.number, false)))
+}
+
+/// A plan path goes into the checklist issue's marker: plain repo-relative text only.
+pub(crate) fn check_plan_path(p: &str) -> Result<()> {
+    let bad = p.contains("--") || p.contains('<') || p.contains(char::is_whitespace);
+    if bad || crate::core::text::has_hidden(p) || p.is_empty() {
+        return Err(BosunError::usage(
+            format!("plan path `{}` is not a plain file path", p.escape_debug()),
+            "name the plan file with a plain repo-relative path, such as plans/bosun.md",
+        ));
+    }
+    Ok(())
 }
 
 /// `Some(found)` when the API answered, `None` when it did not (owner, or a 403).

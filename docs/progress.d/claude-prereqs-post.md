@@ -1,0 +1,1 @@
+- 2026-10-27 · Q2b · bosun prereqs --post: the checklist issue · PR (claude/prereqs-post)

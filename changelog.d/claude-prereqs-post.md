@@ -1,0 +1,1 @@
+- `bosun prereqs --post` keeps one checklist issue per plan (label `bosun:prereqs`): created when there is something to do, rewritten from the API and the owner's ticks, closed when nothing is open and reopened when something is.
