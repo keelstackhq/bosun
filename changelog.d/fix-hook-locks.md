@@ -1,0 +1,1 @@
+- Hooks: a session may edit paths leased under its own `<session>/<task>` ids; the label-lock no longer refuses read-only GitHub MCP tools or heredoc prose that names a state label; AGENTS.md says to run `git checkout -b` as its own command.

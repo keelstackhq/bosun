@@ -237,6 +237,7 @@ Conflict avoidance (three layers):
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.
+   The label-lock skips the read-only GitHub MCP tools (`list_*`, `search_*`, `get_*`, `*_read`), and treats the body of a heredoc as data: in an unquoted body only the command substitutions (`$( )`, backticks) are judged as commands. Anything the guard cannot parse safely is refused as before: a body with `$name` or `${`, a substitution with a quote, `#`, `<<`, a newline, a backslash or `case`, an unterminated substitution, or a line ending in a backslash (bash joins it with the next line before it looks for the delimiter).
    The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`). Its default-branch rules (commit, merge, rebase, reset, cherry-pick, plain push) read the branch where git acts: the hook's directory moved by a `cd dir` joined with `&&`, `;` or a newline, and by `git -C dir`, `--git-dir` and `--work-tree`; a `cd` counts only when the shell surely runs it here (after the start, `;`, a newline, or in an `&&` chain that reaches the git command; never in a pipeline or a `( .. )` group); a directory it cannot read literally (`$VAR`, `~`, `cd -`), a moved target git cannot read (a failed `cd`), or `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` count as the default branch. Branch protection stays the real guard, since a hook cannot see every shell trick.
 
 Leases conflict per issue, not per session: wave agents run inside their orchestrator's session, so a
@@ -246,6 +247,7 @@ on the issue being claimed is the same claim (a re-claim is idempotent). Give ea
 `wave plan` counts the epic's active tasks that hold a live lease against `waves.max_parallel` and
 blocks picks that overlap their touch paths. The edit hook keeps the session rule (an agent may edit
 paths its orchestrator `S` leased), a known limit: without per-task ids it cannot tell wave agents apart.
+The hook sees only the plain session id, so a session `S` may also edit the paths of leases held under `S/<task>`; `S/x` and `S/y` still block each other.
 Claim and spawn re-check after writing: they re-read the comments of the claimed issue and the active
 issues, and when a live overlapping lease has an earlier comment (creation time, then comment id) they
 post `lease-end` with reason `lost-race`, leave the state alone and exit 3 naming the winner.
