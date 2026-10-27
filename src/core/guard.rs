@@ -1298,6 +1298,46 @@ fn flag(arg: &str) -> Option<&str> {
     Some(f.trim_start_matches('-').split('=').next().unwrap_or(""))
 }
 
+/// A long option given as `full` or a prefix of it at least `min` long (git, getopt and ack
+/// take unique prefixes; `min` is the shortest one unique among the tool's options).
+fn long_prefix(arg: &str, full: &str, min: usize) -> bool {
+    let n = arg.split('=').next().unwrap_or(arg);
+    n.len() >= min && full.starts_with(n)
+}
+
+/// The values of a long option or its prefixes: `--opt=v`, else the next word.
+fn long_values<'a>(args: &[&'a str], full: &str, min: usize) -> Vec<&'a str> {
+    #[rustfmt::skip]
+    let v = args.iter().enumerate().filter(|(_, a)| long_prefix(a, full, min))
+        .filter_map(|(i, a)| a.split_once('=').map(|p| p.1).or_else(|| args.get(i + 1).copied()));
+    v.collect()
+}
+
+/// The commands ack and ugrep run on their output or files: `--pager` and ugrep's `--view`
+/// (also abbreviated), `ACK_PAGER`, `ACK_PAGER_COLOR` and the options in `ACK_OPTIONS`.
+fn pagers(name: &str, segment: &[String], args: &[&str]) -> Vec<String> {
+    let mut opts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+    let mut out = Vec::new();
+    for (k, v) in segment
+        .iter()
+        .filter_map(|w| Some((assigned(w)?, w.split_once('=')?.1)))
+    {
+        match k {
+            "ACK_PAGER" | "ACK_PAGER_COLOR" => out.push(v.to_string()),
+            "ACK_OPTIONS" => opts.extend(shell_words(v)),
+            _ => {}
+        }
+    }
+    let opts: Vec<&str> = opts.iter().map(String::as_str).collect();
+    let view = match name.starts_with('u') {
+        true => long_values(&opts, "--view", 4),
+        false => Vec::new(),
+    };
+    let pager = long_values(&opts, "--pager", 5);
+    out.extend(pager.into_iter().chain(view).map(String::from));
+    out
+}
+
 /// `sops` may print info or encrypt; `sops FILE` decrypts, so any other argument is refused.
 fn sops_ok(args: &[&str]) -> bool {
     const INFO: &[&str] = &["version", "v", "help", "h"];
@@ -1453,7 +1493,6 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // `bosun main-triage --run CMD` and `rg --pre CMD FILE` run a command.
         let run = match name.as_str() {
             "bosun" => long("--run").map(str::to_string),
-            "ack" | "ugrep" | "ug" => long("--pager").map(str::to_string),
             "rg" => long("--pre").map(|c| format!("{c} FILE")),
             #[rustfmt::skip]
             "git" if verb == "grep" => long("--open-files-in-pager").or_else(|| args.iter().enumerate().find_map(|(i, a)| a.strip_prefix("-O").map(|v| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v }))).map(|c| format!("{c} FILE")),
@@ -1462,8 +1501,24 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
             return Some(why);
         }
+        // A pager or view runs on a file; a shell there runs the search output as a script.
+        let paged_at = rest.iter().position(|w| PAGED.contains(&base(w).as_str()));
+        for c in paged_at.map_or(Vec::new(), |p| {
+            pagers(&base(rest[p]), segment, &rest[p + 1..])
+        }) {
+            if let Some(sh) = shell_words(&c)
+                .iter()
+                .map(|w| base(w))
+                .find(|w| SHELLS.contains(&w.as_str()))
+            {
+                return Some(decrypt_reason(&format!("`{sh}` as a pager")));
+            }
+            if let Some(why) = decrypt_rule(&format!("{c} FILE"), depth + 1) {
+                return Some(why);
+            }
+        }
         // `git grep --no-index` searches its paths (or the cwd) like `grep -r`, hidden ones too.
-        if git && verb == "grep" && args.contains(&"--no-index") {
+        if git && verb == "grep" && args.iter().any(|a| long_prefix(a, "--no-index", 6)) {
             #[rustfmt::skip]
             const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
             // The first bare word is the pattern, unless `-e` or `-f` gave it.
@@ -1535,23 +1590,19 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 matches!(name.as_str(), "rg" | "ag"),
                 matches!(name.as_str(), "rg" | "ag" | "ack" | "rgrep"),
             );
-            let dirs = args
-                .windows(2)
-                .any(|w| matches!(w[0], "-d" | "--directories") && w[1] == "recurse")
-                || args
-                    .iter()
-                    .any(|a| matches!(*a, "-drecurse" | "--directories=recurse"));
-            let recursive = always
-                || dirs
-                || args.iter().any(|a| {
-                    matches!(*a, "--recursive" | "--dereference-recursive")
-                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['r', 'R'])
-                });
-            let hidden = !rg
-                || args.iter().any(|a| {
-                    matches!(*a, "--hidden" | "--unrestricted")
-                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['u', '.'])
-                });
+            // Long options by unique prefix (`--rec`, `--der`, `--dir=rec`, ag `--hi`, `--u`).
+            let short = |a: &&str| a.starts_with('-') && !a.starts_with("--");
+            let d = args.windows(2).filter(|w| w[0] == "-d").map(|w| w[1]);
+            #[rustfmt::skip]
+            let dirs = long_values(args, "--directories", 4).into_iter().chain(d)
+                .chain(args.iter().filter_map(|a| a.strip_prefix("-d").filter(|v| !v.is_empty())))
+                .any(|v| v.len() >= 3 && "recurse".starts_with(v));
+            let long =
+                |a: &&str, opts: &[(&str, usize)]| opts.iter().any(|(f, m)| long_prefix(a, f, *m));
+            #[rustfmt::skip]
+            let recursive = always || dirs || args.iter().any(|a| long(a, &[("--recursive", 5), ("--dereference-recursive", 5)]) || short(a) && a.contains(['r', 'R']));
+            #[rustfmt::skip]
+            let hidden = !rg || args.iter().any(|a| long(a, &[("--hidden", 4), ("--unrestricted", 3)]) || short(a) && a.contains(['u', '.']));
             if finds && key_search(&pos, recursive, hidden) {
                 return Some(decrypt_reason("a search of the age key directory"));
             }
@@ -1569,12 +1620,11 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             if !PAGED.contains(&name.as_str()) {
                 continue;
             }
-            #[rustfmt::skip]
-            let filters = args.iter().enumerate().filter_map(|(i, a)| {
-                let (n, v) = a.split_once('=').map_or((*a, None), |(n, v)| (n, Some(v)));
-                (name.starts_with('u') && n.len() >= 6 && "--filter".starts_with(n)).then(|| v.or_else(|| args.get(i + 1).copied())).flatten()
-            });
-            for c in filters.flat_map(|f| f.split(',')) {
+            let filters = match name.starts_with('u') {
+                true => long_values(args, "--filter", 6),
+                false => Vec::new(),
+            };
+            for c in filters.iter().flat_map(|f| f.split(',')) {
                 let c = c.split_once(':').map_or(c, |p| p.1);
                 if let Some(why) = decrypt_rule(c, depth + 1) {
                     return Some(why);
@@ -2885,6 +2935,30 @@ mod tests {
         ("grep -r x ../../*/*", true), ("rg TODO ../bosun", false), ("rg x ../.claude", false),
         ("grep -r x /*", true), ("grep -r x /r*", true), ("grep -r x /ro?t", true),
         ("grep -r x /home/b*", true), ("grep -r x /tmp/*", false), ("grep -r x src/*", false),
+        // A pager or view is judged as a command run on a file; a shell there runs the output.
+        ("ugrep --view sops x f", true), ("ug --view=sops x f", true), ("ugrep --vi=sops x f", true),
+        ("ugrep --pager sops x f", true), ("ugrep --pager=sops x f", true), ("ack --pager sops x", true),
+        ("ACK_PAGER=sh ack x", true), ("ack --pager=bash x", true), ("ugrep --pager=sh x f", true),
+        ("ugrep --view=zsh x f", true), ("ack --pager=/bin/sh x", true), ("ack --pag dash x", true),
+        ("ACK_PAGER_COLOR=/usr/bin/bash ack x", true), ("ACK_OPTIONS=--pager=sh ack x", true),
+        ("env ACK_PAGER=sh ack x", true), ("ugrep --pager='env bash' x f", true),
+        ("ack --pager=less x", false), ("ugrep --pager='less -R' x f", false),
+        ("ugrep --view=vim x f", false), ("ACK_PAGER=less ack x", false),
+        ("ack --pager less TODO src", false),
+        // git, GNU grep and ag take unique prefixes of long options.
+        ("git grep --no-in x ~", true), ("git grep --no-ind x ~/.config", true),
+        ("git grep --no-inde -e x -- ~", true), ("git -C ~ grep --no-ind x", true),
+        ("git grep --no- x ~", false), ("git grep --no-ind x src", false),
+        ("grep --rec x ~/.config", true), ("grep --recu x ~", true), ("grep --der x ~", true),
+        ("grep --dereference-rec x ~/.config", true), ("grep --dir=recurse x ~/.config", true),
+        ("grep --dire recurse x ~", true), ("grep --directories=rec x ~/.config", true),
+        ("grep -d rec x ~", true), ("ag --hid x ~", true), ("ag --unres x ~", true),
+        ("ag --u x ~", true), ("grep --dir=skip x ~", false), ("grep --rec x src", false),
+        ("ag --hid x src", false), ("grep --directories=read x ~/.config", false),
+        ("rg pattern src", false), ("grep -rn foo .", false), ("ugrep -rn x src", false),
+        ("ack --type rust TODO src", false), ("grep --recursive foo src", false),
+        // Over-denial: a sibling repo reads as a home.
+        ("grep -rn foo ../other-repo/*", true), ("echo ack --pager=sh", true),
     ];
 
     #[test]

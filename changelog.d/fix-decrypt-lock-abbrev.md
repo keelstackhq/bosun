@@ -1,0 +1,1 @@
+- Hooks: the decrypt-lock judges the ack and ugrep pager and `--view` (also bare, abbreviated or from `ACK_PAGER`/`ACK_OPTIONS`) as a command run on a file and refuses a shell there, and takes unique prefixes of `git grep --no-index`, GNU grep `--recursive`/`--dereference-recursive`/`--directories=recurse` and ag `--hidden`/`--unrestricted`.
