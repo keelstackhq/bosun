@@ -96,7 +96,8 @@ fn touch_check(
 ) -> Result<&'static str, BosunError> {
     let Some(lease) = leases_of(n, &notes(app.gh.as_ref(), n)?)
         .into_iter()
-        .filter(|l| l.is_live(app.ctx.now))
+        // An empty touch (a spawn's epic lease) restricts nothing, as in the edit hook.
+        .filter(|l| l.is_live(app.ctx.now) && !l.touch.is_empty())
         // Own lease first, else one held by a per-task id of this orchestrator.
         .filter(|l| l.session == app.ctx.session || orchestrator_of(&l.session) == app.ctx.session)
         .min_by_key(|l| l.session != app.ctx.session)
