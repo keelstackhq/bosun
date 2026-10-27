@@ -1030,13 +1030,35 @@ const RUNNERS: &[(&str, &[&str], usize, &[&str])] = &[
     ("stdbuf", &["-i", "--input", "-o", "--output", "-e", "--error"], 0, &[]),
     ("ionice", &["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"], 0, &[]),
     ("xargs", &["-I", "-n", "-L", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-lines", "--max-procs", "--max-chars", "--delimiter", "--arg-file", "--eof", "--process-slot-var"], 0, &[]),
+    ("doas", &["-u", "-C", "-a"], 0, &[]), ("unbuffer", &[], 0, &[]), ("busybox", &[], 0, &[]),
+    ("chrt", &["-T", "--sched-runtime", "-P", "--sched-period", "-D", "--sched-deadline"], 1, &[]),
+    // `-c` takes no value: the mask positional is the cpu list then.
+    ("taskset", &[], 1, &[]),
+    ("watch", &["-n", "--interval", "-q", "--equexit"], 0, &[]),
+    // `FILE -c CMD`: `-c` is a flag here, so its value is the command.
+    ("flock", &["-w", "--timeout", "--wait", "-E", "--conflict-exit-code"], 1, &[]),
+    ("strace", &["-a", "-b", "-e", "-E", "-I", "-o", "-O", "-p", "-P", "-s", "-S", "-u", "-U", "-X", "--output", "--attach", "--string-limit", "--user", "--env", "--detach-on", "--columns", "--overhead", "--summary-sort-by", "--trace-path", "--summary-columns", "--const-print-style", "--trace", "--trace-fds", "--signal", "--signals", "--status", "--abbrev", "--verbose", "--raw", "--read", "--write", "--fault", "--inject", "--kvm", "--decode-pids"], 0, &[]),
+    ("ltrace", &["-a", "-A", "-D", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x", "--align", "--indent", "--library", "--output", "--config", "--where"], 0, &[]),
+    ("unshare", &["-S", "--setuid", "-G", "--setgid", "-R", "--root", "-w", "--wd", "--propagation", "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups", "--monotonic", "--boottime"], 0, &["-w", "--wd"]),
+    ("chroot", &["--userspec", "--groups"], 1, &[]),
+    ("caffeinate", &["-t", "-w"], 0, &[]),
 ];
 
-/// The command after leading runners (`nice -n 5 sudo -u x grep ..`), and the directories
-/// their options move to (`env -C dir`, `--chdir=dir`, `sudo -D dir`).
-fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>) {
-    let mut dirs = Vec::new();
-    while let Some(&(_, vals, mut pos, cd)) = cmd.first().and_then(|w| {
+/// Runner options that change the root (`unshare -R dir`, `sudo --chroot dir`): the command
+/// starts in the new `/`, read as `/` of this filesystem (`chroot` does the same).
+const NEW_ROOT: &[&str] = &["-R", "--root", "--chroot"];
+
+/// strace options with an optional value, which getopt takes only after `=`: a flag in
+/// `RUNNERS`, and judged again as taking the next word (`--decode-fds all cmd`).
+#[rustfmt::skip]
+const STRACE_OPTIONAL: &[&str] = &["--quiet", "--silent", "--silence", "--decode-fds", "--timestamps", "--absolute-timestamps", "--syscall-times"];
+
+/// The command after leading runners (`nice -n 5 sudo -u x grep ..`), the directories
+/// their options move to (`env -C dir`, `--chdir=dir`, `sudo -D dir`, `unshare -w dir`, `/`
+/// after a new root), and whether a runner joins the command into a shell string (`watch`).
+fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>, bool) {
+    let (mut dirs, mut shell) = (Vec::new(), false);
+    while let Some(&(runner, vals, mut pos, cd)) = cmd.first().and_then(|w| {
         let w = w.rsplit('/').next().unwrap_or(w);
         RUNNERS.iter().find(|r| r.0 == w)
     }) {
@@ -1067,14 +1089,22 @@ fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>) {
             if let Some(v) = val.filter(|_| cd.contains(&opt)) {
                 dirs.push(v);
             }
+            if val.is_some() && NEW_ROOT.contains(&opt) {
+                dirs.push("/");
+            }
         }
         // A runner with no command after it is the command (`command env`, `timeout 5 env`).
         if cmd.get(i).is_none_or(|w| redirect(w)) {
             break;
         }
+        if runner == "chroot" {
+            dirs.push("/");
+        }
+        // `watch` runs its words through `sh -c` (also judged with `-x`: fail closed).
+        shell |= runner == "watch";
         cmd = &cmd[i..];
     }
-    (cmd, dirs)
+    (cmd, dirs, shell)
 }
 
 /// Mutations and endpoints that merge, tag or move refs through the GitHub API.
@@ -1546,7 +1576,21 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // them: judge it as the command, in the directory `env -C` or `sudo -D` moves to. An
         // option they take that is not known may hide the real command, so after a runner no
         // command exempts its words from being tried as commands.
-        let (cmd, cds) = unwrap_runners(&rest);
+        let (cmd, cds, shell) = unwrap_runners(&rest);
+        let script = shell.then(|| cmd.join(" ")).or_else(|| {
+            let s = rest.iter().position(|w| base(w) == "strace")?;
+            let p = s + rest[s..].iter().position(|w| STRACE_OPTIONAL.contains(w))?;
+            let v = rest.get(p + 1)?;
+            let glued = format!("{}={v}", rest[p]);
+            Some(
+                [&rest[..p], &[glued.as_str()], &rest[p + 2..]]
+                    .concat()
+                    .join(" "),
+            )
+        });
+        if let Some(why) = script.and_then(|s| decrypt_rule(&s, depth + 1)) {
+            return Some(why);
+        }
         let wrapped = cmd.len() < rest.len();
         let name = base(cmd.first().unwrap_or(first));
         let args = &cmd[1.min(cmd.len())..];
@@ -3195,6 +3239,36 @@ mod tests {
         ("nice cargo test", false), ("timeout 60 cargo nextest run", false),
         ("command -v git", false), ("time rg pattern src", false), ("sudo apt-get install x", false),
         ("timeout 5 grep -r x src", false), ("xargs -n 1 grep -l x", false),
+        // More runners, with their value options and positionals (`chrt 1`, `flock FILE`).
+        ("doas grep -r x ~/.config", true), ("doas printenv", true),
+        ("doas git grep --no-index x ~", true), ("doas -u bob -n grep -r x ~/.config", true),
+        ("chrt 1 grep -r x ~/.config", true), ("chrt -f 1 printenv", true),
+        ("chrt -T 5 -d 0 grep -r x ~/.config", true), ("taskset 1 grep -r x ~/.config", true),
+        ("taskset -c 0 printenv", true), ("unbuffer grep -r x ~/.config", true),
+        ("unbuffer printenv", true), ("unbuffer -p printenv", true),
+        ("watch grep -r x ~/.config", true), ("watch -n1 printenv", true),
+        ("watch -n 2 -d 'grep -r' x ~/.config", true), ("watch -x -q 3 grep -r x ~/.config", true),
+        ("flock /tmp/l grep -r x ~/.config", true), ("flock /tmp/l printenv", true),
+        ("flock -w 5 /tmp/l -c printenv", true), ("flock -E 3 /tmp/l rg -uu x ~", true),
+        ("busybox grep -r x ~/.config", true), ("busybox env", true),
+        ("strace -f grep -r x ~/.config", true), ("strace -o /tmp/t -e trace=open printenv", true),
+        ("strace -ff -tt -s 99 -E X=1 grep -r x ~/.config", true), ("ltrace -o /tmp/t -n 2 printenv", true),
+        ("strace --trace open grep -r x ~/.config", true), ("strace --signal none printenv", true),
+        ("strace --status failed --kvm vcpu printenv", true), ("ltrace --library x printenv", true),
+        // Optional values (`--decode-fds[=set]`) are judged as a flag and as taking the next word.
+        ("strace --decode-fds all printenv", true), ("strace --decode-fds printenv", true),
+        ("strace --quiet attach --timestamps grep -r x ~/.config", true),
+        ("strace -c -f cargo build", false), ("strace --timestamps -f cargo test", false),
+        ("unshare -r grep -r x ~/.config", true), ("unshare --map-root-user -S 0 printenv", true),
+        ("unshare --mount=/tmp/m -G 0 grep -r x ~/.config", true), ("unshare -w ~ git grep x", true),
+        ("unshare --wd=~ git grep x", true), ("unshare -R /jail git grep x", true),
+        ("chroot / grep -r x ~/.config", true), ("chroot --userspec=1:1 /jail printenv", true),
+        ("chroot /jail git grep x", true), ("caffeinate grep -r x ~/.config", true),
+        ("caffeinate -t 9 -w 1 printenv", true), ("nice -n 5 doas grep -r x ~/.config", true),
+        ("watch -n 2 git status", false), ("strace -f cargo test", false),
+        ("flock /tmp/l cargo build", false), ("taskset -c 0 cargo test", false),
+        ("doas apt-get install x", false), ("busybox ls", false), ("caffeinate -i cargo build", false),
+        ("unshare -w src git grep x", false), ("chrt -p 1 1234", false), ("taskset -p 1234", false),
         // After a runner every word is still tried as a command (an unknown option may
         // take the next word), and a runner hides no env dump.
         ("sudo -R cp sops -d f", true), ("sudo --chroot cp sops -d f", true),
