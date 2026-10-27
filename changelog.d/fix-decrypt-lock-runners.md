@@ -1,0 +1,1 @@
+- Hooks: the decrypt-lock judges the command after doas, chrt, taskset, unbuffer, watch (also as its sh -c string), flock, busybox, strace, ltrace, unshare, chroot and caffeinate; unshare -w moves the base and a new root counts as /.
