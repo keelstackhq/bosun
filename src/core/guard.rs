@@ -134,28 +134,97 @@ pub fn tool_rules(
     None
 }
 
-/// Prereqs-lock (design F4): refuses a GitHub write whose text carries `bosun:prereq`, the marker
-/// of the owner checklist issue. Best effort. Known and accepted bypasses: a body read from a
-/// file (`--body-file`), `--input`, and `curl` with the text or token built in a variable. The
-/// real guarantees are elsewhere: bosun re-reads the checklist and trusts only its own writes.
+/// Markers bosun writes into issue bodies and comments: the owner checklist (`bosun:prereq`) and
+/// task and epic metadata (which plan gates a task).
+const BOSUN_MARKERS: [&str; 3] = ["bosun:prereq", "bosun:task", "bosun:epic"];
+
+/// MCP tools that write an issue body or comment, and the input fields that hold the text.
+const ISSUE_TEXT_TOOLS: [&str; 4] = [
+    "issue_write",
+    "update_issue",
+    "add_issue_comment",
+    "update_issue_comment",
+];
+
+fn has_marker(text: &str) -> bool {
+    BOSUN_MARKERS.iter().any(|m| text.contains(m))
+}
+
+/// Does one simple command (words, quotes removed) write an issue body or comment through
+/// `gh` or `curl`?
+fn writes_issue_text(words: &[String]) -> bool {
+    let name = |w: &String| w.rsplit('/').next().unwrap_or(w).to_string();
+    let Some(at) = words
+        .iter()
+        .position(|w| ["gh", "curl"].contains(&name(w).as_str()))
+    else {
+        return false;
+    };
+    let args: Vec<&str> = words[at + 1..].iter().map(String::as_str).collect();
+    let has = |f: &[&str]| args.iter().any(|a| f.contains(a));
+    let flag = |long: &str| args.iter().any(|a| a.starts_with(&format!("{long}=")));
+    let method = args.iter().enumerate().any(|(i, a)| {
+        let write = |v: &str| ["POST", "PATCH", "PUT"].contains(&v.to_ascii_uppercase().as_str());
+        let given = if ["-X", "--method", "--request"].contains(a) {
+            args.get(i + 1).copied()
+        } else {
+            a.strip_prefix("--method=")
+                .or_else(|| a.strip_prefix("--request="))
+                .or_else(|| a.strip_prefix("-X"))
+        };
+        given.is_some_and(write)
+    });
+    if name(&words[at]) == "curl" {
+        return method
+            || args
+                .iter()
+                .any(|a| a.starts_with("-d") || a.starts_with("--data"));
+    }
+    match args.first().copied() {
+        Some("issue") => {
+            has(&["edit", "comment", "create", "close"])
+                && (has(&["--body", "-b"]) || flag("--body"))
+        }
+        Some("pr") => has(&["comment"]) && (has(&["--body", "-b"]) || flag("--body")),
+        Some("api") => {
+            method
+                || has(&["-f", "-F", "--field", "--raw-field"])
+                || flag("--field")
+                || flag("--raw-field")
+        }
+        _ => false,
+    }
+}
+
+/// Markers-lock (design F4): refuses a write of an issue body or comment that carries a bosun
+/// marker (`BOSUN_MARKERS`). Only writes are judged: `gh issue edit|comment|create|close` and
+/// `gh pr comment` with `--body`/`-b`, `gh api` with a write method or field flag, `curl` with a
+/// write method or data flag, and the MCP tools in `ISSUE_TEXT_TOOLS` (their `body` and `comment`
+/// fields only). Best effort. Known and accepted bypasses: `--body-file`, `--input`, `curl` or
+/// `gh api` with the text in a variable or a file, wget, httpie and python urllib. The real
+/// guarantees are elsewhere: bosun re-reads the checklist and trusts only its own writes.
 pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
-    let write = match tool.strip_prefix("mcp__github__") {
-        Some(name) => !READ_ONLY_GITHUB.contains(&name),
+    let hit = match tool.strip_prefix("mcp__github__") {
+        Some(name) => {
+            ISSUE_TEXT_TOOLS.contains(&name)
+                && ["body", "comment"]
+                    .iter()
+                    .filter_map(|k| input.get(k).and_then(Value::as_str))
+                    .any(has_marker)
+        }
         None if tool == "Bash" => {
             let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-            let words: Vec<&str> = command
-                .split(|c: char| !(c.is_alphanumeric() || "-_./".contains(c)))
-                .map(|w| w.rsplit('/').next().unwrap_or(w))
-                .collect();
-            words.contains(&"curl")
-                || (words.contains(&"gh")
-                    && words.iter().any(|w| ["issue", "api", "pr"].contains(w)))
+            has_marker(command)
+                && !read_only(command, 0)
+                && shell_words(command)
+                    .split(|w| w == SEP)
+                    .any(|seg| writes_issue_text(seg) && seg.iter().any(|w| has_marker(w)))
         }
         None => false,
     };
-    (write && input.to_string().contains("bosun:prereq")).then(|| {
-        "the owner checklist is the owner's: agents never tick, edit or close it \
-         (bosun prereqs --post writes it); fix the plan's ## Prerequisites instead"
+    hit.then(|| {
+        "bosun's markers (owner checklist, task and epic metadata) are written by bosun only \
+         (bosun prereqs --post writes the checklist); fix the plan instead"
             .to_string()
     })
 }
@@ -1103,32 +1172,40 @@ mod tests {
     }
 
     #[test]
-    fn prereqs_lock_refuses_github_writes_naming_the_marker() {
+    fn prereqs_lock_judges_only_issue_body_writes() {
         let body = "<!-- bosun:prereq H1 sum=ab state=open -->";
         let deny = |tool: &str, input: Value| prereqs_lock(tool, &input).is_some();
+        let sh = |cmd: &str| deny("Bash", json!({ "command": cmd }));
         assert!(deny("mcp__github__issue_write", json!({ "body": body })));
-        assert!(deny(
-            "mcp__github__issue_write",
-            json!({ "body": "<!-- bosun:prereqs p.md -->" })
-        ));
-        assert!(!deny("mcp__github__issue_read", json!({ "body": body })));
         assert!(!deny(
             "mcp__github__issue_write",
             json!({ "body": "plain" })
         ));
-        let gh = format!("gh issue edit 5 --body \"{body}\"");
-        assert!(deny("Bash", json!({ "command": gh })));
-        let curl = format!("curl -X PATCH -d '{body}' https://api.github.com/x");
-        assert!(deny("Bash", json!({ "command": curl })));
         assert!(!deny(
-            "Bash",
-            json!({ "command": "bosun prereqs plans/x.md --post" })
+            "mcp__github__create_pull_request",
+            json!({ "body": body })
         ));
+        assert!(!deny("mcp__github__issue_read", json!({ "body": body })));
+        assert!(sh(&format!("gh issue edit 5 --body \"{body}\"")));
+        assert!(sh(
+            "gh api -X PATCH repos/o/r/issues/5 -f body='x bosun:prereq y'"
+        ));
+        assert!(sh(&format!(
+            "curl -X PATCH -d '{body}' https://api.github.com/x"
+        )));
+        assert!(sh("gh issue edit 5 --body '<!-- bosun:task {\"n\":1} -->'"));
+        assert!(sh("gh issue comment 5 -b '<!-- bosun:epic 3 -->'"));
+        assert!(deny(
+            "mcp__github__add_issue_comment",
+            json!({ "body": "bosun:epic" })
+        ));
+        assert!(!sh("gh issue view 5"));
+        assert!(!sh("gh issue list"));
+        assert!(!sh("gh api repos/o/r/issues/5"));
+        assert!(!sh("git commit -m \"fix bosun:prereq parsing\""));
+        assert!(!sh("bosun prereqs plans/x.md --post"));
         // Documented best-effort gap (design F4): the body comes from a file, so no marker here.
-        assert!(!deny(
-            "Bash",
-            json!({ "command": "gh issue edit 5 --body-file f" })
-        ));
+        assert!(!sh("gh issue edit 5 --body-file f"));
     }
 
     #[test]
