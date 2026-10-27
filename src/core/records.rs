@@ -107,6 +107,14 @@ pub enum Record {
         slack_user: String,
         at: String,
     },
+    /// A human step found mid-run (`bosun hold`): `id` is the `X<n>` box that holds the task
+    /// until the owner ticks it; `on` is `computer` or `phone`.
+    Hold {
+        session: String,
+        id: String,
+        step: String,
+        on: String,
+    },
 }
 
 /// A PR and the head sha an owner acted on.
@@ -139,6 +147,7 @@ impl Record {
             | Record::Escalate { session, .. }
             | Record::LessonSeen { session, .. }
             | Record::Answer { session, .. }
+            | Record::Hold { session, .. }
             | Record::TaskPr { session, .. } => session,
         }
     }

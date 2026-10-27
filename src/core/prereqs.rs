@@ -552,6 +552,8 @@ pub struct Tick {
     pub sum: String,
     /// Informational only: the gates and bosun read the API themselves.
     pub state: String,
+    /// The task a `bosun hold` box (`X1`) blocks, from a trailing ` task=<n>`.
+    pub task: Option<u64>,
 }
 
 /// The boxes of a checklist issue body, in order: lines that start with a box and end in bosun's
@@ -570,6 +572,10 @@ pub fn read_issue(body: &str) -> Vec<Tick> {
             continue;
         };
         let (m, state) = m.split_once(" state=").unwrap_or((m, ""));
+        let (state, task) = match state.rsplit_once(" task=") {
+            Some((s, t)) => (s, t.trim().parse().ok()),
+            None => (state, None),
+        };
         let (id, sum) = m.split_once(" sum=").unwrap_or((m, ""));
         let (id, sum, state) = (id.trim().into(), sum.trim().into(), state.trim().into());
         out.push(Tick {
@@ -577,6 +583,7 @@ pub fn read_issue(body: &str) -> Vec<Tick> {
             ticked,
             sum,
             state,
+            task,
         });
     }
     out
@@ -652,4 +659,129 @@ pub fn message(
 pub fn ticked(ticks: &[Tick], id: &str, sum: &str) -> bool {
     let mut lines = ticks.iter().filter(|t| t.id == id);
     matches!((lines.next(), lines.next()), (Some(t), None) if t.ticked && t.sum == sum)
+}
+
+/// Whether `id` names a `bosun hold` box (`X1`).
+pub fn is_hold_id(id: &str) -> bool {
+    HOLD.is_match(id)
+}
+
+/// The number of an `X<n>` id.
+pub fn hold_number(id: &str) -> Option<u64> {
+    id.strip_prefix('X')?
+        .parse()
+        .ok()
+        .filter(|_| is_hold_id(id))
+}
+
+/// The sum of a hold box: its text is the only content, owner verified.
+pub fn hold_sum(step: &str) -> String {
+    digest(step, "", "owner", "owner")
+}
+
+/// The heading of the boxes `bosun hold` adds.
+pub const FOUND: &str = "### Found during the work";
+
+static HOLD_LINE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    re(
+        r"^- \[( |x|X)\] \*\*(X[1-9][0-9]{0,2})\*\* (`[^`\n]*`) _\(task #([0-9]+)(, phone)?\)_ <!-- bosun:prereq (X[1-9][0-9]{0,2}) sum=([0-9a-f]{8}) state=owner task=([0-9]+) -->$",
+    )
+});
+
+/// One box of `bosun hold`: read back from the issue and rendered again, so it is always
+/// exactly the shape bosun writes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoldBox {
+    pub id: String,
+    /// The inert text, without the backticks of its code span.
+    pub text: String,
+    pub sum: String,
+    pub task: u64,
+    pub phone: bool,
+    pub ticked: bool,
+}
+
+impl HoldBox {
+    /// `None` for a line that is not exactly what [`HoldBox::line`] writes.
+    pub fn parse(line: &str) -> Option<HoldBox> {
+        let c = HOLD_LINE.captures(line.trim())?;
+        let (id, task) = (c[2].to_string(), c[4].parse().ok()?);
+        if c[6] != id || c[8].parse::<u64>().ok()? != task {
+            return None;
+        }
+        Some(HoldBox {
+            text: c[3].trim_matches('`').to_string(),
+            sum: c[7].to_string(),
+            phone: c.get(5).is_some(),
+            ticked: &c[1] != " ",
+            id,
+            task,
+        })
+    }
+
+    /// The box for a new hold: `span` is the text made inert, `step` the raw text.
+    pub fn new(id: &str, step: &str, task: u64, phone: bool) -> HoldBox {
+        HoldBox {
+            id: id.into(),
+            text: inert(step, 300).trim_matches('`').to_string(),
+            sum: hold_sum(step),
+            task,
+            phone,
+            ticked: false,
+        }
+    }
+
+    pub fn line(&self) -> String {
+        let (x, on) = (
+            if self.ticked { 'x' } else { ' ' },
+            if self.phone { ", phone" } else { "" },
+        );
+        let (id, text, sum, task) = (&self.id, &self.text, &self.sum, self.task);
+        format!(
+            "- [{x}] **{id}** `{text}` _(task #{task}{on})_ <!-- bosun:prereq {id} sum={sum} state=owner task={task} -->"
+        )
+    }
+
+    /// As a checklist item: it counts as open or done, and blocks no plan item.
+    pub fn item(&self) -> CheckItem {
+        CheckItem {
+            id: self.id.clone(),
+            title: self.text.clone(),
+            who: "owner".into(),
+            on: if self.phone { "phone" } else { "computer" }.into(),
+            steps: String::new(),
+            verify: "owner".into(),
+            sum: self.sum.clone(),
+            state: "owner".into(),
+            done: self.ticked,
+            blocks: vec![],
+        }
+    }
+}
+
+/// `body` without the "Found during the work" heading and the hold boxes, and those boxes. A
+/// line that is not exactly a box bosun wrote is dropped (fail closed).
+pub fn split_found(body: &str) -> (String, Vec<HoldBox>) {
+    let (mut rest, mut boxes) = (String::new(), Vec::new());
+    for l in body.lines() {
+        if l.trim() == FOUND {
+            continue;
+        }
+        if l.contains("<!-- bosun:prereq X") && l.trim_start().starts_with("- [") {
+            boxes.extend(HoldBox::parse(l));
+            continue;
+        }
+        rest += l;
+        rest.push('\n');
+    }
+    (rest, boxes)
+}
+
+/// `rest` with the hold boxes under their heading, at the end.
+pub fn with_found(rest: &str, boxes: &[HoldBox]) -> String {
+    if boxes.is_empty() {
+        return rest.to_string();
+    }
+    let lines: Vec<String> = boxes.iter().map(HoldBox::line).collect();
+    format!("{rest}{FOUND}\n{}\n", lines.join("\n"))
 }
