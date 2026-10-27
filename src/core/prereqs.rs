@@ -40,13 +40,12 @@ static ID: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^H[1-9][0-9]{0,2}$"));
 static FIELD: LazyLock<regex::Regex> =
     LazyLock::new(|| re(r"^(who|on|steps|verify|blocks|replaces):"));
 static HOLD: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^X[1-9][0-9]{0,2}$"));
+static WHO: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,38}$"));
 static LIST: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([-*+]|[0-9]+\.) "));
 static BULLET: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^- ([^:\s]+):\s*(\S.*)$"));
 static KEY: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([a-z-]+):\s*(.*)$"));
 static NAME: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z_][A-Za-z0-9_]*$"));
 static ENV: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[A-Za-z0-9_.-]+$"));
-static ENV_NAME: LazyLock<regex::Regex> =
-    LazyLock::new(|| re(r"^[A-Za-z0-9_.-]+( [A-Za-z0-9_.-]+)*$"));
 
 impl Verify {
     pub fn parse(v: &str) -> Result<Verify, String> {
@@ -70,16 +69,8 @@ impl Verify {
             "owner" if arg.is_empty() => Ok(Verify::Owner),
             "secret" => scoped(arg).map(|(env, name)| Verify::Secret { env, name }),
             "variable" => scoped(arg).map(|(env, name)| Verify::Variable { env, name }),
-            "environment" if ENV_NAME.is_match(arg) => Ok(Verify::Environment { name: arg.into() }),
-            "file"
-                if arg.starts_with(['/', '~'])
-                    || arg.contains('\\')
-                    || arg.split('/').any(|c| c == "..") =>
-            {
-                Err(format!(
-                    "file `{arg}` must be relative to the repo, without `..`"
-                ))
-            }
+            "environment" if ENV.is_match(arg) => Ok(Verify::Environment { name: arg.into() }),
+            "file" if outside(arg) => Err(format!("file `{arg}` must be relative to the repo")),
             "file" if !arg.is_empty() => Ok(Verify::File { path: arg.into() }),
             _ => Err(format!(
                 "verify `{v}` is not owner, secret [ENV/]NAME, variable [ENV/]NAME, environment NAME or file PATH"
@@ -100,6 +91,11 @@ impl Verify {
             Verify::File { path } => format!("file {path}"),
         }
     }
+}
+
+/// A path that is not plainly inside the repo: absolute, `~`, a backslash or a `..` part.
+fn outside(p: &str) -> bool {
+    p.starts_with(['/', '~']) || p.contains('\\') || p.split('/').any(|c| c == "..")
 }
 
 macro_rules! bad {
@@ -136,6 +132,20 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
     } else if !matches!(on, "phone" | "computer") {
         bad!(errs, at("on"); "write `on: phone` or `on: computer`" => "{id}: `on:` is `{on}`, not phone or computer");
     }
+    let texts = [
+        ("title", o.title.as_str()),
+        ("steps", val("steps")),
+        ("who", val("who")),
+    ];
+    for (k, v) in texts {
+        if let Some(why) = unsafe_text(v) {
+            bad!(errs, at(k); "write plain text" => "{id}: `{k}` contains {why}");
+        }
+    }
+    let who = get("who").map_or("owner", |(v, _)| v.as_str());
+    if !WHO.is_match(who) {
+        bad!(errs, at("who"); "write a plain name like owner or ada" => "{id}: `who:` is not a plain name");
+    }
     if val("steps").is_empty() {
         bad!(errs, o.line; "write the steps on one line, `steps: ...`" => "{id} has no `steps:`");
     }
@@ -165,7 +175,7 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
     }
     out.push(Prereq {
         title: o.title.clone(),
-        who: get("who").map_or("owner", |(v, _)| v).into(),
+        who: who.into(),
         on: on.into(),
         steps: val("steps").into(),
         verify,
@@ -176,9 +186,17 @@ fn finish(o: Open, plan: &Plan, out: &mut Vec<Prereq>, errs: &mut Vec<PlanError>
     });
 }
 
-/// A `## ` heading that looks like a misspelt `## Prerequisites` (`## Pre-requisites`).
+/// Why `t` cannot go into the checklist issue (a comment hides text or forges a marker; bidi lies).
+fn unsafe_text(t: &str) -> Option<&'static str> {
+    let bidi = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    let control = t.chars().any(|c| c.is_control() || bidi(c));
+    let html = t.contains("<!--") || t.contains("-->");
+    (html.then_some("an HTML comment marker")).or(control.then_some("a control or bidi character"))
+}
+
+/// A heading (any level) like a misspelt `## Prerequisites` (`## Pre-requisites`).
 fn near_miss(line: &str) -> bool {
-    let h = line[3..].trim().to_lowercase();
+    let h = line.trim_start_matches('#').trim().to_lowercase();
     h.starts_with("pre") && h.contains("requisite") && line != "## Prerequisites"
 }
 
@@ -202,6 +220,10 @@ pub fn parse(text: &str, plan: &Plan) -> Result<Vec<Prereq>, Vec<PlanError>> {
         let indented = line.starts_with([' ', '\t']);
         if !indented && let Some(o) = cur.take() {
             finish(o, plan, &mut out, &mut errs);
+        }
+        if line.starts_with('#') && !line.starts_with("## ") && near_miss(line) {
+            bad!(errs, n; "write the heading as `## Prerequisites`" => "`{line}` is not `## Prerequisites`");
+            continue;
         }
         if line.starts_with("## ") {
             in_sec = line == "## Prerequisites";
@@ -471,7 +493,12 @@ fn by(i: &CheckItem) -> String {
 
 /// User text made safe for one checklist line: no HTML comment, no line break.
 fn safe(t: &str) -> String {
-    t.replace("<!--", "<!-\u{200b}-").replace(['\n', '\r'], " ")
+    let t = t
+        .replace("<!--", "<!-\u{200b}-")
+        .replace("-->", "-\u{200b}->");
+    t.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// One box of a checklist issue, as bosun wrote it.
