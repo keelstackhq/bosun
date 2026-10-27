@@ -133,3 +133,9 @@ another plan file or hand-made issues. A dropped task that is active or holds a 
 closed (it is listed under `skipped`, with a warning; its epic stays open); amend again after it
 ends. An item that comes back reopens its epic and tasks. Plan paths are stored relative to the
 repo root. Only after the plan task merged do new tasks become ready.
+
+## Human prerequisites
+
+Steps only a human can do (a secret, a repo setting, an account, a key) go in a
+`## Prerequisites` section of the plan, with the tasks they block; `docs/prerequisites.md` has the
+format, and spec §14 how bosun asks for them up front and holds the tasks they block.
