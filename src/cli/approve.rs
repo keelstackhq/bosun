@@ -39,7 +39,7 @@ struct Ready {
 const COMPARE_FILES_CAP: usize = 300;
 
 /// Why a PR is not ready when an owner's newest decisive review on the head requests changes.
-const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves again with a GitHub review or a plain `/bosun approve <head>` comment, or another owner approves with a GitHub review";
 
 /// An owner's newest decisive review on the head requests changes: that withdraws their
 /// approval comment, so approving again here would not count.

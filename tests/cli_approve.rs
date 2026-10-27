@@ -626,7 +626,7 @@ fn list_works_in_a_cloud_session_and_says_so() {
     assert_eq!(v["data"]["cloud"], false);
 }
 
-const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves again with a GitHub review or a plain `/bosun approve <head>` comment, or another owner approves with a GitHub review";
 
 fn repost_of(v: &Value, i: usize) -> Option<&Value> {
     v["data"]["approved"][i].get("repost")

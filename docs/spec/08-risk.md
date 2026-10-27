@@ -44,7 +44,17 @@ High-risk PRs:
   app on their comments, so an agent cannot approve; a response without the field does not
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
-  count either.
+  count either. Withdrawal: an owner whose newest decisive review (APPROVED, CHANGES_REQUESTED
+  or DISMISSED) on the head is CHANGES_REQUESTED or DISMISSED has withdrawn approval, so their
+  comment approval, every owner-signed approval and every delegate approval stop counting.
+  GitHub reports a dismissed request for changes as DISMISSED and anyone with write access can
+  dismiss one, so a dismissal never lifts the withdrawal, and a DISMISSED review is never an
+  approval. A request for changes ends only with a newer APPROVED review from that owner on the
+  head. After a dismissal, a plain-token, unedited `/bosun approve <head>` comment from that
+  owner also ends it when its `created_at` is strictly later than the review's `submitted_at`.
+  A missing or unparseable time counts as not newer. A signed approval, owner or delegate,
+  never ends a withdrawal: the signature carries no time, so a re-posted old one would pass for
+  new.
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
   in its own container (never shared) and, on the owner's chat message, posts a PR comment whose
@@ -61,7 +71,7 @@ High-risk PRs:
   line 1 names that head. A signature for an old head, another PR or another repo does not
   verify. Each signature line is checked on its own; one that verifies is enough. A key stands
   for the owners: with no owners in `governance/owners.toml` at base, or while any owner's
-  newest decisive review on the head requests changes, a signed approval does not count. Heads
+  newest decisive review on the head requests changes or was dismissed (withdrawal, above), a signed approval does not count. Heads
   are 40-hex SHA-1, so a SHA-256 repo has the feature off. A missing or unreadable
   `.bosun/approvers.toml` turns the feature off. A malformed file (bad TOML,
   unknown fields, a duplicate or empty id, a key that is not 32 bytes of base64), an unknown
@@ -118,7 +128,7 @@ High-risk PRs:
     a linked task, approves with confidence >= 0.9 and counts `major: 0` findings (the record
     carries `major` from this version on; an older record without it never counts; an
     approving verdict has no blocker); a session's newest record for the head decides;
-  - owners exist at base and no owner's newest decisive review on the head requests changes;
+  - owners exist at base and no owner has withdrawn approval on the head (withdrawal, above);
   - the signature checks of signed approvals above.
   The critical floor is hard-coded and holds whatever a rule's `approval` says: the rules
   R-secrets, R-prod-write and R-unseen (bosun could not see the whole diff, so it cannot rule
@@ -163,7 +173,9 @@ High-risk PRs:
   owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one
   line `bosun approve 199@<head> 200@<head>` (null when nothing is ready), and `data.hint` says
   to approve only by running `data.approve_command` or in the GitHub UI: a `/bosun approve` comment posted through the Claude
-  GitHub tool goes through an app and carries a footer, so it never counts. `--list` shows each
+  GitHub tool goes through an app and carries a footer, so it never counts. A DISMISSED owner
+  review does not hide a PR from `--list`: the owner's fresh `/bosun approve <head>` comment,
+  posted after the dismissal, is what ends that withdrawal. `--list` shows each
   open PR whose `risk-check` status is `failure` with a description that starts `high risk,
   owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
   statuses created by `github-actions[bot]` count (anyone with write access can post a status
