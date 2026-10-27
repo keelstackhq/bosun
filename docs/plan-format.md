@@ -57,7 +57,8 @@ The state machine, stop rules and resume.
 5. `### Tasks` lists the tasks, one `- <ID>: <title>` bullet each. The task ID matches
    `^T[0-9]{1,3}$` and is unique in its item. Indented `key: value` lines under the bullet:
    - `touch:` (required) comma-separated repo-relative globs (`*` inside a segment, `**` across
-     segments). They are the claim's touch paths.
+     segments). They are the claim's touch paths. Only `*`, `?` and `**` are allowed: a glob with
+     braces, character classes, escapes or `..` is a plan error.
      For the overlap and hotspot warnings below, a `Cargo.toml` also counts the `Cargo.lock` beside
      it and at the root, and a `package.json` counts `pnpm-lock.yaml` the same way. Claim, the
      edit hook and `bosun pr` will adopt this in later tasks.
@@ -71,12 +72,33 @@ The state machine, stop rules and resume.
    counts for all its tasks) are not parallel: claim and wave keep apart tasks whose raw touch globs overlap
    (the companions apply only to this check for now), and the warning only tells the planner. Add a `depends:` or give the file to one task. A file that 3 or
    more tasks touch, that overlap each other and are not already in one order, is a hotspot: give
-   it to one task and chain the others, or split the file. At most 20 overlap warnings are shown.
+   it to one task and chain the others, or split the file. At most 20 overlap warnings are shown;
+   the count stops at 1000 ("at least N more overlapping pairs").
 6. The critical path of an item (the longest chain of `depends` inside it) has at most 4 tasks.
 7. `### Done when` lists the UCs, one `- UC-<item>-<n>: <text>` bullet each, numbered from 1 with
    no gaps. Each line must be checkable by a test. Every item has at least one UC.
 8. Any rule broken is a parse error with the file, the line and the fix; `bosun plan import` then
    changes nothing (exit 1).
+
+## Cutting tasks for parallel work
+
+PRs that run in parallel must not edit the same file, or the second one to merge has a merge
+conflict to resolve. Cut the plan by file ownership:
+
+- One task owns a file. A second task that must edit it gets a `depends:` on the first, so it
+  starts from the merged result. `bosun plan check` warns when two tasks overlap without one.
+- List every file a task edits in its `touch:`, including the spec section it updates
+  (`docs/spec/NN-<section>.md`), module registries (`mod.rs`, `lib.rs`) and the test files it
+  changes. The claim, wave and edit-hook checks only see what `touch:` names.
+- Put new tests in a new file (`tests/<command>_<topic>.rs`), not at the end of a shared one:
+  two PRs that append to the same file conflict.
+- Append-only lists live as one file per PR: CHANGELOG and PROGRESS entries are fragments in
+  `changelog.d/` and `docs/progress.d/`. Never edit the folded files in a task.
+- A dependency change is its own task (touch the manifest and its lockfile). On a lockfile
+  conflict, regenerate it (`cargo update -w`, `pnpm install`); never merge it by hand.
+- Versions change only in release PRs.
+- A file that many tasks need is a hotspot: give it to one early task, or split it first (as
+  `docs/spec.md` was split into one file per section).
 
 ## What import makes
 
