@@ -1108,7 +1108,9 @@ const READERS: &[&str] = &[
 #[rustfmt::skip]
 const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
     "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
-const INTERPS: &[&str] = &["python", "python3", "perl", "ruby", "node", "deno", "php"];
+const INTERPS: &[&str] = &[
+    "python", "python3", "perl", "ruby", "node", "deno", "bun", "php",
+];
 const FILE_TOOLS: &[&str] = &[
     "mv", "cp", "install", "chmod", "chown", "ln", "mkdir", "rmdir", "rm", "touch", "tar", "unzip",
     "gzip", "gunzip", "curl", "wget", "stat", "file", "du", "df",
@@ -1126,7 +1128,7 @@ const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-fi
     "search", "q", "jq"];
 const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
-    "node", "deno", "php", "source", "xargs", "eval",
+    "node", "deno", "bun", "php", "source", "xargs", "eval",
 ];
 
 /// The files that `> f`, `>> f` and `tee f` write in these words.
@@ -1148,6 +1150,62 @@ fn keyline(w: &str) -> bool {
     w.contains("age-secret") || w.contains("secret-key-1")
 }
 
+/// A word naming `.config/sops` as a whole path segment (`.config/sops-test` is another dir).
+fn sops_dir(w: &str) -> bool {
+    w.match_indices(".config/sops")
+        .any(|(i, m)| w[i + m.len()..].is_empty() || w[i + m.len()..].starts_with('/'))
+}
+
+/// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
+/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), 1 for home or above it
+/// (`~`, `/root`, `/home/<user>`, `/home`, `/`), 0 for anything else (`~/projects/x`).
+fn key_root(word: &str) -> u8 {
+    let mut n = word.trim_matches(|c| c == '"' || c == '\'').to_string();
+    loop {
+        let m = n.replace("//", "/").replace("/./", "/");
+        let m = m.strip_suffix("/.").map_or(m.clone(), str::to_string);
+        if m == n {
+            break;
+        }
+        n = m;
+    }
+    let word = n.as_str();
+    let t = word.trim_end_matches('/');
+    let odd = t.contains("..") || t.contains(['*', '?', '[']);
+    let under = |r: &str, own: &str| {
+        r == own
+            || r.strip_prefix(own)
+                .is_some_and(|x| x == "/sops" || x.starts_with("/sops/"))
+    };
+    if t.is_empty() || t == "/home" {
+        return u8::from(word.starts_with('/') || word.is_empty());
+    }
+    if let Some(r) = ["$XDG_CONFIG_HOME", "${XDG_CONFIG_HOME}"]
+        .iter()
+        .find_map(|h| t.strip_prefix(h))
+    {
+        return if odd || r.is_empty() || r.starts_with("/sops/") || r == "/sops" {
+            2
+        } else {
+            0
+        };
+    }
+    let rest = ["~", "$HOME", "${HOME}", "/root"]
+        .iter()
+        .find_map(|h| t.strip_prefix(h))
+        .or_else(|| {
+            let user = t.strip_prefix("/home/")?;
+            Some(user.find('/').map_or("", |i| &user[i..]))
+        });
+    match rest {
+        Some(_) if odd => 2,
+        Some("") => 1,
+        Some(r) if under(r, "/.config") => 2,
+        None if under(t.trim_start_matches("./"), ".config") => 2,
+        _ => 0,
+    }
+}
+
 /// A redirect word: `>`, `>>`, `2>`, `&>`, `<`, `2>&1`, `>file`.
 fn redirect(a: &str) -> bool {
     a.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&')
@@ -1163,7 +1221,7 @@ fn runs_code(n: &str, after: &[&str]) -> bool {
     let dash = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
     let interp = INTERPS.contains(&n);
     #[rustfmt::skip]
-    let code = |a: &&str| dash(a, 'c') || interp && (dash(a, 'e') || *a == "--eval" || *a == "eval" || n == "php" && dash(a, 'r'));
+    let code = |a: &&str| dash(a, 'c') || n == "bun" && (dash(a, 'p') || *a == "--print") || interp && (dash(a, 'e') || *a == "--eval" || *a == "eval" || n == "php" && dash(a, 'r'));
     after.iter().any(code)
 }
 
@@ -1356,6 +1414,34 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 .any(|a| keyline(a) && !(pat_ok && pos.first() == Some(a)))
             {
                 return Some(decrypt_reason("an age secret key"));
+            }
+            // A recursive search whose root holds the age key reads it, whatever the pattern:
+            // `.config` and its ancestors always; home (hidden dirs included) for grep, and for
+            // rg and ag only with --hidden, -u or -. .
+            let finds = matches!(name.as_str(), "grep" | "rg" | "ag");
+            let dirs = args
+                .windows(2)
+                .any(|w| matches!(w[0], "-d" | "--directories") && w[1] == "recurse")
+                || args
+                    .iter()
+                    .any(|a| matches!(*a, "-drecurse" | "--directories=recurse"));
+            let recursive = name != "grep"
+                || dirs
+                || args.iter().any(|a| {
+                    matches!(*a, "--recursive" | "--dereference-recursive")
+                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['r', 'R'])
+                });
+            let hidden = name == "grep"
+                || args.iter().any(|a| {
+                    matches!(*a, "--hidden" | "--unrestricted")
+                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['u', '.'])
+                });
+            let root = pos.iter().map(|a| key_root(a)).max().unwrap_or(0);
+            if finds
+                && (pos.iter().any(|a| sops_dir(a))
+                    || recursive && (root == 2 || root == 1 && hidden))
+            {
+                return Some(decrypt_reason("a search of the age key directory"));
             }
             let cfg = |a: &&str| a.contains(".config/") && a.contains(['*', '?', '[', ']']);
             if matches!(name.as_str(), "cat" | "head" | "tail") && args.iter().any(cfg) {
@@ -2578,6 +2664,32 @@ mod tests {
         ("sops --version > /dev/null", false), ("age --version 2>/dev/null", false),
         ("sops --version > v.txt && cat v.txt", false), ("sops -d f > out.yaml", true),
         ("sops f 2>/dev/null", true),
+        ("grep -r SECRET-KEY ~", true), ("grep -ri secret-key $HOME", true),
+        ("rg SECRET-KEY ~/.config", true), ("grep -r x ~/.config/sops", true),
+        ("grep -R SECRET-K ${HOME}", true), ("rg AGE-SE /root", false), ("ag age-sec /home/bob", false),
+        ("grep --recursive SECRET-KEY $XDG_CONFIG_HOME", true), ("rg secret ~", false),
+        ("grep -rn SECRET-KEY ~/.config/nvim", false), ("rg x ~/.config/sops/foo", true),
+        ("grep -rn SECRET-KEY src/", false), ("rg secret ~/projects/x", false),
+        ("grep -r TODO ~/.config/nvim", false), ("grep -r TODO ~", true),
+        ("grep SECRET-KEY ~/notes.txt", false), ("rg AGE ~", false),
+        ("bun -e 'console.log(Bun.env)'", true), ("bun -p 'Bun.env.HOME'", true),
+        ("bun --eval 'console.log(process.env)'", true), ("bun --print 'Bun.env'", true),
+        ("bun -e \"require('child_process').execSync('sops -d f')\"", true),
+        ("grep -r AGE ~", true), ("grep -ri age ~/.config", true), ("grep -r . ~/.config", true),
+        ("grep -r '' ~/.config", true), ("rg --hidden . ~/.config", true), ("rg -uu KEY ~", true),
+        ("grep -rE 'SECRET.KEY' ~", true), ("rg x ~/.config", true), ("rg x .config", true),
+        ("grep -r x ${XDG_CONFIG_HOME}", true), ("rg --hidden x $HOME", true), ("rg -. x ~", true),
+        ("grep -r x /home", true), ("rg TODO ~", false), ("rg AGE src/", false),
+        ("rg x ~/.config/nvim", false), ("grep -r x $XDG_CONFIG_HOME/nvim", false),
+        ("bun -e \"Bun.spawnSync(['sops','-d','f'])\"", true), ("bun -p \"Bun.spawnSync(['sops','-d','f'])\"", true),
+        ("grep -r x ~/.config/../.config", true), ("grep -r x ~/.config/./", true),
+        ("grep -r x ~/./.config", true), ("grep -r x ~//.config", true),
+        ("grep -d recurse x ~/.config", true), ("grep -drecurse x ~/.config", true),
+        ("grep --directories=recurse x ~/.config", true), ("grep --directories recurse x ~/.config", true),
+        ("grep -r x ~/.conf*", true), ("grep -r x ~/../bob", true),
+        ("grep -ri secret ~/.config/sops-test", false), ("grep -r x ~/.config/sops/", true),
+        ("bun test", false), ("bun run build", false), ("bun install", false),
+        ("bun -e 'console.log(1)'", false),
     ];
 
     #[test]
