@@ -1018,6 +1018,65 @@ const WRAPPERS: &[&str] = &[
     "if", "while", "until",
 ];
 
+/// Commands that run the command after their options: name, options with a separate value,
+/// positionals before the command (`timeout 5`), options that change directory.
+#[rustfmt::skip]
+const RUNNERS: &[(&str, &[&str], usize, &[&str])] = &[
+    ("env", &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"], 0, &["-C", "--chdir"]),
+    ("sudo", &["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user", "-R", "--chroot", "-h", "--host", "-a", "--auth-type", "-c", "--login-class"], 0, &["-D", "--chdir"]),
+    ("nice", &["-n", "--adjustment"], 0, &[]), ("command", &[], 0, &[]), ("exec", &["-a"], 0, &[]),
+    ("nohup", &[], 0, &[]), ("setsid", &[], 0, &[]), ("time", &["-f", "--format", "-o", "--output"], 0, &[]),
+    ("timeout", &["-k", "--kill-after", "-s", "--signal"], 1, &[]),
+    ("stdbuf", &["-i", "--input", "-o", "--output", "-e", "--error"], 0, &[]),
+    ("ionice", &["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"], 0, &[]),
+    ("xargs", &["-I", "-n", "-L", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-lines", "--max-procs", "--max-chars", "--delimiter", "--arg-file", "--eof", "--process-slot-var"], 0, &[]),
+];
+
+/// The command after leading runners (`nice -n 5 sudo -u x grep ..`), and the directories
+/// their options move to (`env -C dir`, `--chdir=dir`, `sudo -D dir`).
+fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>) {
+    let mut dirs = Vec::new();
+    while let Some(&(_, vals, mut pos, cd)) = cmd.first().and_then(|w| {
+        let w = w.rsplit('/').next().unwrap_or(w);
+        RUNNERS.iter().find(|r| r.0 == w)
+    }) {
+        let mut i = 1;
+        while let Some(&a) = cmd.get(i) {
+            i += 1;
+            if !a.starts_with('-') && assigned(a).is_none() {
+                match pos {
+                    0 => {
+                        i -= 1;
+                        break;
+                    }
+                    _ => pos -= 1,
+                }
+                continue;
+            }
+            let (opt, val) = match a.split_once('=') {
+                Some((o, v)) if a.starts_with("--") => (o, Some(v)),
+                _ if a.len() > 2 && a.get(..2).is_some_and(|o| vals.contains(&o)) => {
+                    (&a[..2], Some(&a[2..]))
+                }
+                _ => (a, None),
+            };
+            let val = match val {
+                None if vals.contains(&opt) => cmd.get(i).inspect(|_| i += 1).copied(),
+                v => v,
+            };
+            if let Some(v) = val.filter(|_| cd.contains(&opt)) {
+                dirs.push(v);
+            }
+        }
+        // A runner with no command after it is the command (`command env`, `timeout 5 env`).
+        if cmd.get(i).is_none_or(|w| redirect(w)) {
+            break;
+        }
+        cmd = &cmd[i..];
+    }
+    (cmd, dirs)
+}
+
 /// Mutations and endpoints that merge, tag or move refs through the GitHub API.
 const GRAPHQL_WRITES: &[&str] = &[
     "mergePullRequest",
@@ -1483,8 +1542,14 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 .unwrap_or(w)
                 .to_string()
         };
-        let name = base(first);
-        let args = &rest[1..];
+        // Runners (`env`, `nice -n 5`, `timeout 5`, `sudo -u x`, `xargs`) run the command after
+        // them: judge it as the command, in the directory `env -C` or `sudo -D` moves to. An
+        // option they take that is not known may hide the real command, so after a runner no
+        // command exempts its words from being tried as commands.
+        let (cmd, cds) = unwrap_runners(&rest);
+        let wrapped = cmd.len() < rest.len();
+        let name = base(cmd.first().unwrap_or(first));
+        let args = &cmd[1.min(cmd.len())..];
         #[rustfmt::skip]
         let da = &args[..args.iter().position(|a| redirect(a)).unwrap_or(args.len())];
         let dump = match name.as_str() {
@@ -1568,7 +1633,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             true => r.to_string(),
             false => format!("{b}/{r}"),
         };
-        let (mut dir, mut gi) = (None::<String>, args.iter());
+        #[rustfmt::skip]
+        let (mut dir, mut gi) = (cds.iter().fold(None::<String>, |d, v| Some(d.map_or(v.to_string(), |b| at(&b, v)))), args.iter());
         while let Some(a) = gi.next() {
             #[rustfmt::skip]
             let v = match *a {
@@ -1583,7 +1649,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         }
         // A key root as the base is outside any repo, so the fallback may apply there whatever
         // config set it (`GIT_CONFIG_PARAMETERS`, a gitconfig file); `../x` is not one here,
-        // but `../../root` and `../../home/x` are.
+        // but `../../root`, `../../home/x` and `../../x` are.
         let key_base = dir.as_deref().map(lexical).is_some_and(|b| {
             let segs: Vec<&str> = b.split('/').collect();
             let top = segs
@@ -1592,20 +1658,39 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 .map(|i| segs.get(i + 1));
             #[rustfmt::skip]
             let home = top.is_none_or(|s| s.is_some_and(|s| matches!(*s, "root" | "home")));
-            key_root(&b) == 2 || key_root(&b) == 1 && home
+            // Two `..` climb past a repo's parent: `../../user` from `~/repo/sub` is home.
+            #[rustfmt::skip]
+            let rel = ["$PWD/", "${PWD}/", "\"$PWD\"/", "/proc/self/cwd/"].iter().find_map(|p| b.strip_prefix(p)).unwrap_or(&b);
+            let deep = rel.split('/').take_while(|s| *s == "..").count() >= 2;
+            key_root(&b) == 2 || key_root(&b) == 1 && (home || deep)
         });
         let no_index = fallback || key_base || args.iter().any(|a| long_prefix(a, "--no-index", 6));
         if git && verb == "grep" && no_index {
             #[rustfmt::skip]
             const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
-            // The first bare word is the pattern, unless `-e` or `-f` gave it.
-            let mut pat = args.iter().any(|a| matches!(*a, "-e" | "-f"));
+            // `GIT_ICASE_PATHSPECS`, `GIT_GLOB_PATHSPECS` and their global flags widen every
+            // path (`.CONFIG`).
+            #[rustfmt::skip]
+            let wide = words.iter().any(|w| matches!(assigned(w).unwrap_or(w), "GIT_ICASE_PATHSPECS" | "GIT_GLOB_PATHSPECS" | "--icase-pathspecs" | "--glob-pathspecs"));
+            if wide {
+                return Some(decrypt_reason("a pathspec env var on a git grep search"));
+            }
+            // The first bare word is the pattern, unless `-e` or `-f` gave it, also in a short
+            // cluster (`-eX`, `-ieX`, `-ifpat`).
+            #[rustfmt::skip]
+            let mut pat = args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(['e', 'f']));
             let (mut roots, mut it, mut paths) = (Vec::new(), it.clone(), false);
             while let Some(a) = it.next() {
                 match *a {
                     "--" if !paths => paths = true,
                     _ if !paths && VALUE.contains(a) => drop(it.next()),
                     _ if !paths && a.starts_with('-') => {}
+                    // Pathspec magic (`:(exclude)x`, `:!x`, `:/`) searches the whole base; as the
+                    // pattern it is judged as a root too, and the next word is a root.
+                    _ if a.trim_start_matches(['$', '\'', '"']).starts_with(':') => {
+                        pat = true;
+                        roots.push(".");
+                    }
                     _ if !std::mem::replace(&mut pat, true) => {}
                     _ => roots.push(*a),
                 }
@@ -1620,7 +1705,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 return Some(decrypt_reason("a search of the age key directory"));
             }
         }
-        if name == "bosun" {
+        if name == "bosun" && !wrapped {
             continue;
         }
         if READERS.contains(&name.as_str()) {
@@ -1678,10 +1763,11 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
             // ack and ugrep take commands in options (`--pager`, `--view`, `--filter`, abbreviated)
             // and from the environment, so only their pattern is data.
-            if !PAGED.contains(&name.as_str()) {
+            let paged = PAGED.contains(&name.as_str());
+            if !paged && !wrapped {
                 continue;
             }
-            let filters = match name.starts_with('u') {
+            let filters = match paged && name.starts_with('u') {
                 true => long_values(args, "--filter", 6),
                 false => Vec::new(),
             };
@@ -1694,7 +1780,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         }
         #[rustfmt::skip]
         let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
-        let safe = FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub;
+        let safe = !wrapped
+            && (FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub);
         // Data words: message and query option values, search patterns.
         let (msg, vi) = (
             matches!(name.as_str(), "git" | "gh"),
@@ -1704,7 +1791,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             name == "git" && verb == "grep",
             name == "gh" && verb == "search",
         );
-        let api = (name.as_str(), verb) == ("gh", "api");
+        let api = !wrapped && (name.as_str(), verb) == ("gh", "api");
         let mut data = vec![false; segment.len()];
         let (mut skip, mut pat_done) = (false, false);
         for (i, w) in segment.iter().enumerate() {
@@ -1727,7 +1814,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // value of a long option.
         let paged = PAGED.contains(&name.as_str());
         if paged {
-            let (a0, mut seen) = (segment.len() - rest.len() + 1, false);
+            let (a0, mut seen) = (segment.len() - args.len(), false);
             let e = da
                 .iter()
                 .any(|a| matches!(*a, "-e" | "--regexp") || a.starts_with("--regexp="));
@@ -1743,6 +1830,10 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 seen |= pat;
                 data[a0 + j] |= pat;
             }
+        }
+        // After a runner the command may be misread: no word is data.
+        if wrapped {
+            data.fill(false);
         }
         // Options run command strings: a word or option value with whitespace is a command.
         for w in segment
@@ -1781,7 +1872,12 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
         }
         let off = segment.len() - rest.len();
-        for i in 0..if safe || paged { 0 } else { rest.len() } {
+        let tried = if safe || paged && !wrapped {
+            0
+        } else {
+            rest.len()
+        };
+        for i in 0..tried {
             if data[i + off] {
                 continue;
             }
@@ -3073,6 +3169,54 @@ mod tests {
         ("git -C ~/projects/x grep x", false), ("git -C ../bosun grep x", false),
         ("git -C ../../root grep x", true), ("git -C ../../home/user grep x", true),
         ("git -C ../../home grep x", true),
+        // A `:` root is pathspec magic (`:(exclude)x`, `:!x`, `:/`): it searches the base.
+        ("git -C ~ grep x -- ':(exclude)foo'", true), ("git -C ~ grep x ':!foo'", true),
+        ("git -C ~ grep --no-index x ':(top)'", true), ("git -C ~ grep x ':/'", true),
+        ("git -C ~ grep x ':^foo'", true), ("git -C /root grep x ':(glob)*'", true),
+        ("git grep --no-index x ':(exclude)y'", false), ("git grep x -- ':(exclude)vendor'", false),
+        ("git -C src grep x ':!tests'", false), ("git -C ~ grep x -- src ':!src/t'", true),
+        ("git -C ~ grep -eSECRET ':(top)' src", true), ("git -C ~ grep -eSECRET ':/' src", true),
+        ("git -C ~ grep -fpat ':(top)' src", true), ("git -C ~ grep x src $':(top)'", true),
+        ("git grep --no-index ':x' ~", true), ("git -C ~ grep ':x' src", true), ("GIT_ICASE_PATHSPECS=1 git -C ~ grep x -- .CONFIG", true),
+        ("export GIT_GLOB_PATHSPECS=1; git -C ~ grep x src", true),
+        ("env GIT_ICASE_PATHSPECS=1 git grep --no-index x src", true),
+        ("env git grep --no-index x ~", true), ("env -i X=1 git -C ~ grep x", true),
+        // `env -C dir` is a leading `git -C dir`; wrappers run the search tool after them.
+        ("env -C ~ git grep x", true), ("env --chdir=~ git grep x", true),
+        ("env --chdir ~ git grep x", true), ("env -C ~ git grep --no-index x", true),
+        ("env -C~ git grep x", true), ("env -C src git grep x", false),
+        ("command git grep --no-index x ~", true), ("nice git grep --no-index x ~", true),
+        ("timeout 5 git grep --no-index x ~", true), ("nice -n 5 git -C ~ grep x", true),
+        ("sudo git -C ~ grep x", true), ("nohup git -C ~ grep x", true),
+        ("command grep -r x ~/.config", true), ("nice rg -uu x ~", true),
+        ("timeout 5 grep -r x ~", true), ("xargs grep -r x ~", true),
+        ("timeout -k 1 -s KILL 5 grep -r x ~", true), ("sudo -u bob nice -n5 grep -r x ~", true),
+        ("stdbuf -oL ionice -c 3 setsid rg -uu x ~", true), ("xargs -I x -n 1 grep -r y ~", true),
+        ("nice cargo test", false), ("timeout 60 cargo nextest run", false),
+        ("command -v git", false), ("time rg pattern src", false), ("sudo apt-get install x", false),
+        ("timeout 5 grep -r x src", false), ("xargs -n 1 grep -l x", false),
+        // After a runner every word is still tried as a command (an unknown option may
+        // take the next word), and a runner hides no env dump.
+        ("sudo -R cp sops -d f", true), ("sudo --chroot cp sops -d f", true),
+        ("sudo -h cp sops -d f", true), ("sudo -R tar sops -d f", true),
+        ("sudo -R cargo test sops -d f", true), ("sudo -R echo sops -d f", true),
+        ("sudo -R ack sops -d f", true), ("xargs --process-slot-var cp sops -d f", true),
+        ("sudo -Z cp sops -d f", true), ("nice cargo test -- sops -d f", true),
+        ("xargs -0 rm -f", false), ("nohup ./run.sh", false), ("nice ack sops src", true),
+        ("nice printenv", true), ("command env", true), ("timeout 5 env", true),
+        ("sudo printenv", true), ("nice printenv HOME", false), ("env -u X git status", false),
+        ("env FOO=1 cargo test", false), ("sudo -R /x printenv", true),
+        ("git -C ~ grep -ieSECRET .config src", true), ("git -C ~ grep -ifpat .config src", true),
+        ("git --icase-pathspecs -C ~ grep x -- .CONFIG", true),
+        ("git --glob-pathspecs grep --no-index x src", true),
+        ("GIT_ICASE_PATHSPECS=1 git grep x src", false), ("git grep -n foo ':!tests'", false),
+        ("git -C src grep x ':/'", false), ("git -C ../bosun grep foo", false),
+        ("git -C $PWD/../../x grep x", true), ("git -C /proc/self/cwd/../../x grep x", true),
+        ("git -C ${PWD}/../../x grep x", true), ("git -C \"$PWD\"/../../x grep x", true),
+        // Two or more `..` and one segment may be a home (`../../user` from `~/repo/sub`).
+        ("git -C ../../user grep x", true), ("git -C ../../../root grep x", true),
+        ("git -C ../../bob grep -e x", true), ("git -C ../../../x grep x", true),
+        ("git -C ../other-repo/src grep x", false), ("git -C ../../x/y grep x", false),
         // Vim and nvim init variables run commands in a ugrep view (`-Q`, `--query`, `--view`).
         ("VIMINIT=':!sh' ugrep --view=vim x f", true), ("EXINIT='!sh' ug --view=vi x f", true),
         ("export MYVIMRC=/tmp/e; ugrep --view=vim x f", true), ("GVIMINIT=x ug -Q x f", true),
