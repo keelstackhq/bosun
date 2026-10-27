@@ -1,0 +1,1 @@
+- 2026-10-27 · Canary G3 · an item added by a merged intake PR is promoted at once, no second plan PR · PR (fix/intake-promote)
