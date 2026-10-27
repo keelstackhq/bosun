@@ -38,7 +38,7 @@ under plan-format rule 2, so the plan parser and older bosun versions ignore it)
 
 Fields: `on:` (required) `phone` or `computer`; `steps:` (required) one line, copy-paste ready;
 `verify:` (default `owner`); `blocks:` (required) tasks `<item>/<task>` or whole items; `who:`
-(default `owner`). IDs match `^H[0-9]{1,3}$`. Why in the plan and why `blocks:` on the
+(default `owner`). IDs match `^H[1-9][0-9]{0,2}$` (H1 to H999). Why in the plan and why `blocks:` on the
 prerequisite instead of `needs:` on the task: one place lists all the owner must do (the checklist
 is a view of it), it is reviewed in the kind/plan PR like the rest of the plan, and
 `src/core/plan.rs` (edited by the parallel-conflicts work) stays untouched.
@@ -52,10 +52,13 @@ when the API says it is missing. Why: "done" should be a fact bosun can read, no
 **F3. Automatic items.**
 - Setup: every `missing` step of `bosun doctor` becomes an item (`D<step>`), so a fresh repo's
   owner steps come first (skip with `--no-setup`).
-- Approvals: each task whose `touch` overlaps the critical floor or an owner-class rule, or that
+- Approvals (an estimate from paths): each task whose `touch` overlaps the critical floor or an owner-class rule, or that
   says `risk: high`, is listed under "approvals at merge" with `needs: owner`; one that hits only
   delegate rules is `needs: delegate`. They are grouped into batches by dependency level, so an
-  orchestrator spawns a batch together and the owner answers once per batch.
+  orchestrator spawns a batch together and the owner answers once per batch. It is an estimate:
+  risk-check also matches added lines (R-secrets), new dependencies (R-deps), capabilities and
+  an unseen diff, which a plan cannot predict, and the bosun-code floor applies only where the
+  base has bosun's own code (the `bosun_code` argument). risk-check stays the judge at merge.
 - Delegate key: when some task is delegate-class and `.bosun/approvers.toml` has no delegate key,
   an item "enrol a delegate key" (computer) is added. Why: the owner prefers to delegate the
   non-critical classes; without a key every such PR would wait for them.
@@ -67,21 +70,33 @@ with `--post`, upserts one issue per plan (marker `<!-- bosun:prereqs <plan path
 `Owner checklist: <plan title>`) whose body is the checklist with task-list boxes the owner ticks
 in the GitHub app; ticks are read back before each rewrite, verified items are ticked by bosun,
 and the issue closes when nothing is open. Why one issue: GitHub mobile notifies on it, boxes are
-tappable on a phone, and the orchestrator relays one link.
+tappable on a phone, and the orchestrator relays one link. The issue carries the label
+`bosun:prereqs`, and each line's hidden marker names what it blocks
+(`<!-- bosun:prereq H1 blocks=M4/T2,M5 -->`), so the gates below read one issue, not the API.
+A tick is not authenticated: anyone with write access can tick a box. That is accepted because a
+prerequisite only schedules work; risk-check still decides every merge, API-verifiable items never
+pass on a tick alone, and agents never tick boxes (AGENTS.md).
 
-**F5. Gating.** `bosun plan import`/`amend` keeps a task `planned` while a prerequisite that
-blocks it (or its item) is open, and lists it under `data.held` with the prerequisite ids; the next
-import after the prerequisite is verified promotes it. Everything else proceeds. Why gate at
-promote: it is the only place tasks become ready, so no claim, wave or spawn path can bypass it.
+**F5. Gating, in two places.** (1) `bosun plan import`/`amend` keeps a task `planned` while an
+open prerequisite blocks it (or its item) and lists it under `data.held`; the next import after
+the prerequisite is done promotes it. (2) `bosun claim` refuses (exit 5) a task that an open item
+of a `bosun:prereqs` issue blocks, and `bosun wave plan` leaves it out, because tasks also become
+ready outside promote (`bosun release --to ready`, reap) and a prerequisite can appear after a
+task was promoted. Everything else proceeds.
 
-**F6. No mid-run asks.** An agent that hits an undeclared human step does not stop and wait: it
-records a lesson, adds the prerequisite to the plan (a kind/plan amendment with `blocks:` its
-task), releases the task and takes other work. The orchestrator relays the updated checklist once.
-`bosun ask` remains for genuine decisions, which also go to the orchestrator's batch.
+**F6. No mid-run asks.** An agent that hits an undeclared human step does not stop and wait. It
+runs `bosun prereqs hold <issue> "<what the owner must do>" [--phone]`: bosun adds an item
+`X<n>` (blocks: that task) to the plan's checklist issue, releases the task to `ready` (the claim
+gate now keeps it there) and records a lesson. The agent takes other work. The orchestrator
+relays the updated checklist once and folds the item into the plan's `## Prerequisites` in the
+next amendment. `bosun ask` remains for decisions, which also go to the orchestrator's batch.
 
 **F7. Approval batches.** `bosun approve --list` adds `data.message`: one short text listing the
-ready PRs (number, task, title, files) and the one reply (`approve 12 15 17`). The orchestrator
-relays it when a batch from F3 is complete (or at most every few hours), not per PR.
+ready PRs (`#12@abc1234`, task, title) and the one reply (`approve 12 15 17`). The orchestrator
+maps the numbers in the reply to the `<pr>@<head>` pairs of that same listing and signs each with
+`--sign-key` (a bare number stays exit 2). If a head moved after the message, signing it is exit
+3 and that PR goes into the next message. The orchestrator relays a message when a batch from F3
+is complete (or at most every few hours), not per PR.
 
 **F8. Docs.** A spec section (after the spec split lands), `docs/prerequisites.md`, AGENTS.md
 rules for agents and orchestrators ("front-load human steps; never block mid-run"), the keelstack
