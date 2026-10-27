@@ -243,8 +243,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     }
     let passed_on_head = !high || found.passed();
     // An older head's approval carries over a clean merge of main (design §3 C7), judged by `need`.
-    // The delegate carry comes in a later PR with its tests.
-    let carried = if passed_on_head || requirement == Approval::Delegate {
+    let carried = if passed_on_head {
         None
     } else {
         default_branch(gh).ok().and_then(|branch| {
@@ -254,13 +253,19 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     };
     let Found {
         mut approved_by,
-        verdicts,
-        delegate_verdicts,
+        mut verdicts,
+        mut delegate_verdicts,
         delegate_blocked,
     } = found;
-    let carried_from = carried.as_ref().map(|(h, _)| h.clone());
-    if let Some((_, who)) = carried {
+    let carried_from = carried.as_ref().map(|(h, ..)| h.clone());
+    if let Some((_, who, counted)) = carried {
         approved_by = Some(who);
+        // The sessions counted on h, shown as the head path shows them.
+        match requirement {
+            Approval::TwoVerdicts => verdicts = counted,
+            Approval::Delegate => delegate_verdicts = counted,
+            _ => {}
+        }
     }
     let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
     let passed = passed_on_head || carried_from.is_some();
@@ -382,7 +387,12 @@ impl Found {
 
     /// The sessions whose verdicts count in this approval; `None` when an owner approved.
     pub(crate) fn counted(&self) -> Option<&[String]> {
-        self.approved_by.is_none().then_some(&self.verdicts[..])
+        let delegate = (!self.delegate_verdicts.is_empty()).then_some(&self.delegate_verdicts[..]);
+        if self.approved_by.is_none() {
+            Some(&self.verdicts)
+        } else {
+            delegate
+        }
     }
 }
 

@@ -532,9 +532,10 @@ pub fn parse_owners(text: &str) -> Result<Vec<Owner>, String> {
 const NOTE_OPEN: &str = "<!-- bosun:risk -->";
 const NOTE_CLOSE: &str = "<!-- /bosun:risk -->";
 
-/// `s` with backticks, angle brackets and control characters as `?`, for file names in a PR body.
+/// `s` with backticks, angle brackets and anything but printable ASCII as `?`, for file names in a PR body.
 pub fn plain(s: &str) -> String {
-    let bad = |c: char| matches!(c, '`' | '<' | '>') || c.is_control();
+    // Printable ASCII only: no bidi override, line separator or zero-width character survives.
+    let bad = |c: char| matches!(c, '`' | '<' | '>') || !(c == ' ' || c.is_ascii_graphic());
     s.chars().map(|c| if bad(c) { '?' } else { c }).collect()
 }
 
@@ -544,7 +545,7 @@ pub fn risk_note(matches: &[Match], head_sha: &str) -> String {
     for m in matches {
         s.push_str(&format!("- **{}**: {}\n", m.rule, m.why));
         for e in &m.evidence {
-            s.push_str(&format!("  - {}\n", plain(e))); // evidence names files
+            s.push_str(&format!("  - `{}`\n", plain(e))); // evidence names files
         }
     }
     let ask = match requirement(matches) {
@@ -724,6 +725,20 @@ libc = "0"
         assert_eq!(o.len(), 2);
         assert_eq!(o[0].slack.as_deref(), Some("U1"));
         assert!(parse_owners("[[owner]]\nname = \"x\"").is_err());
+    }
+
+    #[test]
+    fn note_names_are_plain_ascii_and_quoted() {
+        // Bidi overrides, line separators and other non-ASCII cannot reorder or break the note.
+        assert_eq!(plain("a\u{202e}b\u{2028}c\u{200b}`<>é"), "a?b?c?????");
+        let note = risk_note(
+            &eval(&[file(".github/workflows/x\u{202e}.yml", &[])]),
+            "abc",
+        );
+        assert!(
+            note.contains("  - `path .github/workflows/x?.yml`\n"),
+            "{note}"
+        );
     }
 
     #[test]
@@ -979,5 +994,18 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             head
         ));
         assert!(!comment_approves(&format!("/bosun  approve {head}"), head));
+    }
+
+    /// A delegate never approves a trust file change: the critical floor is what stops it.
+    #[test]
+    fn every_trust_file_is_critical() {
+        for t in crate::core::approve::TRUST_FILES {
+            let f = ChangedFile {
+                path: t.into(),
+                previous_path: None,
+                added_lines: Vec::new(),
+            };
+            assert!(!critical(&[], &[f], false).is_empty(), "{t}");
+        }
     }
 }

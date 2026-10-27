@@ -1318,34 +1318,53 @@ fn long_values<'a>(args: &[&'a str], full: &str, min: usize) -> Vec<&'a str> {
 
 /// Whether the commands ack and ugrep run on their output or files are all known pagers:
 /// `--pager` and ugrep's `--view` (also abbreviated), `ACK_PAGER`, `ACK_PAGER_COLOR` and the
-/// options in `ACK_OPTIONS` and `PAGER` (set anywhere in the command); `LESS` may hold only
-/// such flags, and `LESSOPEN`, `LESSCLOSE`, `LESSKEY*`, `LESSSECURE` and `BAT_PAGER` may not be
-/// set. A pager is a known name, bare or in `/usr/bin` or `/bin`, with plain flag clusters
+/// options in `ACK_OPTIONS` and `PAGER` (set anywhere in the command), and ugrep's view
+/// fallbacks `EDITOR` and `VISUAL`; `LESS` may hold only such flags, and `LESSOPEN`,
+/// `LESSCLOSE`, `LESSKEY*`, `LESSSECURE`, `BAT_PAGER` and vim's or nvim's init variables may not
+/// be set. ugrep's `--pager` and `--view` take a value only with `=`. A pager is a known name, bare or in `/usr/bin` or `/bin`, with plain flag clusters
 /// (`-R`, `-`; no `k`, `o` or `O`, which read keys or write files); an editor may only view,
 /// with no arguments.
 fn pagers_ok(name: &str, words: &[String], args: &[&str]) -> bool {
     let mut opts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     let mut cmds: Vec<(String, bool)> = Vec::new();
+    let ugrep = name.starts_with('u');
+    // ugrep opens a viewer only from its query TUI: `-Q` (also in a cluster), `--query`, `--view`.
+    #[rustfmt::skip]
+    let views = ugrep && args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains('Q') || long_prefix(a, "--query", 5) || long_prefix(a, "--view", 4));
     for (k, v) in words
         .iter()
         .filter_map(|w| Some((assigned(w)?, w.split_once('=')?.1)))
     {
         match k {
             "ACK_PAGER" | "ACK_PAGER_COLOR" | "PAGER" => cmds.push((v.to_string(), false)),
+            "EDITOR" | "VISUAL" if views => cmds.push((v.to_string(), true)),
             "ACK_OPTIONS" => opts.extend(shell_words(v)),
             "LESS" if shell_words(v).iter().all(|a| pager_flag(a)) => {}
             "LESS" | "LESSOPEN" | "LESSCLOSE" | "LESSKEY" | "LESSKEYIN" | "LESSKEY_SYSTEM"
             | "LESSSECURE" | "BAT_PAGER" => return false,
+            // Vim and nvim init commands and files (`init.lua` under `XDG_CONFIG_HOME`).
+            "VIMINIT" | "EXINIT" | "MYVIMRC" | "GVIMINIT" | "VIM" | "VIMRUNTIME"
+            | "XDG_CONFIG_HOME" | "NVIM_APPNAME"
+                if views =>
+            {
+                return false;
+            }
             _ => {}
         }
     }
     let opts: Vec<&str> = opts.iter().map(String::as_str).collect();
-    let view = match name.starts_with('u') {
-        true => long_values(&opts, "--view", 4),
-        false => Vec::new(),
+    // ugrep's values are optional: a bare `--pager` or `--view` uses the default.
+    let eq = |full: &str, min: usize| -> Vec<&str> {
+        #[rustfmt::skip]
+        let v = opts.iter().filter(|a| long_prefix(a, full, min)).filter_map(|a| Some(a.split_once('=')?.1));
+        v.collect()
+    };
+    let (view, pager) = match ugrep {
+        true => (eq("--view", 4), eq("--pager", 5)),
+        false => (Vec::new(), long_values(&opts, "--pager", 5)),
     };
     #[rustfmt::skip]
-    cmds.extend(long_values(&opts, "--pager", 5).into_iter().map(|c| (c.to_string(), false))
+    cmds.extend(pager.into_iter().map(|c| (c.to_string(), false))
         .chain(view.into_iter().map(|c| (c.to_string(), true))));
     cmds.iter().all(|(c, view)| {
         let w = shell_words(c);
@@ -1544,7 +1563,38 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         let fallback = args.windows(2).filter(|w| matches!(w[0], "-c" | "--config-env")).map(|w| w[1])
             .chain(args.iter().filter_map(|a| a.strip_prefix("-c").or(a.strip_prefix("--config-env=")))).chain(keys)
             .any(|v| v.to_lowercase().starts_with("grep.fallbacktonoindex"));
-        let no_index = fallback || args.iter().any(|a| long_prefix(a, "--no-index", 6));
+        // `-C dir` and `--work-tree dir` move where it searches: join them with each root.
+        let at = |b: &str, r: &str| match r.starts_with(['/', '~', '$']) {
+            true => r.to_string(),
+            false => format!("{b}/{r}"),
+        };
+        let (mut dir, mut gi) = (None::<String>, args.iter());
+        while let Some(a) = gi.next() {
+            #[rustfmt::skip]
+            let v = match *a {
+                "-C" | "--work-tree" => gi.next().copied(),
+                "-c" | "--git-dir" | "--namespace" | "--exec-path" | "--config-env" => { gi.next(); None }
+                _ if a.starts_with('-') => a.strip_prefix("--work-tree=").or_else(|| a.strip_prefix("-C").filter(|v| !v.is_empty())),
+                _ => break,
+            };
+            if let Some(v) = v {
+                dir = Some(dir.map_or(v.to_string(), |b| at(&b, v)));
+            }
+        }
+        // A key root as the base is outside any repo, so the fallback may apply there whatever
+        // config set it (`GIT_CONFIG_PARAMETERS`, a gitconfig file); `../x` is not one here,
+        // but `../../root` and `../../home/x` are.
+        let key_base = dir.as_deref().map(lexical).is_some_and(|b| {
+            let segs: Vec<&str> = b.split('/').collect();
+            let top = segs
+                .iter()
+                .rposition(|s| *s == "..")
+                .map(|i| segs.get(i + 1));
+            #[rustfmt::skip]
+            let home = top.is_none_or(|s| s.is_some_and(|s| matches!(*s, "root" | "home")));
+            key_root(&b) == 2 || key_root(&b) == 1 && home
+        });
+        let no_index = fallback || key_base || args.iter().any(|a| long_prefix(a, "--no-index", 6));
         if git && verb == "grep" && no_index {
             #[rustfmt::skip]
             const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
@@ -1560,25 +1610,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                     _ => roots.push(*a),
                 }
             }
-            // `-C dir` and `--work-tree dir` move where it searches: join them with each root.
-            let at = |b: &str, r: &str| match r.starts_with(['/', '~', '$']) {
-                true => r.to_string(),
-                false => format!("{b}/{r}"),
-            };
-            let (mut base, mut gi) = (None::<String>, args.iter());
-            while let Some(a) = gi.next() {
-                #[rustfmt::skip]
-                let v = match *a {
-                    "-C" | "--work-tree" => gi.next().copied(),
-                    "-c" | "--git-dir" | "--namespace" | "--exec-path" | "--config-env" => { gi.next(); None }
-                    _ if a.starts_with('-') => a.strip_prefix("--work-tree=").or_else(|| a.strip_prefix("-C").filter(|v| !v.is_empty())),
-                    _ => break,
-                };
-                if let Some(v) = v {
-                    base = Some(base.map_or(v.to_string(), |b| at(&b, v)));
-                }
-            }
-            let joined: Vec<String> = match &base {
+            let joined: Vec<String> = match &dir {
                 Some(b) if roots.is_empty() => vec![lexical(b)],
                 Some(b) => roots.iter().map(|r| lexical(&at(b, r))).collect(),
                 None => Vec::new(),
@@ -1701,7 +1733,10 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 .any(|a| matches!(*a, "-e" | "--regexp") || a.starts_with("--regexp="));
             for (j, a) in da.iter().enumerate() {
                 let prev = if j == 0 { "" } else { da[j - 1] };
-                let value = prev.starts_with("--") && !prev.contains('=');
+                // ugrep's `--pager` and `--view` take no next word.
+                #[rustfmt::skip]
+                let bare = name.starts_with('u') && (long_prefix(prev, "--pager", 5) || long_prefix(prev, "--view", 4));
+                let value = prev.starts_with("--") && !prev.contains('=') && !bare;
                 #[rustfmt::skip]
                 let pat = if e { matches!(prev, "-e" | "--regexp") || a.starts_with("--regexp=") }
                     else { !seen && !a.starts_with('-') && !value };
@@ -2965,8 +3000,8 @@ mod tests {
         ("grep -r x /*", true), ("grep -r x /r*", true), ("grep -r x /ro?t", true),
         ("grep -r x /home/b*", true), ("grep -r x /tmp/*", false), ("grep -r x src/*", false),
         // A pager or view is judged as a command run on a file; a shell there runs the output.
-        ("ugrep --view sops x f", true), ("ug --view=sops x f", true), ("ugrep --vi=sops x f", true),
-        ("ugrep --pager sops x f", true), ("ugrep --pager=sops x f", true), ("ack --pager sops x", true),
+        ("ugrep --view sops x f", false), ("ug --view=sops x f", true), ("ugrep --vi=sops x f", true),
+        ("ugrep --pager sops x f", false), ("ugrep --pager=sops x f", true), ("ack --pager sops x", true),
         ("ACK_PAGER=sh ack x", true), ("ack --pager=bash x", true), ("ugrep --pager=sh x f", true),
         ("ugrep --view=zsh x f", true), ("ack --pager=/bin/sh x", true), ("ack --pag dash x", true),
         ("ACK_PAGER_COLOR=/usr/bin/bash ack x", true), ("ACK_OPTIONS=--pager=sh ack x", true),
@@ -3027,6 +3062,29 @@ mod tests {
         ("LESSSECURE=0 ack x", true), ("LESS=-k ack x", true),
         ("export PAGER=cat; ack TODO src", false), ("PAGER=cat ugrep x src", false),
         ("LESS=-R ack x", false), ("PAGER='less -R' ack x", false),
+        // git grep on a key root falls back to no-index whatever the config says.
+        ("git -C ~ grep x", true), ("git -C ~/.config grep -e x", true),
+        ("GIT_CONFIG_PARAMETERS=\"'grep.fallbackToNoIndex=true'\" git -C ~ grep x", true),
+        ("GIT_CONFIG_GLOBAL=/tmp/g git -C /root grep x", true), ("git -C / grep x", true),
+        ("git config --global grep.fallbackToNoIndex true; git -C ~ grep x", true),
+        ("git --work-tree=~ grep x", true), ("git -C .. grep x", true), ("git -C~ grep x", true),
+        ("git grep x", false), ("git grep x src", false), ("git -C src grep x", false),
+        ("git -C ../other-repo grep x", false), ("git -C ~ grep x src", false),
+        ("git -C ~/projects/x grep x", false), ("git -C ../bosun grep x", false),
+        ("git -C ../../root grep x", true), ("git -C ../../home/user grep x", true),
+        ("git -C ../../home grep x", true),
+        // Vim and nvim init variables run commands in a ugrep view (`-Q`, `--query`, `--view`).
+        ("VIMINIT=':!sh' ugrep --view=vim x f", true), ("EXINIT='!sh' ug --view=vi x f", true),
+        ("export MYVIMRC=/tmp/e; ugrep --view=vim x f", true), ("GVIMINIT=x ug -Q x f", true),
+        ("XDG_CONFIG_HOME=/tmp/c ugrep --view=nvim x f", true), ("VIMRUNTIME=/tmp ug -rQ x", true),
+        ("EDITOR=sh ugrep --view x f", true), ("VISUAL='vim -c x' ug --view x f", true),
+        ("EDITOR=sh ugrep --query x", true), ("EDITOR=vim ugrep --view x f", false),
+        ("VIMINIT=x vim f", false), ("EDITOR=true ugrep x src", false),
+        ("XDG_CONFIG_HOME=/tmp/x ugrep x src", false), ("VIMINIT=x ack x", false),
+        // ugrep's pager and view take a value only with `=`; ack's pager takes the next word.
+        ("ugrep --pager TODO src", false), ("ugrep --view TODO src", false), ("ug --view x f", false),
+        ("ugrep --pag TODO src", false), ("ugrep --pager=sh x f", true), ("ug --view=zsh x f", true),
+        ("ugrep --vi=sh x f", true), ("ugrep --pag=sh x f", true), ("ack --pager sh x", true),
     ];
 
     #[test]
