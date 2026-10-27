@@ -56,8 +56,10 @@ High-risk PRs:
   is the decisive review's id). If the timeline cannot be read, has no matching event or a
   time does not parse, nothing counts as newer. With several owners, each owner's own newest
   decisive review decides for that owner's comment, and any owner's withdrawal blocks signed
-  and delegate approvals. A signature, owner or delegate, never ends a withdrawal: it carries
-  no time, so a re-posted old one would pass for new.
+  and delegate approvals. A v1 signature, owner or delegate, never ends a withdrawal: it carries
+  no time, so a re-posted old one would pass for new. A DISMISSED withdrawal (never a
+  CHANGES_REQUESTED one) ends also with a v2 owner signature, which names the dismissed review
+  (below).
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
   in its own container (never shared) and, on the owner's chat message, posts a PR comment whose
@@ -74,7 +76,8 @@ High-risk PRs:
   line 1 names that head. A signature for an old head, another PR or another repo does not
   verify. Each signature line is checked on its own; one that verifies is enough. A key stands
   for the owners: with no owners in `governance/owners.toml` at base, or while any owner's
-  newest decisive review on the head requests changes or was dismissed, a signed approval does not count. Heads
+  newest decisive review on the head requests changes, a signed approval does not count; while
+  one was dismissed, only a v2 signature (below) counts. Heads
   are 40-hex SHA-1, so a SHA-256 repo has the feature off. A missing or unreadable
   `.bosun/approvers.toml` turns the feature off. A malformed file (bad TOML,
   unknown fields, a duplicate or empty id, a key that is not 32 bytes of base64), an unknown
@@ -107,7 +110,27 @@ High-risk PRs:
   (`GITHUB_TOKEN`); `data.approved` lists `pr`, `head_sha`, `key_id`, `comment_id`. It trusts
   the head only from an `https://` or loopback `BOSUN_GITHUB_API` (else exit 1). It is exit 4
   while bosun is halted, `--print` included. The cloud refusal below does not apply with `--sign-key`. `--print`
-  puts the comment in `data.body` (with `pr`, `head_sha`, `key_id`, `role`) and posts nothing.
+  puts the comment in `data.body` (with `pr`, `head_sha`, `key_id`, `role`; `bodies` lists each `{after_review, body}`) and posts nothing. When an owner's decisive review on the head was dismissed (and
+  none requests changes), an owner key signs v2 for each dismissed owner review and posts one
+  comment per review (`data.approved[].after_review`); with `--as delegate` it is exit 3. A
+  request for changes is exit 3, nothing signed. Otherwise it signs v1.
+- Signed clearing of a dismissal (v2). The owner works from mobile chat, where only signatures
+  are possible, so a signature can be bound to the dismissal. The signed message is
+  `bosun-approve v2 <owner>/<repo>#<pr> <head_sha> after-review <review_id>` (same lowercasing),
+  and the comment's first line is `/bosun approve <head_sha> after-review <review_id>` (v1
+  comments and messages stay as above). `<review_id>` is the plain decimal id (no sign, no
+  leading zero, else the comment is ignored) of the owner's dismissed review that is decisive on
+  the head. When an owner's decisive review is DISMISSED, risk-check counts that withdrawal as
+  cleared only if all hold: a signature line verifies over the v2 message; its key is an
+  enrolled `owner` key (a delegate never clears); the head is the current head; `after-review`
+  equals the id of that owner's CURRENT decisive dismissed review; and the timeline shows that
+  review's dismissal (else nothing clears: fail closed). A v1 signature never clears. A v2
+  naming an older review id does not either, so a new request for changes plus a dismissal
+  invalidates every earlier signature, and a copy of an old v2 comment is no replay. With
+  several owners every dismissed owner review needs its own v2 (any owner's request for changes
+  still blocks all signatures). Outside a withdrawal a valid owner v2 is a normal signed
+  approval, `approved by key <id>`. The same trust-file and R-unseen exclusions apply. A
+  delegate has no v2.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate
@@ -197,8 +220,8 @@ High-risk PRs:
   `waiting` (the hint names only a newer APPROVED review) and refused with exit 3. One whose
   request was dismissed is in `waiting` too ("needs a fresh plain owner comment", that is
   `bosun approve <pr>@<head>`, "or a GitHub review") but an explicit `<pr>@<head>` is allowed:
-  it posts exactly the comment that ends the withdrawal. `--sign-key` refuses either kind
-  (exit 3, the fix names the plain-comment or review way). Otherwise the comment is always posted, also when one that
+  it posts exactly the comment that ends the withdrawal. `--sign-key` refuses a request for
+  changes (exit 3, the fix names the review way) and signs v2 after a dismissal (above). Otherwise the comment is always posted, also when one that
   counts (the owner test of risk-check: unedited, plain user token, exact text) already exists,
   because the new comment re-runs risk-check if its run was lost; `data.approved` marks that
   entry `"repost": true`. In a Claude cloud session (`CCR_AGENT_PROXY_ENABLED` is `1`, `true`,

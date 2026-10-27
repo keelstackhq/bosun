@@ -11,10 +11,12 @@ use serde_json::{Value, json};
 use super::ApproveArgs;
 use crate::app::App;
 use crate::app::{Result, kill_switch, main_red};
-use crate::cli::risk_check::{decisive_review, enrolled_keys, owner_comment, owner_logins};
+use crate::cli::risk_check::{
+    decisive_review, dismissed_review, enrolled_keys, owner_comment, owner_logins,
+};
 use crate::core::approve::{
     APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, in_cloud,
-    parse_target, readiness, signed_comment, signed_message,
+    parse_target, readiness, signed_comment, signed_message, signed_message_v2,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
@@ -42,7 +44,7 @@ const COMPARE_FILES_CAP: usize = 300;
 const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves again with a GitHub review, or another owner approves with a GitHub review";
 
 /// The same when that review was dismissed.
-const WITHDRAWN_DISMISSED: &str = "an owner's request for changes on this head was dismissed; it needs a fresh plain owner comment (`bosun approve <pr>@<head>`, with the owner token) or a GitHub review from that owner, or a GitHub review from another owner";
+const WITHDRAWN_DISMISSED: &str = "an owner's request for changes on this head was dismissed; it needs a fresh plain owner comment (`bosun approve <pr>@<head>`, with the owner token), a signature bound to the dismissed review (`bosun approve <pr>@<head> --sign-key <pem>`), or a GitHub review from that owner, or a GitHub review from another owner";
 
 /// Why an owner's approval of the head is withdrawn, if it is, and whether a fresh plain owner
 /// comment ends it (only after a dismissal). A request for changes wins.
@@ -444,11 +446,35 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             "show the owner the new head and sign it only on their word",
         ));
     }
-    if let Some((why, _)) = withdrawn(gh, &pull)? {
-        return Err(BosunError::conflict(
-            format!("PR #{pr}: a signature would not count, nothing was signed: {why}"),
-            "the owner posts a plain `/bosun approve <head>` comment (only after a dismissal) or submits a GitHub approving review; a signature cannot end a withdrawal",
-        ));
+    let role = match args.role.as_deref() {
+        Some("delegate") => Role::Delegate,
+        _ => Role::Owner,
+    };
+    // A request for changes, and any withdrawal for a delegate, cannot be signed away. After a
+    // dismissal an owner key signs v2, bound to each dismissed owner review (spec section 8).
+    let mut reviews = vec![None];
+    match withdrawn(gh, &pull)? {
+        Some((_, true)) if role == Role::Owner => {
+            let all = gh.list_reviews(pr)?;
+            reviews = owner_logins(gh, &pull.base_sha)?
+                .iter()
+                .filter_map(|o| dismissed_review(&all, o, &head))
+                .map(Some)
+                .collect();
+            if reviews.is_empty() || reviews.contains(&Some(0)) {
+                return Err(BosunError::conflict(
+                    format!("PR #{pr}: the dismissed review cannot be named, nothing was signed"),
+                    "the owner posts a plain `/bosun approve <head>` comment or submits a GitHub approving review",
+                ));
+            }
+        }
+        Some((why, _)) => {
+            return Err(BosunError::conflict(
+                format!("PR #{pr}: a signature would not count, nothing was signed: {why}"),
+                "the owner submits a GitHub approving review (or, after a dismissal, posts a plain `/bosun approve <head>` comment); only an owner key signs after a dismissal, and a request for changes ends only with a review",
+            ));
+        }
+        None => {}
     }
     let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
     let keys = enrolled_keys(gh).map_err(|why| {
@@ -459,10 +485,6 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             ),
         )
     })?;
-    let role = match args.role.as_deref() {
-        Some("delegate") => Role::Delegate,
-        _ => Role::Owner,
-    };
     let key = keys
         .into_iter()
         .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
@@ -489,18 +511,40 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
         ));
     }
     let key_id = key.id;
-    let msg = signed_message(role, &app.ctx.repo.owner, &app.ctx.repo.name, pr, &head);
-    let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
-    let body = signed_comment(&head, &key_id, &sig);
+    let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
+    let mut signed = Vec::new();
+    for after in reviews {
+        let msg = match after {
+            Some(r) => signed_message_v2(owner, repo, pr, &head, r),
+            None => signed_message(role, owner, repo, pr, &head),
+        };
+        let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
+        signed.push((after, signed_comment(&head, after, &key_id, &sig)));
+    }
     if args.print {
+        let all: Vec<Value> = (signed.iter())
+            .map(|(after, body)| json!({"after_review": after, "body": body}))
+            .collect();
         return Ok(Outcome::data(
-            json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(), "body": body}),
+            json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(),
+                "body": signed[0].1, "bodies": all}),
         ));
     }
-    let id = gh.add_comment(pr, &body)?.id;
-    Ok(Outcome::data(json!({"approved": [
-        {"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(), "comment_id": id}
-    ]})))
+    let mut approved = Vec::new();
+    for (after, body) in signed {
+        // The comments already posted stay listed when a later one fails.
+        let id = match gh.add_comment(pr, &body) {
+            Ok(c) => c.id,
+            Err(e) => return Err(e.with_data(json!({"approved": approved}))),
+        };
+        let mut entry = json!({"pr": pr, "head_sha": head, "key_id": key_id,
+            "role": role.name(), "comment_id": id});
+        if let Some(r) = after {
+            entry["after_review"] = json!(r);
+        }
+        approved.push(entry);
+    }
+    Ok(Outcome::data(json!({"approved": approved})))
 }
 
 /// An ed25519 key from a PKCS#8 PEM (`openssl genpkey -algorithm ed25519`). Errors name the
