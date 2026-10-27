@@ -1,0 +1,1 @@
+- decrypt-lock: a `git grep` whose `-C`/`--work-tree` base is a key root (`git -C ~ grep x`) is judged like `--no-index`, whatever config sets `grep.fallbackToNoIndex`; vim and nvim init variables, and ugrep's `EDITOR`/`VISUAL` view fallbacks, are judged when ack or ugrep runs; a bare ugrep `--pager` or `--view` no longer takes the next word as its command.
