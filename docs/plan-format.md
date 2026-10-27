@@ -56,8 +56,8 @@ The state machine, stop rules and resume.
 4. Text between the fields and `### Tasks` is the item's description; it goes into the epic body.
 5. `### Tasks` lists the tasks, one `- <ID>: <title>` bullet each. The task ID matches
    `^T[0-9]{1,3}$` and is unique in its item. Indented `key: value` lines under the bullet:
-   - `touch:` (required) comma-separated repo-relative globs (`*` inside a segment, `**` across
-     segments). They are the claim's touch paths. Only `*`, `?` and `**` are allowed: a glob with
+   - `touch:` (required) comma-separated repo-relative globs (`*` inside a segment, `**` as a whole
+     segment, across segments). They are the claim's touch paths. Only `*`, `?` and `**` are allowed: a glob with
      braces, character classes, escapes or `..` is a plan error.
      For the overlap and hotspot warnings below, a `Cargo.toml` also counts the `Cargo.lock` beside
      it and at the root, and a `package.json` counts `pnpm-lock.yaml` the same way. Claim, the
@@ -95,8 +95,13 @@ conflict to resolve. Cut the plan by file ownership:
 - Append-only lists live as one file per PR: CHANGELOG and PROGRESS entries are fragments in
   `changelog.d/` and `docs/progress.d/`. Never edit the folded files in a task.
 - A dependency change is its own task (touch the manifest and its lockfile). On a lockfile
-  conflict, regenerate it (`cargo update -w`, `pnpm install`); never merge it by hand.
+  conflict, take main's copy and regenerate it: `git checkout origin/main -- Cargo.lock` then
+  `cargo update -w` (for pnpm: `git checkout origin/main -- pnpm-lock.yaml` then `pnpm install`).
+  Never merge a lockfile by hand; the tools cannot read conflict markers.
 - Versions change only in release PRs.
+- Registries (`mod.rs`, `lib.rs`, a command list) are typical hotspots: let one early task add
+  stub modules for the whole item and own the registry, so later tasks only touch their own
+  files. Shared test helpers (`tests/common/**`) are another: extend them in that early task.
 - A file that many tasks need is a hotspot: give it to one early task, or split it first (as
   `docs/spec.md` was split into one file per section).
 
