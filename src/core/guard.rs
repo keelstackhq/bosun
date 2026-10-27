@@ -1111,12 +1111,15 @@ fn decrypt_reason(what: &str) -> String {
 const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
 /// Readers: their arguments are data (patterns, text).
 #[rustfmt::skip]
-const READERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "rg", "ag", "ack",
-    "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type"];
+const READERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "pcregrep",
+    "pcre2grep", "rg", "ag", "ack", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which",
+    "type"];
 /// The grep family; rg, ag, ack and rgrep always recurse, rg and ag skip hidden directories.
 #[rustfmt::skip]
-const SEARCHERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "rg", "ag",
-    "ack"];
+const SEARCHERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "pcregrep",
+    "pcre2grep", "rg", "ag", "ack"];
+/// Searchers whose options and environment run commands: only their pattern is data.
+const PAGED: &[&str] = &["ack", "ugrep", "ug"];
 #[rustfmt::skip]
 const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
     "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
@@ -1169,13 +1172,13 @@ fn sops_dir(w: &str) -> bool {
 }
 
 /// A path with `//`, `.` and `dir/..` collapsed, lexically (no fs). `..` stays after `~`, `$X`,
-/// a glob or another `..`, and `/..` is `/`.
+/// a glob or another `..`, and anywhere under `/proc` (its links are symlinks); `/..` is `/`.
 fn lexical(path: &str) -> String {
-    let abs = path.starts_with('/');
+    let (abs, proc) = (path.starts_with('/'), path.starts_with("/proc/"));
     let mut out: Vec<&str> = Vec::new();
     for s in path.split('/') {
-        let plain =
-            |l: &&str| *l != ".." && !l.starts_with(['~', '$']) && !l.contains(['*', '?', '[']);
+        #[rustfmt::skip]
+        let plain = |l: &&str| !proc && *l != ".." && !l.starts_with(['~', '$']) && !l.contains(['*', '?', '[']);
         match s {
             "" | "." => {}
             ".." if out.last().is_some_and(plain) => drop(out.pop()),
@@ -1192,17 +1195,31 @@ fn lexical(path: &str) -> String {
 }
 
 /// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
-/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), or a root above an unknown
-/// cwd (`..`); 1 for home or above it (`~`, `~user`, `/root`, `/home/<user>`, `/home`, `/`);
-/// 0 for anything else (`~/projects/x`).
+/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), or a pure `..` chain above
+/// an unknown place (`..`, `$PWD/..`); 1 for home or above it (`~`, `~user`, `/root`,
+/// `/home/<user>`, `/home`, `/`, `../bob`); 0 for anything else (`~/projects/x`, `../x/src`).
 fn key_root(word: &str) -> u8 {
     let n = lexical(word.trim_matches(|c| c == '"' || c == '\''));
     let word = n.as_str();
     let t = word.trim_end_matches('/');
-    if t == ".." || t.starts_with("../") {
-        return 2;
+    // A `..` left after `lexical` climbs from an unknown place: what follows the last one is
+    // judged as under an unknown home (`..` alone is above it, `../bob` may be a home).
+    let segs: Vec<&str> = t.split('/').collect();
+    if let Some(i) = segs.iter().rposition(|s| *s == "..") {
+        let tail = &segs[i + 1..];
+        return match tail.len() {
+            0 => 2,
+            _ if tail
+                .iter()
+                .any(|s| matches!(*s, ".config" | "sops" | "age")) =>
+            {
+                2
+            }
+            1 => 1,
+            _ => 0,
+        };
     }
-    let odd = t.contains("..") || t.contains(['*', '?', '[']);
+    let odd = t.contains(['*', '?', '[']);
     let under = |r: &str, own: &str| {
         r == own
             || r.strip_prefix(own)
@@ -1428,7 +1445,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // `bosun main-triage --run CMD` and `rg --pre CMD FILE` run a command.
         let run = match name.as_str() {
             "bosun" => long("--run").map(str::to_string),
-            "ack" | "ugrep" => long("--pager").map(str::to_string),
+            "ack" | "ugrep" | "ug" => long("--pager").map(str::to_string),
             "rg" => long("--pre").map(|c| format!("{c} FILE")),
             #[rustfmt::skip]
             "git" if verb == "grep" => long("--open-files-in-pager").or_else(|| args.iter().enumerate().find_map(|(i, a)| a.strip_prefix("-O").map(|v| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v }))).map(|c| format!("{c} FILE")),
@@ -1453,6 +1470,30 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                     _ => roots.push(*a),
                 }
             }
+            // `-C dir` and `--work-tree dir` move where it searches: join them with each root.
+            let at = |b: &str, r: &str| match r.starts_with(['/', '~', '$']) {
+                true => r.to_string(),
+                false => format!("{b}/{r}"),
+            };
+            let (mut base, mut gi) = (None::<String>, args.iter());
+            while let Some(a) = gi.next() {
+                #[rustfmt::skip]
+                let v = match *a {
+                    "-C" | "--work-tree" => gi.next().copied(),
+                    "-c" | "--git-dir" | "--namespace" | "--exec-path" => { gi.next(); None }
+                    _ if a.starts_with('-') => a.strip_prefix("--work-tree=").or_else(|| a.strip_prefix("-C").filter(|v| !v.is_empty())),
+                    _ => break,
+                };
+                if let Some(v) = v {
+                    base = Some(base.map_or(v.to_string(), |b| at(&b, v)));
+                }
+            }
+            let joined: Vec<String> = match &base {
+                Some(b) if roots.is_empty() => vec![lexical(b)],
+                Some(b) => roots.iter().map(|r| lexical(&at(b, r))).collect(),
+                None => Vec::new(),
+            };
+            roots.extend(joined.iter().map(String::as_str));
             if key_search(&roots, true, true) {
                 return Some(decrypt_reason("a search of the age key directory"));
             }
@@ -1515,7 +1556,22 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             {
                 return Some(decrypt_reason("the process environment"));
             }
-            continue;
+            // ack and ugrep take commands in options (`--pager`, `--view`, `--filter`, abbreviated)
+            // and from the environment, so only their pattern is data.
+            if !PAGED.contains(&name.as_str()) {
+                continue;
+            }
+            #[rustfmt::skip]
+            let filters = args.iter().enumerate().filter_map(|(i, a)| {
+                let (n, v) = a.split_once('=').map_or((*a, None), |(n, v)| (n, Some(v)));
+                (name.starts_with('u') && n.len() >= 6 && "--filter".starts_with(n)).then(|| v.or_else(|| args.get(i + 1).copied())).flatten()
+            });
+            for c in filters.flat_map(|f| f.split(',')) {
+                let c = c.split_once(':').map_or(c, |p| p.1);
+                if let Some(why) = decrypt_rule(c, depth + 1) {
+                    return Some(why);
+                }
+            }
         }
         #[rustfmt::skip]
         let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
@@ -1546,6 +1602,24 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 data[i] = true;
             } else if msg && w.starts_with('-') && opts.contains(&opt) {
                 (data[i], skip) = (true, !w.contains('='));
+            }
+        }
+        // ack and ugrep: the `-e`/`--regexp` values, else the first bare word that is not the
+        // value of a long option.
+        let paged = PAGED.contains(&name.as_str());
+        if paged {
+            let (a0, mut seen) = (segment.len() - rest.len() + 1, false);
+            let e = da
+                .iter()
+                .any(|a| matches!(*a, "-e" | "--regexp") || a.starts_with("--regexp="));
+            for (j, a) in da.iter().enumerate() {
+                let prev = if j == 0 { "" } else { da[j - 1] };
+                let value = prev.starts_with("--") && !prev.contains('=');
+                #[rustfmt::skip]
+                let pat = if e { matches!(prev, "-e" | "--regexp") || a.starts_with("--regexp=") }
+                    else { !seen && !a.starts_with('-') && !value };
+                seen |= pat;
+                data[a0 + j] |= pat;
             }
         }
         // Options run command strings: a word or option value with whitespace is a command.
@@ -1585,7 +1659,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
         }
         let off = segment.len() - rest.len();
-        for i in 0..if safe { 0 } else { rest.len() } {
+        for i in 0..if safe || paged { 0 } else { rest.len() } {
             if data[i + off] {
                 continue;
             }
@@ -2782,6 +2856,22 @@ mod tests {
         ("grep -r x /etc/../root/.config", true), ("rg x /etc/../root/.config/./sops", true),
         ("grep -r x /etc/../home/bob", true), ("rg x /tmp/../../..", false),
         ("grep -r x /root/../tmp", false), ("rg x src/../src", false), ("grep -r x ~/../bob", true),
+        ("ugrep --view='sops -d' x f", true), ("ugrep -Q --view='sops -d' x", true),
+        ("ugrep --filter='*:sh -c \"sops -d %\"' x f", true), ("ack --pag='sops -d f' x", true),
+        ("ack --page='sops -d f' x", true), ("ugrep --pag='sops -d f' x f", true),
+        ("ACK_PAGER='sops -d f' ack x", true), ("ACK_OPTIONS=\"--pager='sops -d f'\" ack x", true),
+        ("ack --pag 'sops -d f' x", true), ("ack 'a b' src", false), ("ack sops docs/", false),
+        ("ugrep -e 'sops -d' src", false), ("ugrep --filter='pdf:pdftotext % -' x f", false),
+        ("ugrep --filter='yaml:sops -d %' '' secrets.enc.yaml", true),
+        ("ugrep --filter=\"yaml:age -d -i k %\" x f.age", true),
+        ("grep -r x $PWD/..", true), ("rg x ${PWD}/../..", true), ("rg x \"$PWD/..\"", true),
+        ("rg x /proc/self/cwd/../..", true), ("rg x ..", true), ("rg x ../.config", true),
+        ("grep -r x ../bob/.config", true), ("grep -r x ../bosun", true),
+        ("grep -rn foo ../other-repo/src", false), ("rg x ../bosun/src", false),
+        ("git -C ~/.config grep --no-index -e x .", true), ("git -C ~ grep --no-index x", true),
+        ("git --work-tree=/root grep --no-index x", true), ("git -C src grep --no-index x", false),
+        ("ug -r x ~", true), ("pcregrep -r x ~/.config", true), ("pcre2grep -r x ~", true),
+        ("ug --pager='sops -d f' x f", true), ("pcregrep x f.txt", false), ("ug x src", false),
     ];
 
     #[test]
@@ -2792,8 +2882,14 @@ mod tests {
             ("/root/../tmp", 0),
             ("/..", 1),
             ("a/../..", 2),
-            ("../x", 2),
-            ("~/../bob", 2),
+            ("../x", 1),
+            ("~/../bob", 1),
+            ("../other/src", 0),
+            ("../.config", 2),
+            ("../a/sops", 2),
+            ("$PWD/..", 2),
+            ("${PWD}/../..", 2),
+            ("/proc/self/cwd/../..", 2),
             ("~root", 1),
             ("~root/.config/", 2),
             ("~+/src", 0),
