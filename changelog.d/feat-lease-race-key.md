@@ -1,1 +1,1 @@
-- A lease races pairwise with its first record since the last lease-end that overlaps the rival, so a lease that grew keeps its priority on its old globs, races at grow time for the added ones, and both sides of a race agree on the winner.
+- A lease race is decided per contested glob pair (each side counts from its earliest record that overlaps the other glob), so a grow keeps its priority on its old globs, races at grow time for the added ones, and the two sides never both win.

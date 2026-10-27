@@ -166,12 +166,14 @@ pub fn orchestrator_of(session: &str) -> &str {
 }
 
 /// The lease that beat a new lease in a claim race: a live lease, other than the new one, on
-/// the same issue or with overlapping touch paths, that wrote first. The two leases are compared
-/// pairwise, the same from both sides: the time of a lease is that of its session's earliest
-/// record since its last lease-end whose touch overlaps the other lease's current touch (else its
-/// first record). So a lease that grew keeps its priority on the globs it had, and races at the
-/// time of the grow for the globs it added. `issues` is the freshly read comments of the issues
-/// that may hold one.
+/// the same issue or with overlapping touch paths, that wrote first on a contested glob pair.
+/// For each pair of globs `g` (of the new lease's current touch) and `h` (of the rival's) that
+/// overlap, a lease counts from its session's earliest record since its last lease-end that has a
+/// glob overlapping the other's glob; the rival wins the pair when that time is earlier. Both
+/// sides compute the same two times per pair, so they can never both win. So a lease that grew
+/// keeps its priority on the globs it had and races at the time of the grow for the ones it
+/// added. Rivals on the same issue with no overlapping pair are compared by first record.
+/// `issues` is the freshly read comments of the issues that may hold one.
 pub fn race_winner(
     issue: u64,
     comment_id: u64,
@@ -185,37 +187,47 @@ pub fn race_winner(
             .flat_map(|(n, notes)| timed_leases_of(*n, notes))
     };
     let (mine, my_hist) = all().find(|(l, _)| l.issue == issue && l.comment_id == comment_id)?;
+    let my_globs = globs_of(&mine.touch);
     all()
         .filter(|(l, _)| l.is_live(now) && l.comment_id != comment_id)
         .filter(|(l, _)| {
-            l.issue == issue || {
-                let theirs = glob::parse_all(&l.touch).unwrap_or_else(|_| vec![everything()]);
-                glob::first_overlap(touch, &theirs).is_some()
-            }
+            l.issue == issue || glob::first_overlap(touch, &globs_of(&l.touch)).is_some()
         })
-        .map(|(l, hist)| {
-            let theirs = first_against(&hist, &mine.touch);
-            let key = first_against(&my_hist, &l.touch);
-            (theirs, key, l)
+        .filter_map(|(l, hist)| {
+            let their_globs = globs_of(&l.touch);
+            let pairs: Vec<_> = my_globs
+                .iter()
+                .flat_map(|g| their_globs.iter().map(move |h| (g, h)))
+                .filter(|(g, h)| g.overlaps(h))
+                .collect();
+            let first = |h: &History| h.first().map(|(at, id, _)| (*at, *id));
+            let times = if pairs.is_empty() {
+                vec![(first(&hist), first(&my_hist))]
+            } else {
+                pairs
+                    .into_iter()
+                    .map(|(g, h)| (earliest(&hist, g), earliest(&my_hist, h)))
+                    .collect()
+            };
+            times
+                .into_iter()
+                .filter_map(|(theirs, mine)| theirs.filter(|t| mine.is_none_or(|m| *t < m)))
+                .min()
+                .map(|t| (t, l))
         })
-        .filter(|(theirs, key, _)| theirs < key)
-        .min_by_key(|(theirs, _, _)| *theirs)
-        .map(|(_, _, l)| l)
+        .min_by_key(|(t, _)| *t)
+        .map(|(_, l)| l)
 }
 
-/// (time, id) of the earliest record in `hist` whose touch overlaps `other`; the first record
-/// when none does.
-fn first_against(hist: &History, other: &[String]) -> (Timestamp, u64) {
-    let theirs = glob::parse_all(other).unwrap_or_else(|_| vec![everything()]);
+fn globs_of(touch: &[String]) -> Vec<Glob> {
+    glob::parse_all(touch).unwrap_or_else(|_| vec![everything()])
+}
+
+/// (time, id) of the earliest record in `hist` with a glob that overlaps `other`.
+fn earliest(hist: &History, other: &Glob) -> Option<(Timestamp, u64)> {
     hist.iter()
-        .filter(|(_, _, t)| {
-            let own = glob::parse_all(t).unwrap_or_else(|_| vec![everything()]);
-            glob::first_overlap(&own, &theirs).is_some()
-        })
-        .chain(hist.first())
+        .find(|(_, _, t)| globs_of(t).iter().any(|g| g.overlaps(other)))
         .map(|(at, id, _)| (*at, *id))
-        .next()
-        .unwrap_or((Timestamp(0), 0))
 }
 
 fn everything() -> Glob {
@@ -434,6 +446,44 @@ mod tests {
                 .session,
             "z"
         );
+    }
+
+    #[test]
+    fn a_grow_loses_only_on_the_contested_glob() {
+        let at = |id, secs, r| {
+            let mut n = note(id, r);
+            n.created_at = Timestamp(secs);
+            n
+        };
+        let g = |ps: &[&str]| {
+            glob::parse_all(&ps.iter().map(|p| p.to_string()).collect::<Vec<_>>()).unwrap()
+        };
+        let exp = "2026-10-22T10:30:00Z";
+        // X r1@100 {a/**}; Y s1@150 {b/**}, grown s2@250 {b/**, a/x.rs}; X grows r2@260.
+        let both = ["src/a/**", "src/b/**"];
+        let issues = vec![
+            (
+                1,
+                vec![
+                    at(1, 100, lease("x", exp, &["src/a/**"])),
+                    at(4, 260, lease("x", exp, &both)),
+                ],
+            ),
+            (
+                2,
+                vec![
+                    at(2, 150, lease("y", exp, &["src/b/**"])),
+                    at(3, 250, lease("y", exp, &["src/b/**", "src/a/x.rs"])),
+                ],
+            ),
+        ];
+        // X's grow loses on src/b, to Y, whose lease keeps src/b.
+        let w = race_winner(1, 4, &g(&both), &issues, NOW).unwrap();
+        assert_eq!(w.session, "y");
+        // Y's grow (comment 3) loses on src/a/x.rs, which X has held since 100. Both grows
+        // lose; that only costs a retry, they can never both win.
+        let w = race_winner(2, 3, &g(&["src/a/x.rs"]), &issues, NOW).unwrap();
+        assert_eq!(w.session, "x");
     }
 
     #[test]
