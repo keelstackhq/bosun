@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P2a · symmetric race key: first lease record since the last lease-end · PR (feat/lease-race-key)

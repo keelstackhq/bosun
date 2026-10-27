@@ -1,0 +1,1 @@
+- 2026-10-27 · decrypt-lock roots · whole grep family and git grep --no-index judged by root; .. roots, ~user homes and lexical dir/.. resolution refused; /root/../tmp stays searchable · PR (fix/decrypt-lock-roots)

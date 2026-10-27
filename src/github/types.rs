@@ -109,6 +109,9 @@ pub struct Pull {
     pub merge_commit_sha: Option<String>,
     /// Number of commits in the PR; 0 when GitHub did not say.
     pub commits: u64,
+    /// GitHub's lazily computed `mergeable_state` (`dirty`, `clean`, ...); `None` for `null`,
+    /// and always `None` in lists (only the pull detail has it).
+    pub mergeable_state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +147,8 @@ struct RawPull {
     merge_commit_sha: Option<String>,
     #[serde(default)]
     commits: u64,
+    #[serde(default)]
+    mergeable_state: Option<String>,
 }
 
 impl From<RawPull> for Pull {
@@ -165,6 +170,7 @@ impl From<RawPull> for Pull {
             changed_files: r.changed_files,
             merge_commit_sha: r.merge_commit_sha,
             commits: r.commits,
+            mergeable_state: r.mergeable_state,
         }
     }
 }
@@ -186,6 +192,8 @@ pub struct PrFile {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Review {
+    #[serde(default)]
+    pub id: u64,
     #[serde(default, deserialize_with = "login")]
     pub user: String,
     pub state: String,
@@ -336,4 +344,61 @@ mod tests {
 pub struct Compare {
     pub status: String,
     pub files: Vec<PrFile>,
+    /// `merge_base_commit.sha` of the first page; `None` when GitHub sent none.
+    pub merge_base: Option<String>,
+    /// The file list may be incomplete: 300 or more files (GitHub's cap), or the page limit hit.
+    pub truncated: bool,
+}
+
+/// A git commit object (`GET /git/commits/{sha}`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GitCommit {
+    pub sha: String,
+    /// The sha of the commit's root tree.
+    pub tree: String,
+    pub parents: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct Sha {
+    sha: String,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RawGitCommit {
+    sha: String,
+    tree: Sha,
+    parents: Vec<Sha>,
+}
+
+impl From<RawGitCommit> for GitCommit {
+    fn from(r: RawGitCommit) -> GitCommit {
+        GitCommit {
+            sha: r.sha,
+            tree: r.tree.sha,
+            parents: r.parents.into_iter().map(|p| p.sha).collect(),
+        }
+    }
+}
+
+/// A git tree read recursively (`GET /git/trees/{sha}?recursive=1`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GitTree {
+    /// The root sha GitHub returned.
+    pub sha: String,
+    /// GitHub cut the listing short; the entries are incomplete.
+    pub truncated: bool,
+    #[serde(rename = "tree")]
+    pub entries: Vec<TreeEntry>,
+}
+
+/// One tree entry; every field is required, none is defaulted.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct TreeEntry {
+    pub path: String,
+    pub mode: String,
+    /// `blob`, `tree` or `commit` (GitHub's `type`).
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub sha: String,
 }
