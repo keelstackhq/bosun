@@ -80,11 +80,13 @@ Conflict avoidance (three layers):
    restrict `S`, so a wave orchestrator and its agents are not restricted by the hook (`bosun pr`
    checks them). Always allowed: a file not on the default branch (`origin/HEAD`, `origin/main` or
    `origin/master`; with none of them every file counts as new), fragments under `changelog.d/` and
-   `docs/progress.d/`, and paths outside the repo after `.` and `..` are resolved lexically. Before
+   `docs/progress.d/`, and paths outside the repo. The edited path is canonicalised when the file (or, for a new file, its parent) exists, so symlinks and `link/../x` are judged by their real target; a path whose real target lies outside the repo counts as outside; else `.` and `..` are resolved lexically. Before
    it denies, the hook re-reads the leases from GitHub once, bypassing and refreshing the cache, and
    denies only if the fresh view still denies; the fix names `bosun claim <issue> --touch <path>`. A
-   bad glob in an own lease covers nothing. Case-insensitive file systems and symlinks are not
-   resolved (known limit).
+   bad glob in an own lease covers nothing. Known limits: case-insensitive file systems are not
+   handled; a stale `origin/<default>` (a file added upstream since the last fetch) counts that
+   file as new; a new file under a symlinked directory whose parent does not exist yet is judged
+   lexically.
    The label-lock skips the read-only GitHub MCP tools on an explicit allowlist (`READ_ONLY_GITHUB` in `core::guard`; a tool not on it, even `get_*` or `list_*`, is judged like a write), and treats the body of a heredoc as data: in an unquoted body only the command substitutions (`$( )`, backticks) are judged as commands. Anything the guard cannot parse safely is refused as before: a body with `$name` or `${`, a substitution with a quote, `#`, `<<`, a newline, a backslash or `case`, an unterminated substitution, or a line ending in a backslash (bash joins it with the next line before it looks for the delimiter).
    The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`). Its default-branch rules (commit, merge, rebase, reset, cherry-pick, plain push) read the branch where git acts: the hook's directory moved by a `cd dir` joined with `&&`, `;` or a newline, and by `git -C dir`, `--git-dir` and `--work-tree`; a `cd` counts only when the shell surely runs it here (after the start, `;`, a newline, or in an `&&` chain that reaches the git command; never in a pipeline or a `( .. )` group); a directory it cannot read literally (`$VAR`, `~`, `cd -`), a moved target git cannot read (a failed `cd`), or `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` count as the default branch. Branch protection stays the real guard, since a hook cannot see every shell trick.
 
@@ -99,7 +101,7 @@ The hook sees only the plain session id, so a session `S` may also edit the path
 Claim and spawn re-check after writing: a fresh claim sets the state `claimed` first (it relies on the label-filtered issue list reflecting that at once), posts the lease, then lists
 the active issues anew and re-reads their comments (so of two ready tasks claimed at the same time the later
 listing sees the other), and when a live overlapping lease has an earlier comment (creation time, then comment id) they
-post `lease-end` with reason `lost-race`, exit 3 naming the winner and, for a claim lost to another task, set the state back to `ready` (only while it is still exactly `claimed` with no other live lease; a failed revert stays exit 3 with `data.revert_failed`, and `bosun reap` resets a claimed or building task with no live lease whose newest lease record is a `lost-race` lease-end and whose issue was last updated over 10 minutes ago). A claim that dies between the state change and the lease leaves a `claimed` task with no lease record: a known limit, `bosun release` fixes it.
+post `lease-end` with reason `lost-race`, exit 3 naming the winner and, for a claim lost to another task, set the state back to `ready` (only while it is still exactly `claimed` with no other live lease; after the `ready` write the comments are read once more, and a live lease of another session that appeared meanwhile (a third claimer that won) gets the state set back to `claimed`, best effort with a stderr note; a failed revert stays exit 3 with `data.revert_failed`, and `bosun reap` resets a claimed or building task with no live lease whose newest lease record is a `lost-race` lease-end and whose issue was last updated over 10 minutes ago). A claim that dies between the state change and the lease leaves a `claimed` task with no lease record: a known limit, `bosun release` fixes it.
 A race is decided per contested glob pair: for each glob of the new lease that overlaps a glob of
 a rival, a lease counts from its session's earliest lease record on its issue since its last
 lease-end that has a glob overlapping the other's glob, and the new lease loses if the rival is

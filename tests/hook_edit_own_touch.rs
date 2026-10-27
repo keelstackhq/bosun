@@ -147,3 +147,27 @@ fn a_file_counts_as_new_unless_it_is_on_the_base_branch() {
     git(r, &["update-ref", "-d", "refs/remotes/origin/main"]);
     assert_eq!(edit(&fake, r, "src/cli/b.rs"), None);
 }
+
+#[cfg(unix)]
+#[test]
+fn paths_are_judged_by_their_real_target() {
+    let (fake, tmp) = setup("session_me", "src/core/**");
+    let r = tmp.path();
+    // A link inside the touch to a file outside it: the real target decides.
+    std::os::unix::fs::symlink(r.join("src/cli/b.rs"), r.join("src/core/l.rs")).unwrap();
+    let why = edit(&fake, r, "src/core/l.rs").expect("link to a file outside the touch");
+    assert!(
+        why.starts_with("src/cli/b.rs is outside your lease"),
+        "{why}"
+    );
+    // `link/../x`: `..` follows the real directory (src/cli), not the lexical one.
+    std::os::unix::fs::symlink(r.join("src/cli"), r.join("src/core/link")).unwrap();
+    let why = edit(&fake, r, "src/core/link/../cli/b.rs");
+    assert!(why.is_some_and(|w| w.starts_with("src/cli/b.rs is outside")));
+    assert_eq!(edit(&fake, r, "src/core/link/../core/a.rs"), None);
+    // A link to a file outside the repo counts as outside: allowed.
+    let out = tempfile::tempdir().unwrap();
+    fs::write(out.path().join("o.rs"), "x").unwrap();
+    std::os::unix::fs::symlink(out.path().join("o.rs"), r.join("src/cli/o.rs")).unwrap();
+    assert_eq!(edit(&fake, r, "src/cli/o.rs"), None);
+}

@@ -151,6 +151,35 @@ fn losing_to_a_task_claimed_at_the_same_time_reverts_to_ready() {
 }
 
 #[test]
+fn a_third_claimer_that_won_in_the_meantime_gets_its_claimed_state_back() {
+    let fake = FakeGithub::start();
+    ready(&fake, 10);
+    ready(&fake, 11);
+    rival_claims_11(&fake, "2000-01-01T00:00:00Z");
+    // Right after our `ready` label write, a third session leases #10 (it saw `claimed` earlier).
+    fake.after_requests("/issues/10/labels", 1, |s| {
+        s.hooks.push(common::fake::Hook::at_next_request(|s| {
+            s.comments.push(FakeComment {
+                id: 70,
+                issue: 10,
+                body: lease_note("session_x", "2026-10-22T10:30:00Z", "src/b/**"),
+                user: "octocat".into(),
+                created_at: "2030-01-01T00:00:00Z".into(),
+                updated_at: "2030-01-01T00:00:00Z".into(),
+                via_app: None,
+                no_app_field: false,
+                association: "MEMBER".into(),
+            });
+        }));
+    });
+    let (code, v) = run(&fake, "session_a", T0, &["claim", "10"]);
+    assert_eq!(code, 3, "{v}");
+    let labels = fake.labels_of(10);
+    assert!(labels.contains(&"bosun:state/claimed".into()), "{labels:?}");
+    assert!(!labels.contains(&"bosun:state/ready".into()), "{labels:?}");
+}
+
+#[test]
 fn winning_against_a_later_claim_made_at_the_same_time() {
     let fake = FakeGithub::start();
     ready(&fake, 10);

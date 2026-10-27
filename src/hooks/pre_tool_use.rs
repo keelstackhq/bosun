@@ -109,8 +109,7 @@ fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
 
 /// Whether `rel` is on the default branch (`origin/HEAD`, else `origin/main`, else
 /// `origin/master`): a file added on this branch counts as new, so Write then Edit works. With
-/// no such ref the file counts as new (fail open). Known limits: case-insensitive file systems
-/// and symlinks are not resolved.
+/// no such ref the file counts as new (fail open). Known limit: case-insensitive file systems.
 fn on_base(root: &Path, rel: &str) -> bool {
     let known = |r: &str| git_out(root, &["rev-parse", "--verify", "--quiet", r]).is_some();
     let head = git_out(
@@ -132,8 +131,8 @@ fn on_base(root: &Path, rel: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// `path` relative to the repo root, `.` and `..` resolved lexically; `None` when it lies
-/// outside the repo.
+/// `path` relative to the repo root, resolved with `canonicalize` when the file or its parent
+/// exists, else `.` and `..` lexically; `None` when it lies outside the repo.
 fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
     use std::path::Component;
     let p = Path::new(path);
@@ -142,6 +141,17 @@ fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
     } else {
         cwd.join(p)
     };
+    // The real path first, so symlinks and `link/../x` are judged by their target: the file
+    // itself, else (a new file) its existing parent. Outside the repo: not a claimable path.
+    let real = joined.canonicalize().ok().or_else(|| {
+        let parent = joined.parent()?.canonicalize().ok()?;
+        Some(parent.join(joined.file_name()?))
+    });
+    if let Some(real) = real {
+        let r = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let text = real.strip_prefix(&r).ok()?.to_str()?.replace('\\', "/");
+        return (!text.starts_with("..")).then_some(text);
+    }
     let mut abs = std::path::PathBuf::new();
     for c in joined.components() {
         match c {
