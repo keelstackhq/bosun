@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P2c · two ready tasks claimed at the same time with overlapping touch no longer both win: claim sets the state, then re-lists the active issues for the race check; a loser goes back to ready · PR (fix/claim-race-fresh)

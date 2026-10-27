@@ -14,6 +14,20 @@ fn read(path: &str) -> String {
     fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap()
 }
 
+/// The committed copy of `path` (HEAD), else the working-tree file. CI puts the base's `.bosun/`
+/// over the checkout before the gates, so a PR that changes the built-in rules and
+/// `.bosun/risk.toml` together is judged on what it commits.
+fn committed(path: &str) -> String {
+    std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{path}")])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_else(|| read(path))
+}
+
 #[test]
 fn bosun_toml_and_limits_parse() {
     let config = Config::parse(&read(".bosun/bosun.toml"), ".bosun/bosun.toml").unwrap();
@@ -96,7 +110,7 @@ fn shipped_rules_have_the_decided_approval_class() {
 
 #[test]
 fn builtin_rules_equal_the_repo_rules() {
-    let repo = Rules::parse(&read(".bosun/risk.toml")).unwrap();
+    let repo = Rules::parse(&committed(".bosun/risk.toml")).unwrap();
     let built = Rules::defaults();
     assert_eq!(repo.rules.len(), built.rules.len());
     for (a, b) in repo.rules.iter().zip(&built.rules) {

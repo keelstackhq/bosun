@@ -1,0 +1,1 @@
+- 2026-10-27 Markers-lock follow-up: several method flags count as a write if any is one; graphql `@file` gap documented.
