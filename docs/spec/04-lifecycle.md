@@ -81,6 +81,13 @@ The hook sees only the plain session id, so a session `S` may also edit the path
 Claim and spawn re-check after writing: they re-read the comments of the claimed issue and the active
 issues, and when a live overlapping lease has an earlier comment (creation time, then comment id) they
 post `lease-end` with reason `lost-race`, leave the state alone and exit 3 naming the winner.
+A race is decided per contested glob pair: for each glob of the new lease that overlaps a glob of
+a rival, a lease counts from its session's earliest lease record on its issue since its last
+lease-end that has a glob overlapping the other's glob, and the new lease loses if the rival is
+earlier on any pair. So a grow keeps its priority on the globs it had and races at grow time for the
+globs it added; both sides compute the same times per pair, so they never both win (both may lose and
+retry). Known limit: a lease that
+expired without a `lease-end` (not yet reaped) keeps its older records in that history.
 
 Trust in records: a `{"bosun":…}` record in a comment is trusted from any commenter with write access to the repo; bosun does not check who wrote it. Checks that do not rely on records: commit statuses (`ci-ok`, `risk-check`, `review-verdict`, `main-open`), and the files read from the base or default branch (`docs/lessons.toml`, `REVIEW.md`, `.bosun/limits.toml`). A `spend` record with a negative or non-finite amount is ignored. A delta review (`since_sha` of `review-pack`) needs the `verdict` record and a successful `review-verdict` status on that sha (records on heads without one are skipped), and the sha must be an ancestor of the head and a commit of this PR; otherwise the review is full.
 
