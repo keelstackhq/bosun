@@ -12,7 +12,7 @@ use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, tas
 use crate::core::lease::leases_of;
 use crate::core::meta::{TaskMeta, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
-use crate::core::state::{State, state_of};
+use crate::core::state::{State, labels_to_remove, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::Timestamp;
@@ -243,6 +243,47 @@ impl Importer<'_> {
         })
     }
 
+    /// Epics that `reap` closed as complete (closed and done) that have an open task again open
+    /// as `ready`. Decided from this run's slots, with no list call (GitHub's list lags): a task
+    /// slot not merged and not closed, or one `reconcile` reopened (`reopened`, plan ids).
+    /// Returns the plan ids of the epics (would-be ones in a dry run).
+    fn reopen_done_epics(&mut self, reopened: &[String]) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for k in 0..self.epics.len() {
+            let e = self.epics[k].clone();
+            let Some(number) = e.issue.filter(|_| e.closed && e.merged) else {
+                continue;
+            };
+            let live = self.tasks.iter().any(|t| {
+                t.id.split('/').next() == Some(e.id.as_str())
+                    && !t.merged
+                    && (!t.closed || reopened.contains(&t.id))
+            });
+            if !live {
+                continue;
+            }
+            if !self.dry {
+                let labels = self.issues.iter().find(|i| i.number == number);
+                let labels = labels.map(|i| i.labels.clone()).unwrap_or_default();
+                let ready = State::Ready.label();
+                self.gh.ensure_label(&ready, "ededed", "bosun task state")?;
+                let open = IssuePatch {
+                    state: Some(PatchState::Open),
+                    ..IssuePatch::default()
+                };
+                self.gh.update_issue(number, open)?;
+                for l in labels_to_remove(&labels, State::Ready) {
+                    self.gh.remove_label(number, &l)?;
+                }
+                self.gh.add_labels(number, &[&ready])?;
+                self.epics[k].closed = false;
+                self.epics[k].state = Some("ready".into());
+            }
+            out.push(e.id);
+        }
+        Ok(out)
+    }
+
     /// Once the plan task of an item merged, the epic and the tasks this plan made move from
     /// `planned` to `ready`. Adopted hand-made issues are never touched.
     fn promote(&mut self, epic: &Slot, pslot: &Slot, tasks: &[Slot]) -> Result<()> {
@@ -411,6 +452,31 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
             }
             Err(e) => return Err(e.with_data(data)),
         }
+    }
+    let again: Vec<String> = data["reopened"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(data["would_reopen"].as_array().into_iter().flatten())
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    let epics = imp
+        .reopen_done_epics(&again)
+        .map_err(|e| e.with_data(data.clone()))?;
+    if !epics.is_empty() {
+        let key = if a.dry_run {
+            "would_reopen"
+        } else {
+            "reopened"
+        };
+        data["epics"] = imp
+            .epics
+            .iter()
+            .map(|e| e.json(epics.contains(&e.id)))
+            .collect();
+        let mut all = data[key].as_array().cloned().unwrap_or_default();
+        all.extend(epics.iter().map(|id| json!(id)));
+        data[key] = Value::Array(all);
     }
     Ok(Outcome::data(data))
 }
