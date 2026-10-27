@@ -232,13 +232,11 @@ fn finding(
 
 pub fn run(req: &Request) -> CmdResult {
     // Compare with the merge base: a branch behind its base must not look like it lost tests.
+    // The diff runs to the working tree, so staged and unstaged edits of tracked files count.
     let merge_base = git(req.root, &["merge-base", req.base, "HEAD"])?
         .trim()
         .to_string();
-    let diff = git(
-        req.root,
-        &["diff", "--name-status", "-M", &merge_base, "HEAD"],
-    )?;
+    let diff = git(req.root, &["diff", "--name-status", "-M", &merge_base])?;
     let kits = kits(req.root, req.stacks)?;
     // Each side is read with the kit of the innermost stack holding its own path.
     let is_test_file = |p: &str, t: &str| kit_for(&kits, p).is_test_file(p, t);

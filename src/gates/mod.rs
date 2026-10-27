@@ -108,12 +108,48 @@ fn under_stack(path: &str, changed: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Files with staged, unstaged or untracked changes, relative to the repo root. A git failure
+/// (a repo without HEAD) is noted on stderr and counts as none: the committed diff decides then.
+fn uncommitted(root: &Path) -> Vec<String> {
+    let mut files: Vec<String> = Vec::new();
+    for args in [
+        &["diff", "--name-only", "HEAD"][..],
+        &["ls-files", "--others", "--exclude-standard", "--full-name"][..],
+    ] {
+        let out = git(root, args).unwrap_or_else(|e| {
+            eprintln!("bosun gate: cannot list uncommitted files ({e}); using the commits only");
+            String::new()
+        });
+        for f in out.lines() {
+            if !files.iter().any(|x| x == f) {
+                files.push(f.to_string());
+            }
+        }
+    }
+    files
+}
+
 pub fn run(req: &Request) -> CmdResult {
     let range = format!("{}...HEAD", req.base);
-    let changed: Vec<String> = git(req.root, &["diff", "--name-only", &range])?
+    let mut changed: Vec<String> = git(req.root, &["diff", "--name-only", &range])?
         .lines()
         .map(String::from)
         .collect();
+    // Work not yet committed selects the gate too, so a run before the first commit does not
+    // report a green skip; `data.uncommitted` tells the caller it ran on such work.
+    let dirty: Vec<String> = uncommitted(req.root)
+        .into_iter()
+        .filter(|f| {
+            req.stacks
+                .iter()
+                .any(|s| !under_stack(&s.path, std::slice::from_ref(f)).is_empty())
+        })
+        .collect();
+    for f in &dirty {
+        if !changed.contains(f) {
+            changed.push(f.clone());
+        }
+    }
 
     let mut plan: Vec<(&Stack, Profile, Vec<String>)> = Vec::new();
     for stack in req.stacks {
@@ -128,6 +164,7 @@ pub fn run(req: &Request) -> CmdResult {
         return Ok(Outcome::data(json!({
             "gate": req.gate, "stack": null, "command": [], "packages": [],
             "exit_status": 0, "secs": 0.0, "over_budget": false, "skipped": true,
+            "uncommitted": dirty,
         })));
     }
 
@@ -165,6 +202,7 @@ pub fn run(req: &Request) -> CmdResult {
     if runs.len() > 1 {
         data["runs"] = Value::Array(runs);
     }
+    data["uncommitted"] = json!(dirty);
     match failed {
         None => Ok(Outcome::data(data)),
         Some(code) => Err(BosunError::error(
@@ -215,8 +253,9 @@ fn execute(
 
     let diff = if gate.needs_diff() {
         let path = std::env::temp_dir().join(format!("bosun-gate-{}.diff", std::process::id()));
-        let range = format!("{}...HEAD", req.base);
-        let text = git(req.root, &["diff", &range])?;
+        // From the merge base to the working tree: staged and unstaged edits count too.
+        let merge_base = git(req.root, &["merge-base", req.base, "HEAD"])?;
+        let text = git(req.root, &["diff", merge_base.trim()])?;
         std::fs::write(&path, text).map_err(|e| {
             BosunError::error(
                 format!("cannot write {}: {e}", path.display()),

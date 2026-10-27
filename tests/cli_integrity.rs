@@ -297,3 +297,18 @@ fn stdout_is_one_json_object() {
     assert_eq!(v["command"], "gate");
     assert_eq!(v["data"]["files_checked"], 0);
 }
+
+#[test]
+fn uncommitted_changes_to_tracked_tests_are_checked() {
+    let r = repo();
+    r.edit("src/lib.rs", "pub fn f() { /* x */ }\n");
+    // Staged weakening and an unstaged deletion, none committed.
+    r.put("tests/t.rs", "#[test]\nfn t() {\n    assert!(true);\n}\n");
+    git(&r.root, &["add", "tests/t.rs"]);
+    fs::remove_file(r.root.join("tests/u.rs")).unwrap();
+    let (code, v) = r.check(&[]);
+    assert_eq!(code, 1, "{v}");
+    let mut k = kinds(&v);
+    k.sort();
+    assert_eq!(k, vec!["deleted-test", "fewer-asserts"], "{v}");
+}
