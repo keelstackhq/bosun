@@ -1,0 +1,1 @@
+- `docs/plan-format.md` explains how to cut tasks by file ownership so parallel PRs never conflict; AGENTS.md and the channel's agents section point to it.

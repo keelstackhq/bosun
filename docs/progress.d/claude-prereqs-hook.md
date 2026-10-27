@@ -1,0 +1,1 @@
+- 2026-10-27 · Q3d · prereqs-lock in the PreToolUse hook · PR (claude/prereqs-hook)

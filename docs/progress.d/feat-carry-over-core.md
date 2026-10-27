@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P9a · core::carry: the pure carry-over rule (rules 1-4) · PR (feat/carry-over-core)

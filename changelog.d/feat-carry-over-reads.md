@@ -1,0 +1,1 @@
+- `github`: reads for git commits, recursive trees and the compare merge base, with a truncation flag on compare.
