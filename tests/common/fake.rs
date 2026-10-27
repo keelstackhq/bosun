@@ -124,6 +124,18 @@ pub struct Hook {
     run: Option<Mutation>,
 }
 
+impl Hook {
+    /// A hook that runs before the very next request, whatever its path.
+    pub fn at_next_request(f: impl FnOnce(&mut State) + Send + 'static) -> Self {
+        Hook {
+            suffix: String::new(),
+            at: 0,
+            seen: 0,
+            run: Some(Box::new(f)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Logged {
     pub method: String,

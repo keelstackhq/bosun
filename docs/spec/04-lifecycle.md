@@ -96,9 +96,10 @@ on the issue being claimed is the same claim (a re-claim is idempotent). Give ea
 blocks picks that overlap their touch paths. The edit hook keeps the session rule (an agent may edit
 paths its orchestrator `S` leased), a known limit: without per-task ids it cannot tell wave agents apart.
 The hook sees only the plain session id, so a session `S` may also edit the paths of leases held under `S/<task>`; `S/x` and `S/y` still block each other.
-Claim and spawn re-check after writing: they re-read the comments of the claimed issue and the active
-issues, and when a live overlapping lease has an earlier comment (creation time, then comment id) they
-post `lease-end` with reason `lost-race`, leave the state alone and exit 3 naming the winner.
+Claim and spawn re-check after writing: a fresh claim sets the state `claimed` first (it relies on the label-filtered issue list reflecting that at once), posts the lease, then lists
+the active issues anew and re-reads their comments (so of two ready tasks claimed at the same time the later
+listing sees the other), and when a live overlapping lease has an earlier comment (creation time, then comment id) they
+post `lease-end` with reason `lost-race`, exit 3 naming the winner and, for a claim lost to another task, set the state back to `ready` (only while it is still exactly `claimed` with no other live lease; a failed revert stays exit 3 with `data.revert_failed`, and `bosun reap` resets a claimed or building task with no live lease whose newest lease record is a `lost-race` lease-end and whose issue was last updated over 10 minutes ago). A claim that dies between the state change and the lease leaves a `claimed` task with no lease record: a known limit, `bosun release` fixes it.
 A race is decided per contested glob pair: for each glob of the new lease that overlaps a glob of
 a rival, a lease counts from its session's earliest lease record on its issue since its last
 lease-end that has a glob overlapping the other's glob, and the new lease loses if the rival is
