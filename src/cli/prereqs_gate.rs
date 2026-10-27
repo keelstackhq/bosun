@@ -34,6 +34,7 @@ pub(crate) fn open_items(
     plan_path: &str,
     wants: &dyn Fn(&[String]) -> bool,
 ) -> Result<Option<(String, Vec<Held>)>> {
+    super::prereqs::check_plan_path(plan_path).map_err(|e| closed(plan_path, e.message))?;
     let branch = default_branch(gh)?;
     let Some(text) = gh.file_at(plan_path, &branch)? else {
         return Err(closed(

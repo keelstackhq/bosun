@@ -24,7 +24,7 @@ fn plan(blocks: &str, verify: &str) -> String {
 fn line(id: &str, tick: bool, api_ok: bool) -> String {
     let b = if tick { "x" } else { " " };
     let v = if api_ok { "api ok" } else { "owner" };
-    let sum = digest("token", "add it", "owner");
+    let sum = digest("token", "add it", "owner", "owner");
     format!("- [{b}] **{id}** thing <!-- bosun:prereq {id} sum={sum} state={v} -->")
 }
 
@@ -174,7 +174,7 @@ fn spawn_of_an_epic_blocked_as_a_whole_is_exit_5() {
 #[test]
 fn a_403_tick_a_stale_sum_and_a_misspelt_heading() {
     let api = plan("M1", "secret release/NPM_TOKEN");
-    let sum = digest("token", "add it", "secret release/NPM_TOKEN");
+    let sum = digest("token", "add it", "secret release/NPM_TOKEN", "owner");
     for (ticked, want) in [(false, 5), (true, 0)] {
         let fake = setup(&api);
         fake.fail_path("secrets/NPM_TOKEN", 403);
@@ -184,7 +184,8 @@ fn a_403_tick_a_stale_sum_and_a_misspelt_heading() {
         assert_eq!(claim(&fake, "11").0, want, "a 403 falls back to the tick");
     }
     let fake = setup(&plan("M1", "owner"));
-    let stale = line("H1", true, false).replace(&digest("token", "add it", "owner"), "00000000");
+    let stale =
+        line("H1", true, false).replace(&digest("token", "add it", "owner", "owner"), "00000000");
     checklist(&fake, 20, "plans/x.md", &[stale]);
     assert_eq!(claim(&fake, "11").0, 5, "a tick on a stale sum");
     let fake = setup(&plan("M1", "owner").replace("## Prerequisites", "## Pre-requisites"));
@@ -203,4 +204,19 @@ fn only_items_that_block_the_target_count() {
     fake.comment(1, join);
     let (code, v) = run(&fake, "session_a", NOW, &["spawn", "10"]);
     assert_ne!(code, 5, "a task-level block does not hold the epic: {v}");
+}
+
+#[test]
+fn a_plan_path_that_could_break_a_marker_fails_closed() {
+    let fake = setup(&plan("M1", "owner"));
+    let epic = r#"<!-- bosun:epic {"item":"M1","plan":"plans/x y.md"} -->"#;
+    fake.state
+        .lock()
+        .unwrap()
+        .issues
+        .iter_mut()
+        .find(|i| i.number == 10)
+        .unwrap()
+        .body = epic.into();
+    assert_eq!(claim(&fake, "11").0, 5);
 }
