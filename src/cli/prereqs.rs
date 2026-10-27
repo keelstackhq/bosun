@@ -69,6 +69,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         let plan = plan::parse(&text).map_err(|e| plan_errors(file, &e))?;
         let prereqs = pq::parse(&text, &plan).map_err(|e| plan_errors(file, &e))?;
         let plan_path = plan_key(file, &base, &roots);
+        check_plan_path(&plan_path)?;
         let marker = pq::issue_marker(&plan_path);
         let issue = existing.iter().find(|i| i.body_text().starts_with(&marker));
         let ticks = issue.map_or_else(Vec::new, |i| pq::read_issue(i.body_text()));
@@ -84,6 +85,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
                     let state = if p.verify == Verify::Owner {
                         "owner"
                     } else {
+                        it.verify += " (bosun cannot read it: your tick decides)";
                         "api 403"
                     };
                     (state.into(), pq::ticked(&ticks, &it.id, &it.sum))
@@ -157,6 +159,18 @@ fn post(
     };
     gh.update_issue(i.number, patch)?;
     Ok(Some((i.number, false)))
+}
+
+/// A plan path goes into the checklist issue's marker: plain repo-relative text only.
+pub(crate) fn check_plan_path(p: &str) -> Result<()> {
+    let bad = p.contains("--") || p.contains('<') || p.contains(char::is_whitespace);
+    if bad || crate::core::text::has_hidden(p) || p.is_empty() {
+        return Err(BosunError::usage(
+            format!("plan path `{}` is not a plain file path", p.escape_debug()),
+            "name the plan file with a plain repo-relative path, such as plans/bosun.md",
+        ));
+    }
+    Ok(())
 }
 
 /// `Some(found)` when the API answered, `None` when it did not (owner, or a 403).
