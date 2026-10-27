@@ -24,6 +24,12 @@ pub enum BaseRule {
     Ref(String),
     /// `git merge-base HEAD <ref>`.
     MergeBase(String),
+    /// Named by a merge-queue branch: untrusted until the caller checks that `base` is the
+    /// default branch and `sha` is on it.
+    Queue {
+        sha: String,
+        base: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,14 +62,14 @@ impl Event {
     }
 }
 
-/// The base commit in `gh-readonly-queue/<base>/pr-<n>-<sha>`. The base branch may contain `/`.
-fn merge_queue_sha(branch: &str) -> Option<&str> {
-    let (_, last) = branch
+/// `(base branch, base sha)` of `gh-readonly-queue/<base>/pr-<n>-<sha>`. The base may contain `/`.
+fn merge_queue(branch: &str) -> Option<(&str, &str)> {
+    let (base, last) = branch
         .strip_prefix("gh-readonly-queue/")?
         .rsplit_once('/')?;
     let (n, sha) = last.strip_prefix("pr-")?.split_once('-')?;
     let digits = |s: &str, radix| !s.is_empty() && s.chars().all(|c| c.is_digit(radix));
-    (digits(n, 10) && digits(sha, 16)).then_some(sha)
+    (digits(n, 10) && digits(sha, 16)).then_some((base, sha))
 }
 
 /// `default_branch` is the repo's default branch name (`main`).
@@ -78,8 +84,15 @@ pub fn detect(env: &dyn Fn(&str) -> Option<String>, default_branch: &str) -> CiC
     let (provider, event, base, all) = if is_true("CIRCLECI") {
         let branch = get("CIRCLE_BRANCH").unwrap_or_default();
         let default_ref = format!("origin/{default_branch}");
-        let (event, base, all) = if let Some(sha) = merge_queue_sha(&branch) {
-            (Event::MergeQueue, BaseRule::Ref(sha.to_string()), true)
+        // The branch name is author-controlled: a pull request is never a queue or a push.
+        let is_pr = get("CIRCLE_PULL_REQUEST")
+            .or_else(|| get("CIRCLE_PR_NUMBER"))
+            .is_some();
+        let (event, base, all) = if is_pr {
+            (Event::Pr, BaseRule::MergeBase(default_ref), false)
+        } else if let Some((qbase, sha)) = merge_queue(&branch) {
+            let (sha, base) = (sha.to_string(), qbase.to_string());
+            (Event::MergeQueue, BaseRule::Queue { sha, base }, true)
         } else if branch == default_branch {
             (Event::DefaultPush, BaseRule::Ref(default_ref), true)
         } else if branch.is_empty() {
@@ -125,6 +138,7 @@ mod tests {
             BaseRule::Legacy => "legacy".to_string(),
             BaseRule::Ref(r) => format!("ref:{}", r.trim_start_matches("origin/")),
             BaseRule::MergeBase(r) => format!("mb:{}", r.trim_start_matches("origin/")),
+            BaseRule::Queue { sha, base } => format!("queue:{base}@{sha}"),
         };
         format!("{} {} {base} {}", c.provider.name(), c.event.name(), c.all)
     }
@@ -134,8 +148,14 @@ mod tests {
         let rows = [
             ("feat/x", "pr mb:main false"),
             ("main", "push ref:main true"),
-            ("gh-readonly-queue/main/pr-7-0123ab", "mq ref:0123ab true"),
-            ("gh-readonly-queue/rel/1.0/pr-12-ab12", "mq ref:ab12 true"),
+            (
+                "gh-readonly-queue/main/pr-7-0123ab",
+                "mq queue:main@0123ab true",
+            ),
+            (
+                "gh-readonly-queue/rel/1.0/pr-12-ab12",
+                "mq queue:rel/1.0@ab12 true",
+            ),
             // malformed queue branches are ordinary branches
             ("gh-readonly-queue/main/pr-x-abc", "pr mb:main false"),
             ("gh-readonly-queue/main/pr-7-zz", "pr mb:main false"),
@@ -146,6 +166,16 @@ mod tests {
             let got = show(&format!("CIRCLECI=true CIRCLE_BRANCH={branch}"));
             let want = want.replacen("mq", "merge-queue", 1);
             assert_eq!(got, format!("circleci {want}"), "{branch}");
+        }
+    }
+
+    #[test]
+    fn a_pull_request_is_never_a_queue_or_a_push() {
+        for pr in ["CIRCLE_PULL_REQUEST=https://x/pull/1", "CIRCLE_PR_NUMBER=5"] {
+            for b in ["gh-readonly-queue/main/pr-1-ab", "main", ""] {
+                let got = show(&format!("CIRCLECI=true CIRCLE_BRANCH={b} {pr}"));
+                assert_eq!(got, "circleci pr mb:main false", "{b} {pr}");
+            }
         }
     }
 

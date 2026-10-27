@@ -30,7 +30,7 @@ pub fn run(dir: Option<&Path>, args: &IntegrityArgs) -> CmdResult {
 pub fn check(dir: Option<&Path>, base: Option<&str>) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
-    let (base, _) = resolve_ci(&root, base);
+    let (base, _) = resolve_ci(&root, base)?;
     // Task 13+ reads them from the PR and the task metadata.
     let body = std::env::var("BOSUN_PR_BODY").unwrap_or_default();
     let allow = parse_allow(&std::env::var("BOSUN_INTEGRITY_ALLOW").unwrap_or_default());

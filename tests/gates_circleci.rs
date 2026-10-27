@@ -181,6 +181,7 @@ fn github_and_local_runs_carry_no_ci_block() {
 fn test_integrity_uses_the_merge_queue_base() {
     let r = repo();
     let sha = git(&r.root, &["rev-parse", "origin/main"]);
+    git(&r.root, &["checkout", "-q", "-b", "queue", "main"]); // the queue builds on the base sha
     fs::remove_file(r.root.join("tests/t.rs")).unwrap();
     git(&r.root, &["add", "-A"]);
     git(&r.root, &["commit", "-q", "-m", "drop the test"]);
@@ -190,4 +191,46 @@ fn test_integrity_uses_the_merge_queue_base() {
     let (code, v) = r.exec(&env, "test-integrity", &[]);
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["data"]["findings"][0]["kind"], "deleted-test", "{v}");
+}
+
+/// CIRCLE_BRANCH is author-controlled: a PR branch named like a merge-queue branch around the
+/// author's own commit (here the one deleting a test) must not choose the base.
+#[test]
+fn a_forged_queue_name_does_not_hide_a_deleted_test() {
+    let r = repo();
+    fs::remove_file(r.root.join("tests/t.rs")).unwrap();
+    git(&r.root, &["add", "-A"]);
+    git(&r.root, &["commit", "-q", "-m", "drop the test"]);
+    let w = git(&r.root, &["rev-parse", "HEAD"]);
+    let branch = format!("gh-readonly-queue/main/pr-1-{w}");
+    let env = [("CIRCLECI", "true"), ("CIRCLE_BRANCH", &branch)];
+    let (code, v) = r.exec(&env, "test-integrity", &[]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["findings"][0]["kind"], "deleted-test", "{v}");
+}
+
+#[test]
+fn untrusted_queue_names_and_pull_requests_diff_like_prs() {
+    let cases = [
+        ("gh-readonly-queue/main/pr-7-{tip}", true), // a PR whatever the branch is called
+        ("gh-readonly-queue/rel/pr-7-{tip}", false), // not the default branch
+        ("gh-readonly-queue/main/pr-7-{head}", false), // sha not on origin/main
+        ("main", true),
+    ];
+    for (template, pr) in cases {
+        let r = repo();
+        commit(&r.root, "a/src/lib.rs");
+        let branch = template
+            .replace("{tip}", &git(&r.root, &["rev-parse", "origin/main"]))
+            .replace("{head}", &git(&r.root, &["rev-parse", "HEAD"]));
+        let mut env = vec![("CIRCLECI", "true"), ("CIRCLE_BRANCH", branch.as_str())];
+        if pr {
+            env.push(("CIRCLE_PULL_REQUEST", "https://github.com/o/r/pull/1"));
+        }
+        let v = r.gate(&env, &["test"]);
+        let fork = git(&r.root, &["merge-base", "HEAD", "origin/main"]);
+        assert_eq!(v["data"]["ci"]["event"], "pr", "{template}: {v}");
+        assert_eq!(v["data"]["ci"]["base"], fork.as_str(), "{template}");
+        assert_eq!(r.calls(), vec!["nextest run --locked -p a"], "{template}");
+    }
 }
