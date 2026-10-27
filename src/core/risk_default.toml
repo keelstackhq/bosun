@@ -10,7 +10,7 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", ".github/actions/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"
@@ -93,7 +93,8 @@ paths = ["channel/**"]
 [[rule]]
 id = "R-secrets"
 why = "A secret in the repo is a leak."
-content = '(?i)(api[_-]?key|secret|token)\s*='
+paths = ["secrets.toml", ".sops.yaml", "access.toml", "**/.sops.yaml", "**/*.sops.yaml", "**/*.sops.json"]
+content = '(?i)(api[_-]?key|secret|token)\s*=|AGE-SECRET-KEY-1|SOPS_AGE_KEY\s*[:=]'
 
 [[rule]]
 id = "R-deps"

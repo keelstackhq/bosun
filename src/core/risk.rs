@@ -255,8 +255,9 @@ pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 
 /// Paths of the approval and risk system in every repo: a delegate never approves a change to
 /// them (also when renamed from or to them). Every workflow is here: any workflow with
-/// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR.
-pub const CRITICAL_PATHS: [&str; 7] = [
+/// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR; so can a
+/// CircleCI config, which is why `.circleci/**` is here too.
+pub const CRITICAL_PATHS: [&str; 8] = [
     ".bosun/**",
     "governance/**",
     "CODEOWNERS",
@@ -264,6 +265,7 @@ pub const CRITICAL_PATHS: [&str; 7] = [
     "docs/CODEOWNERS",
     ".github/workflows/**",
     ".github/actions/**",
+    ".circleci/**",
 ];
 
 /// bosun's own code, critical in a repo whose base has bosun's code (bosun itself and its
