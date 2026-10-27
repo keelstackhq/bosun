@@ -134,6 +134,32 @@ pub fn tool_rules(
     None
 }
 
+/// Prereqs-lock (design F4): refuses a GitHub write whose text carries `bosun:prereq`, the marker
+/// of the owner checklist issue. Best effort. Known and accepted bypasses: a body read from a
+/// file (`--body-file`), `--input`, and `curl` with the text or token built in a variable. The
+/// real guarantees are elsewhere: bosun re-reads the checklist and trusts only its own writes.
+pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
+    let write = match tool.strip_prefix("mcp__github__") {
+        Some(name) => !READ_ONLY_GITHUB.contains(&name),
+        None if tool == "Bash" => {
+            let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+            let words: Vec<&str> = command
+                .split(|c: char| !(c.is_alphanumeric() || "-_./".contains(c)))
+                .map(|w| w.rsplit('/').next().unwrap_or(w))
+                .collect();
+            words.contains(&"curl")
+                || (words.contains(&"gh")
+                    && words.iter().any(|w| ["issue", "api", "pr"].contains(w)))
+        }
+        None => false,
+    };
+    (write && input.to_string().contains("bosun:prereq")).then(|| {
+        "the owner checklist is the owner's: agents never tick, edit or close it \
+         (bosun prereqs --post writes it); fix the plan's ## Prerequisites instead"
+            .to_string()
+    })
+}
+
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
 fn label_fields(v: &Value) -> String {
     match v {
@@ -1074,6 +1100,35 @@ mod tests {
             &|_| Some(branch.into()),
             "main",
         )
+    }
+
+    #[test]
+    fn prereqs_lock_refuses_github_writes_naming_the_marker() {
+        let body = "<!-- bosun:prereq H1 sum=ab state=open -->";
+        let deny = |tool: &str, input: Value| prereqs_lock(tool, &input).is_some();
+        assert!(deny("mcp__github__issue_write", json!({ "body": body })));
+        assert!(deny(
+            "mcp__github__issue_write",
+            json!({ "body": "<!-- bosun:prereqs p.md -->" })
+        ));
+        assert!(!deny("mcp__github__issue_read", json!({ "body": body })));
+        assert!(!deny(
+            "mcp__github__issue_write",
+            json!({ "body": "plain" })
+        ));
+        let gh = format!("gh issue edit 5 --body \"{body}\"");
+        assert!(deny("Bash", json!({ "command": gh })));
+        let curl = format!("curl -X PATCH -d '{body}' https://api.github.com/x");
+        assert!(deny("Bash", json!({ "command": curl })));
+        assert!(!deny(
+            "Bash",
+            json!({ "command": "bosun prereqs plans/x.md --post" })
+        ));
+        // Documented best-effort gap (design F4): the body comes from a file, so no marker here.
+        assert!(!deny(
+            "Bash",
+            json!({ "command": "gh issue edit 5 --body-file f" })
+        ));
     }
 
     #[test]

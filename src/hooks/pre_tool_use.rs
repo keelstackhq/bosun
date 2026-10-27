@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::{cache, git_out};
 use crate::app::App;
-use crate::core::guard::{edit_lock, edited_path, tool_rules};
+use crate::core::guard::{edit_lock, edited_path, prereqs_lock, tool_rules};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -62,6 +62,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     .map(|b| b.strip_prefix("origin/").unwrap_or(&b).to_string())
     .unwrap_or_else(|| "main".into());
     if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
+        return Some(deny(&why));
+    }
+    if let Some(why) = prereqs_lock(tool, &tool_input) {
         return Some(deny(&why));
     }
     let path = edited_path(tool, &tool_input)?;
