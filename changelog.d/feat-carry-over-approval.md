@@ -1,0 +1,1 @@
+- `bosun risk-check` carries a high-risk approval (owner review, comment, signature or the class's verdicts) of an older head over a clean merge of main (`data.approval_carried_from`); only the approval, everything else is recomputed on the new head.

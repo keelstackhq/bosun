@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::PrArg;
-use super::carry_over::{candidates, carry_verdict, has_verdict, is_verdict};
+use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
 use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
 use crate::core::approve::{
@@ -197,64 +197,59 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         );
     }
     let signed_ok = trust.is_empty() && !unseen;
-    let mut approved_by = if high {
-        approver(gh, &app.ctx.repo, n, head, &owners, signed_ok)?
-    } else {
-        None
-    };
     let requirement = requirement(&matches);
-    // Two verdicts only matter when the owner has not approved and the class allows them.
     let linked = linked_issues(&pull.body);
     // Without a linked task there is no lease to check the reviewers against: fail closed.
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
-    let verdicts =
-        if high && approved_by.is_none() && requirement == Approval::TwoVerdicts && !unlinked {
-            let (comments, excluded) = verdict_inputs(gh, n, &linked)?;
-            two_verdicts(
-                comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
-                head,
-                &excluded,
-            )
-        } else {
-            Vec::new()
-        };
-    // A delegate decides only with one clean independent verdict on the head (spec §8).
-    let mut delegate_verdicts = Vec::new();
-    let mut delegate_blocked = None;
-    if high && approved_by.is_none() && requirement == Approval::Delegate && !unlinked {
-        delegate_blocked = delegation_blocked(gh, &pull.base_ref, &linked)?;
-    }
-    if let Some(why) = &delegate_blocked {
+    let need = Need {
+        repo: &app.ctx.repo,
+        pr: n,
+        base_ref: &pull.base_ref,
+        owners: &owners,
+        signed_ok,
+        requirement,
+        linked: &linked,
+        unlinked,
+    };
+    let found = if high {
+        approval_on(gh, &need, head)?
+    } else {
+        Found::default()
+    };
+    if let Some(why) = &found.delegate_blocked {
         eprintln!("bosun: risk-check: a delegate cannot approve: {why}");
     }
-    if high
-        && approved_by.is_none()
-        && requirement == Approval::Delegate
-        && !unlinked
-        && delegate_blocked.is_none()
-        && signed_ok
-    {
-        let (comments, excluded) = verdict_inputs(gh, n, &linked)?;
-        delegate_verdicts = clean_verdicts(
-            comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
-            head,
-            &excluded,
-        );
-        if !delegate_verdicts.is_empty() && !owners_withdrawn(gh, n, head, &owners)? {
-            let v1 = |after: Option<u64>| after.is_none();
-            approved_by =
-                signed_approver(gh, &app.ctx.repo, n, head, &comments, Role::Delegate, &v1)?
-                    .map(|id| format!("delegate {id}"));
-        }
+    let passed_on_head = !high || found.passed();
+    // An older head's approval carries over a clean merge of main (design §3 C7), judged by `need`.
+    // The delegate carry comes in a later PR with its tests.
+    let carried = if passed_on_head || requirement == Approval::Delegate {
+        None
+    } else {
+        default_branch(gh).ok().and_then(|branch| {
+            let approve = |h: &str| approval_on(gh, &need, h).ok();
+            carry_approval(gh, &pull, &branch, &owners, &approve)
+        })
+    };
+    let Found {
+        mut approved_by,
+        verdicts,
+        delegate_verdicts,
+        delegate_blocked,
+    } = found;
+    let carried_from = carried.as_ref().map(|(h, _)| h.clone());
+    if let Some((_, who)) = carried {
+        approved_by = Some(who);
     }
     let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
-    let passed = !high || approved_by.is_some() || by_verdicts;
+    let passed = passed_on_head || carried_from.is_some();
 
     let ids: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
+    let tag = |h: &String| format!(" (carried from {})", &h[..7]); // a full sha (`candidates`)
+    let from: String = carried_from.iter().map(tag).collect();
     let description = match (&approved_by, high) {
         (_, false) => "normal risk".to_string(),
-        (Some(who), _) => format!("high risk ({}), approved by {who}", ids.join(", ")),
+        (Some(who), _) => format!("high risk ({}), approved by {who}{from}", ids.join(", ")),
         (None, _) if by_verdicts => format!(
             "high risk ({}), approved by two verdicts: {}",
             ids.join(", "),
@@ -287,7 +282,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
-        "verdict_carried_from": carried});
+        "verdict_carried_from": carried, "approval_carried_from": carried_from});
     if high {
         data["requirement"] = json!(requirement.name());
         if requirement == Approval::TwoVerdicts {
@@ -336,6 +331,77 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
         fix,
     )
     .with_data(data))
+}
+
+/// What an approval is judged by: the checked head's own diff, the rules and owners at base.
+struct Need<'a> {
+    repo: &'a RepoId,
+    pr: u64,
+    base_ref: &'a str,
+    owners: &'a [String],
+    signed_ok: bool,
+    requirement: Approval,
+    linked: &'a [u64],
+    unlinked: bool,
+}
+
+/// How a head is approved: by an owner or delegate (`approved_by`), or by two verdicts.
+#[derive(Default)]
+pub(crate) struct Found {
+    pub(crate) approved_by: Option<String>,
+    pub(crate) verdicts: Vec<String>,
+    delegate_verdicts: Vec<String>,
+    delegate_blocked: Option<String>,
+}
+
+impl Found {
+    pub(crate) fn passed(&self) -> bool {
+        self.approved_by.is_some() || self.verdicts.len() >= VERDICTS_NEEDED
+    }
+
+    /// The sessions whose verdicts count in this approval; `None` when an owner approved.
+    pub(crate) fn counted(&self) -> Option<&[String]> {
+        self.approved_by.is_none().then_some(&self.verdicts[..])
+    }
+}
+
+/// The approval of a high-risk PR on `sha`: an owner, two verdicts, or a delegate.
+fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
+    let Need {
+        repo, pr, owners, ..
+    } = *need;
+    let mut found = Found {
+        approved_by: approver(gh, repo, pr, sha, owners, need.signed_ok)?,
+        ..Found::default()
+    };
+    let open = found.approved_by.is_none() && !need.unlinked;
+    // Two verdicts only matter when the owner has not approved and the class allows them.
+    if open && need.requirement == Approval::TwoVerdicts {
+        let (comments, excluded) = verdict_inputs(gh, pr, need.linked)?;
+        found.verdicts = two_verdicts(
+            comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+            sha,
+            &excluded,
+        );
+    }
+    // A delegate decides only with one clean independent verdict on the head (spec §8).
+    if open && need.requirement == Approval::Delegate {
+        found.delegate_blocked = delegation_blocked(gh, need.base_ref, need.linked)?;
+        if found.delegate_blocked.is_none() && need.signed_ok {
+            let (comments, excluded) = verdict_inputs(gh, pr, need.linked)?;
+            found.delegate_verdicts = clean_verdicts(
+                comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+                sha,
+                &excluded,
+            );
+            if !found.delegate_verdicts.is_empty() && !owners_withdrawn(gh, pr, sha, owners)? {
+                let v1 = |after: Option<u64>| after.is_none();
+                let key = signed_approver(gh, repo, pr, sha, &comments, Role::Delegate, &v1)?;
+                found.approved_by = key.map(|id| format!("delegate {id}"));
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Carries `review-verdict` of an older head onto exactly `pull.head_sha` (design §3 C7), checking
