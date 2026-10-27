@@ -114,6 +114,8 @@ pub trait Github {
     fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
+    /// When review `review_id` was dismissed (issue timeline); `None` without such an event.
+    fn review_dismissed_at(&self, number: u64, review_id: u64) -> Result<Option<String>>;
     /// `state` is `success`, `failure`, `pending` or `error`; the description is cut to 140
     /// characters.
     fn create_status(
@@ -577,6 +579,19 @@ impl Github for LiveGithub {
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>> {
         let path = self.path(&format!("/pulls/{number}/reviews?per_page=100"));
         self.parse_all("review", self.http.get_all(&path)?)
+    }
+
+    fn review_dismissed_at(&self, number: u64, review_id: u64) -> Result<Option<String>> {
+        let path = self.path(&format!("/issues/{number}/timeline?per_page=100"));
+        let events = self.http.get_all(&path)?;
+        Ok(events
+            .iter()
+            .filter(|e| {
+                e["event"] == "review_dismissed" && e["dismissed_review"]["review_id"] == review_id
+            })
+            .filter_map(|e| e["created_at"].as_str())
+            .max()
+            .map(String::from))
     }
 
     fn create_status(

@@ -192,6 +192,8 @@ pub struct PrFile {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Review {
+    #[serde(default)]
+    pub id: u64,
     #[serde(default, deserialize_with = "login")]
     pub user: String,
     pub state: String,

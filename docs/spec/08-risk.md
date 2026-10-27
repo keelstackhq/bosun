@@ -44,7 +44,20 @@ High-risk PRs:
   app on their comments, so an agent cannot approve; a response without the field does not
   count either (fail closed). When
   the owner's newest decisive review on the head SHA requests changes, their comment does not
-  count either.
+  count either. Withdrawal: an owner whose newest decisive review (APPROVED, CHANGES_REQUESTED
+  or DISMISSED) on the head is CHANGES_REQUESTED or DISMISSED has withdrawn approval: their
+  comment approval and every signed and delegate approval stop counting. Anyone with write
+  access can dismiss a review (GitHub then reports DISMISSED, also for an APPROVED one), so a
+  dismissal never lifts a withdrawal, and a DISMISSED review is never an approval. A request
+  for changes ends only with a newer APPROVED review from that owner. After a dismissal, a
+  plain-token, unedited `/bosun approve <head>` comment from that owner also ends it when its
+  `created_at` is strictly later than the dismissal time, read from the issue timeline
+  (`GET /issues/<n>/timeline`, the `review_dismissed` event whose `dismissed_review.review_id`
+  is the decisive review's id). If the timeline cannot be read, has no matching event or a
+  time does not parse, nothing counts as newer. With several owners, each owner's own newest
+  decisive review decides for that owner's comment, and any owner's withdrawal blocks signed
+  and delegate approvals. A signature, owner or delegate, never ends a withdrawal: it carries
+  no time, so a re-posted old one would pass for new.
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
   in its own container (never shared) and, on the owner's chat message, posts a PR comment whose
@@ -61,7 +74,7 @@ High-risk PRs:
   line 1 names that head. A signature for an old head, another PR or another repo does not
   verify. Each signature line is checked on its own; one that verifies is enough. A key stands
   for the owners: with no owners in `governance/owners.toml` at base, or while any owner's
-  newest decisive review on the head requests changes, a signed approval does not count. Heads
+  newest decisive review on the head requests changes or was dismissed, a signed approval does not count. Heads
   are 40-hex SHA-1, so a SHA-256 repo has the feature off. A missing or unreadable
   `.bosun/approvers.toml` turns the feature off. A malformed file (bad TOML,
   unknown fields, a duplicate or empty id, a key that is not 32 bytes of base64), an unknown
@@ -118,7 +131,7 @@ High-risk PRs:
     a linked task, approves with confidence >= 0.9 and counts `major: 0` findings (the record
     carries `major` from this version on; an older record without it never counts; an
     approving verdict has no blocker); a session's newest record for the head decides;
-  - owners exist at base and no owner's newest decisive review on the head requests changes;
+  - owners exist at base and no owner has withdrawn approval on the head (withdrawal, above);
   - the signature checks of signed approvals above.
   The critical floor is hard-coded and holds whatever a rule's `approval` says: the rules
   R-secrets, R-prod-write and R-unseen (bosun could not see the whole diff, so it cannot rule
@@ -181,7 +194,11 @@ High-risk PRs:
   the owner needs a new `--list`. If a later comment fails, the ones posted stay recorded and
   `data.approved` lists them (exit 1). A PR whose owner has a review on that head that requests
   changes (the newest decisive review withdraws an approval comment) is not ready: it is in
-  `waiting` and refused with exit 3. Otherwise the comment is always posted, also when one that
+  `waiting` (the hint names only a newer APPROVED review) and refused with exit 3. One whose
+  request was dismissed is in `waiting` too ("needs a fresh plain owner comment", that is
+  `bosun approve <pr>@<head>`, "or a GitHub review") but an explicit `<pr>@<head>` is allowed:
+  it posts exactly the comment that ends the withdrawal. `--sign-key` refuses either kind
+  (exit 3, the fix names the plain-comment or review way). Otherwise the comment is always posted, also when one that
   counts (the owner test of risk-check: unedited, plain user token, exact text) already exists,
   because the new comment re-runs risk-check if its run was lost; `data.approved` marks that
   entry `"repost": true`. In a Claude cloud session (`CCR_AGENT_PROXY_ENABLED` is `1`, `true`,
