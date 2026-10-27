@@ -31,11 +31,15 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
   tests/cli_prereqs.rs (new), tests/common/fake.rs, fragments
 - [ ] **Q3a: gating (F5)** — depends Q2
   touch: src/cli/prereqs_gate.rs (new: open items of `bosun:prereqs` issues per task),
-  src/cli/plan.rs (`promote`, `data.held`), src/cli/claim.rs (one call before the claim),
-  src/cli/wave.rs (leave held tasks out), tests/cli_prereqs_gate.rs (new), fragments
-- [ ] **Q3b: `bosun prereqs hold` and approval batches (F6, F7)** — depends Q3a
-  touch: src/cli/prereqs.rs, src/cli/approve.rs (`data.message`), src/cli/intake.rs (next step
-  text), tests/cli_prereqs_hold.rs (new), fragments
+  src/cli/plan.rs (`promote`, refresh before promote, `data.held`), src/cli/claim.rs (one call
+  before the claim), src/cli/wave.rs (leave held tasks out), tests/cli_prereqs_gate.rs (new),
+  fragments
+- [ ] **Q3b: `bosun hold` (F6)** — depends Q3a
+  touch: src/cli/hold.rs (new), src/cli/mod.rs (command and Args), src/lib.rs (dispatch),
+  tests/cli_hold.rs (new), fragments
+- [ ] **Q3c: approval batches (F7)** — depends Q2
+  touch: src/cli/approve.rs (`data.message`), src/cli/intake.rs (next step text),
+  tests/cli_approve_message.rs (new), fragments
 - [ ] **Q4: docs (F6, F8)** — depends Q3b and P5, P7 of
   `docs/superpowers/plans/2026-10-27-parallel-conflicts.md` (branch `docs/parallel-conflicts-design`)
   touch: AGENTS.md, channel/pieces/core/files/sections/agents.md, docs/plan-format.md (link),
@@ -45,7 +49,10 @@ Stays out of the parallel-conflicts plan's files (`src/core/plan.rs`, `docs/plan
 
 ## Owner items
 
-- `src/cli/claim.rs` is also edited by the parallel-conflicts P2: Q3a adds one call line at the
-  start of the claim, outside P2's lease code; whichever lands second merges main.
+- Files shared with the parallel-conflicts plan: `src/cli/claim.rs` (its P2; Q3a adds one call
+  line before the claim, outside P2's lease code), `src/github/*` (its P9 goes after Q2),
+  `src/cli/mod.rs` and every command's Args (its P10 goes after Q2 and Q3b), `src/cli/plan.rs`,
+  `src/cli/wave.rs` (P10 Args only). No function is edited by both in parallel; whichever lands
+  second merges main.
 - Every Q1-Q3 PR touches `src/**`, so each needs the owner's approval at merge (critical floor).
   They are meant to be approved as one batch.

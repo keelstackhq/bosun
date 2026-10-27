@@ -71,23 +71,30 @@ with `--post`, upserts one issue per plan (marker `<!-- bosun:prereqs <plan path
 in the GitHub app; ticks are read back before each rewrite, verified items are ticked by bosun,
 and the issue closes when nothing is open. Why one issue: GitHub mobile notifies on it, boxes are
 tappable on a phone, and the orchestrator relays one link. The issue carries the label
-`bosun:prereqs`, and each line's hidden marker names what it blocks
-(`<!-- bosun:prereq H1 blocks=M4/T2,M5 -->`), so the gates below read one issue, not the API.
-A tick is not authenticated: anyone with write access can tick a box. That is accepted because a
-prerequisite only schedules work; risk-check still decides every merge, API-verifiable items never
-pass on a tick alone, and agents never tick boxes (AGENTS.md).
+`bosun:prereqs`. Each line's hidden marker, written by bosun, names what the item blocks, how it
+is verified and whether bosun verified it: `<!-- bosun:prereq H1 blocks=M4/T2,M5 verify=api ok -->`
+(`verify=owner` for tick-only items; `ok` only after an API read found it). An item is done when
+its marker says `ok` (API items: a tick alone never counts) or, for `verify=owner`, when its box is
+ticked. The gates below read this one issue, never the API. A tick is not authenticated (anyone
+with write access can tick, or edit the marker); that is accepted because a prerequisite only
+schedules work, risk-check still decides every merge, and agents never tick boxes (AGENTS.md).
 
-**F5. Gating, in two places.** (1) `bosun plan import`/`amend` keeps a task `planned` while an
-open prerequisite blocks it (or its item) and lists it under `data.held`; the next import after
-the prerequisite is done promotes it. (2) `bosun claim` refuses (exit 5) a task that an open item
-of a `bosun:prereqs` issue blocks, and `bosun wave plan` leaves it out, because tasks also become
-ready outside promote (`bosun release --to ready`, reap) and a prerequisite can appear after a
-task was promoted. Everything else proceeds.
+**F5. Gating, in two places.** (1) `bosun plan import`/`amend` of a plan with a
+`## Prerequisites` section first refreshes its checklist issue exactly as `bosun prereqs --post`
+does (API reads, create or reopen the issue), so every such plan has one; it then keeps a task
+`planned` while an open item blocks it or its item (the epic of a blocked item stays `planned`
+too) and lists it under `data.held`. The next import after the item is done promotes it. (2)
+`bosun claim` refuses (exit 5) a task that an open item of a `bosun:prereqs` issue blocks, and
+`bosun wave plan` leaves it out, because tasks also become ready outside promote (`bosun release
+--to ready`, reap) and an item can appear after a task was promoted. Everything else proceeds.
 
 **F6. No mid-run asks.** An agent that hits an undeclared human step does not stop and wait. It
-runs `bosun prereqs hold <issue> "<what the owner must do>" [--phone]`: bosun adds an item
-`X<n>` (blocks: that task) to the plan's checklist issue, releases the task to `ready` (the claim
-gate now keeps it there) and records a lesson. The agent takes other work. The orchestrator
+runs `bosun hold <task issue> "<what the owner must do>" [--phone]`, a top-level command that
+checks the kill switch, finds the checklist issue of the task's plan (from its epic; created or
+reopened when missing or closed), adds an item `X<n>` (`verify=owner`, blocks: that task),
+releases the agent's lease and moves the task to `ready` (the claim gate keeps it there), and
+records a lesson best-effort (a failed lesson, such as the cap's exit 6, is reported in
+`data.lesson_error` and does not undo the hold). The agent takes other work. The orchestrator
 relays the updated checklist once and folds the item into the plan's `## Prerequisites` in the
 next amendment. `bosun ask` remains for decisions, which also go to the orchestrator's batch.
 
