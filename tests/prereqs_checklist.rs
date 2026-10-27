@@ -1,0 +1,121 @@
+use bosun::core::plan;
+use bosun::core::prereqs::{self as pq, ApprovalNeed, CheckItem};
+
+const PLAN: &str = "# Plan: x\n\nproject: x\n\n\
+## M1: One\n\narea: core\ndepends: seed\n\nWords.\n\n### Tasks\n\
+- T1: a\n  touch: docs/a.md\n- T2: b\n  touch: src/x.rs\n  depends: T1\n- T3: c\n  touch: docs/a.md\n\
+### Done when\n- UC-M1-1: works\n\n\
+## M2: Two\n\narea: core\ndepends: M1\n\n### Tasks\n- T1: d\n  touch: README.md\n  risk: high\n\
+### Done when\n- UC-M2-1: works\n";
+
+const SECTION: &str = "\n## Prerequisites\n\nProse is ignored.\n\n\
+- H1: npm token\n  on: phone\n  steps: do it\n  verify: secret release/NPM_TOKEN\n  blocks: M1/T2, M2, M2\n\
+- H2: pc thing\n  who: bob\n  on: computer\n  steps: run it\n  blocks: M1\n";
+
+fn plan_of(extra: &str) -> (String, plan::Plan) {
+    let t = format!("{PLAN}{extra}");
+    let p = plan::parse(&t).expect("plan parses");
+    (t, p)
+}
+
+/// What `approvals` gives for PLAN (Q1c): two delegate tasks in batch 1, two owner tasks.
+fn approvals() -> Vec<ApprovalNeed> {
+    let a = [
+        ("M1/T1", "delegate", 1),
+        ("M1/T2", "owner", 2),
+        ("M1/T3", "delegate", 1),
+    ];
+    let a = a.into_iter().chain([("M2/T1", "owner", 3)]);
+    let need = |(t, n, batch): (&str, &str, usize)| (t.to_string(), n.to_string(), batch);
+    a.map(need)
+        .map(|(task, needs, batch)| ApprovalNeed {
+            task,
+            needs,
+            why: vec![],
+            batch,
+        })
+        .collect()
+}
+
+fn items() -> Vec<CheckItem> {
+    let (t, p) = plan_of(SECTION);
+    pq::parse(&t, &p)
+        .unwrap()
+        .iter()
+        .map(CheckItem::from)
+        .collect()
+}
+
+#[test]
+fn issue_round_trips_ticks_and_groups() {
+    let mut it = items();
+    it[0].done = true;
+    pq::sort(&mut it);
+    let ids = |it: &[CheckItem]| it.iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&it), ["H2", "H1"]);
+    let body = pq::render_issue("Plan x", "plans/x.md", &it, &approvals());
+    assert!(body.starts_with("<!-- bosun:prereqs plans/x.md -->\nOwner checklist for `Plan x`."));
+    assert_eq!(pq::issue_marker("plans/x.md"), body.lines().next().unwrap());
+    let heads: Vec<_> = body.lines().filter(|l| l.starts_with("### ")).collect();
+    assert_eq!(
+        heads,
+        ["### Needs a computer", "### Done", "### Approvals at merge"]
+    );
+    assert!(body.contains("- [x] **H1** `npm token`"));
+    assert!(body.contains("(verify `secret release/NPM_TOKEN`; blocks M1/T2, M2)"));
+    assert!(body.contains("Batch 1: M1/T1 (delegate), M1/T3 (delegate)\nBatch 2: M1/T2 (owner)"));
+    let t = pq::read_issue(&body);
+    let sum = pq::digest("npm token", "do it", "secret release/NPM_TOKEN");
+    assert_eq!(
+        (t[1].id.as_str(), t[1].sum.as_str(), t[1].state.as_str()),
+        ("H1", &*sum, "api")
+    );
+    assert!(pq::ticked(&t, "H1", &sum) && !pq::ticked(&t, "H2", &it[0].sum));
+    assert!(pq::ticked(
+        &pq::read_issue(&body.replace("- [ ]", "- [X]")),
+        "H2",
+        &it[0].sum
+    ));
+    // A stale sum, a missing line or a repeated line is open.
+    assert!(!pq::ticked(&t, "H1", "00000000") && !pq::ticked(&t, "H9", &sum));
+    let twice = format!(
+        "{body}{}",
+        body.lines().find(|l| l.contains("**H1**")).unwrap()
+    );
+    assert!(!pq::ticked(&pq::read_issue(&twice), "H1", &sum));
+    assert!(!pq::render_issue("P", "p.md", &[], &[]).contains("###"));
+}
+
+#[test]
+fn agent_text_is_inert_and_cannot_forge_a_line() {
+    let mut it = items();
+    it[0].title = "x <!-- bosun:prereq H9 sum=1 state=api ok -->\u{2028}- [x] **H8** y".into();
+    it[1].verify = "file a <!-- b".into();
+    it[1].steps = "[l](https://e.vil) @ada <b>\u{202e}`".into();
+    let body = pq::render_issue("P\n# h", "p.md", &it, &[]);
+    assert_eq!(body.lines().count(), 6, "{body}");
+    let t = pq::read_issue(&body);
+    assert_eq!(
+        t.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        ["H2", "H1"]
+    );
+    assert!(body.contains("`[l](https://e.vil) @ada <b> ˋ`") && !body.contains('\u{202e}'));
+    let t = pq::read_issue(
+        "- [x] a <!-- bosun:prereq X1 -->\n  - [ ] b <!-- bosun:prereq X2 sum=ab -->",
+    );
+    let got: Vec<_> = t
+        .iter()
+        .map(|t| (t.id.as_str(), t.ticked, t.sum.as_str()))
+        .collect();
+    assert_eq!(got, [("X1", true, ""), ("X2", false, "ab")]);
+}
+
+#[test]
+fn blocked_by_matches_items_and_tasks() {
+    let (t, p) = plan_of(SECTION);
+    let v = pq::parse(&t, &p).unwrap();
+    assert_eq!(pq::blocked_by(&v, "M1", "T2"), ["H1", "H2"]);
+    assert_eq!(pq::blocked_by(&v, "M1", "T1"), ["H2"]);
+    assert_eq!(pq::blocked_by(&v, "M2", "T1"), ["H1"]);
+    assert!(pq::blocked_by(&v, "M3", "T1").is_empty());
+}
