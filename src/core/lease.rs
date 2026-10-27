@@ -56,9 +56,13 @@ pub fn leases_of(issue: u64, notes: &[Note]) -> Vec<Lease> {
         .collect()
 }
 
-/// `leases_of` with the creation time of each lease comment.
-fn timed_leases_of(issue: u64, notes: &[Note]) -> Vec<(Lease, Timestamp)> {
-    let mut by_session: BTreeMap<String, (Lease, Timestamp)> = BTreeMap::new();
+/// The lease records of a session on one issue since its last lease-end:
+/// (creation time, comment id, touch).
+type History = Vec<(Timestamp, u64, Vec<String>)>;
+
+/// `leases_of` with the history of each lease (for `race_winner`).
+fn timed_leases_of(issue: u64, notes: &[Note]) -> Vec<(Lease, History)> {
+    let mut by_session: BTreeMap<String, (Lease, History)> = BTreeMap::new();
     for note in notes {
         match parse_record(&note.body) {
             Some(Record::Lease {
@@ -70,6 +74,8 @@ fn timed_leases_of(issue: u64, notes: &[Note]) -> Vec<(Lease, Timestamp)> {
             }) => {
                 // An unparseable expiry counts as already expired.
                 let expires = parse_rfc3339(&expires).unwrap_or(Timestamp(0));
+                let mut hist = by_session.remove(&session).map(|e| e.1).unwrap_or_default();
+                hist.push((note.created_at, note.id, touch.clone()));
                 by_session.insert(
                     session.clone(),
                     (
@@ -81,7 +87,7 @@ fn timed_leases_of(issue: u64, notes: &[Note]) -> Vec<(Lease, Timestamp)> {
                             touch,
                             comment_id: note.id,
                         },
-                        note.created_at,
+                        hist,
                     ),
                 );
             }
@@ -160,8 +166,12 @@ pub fn orchestrator_of(session: &str) -> &str {
 }
 
 /// The lease that beat a new lease in a claim race: a live lease, other than the new one, on
-/// the same issue or with overlapping touch paths, whose comment is earlier (creation time,
-/// then comment id). `issues` is the freshly read comments of the issues that may hold one.
+/// the same issue or with overlapping touch paths, that wrote first. The two leases are compared
+/// pairwise, the same from both sides: the time of a lease is that of its session's earliest
+/// record since its last lease-end whose touch overlaps the other lease's current touch (else its
+/// first record). So a lease that grew keeps its priority on the globs it had, and races at the
+/// time of the grow for the globs it added. `issues` is the freshly read comments of the issues
+/// that may hold one.
 pub fn race_winner(
     issue: u64,
     comment_id: u64,
@@ -169,15 +179,13 @@ pub fn race_winner(
     issues: &[(u64, Vec<Note>)],
     now: Timestamp,
 ) -> Option<Lease> {
-    let mine = issues
-        .iter()
-        .filter(|(n, _)| *n == issue)
-        .flat_map(|(n, notes)| timed_leases_of(*n, notes))
-        .find(|(l, _)| l.comment_id == comment_id)
-        .map(|(l, at)| (at, l.comment_id))?;
-    issues
-        .iter()
-        .flat_map(|(n, notes)| timed_leases_of(*n, notes))
+    let all = || {
+        issues
+            .iter()
+            .flat_map(|(n, notes)| timed_leases_of(*n, notes))
+    };
+    let (mine, my_hist) = all().find(|(l, _)| l.issue == issue && l.comment_id == comment_id)?;
+    all()
         .filter(|(l, _)| l.is_live(now) && l.comment_id != comment_id)
         .filter(|(l, _)| {
             l.issue == issue || {
@@ -185,9 +193,29 @@ pub fn race_winner(
                 glob::first_overlap(touch, &theirs).is_some()
             }
         })
-        .filter(|(l, at)| (*at, l.comment_id) < mine)
-        .min_by_key(|(l, at)| (*at, l.comment_id))
-        .map(|(l, _)| l)
+        .map(|(l, hist)| {
+            let theirs = first_against(&hist, &mine.touch);
+            let key = first_against(&my_hist, &l.touch);
+            (theirs, key, l)
+        })
+        .filter(|(theirs, key, _)| theirs < key)
+        .min_by_key(|(theirs, _, _)| *theirs)
+        .map(|(_, _, l)| l)
+}
+
+/// (time, id) of the earliest record in `hist` whose touch overlaps `other`; the first record
+/// when none does.
+fn first_against(hist: &History, other: &[String]) -> (Timestamp, u64) {
+    let theirs = glob::parse_all(other).unwrap_or_else(|_| vec![everything()]);
+    hist.iter()
+        .filter(|(_, _, t)| {
+            let own = glob::parse_all(t).unwrap_or_else(|_| vec![everything()]);
+            glob::first_overlap(&own, &theirs).is_some()
+        })
+        .chain(hist.first())
+        .map(|(at, id, _)| (*at, *id))
+        .next()
+        .unwrap_or((Timestamp(0), 0))
 }
 
 fn everything() -> Glob {
@@ -355,6 +383,57 @@ mod tests {
         assert_eq!(race_winner(1, 5, &touch, &issues, NOW).unwrap().issue, 2);
         let docs = glob::parse_all(&["docs/**".into()]).unwrap();
         assert_eq!(race_winner(1, 5, &docs, &issues, NOW), None);
+    }
+
+    #[test]
+    fn a_grown_lease_races_pairwise_from_both_sides() {
+        let at = |id, secs, r| {
+            let mut n = note(id, r);
+            n.created_at = Timestamp(secs);
+            n
+        };
+        let g = |p: &str| glob::parse_all(&[p.to_string()]).unwrap();
+        let exp = "2026-10-22T10:30:00Z";
+        // X: #1 src/a/** at 100 (comment 1), grown by src/b/** at 200 (comment 3).
+        // Y: #2 src/b/x.rs at 150. Z: #3 src/a/x.rs at 150.
+        let r1 = at(1, 100, lease("x", exp, &["src/a/**"]));
+        let r3 = at(3, 200, lease("x", exp, &["src/a/**", "src/b/**"]));
+        let y = at(2, 150, lease("y", exp, &["src/b/x.rs"]));
+        let z = at(4, 150, lease("z", exp, &["src/a/x.rs"]));
+        let full = vec![
+            (1, vec![r1.clone(), r3.clone()]),
+            (2, vec![y.clone()]),
+            (3, vec![z.clone()]),
+        ];
+        // (a) the old globs keep their priority against a rival that claimed between.
+        assert_eq!(race_winner(1, 3, &g("src/a/**"), &full, NOW), None);
+        assert_eq!(
+            race_winner(3, 4, &g("src/a/x.rs"), &full, NOW)
+                .unwrap()
+                .session,
+            "x"
+        );
+        // (b) the added globs race at grow time and lose to the earlier rival.
+        assert_eq!(
+            race_winner(1, 3, &g("src/b/**"), &full, NOW)
+                .unwrap()
+                .session,
+            "y"
+        );
+        // (c) from Y's side the same notes give no second winner.
+        assert_eq!(race_winner(2, 2, &g("src/b/x.rs"), &full, NOW), None);
+        // (d) Y's stale snapshot (without the grow) agrees: Y wins, X loses.
+        let stale = vec![(1, vec![r1.clone()]), (2, vec![y.clone()])];
+        assert_eq!(race_winner(2, 2, &g("src/b/x.rs"), &stale, NOW), None);
+        // (e) a lease-end resets the history: X's re-claim at 400 loses to Z.
+        let again = at(5, 400, lease("x", exp, &["src/a/**"]));
+        let reset = vec![(1, vec![r1, at(6, 300, end("x")), again]), (3, vec![z])];
+        assert_eq!(
+            race_winner(1, 5, &g("src/a/**"), &reset, NOW)
+                .unwrap()
+                .session,
+            "z"
+        );
     }
 
     #[test]
