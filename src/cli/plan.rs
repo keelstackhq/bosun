@@ -7,11 +7,14 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use super::prereqs::Env;
+use super::prereqs_gate::{Held, blockers};
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
 use crate::core::lease::leases_of;
 use crate::core::meta::{TaskMeta, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
+use crate::core::prereqs as pq;
 use crate::core::state::{State, labels_to_remove, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -26,6 +29,11 @@ pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
 }
 
 fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
+    read_plan_text(dir, file).map(|(_, p)| p)
+}
+
+/// The plan file's text and what `plan::parse` made of it.
+fn read_plan_text(dir: Option<&Path>, file: &str) -> Result<(String, Plan)> {
     let path = dir.map_or_else(|| file.into(), |d| d.join(file));
     let text = std::fs::read_to_string(&path).map_err(|e| {
         BosunError::error(
@@ -33,7 +41,8 @@ fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
             "pass the path of a plan file, for example plans/bosun.md",
         )
     })?;
-    plan::parse(&text).map_err(|errs| plan_errors(file, &errs))
+    let plan = plan::parse(&text).map_err(|errs| plan_errors(file, &errs))?;
+    Ok((text, plan))
 }
 
 pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
@@ -148,6 +157,9 @@ struct Importer<'a> {
     warnings: Vec<String>,
     dir: PathBuf,
     promoted: Vec<String>,
+    /// Open owner-checklist items of the plan being imported, and what they hold back.
+    open_items: Vec<Held>,
+    held: Vec<Value>,
     /// The plan path as stored in epics: relative to the repo root.
     plan_path: String,
     roots: Vec<PathBuf>,
@@ -239,6 +251,7 @@ impl Importer<'_> {
             "epics": self.epics.iter().map(|s| s.json(false)).collect::<Vec<_>>(),
             "tasks": self.tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
             promote: self.promoted,
+            "held": self.held,
             "warnings": self.warnings,
         })
     }
@@ -260,6 +273,11 @@ impl Importer<'_> {
                     && (!t.closed || reopened.contains(&t.id))
             });
             if !live {
+                continue;
+            }
+            let needs = blockers(&self.open_items, &e.id, None);
+            if !needs.is_empty() {
+                self.held.push(json!({"task": e.id, "needs": needs}));
                 continue;
             }
             if !self.dry {
@@ -292,6 +310,15 @@ impl Importer<'_> {
         }
         for s in std::iter::once(epic).chain(tasks) {
             if s.action == "adopted" || s.closed || s.state.as_deref() != Some("planned") {
+                continue;
+            }
+            let (item, task) = match s.id.split_once('/') {
+                Some((i, t)) => (i, Some(t)),
+                None => (s.id.as_str(), None),
+            };
+            let needs = blockers(&self.open_items, item, task);
+            if !needs.is_empty() {
+                self.held.push(json!({"task": s.id, "needs": needs}));
                 continue;
             }
             if !self.dry {
@@ -387,7 +414,9 @@ fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
 }
 
 fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult {
-    let p = read_plan(dir, &a.file)?;
+    let (text, p) = read_plan_text(dir, &a.file)?;
+    // Always parsed: a misspelt heading is an error here, never "no section". Nothing is written.
+    let prereqs = pq::parse(&text, &p).map_err(|e| plan_errors(&a.file, &e))?;
     let app = App::load(dir)?;
     if let Some(project) = &p.project
         && *project != app.ctx.config.project
@@ -430,10 +459,17 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         warnings: vec![],
         dir: app.ctx.dir.clone(),
         promoted: vec![],
+        open_items: vec![],
+        held: vec![],
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
         now: app.ctx.now,
     };
+    if !prereqs.is_empty()
+        && let Err(e) = refresh_checklist(&mut imp, &app, dir, a, &text)
+    {
+        return Err(e.with_data(imp.data(&a.file)));
+    }
     let mut data = match import_items(&mut imp, &p, a) {
         Ok(()) => imp.data(&a.file),
         Err(e) => return Err(e.with_data(imp.data(&a.file))),
@@ -463,6 +499,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     let epics = imp
         .reopen_done_epics(&again)
         .map_err(|e| e.with_data(data.clone()))?;
+    data["held"] = json!(imp.held);
     if !epics.is_empty() {
         let key = if a.dry_run {
             "would_reopen"
@@ -479,6 +516,28 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         data[key] = Value::Array(all);
     }
     Ok(Outcome::data(data))
+}
+
+/// A plan with prerequisites gets its checklist issue refreshed (as `bosun
+/// prereqs --post --no-setup`; read-only with `--dry-run`); its open items hold tasks back.
+fn refresh_checklist(
+    imp: &mut Importer,
+    app: &App,
+    dir: Option<&Path>,
+    a: &PlanImportArgs,
+    text: &str,
+) -> Result<()> {
+    let mut env = Env::load(app, dir, &mut imp.warnings)?;
+    env.one_issue(&imp.plan_path)?;
+    let c = env.checklist(app, &a.file, text, !a.dry_run, &[])?;
+    let open = c.items.into_iter().filter(|i| !i.done);
+    imp.open_items = open
+        .map(|i| Held {
+            id: i.id,
+            blocks: i.blocks,
+        })
+        .collect();
+    Ok(())
 }
 
 /// The `plan` file named in the metadata of an epic body.
