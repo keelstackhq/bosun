@@ -58,11 +58,20 @@ The state machine, stop rules and resume.
    `^T[0-9]{1,3}$` and is unique in its item. Indented `key: value` lines under the bullet:
    - `touch:` (required) comma-separated repo-relative globs (`*` inside a segment, `**` across
      segments). They are the claim's touch paths.
+     For the overlap and hotspot warnings below, a `Cargo.toml` also counts the `Cargo.lock` beside
+     it and at the root, and a `package.json` counts `pnpm-lock.yaml` the same way. Claim, the
+     edit hook and `bosun pr` will adopt this in later tasks.
    - `depends:` (optional) task IDs of the same item, or `<item>/<task>` for another item.
    - `size:` (optional) the planned changed lines. More than 400 is an error; a `risk: high` task
      over 100 is a warning.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
+   `bosun plan check` gives two warnings from the touch lists (not errors). Two tasks that touch
+   overlapping files with no `depends` path between them (across items too; an item `depends:`
+   counts for all its tasks) are not parallel: claim and wave keep apart tasks whose raw touch globs overlap
+   (the companions apply only to this check for now), and the warning only tells the planner. Add a `depends:` or give the file to one task. A file that 3 or
+   more tasks touch, that overlap each other and are not already in one order, is a hotspot: give
+   it to one task and chain the others, or split the file. At most 20 overlap warnings are shown.
 6. The critical path of an item (the longest chain of `depends` inside it) has at most 4 tasks.
 7. `### Done when` lists the UCs, one `- UC-<item>-<n>: <text>` bullet each, numbered from 1 with
    no gaps. Each line must be checkable by a test. Every item has at least one UC.
