@@ -168,7 +168,8 @@ fn label_reason() -> String {
 const MAX_DEPTH: usize = 3;
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
-    check(command, branch_at, default_branch, 0)
+    decrypt_rule(command, 0)
+        .or_else(|| check(command, branch_at, default_branch, 0))
         .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
 }
 
@@ -926,6 +927,278 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
+}
+
+const DECRYPT_FIX: &str = "secrets stay encrypted; the owner runs `hoist secrets edit`, CI \
+    decrypts with `hoist secrets exec` (spec §8)";
+
+fn decrypt_reason(what: &str) -> String {
+    format!("decrypting secrets is refused for agents ({what}): {DECRYPT_FIX}")
+}
+
+const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
+/// Readers: their arguments are data (patterns, text).
+const READERS: &[&str] = &[
+    "grep", "rg", "ag", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type",
+];
+const INTERPS: &[&str] = &["python", "python3", "perl", "ruby", "node", "deno"];
+const FILE_TOOLS: &[&str] = &[
+    "mv", "cp", "install", "chmod", "chown", "ln", "mkdir", "rmdir", "rm", "touch", "tar", "unzip",
+    "gzip", "gunzip", "curl", "wget", "stat", "file", "du", "df",
+];
+/// Package managers, and the subcommands whose arguments are package names (never `run`/`exec`).
+const PACKAGERS: &[&str] = &[
+    "brew", "apt", "apt-get", "dnf", "yum", "apk", "pacman", "port", "pip", "pip3", "pipx", "npm",
+    "pnpm", "yarn", "bun", "cargo",
+];
+#[rustfmt::skip]
+const PKG_SUBS: &[&str] = &["install", "add", "remove", "uninstall", "upgrade", "update", "info",
+    "search", "show", "list", "build", "test", "nextest", "check", "clippy", "fmt"];
+#[rustfmt::skip]
+const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-field", "field",
+    "search", "q", "jq"];
+const SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
+    "node", "deno", "source", "xargs", "eval",
+];
+
+/// A flag without its dashes and value: `--decrypt=x` and `-decrypt` are `decrypt`.
+fn flag(arg: &str) -> Option<&str> {
+    let f = arg.strip_prefix('-')?;
+    Some(f.trim_start_matches('-').split('=').next().unwrap_or(""))
+}
+
+/// `sops` may print info or encrypt; `sops FILE` decrypts, so any other argument is refused.
+fn sops_ok(args: &[&str]) -> bool {
+    const INFO: &[&str] = &["version", "v", "help", "h"];
+    #[rustfmt::skip]
+    const BAD: &[&str] = &["d", "decrypt", "edit", "exec-env", "exec-file", "set", "rotate", "r",
+        "updatekeys", "keyservice", "unset", "publish", "filestatus", "groups"];
+    let info = |a: &&str| flag(a).is_some_and(|f| INFO.contains(&f));
+    // Flags that take the next word as their value, and boolean ones. The first bare word or
+    // unknown flag ends the walk: `-e` after it, or as a value (`--age -e`), is not a marker.
+    #[rustfmt::skip]
+    const VALUE: &[&str] = &["config", "age", "pgp", "kms", "gcp-kms", "azure-kv", "hc-vault-transit",
+        "input-type", "output-type", "unencrypted-suffix", "encrypted-suffix", "unencrypted-regex",
+        "encrypted-regex", "output", "indent", "filename-override", "shamir-secret-sharing-threshold"];
+    let (mut it, mut enc) = (args.iter(), false);
+    while let Some(a) = it.next() {
+        let f = flag(a);
+        enc = *a == "encrypt" || matches!(f, Some("e" | "encrypt"));
+        match f {
+            _ if enc => break,
+            Some(f)
+                if a.contains('=') || matches!(f, "i" | "in-place" | "verbose" | "ignore-mac") => {}
+            Some(f) if VALUE.contains(&f) => drop(it.next()),
+            _ => break,
+        }
+    }
+    let bad = |a: &&str| BAD.contains(&flag(a).unwrap_or(a));
+    args.is_empty() || args.iter().all(info) || (enc && !args.iter().any(bad))
+}
+
+/// `age`/`rage` may print info or encrypt; a decrypt flag in any spelling is refused.
+fn age_ok(args: &[&str]) -> bool {
+    let info = |a: &&str| flag(a).is_some_and(|f| matches!(f, "version" | "h" | "help"));
+    #[rustfmt::skip]
+    let enc = |a: &&str| flag(a).is_some_and(|f| matches!(f, "r" | "R" | "e" | "p" | "encrypt" | "recipient" | "recipients-file"));
+    #[rustfmt::skip]
+    let dec = |a: &&str| a.starts_with('-') && (flag(a) == Some("decrypt") || !a.starts_with("--") && a.contains('d'));
+    args.is_empty() || args.iter().all(info) || (args.iter().any(enc) && !args.iter().any(dec))
+}
+
+#[rustfmt::skip]
+fn mentions_secrets(text: &str) -> bool {
+    ["sops", "SOPS_", "keys.txt", "hoist secrets"].iter().any(|k| text.contains(k))
+        || text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .any(|t| matches!(t, "age" | "rage"))
+}
+
+/// Decrypt-lock (spec §4), an allowlist that fails closed: `sops`/`age` only print info or
+/// encrypt, `hoist secrets edit|..`, the key directory, `$SOPS_AGE_KEY*`, `/proc/*/environ`,
+/// env dumps naming sops, and shells reading stdin or code that mention secrets are refused.
+/// Every word of a segment is tried as the command word (except in readers, file tools and
+/// install-like packager commands); command strings in options are judged.
+fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
+    if depth > MAX_DEPTH {
+        return Some(decrypt_reason("commands nested too deep"));
+    }
+    let text = strip_data_heredocs(command);
+    let text = text.as_str();
+    for inner in nested(text) {
+        if let Some(why) = decrypt_rule(&inner, depth + 1) {
+            return Some(why);
+        }
+    }
+    let low = text.to_lowercase();
+    #[rustfmt::skip]
+    let key_dir = ["sops/age", "age/keys.txt"].iter().any(|k| text.contains(k)) || text.contains("keys.txt") && low.contains("sops");
+    if key_dir {
+        return Some(decrypt_reason("the age key directory"));
+    }
+    if text.contains("$SOPS_AGE_KEY") || text.contains("${SOPS_AGE_KEY") {
+        return Some(decrypt_reason("the age key"));
+    }
+    let (named, mentions) = (low.contains("sops"), mentions_secrets(text));
+    let words = shell_words(text);
+    for segment in words.split(|w| w == SEP) {
+        let mut rest: Vec<&str> = segment.iter().map(String::as_str).collect();
+        while rest.first().is_some_and(|w| assigned(w).is_some()) {
+            rest.remove(0);
+        }
+        let Some(first) = rest.first() else { continue };
+        let base = |w: &str| w.rsplit(['/', '#']).next().unwrap_or(w).to_string();
+        let name = base(first);
+        let args = &rest[1..];
+        let dump = match name.as_str() {
+            "printenv" | "compgen" => true,
+            #[rustfmt::skip]
+            "env" => args.iter().all(|a| a.starts_with('-') || assigned(a).is_some()),
+            "set" => args.is_empty(),
+            "export" | "declare" | "typeset" => args.is_empty() || args.contains(&"-p"),
+            _ => false,
+        };
+        if dump && named {
+            return Some(decrypt_reason("the environment"));
+        }
+        let long = |name: &str| {
+            args.iter().enumerate().find_map(|(i, a)| {
+                let v = a.strip_prefix(name).and_then(|r| r.strip_prefix('='));
+                v.or_else(|| (*a == name).then(|| args.get(i + 1).copied()).flatten())
+            })
+        };
+        // `bosun main-triage --run CMD` and `rg --pre CMD FILE` run a command.
+        let run = match name.as_str() {
+            "bosun" => long("--run").map(str::to_string),
+            "rg" => long("--pre").map(|c| format!("{c} FILE")),
+            _ => None,
+        };
+        if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
+            return Some(why);
+        }
+        if name == "bosun" {
+            continue;
+        }
+        if READERS.contains(&name.as_str()) {
+            let env = |w: &&str| w.contains("/proc/") && w.contains("/environ");
+            #[rustfmt::skip]
+            let pos: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with('-')).collect();
+            #[rustfmt::skip]
+            let pat_flag = args.iter().any(|a| matches!(*a, "-e" | "-f") || a.starts_with("--file"));
+            let search = matches!(name.as_str(), "grep" | "rg" | "ag") && !pat_flag;
+            if args.iter().any(env)
+                && !(search && pos.first().is_some_and(env) && !pos[1..].iter().any(env))
+            {
+                return Some(decrypt_reason("the process environment"));
+            }
+            continue;
+        }
+        // Options run command strings: a word or option value with whitespace is a command.
+        let (msg, mut skip) = (matches!(name.as_str(), "git" | "gh"), false);
+        for w in segment {
+            let (w, opt) = (w.as_str(), w.trim_start_matches('-'));
+            if std::mem::take(&mut skip) {
+                continue;
+            }
+            if w.contains("/proc/") && w.contains("/environ") {
+                return Some(decrypt_reason("the process environment"));
+            }
+            let data = if name == "gh" {
+                GH_DATA
+            } else {
+                &["m", "message"][..]
+            };
+            if msg && w.starts_with('-') && data.contains(&opt.split('=').next().unwrap_or("")) {
+                skip = !opt.contains('=');
+                continue;
+            }
+            let value = w.split_once('=').map(|(_, v)| v);
+            let strs = [
+                Some(w).filter(|w| w.contains(char::is_whitespace)),
+                value.filter(|v| v.contains(char::is_whitespace) || v.starts_with(['|', '!'])),
+            ];
+            for c in strs.into_iter().flatten() {
+                if let Some(why) = decrypt_rule(c.trim_start_matches(['|', '!']), depth + 1) {
+                    return Some(why);
+                }
+            }
+        }
+        #[rustfmt::skip]
+        let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
+        let safe = FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub;
+        for i in 0..if safe { 0 } else { rest.len() } {
+            let (n, after) = (base(rest[i]), &rest[i + 1..]);
+            #[rustfmt::skip]
+            let refused = match n.as_str() {
+                "sops" => !sops_ok(after),
+                "age" | "rage" => !age_ok(after),
+                "hoist" => after.iter().position(|a| *a == "secrets")
+                    .is_some_and(|p| after.get(p + 1).is_some_and(|a| HOIST_SECRETS.contains(a))),
+                n if SHELLS.contains(&n) && mentions => {
+                    let dash = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
+                    let interp = INTERPS.contains(&n);
+                    let code = after.iter().any(|a| dash(a, 'c') || interp && (dash(a, 'e') || *a == "--eval"));
+                    let file = after.iter().any(|a| !a.starts_with(['-', '<']));
+                    let stdin = after.iter().any(|a| matches!(*a, "-s" | "-") || a.starts_with('<'));
+                    if code { interp || after.iter().any(|a| a.contains("{}") || a.contains('$')) } else { !file || stdin }
+                }
+                _ => false,
+            };
+            if refused {
+                return Some(decrypt_reason(&format!("`{n}`")));
+            }
+        }
+    }
+    None
+}
+
+fn heredoc_at(line: &str) -> Option<usize> {
+    let (mut quote, b) = (None, line.as_bytes());
+    for (i, c) in line.char_indices() {
+        let op = c == '<' && b.get(i + 1) == Some(&b'<');
+        // In double quotes, `<<` counts after an unclosed `$(`: `"$(cat <<'EOF'`.
+        let sub = || line[..i].matches("$(").count() > line[..i].matches(')').count();
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), _) if op && sub() => return (b.get(i + 2) != Some(&b'<')).then_some(i),
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, _) if op => return (b.get(i + 2) != Some(&b'<')).then_some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The text without the bodies of quoted-delimiter heredocs, unless their line has a shell.
+fn strip_data_heredocs(command: &str) -> String {
+    let (mut out, mut skip) = (String::new(), None::<(String, bool)>);
+    for line in command.split_inclusive('\n') {
+        if let Some((delim, dash)) = &skip {
+            let l = line.trim_end_matches('\n');
+            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+                skip = None;
+                out.push_str(line);
+            }
+            continue;
+        }
+        out.push_str(line);
+        if let Some(at) = heredoc_at(line) {
+            let spec = line[at + 2..].trim_start_matches('-').trim_start();
+            let dash = line[at + 2..].starts_with('-');
+            let quote = spec.chars().next().filter(|c| matches!(c, '\'' | '"'));
+            let reads = shell_words(line)
+                .iter()
+                .any(|w| SHELLS.contains(&w.rsplit('/').next().unwrap_or(w)));
+            if let Some(q) = quote
+                && !reads
+                && let Some(end) = spec[1..].find(q)
+            {
+                skip = Some((spec[1..=end].to_string(), dash));
+            }
+        }
+    }
+    out
 }
 
 fn http_rule(segment: &str) -> Option<&'static str> {
@@ -1764,5 +2037,87 @@ mod tests {
             Some("a.rs".to_string())
         );
         assert_eq!(edited_path("Read", &json!({"file_path": "a.rs"})), None);
+    }
+
+    #[rustfmt::skip]
+    const DECRYPT_CASES: &[(&str, bool)] = &[
+        ("sops -d secrets/prod.yaml", true), ("sops secrets/prod.sops.yaml", true),
+        ("EDITOR=cat sops f", true), ("sops -decrypt f", true), ("sops -d=true f", true),
+        ("sops -decrypt=true f", true), ("sops --decrypt=yes f", true),
+        ("sops exec-env f cmd", true), ("sops rotate -i f", true), ("sops set f '[\"a\"]' 1", true),
+        ("sops -e --decrypt f", true), ("bash -c 'sops -d secrets/prod.yaml'", true),
+        ("sh -c \"age -d -i k f\"", true), ("\"sops\" -d x", true),
+        ("/usr/bin/sops --decrypt x", true), ("env FOO=1 sops exec-env f cmd", true),
+        ("sudo -u root sops -d f", true), ("x=$(sops -d f)", true), ("echo `sops -d f`", true),
+        ("sops -d f | jq .", true), ("timeout 10 sops -d f", true), ("stdbuf -o0 sops -d f", true),
+        ("watch sops -d f", true), ("doas sops -d f", true),
+        ("find . -name '*.sops.yaml' -exec sops -d {} \\;", true),
+        ("cat <<'EOF' | sh\nsops -d f\nEOF", true), ("cat <<'EOF' | bash -s\nsops -d f\nEOF", true),
+        ("echo 'sops -d f' | sh", true), ("bash <<< 'sops -d f'", true),
+        ("bash <<'EOF'\nsops -d f\nEOF", true), (": \"<<'X'\"\nsops -d f\nX", true),
+        ("age -di k f", true), ("age --decrypt=1 f", true), ("age f", true),
+        ("hoist secrets edit prod", true), ("hoist --root x secrets sync", true),
+        ("cat ~/.config/sops/age/keys.txt", true), ("cat ~/.config/sops/age/*", true),
+        ("cd ~/.config/sops; cat age/keys.txt", true), ("cat /proc/self/environ", true),
+        ("cat /proc/1/environ | tr '\\0' '\\n' | grep SOPS", true), ("echo $SOPS_AGE_KEY", true),
+        ("echo \"${SOPS_AGE_KEY}\"", true), ("cat $SOPS_AGE_KEY_FILE", true),
+        ("printenv SOPS_AGE_KEY", true), ("env | grep SOPS", true), ("export -p | grep SOPS", true),
+        ("bash -c \"bash -c \\\"sh -c 'sops -d f'\\\"\"", true), ("sops --version", false),
+        ("sops --help", false), ("sops -e -i f.yaml", false), ("sops encrypt f.yaml", false),
+        ("command -v sops", false), ("age -r age1abc -o f.age f", false), ("age --version", false),
+        ("age-keygen -o $TMP/k.txt", false), ("hoist secrets check", false),
+        ("hoist secrets exec --help", false),
+        ("git commit -m 'docs: explain SOPS_AGE_KEY_FILE'", false),
+        ("grep -rn SOPS_AGE_KEY_FILE src/", false), ("grep -rn 'sops -d' docs/", false),
+        ("SOPS_AGE_KEY_FILE=tests/fixtures/k.txt cargo test", false),
+        ("export SOPS_AGE_RECIPIENTS=age1abc", false), ("cargo test sops_decrypt_refused", false),
+        ("set -e; ls", false), ("git config diff.sopsdiffer.textconv \"sops -d\"", true),
+        ("git -c diff.s.textconv='sops -d' diff", true),
+        ("git -c core.pager='sops -d f' log", true),
+        ("LESSOPEN='|sops -d %s' less f.sops.yaml", true), ("man -P 'sops -d f' ls", true),
+        ("gh alias set x '!sops -d f'", true), ("watch -n1 'sops -d f'", true),
+        ("ssh host 'sops -d f'", true),
+        ("python3 -c \"import subprocess;subprocess.run(['sops','-d','f'])\"", true),
+        ("node -e \"require('child_process').execSync('sops -d f')\"", true),
+        ("perl -e 'system(\"sops -d f\")'", true),
+        ("git commit -m \"docs: sops -d is refused\"", false),
+        ("gh pr create --title \"x\" --body \"refuses sops -d\"", false),
+        ("git commit -m \"$(cat <<'EOF'\nsops/age $SOPS_AGE_KEY /proc/self/environ keys.txt\nEOF\n)\"", false),
+        ("gh pr create --body \"$(cat <<'EOF'\nsops/age $SOPS_AGE_KEY /proc/self/environ keys.txt\nEOF\n)\"", false),
+        ("sops --config .sops.yaml -e f.yaml", false), ("brew install sops age", false),
+        ("apt-get install -y age sops", false), ("mv sops /usr/local/bin/sops", false),
+        ("install -m 755 sops /usr/local/bin/sops", false),
+        ("tar xzf age.tar.gz && mv age/age /usr/local/bin/", false),
+        ("cargo nextest run sops decrypt", false), ("grep -rn '/proc/self/environ' src", false),
+        ("npx sops -d f", true), ("nix run nixpkgs#sops -- -d f", true),
+        ("flock /tmp/l sops -d f", true), ("strace -f sops -d f", true),
+        ("git bisect run sops -d f", true), ("coproc sops -d f", true),
+        ("case x in *) sops -d f;; esac", true),
+        ("if false; then :; elif sops -d f; then :; fi", true),
+        ("bosun main-triage --run \"sops -d f\"", true),
+        ("bosun main-triage --run='sops -d f'", true),
+        ("echo sops | xargs -I{} sh -c '{} -d f'", true), ("rg --pre sops x src", true),
+        ("rg --pre=sops x src", true), ("grep x /proc/self/environ", true),
+        ("grep -e x /proc/self/environ", true), ("rg pat src /proc/1/environ", true),
+        ("gh api -f body=\"x sops -d y\" repos/o/r/issues", false),
+        ("gh issue list -q \".[] | sops -d\"", false), ("bosun claim 3", false),
+        ("rg --pre-glob '*.gz' x src", false), ("npm install sops age", false),
+        ("cargo test sops", false), ("curl -o sops https://x/sops", false),
+        ("env | grep -i sops", true), ("printenv | grep -i sops_age", true),
+        ("cat ~/.config/*/age/keys.txt", true), ("cat ~/.config/s*/age/keys.txt", true),
+        ("cat ~/.config/so\"ps/age/keys.txt\"", true), ("sops --age -e f", true),
+        ("sops --age encrypt f", true), ("sops --unencrypted-suffix -e f", true),
+        ("sops --age=age1abc -e f", false), ("sops --verbose -e f.yaml", false),
+    ];
+
+    #[test]
+    fn decrypt_lock_table() {
+        let wrong: Vec<_> = DECRYPT_CASES
+            .iter()
+            .filter(|(cmd, deny)| bash(cmd, "feature").is_some() != *deny)
+            .collect();
+        assert!(wrong.is_empty(), "wrong verdict: {wrong:#?}");
+        let why = bash("sops -d f", "feature").unwrap();
+        assert!(!why.contains('\n') && why.contains("hoist secrets exec"));
     }
 }
