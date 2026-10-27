@@ -627,7 +627,7 @@ fn list_works_in_a_cloud_session_and_says_so() {
 }
 
 const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves again with a GitHub review, or another owner approves with a GitHub review";
-const WITHDRAWN_DISMISSED: &str = "an owner's request for changes on this head was dismissed; it needs a fresh plain owner comment (`bosun approve <pr>@<head>`, with the owner token) or a GitHub review from that owner, or a GitHub review from another owner";
+const WITHDRAWN_DISMISSED: &str = "an owner's request for changes on this head was dismissed; it needs a fresh plain owner comment (`bosun approve <pr>@<head>`, with the owner token), a signature bound to the dismissed review (`bosun approve <pr>@<head> --sign-key <pem>`), or a GitHub review from that owner, or a GitHub review from another owner";
 
 fn repost_of(v: &Value, i: usize) -> Option<&Value> {
     v["data"]["approved"][i].get("repost")

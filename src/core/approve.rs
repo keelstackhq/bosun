@@ -253,20 +253,38 @@ pub fn signed_message(role: Role, owner: &str, repo: &str, pr: u64, head: &str) 
     )
 }
 
-/// The `(key id, base64 signature)` of each `bosun-sig ed25519 <id> <sig>` line of a comment
-/// whose first line is `/bosun approve <head>`; empty for any other comment.
-pub fn signature_lines<'a>(body: &'a str, head: &str) -> Vec<(&'a str, &'a str)> {
+/// The review id a v2 comment names, from the first line `/bosun approve <head> after-review <id>`:
+/// plain decimal digits without a leading zero, else `None` (fail closed).
+fn after_review(first: &str, head: &str) -> Option<u64> {
+    let id = first
+        .strip_prefix(&format!("/bosun approve {head} after-review "))?
+        .trim_end();
+    let n: u64 = id.parse().ok()?;
+    (n.to_string() == id).then_some(n)
+}
+
+/// The `(review id, key id, base64 signature)` of each `bosun-sig ed25519 <id> <sig>` line of a
+/// comment whose first line is `/bosun approve <head>` (review id `None`: a v1 signature) or
+/// `/bosun approve <head> after-review <id>` (a v2 signature); empty for any other comment.
+pub fn signature_lines<'a>(body: &'a str, head: &str) -> Vec<(Option<u64>, &'a str, &'a str)> {
     let mut lines = body.lines();
     let first = lines.next().unwrap_or_default().trim();
-    if head.len() != 40 || first != format!("/bosun approve {head}") {
+    if head.len() != 40 {
         return Vec::new();
     }
+    let review = if first == format!("/bosun approve {head}") {
+        None
+    } else if let Some(n) = after_review(first, head) {
+        Some(n)
+    } else {
+        return Vec::new();
+    };
     lines
         .filter_map(|l| {
             let parts: Vec<&str> = l.trim().split(' ').collect();
             match parts.as_slice() {
                 ["bosun-sig", "ed25519", id, sig] if !id.is_empty() && !sig.is_empty() => {
-                    Some((*id, *sig))
+                    Some((review, *id, *sig))
                 }
                 _ => None,
             }
@@ -282,6 +300,16 @@ pub fn verify_ed25519(public_key: &[u8], msg: &[u8], sig: &[u8]) -> bool {
         && UnparsedPublicKey::new(&ED25519, public_key)
             .verify(msg, sig)
             .is_ok()
+}
+
+/// The bytes an owner key signs to clear the withdrawal of the dismissed owner review `review`:
+/// bound to that review, so it cannot be replayed after a newer dismissal.
+pub fn signed_message_v2(owner: &str, repo: &str, pr: u64, head: &str, review: u64) -> String {
+    format!(
+        "bosun-approve v2 {}/{}#{pr} {head} after-review {review}",
+        owner.to_ascii_lowercase(),
+        repo.to_ascii_lowercase()
+    )
 }
 
 /// Files that decide who approves: a PR that changes one (or renames one away) never passes on a
@@ -309,9 +337,10 @@ pub fn trust_files_changed<'a>(
         .collect()
 }
 
-/// The comment `bosun approve --sign-key` posts.
-pub fn signed_comment(head: &str, key_id: &str, sig_b64: &str) -> String {
-    format!("/bosun approve {head}\nbosun-sig ed25519 {key_id} {sig_b64}")
+/// The comment `bosun approve --sign-key` posts; `after` is the dismissed review a v2 names.
+pub fn signed_comment(head: &str, after: Option<u64>, key_id: &str, sig_b64: &str) -> String {
+    let after = after.map_or(String::new(), |r| format!(" after-review {r}"));
+    format!("/bosun approve {head}{after}\nbosun-sig ed25519 {key_id} {sig_b64}")
 }
 
 #[cfg(test)]
@@ -543,5 +572,25 @@ mod tests {
         ] {
             assert!(!api_url_ok(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn signature_lines_tell_v1_from_v2() {
+        let h = "a".repeat(40);
+        let sig = "bosun-sig ed25519 k1 AAAA";
+        let b1 = format!("/bosun approve {h}\n{sig}");
+        let v1 = signature_lines(&b1, &h);
+        assert_eq!(v1, [(None, "k1", "AAAA")]);
+        let b2 = format!("/bosun approve {h} after-review 42\n{sig}");
+        let v2 = signature_lines(&b2, &h);
+        assert_eq!(v2, [(Some(42), "k1", "AAAA")]);
+        for bad in ["", "x", "07", "-1", "1 2", "99999999999999999999999"] {
+            let body = format!("/bosun approve {h} after-review {bad}\n{sig}");
+            assert!(signature_lines(&body, &h).is_empty(), "{bad:?}");
+        }
+        assert_eq!(
+            signed_message_v2("Acme", "Widget", 3, &h, 7),
+            format!("bosun-approve v2 acme/widget#3 {h} after-review 7")
+        );
     }
 }
