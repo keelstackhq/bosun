@@ -1,5 +1,6 @@
 mod common;
 
+use bosun::core::prereqs::digest;
 use common::fake::FakeGithub;
 use common::run;
 use serde_json::Value;
@@ -27,7 +28,6 @@ fn setup() -> (tempfile::TempDir, FakeGithub) {
     (tmp, fake)
 }
 
-/// `bosun prereqs plans/x.md <extra>`.
 fn go(fake: &FakeGithub, dir: &Path, extra: &[&str]) -> (i32, Value) {
     let mut a = vec!["-C", dir.to_str().unwrap(), "prereqs", "plans/x.md"];
     a.extend(extra);
@@ -40,6 +40,12 @@ fn items(v: &Value) -> &Vec<Value> {
 
 fn ids(v: &Value) -> Vec<&str> {
     items(v).iter().map(|i| i["id"].as_str().unwrap()).collect()
+}
+
+fn done(v: &Value) -> Vec<bool> {
+    (1..=6)
+        .map(|k| item(v, &format!("H{k}"))["done"] == true)
+        .collect()
 }
 
 fn item<'a>(v: &'a Value, id: &str) -> &'a Value {
@@ -57,8 +63,10 @@ fn verifies_through_the_api_and_writes_nothing_without_post() {
         ["H2", "H1"],
         "open computer items first, done last"
     );
-    assert_eq!(item(&v, "H1")["done"], true);
-    assert_eq!(item(&v, "H2")["done"], false);
+    assert_eq!(
+        (&item(&v, "H1")["done"], &item(&v, "H2")["done"]),
+        (&true.into(), &false.into())
+    );
     assert_eq!(v["data"]["open"], 1);
     assert_eq!(v["data"]["plans"][0]["plan_path"], "plans/x.md");
     assert!(v["data"]["message"].as_str().unwrap().contains('1'));
@@ -69,10 +77,14 @@ fn verifies_through_the_api_and_writes_nothing_without_post() {
 #[test]
 fn ticks_count_for_owner_items_only() {
     let (tmp, fake) = setup();
-    let body = "<!-- bosun:prereqs plans/x.md -->\n\
-                - [x] **H2** a <!-- bosun:prereq H2 blocks=M1 verify=owner -->\n\
-                - [x] **H1** b <!-- bosun:prereq H1 blocks=M1 verify=api ok -->\n";
-    fake.issue(7, "Owner checklist: x", &["bosun:prereqs"], body);
+    let h2 = digest("pc thing", "run it", "owner");
+    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN");
+    let body = format!(
+        "<!-- bosun:prereqs plans/x.md -->\n\
+         - [x] **H2** a <!-- bosun:prereq H2 sum={h2} state=owner -->\n\
+         - [x] **H1** b <!-- bosun:prereq H1 sum={h1} state=api ok -->\n"
+    );
+    fake.issue(7, "Owner checklist: x", &["bosun:prereqs"], &body);
     let (code, v) = go(&fake, tmp.path(), &["--no-setup"]);
     assert_eq!(code, 0, "{v}");
     // The secret is missing: a tick or an old `ok` does not finish it.
@@ -98,16 +110,10 @@ fn setup_steps_come_from_doctor_unless_skipped() {
     let (code, v) = go(&fake, tmp.path(), &[]);
     assert_eq!(code, 0, "{v}");
     let d = item(&v, "D2");
-    assert_eq!(
-        (d["on"].as_str(), d["verify"].as_str()),
-        (Some("computer"), Some("doctor"))
-    );
+    assert_eq!([&d["on"], &d["verify"]], ["computer", "doctor"]);
     assert!(!d["steps"].as_str().unwrap().is_empty());
-    assert!(
-        ids(&go(&fake, tmp.path(), &["--no-setup"]).1)
-            .iter()
-            .all(|i| !i.starts_with('D'))
-    );
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
+    assert!(ids(&v).iter().all(|i| !i.starts_with('D')));
 }
 
 #[test]
@@ -119,10 +125,7 @@ fn approvals_and_the_delegate_key() {
     write(tmp.path(), "src/cli/risk_check.rs", "");
     let (_, v) = n(&[]);
     let a = &v["data"]["plans"][0]["approvals"][0];
-    assert_eq!(
-        (a["task"].as_str(), a["needs"].as_str()),
-        (Some("M1/T2"), Some("owner"))
-    );
+    assert_eq!([&a["task"], &a["needs"]], ["M1/T2", "owner"]);
     assert!(!ids(&v).contains(&"K1"));
     // A delegate-class task needs a delegate key, until one is enrolled.
     write(tmp.path(), ".bosun/risk.toml", &rule("docs/**", "delegate"));
@@ -147,20 +150,13 @@ fn every_verify_kind_reads_its_api_path() {
         );
     }
     write(tmp.path(), "plans/x.md", &plan);
-    let done = |v: &Value| {
-        (1..=6)
-            .map(|k| item(v, &format!("H{k}"))["done"] == true)
-            .collect::<Vec<_>>()
-    };
     assert_eq!(done(&go(&fake, tmp.path(), &["--no-setup"]).1), [false; 6]);
-    for p in [
-        "actions/secrets/S",
-        "environments/release/secrets/S",
-        "environments/release/variables/V",
-    ] {
-        fake.present(p);
-    }
-    fake.present("environments/release");
+    let present =
+        "actions/secrets/S|environments/release/secrets/S|environments/release/variables/V";
+    present
+        .split('|')
+        .chain(["environments/release"])
+        .for_each(|p| fake.present(p));
     fake.variable("V", "1");
     fake.content("docs/x.md", "main", "x");
     assert_eq!(done(&go(&fake, tmp.path(), &["--no-setup"]).1), [true; 6]);
@@ -169,5 +165,5 @@ fn every_verify_kind_reads_its_api_path() {
     fake.fail_path("contents/docs/x.md", 403);
     let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
     assert_eq!(done(&v), [true, true, false, false, true, false]);
-    assert_eq!(item(&v, "H6")["api"], false);
+    assert_eq!(item(&v, "H6")["state"], "api 403");
 }
