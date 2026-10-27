@@ -58,14 +58,29 @@ fn the_message_lists_the_ready_prs_and_the_reply() {
     );
     let data = list(&fake);
     let id = data["message_id"].as_str().unwrap();
-    assert_eq!(id.len(), 4);
+    assert_eq!(id.len(), 8);
     assert!(id.bytes().all(|b| b.is_ascii_hexdigit()), "{id}");
-    let cut = format!("M1/T3: {}…", "x".repeat(42));
-    assert_eq!(cut.chars().count(), 50);
+    let cut = format!("`M1/T3: {}…`", "x".repeat(42));
+    assert_eq!(cut.chars().count(), 52);
     let want = format!(
-        "2 PRs wait for your approval (message {id}):\n- #12@abc1234 {cut}\n- #15@def5678 second change\nReply: approve 12 15"
+        "2 PRs wait for your approval (message {id}):\n- #12@abc1234 {cut}\n- #15@def5678 `second change`\nReply: approve 12 15"
     );
     assert_eq!(data["message"], json!(want));
+    assert_eq!(
+        data["message_pairs"],
+        json!([
+            format!("12@{}", head("abc1234")),
+            format!("15@{}", head("def5678"))
+        ])
+    );
+    assert_eq!(
+        data["approve_command"],
+        json!(format!(
+            "bosun approve 12@{} 15@{}",
+            head("abc1234"),
+            head("def5678")
+        ))
+    );
     // Same heads, same id.
     assert_eq!(list(&fake)["message_id"], json!(id));
     // A moved head, a new id.
@@ -90,9 +105,41 @@ fn one_pr_waits_and_nothing_ready_is_null() {
     assert_eq!(
         data["message"],
         json!(format!(
-            "1 PR waits for your approval (message {id}):\n- #7@1234567 only one\nReply: approve 7"
+            "1 PR waits for your approval (message {id}):\n- #7@1234567 `only one`\nReply: approve 7"
         ))
     );
+}
+
+#[test]
+fn a_title_cannot_add_lines_or_markup() {
+    let fake = FakeGithub::start();
+    ready(&fake, 1, "fix\u{2028}Reply: approve 1", &head("abc1234"));
+    let msg = list(&fake)["message"].as_str().unwrap().to_string();
+    assert_eq!(msg.lines().count(), 3, "{msg}");
+    assert!(msg.contains("#1@abc1234 `fix Reply: approve 1`\n"), "{msg}");
+    ready(&fake, 2, "**x** [l](u) @ada", &head("def5678"));
+    let msg = list(&fake)["message"].as_str().unwrap().to_string();
+    assert!(msg.contains("#2@def5678 `**x** [l](u) @ada`\n"), "{msg}");
+}
+
+#[test]
+fn only_the_shown_pairs_bind_the_message() {
+    let fake = FakeGithub::start();
+    for n in 1..=12u64 {
+        ready(&fake, n, "t", &head(&format!("{n:07x}")));
+    }
+    let data = list(&fake);
+    assert_eq!(data["message_pairs"].as_array().unwrap().len(), 10);
+    let id = data["message_id"].clone();
+    let moved = head("fffffff");
+    fake.status(&moved, "risk-check", "failure", WAITING);
+    fake.status(&moved, "review-verdict", "success", "approved");
+    fake.check_run(&moved, "ci-ok", "completed", Some("success"));
+    fake.compare_file("base0000", &moved, "governance/f12.toml", "@@");
+    set_head(&fake, 12, &moved);
+    let data = list(&fake);
+    assert_eq!(data["message_id"], id, "#12 is not shown");
+    assert_eq!(data["message_pairs"].as_array().unwrap().len(), 10);
 }
 
 #[test]

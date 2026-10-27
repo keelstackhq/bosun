@@ -1,1 +1,1 @@
-- `bosun approve --list` adds `data.message` and `data.message_id`: one short chat text for the owner listing the ready PRs and the `Reply: approve ...` line, with a 4-hex id of the sorted `pr@head` pairs (both null when nothing is ready).
+- `bosun approve --list` adds `data.message`, `data.message_id` (8 hex characters) and `data.message_pairs`: one short chat text for the owner with inert titles, at most 10 PRs, and the `Reply: approve ...` line; the id hashes only the shown `pr@head` pairs (all null when nothing is ready).

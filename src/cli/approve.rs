@@ -60,7 +60,7 @@ const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/b
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
+const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 struct Board {
     ready: Vec<Ready>,
@@ -193,13 +193,14 @@ fn exec(
             .iter()
             .map(|r| (r.pr, r.head_sha.clone(), r.title.clone()))
             .collect();
-        let (message_id, message) = match batch_message(&items) {
-            Some((id, text)) => (json!(id), json!(text)),
-            None => (Value::Null, Value::Null),
+        let (message_id, message, message_pairs) = match batch_message(&items) {
+            Some(m) => (json!(m.id), json!(m.text), json!(m.pairs)),
+            None => (Value::Null, Value::Null, Value::Null),
         };
         return Ok(Outcome::data(json!({
             "message_id": message_id,
             "message": message,
+            "message_pairs": message_pairs,
             "ready": b.ready.iter().map(ready_json).collect::<Vec<_>>(),
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
