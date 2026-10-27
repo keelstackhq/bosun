@@ -61,6 +61,7 @@ pub fn companions(globs: &[String]) -> Vec<String> {
     out
 }
 
+/// `plan::parse` refuses invalid touch globs, so none is skipped for plan input.
 fn parsed(globs: &[String]) -> Vec<Glob> {
     globs.iter().filter_map(|g| Glob::parse(g).ok()).collect()
 }
@@ -103,27 +104,50 @@ fn reach(tasks: &[TaskTouch], item_depends: &HashMap<String, Vec<String>>) -> Ve
         .collect()
 }
 
+/// Parallel overlaps: the first `keep` pairs, and how many more were found before the scan
+/// stopped. `capped` is true when it stopped at `MAX_COUNTED` pairs, so `more` is a lower bound.
+#[derive(Debug, Default, PartialEq)]
+pub struct Overlaps {
+    pub pairs: Vec<Overlap>,
+    pub more: usize,
+    pub capped: bool,
+}
+
+/// The scan stops once this many overlapping pairs are known.
+pub const MAX_COUNTED: usize = 1000;
+
 /// Pairs of tasks whose touch overlaps and where neither reaches the other through `depends`.
-/// Order: by task position.
+/// Order: by task position. Keeps the first `keep` pairs and counts further ones up to
+/// `MAX_COUNTED` in all, then stops, so a huge plan does not pay for the full quadratic scan.
 pub fn parallel_overlaps(
     tasks: &[TaskTouch],
     item_depends: &HashMap<String, Vec<String>>,
-) -> Vec<Overlap> {
+    keep: usize,
+) -> Overlaps {
     let reach = reach(tasks, item_depends);
     let globs: Vec<Vec<Glob>> = tasks.iter().map(|t| parsed(&t.touch)).collect();
-    let mut out = Vec::new();
+    let mut out = Overlaps::default();
     for i in 0..tasks.len() {
         for j in i + 1..tasks.len() {
             if reach[i].contains(&j) || reach[j].contains(&i) {
                 continue;
             }
-            if let Some((ga, gb)) = glob::first_overlap(&globs[i], &globs[j]) {
-                out.push(Overlap {
+            let Some((ga, gb)) = glob::first_overlap(&globs[i], &globs[j]) else {
+                continue;
+            };
+            if out.pairs.len() < keep {
+                out.pairs.push(Overlap {
                     a: tasks[i].id.clone(),
                     b: tasks[j].id.clone(),
                     glob_a: ga,
                     glob_b: gb,
                 });
+            } else {
+                out.more += 1;
+            }
+            if out.pairs.len() + out.more >= MAX_COUNTED {
+                out.capped = true;
+                return out;
             }
         }
     }
@@ -214,6 +238,20 @@ mod tests {
             "a/Cargo.toml a/Cargo.lock Cargo.lock Cargo.toml w/package.json \
 w/pnpm-lock.yaml pnpm-lock.yaml x-Cargo.toml"
         );
+    }
+
+    #[test]
+    fn the_overlap_scan_stops_at_the_cap() {
+        let t: Vec<TaskTouch> = (0..60)
+            .map(|k| task(&format!("M1/T{k}"), &["src/**"], &[]))
+            .collect();
+        let o = parallel_overlaps(&t, &HashMap::new(), 20);
+        assert_eq!(
+            (o.pairs.len(), o.more, o.capped),
+            (20, MAX_COUNTED - 20, true)
+        );
+        let o = parallel_overlaps(&t[..7], &HashMap::new(), 20);
+        assert_eq!((o.pairs.len(), o.more, o.capped), (20, 1, false));
     }
 
     #[test]
