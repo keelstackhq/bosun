@@ -45,9 +45,20 @@ struct Out {
 }
 
 fn hook(fake: Option<&FakeGithub>, repo: &Path, now: &str, sub: &str, input: &Value) -> Out {
+    hook_as("session_me", fake, repo, now, sub, input)
+}
+
+fn hook_as(
+    session: &str,
+    fake: Option<&FakeGithub>,
+    repo: &Path,
+    now: &str,
+    sub: &str,
+    input: &Value,
+) -> Out {
     let mut cmd = bosun();
     cmd.current_dir(repo)
-        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_SESSION", session)
         .env("BOSUN_NOW", now)
         .args(["hook", sub])
         .write_stdin(input.to_string());
@@ -120,6 +131,45 @@ fn own_lease_unrelated_and_outside_paths_are_allowed() {
     }
     let read = json!({"file_path": "src/core/a.rs"});
     allowed(&pre(&fake, tmp.path(), "Read", read));
+}
+
+#[test]
+fn per_task_lease_of_my_own_session_is_mine_but_blocks_other_tasks() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    fake.issue(19, "task", &["bosun:state/claimed"], "x");
+    fake.comment(19, &lease_note("session_me/19", LIVE, "crates/**"));
+    let edit = json!({"file_path": "crates/cli/src/run.rs"});
+    allowed(&pre(&fake, tmp.path(), "Edit", edit.clone()));
+    // Another task of the same orchestrator is a different session and still conflicts.
+    let input = call(tmp.path(), "Edit", edit);
+    let other = hook_as(
+        "session_me/20",
+        Some(&fake),
+        tmp.path(),
+        T0,
+        "pre-tool-use",
+        &input,
+    );
+    denied(&other);
+}
+
+#[test]
+fn read_only_gh_tools_may_filter_on_a_state_label() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let filter = json!({"labels": ["bosun:state/ready"]});
+    allowed(&pre(
+        &fake,
+        tmp.path(),
+        "mcp__github__list_issues",
+        filter.clone(),
+    ));
+    denied(&pre(&fake, tmp.path(), "mcp__github__issue_write", filter));
+    let doc = "cat >> docs/x.md <<EOF\nThe bosun:state/ready label (see `bosun status`).\nEOF";
+    let bash = |c: &str| pre(&fake, tmp.path(), "Bash", json!({"command": c}));
+    allowed(&bash(doc));
+    denied(&bash(
+        "cat <<EOF\n`gh issue edit 4 --add-label bosun:state/merged`\nEOF",
+    ));
 }
 
 #[test]

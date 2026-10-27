@@ -43,6 +43,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   fragment `changelog.d/<name>.md` or `docs/progress.d/<name>.md` instead (name: the branch with
   `/` as `-`), so merging main never conflicts. Before a release, a docs PR to main runs
   `bash .bosun/fold-fragments.sh`; the release PR then moves Unreleased under the version.
+- Run `git checkout -b <branch>` as its own command before any compound command that commits: the merge-lock reads the branch before the whole command runs, so `git checkout -b X && git commit` on the default branch is refused.
 - Never skip, delete or weaken a test to get green; test-integrity refuses it.
 - Lessons are not in this file. A review pack carries the lessons that match your files.
 - bosun's own rules and their reasons: https://github.com/keelstackhq/bosun/blob/main/docs/spec.md.

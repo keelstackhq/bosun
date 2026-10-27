@@ -26,7 +26,7 @@ pub fn edited_path(tool: &str, input: &Value) -> Option<String> {
 pub fn edit_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
     let hit = leases
         .iter()
-        .filter(|l| l.session != me && l.session != crate::core::lease::orchestrator_of(me))
+        .filter(|l| !is_mine(&l.session, me))
         .find_map(|l| {
             let theirs = match glob::parse_all(&l.touch) {
                 Ok(globs) => globs.iter().find(|g| g.matches(path))?.as_str().to_string(),
@@ -46,6 +46,13 @@ pub fn edit_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
         hit.describe(),
         hit.issue
     ))
+}
+
+/// A lease holder whose files `me` may edit: itself, its orchestrator (`S` for `S/task`), or a
+/// per-task session of its own (`S/19` for the hook, which sees only the plain `S`).
+fn is_mine(holder: &str, me: &str) -> bool {
+    let orch = crate::core::lease::orchestrator_of;
+    holder == me || holder == orch(me) || orch(holder) == me
 }
 
 /// The checked-out branch of the git target a command names, given as `git` global options
@@ -69,6 +76,14 @@ pub fn tool_rules(
     if let Some(name) = tool.strip_prefix("mcp__github__") {
         if matches!(name, "merge_pull_request" | "enable_pr_auto_merge") {
             return Some(format!("`{tool}` is refused: {MERGE_FIX}"));
+        }
+        // Reading or listing sets no label, even when the filter names a state label.
+        if name.starts_with("list_")
+            || name.starts_with("search_")
+            || name.starts_with("get_")
+            || name.ends_with("_read")
+        {
+            return None;
         }
         // A label tool is judged on its whole input; any other tool only on its label fields,
         // so a PR or issue body that names a state label in prose is not a label edit.
@@ -210,9 +225,12 @@ fn read_only(text: &str, depth: usize) -> bool {
         return false;
     }
     if let Some(segments) = plain_segments(text) {
-        return segments
-            .iter()
-            .all(|s| !s.grouped && !s.dollar && segment_ro(&s.words, s.glob));
+        return segments.iter().all(|s| {
+            !s.grouped
+                && !s.dollar
+                && segment_ro(&s.words, s.glob)
+                && s.subs.iter().all(|t| read_only(t, depth + 1))
+        });
     }
     // Backticks nest only when escaped; unescaped, every real span is a gap between two
     // consecutive backticks. An odd count is an unterminated span.
@@ -262,14 +280,17 @@ struct PlainSegment {
     grouped: bool,
     dollar: bool,
     glob: bool,
+    /// Command substitutions in the unquoted heredoc bodies of this command: they run.
+    subs: Vec<String>,
 }
 
 /// The simple commands of a plain command line, split the way bash splits it: `'..'`, `".."`
 /// and `\` quoting, `#` comments, `\`-newline joins, redirections (`>&`, `&>`, `>|`) are not
 /// separators, and heredoc bodies are skipped. `None` for anything this does not model
 /// exactly (command or parameter substitution, `$'..'`, an unterminated quote or heredoc, an
-/// unquoted-delimiter heredoc body with `$` or a backtick): the caller then splits more
-/// roughly.
+/// unquoted-delimiter heredoc body with a `$name`, `${` or an unterminated substitution): the caller then
+/// splits more roughly. The substitutions of an unquoted heredoc body run, so they are kept in
+/// `PlainSegment::subs` to be judged; the rest of the body is data.
 fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
     let c: Vec<char> = text.chars().collect();
     let (mut out, mut seg) = (Vec::new(), PlainSegment::default());
@@ -348,6 +369,7 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
                 out.push(std::mem::take(&mut seg));
                 i += 1;
                 for (delim, tabs, quoted) in std::mem::take(&mut heredocs) {
+                    let mut body = String::new();
                     loop {
                         if i >= c.len() {
                             return None;
@@ -363,11 +385,19 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
                         } else {
                             &line
                         };
+                        // Bash joins a backslash-newline before it matches the delimiter.
+                        if !quoted && (line.len() - line.trim_end_matches('\\').len()) % 2 == 1 {
+                            return None;
+                        }
                         if bare == delim {
+                            // The body is data, but its substitutions run: judge them.
+                            let subs = heredoc_subs(&body)?;
+                            out.last_mut()?.subs.extend(subs);
                             break;
                         }
-                        if !quoted && line.contains(['$', '`']) {
-                            return None;
+                        if !quoted {
+                            body.push_str(&line);
+                            body.push('\n');
                         }
                     }
                 }
@@ -455,6 +485,58 @@ fn plain_segments(text: &str) -> Option<Vec<PlainSegment>> {
     flush(&mut word, &mut started, &mut seg);
     out.push(seg);
     Some(out)
+}
+
+/// The command substitutions (`$( )` and backtick spans) in an unquoted heredoc body; the rest
+/// of the body is text. A backslash escapes `$` and a backtick. `None` for anything not modelled
+/// exactly (`$name`, `${ }`, an unterminated span, a span with a quote, `#`, `<<`, newline,
+/// backslash or `case`): the caller then judges the whole command roughly.
+fn heredoc_subs(body: &str) -> Option<Vec<String>> {
+    let c: Vec<char> = body.chars().collect();
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < c.len() {
+        match c[i] {
+            '\\' => i += 1,
+            '`' => {
+                let end = c[i + 1..].iter().position(|&x| x == '`')? + i + 1;
+                out.push(c[i + 1..end].iter().collect::<String>());
+                i = end;
+            }
+            // A variable may hold text that a later expansion runs (`${x@P}`, the F13 probes):
+            // only a bare `$` (before a space or the end) is plain text.
+            '$' if c
+                .get(i + 1)
+                .is_some_and(|n| *n != '(' && !n.is_whitespace()) =>
+            {
+                return None;
+            }
+            '$' if c.get(i + 1) == Some(&'(') => {
+                let (mut level, mut j) = (0, i + 1);
+                loop {
+                    match *c.get(j)? {
+                        '(' => level += 1,
+                        ')' => level -= 1,
+                        _ => {}
+                    }
+                    j += 1;
+                    if level == 0 {
+                        break;
+                    }
+                }
+                out.push(c[i + 2..j - 1].iter().collect::<String>());
+                i = j - 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    // Fail closed: the span end above counts raw parens, so a span with anything that can hide
+    // or fake a `)` (a quote, a comment, a nested heredoc, a newline, an escape, a `case`
+    // pattern) is not modelled.
+    let odd = |t: &String| {
+        t.contains(['\'', '"', '#', '\\', '\n']) || t.contains("<<") || t.contains("case")
+    };
+    (!out.iter().any(odd)).then_some(out)
 }
 
 /// Variables an assignment-only segment may not set: they change which program runs, or make
@@ -1134,6 +1216,72 @@ mod tests {
         }
     }
 
+    /// The guard cannot parse these unquoted heredoc bodies exactly (a `)` inside a quote, a
+    /// comment, a nested heredoc or a `case` pattern; a delimiter joined by a backslash-newline),
+    /// so each is refused although bash runs the label write.
+    #[test]
+    fn label_lock_refuses_unquoted_heredoc_bodies_it_cannot_parse() {
+        let g = "gh issue edit 1 --add-label bosun:state/merged";
+        for body in [
+            format!("$(true # )\n{g}\n)"),
+            format!("$(echo \")\"; {g})"),
+            format!("$(echo ')'; {g})"),
+            format!("$(cat <<X\n)\nX\n{g})"),
+            format!("$(true;# )\n{g})"),
+            format!("$(case x in a) {g};; esac)"),
+            format!("`echo \\`{g}\\``"),
+            format!("EO\\\nF\n{g}"),
+        ] {
+            let cmd = format!("cat <<EOF\n{body}\nEOF");
+            assert!(bash(&cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn label_lock_treats_unquoted_heredoc_prose_as_data() {
+        for cmd in [
+            "cat >> docs/x.md <<EOF\nThe bosun:state/ready label (see `bosun status`) is set by bosun.\nEOF",
+            "cat >> docs/x.md <<EOF\nbosun:state/ready costs $ 5; a | b\nEOF",
+            "cat >> docs/x.md <<EOF\nbosun:state/ready: $(bosun status)\nEOF",
+            "cat <<-EOF > docs/x.md\n\tbosun:state/ready \\`gh issue edit 1 --add-label bosun:state/x\\`\n\tEOF",
+        ] {
+            assert_eq!(bash(cmd, "x"), None, "{cmd}");
+        }
+        for cmd in [
+            "cat <<EOF\nbosun:state/ready `gh issue edit 1 --add-label bosun:state/merged`\nEOF",
+            "cat <<EOF\nprose $(gh issue edit 1 --add-label bosun:state/merged) prose\nEOF",
+            "cat <<EOF\nbosun:state/x ${y:-$(gh issue edit 1 --add-label bosun:state/merged)}\nEOF",
+            "cat <<EOF\nbosun:state/x $USER\nEOF",
+            "cat <<EOF\nbosun:state/x `unterminated\nEOF",
+            "cat <<EOF\nbosun:state/x $(gh label create bosun:state/x\nEOF",
+        ] {
+            assert!(bash(cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn read_only_github_tools_skip_the_label_lock() {
+        let call = |tool: &str, input: Value| tool_rules(tool, &input, &|_| None, "main");
+        let ready = json!({"labels": ["bosun:state/ready"], "state": "OPEN"});
+        for tool in [
+            "mcp__github__list_issues",
+            "mcp__github__search_issues",
+            "mcp__github__get_label",
+            "mcp__github__issue_read",
+            "mcp__github__pull_request_read",
+        ] {
+            assert_eq!(call(tool, ready.clone()), None, "{tool}");
+        }
+        for tool in [
+            "mcp__github__issue_write",
+            "mcp__github__update_pull_request",
+            "mcp__github__create_label",
+        ] {
+            assert!(call(tool, ready.clone()).is_some(), "{tool}");
+        }
+        assert!(call("mcp__github__merge_pull_request", json!({})).is_some());
+    }
+
     #[test]
     fn label_lock_judges_writes_not_mentions() {
         for cmd in [
@@ -1479,6 +1627,24 @@ mod tests {
                     .contains("D13")
             );
         }
+    }
+
+    #[test]
+    fn edit_lock_treats_leases_of_my_per_task_ids_as_mine() {
+        let lease = |session: &str| Lease {
+            issue: 19,
+            session: session.into(),
+            origin: "claimed".into(),
+            expires: Timestamp(i64::MAX),
+            touch: vec!["crates/**".into()],
+            comment_id: 1,
+        };
+        // The hook sees the plain session `S`; its lease was taken under `S/19`.
+        assert_eq!(edit_lock("crates/a.rs", &[lease("S/19")], "S"), None);
+        // `S/19` and `S/20` still conflict; so do a stranger and a prefix lookalike.
+        assert!(edit_lock("crates/a.rs", &[lease("S/19")], "S/20").is_some());
+        assert!(edit_lock("crates/a.rs", &[lease("S2/19")], "S").is_some());
+        assert!(edit_lock("crates/a.rs", &[lease("T/19")], "S").is_some());
     }
 
     #[test]
