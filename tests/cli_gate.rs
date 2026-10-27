@@ -161,6 +161,73 @@ fn doc_only_change_skips_the_test_gate() {
 }
 
 #[test]
+fn staged_and_untracked_changes_select_the_gate() {
+    let r = repo();
+    write(&r.root, "b/src/lib.rs", "// staged\n");
+    git(&r.root, &["add", "b/src/lib.rs"]);
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_ne!(v["data"]["skipped"], true, "{v}");
+    assert_eq!(r.calls(), vec!["nextest run --locked -p b"]);
+    assert_eq!(
+        v["data"]["uncommitted"],
+        serde_json::json!(["b/src/lib.rs"])
+    );
+
+    let r = repo();
+    write(&r.root, "a/src/new.rs", "// untracked\n");
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
+    assert_eq!(
+        v["data"]["uncommitted"],
+        serde_json::json!(["a/src/new.rs"])
+    );
+}
+
+#[test]
+fn an_unstaged_edit_of_a_tracked_file_selects_the_gate() {
+    let r = repo();
+    write(&r.root, "a/src/lib.rs", "// edited, not added\n");
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
+    assert_eq!(
+        v["data"]["uncommitted"],
+        serde_json::json!(["a/src/lib.rs"])
+    );
+    // A doc edit affects no package: the gate is skipped, and the edit is still listed.
+    let r = repo();
+    write(&r.root, "docs/x.md", "edited\n");
+    let (_, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert_eq!(v["data"]["uncommitted"], serde_json::json!(["docs/x.md"]));
+}
+
+#[test]
+fn the_diff_file_describes_the_files_on_disk() {
+    let r = repo();
+    let out = r.root.join("seen.diff");
+    let profile = format!(
+        "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.mutants]\ncmd = [\"cp\", \"{{diff}}\", \"{}\"]\nbudget_secs = 5\n",
+        out.display()
+    );
+    write(&r.root, ".bosun/profiles/rust.toml", &profile);
+    write(&r.root, "a/src/lib.rs", "// only in the working tree\n");
+    write(&r.root, "a/src/new.rs", "// untracked file\n");
+    // A committed change that the working tree reverted is not on disk, so not in the diff.
+    r.change("b/src/lib.rs");
+    write(&r.root, "b/src/lib.rs", "");
+    let (code, v, _) = r.gate(&["mutants", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    let seen = fs::read_to_string(out).unwrap();
+    for text in ["only in the working tree", "untracked file"] {
+        assert!(seen.contains(text), "{text}: {seen}");
+    }
+    assert!(!seen.contains("// changed"), "{seen}");
+}
+
+#[test]
 fn failing_command_is_exit_1_with_status() {
     let r = repo();
     r.change("a/src/lib.rs");
