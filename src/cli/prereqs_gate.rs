@@ -111,20 +111,14 @@ pub(crate) fn blockers(ticks: &[Held], item: &str, task: Option<&str>) -> Vec<St
     held.map(|t| t.id.clone()).collect()
 }
 
-/// The plan path in the body of the task's epic; `None` for hand-made work (no epic, or an epic
-/// without bosun's epic marker). A named epic that is gone, or an epic marker without a plan,
-/// fails closed. Task and epic bodies are agent-editable like the checklist (design F4): the
-/// hook refuses writes naming bosun's markers, best effort.
+/// The plan path of the task's epic; `None` for hand-made work (no epic, or no epic marker). A
+/// gone epic or a marker without a plan fails closed. Bodies are agent-editable (design F4).
 pub(crate) fn plan_of_task(gh: &dyn Github, meta: &TaskMeta) -> Result<Option<String>> {
     let Some(epic) = meta.epic else {
         return Ok(None);
     };
-    let broken = |why: String| {
-        BosunError::needs_human(
-            why,
-            "ask the orchestrator to run `bosun plan amend <plan>` for this task",
-        )
-    };
+    let fix = "ask the orchestrator to run `bosun plan amend <plan>` for this task";
+    let broken = |why: String| BosunError::needs_human(why, fix);
     let Some(e) = gh.get_issue(epic)? else {
         return Err(broken(format!(
             "epic #{epic} of {}/{} is missing",
