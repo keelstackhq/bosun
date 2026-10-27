@@ -532,13 +532,19 @@ pub fn parse_owners(text: &str) -> Result<Vec<Owner>, String> {
 const NOTE_OPEN: &str = "<!-- bosun:risk -->";
 const NOTE_CLOSE: &str = "<!-- /bosun:risk -->";
 
+/// `s` with backticks, angle brackets and control characters as `?`, for file names in a PR body.
+pub fn plain(s: &str) -> String {
+    let bad = |c: char| matches!(c, '`' | '<' | '>') || c.is_control();
+    s.chars().map(|c| if bad(c) { '?' } else { c }).collect()
+}
+
 /// The Risk note: the rules that matched, why, the evidence, and what the owner must check.
 pub fn risk_note(matches: &[Match], head_sha: &str) -> String {
     let mut s = format!("{NOTE_OPEN}\n## Risk: high\n\n");
     for m in matches {
         s.push_str(&format!("- **{}**: {}\n", m.rule, m.why));
         for e in &m.evidence {
-            s.push_str(&format!("  - {e}\n"));
+            s.push_str(&format!("  - {}\n", plain(e))); // evidence names files
         }
     }
     let ask = match requirement(matches) {
