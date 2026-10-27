@@ -1023,13 +1023,13 @@ const WRAPPERS: &[&str] = &[
 #[rustfmt::skip]
 const RUNNERS: &[(&str, &[&str], usize, &[&str])] = &[
     ("env", &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"], 0, &["-C", "--chdir"]),
-    ("sudo", &["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"], 0, &["-D", "--chdir"]),
+    ("sudo", &["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user", "-R", "--chroot", "-h", "--host", "-a", "--auth-type", "-c", "--login-class"], 0, &["-D", "--chdir"]),
     ("nice", &["-n", "--adjustment"], 0, &[]), ("command", &[], 0, &[]), ("exec", &["-a"], 0, &[]),
     ("nohup", &[], 0, &[]), ("setsid", &[], 0, &[]), ("time", &["-f", "--format", "-o", "--output"], 0, &[]),
     ("timeout", &["-k", "--kill-after", "-s", "--signal"], 1, &[]),
     ("stdbuf", &["-i", "--input", "-o", "--output", "-e", "--error"], 0, &[]),
     ("ionice", &["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"], 0, &[]),
-    ("xargs", &["-I", "-n", "-L", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-lines", "--max-procs", "--max-chars", "--delimiter", "--arg-file", "--eof"], 0, &[]),
+    ("xargs", &["-I", "-n", "-L", "-P", "-s", "-d", "-E", "-a", "--max-args", "--max-lines", "--max-procs", "--max-chars", "--delimiter", "--arg-file", "--eof", "--process-slot-var"], 0, &[]),
 ];
 
 /// The command after leading runners (`nice -n 5 sudo -u x grep ..`), and the directories
@@ -1068,7 +1068,11 @@ fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>) {
                 dirs.push(v);
             }
         }
-        cmd = &cmd[i.min(cmd.len())..];
+        // A runner with no command after it is the command (`command env`, `timeout 5 env`).
+        if cmd.get(i).is_none_or(|w| redirect(w)) {
+            break;
+        }
+        cmd = &cmd[i..];
     }
     (cmd, dirs)
 }
@@ -1538,8 +1542,14 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 .unwrap_or(w)
                 .to_string()
         };
-        let name = base(first);
-        let args = &rest[1..];
+        // Runners (`env`, `nice -n 5`, `timeout 5`, `sudo -u x`, `xargs`) run the command after
+        // them: judge it as the command, in the directory `env -C` or `sudo -D` moves to. An
+        // option they take that is not known may hide the real command, so after a runner no
+        // command exempts its words from being tried as commands.
+        let (cmd, cds) = unwrap_runners(&rest);
+        let wrapped = cmd.len() < rest.len();
+        let name = base(cmd.first().unwrap_or(first));
+        let args = &cmd[1.min(cmd.len())..];
         #[rustfmt::skip]
         let da = &args[..args.iter().position(|a| redirect(a)).unwrap_or(args.len())];
         let dump = match name.as_str() {
@@ -1565,17 +1575,6 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if dump {
             return Some(decrypt_reason("the environment"));
         }
-        // Runners (`env`, `nice -n 5`, `timeout 5`, `sudo -u x`, `xargs`) run the command after
-        // them: judge it as the command, in the directory `env -C` or `sudo -D` moves to.
-        let (cmd, cds) = unwrap_runners(&rest);
-        let (name, args, da) = match cmd.first() {
-            Some(c) if cmd.len() < rest.len() => {
-                let args = &cmd[1..];
-                let da = &args[..args.iter().position(|a| redirect(a)).unwrap_or(args.len())];
-                (base(c), args, da)
-            }
-            _ => (name, args, da),
-        };
         // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
         let (mut it, git) = (args.iter(), name == "git");
         let verb = loop {
@@ -1706,7 +1705,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 return Some(decrypt_reason("a search of the age key directory"));
             }
         }
-        if name == "bosun" {
+        if name == "bosun" && !wrapped {
             continue;
         }
         if READERS.contains(&name.as_str()) {
@@ -1764,10 +1763,11 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
             // ack and ugrep take commands in options (`--pager`, `--view`, `--filter`, abbreviated)
             // and from the environment, so only their pattern is data.
-            if !PAGED.contains(&name.as_str()) {
+            let paged = PAGED.contains(&name.as_str());
+            if !paged && !wrapped {
                 continue;
             }
-            let filters = match name.starts_with('u') {
+            let filters = match paged && name.starts_with('u') {
                 true => long_values(args, "--filter", 6),
                 false => Vec::new(),
             };
@@ -1780,7 +1780,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         }
         #[rustfmt::skip]
         let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
-        let safe = FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub;
+        let safe = !wrapped
+            && (FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub);
         // Data words: message and query option values, search patterns.
         let (msg, vi) = (
             matches!(name.as_str(), "git" | "gh"),
@@ -1790,7 +1791,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             name == "git" && verb == "grep",
             name == "gh" && verb == "search",
         );
-        let api = (name.as_str(), verb) == ("gh", "api");
+        let api = !wrapped && (name.as_str(), verb) == ("gh", "api");
         let mut data = vec![false; segment.len()];
         let (mut skip, mut pat_done) = (false, false);
         for (i, w) in segment.iter().enumerate() {
@@ -1830,6 +1831,10 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 data[a0 + j] |= pat;
             }
         }
+        // After a runner the command may be misread: no word is data.
+        if wrapped {
+            data.fill(false);
+        }
         // Options run command strings: a word or option value with whitespace is a command.
         for w in segment
             .iter()
@@ -1867,7 +1872,12 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
         }
         let off = segment.len() - rest.len();
-        for i in 0..if safe || paged { 0 } else { rest.len() } {
+        let tried = if safe || paged && !wrapped {
+            0
+        } else {
+            rest.len()
+        };
+        for i in 0..tried {
             if data[i + off] {
                 continue;
             }
@@ -3185,6 +3195,17 @@ mod tests {
         ("nice cargo test", false), ("timeout 60 cargo nextest run", false),
         ("command -v git", false), ("time rg pattern src", false), ("sudo apt-get install x", false),
         ("timeout 5 grep -r x src", false), ("xargs -n 1 grep -l x", false),
+        // After a runner every word is still tried as a command (an unknown option may
+        // take the next word), and a runner hides no env dump.
+        ("sudo -R cp sops -d f", true), ("sudo --chroot cp sops -d f", true),
+        ("sudo -h cp sops -d f", true), ("sudo -R tar sops -d f", true),
+        ("sudo -R cargo test sops -d f", true), ("sudo -R echo sops -d f", true),
+        ("sudo -R ack sops -d f", true), ("xargs --process-slot-var cp sops -d f", true),
+        ("sudo -Z cp sops -d f", true), ("nice cargo test -- sops -d f", true),
+        ("xargs -0 rm -f", false), ("nohup ./run.sh", false), ("nice ack sops src", true),
+        ("nice printenv", true), ("command env", true), ("timeout 5 env", true),
+        ("sudo printenv", true), ("nice printenv HOME", false), ("env -u X git status", false),
+        ("env FOO=1 cargo test", false), ("sudo -R /x printenv", true),
         ("git -C ~ grep -ieSECRET .config src", true), ("git -C ~ grep -ifpat .config src", true),
         ("git --icase-pathspecs -C ~ grep x -- .CONFIG", true),
         ("git --glob-pathspecs grep --no-index x src", true),
