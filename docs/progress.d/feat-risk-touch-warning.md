@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P6 · risk-check warns about files outside the task's lease (data.out_of_touch) · PR (feat/risk-touch-warning)

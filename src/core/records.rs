@@ -94,6 +94,13 @@ pub enum Record {
     },
     /// The PR that `bosun pr --auto-merge` queued for this task; `reap` reads it directly.
     TaskPr { session: String, pr: u64 },
+    /// An open PR that became conflicting with its base (`mergeable_state` dirty), posted by
+    /// `bosun main-health`. One per head and base sha pair.
+    Conflict {
+        pr: u64,
+        head_sha: String,
+        base_sha: String,
+    },
     /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
     Answer {
         session: String,
@@ -126,7 +133,7 @@ impl Record {
     /// The session that wrote the record; `""` for a `notified` record, which has none.
     pub fn session(&self) -> &str {
         match self {
-            Record::Notified { .. } | Record::Approve { .. } => "",
+            Record::Notified { .. } | Record::Approve { .. } | Record::Conflict { .. } => "",
             Record::Lease { session, .. }
             | Record::LeaseEnd { session, .. }
             | Record::Join { session, .. }
