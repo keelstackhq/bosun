@@ -1,6 +1,6 @@
 ## 14. Front-loaded human prerequisites
 
-The owner works mainly from a phone (org decision D-009). Every step of a request that only a
+The owner works mainly from a phone (proposed org decision D-009). Every step of a request that only a
 human can do is asked for at the start, in one checklist; agents then run to the end. The only
 later human touch is the approvals the risk model needs (§8), and those come in batches.
 
@@ -51,8 +51,11 @@ the GitHub MCP issue tools) that carries one of bosun's markers (`bosun:prereq`,
 **No mid-run asks.** An agent that holds a task's lease and meets a human step nobody listed
 runs `bosun hold <task issue>
 "<step>"`: bosun records the hold on the task, adds a box `X<n>` to the plan's checklist, releases
-the task and records a lesson; the claim gate keeps the task until the box is ticked. The
-orchestrator relays the updated checklist once and folds the step into the plan (`replaces: X1`).
+the task and records a lesson; `bosun claim` refuses the task until the box is ticked (`bosun wave plan`
+does not read holds yet, so a held task can still be offered; its claim fails). Ids are unique
+for the plan's life (a new one skips the plan's `replaces` ids). The orchestrator relays the
+updated checklist once and folds the step into the plan (`replaces: X1`, in an item that blocks
+the held task; `replaces` never releases another task's hold).
 
 **Approval batches.** `bosun approve --list` gives `data.message` (at most 10 ready PRs with inert
 titles and the reply `approve 12 15`), `data.message_id` (8 hex of the SHA-256 of the shown pairs'

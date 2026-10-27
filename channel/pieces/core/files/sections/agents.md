@@ -51,4 +51,12 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   https://github.com/keelstackhq/bosun/blob/main/docs/plan-format.md#cutting-tasks-for-parallel-work.
 - Never skip, delete or weaken a test to get green; test-integrity refuses it.
 - Lessons are not in this file. A review pack carries the lessons that match your files.
+- Front-load human steps: a plan lists every step only a human can do (secrets, settings,
+  accounts, keys) in `## Prerequisites`
+  (https://github.com/keelstackhq/bosun/blob/main/docs/prerequisites.md). Before work starts the
+  orchestrator runs `bosun prereqs <plan> --post` and relays `data.message` to the owner once.
+- Never wait mid-run for a human: run `bosun hold <issue> "<step>"` and take other work. Never
+  tick, edit or close the owner checklist issue (`bosun:prereqs`).
+- Orchestrators relay approvals in batches: `bosun approve --list` gives `data.message`; keep its
+  `data.message_pairs`, only the latest message is answerable, numbers come only from the owner.
 - bosun's own rules and their reasons: https://github.com/keelstackhq/bosun/blob/main/docs/spec.md.

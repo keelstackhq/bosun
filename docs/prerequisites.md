@@ -60,8 +60,9 @@ its checklist issue cannot be read, they refuse too (fix: `bosun prereqs <plan> 
 
 An agent that finds a human step nobody listed runs `bosun hold <task issue> "<step>"`. bosun
 adds it to the checklist (id `X1`, `X2`, ..., verified by the tick), releases the task, and the
-task waits for it. The agent takes other work. Rewrites of the checklist keep X items until a
-plan item lists them in `replaces:`.
+task waits for it: `bosun claim` refuses it until the box is ticked (`bosun wave plan` does not
+read holds yet). The agent takes other work. Rewrites of the checklist keep X items until a plan
+item that blocks the held task lists them in `replaces:`; an X id is never used twice in a plan.
 
 ## Automatic items
 
