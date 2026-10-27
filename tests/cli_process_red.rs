@@ -29,6 +29,7 @@ fn claim_is_refused_for_features_and_allowed_for_process_fix() {
     fake.issue(11, "feature", &["bosun:state/ready"], &task("feature"));
     fake.issue(12, "fix", &["bosun:state/ready"], &task("process-fix"));
     red(&fake);
+    fake.issue(10, "Epic", &[], ""); // the tasks' epic (no plan marker: no prereqs gate)
     let (code, v) = run(&fake, "session_a", NOW, &["claim", "11"]);
     assert_eq!(code, 4, "{v}");
     assert!(v["error"]["message"].as_str().unwrap().contains("#99"));
@@ -41,6 +42,7 @@ fn a_closed_process_red_issue_does_not_pause() {
     let fake = FakeGithub::start();
     fake.issue(11, "feature", &["bosun:state/ready"], &task("feature"));
     red(&fake);
+    fake.issue(10, "Epic", &[], ""); // the tasks' epic (no plan marker: no prereqs gate)
     fake.state.lock().unwrap().issues[1].state = "closed".into();
     assert_eq!(run(&fake, "session_a", NOW, &["claim", "11"]).0, 0);
 }
@@ -98,6 +100,7 @@ fn a_mainfix_task_is_claimed_under_process_red() {
     let fake = FakeGithub::start();
     fake.issue(11, "fix main", &["bosun:state/ready"], &task("mainfix"));
     red(&fake);
+    fake.issue(10, "Epic", &[], ""); // the tasks' epic (no plan marker: no prereqs gate)
     assert_eq!(run(&fake, "session_a", NOW, &["claim", "11"]).0, 0);
 }
 

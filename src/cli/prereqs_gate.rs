@@ -2,7 +2,7 @@
 //! that an open prerequisite of the task's plan blocks. It fails closed. Ids, blocks and verify
 //! kinds come from the plan file on the default branch; the checklist issue only supplies ticks.
 
-use super::plan::{epic_item, epic_plan};
+use super::plan::epic_plan;
 use super::prereqs::verify;
 use crate::app::{Result, default_branch};
 use crate::core::meta::TaskMeta;
@@ -28,10 +28,11 @@ fn closed(plan_path: &str, why: String) -> BosunError {
 /// checklist issue's name for messages, or `None` when the plan has no prerequisites.
 /// An item is done when the API finds it, or, for `verify: owner` and when the API cannot say,
 /// when its single box in the issue, with a matching sum, is ticked. Anything unreadable or
-/// ambiguous fails closed.
+/// ambiguous fails closed, and so does a `target` (item, task) the plan does not have.
 pub(crate) fn open_items(
     gh: &dyn Github,
     plan_path: &str,
+    target: Option<(&str, Option<&str>)>,
     wants: &dyn Fn(&[String]) -> bool,
 ) -> Result<Option<(String, Vec<Held>)>> {
     super::prereqs::check_plan_path(plan_path).map_err(|e| closed(plan_path, e.message))?;
@@ -48,6 +49,18 @@ pub(crate) fn open_items(
     let prereqs = pq::parse(&text, &parsed).map_err(bad)?;
     if prereqs.is_empty() {
         return Ok(None);
+    }
+    if let Some((item, task)) = target {
+        let it = parsed.items.iter().find(|i| i.id == item);
+        let known =
+            it.is_some_and(|i| task.is_none_or(|t| t == "P" || i.tasks.iter().any(|x| x.id == t)));
+        if !known {
+            let name = task.map_or_else(|| item.to_string(), |t| format!("{item}/{t}"));
+            return Err(BosunError::needs_human(
+                format!("{name} is not in {plan_path} on {branch}"),
+                "re-import the plan (bosun plan amend <plan>) so tasks match it",
+            ));
+        }
     }
     let marker = pq::issue_marker(plan_path);
     let mut found: Vec<Issue> = gh
@@ -98,38 +111,32 @@ pub(crate) fn blockers(ticks: &[Held], item: &str, task: Option<&str>) -> Vec<St
     held.map(|t| t.id.clone()).collect()
 }
 
-/// The plan path in the body of the task's epic; `None` without an epic or a plan marker.
+/// The plan path in the body of the task's epic; `None` for hand-made work (no epic, or an epic
+/// without bosun's epic marker). A named epic that is gone, or an epic marker without a plan,
+/// fails closed. Task and epic bodies are agent-editable like the checklist (design F4): the
+/// hook refuses writes naming bosun's markers, best effort.
 pub(crate) fn plan_of_task(gh: &dyn Github, meta: &TaskMeta) -> Result<Option<String>> {
     let Some(epic) = meta.epic else {
         return Ok(None);
     };
-    // A missing epic, or one without a plan marker, is not a plan task (hand-made work): no gate.
-    Ok(gh.get_issue(epic)?.and_then(|e| epic_plan(e.body_text())))
-}
-
-/// Exit 5 when an open item blocks the epic's whole item (`blocks: M5`).
-pub(crate) fn refuse_epic_if_held(gh: &dyn Github, epic: &Issue) -> Result<()> {
-    let (body, n) = (epic.body_text(), epic.number);
-    let (Some(plan_path), Some(item)) = (epic_plan(body), epic_item(body)) else {
-        return Ok(());
+    let broken = |why: String| {
+        BosunError::needs_human(
+            why,
+            "ask the orchestrator to run `bosun plan amend <plan>` for this task",
+        )
     };
-    let wants = |b: &[String]| b.contains(&item);
-    let Some((issue, ticks)) = open_items(gh, &plan_path, &wants)? else {
-        return Ok(());
+    let Some(e) = gh.get_issue(epic)? else {
+        return Err(broken(format!(
+            "epic #{epic} of {}/{} is missing",
+            meta.item, meta.task
+        )));
     };
-    let ids = blockers(&ticks, &item, None);
-    if ids.is_empty() {
-        return Ok(());
+    match epic_plan(e.body_text()) {
+        None if e.body_text().contains("<!-- bosun:epic") => Err(broken(format!(
+            "epic #{epic} has bosun's marker but no plan path"
+        ))),
+        plan => Ok(plan),
     }
-    Err(BosunError::needs_human(
-        format!(
-            "epic #{n} ({item}) waits for owner steps {} of {plan_path}",
-            ids.join(", ")
-        ),
-        format!(
-            "spawn another epic; the owner checklist {issue} lists the steps; after they are done the epic can be spawned"
-        ),
-    ))
 }
 
 /// Exit 5 when an open item of the task's plan blocks it.
@@ -142,7 +149,8 @@ pub(crate) fn refuse_if_held(gh: &dyn Github, n: u64, meta: &Option<TaskMeta>) -
     };
     let full = format!("{}/{}", meta.item, meta.task);
     let wants = |b: &[String]| b.iter().any(|x| *x == meta.item || *x == full);
-    let Some((issue, ticks)) = open_items(gh, &plan_path, &wants)? else {
+    let target = Some((meta.item.as_str(), Some(meta.task.as_str())));
+    let Some((issue, ticks)) = open_items(gh, &plan_path, target, &wants)? else {
         return Ok(());
     };
     let ids = blockers(&ticks, &meta.item, Some(&meta.task));
