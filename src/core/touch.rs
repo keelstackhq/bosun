@@ -61,6 +61,42 @@ pub fn companions(globs: &[String]) -> Vec<String> {
     out
 }
 
+/// A changed file as a PR lists it: its status and, for a rename, the old name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Changed {
+    pub path: String,
+    pub status: String,
+    pub previous: Option<String>,
+}
+
+/// Files a PR may always change: the per-branch fragments (CLAUDE.md), which never conflict.
+const FRAGMENTS: [&str; 2] = ["changelog.d/*.md", "docs/progress.d/*.md"];
+
+/// The paths of `changed` that no `touch` glob covers: files that are modified, removed or
+/// renamed (a rename checks the old name only; its new path is effectively added). Added and
+/// copied files (the source is unchanged) and the fragments always pass. Any other status is
+/// checked, not trusted. Sorted, deduped.
+pub fn outside(changed: &[Changed], touch: &[String]) -> Vec<String> {
+    // A bad glob is dropped alone; the rest still count.
+    let globs = parsed(&companions(touch));
+    let free = parsed(&FRAGMENTS.map(String::from));
+    let covered = |p: &str| globs.iter().chain(&free).any(|g| g.matches(p));
+    let mut out: Vec<String> = Vec::new();
+    for c in changed {
+        // A rename's new path is effectively added: only the old name is edited.
+        let p = match (c.status.as_str(), &c.previous) {
+            ("added" | "copied", _) => continue,
+            ("renamed", Some(old)) => old,
+            _ => &c.path,
+        };
+        if !covered(p) && !out.contains(p) {
+            out.push(p.clone());
+        }
+    }
+    out.sort();
+    out
+}
+
 /// `plan::parse` refuses invalid touch globs, so none is skipped for plan input.
 fn parsed(globs: &[String]) -> Vec<Glob> {
     globs.iter().filter_map(|g| Glob::parse(g).ok()).collect()
@@ -273,5 +309,26 @@ w/pnpm-lock.yaml pnpm-lock.yaml x-Cargo.toml"
             task("M1/T3", &["src/b.rs", "docs/x.md"], &[]),
         ];
         assert!(hotspots(&split, &none, 3).is_empty());
+    }
+
+    #[test]
+    fn outside_checks_the_old_name_of_a_rename_and_spares_added_and_copied_files() {
+        let c = |path: &str, status: &str, previous: Option<&str>| Changed {
+            path: path.into(),
+            status: status.into(),
+            previous: previous.map(String::from),
+        };
+        let changed = [
+            c("src/a.rs", "modified", None),
+            c("src/new.rs", "added", None),
+            c("Cargo.lock", "modified", None),
+            c("changelog.d/x.md", "modified", None),
+            c("src/b.rs", "renamed", Some("lib/old.rs")),
+            c("lib/z.rs", "removed", None),
+            c("lib/copy.rs", "copied", Some("lib/src.rs")),
+        ];
+        // The bad glob is dropped alone.
+        let touch = s(&["src/a.rs", "src/b.rs", "Cargo.toml", "[bad"]);
+        assert_eq!(outside(&changed, &touch), s(&["lib/old.rs", "lib/z.rs"]));
     }
 }
