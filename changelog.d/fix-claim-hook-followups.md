@@ -1,0 +1,1 @@
+- `bosun claim` re-reads the comments after setting a lost claim back to `ready` and restores `claimed` when a third session won meanwhile; the edit hook resolves the edited path with `canonicalize`, so symlinks and `link/../x` are judged by their real target.

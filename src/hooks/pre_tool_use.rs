@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::{cache, git_out};
 use crate::app::App;
-use crate::core::guard::{edit_lock, edited_path, tool_rules};
+use crate::core::guard::{edit_lock, edited_path, foreign_lock, prereqs_lock, tool_rules};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -64,6 +64,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
         return Some(deny(&why));
     }
+    if let Some(why) = prereqs_lock(tool, &tool_input) {
+        return Some(deny(&why));
+    }
     let path = edited_path(tool, &tool_input)?;
     match edit_reason(&dir, &path) {
         Ok(why) => why.map(|w| deny(&w)),
@@ -79,25 +82,99 @@ fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
     let Some(rel) = repo_relative(&app.ctx.dir, dir, path) else {
         return Ok(None); // outside the repo: not a claimable path
     };
-    let leases = cache::leases(&app, cache::path(dir).as_deref())?;
-    Ok(edit_lock(&rel, &leases, &app.ctx.session))
+    let file = cache::path(dir);
+    let leases = cache::leases(&app, file.as_deref())?;
+    // Assume the file exists first: git is asked only when that would deny.
+    let me = &app.ctx.session;
+    let Some(why) = edit_lock(&rel, true, &leases, me) else {
+        return Ok(None);
+    };
+    if foreign_lock(&rel, &leases, me).is_some() {
+        return Ok(Some(why));
+    }
+    let exists = app.ctx.dir.join(&rel).is_file() && on_base(&app.ctx.dir, &rel);
+    if !exists {
+        return Ok(None);
+    }
+    // The own-touch rule may rest on a stale cache (a claim that grew the touch): look again
+    // before denying.
+    match cache::refresh(&app, file.as_deref()) {
+        Ok(fresh) => Ok(edit_lock(&rel, exists, &fresh, me)),
+        Err(e) => {
+            eprintln!(
+                "bosun: could not re-check leases: {}; using the cached view",
+                e.message
+            );
+            Ok(Some(why))
+        }
+    }
 }
 
-/// `path` relative to the repo root; `None` when it lies outside the repo.
+/// Whether `rel` is on the default branch (`origin/HEAD`, else `origin/main`, else
+/// `origin/master`): a file added on this branch counts as new, so Write then Edit works. With
+/// no such ref the file counts as new (fail open). Known limit: case-insensitive file systems.
+fn on_base(root: &Path, rel: &str) -> bool {
+    let known = |r: &str| git_out(root, &["rev-parse", "--verify", "--quiet", r]).is_some();
+    let head = git_out(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    );
+    let Some(base) = head
+        .into_iter()
+        .chain(["origin/main".to_string(), "origin/master".to_string()])
+        .find(|r| known(r))
+    else {
+        return false;
+    };
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "-e", &format!("{base}:{rel}")])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// `path` relative to the repo root, resolved with `canonicalize` when the file or its parent
+/// exists, else `.` and `..` lexically; `None` when it lies outside the repo.
 fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
+    use std::path::Component;
     let p = Path::new(path);
-    let abs = if p.is_absolute() {
+    let joined = if p.is_absolute() {
         p.to_path_buf()
     } else {
         cwd.join(p)
     };
+    // The real path first, so symlinks and `link/../x` are judged by their target: the file
+    // itself, else (a new file) its existing parent. Outside the repo: not a claimable path.
+    let real = joined.canonicalize().ok().or_else(|| {
+        let parent = joined.parent()?.canonicalize().ok()?;
+        Some(parent.join(joined.file_name()?))
+    });
+    if let Some(real) = real {
+        let r = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let rel = real.strip_prefix(&r).ok()?;
+        let text = rel.to_str()?.replace('\\', "/");
+        return (!rel.components().any(|c| c == Component::ParentDir)).then_some(text);
+    }
+    let mut abs = std::path::PathBuf::new();
+    for c in joined.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !abs.pop() {
+                    return None;
+                }
+            }
+            other => abs.push(other),
+        }
+    }
     let strip = |a: &Path, r: &Path| a.strip_prefix(r).ok().map(Path::to_path_buf);
     let rel = strip(&abs, root).or_else(|| {
         let (a, r) = (abs.canonicalize().ok()?, root.canonicalize().ok()?);
         strip(&a, &r)
     })?;
     let text = rel.to_str()?.replace('\\', "/");
-    (!text.starts_with("..")).then_some(text)
+    (!rel.components().any(|c| c == Component::ParentDir)).then_some(text)
 }
 
 #[cfg(test)]

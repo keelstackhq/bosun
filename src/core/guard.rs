@@ -1,6 +1,9 @@
 //! What the PreToolUse hook refuses (spec §4 edit hook, label-lock; D13 merge-lock). Pure: the
 //! hook passes the tool call, the repo-relative path, the current branch and the live leases.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde_json::Value;
 
 use crate::core::glob;
@@ -22,8 +25,54 @@ pub fn edited_path(tool: &str, input: &Value) -> Option<String> {
 /// Edit-lock: a path inside a live lease of another session. The edited path is a literal
 /// path (`app/[id]/page.tsx` has brackets), so each lease glob is matched against it and it is
 /// never parsed as a glob itself. A lease with a bad glob covers everything. An agent may edit
-/// the paths its own orchestrator leased (`S/task` runs inside `S`); see spec §4.
-pub fn edit_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
+/// the paths its own orchestrator leased (`S/task` runs inside `S`); see spec §4. A session that
+/// holds a lease with a touch list must also stay inside it (`own_touch_lock`); `exists` says
+/// whether the path is already a file (the hook checks, core stays pure).
+pub fn edit_lock(path: &str, exists: bool, leases: &[Lease], me: &str) -> Option<String> {
+    foreign_lock(path, leases, me).or_else(|| own_touch_lock(path, exists, leases, me))
+}
+
+/// The leases held by exactly `me` that list a touch. The hook sees only the plain session id,
+/// so a per-task lease (`S/x`) never restricts `S`, and a wave orchestrator edits freely.
+fn own_leases<'a>(leases: &'a [Lease], me: &str) -> Vec<&'a Lease> {
+    leases
+        .iter()
+        .filter(|l| l.session == me && !l.touch.is_empty())
+        .collect()
+}
+
+/// An existing file that no own glob (nor a lockfile companion) covers is refused. Fragments and
+/// new files are free. A bad glob in an own lease covers nothing.
+fn own_touch_lock(path: &str, exists: bool, leases: &[Lease], me: &str) -> Option<String> {
+    let own = own_leases(leases, me);
+    let first = own.first()?;
+    if !exists || path.starts_with("changelog.d/") || path.starts_with("docs/progress.d/") {
+        return None;
+    }
+    let touch: Vec<String> = own.iter().flat_map(|l| l.touch.clone()).collect();
+    let all = crate::core::touch::companions(&touch);
+    let valid: Vec<glob::Glob> = all
+        .iter()
+        .filter_map(|g| glob::Glob::parse(g).ok())
+        .collect();
+    if valid.iter().any(|g| g.matches(path)) {
+        return None;
+    }
+    let bad = if valid.len() < all.len() {
+        " One of your globs is invalid: re-claim with valid globs."
+    } else {
+        ""
+    };
+    Some(format!(
+        "{path} is outside your lease (touch: {}). Add it with `bosun claim {} --touch {path}` \
+         (exit 3 if another session holds it), or leave the file alone.{bad}",
+        touch.join(", "),
+        first.issue
+    ))
+}
+
+/// The first half of `edit_lock`: the path lies in a live lease of another session.
+pub fn foreign_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
     let hit = leases
         .iter()
         .filter(|l| !is_mine(&l.session, me))
@@ -134,6 +183,129 @@ pub fn tool_rules(
     None
 }
 
+/// The marker syntax bosun's parsers read (owner checklist `bosun:prereq|prereqs`, task and epic
+/// metadata): an HTML comment opener, then the name, then a space, `{` or the comment end.
+/// Prose that only mentions `bosun:task`, and `bosun:task-pr`, are not markers.
+static MARKER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*bosun:(?:prereqs?|task|epic)(?:[\s{]|-->|$)").expect("marker regex")
+});
+
+/// MCP tools that write an issue body or comment, and the input fields that hold the text.
+const ISSUE_TEXT_TOOLS: [&str; 4] = [
+    "issue_write",
+    "update_issue",
+    "add_issue_comment",
+    "update_issue_comment",
+];
+
+fn has_marker(text: &str) -> bool {
+    MARKER.is_match(text)
+}
+
+/// Does one simple command (words, quotes removed) write an issue body or comment through
+/// `gh`, `hub` or `curl`?
+fn writes_issue_text(words: &[String]) -> bool {
+    let name = |w: &String| w.rsplit('/').next().unwrap_or(w).to_string();
+    let Some(at) = words
+        .iter()
+        .position(|w| ["gh", "hub", "curl"].contains(&name(w).as_str()))
+    else {
+        return false;
+    };
+    let args: Vec<&str> = words[at + 1..].iter().map(String::as_str).collect();
+    let has = |f: &[&str]| args.iter().any(|a| f.contains(a));
+    let flag = |long: &str| args.iter().any(|a| a.starts_with(&format!("{long}=")));
+    // `-b`, `-b TEXT`, `-bTEXT`, `--body`, `--body=TEXT` (not `--body-file`).
+    let body = has(&["--body"])
+        || flag("--body")
+        || args
+            .iter()
+            .any(|a| a.starts_with("-b") && !a.starts_with("--"));
+    // gh and curl use the last method flag; any write method among them counts as a write.
+    let methods: Vec<&str> = args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| {
+            if ["-X", "--method", "--request"].contains(a) {
+                args.get(i + 1).copied()
+            } else {
+                a.strip_prefix("--method=")
+                    .or_else(|| a.strip_prefix("--request="))
+                    .or_else(|| a.strip_prefix("-X"))
+            }
+        })
+        .collect();
+    let write = |v: &str| ["POST", "PATCH", "PUT"].contains(&v.to_ascii_uppercase().as_str());
+    let explicit = (!methods.is_empty()).then(|| methods.iter().any(|m| write(m)));
+    if name(&words[at]) == "curl" {
+        return explicit == Some(true)
+            || args.iter().any(|a| {
+                a.starts_with("-d") || a.starts_with("--data") || a.starts_with("--json")
+            });
+    }
+    match args.first().copied() {
+        Some("issue") => has(&["edit", "comment", "create", "close"]) && body,
+        Some("pr") => has(&["comment"]) && body,
+        Some("api") if args.get(1) == Some(&"graphql") => args
+            .iter()
+            .any(|a| a.to_ascii_lowercase().contains("mutation")),
+        Some("api") => match explicit {
+            Some(w) => w,
+            None => {
+                has(&["-f", "-F", "--field", "--raw-field"])
+                    || flag("--field")
+                    || flag("--raw-field")
+            }
+        },
+        _ => false,
+    }
+}
+
+/// Does `command`, or a command nested in it (`bash -c`, `eval`, `$( )`, groups), write issue
+/// text that carries a marker?
+fn writes_marker(command: &str, depth: usize) -> bool {
+    depth <= MAX_DEPTH
+        && (shell_words(command)
+            .split(|w| w == SEP)
+            .any(|seg| writes_issue_text(seg) && has_marker(&seg.join(" ")))
+            || nested(command).iter().any(|n| writes_marker(n, depth + 1)))
+}
+
+/// Markers-lock (design F4): refuses a write of an issue body or comment that carries a bosun
+/// marker (`MARKER`: `<!-- bosun:prereq|prereqs|task|epic`; prose that names one is allowed).
+/// Only writes are judged: `gh|hub issue edit|comment|create|close` and `gh pr comment` with
+/// `--body`/`-b` (also `-bTEXT`), `gh|hub api` with a write method or field flag (never with an
+/// explicit GET; with several method flags any write method counts; `gh api graphql` only with a
+/// `mutation`), `curl` with a write method or a data
+/// flag (`-d`, `--data*`, `--json`), the same inside `bash -c`, `eval` and `$( )`, and the MCP
+/// tools in `ISSUE_TEXT_TOOLS` (their `body` and `comment` fields only). Best effort. Known and
+/// accepted bypasses: `--body-file`, `--input`, `curl` or `gh api` with the text in a variable or
+/// a file, a marker split by quotes (`'bosun:'"task"`) or built by `printf` in `$( )`, a
+/// `gh api graphql -F query=@file` mutation (the text is in the file), wget,
+/// httpie and python urllib. The real guarantees are elsewhere: bosun re-reads the checklist and
+/// trusts only its own writes.
+pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
+    let hit = match tool.strip_prefix("mcp__github__") {
+        Some(name) => {
+            ISSUE_TEXT_TOOLS.contains(&name)
+                && ["body", "comment"]
+                    .iter()
+                    .filter_map(|k| input.get(k).and_then(Value::as_str))
+                    .any(has_marker)
+        }
+        None if tool == "Bash" => {
+            let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+            has_marker(command) && !read_only(command, 0) && writes_marker(command, 0)
+        }
+        None => false,
+    };
+    hit.then(|| {
+        "bosun's markers (owner checklist, task and epic metadata) are written by bosun only \
+         (bosun prereqs --post writes the checklist); fix the plan instead"
+            .to_string()
+    })
+}
+
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
 fn label_fields(v: &Value) -> String {
     match v {
@@ -168,7 +340,8 @@ fn label_reason() -> String {
 const MAX_DEPTH: usize = 3;
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
-    check(command, branch_at, default_branch, 0)
+    decrypt_rule(command, 0)
+        .or_else(|| check(command, branch_at, default_branch, 0))
         .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
 }
 
@@ -928,6 +1101,526 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
     }
 }
 
+const DECRYPT_FIX: &str = "secrets stay encrypted; the owner runs `hoist secrets edit`, CI \
+    decrypts with `hoist secrets exec` (spec §8)";
+
+fn decrypt_reason(what: &str) -> String {
+    format!("decrypting secrets is refused for agents ({what}): {DECRYPT_FIX}")
+}
+
+const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
+/// Readers: their arguments are data (patterns, text).
+const READERS: &[&str] = &[
+    "grep", "rg", "ag", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type",
+];
+#[rustfmt::skip]
+const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
+    "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
+const INTERPS: &[&str] = &[
+    "python", "python3", "perl", "ruby", "node", "deno", "bun", "php",
+];
+const FILE_TOOLS: &[&str] = &[
+    "mv", "cp", "install", "chmod", "chown", "ln", "mkdir", "rmdir", "rm", "touch", "tar", "unzip",
+    "gzip", "gunzip", "curl", "wget", "stat", "file", "du", "df",
+];
+/// Package managers, and the subcommands whose arguments are package names (never `run`/`exec`).
+const PACKAGERS: &[&str] = &[
+    "brew", "apt", "apt-get", "dnf", "yum", "apk", "pacman", "port", "pip", "pip3", "pipx", "npm",
+    "pnpm", "yarn", "bun", "cargo",
+];
+#[rustfmt::skip]
+const PKG_SUBS: &[&str] = &["install", "add", "remove", "uninstall", "upgrade", "update", "info",
+    "search", "show", "list", "build", "test", "nextest", "check", "clippy", "fmt"];
+#[rustfmt::skip]
+const GH_DATA: &[&str] = &["t", "title", "b", "body", "notes", "f", "F", "raw-field", "field",
+    "search", "q", "jq"];
+const SHELLS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
+    "node", "deno", "bun", "php", "source", "xargs", "eval",
+];
+
+/// The files that `> f`, `>> f` and `tee f` write in these words.
+fn write_targets(w: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, x) in w.iter().enumerate() {
+        let r = x.trim_start_matches('>');
+        #[rustfmt::skip]
+        let t = if x.starts_with('>') { if r.is_empty() { w.get(i + 1).map(String::as_str) } else { Some(r) } }
+            else if x == "tee" { w[i + 1..].iter().map(String::as_str).find(|a| !a.starts_with('-')) } else { None };
+        out.extend(t.map(str::to_string));
+    }
+    out
+}
+
+/// An age secret key line (or its tail) named in a word, in any case.
+fn keyline(w: &str) -> bool {
+    let w = w.to_lowercase();
+    w.contains("age-secret") || w.contains("secret-key-1")
+}
+
+/// A word naming `.config/sops` as a whole path segment (`.config/sops-test` is another dir).
+fn sops_dir(w: &str) -> bool {
+    w.match_indices(".config/sops")
+        .any(|(i, m)| w[i + m.len()..].is_empty() || w[i + m.len()..].starts_with('/'))
+}
+
+/// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
+/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), 1 for home or above it
+/// (`~`, `/root`, `/home/<user>`, `/home`, `/`), 0 for anything else (`~/projects/x`).
+fn key_root(word: &str) -> u8 {
+    let mut n = word.trim_matches(|c| c == '"' || c == '\'').to_string();
+    loop {
+        let m = n.replace("//", "/").replace("/./", "/");
+        let m = m.strip_suffix("/.").map_or(m.clone(), str::to_string);
+        if m == n {
+            break;
+        }
+        n = m;
+    }
+    let word = n.as_str();
+    let t = word.trim_end_matches('/');
+    let odd = t.contains("..") || t.contains(['*', '?', '[']);
+    let under = |r: &str, own: &str| {
+        r == own
+            || r.strip_prefix(own)
+                .is_some_and(|x| x == "/sops" || x.starts_with("/sops/"))
+    };
+    if t.is_empty() || t == "/home" {
+        return u8::from(word.starts_with('/') || word.is_empty());
+    }
+    if let Some(r) = ["$XDG_CONFIG_HOME", "${XDG_CONFIG_HOME}"]
+        .iter()
+        .find_map(|h| t.strip_prefix(h))
+    {
+        return if odd || r.is_empty() || r.starts_with("/sops/") || r == "/sops" {
+            2
+        } else {
+            0
+        };
+    }
+    let rest = ["~", "$HOME", "${HOME}", "/root"]
+        .iter()
+        .find_map(|h| t.strip_prefix(h))
+        .or_else(|| {
+            let user = t.strip_prefix("/home/")?;
+            Some(user.find('/').map_or("", |i| &user[i..]))
+        });
+    match rest {
+        Some(_) if odd => 2,
+        Some("") => 1,
+        Some(r) if under(r, "/.config") => 2,
+        None if under(t.trim_start_matches("./"), ".config") => 2,
+        _ => 0,
+    }
+}
+
+/// A redirect word: `>`, `>>`, `2>`, `&>`, `<`, `2>&1`, `>file`.
+fn redirect(a: &str) -> bool {
+    a.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&')
+        .starts_with(['>', '<'])
+}
+
+fn procenv(w: &str) -> bool {
+    w.contains("/proc/") && w.contains("env")
+}
+
+/// Whether an interpreter or shell command line has code on it (`-c`, `-e`, `--eval`, `eval`, `php -r`).
+fn runs_code(n: &str, after: &[&str]) -> bool {
+    let dash = |a: &&str, c: char| a.starts_with('-') && !a.starts_with("--") && a.contains(c);
+    let interp = INTERPS.contains(&n);
+    #[rustfmt::skip]
+    let code = |a: &&str| dash(a, 'c') || n == "bun" && (dash(a, 'p') || *a == "--print") || interp && (dash(a, 'e') || *a == "--eval" || *a == "eval" || n == "php" && dash(a, 'r'));
+    after.iter().any(code)
+}
+
+/// A flag without its dashes and value: `--decrypt=x` and `-decrypt` are `decrypt`.
+fn flag(arg: &str) -> Option<&str> {
+    let f = arg.strip_prefix('-')?;
+    Some(f.trim_start_matches('-').split('=').next().unwrap_or(""))
+}
+
+/// `sops` may print info or encrypt; `sops FILE` decrypts, so any other argument is refused.
+fn sops_ok(args: &[&str]) -> bool {
+    const INFO: &[&str] = &["version", "v", "help", "h"];
+    #[rustfmt::skip]
+    const BAD: &[&str] = &["d", "decrypt", "edit", "exec-env", "exec-file", "set", "rotate", "r",
+        "updatekeys", "keyservice", "unset", "publish", "filestatus", "groups"];
+    let info = |a: &&str| flag(a).is_some_and(|f| INFO.contains(&f));
+    // Flags that take the next word as their value, and boolean ones. The first bare word or
+    // unknown flag ends the walk: `-e` after it, or as a value (`--age -e`), is not a marker.
+    #[rustfmt::skip]
+    const VALUE: &[&str] = &["config", "age", "pgp", "kms", "gcp-kms", "azure-kv", "hc-vault-transit",
+        "input-type", "output-type", "unencrypted-suffix", "encrypted-suffix", "unencrypted-regex",
+        "encrypted-regex", "output", "indent", "filename-override", "shamir-secret-sharing-threshold"];
+    let (mut it, mut enc) = (args.iter(), false);
+    while let Some(a) = it.next() {
+        let f = flag(a);
+        enc = *a == "encrypt" || matches!(f, Some("e" | "encrypt"));
+        match f {
+            _ if enc => break,
+            Some(f)
+                if a.contains('=') || matches!(f, "i" | "in-place" | "verbose" | "ignore-mac") => {}
+            Some(f) if VALUE.contains(&f) => drop(it.next()),
+            _ => break,
+        }
+    }
+    let bad = |a: &&str| BAD.contains(&flag(a).unwrap_or(a));
+    args.is_empty() || args.iter().all(info) || (enc && !args.iter().any(bad))
+}
+
+/// `age`/`rage` may print info or encrypt; a decrypt flag in any spelling is refused.
+fn age_ok(args: &[&str]) -> bool {
+    let info = |a: &&str| flag(a).is_some_and(|f| matches!(f, "version" | "h" | "help"));
+    #[rustfmt::skip]
+    let enc = |a: &&str| flag(a).is_some_and(|f| matches!(f, "r" | "R" | "e" | "p" | "encrypt" | "recipient" | "recipients-file"));
+    #[rustfmt::skip]
+    let dec = |a: &&str| a.starts_with('-') && (flag(a) == Some("decrypt") || !a.starts_with("--") && a.contains('d'));
+    args.is_empty() || args.iter().all(info) || (args.iter().any(enc) && !args.iter().any(dec))
+}
+
+#[rustfmt::skip]
+fn mentions_secrets(text: &str) -> bool {
+    ["sops", "SOPS_", "keys.txt", "hoist secrets"].iter().any(|k| text.contains(k))
+        || text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .any(|t| matches!(t, "age" | "rage"))
+}
+
+/// Decrypt-lock (spec §4), an allowlist that fails closed: `sops`/`age` only print info or
+/// encrypt, `hoist secrets edit|..`, the key directory, `$SOPS_AGE_KEY*`, `/proc/*/environ`,
+/// env dumps naming sops, and shells reading stdin or code that mention secrets are refused.
+/// Every word of a segment is tried as the command word (except in readers, file tools and
+/// install-like packager commands); command strings in options are judged.
+fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
+    if depth > MAX_DEPTH {
+        return Some(decrypt_reason("commands nested too deep"));
+    }
+    let (text, bodies, targets) = strip_data_heredocs(command);
+    let (text, wrote) = (text.as_str(), mentions_secrets(&bodies));
+    for inner in nested(text) {
+        if let Some(why) = decrypt_rule(&inner, depth + 1) {
+            return Some(why);
+        }
+    }
+    let low = text.to_lowercase();
+    #[rustfmt::skip]
+    let key_dir = ["sops/age", "age/keys.txt"].iter().any(|k| text.contains(k)) || text.contains("keys.txt") && (low.contains("sops") || text.contains(".config") || text.contains("find"));
+    if key_dir {
+        return Some(decrypt_reason("the age key directory"));
+    }
+    if text.contains("$SOPS_AGE_KEY") || text.contains("${SOPS_AGE_KEY") {
+        return Some(decrypt_reason("the age key"));
+    }
+    // Indirect expansion can name the variable at run time.
+    if text.contains("${!")
+        && (mentions_secrets(&low) || low.contains("ops_age") || text.contains("${!S"))
+    {
+        return Some(decrypt_reason("an indirect expansion"));
+    }
+    let (named, mentions) = (low.contains("sops"), mentions_secrets(text));
+    let words = shell_words(text);
+    let mut hits = if wrote { targets } else { Vec::new() };
+    for segment in words.split(|w| w == SEP) {
+        if mentions_secrets(&segment.join(" ")) {
+            hits.extend(write_targets(segment));
+        }
+        let mut rest: Vec<&str> = segment.iter().map(String::as_str).collect();
+        while rest.first().is_some_and(|w| assigned(w).is_some()) {
+            rest.remove(0);
+        }
+        let Some(first) = rest.first() else { continue };
+        let base = |w: &str| {
+            w.rsplit(['/', '#'])
+                .next()
+                .unwrap_or(w)
+                .split('@')
+                .next()
+                .unwrap_or(w)
+                .to_string()
+        };
+        let name = base(first);
+        let args = &rest[1..];
+        #[rustfmt::skip]
+        let da = &args[..args.iter().position(|a| redirect(a)).unwrap_or(args.len())];
+        let dump = match name.as_str() {
+            "printenv" => da.is_empty() || named,
+            "compgen" => da.iter().any(|a| matches!(*a, "-e" | "-v")),
+            "env" => da
+                .iter()
+                .all(|a| a.starts_with('-') || assigned(a).is_some()),
+            "set" => da.is_empty(),
+            "export" | "declare" | "typeset" => {
+                da.is_empty()
+                    || da.iter().any(|a| matches!(*a, "-p" | "-x"))
+                        && (named || da.iter().all(|a| a.starts_with('-')))
+            }
+            "ps" => da.iter().any(|a| {
+                *a == "-E"
+                    || !a.starts_with('-')
+                        && a.contains('e')
+                        && a.chars().all(|c| "aeuxwfl".contains(c))
+            }),
+            _ => false,
+        };
+        if dump {
+            return Some(decrypt_reason("the environment"));
+        }
+        // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
+        let (mut it, git) = (args.iter(), name == "git");
+        let verb = loop {
+            match it.next() {
+                Some(a)
+                    if git
+                        && matches!(
+                            *a,
+                            "-C" | "-c"
+                                | "--git-dir"
+                                | "--work-tree"
+                                | "--namespace"
+                                | "--exec-path"
+                        ) =>
+                {
+                    it.next();
+                }
+                Some(a) if a.starts_with('-') => {}
+                other => break other.copied().unwrap_or(""),
+            }
+        };
+        let long = |name: &str| {
+            args.iter().enumerate().find_map(|(i, a)| {
+                let v = a.strip_prefix(name).and_then(|r| r.strip_prefix('='));
+                v.or_else(|| (*a == name).then(|| args.get(i + 1).copied()).flatten())
+            })
+        };
+        // `bosun main-triage --run CMD` and `rg --pre CMD FILE` run a command.
+        let run = match name.as_str() {
+            "bosun" => long("--run").map(str::to_string),
+            "rg" => long("--pre").map(|c| format!("{c} FILE")),
+            #[rustfmt::skip]
+            "git" if verb == "grep" => long("--open-files-in-pager").or_else(|| args.iter().enumerate().find_map(|(i, a)| a.strip_prefix("-O").map(|v| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v }))).map(|c| format!("{c} FILE")),
+            _ => None,
+        };
+        if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
+            return Some(why);
+        }
+        if name == "bosun" {
+            continue;
+        }
+        if READERS.contains(&name.as_str()) {
+            let env = |w: &&str| procenv(w);
+            #[rustfmt::skip]
+            let pos: Vec<&str> = da.iter().copied().filter(|a| !a.starts_with('-')).collect();
+            #[rustfmt::skip]
+            let pat_flag = args.iter().any(|a| matches!(*a, "-e" | "-f") || a.starts_with("--file"));
+            let search = matches!(name.as_str(), "grep" | "rg" | "ag") && !pat_flag;
+            // A search pattern naming the key marker is data, unless it searches home or `.config`.
+            let home = |a: &&str| {
+                a.starts_with(['~', '/']) || a.contains("$HOME") || a.contains(".config")
+            };
+            let pat_ok = search && !pos.is_empty() && !pos[1..].iter().any(home);
+            if args
+                .iter()
+                .any(|a| keyline(a) && !(pat_ok && pos.first() == Some(a)))
+            {
+                return Some(decrypt_reason("an age secret key"));
+            }
+            // A recursive search whose root holds the age key reads it, whatever the pattern:
+            // `.config` and its ancestors always; home (hidden dirs included) for grep, and for
+            // rg and ag only with --hidden, -u or -. .
+            let finds = matches!(name.as_str(), "grep" | "rg" | "ag");
+            let dirs = args
+                .windows(2)
+                .any(|w| matches!(w[0], "-d" | "--directories") && w[1] == "recurse")
+                || args
+                    .iter()
+                    .any(|a| matches!(*a, "-drecurse" | "--directories=recurse"));
+            let recursive = name != "grep"
+                || dirs
+                || args.iter().any(|a| {
+                    matches!(*a, "--recursive" | "--dereference-recursive")
+                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['r', 'R'])
+                });
+            let hidden = name == "grep"
+                || args.iter().any(|a| {
+                    matches!(*a, "--hidden" | "--unrestricted")
+                        || a.starts_with('-') && !a.starts_with("--") && a.contains(['u', '.'])
+                });
+            let root = pos.iter().map(|a| key_root(a)).max().unwrap_or(0);
+            if finds
+                && (pos.iter().any(|a| sops_dir(a))
+                    || recursive && (root == 2 || root == 1 && hidden))
+            {
+                return Some(decrypt_reason("a search of the age key directory"));
+            }
+            let cfg = |a: &&str| a.contains(".config/") && a.contains(['*', '?', '[', ']']);
+            if matches!(name.as_str(), "cat" | "head" | "tail") && args.iter().any(cfg) {
+                return Some(decrypt_reason("a glob in .config"));
+            }
+            if args.iter().any(env)
+                && !(search && pos.first().is_some_and(env) && !pos[1..].iter().any(env))
+            {
+                return Some(decrypt_reason("the process environment"));
+            }
+            continue;
+        }
+        #[rustfmt::skip]
+        let sub = args.iter().find(|a| !a.starts_with('-')).is_some_and(|a| PKG_SUBS.contains(a));
+        let safe = FILE_TOOLS.contains(&name.as_str()) || PACKAGERS.contains(&name.as_str()) && sub;
+        // Data words: message and query option values, search patterns.
+        let (msg, vi) = (
+            matches!(name.as_str(), "git" | "gh"),
+            segment.iter().position(|x| x == verb),
+        );
+        let (gs, ss) = (
+            name == "git" && verb == "grep",
+            name == "gh" && verb == "search",
+        );
+        let api = (name.as_str(), verb) == ("gh", "api");
+        let mut data = vec![false; segment.len()];
+        let (mut skip, mut pat_done) = (false, false);
+        for (i, w) in segment.iter().enumerate() {
+            let opt = w.trim_start_matches('-').split('=').next().unwrap_or("");
+            let opts: &[&str] = match (name.as_str(), verb) {
+                ("gh", _) => GH_DATA,
+                ("git", "log") => &["S", "G", "grep"],
+                ("git", "grep") => &["e"],
+                _ => &["m", "message"],
+            };
+            let pat = !w.starts_with('-') && vi.is_some_and(|v| i > v) && (ss || gs && !pat_done);
+            pat_done |= pat;
+            if std::mem::take(&mut skip) || pat {
+                data[i] = true;
+            } else if msg && w.starts_with('-') && opts.contains(&opt) {
+                (data[i], skip) = (true, !w.contains('='));
+            }
+        }
+        // Options run command strings: a word or option value with whitespace is a command.
+        for w in segment
+            .iter()
+            .zip(&data)
+            .filter(|(_, d)| !**d)
+            .map(|(w, _)| w)
+        {
+            let w = w.as_str();
+            if procenv(w) {
+                return Some(decrypt_reason("the process environment"));
+            }
+            let t = if assigned(w).is_some() {
+                w.split_once('=').map_or(w, |p| p.1)
+            } else {
+                w
+            };
+            if keyline(w) {
+                return Some(decrypt_reason("an age secret key"));
+            }
+            if !safe && !(api && !w.starts_with('-')) && t.contains("SOPS_AGE_KEY") {
+                return Some(decrypt_reason("the age key"));
+            }
+            if w.contains(".config/") && w.contains(['*', '?', '[', ']']) {
+                return Some(decrypt_reason("a glob in .config"));
+            }
+            let value = w.split_once('=').map(|(_, v)| v);
+            let strs = [
+                Some(w.strip_prefix("-O").unwrap_or(w)).filter(|w| w.contains(char::is_whitespace)),
+                value.filter(|v| v.contains(char::is_whitespace) || v.starts_with(['|', '!'])),
+            ];
+            for c in strs.into_iter().flatten() {
+                if let Some(why) = decrypt_rule(c.trim_start_matches(['|', '!']), depth + 1) {
+                    return Some(why);
+                }
+            }
+        }
+        let off = segment.len() - rest.len();
+        for i in 0..if safe { 0 } else { rest.len() } {
+            if data[i + off] {
+                continue;
+            }
+            let (n, after) = (base(rest[i]), &rest[i + 1..]);
+            let tgt = |a: &str| {
+                hits.iter()
+                    .any(|t| t.trim_start_matches("./") == a.trim_start_matches("./"))
+            };
+            #[rustfmt::skip]
+            let refused = match n.as_str() {
+                "sops" => !sops_ok(&after[..after.iter().position(|a| redirect(a)).unwrap_or(after.len())]),
+                "age" | "rage" => !age_ok(&after[..after.iter().position(|a| redirect(a)).unwrap_or(after.len())]),
+                "hoist" => after.iter().position(|a| *a == "secrets").is_some_and(|p| after[p + 1..].iter().take_while(|a| **a != "--" && **a != "exec").any(|a| HOIST_SECRETS.contains(a))),
+                "alias" => after.iter().filter_map(|a| a.split_once('=')).any(|(_, v)| matches!(base(v.split(' ').next().unwrap_or("")).as_str(), "sops" | "age" | "rage")),
+                "awk" | "gawk" | "mawk" => after.iter().any(|a| a.contains("ENVIRON")),
+                "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t == "env" || t.starts_with("env."))),
+                n if INTERPS.contains(&n) && after.iter().any(|a| ENV_READS.iter().any(|e| a.contains(e) && (*e != "environ" || runs_code(n, after)))) => true,
+                _ if i == 0 && tgt(rest[0]) => true,
+                n if (SHELLS.contains(&n) || n == ".") && after.iter().any(|a| tgt(a)) => true,
+                n if SHELLS.contains(&n) && mentions => {
+                    let interp = INTERPS.contains(&n);
+                    let code = runs_code(n, after);
+                    let file = after.iter().any(|a| !a.starts_with(['-', '<']));
+                    let stdin = after.iter().any(|a| matches!(*a, "-s" | "-") || a.starts_with('<'));
+                    if code { interp || after.iter().any(|a| a.contains("{}") || a.contains('$')) } else { !file || stdin }
+                }
+                _ => false,
+            };
+            if refused {
+                return Some(decrypt_reason(&format!("`{n}`")));
+            }
+        }
+    }
+    None
+}
+
+fn heredoc_at(line: &str) -> Option<usize> {
+    let (mut quote, b) = (None, line.as_bytes());
+    for (i, c) in line.char_indices() {
+        let op = c == '<' && b.get(i + 1) == Some(&b'<');
+        // In double quotes, `<<` counts after an unclosed `$(`: `"$(cat <<'EOF'`.
+        let sub = || line[..i].matches("$(").count() > line[..i].matches(')').count();
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), _) if op && sub() => return (b.get(i + 2) != Some(&b'<')).then_some(i),
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, _) if op => return (b.get(i + 2) != Some(&b'<')).then_some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The text without the bodies of quoted-delimiter heredocs (unless their line has a shell),
+/// those bodies, and the files the opening lines write (`> f`, `>> f`, `tee f`).
+fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
+    let (mut out, mut bodies, mut skip) = (String::new(), String::new(), None::<(String, bool)>);
+    let mut targets = Vec::new();
+    for line in command.split_inclusive('\n') {
+        if let Some((delim, dash)) = &skip {
+            let l = line.trim_end_matches('\n');
+            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+                skip = None;
+                out.push_str(line);
+            } else {
+                bodies.push_str(line);
+            }
+            continue;
+        }
+        out.push_str(line);
+        if let Some(at) = heredoc_at(line) {
+            let spec = line[at + 2..].trim_start_matches('-').trim_start();
+            let dash = line[at + 2..].starts_with('-');
+            let quote = spec.chars().next().filter(|c| matches!(c, '\'' | '"'));
+            let reads = shell_words(line)
+                .iter()
+                .any(|w| SHELLS.contains(&w.rsplit('/').next().unwrap_or(w)));
+            if let Some(q) = quote
+                && !reads
+                && let Some(end) = spec[1..].find(q)
+            {
+                skip = Some((spec[1..=end].to_string(), dash));
+                targets.extend(write_targets(&shell_words(line)));
+            }
+        }
+    }
+    (out, bodies, targets)
+}
+
 fn http_rule(segment: &str) -> Option<&'static str> {
     if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) {
         return Some("GraphQL merge or ref mutation");
@@ -1074,6 +1767,89 @@ mod tests {
             &|_| Some(branch.into()),
             "main",
         )
+    }
+
+    #[test]
+    fn prereqs_lock_judges_only_issue_body_writes() {
+        let body = "<!-- bosun:prereq H1 sum=ab state=open -->";
+        let deny = |tool: &str, input: Value| prereqs_lock(tool, &input).is_some();
+        let sh = |cmd: &str| deny("Bash", json!({ "command": cmd }));
+        assert!(deny("mcp__github__issue_write", json!({ "body": body })));
+        assert!(!deny(
+            "mcp__github__issue_write",
+            json!({ "body": "plain" })
+        ));
+        assert!(!deny(
+            "mcp__github__create_pull_request",
+            json!({ "body": body })
+        ));
+        assert!(!deny("mcp__github__issue_read", json!({ "body": body })));
+        assert!(sh(&format!("gh issue edit 5 --body \"{body}\"")));
+        assert!(sh(
+            "gh api -X PATCH repos/o/r/issues/5 -f body='x <!-- bosun:prereq H1 --> y'"
+        ));
+        assert!(sh(&format!(
+            "curl -X PATCH -d '{body}' https://api.github.com/x"
+        )));
+        assert!(sh("gh issue edit 5 --body '<!-- bosun:task {\"n\":1} -->'"));
+        assert!(sh("gh issue comment 5 -b '<!-- bosun:epic 3 -->'"));
+        assert!(deny(
+            "mcp__github__add_issue_comment",
+            json!({ "body": "<!-- bosun:epic 3 -->" })
+        ));
+        assert!(!sh("gh issue view 5"));
+        assert!(!sh("gh issue list"));
+        assert!(!sh("gh api repos/o/r/issues/5"));
+        assert!(!sh("git commit -m \"fix bosun:prereq parsing\""));
+        assert!(!sh("bosun prereqs plans/x.md --post"));
+        // Documented best-effort gap (design F4): the body comes from a file, so no marker here.
+        assert!(!sh("gh issue edit 5 --body-file f"));
+        // Nested shells, attached short flags, curl --json, hub.
+        assert!(sh(
+            "bash -c 'gh issue edit 5 --body \"<!-- bosun:task {} -->\"'"
+        ));
+        assert!(sh("echo $(gh issue comment 5 -b '<!-- bosun:epic 3 -->')"));
+        assert!(sh("gh issue comment 5 -b'<!-- bosun:task {\"n\":1} -->'"));
+        assert!(sh("gh issue comment 5 -b\"<!-- bosun:task {} -->\""));
+        assert!(sh(
+            "curl --json '<!-- bosun:prereqs p.md -->' https://api.github.com/x"
+        ));
+        assert!(sh(
+            "hub api -X PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'"
+        ));
+        // Prose, `bosun:task-pr` and read-only calls are not refused.
+        assert!(!sh(
+            "gh issue comment 5 --body 'I fixed how bosun:task metadata is read'"
+        ));
+        assert!(!sh(
+            "gh pr comment 5 -b 'Closes #5 <!-- bosun:task-pr 5 -->'"
+        ));
+        assert!(!sh("gh api -X GET search/issues -f q='<!-- bosun:task'"));
+        assert!(!sh(
+            "gh api --method GET search/issues -f q='<!-- bosun:task'"
+        ));
+        // gh and curl use the last method flag: any write method among them is a write.
+        for cmd in [
+            "gh api -X GET --method PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "gh api -XGET -XPATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "gh api --method=GET -X PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'",
+            "curl -X GET -X PATCH -H 'x: <!-- bosun:task {} -->' https://api.github.com/x",
+        ] {
+            assert!(sh(cmd), "{cmd}");
+        }
+        assert!(!sh(
+            "gh api -X GET --method GET search/issues -f q='<!-- bosun:task'"
+        ));
+        assert!(!sh(
+            "gh api graphql -f query='{ search(query: \"<!-- bosun:task\") { issueCount } }'"
+        ));
+        assert!(sh(
+            "gh api graphql -f query='mutation { x(body: \"<!-- bosun:task {} -->\") }'"
+        ));
+        assert!(!deny(
+            "mcp__github__add_issue_comment",
+            json!({ "body": "I fixed how bosun:task metadata is read" })
+        ));
     }
 
     #[test]
@@ -1722,11 +2498,11 @@ mod tests {
             comment_id: 1,
         };
         // The hook sees the plain session `S`; its lease was taken under `S/19`.
-        assert_eq!(edit_lock("crates/a.rs", &[lease("S/19")], "S"), None);
+        assert_eq!(edit_lock("crates/a.rs", true, &[lease("S/19")], "S"), None);
         // `S/19` and `S/20` still conflict; so do a stranger and a prefix lookalike.
-        assert!(edit_lock("crates/a.rs", &[lease("S/19")], "S/20").is_some());
-        assert!(edit_lock("crates/a.rs", &[lease("S2/19")], "S").is_some());
-        assert!(edit_lock("crates/a.rs", &[lease("T/19")], "S").is_some());
+        assert!(edit_lock("crates/a.rs", true, &[lease("S/19")], "S/20").is_some());
+        assert!(edit_lock("crates/a.rs", true, &[lease("S2/19")], "S").is_some());
+        assert!(edit_lock("crates/a.rs", true, &[lease("T/19")], "S").is_some());
     }
 
     #[test]
@@ -1740,12 +2516,12 @@ mod tests {
             comment_id: 1,
         };
         let leases = [lease];
-        let why = edit_lock("src/core/wave.rs", &leases, "me").unwrap();
+        let why = edit_lock("src/core/wave.rs", true, &leases, "me").unwrap();
         assert!(
             why.contains("#7") && why.contains("bosun wait --issue 7"),
             "{why}"
         );
-        assert_eq!(edit_lock("docs/x.md", &leases, "me"), None);
+        assert_eq!(edit_lock("docs/x.md", true, &leases, "me"), None);
         // Brackets and braces are literal in an edited path, never a way past the lock.
         let app = Lease {
             touch: vec!["app/**".into()],
@@ -1753,16 +2529,256 @@ mod tests {
         };
         for p in ["app/[id]/page.tsx", "app/{team}/x.tsx", "app/(group)/a.tsx"] {
             assert!(
-                edit_lock(p, std::slice::from_ref(&app), "me").is_some(),
+                edit_lock(p, true, std::slice::from_ref(&app), "me").is_some(),
                 "{p}"
             );
         }
-        assert_eq!(edit_lock("web/[id]/p.tsx", &[app], "me"), None);
-        assert_eq!(edit_lock("src/core/wave.rs", &leases, "other"), None);
+        assert_eq!(edit_lock("web/[id]/p.tsx", true, &[app], "me"), None);
+        assert_eq!(edit_lock("src/core/wave.rs", true, &leases, "other"), None);
         assert_eq!(
             edited_path("Write", &json!({"file_path": "a.rs"})),
             Some("a.rs".to_string())
         );
         assert_eq!(edited_path("Read", &json!({"file_path": "a.rs"})), None);
+    }
+
+    #[rustfmt::skip]
+    const DECRYPT_CASES: &[(&str, bool)] = &[
+        ("sops -d secrets/prod.yaml", true), ("sops secrets/prod.sops.yaml", true),
+        ("EDITOR=cat sops f", true), ("sops -decrypt f", true), ("sops -d=true f", true),
+        ("sops -decrypt=true f", true), ("sops --decrypt=yes f", true),
+        ("sops exec-env f cmd", true), ("sops rotate -i f", true), ("sops set f '[\"a\"]' 1", true),
+        ("sops -e --decrypt f", true), ("bash -c 'sops -d secrets/prod.yaml'", true),
+        ("sh -c \"age -d -i k f\"", true), ("\"sops\" -d x", true),
+        ("/usr/bin/sops --decrypt x", true), ("env FOO=1 sops exec-env f cmd", true),
+        ("sudo -u root sops -d f", true), ("x=$(sops -d f)", true), ("echo `sops -d f`", true),
+        ("sops -d f | jq .", true), ("timeout 10 sops -d f", true), ("stdbuf -o0 sops -d f", true),
+        ("watch sops -d f", true), ("doas sops -d f", true),
+        ("find . -name '*.sops.yaml' -exec sops -d {} \\;", true),
+        ("cat <<'EOF' | sh\nsops -d f\nEOF", true), ("cat <<'EOF' | bash -s\nsops -d f\nEOF", true),
+        ("echo 'sops -d f' | sh", true), ("bash <<< 'sops -d f'", true),
+        ("bash <<'EOF'\nsops -d f\nEOF", true), (": \"<<'X'\"\nsops -d f\nX", true),
+        ("age -di k f", true), ("age --decrypt=1 f", true), ("age f", true),
+        ("hoist secrets edit prod", true), ("hoist --root x secrets sync", true),
+        ("cat ~/.config/sops/age/keys.txt", true), ("cat ~/.config/sops/age/*", true),
+        ("cd ~/.config/sops; cat age/keys.txt", true), ("cat /proc/self/environ", true),
+        ("cat /proc/1/environ | tr '\\0' '\\n' | grep SOPS", true), ("echo $SOPS_AGE_KEY", true),
+        ("echo \"${SOPS_AGE_KEY}\"", true), ("cat $SOPS_AGE_KEY_FILE", true),
+        ("printenv SOPS_AGE_KEY", true), ("env | grep SOPS", true), ("export -p | grep SOPS", true),
+        ("bash -c \"bash -c \\\"sh -c 'sops -d f'\\\"\"", true), ("sops --version", false),
+        ("sops --help", false), ("sops -e -i f.yaml", false), ("sops encrypt f.yaml", false),
+        ("command -v sops", false), ("age -r age1abc -o f.age f", false), ("age --version", false),
+        ("age-keygen -o $TMP/k.txt", false), ("hoist secrets check", false),
+        ("hoist secrets exec --help", false),
+        ("git commit -m 'docs: explain SOPS_AGE_KEY_FILE'", false),
+        ("grep -rn SOPS_AGE_KEY_FILE src/", false), ("grep -rn 'sops -d' docs/", false),
+        ("SOPS_AGE_KEY_FILE=tests/fixtures/k.txt cargo test", false),
+        ("export SOPS_AGE_RECIPIENTS=age1abc", false), ("cargo test sops_decrypt_refused", false),
+        ("set -e; ls", false), ("git config diff.sopsdiffer.textconv \"sops -d\"", true),
+        ("git -c diff.s.textconv='sops -d' diff", true),
+        ("git -c core.pager='sops -d f' log", true),
+        ("LESSOPEN='|sops -d %s' less f.sops.yaml", true), ("man -P 'sops -d f' ls", true),
+        ("gh alias set x '!sops -d f'", true), ("watch -n1 'sops -d f'", true),
+        ("ssh host 'sops -d f'", true),
+        ("python3 -c \"import subprocess;subprocess.run(['sops','-d','f'])\"", true),
+        ("node -e \"require('child_process').execSync('sops -d f')\"", true),
+        ("perl -e 'system(\"sops -d f\")'", true),
+        ("git commit -m \"docs: sops -d is refused\"", false),
+        ("gh pr create --title \"x\" --body \"refuses sops -d\"", false),
+        ("git commit -m \"$(cat <<'EOF'\nsops/age $SOPS_AGE_KEY /proc/self/environ keys.txt\nEOF\n)\"", false),
+        ("gh pr create --body \"$(cat <<'EOF'\nsops/age $SOPS_AGE_KEY /proc/self/environ keys.txt\nEOF\n)\"", false),
+        ("sops --config .sops.yaml -e f.yaml", false), ("brew install sops age", false),
+        ("apt-get install -y age sops", false), ("mv sops /usr/local/bin/sops", false),
+        ("install -m 755 sops /usr/local/bin/sops", false),
+        ("tar xzf age.tar.gz && mv age/age /usr/local/bin/", false),
+        ("cargo nextest run sops decrypt", false), ("grep -rn '/proc/self/environ' src", false),
+        ("npx sops -d f", true), ("nix run nixpkgs#sops -- -d f", true),
+        ("flock /tmp/l sops -d f", true), ("strace -f sops -d f", true),
+        ("git bisect run sops -d f", true), ("coproc sops -d f", true),
+        ("case x in *) sops -d f;; esac", true),
+        ("if false; then :; elif sops -d f; then :; fi", true),
+        ("bosun main-triage --run \"sops -d f\"", true),
+        ("bosun main-triage --run='sops -d f'", true),
+        ("echo sops | xargs -I{} sh -c '{} -d f'", true), ("rg --pre sops x src", true),
+        ("rg --pre=sops x src", true), ("grep x /proc/self/environ", true),
+        ("grep -e x /proc/self/environ", true), ("rg pat src /proc/1/environ", true),
+        ("gh api -f body=\"x sops -d y\" repos/o/r/issues", false),
+        ("gh issue list -q \".[] | sops -d\"", false), ("bosun claim 3", false),
+        ("rg --pre-glob '*.gz' x src", false), ("npm install sops age", false),
+        ("cargo test sops", false), ("curl -o sops https://x/sops", false),
+        ("env | grep -i sops", true), ("printenv | grep -i sops_age", true),
+        ("cat ~/.config/*/age/keys.txt", true), ("cat ~/.config/s*/age/keys.txt", true),
+        ("cat ~/.config/so\"ps/age/keys.txt\"", true), ("sops --age -e f", true),
+        ("sops --age encrypt f", true), ("sops --unencrypted-suffix -e f", true),
+        ("sops --age=age1abc -e f", false), ("sops --verbose -e f.yaml", false),
+        ("awk 'BEGIN{print ENVIRON[\"SOPS_AGE_KEY\"]}'", true), ("jq -n 'env.SOPS_AGE_KEY'", true),
+        ("jq -n '$ENV.SOPS_AGE_KEY'", true), ("jq -n 'env.HOME'", true),
+        ("printenv | grep -i age", true), ("env | sort", true), ("set | grep -i age", true),
+        ("declare -x | grep age", true), ("compgen -e | head", true), ("env > /tmp/e", true),
+        ("export -p > /tmp/e", true), ("python3 -c \"import os;print(os.environ)\"", true),
+        ("node -e \"console.log(process.env)\"", true), ("ruby -e 'p ENV[\"A\"]'", true),
+        ("perl -e 'print $ENV{A}'", true), ("python3 -c \"import os;os.getenv('A')\"", true),
+        ("p=S\"OPS_AGE_KEY\"; echo ${!p}", true), ("cat /proc/self/env*", true),
+        ("tar cf x.tar ~/.config/s*/a", true), ("find ~ -name keys.txt", true),
+        ("find / -name keys.txt -print", true), ("cat keys.txt ~/.config/x", true),
+        ("FOO=SOPS_AGE_KEY_FILE true", true), ("hoist secrets --env prod edit", true),
+        ("hoist secrets --env=prod edit", true), ("hoist secrets --repo x rotate-key", true),
+        ("alias s=sops", true), ("alias d='age -d'", true), ("alias r=rage", true),
+        ("go run github.com/getsops/sops/v3/cmd/sops@v3.8.1 -d f", true),
+        ("cat > /tmp/x.sh <<'EOF'\nsops -d f\nEOF\nbash /tmp/x.sh", true),
+        ("cat > /tmp/x <<'EOF'\nsops -d f\nEOF\n. /tmp/x", true),
+        ("cat > x.py <<'EOF'\nsops -d f\nEOF\npython3 x.py", true),
+        ("cat > x <<'EOF'\nsops -d f\nEOF\nsource x", true), ("hoist secrets --env prod check", false),
+        ("alias ll='ls -l'", false), ("cat > d.md <<'EOF'\nsops -d f\nEOF\ncargo test", false),
+        ("cargo test", false), ("cargo nextest run", false), ("grep -rn age src/", false),
+        ("rg sops", false), ("git log --grep sops", false), ("ls ~/.config", false),
+        ("npm run build", false), ("pnpm test -- age", false), ("python3 scripts/check.py", false),
+        ("node --test", false), ("printenv HOME", false), ("export PATH=$PATH:/x", false),
+        ("printenv", true), ("env", true), ("env -0", true), ("set", true), ("export -p", true),
+        ("declare -p", true), ("declare -x", true), ("typeset -p", true), ("typeset -x", true),
+        ("compgen -e", true), ("compgen -v", true), ("ps e", true), ("ps eww", true), ("ps -E", true),
+        ("ps axe", true), ("echo ${!SOPS*}", true), ("v=SOPS_AGE_KEY; echo ${!v}", true),
+        ("for i in \"${!pkgs[@]}\"; do echo \"package $i\"; done", false),
+        ("echo \"${!prefix@}\" # usage", false), ("git grep SOPS_AGE_KEY", false),
+        ("git log -S SOPS_AGE_KEY --oneline", false), ("git log --grep 'SOPS_AGE_KEY' --oneline", false),
+        ("gh search code SOPS_AGE_KEY", false), ("sed -n s/SOPS_AGE_KEY//p f", true),
+        ("gh api repos/o/r/environments/prod/secrets/SOPS_AGE_KEY", false),
+        ("cat > x.sh <<'EOF'\nsops -d f\nEOF\nchmod +x x.sh && ./x.sh", true),
+        ("cat > x.sh <<'EOF'\nsops -d f\nEOF\nbash x.sh", true),
+        ("cat <<'EOF' > x.py\nsops -d f\nEOF\npython3 x.py", true),
+        ("tee x.sh <<'EOF'\nsops -d f\nEOF\nsh x.sh", true),
+        ("cat > docs/s.md <<'EOF'\nmention sops -d here\nEOF\nbash scripts/check.sh", false),
+        ("cat > notes.md <<'EOF'\nsops\nEOF\ngit ls-files | xargs wc -l", false),
+        ("hoist secrets --manifest secrets.toml edit", true), ("hoist secrets --keys A,B edit", true),
+        ("hoist --env prod secrets sync", true), ("hoist secrets exec --env prod -- cargo test", false),
+        ("python3 -c \"from os import environ\"", true), ("deno eval \"Deno.env.get('A')\"", true),
+        ("node -e \"require('process').env\"", true), ("php -r 'echo getenv(\"A\");'", true),
+        ("php -r 'echo $_SERVER[\"A\"];'", true), ("jq '.env' f.json", false), ("make ENV=prod", false),
+        ("docker compose --env-file .env up", false), ("ps aux", false), ("ps -e", false),
+        ("python3 -c 'import os; print(os.getcwd())'", false),
+        ("node -e 'console.log(process.argv)'", false), ("cargo build --package age", false),
+        ("git grep --open-files-in-pager='sops -d' x", true), ("git grep -O'sops -d' x", true),
+        ("git grep -O sops x", true), ("git grep --open-files-in-pager=sops x", true),
+        ("python3 -c \"from os import environ as e; print(e)\"", true),
+        ("declare -p SOPS_AGE_KEY", true), ("git grep -n sops docs/", false),
+        ("gh search code sops", false), ("git log --grep sops --oneline", false),
+        ("python3 -m pytest tests/test_environ.py", false), ("declare -p arr", false),
+        ("typeset -p x", false),
+        ("git -C . grep -O'sops -d' x", true), ("git -c core.quotepath=off grep -O'sops -d' x", true),
+        ("git --git-dir=.git grep --open-files-in-pager=sops x", true),
+        ("git -C . grep SOPS_AGE_KEY", false), ("git --no-pager grep -n sops docs/", false),
+        ("git -C . log --grep sops --oneline", false),
+        ("grep -r AGE-SECRET-KEY ~/.config", true), ("grep -r SECRET-KEY-1 ~", true),
+        ("rg -uu AGE-SECRET ~", true), ("cat ~/.config/sop[s]/age/key[s].txt", true),
+        ("printf 'sops -d f\\n' > /tmp/x.sh; bash /tmp/x.sh", true),
+        ("echo 'sops -d f' > x.sh; . x.sh", true),
+        ("echo 'sops -d f' > x.sh && chmod +x x.sh && ./x.sh", true),
+        ("perl -e 'print %ENV'", true), ("node -e 'Bun.env'", true), ("jq -n env", true),
+        ("jq -n 'env'", true), ("git commit -m \"docs: AGE-SECRET-KEY lines are R-secrets\"", false),
+        ("git commit -m \"$(cat <<'EOF'\nAGE-SECRET-KEY lines\nEOF\n)\"", false),
+        ("cargo test age_secret", false), ("echo hi > out.txt; cat out.txt", false),
+        ("cargo test > log.txt; bash scripts/check.sh", false), ("jq '.env' f", false),
+        ("jq -r .env.name file", false),
+        ("grep -rn AGE-SECRET-KEY src/", false), ("rg 'SECRET-KEY-1' .bosun/risk.toml", false),
+        ("echo AGE-SECRET-KEY", true), ("sops --version 2>&1 | head -1", false),
+        ("sops --version > /dev/null", false), ("age --version 2>/dev/null", false),
+        ("sops --version > v.txt && cat v.txt", false), ("sops -d f > out.yaml", true),
+        ("sops f 2>/dev/null", true),
+        ("grep -r SECRET-KEY ~", true), ("grep -ri secret-key $HOME", true),
+        ("rg SECRET-KEY ~/.config", true), ("grep -r x ~/.config/sops", true),
+        ("grep -R SECRET-K ${HOME}", true), ("rg AGE-SE /root", false), ("ag age-sec /home/bob", false),
+        ("grep --recursive SECRET-KEY $XDG_CONFIG_HOME", true), ("rg secret ~", false),
+        ("grep -rn SECRET-KEY ~/.config/nvim", false), ("rg x ~/.config/sops/foo", true),
+        ("grep -rn SECRET-KEY src/", false), ("rg secret ~/projects/x", false),
+        ("grep -r TODO ~/.config/nvim", false), ("grep -r TODO ~", true),
+        ("grep SECRET-KEY ~/notes.txt", false), ("rg AGE ~", false),
+        ("bun -e 'console.log(Bun.env)'", true), ("bun -p 'Bun.env.HOME'", true),
+        ("bun --eval 'console.log(process.env)'", true), ("bun --print 'Bun.env'", true),
+        ("bun -e \"require('child_process').execSync('sops -d f')\"", true),
+        ("grep -r AGE ~", true), ("grep -ri age ~/.config", true), ("grep -r . ~/.config", true),
+        ("grep -r '' ~/.config", true), ("rg --hidden . ~/.config", true), ("rg -uu KEY ~", true),
+        ("grep -rE 'SECRET.KEY' ~", true), ("rg x ~/.config", true), ("rg x .config", true),
+        ("grep -r x ${XDG_CONFIG_HOME}", true), ("rg --hidden x $HOME", true), ("rg -. x ~", true),
+        ("grep -r x /home", true), ("rg TODO ~", false), ("rg AGE src/", false),
+        ("rg x ~/.config/nvim", false), ("grep -r x $XDG_CONFIG_HOME/nvim", false),
+        ("bun -e \"Bun.spawnSync(['sops','-d','f'])\"", true), ("bun -p \"Bun.spawnSync(['sops','-d','f'])\"", true),
+        ("grep -r x ~/.config/../.config", true), ("grep -r x ~/.config/./", true),
+        ("grep -r x ~/./.config", true), ("grep -r x ~//.config", true),
+        ("grep -d recurse x ~/.config", true), ("grep -drecurse x ~/.config", true),
+        ("grep --directories=recurse x ~/.config", true), ("grep --directories recurse x ~/.config", true),
+        ("grep -r x ~/.conf*", true), ("grep -r x ~/../bob", true),
+        ("grep -ri secret ~/.config/sops-test", false), ("grep -r x ~/.config/sops/", true),
+        ("bun test", false), ("bun run build", false), ("bun install", false),
+        ("bun -e 'console.log(1)'", false),
+    ];
+
+    #[test]
+    fn decrypt_lock_table() {
+        let wrong: Vec<_> = DECRYPT_CASES
+            .iter()
+            .filter(|(cmd, deny)| bash(cmd, "feature").is_some() != *deny)
+            .collect();
+        assert!(wrong.is_empty(), "wrong verdict: {wrong:#?}");
+        let why = bash("sops -d f", "feature").unwrap();
+        assert!(!why.contains('\n') && why.contains("hoist secrets exec"));
+    }
+
+    fn own(issue: u64, session: &str, touch: &[&str]) -> Lease {
+        Lease {
+            issue,
+            session: session.into(),
+            origin: "claimed".into(),
+            expires: Timestamp(i64::MAX),
+            touch: touch.iter().map(|t| t.to_string()).collect(),
+            comment_id: 1,
+        }
+    }
+
+    #[test]
+    fn edit_lock_keeps_edits_inside_the_own_touch() {
+        let mine = [own(8, "me", &["src/core/**", "Cargo.toml"])];
+        // Covered by a glob, or a lockfile companion.
+        assert_eq!(edit_lock("src/core/a.rs", true, &mine, "me"), None);
+        assert_eq!(edit_lock("Cargo.lock", true, &mine, "me"), None);
+        // Fragments and new files are always free.
+        assert_eq!(edit_lock("changelog.d/x.md", true, &mine, "me"), None);
+        assert_eq!(edit_lock("docs/progress.d/x.md", true, &mine, "me"), None);
+        assert_eq!(edit_lock("src/new.rs", false, &mine, "me"), None);
+        // An existing file outside the touch is denied, naming issue, globs and the fix.
+        let why = edit_lock("src/cli/x.rs", true, &mine, "me").unwrap();
+        assert!(
+            why.contains("src/cli/x.rs is outside your lease (touch: src/core/**, Cargo.toml)")
+                && why.contains("`bosun claim 8 --touch src/cli/x.rs`")
+                && why.contains("exit 3"),
+            "{why}"
+        );
+        // Several own leases are one union; the first names the issue.
+        let two = [mine[0].clone(), own(9, "me", &["docs/**"])];
+        assert_eq!(edit_lock("docs/a.md", true, &two, "me"), None);
+        let why = edit_lock("web/a.ts", true, &two, "me").unwrap();
+        assert!(why.contains("claim 8"), "{why}");
+    }
+
+    #[test]
+    fn edit_lock_without_an_own_touch_allows() {
+        assert_eq!(edit_lock("src/a.rs", true, &[], "me"), None);
+        let epic = [own(3, "me", &[])];
+        assert_eq!(edit_lock("src/a.rs", true, &epic, "me"), None);
+        // Another session's lease does not make one of mine, and still denies.
+        let other = [own(4, "other", &["src/**"])];
+        assert!(edit_lock("src/a.rs", true, &other, "me").is_some());
+        // An orchestrator holding only per-task wave leases is not restricted by them.
+        let wave = [own(7, "me/x", &["src/a/**"]), own(8, "me/y", &["src/c/**"])];
+        assert_eq!(edit_lock("src/b.rs", true, &wave, "me"), None);
+    }
+
+    #[test]
+    fn edit_lock_bad_own_glob_covers_nothing() {
+        let bad = [own(6, "me", &["src/**", "src/[a"])];
+        assert_eq!(edit_lock("src/a.rs", true, &bad, "me"), None);
+        let why = edit_lock("docs/a.md", true, &bad, "me").unwrap();
+        assert!(why.contains("re-claim with valid globs"), "{why}");
+        let only = [own(6, "me", &["src/[a"])];
+        assert!(edit_lock("src/[a", true, &only, "me").is_some());
     }
 }

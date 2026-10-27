@@ -11,10 +11,12 @@ use serde_json::{Value, json};
 use super::ApproveArgs;
 use crate::app::App;
 use crate::app::{Result, kill_switch, main_red};
-use crate::cli::risk_check::{decisive_review, enrolled_keys, owner_comment, owner_logins};
+use crate::cli::risk_check::{
+    decisive_review, dismissed_review, enrolled_keys, owner_comment, owner_logins,
+};
 use crate::core::approve::{
-    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, in_cloud,
-    parse_target, readiness, signed_comment, signed_message,
+    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, batch_message,
+    in_cloud, parse_target, readiness, signed_comment, signed_message, signed_message_v2,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
@@ -39,19 +41,28 @@ struct Ready {
 const COMPARE_FILES_CAP: usize = 300;
 
 /// Why a PR is not ready when an owner's newest decisive review on the head requests changes.
-const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves with a review or dismisses it, or another owner approves with a GitHub review";
+const WITHDRAWN: &str = "an owner's review requests changes on this head; that owner approves again with a GitHub review, or another owner approves with a GitHub review";
 
-/// An owner's newest decisive review on the head requests changes: that withdraws their
-/// approval comment, so approving again here would not count.
-fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<bool> {
+/// The same when that review was dismissed.
+const WITHDRAWN_DISMISSED: &str = "an owner's request for changes on this head was dismissed; it needs a fresh plain owner comment (`bosun approve <pr>@<head>`, with the owner token), a signature bound to the dismissed review (`bosun approve <pr>@<head> --sign-key <pem>`), or a GitHub review from that owner, or a GitHub review from another owner";
+
+/// Why an owner's approval of the head is withdrawn, if it is, and whether a fresh plain owner
+/// comment ends it (only after a dismissal). A request for changes wins.
+fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<Option<(&'static str, bool)>> {
     let owners = owner_logins(gh, &p.base_sha)?;
-    if owners.is_empty() {
-        return Ok(false);
-    }
     let reviews = gh.list_reviews(p.number)?;
-    Ok(owners
+    let states: Vec<_> = owners
         .iter()
-        .any(|o| decisive_review(&reviews, o, &p.head_sha).as_deref() == Some("CHANGES_REQUESTED")))
+        .map(|o| decisive_review(&reviews, o, &p.head_sha))
+        .collect();
+    let has = |s: &str| states.iter().any(|x| x.as_deref() == Some(s));
+    Ok(if has("CHANGES_REQUESTED") {
+        Some((WITHDRAWN, false))
+    } else if has("DISMISSED") {
+        Some((WITHDRAWN_DISMISSED, true))
+    } else {
+        None
+    })
 }
 
 /// What to do instead in a Claude cloud session.
@@ -60,11 +71,26 @@ const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/b
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
+const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 struct Board {
     ready: Vec<Ready>,
     waiting: Vec<(u64, &'static str)>,
+    /// Waiting PRs whose dismissed withdrawal a fresh `bosun approve` comment ends: (pr, head, base).
+    dismissed: Vec<(u64, String, String)>,
+}
+
+/// Put `p` in `waiting` when an owner's approval of it is withdrawn.
+fn hold(gh: &dyn Github, p: &Pull, board: &mut Board) -> Result<bool> {
+    let Some((why, by_comment)) = withdrawn(gh, p)? else {
+        return Ok(false);
+    };
+    board.waiting.push((p.number, why));
+    if by_comment {
+        let (head, base) = (p.head_sha.clone(), p.base_sha.clone());
+        board.dismissed.push((p.number, head, base));
+    }
+    Ok(true)
 }
 
 /// The open PRs whose risk-check waits for an owner, split into ready and waiting, by number.
@@ -75,6 +101,7 @@ fn board(gh: &dyn Github) -> Result<Board> {
     let mut board = Board {
         ready: Vec::new(),
         waiting: Vec::new(),
+        dismissed: Vec::new(),
     };
     for p in pulls {
         let statuses: Vec<Stat> = gh
@@ -101,9 +128,7 @@ fn board(gh: &dyn Github) -> Result<Board> {
         match readiness(&statuses, &runs) {
             Readiness::NotWaiting => {}
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
-            Readiness::Ready(_) if withdrawn(gh, &p)? => {
-                board.waiting.push((p.number, WITHDRAWN));
-            }
+            Readiness::Ready(_) if hold(gh, &p, &mut board)? => {}
             Readiness::Ready(risk) => board.ready.push(Ready {
                 pr: p.number,
                 title: p.title.clone(),
@@ -188,7 +213,19 @@ fn exec(
         let b = board(gh)?;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
+        let items: Vec<(u64, String, String)> = b
+            .ready
+            .iter()
+            .map(|r| (r.pr, r.head_sha.clone(), r.title.clone()))
+            .collect();
+        let (message_id, message, message_pairs) = match batch_message(&items) {
+            Some(m) => (json!(m.id), json!(m.text), json!(m.pairs)),
+            None => (Value::Null, Value::Null, Value::Null),
+        };
         return Ok(Outcome::data(json!({
+            "message_id": message_id,
+            "message": message,
+            "message_pairs": message_pairs,
             "ready": b.ready.iter().map(ready_json).collect::<Vec<_>>(),
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
@@ -218,7 +255,11 @@ fn exec(
         let why = match b.ready.iter().find(|r| r.pr == *n) {
             Some(r) if r.head_sha == *sha => continue,
             Some(r) => format!("head changed (now {})", r.head_sha),
-            None => why_not(gh, &b, *n)?,
+            None => match b.dismissed.iter().find(|d| d.0 == *n) {
+                Some(d) if d.1 == *sha => continue,
+                Some(d) => format!("head changed (now {})", d.1),
+                None => why_not(gh, &b, *n)?,
+            },
         };
         not_ready.push(json!({"pr": n, "why": why}));
     }
@@ -233,12 +274,13 @@ fn exec(
     let mut heads = Vec::new();
     let mut failed = None;
     for (pr, sha) in targets {
-        let base = &b
+        let base = b
             .ready
             .iter()
             .find(|r| r.pr == pr)
-            .expect("checked above")
-            .base_sha;
+            .map(|r| &r.base_sha)
+            .or_else(|| b.dismissed.iter().find(|d| d.0 == pr).map(|d| &d.2))
+            .expect("checked above");
         match approve_one(gh, pr, &sha, base) {
             Ok((id, repost)) => {
                 let mut entry = json!({"pr": pr, "head_sha": sha, "comment_id": id});
@@ -409,12 +451,42 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
         .ok_or_else(|| {
             BosunError::conflict(format!("PR #{pr} is not an open PR"), "name an open PR")
         })?;
-    let head = pull.head_sha;
+    let head = pull.head_sha.clone();
     if pinned != head {
         return Err(BosunError::conflict(
             format!("PR #{pr} head changed (now {head}); nothing was signed"),
             "show the owner the new head and sign it only on their word",
         ));
+    }
+    let role = match args.role.as_deref() {
+        Some("delegate") => Role::Delegate,
+        _ => Role::Owner,
+    };
+    // A request for changes, and any withdrawal for a delegate, cannot be signed away. After a
+    // dismissal an owner key signs v2, bound to each dismissed owner review (spec section 8).
+    let mut reviews = vec![None];
+    match withdrawn(gh, &pull)? {
+        Some((_, true)) if role == Role::Owner => {
+            let all = gh.list_reviews(pr)?;
+            reviews = owner_logins(gh, &pull.base_sha)?
+                .iter()
+                .filter_map(|o| dismissed_review(&all, o, &head))
+                .map(Some)
+                .collect();
+            if reviews.is_empty() || reviews.contains(&Some(0)) {
+                return Err(BosunError::conflict(
+                    format!("PR #{pr}: the dismissed review cannot be named, nothing was signed"),
+                    "the owner posts a plain `/bosun approve <head>` comment or submits a GitHub approving review",
+                ));
+            }
+        }
+        Some((why, _)) => {
+            return Err(BosunError::conflict(
+                format!("PR #{pr}: a signature would not count, nothing was signed: {why}"),
+                "the owner submits a GitHub approving review (or, after a dismissal, posts a plain `/bosun approve <head>` comment); only an owner key signs after a dismissal, and a request for changes ends only with a review",
+            ));
+        }
+        None => {}
     }
     let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
     let keys = enrolled_keys(gh).map_err(|why| {
@@ -425,10 +497,6 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             ),
         )
     })?;
-    let role = match args.role.as_deref() {
-        Some("delegate") => Role::Delegate,
-        _ => Role::Owner,
-    };
     let key = keys
         .into_iter()
         .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
@@ -455,18 +523,40 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
         ));
     }
     let key_id = key.id;
-    let msg = signed_message(role, &app.ctx.repo.owner, &app.ctx.repo.name, pr, &head);
-    let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
-    let body = signed_comment(&head, &key_id, &sig);
+    let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
+    let mut signed = Vec::new();
+    for after in reviews {
+        let msg = match after {
+            Some(r) => signed_message_v2(owner, repo, pr, &head, r),
+            None => signed_message(role, owner, repo, pr, &head),
+        };
+        let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
+        signed.push((after, signed_comment(&head, after, &key_id, &sig)));
+    }
     if args.print {
+        let all: Vec<Value> = (signed.iter())
+            .map(|(after, body)| json!({"after_review": after, "body": body}))
+            .collect();
         return Ok(Outcome::data(
-            json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(), "body": body}),
+            json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(),
+                "body": signed[0].1, "bodies": all}),
         ));
     }
-    let id = gh.add_comment(pr, &body)?.id;
-    Ok(Outcome::data(json!({"approved": [
-        {"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(), "comment_id": id}
-    ]})))
+    let mut approved = Vec::new();
+    for (after, body) in signed {
+        // The comments already posted stay listed when a later one fails.
+        let id = match gh.add_comment(pr, &body) {
+            Ok(c) => c.id,
+            Err(e) => return Err(e.with_data(json!({"approved": approved}))),
+        };
+        let mut entry = json!({"pr": pr, "head_sha": head, "key_id": key_id,
+            "role": role.name(), "comment_id": id});
+        if let Some(r) = after {
+            entry["after_review"] = json!(r);
+        }
+        approved.push(entry);
+    }
+    Ok(Outcome::data(json!({"approved": approved})))
 }
 
 /// An ed25519 key from a PKCS#8 PEM (`openssl genpkey -algorithm ed25519`). Errors name the

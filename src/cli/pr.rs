@@ -7,13 +7,15 @@ use std::process::Command;
 use serde_json::json;
 
 use super::PrArgs;
-use crate::app::{App, default_branch, kill_switch, set_state, sync_merged};
+use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged};
 use crate::core::checks;
+use crate::core::lease::{leases_of, orchestrator_of};
 use crate::core::meta::linked_issues;
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
-use crate::github::{Github, IssueState, enable_auto_merge_any};
+use crate::core::touch::{Changed, outside};
+use crate::github::{Github, IssueState, PrFile, enable_auto_merge_any};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// The default checks that must be green before auto-merge (spec D15, D32). `required` lets
@@ -79,6 +81,68 @@ fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, Stri
     Ok(bad)
 }
 
+/// The compare API lists at most 300 files (as in review_ci and approve).
+const COMPARE_CAP: usize = 300;
+
+/// Design C3: the PR may change only files in this session's live lease on `n` (plus lockfile
+/// companions, added files and the fragments). `fetch` reads the PR's own file list, or the
+/// comparison of the default branch with the pushed branch when no PR exists (with the number
+/// of files the PR has, when GitHub says); it runs only once a lease is found. Returns the
+/// `touch_check` value; exit 3 when files are outside.
+fn touch_check(
+    app: &App,
+    n: u64,
+    fetch: impl FnOnce() -> Result<(Vec<PrFile>, Option<u64>), BosunError>,
+) -> Result<&'static str, BosunError> {
+    let Some(lease) = leases_of(n, &notes(app.gh.as_ref(), n)?)
+        .into_iter()
+        // An empty touch (a spawn's epic lease) restricts nothing, as in the edit hook.
+        .filter(|l| l.is_live(app.ctx.now) && !l.touch.is_empty())
+        // Own lease first, else one held by a per-task id of this orchestrator.
+        .filter(|l| l.session == app.ctx.session || orchestrator_of(&l.session) == app.ctx.session)
+        .min_by_key(|l| l.session != app.ctx.session)
+    else {
+        return Ok("skipped (no lease)");
+    };
+    // Like the pushed-branch check: an unreadable diff does not stop the PR.
+    let (files, total) = match fetch() {
+        Ok(found) => found,
+        Err(e) => {
+            eprintln!(
+                "bosun: cannot read the changed files of #{n}: {}",
+                e.message
+            );
+            return Ok("skipped (diff unavailable)");
+        }
+    };
+    let cut = match total {
+        Some(total) => (files.len() as u64) < total,
+        None => files.len() >= COMPARE_CAP,
+    };
+    if cut {
+        return Ok("skipped (diff too large)");
+    }
+    let files: Vec<Changed> = files
+        .into_iter()
+        .map(|f| Changed {
+            path: f.filename,
+            status: f.status,
+            previous: f.previous_filename,
+        })
+        .collect();
+    let out = outside(&files, &lease.touch);
+    if out.is_empty() {
+        return Ok("ok");
+    }
+    Err(BosunError::conflict(
+        format!("#{n} edits files outside its lease: {}", out.join(", ")),
+        format!(
+            "add them with `bosun claim {n} --touch <path>` (exit 3 if another session holds one), or drop the changes; then run `bosun pr {n}` again"
+        ),
+    )
+    .with_data(json!({"outside": out})))
+}
+
 pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
@@ -125,6 +189,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
         }
     }
+    let touch;
     let (pull, created) = match open.map(|i| found.swap_remove(i)) {
         Some(p) if !linked_issues(&p.body).contains(&n) => {
             // Before any state change, record or auto-merge: this PR belongs to something else.
@@ -139,7 +204,15 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             )
             .with_data(json!({"pr": p.number})));
         }
-        Some(p) => (p, false),
+        Some(p) => {
+            touch = touch_check(&app, n, || {
+                let total = gh
+                    .get_pull(p.number)?
+                    .map_or(p.changed_files, |f| f.changed_files);
+                Ok((gh.pull_files(p.number)?, (total > 0).then_some(total)))
+            })?;
+            (p, false)
+        }
         None => {
             // Only a definite "not found" stops here; an unreadable check (a proxy's 403) does not.
             let pushed = gh.branch_exists(&branch).unwrap_or_else(|e| {
@@ -154,6 +227,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     ),
                 ));
             }
+            touch = touch_check(&app, n, || Ok((gh.compare_files(&base, &branch)?, None)))?;
             let title = args
                 .title
                 .clone()
@@ -222,5 +296,6 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     Ok(Outcome::data(json!({
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
         "auto_merge": args.auto_merge, "auto_merge_route": route, "task_state": state.map(State::name),
+        "touch_check": touch,
     })))
 }
