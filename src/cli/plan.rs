@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
-use crate::app::{App, Result, kill_switch, notes, set_state, task_meta};
+use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
 use crate::core::lease::leases_of;
-use crate::core::meta::TaskMeta;
+use crate::core::meta::{TaskMeta, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
@@ -705,8 +705,81 @@ fn all_issues(gh: &dyn Github) -> Result<Vec<Issue>> {
     Ok(issues)
 }
 
+/// Items among `wanted` that a merged intake PR added to the plan file `plan_path`, as item id ->
+/// (intake, PR). An intake counts when it touches this plan file and is merged, or closed as
+/// completed. Its PR is a closed, merged pull request into the default branch that links it; the
+/// plan file at the PR's base and at its merge commit are parsed, and the ids only the later one
+/// has were added by that PR. A file missing at the base has no ids; an unparsable one counts the
+/// same. Newest intakes first, and the scan stops once every wanted id has an owner.
+fn intake_added(imp: &Importer, wanted: &[&str]) -> Result<HashMap<String, (u64, u64)>> {
+    let want = imp.plan_path.trim_start_matches("./");
+    let mut intakes: Vec<&Issue> = imp
+        .issues
+        .iter()
+        .filter(|i| !i.pull_request && i.labels.iter().any(|l| l == "bosun:kind/plan"))
+        .filter(|i| {
+            state_of(&i.labels) == Some(State::Merged)
+                || (i.state == "closed" && i.state_reason.as_deref() == Some("completed"))
+        })
+        .filter(|i| {
+            parse_task_meta(i.body_text()).is_some_and(|m| {
+                m.task == "intake" && m.touch.iter().any(|t| t.trim_start_matches("./") == want)
+            })
+        })
+        .collect();
+    intakes.sort_by_key(|i| std::cmp::Reverse(i.number));
+    let mut added = HashMap::new();
+    if intakes.is_empty() {
+        return Ok(added);
+    }
+    // A missing file has no ids; one that exists but does not parse says nothing (`None`).
+    let ids = |text: Option<String>| -> Option<HashSet<String>> {
+        let Some(t) = text else {
+            return Some(HashSet::new());
+        };
+        plan::parse(&t)
+            .ok()
+            .map(|p| p.items.into_iter().map(|i| i.id).collect())
+    };
+    let base = default_branch(imp.gh)?;
+    let pulls = imp.gh.list_pulls(None, IssueState::Closed)?;
+    for intake in intakes {
+        if wanted.iter().all(|w| added.contains_key(*w)) {
+            break;
+        }
+        for p in pulls
+            .iter()
+            .filter(|p| p.base_ref == base && linked_issues(&p.body).contains(&intake.number))
+        {
+            let Some(full) = imp.gh.get_pull(p.number)?.filter(|f| f.merged) else {
+                continue;
+            };
+            let after = full.merge_commit_sha.as_deref().unwrap_or(&full.head_sha);
+            let before = ids(imp.gh.file_at(&imp.plan_path, &full.base_sha)?);
+            let now = ids(imp.gh.file_at(&imp.plan_path, after)?);
+            let (Some(before), Some(now)) = (before, now) else {
+                eprintln!(
+                    "plan: {} does not parse at PR #{}'s base or merge commit; intake #{} is not trusted",
+                    imp.plan_path, p.number, intake.number
+                );
+                continue;
+            };
+            for id in now.difference(&before) {
+                added.entry(id.clone()).or_insert((intake.number, p.number));
+            }
+        }
+    }
+    Ok(added)
+}
+
+fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
+    let m = marker(pid);
+    issues.iter().any(|i| i.body_text().contains(&m))
+}
+
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     let plan_path = imp.plan_path.clone();
+    let mut added: Option<HashMap<String, (u64, u64)>> = None;
     for item in p
         .items
         .iter()
@@ -720,9 +793,26 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             )
         })?;
         let pid = format!("{}/P", item.id);
+        // Only a new item can have been born of an intake; read the PRs once, when one shows up.
+        if added.is_none() && !has_plan_task(&imp.issues, &pid) {
+            let wanted: Vec<&str> = p
+                .items
+                .iter()
+                .filter(|i| a.item.is_empty() || a.item.contains(&i.id))
+                .filter(|i| !has_plan_task(&imp.issues, &format!("{}/P", i.id)))
+                .map(|i| i.id.as_str())
+                .collect();
+            added = Some(intake_added(imp, &wanted)?);
+        }
+        let done_by = added.as_ref().and_then(|m| m.get(&item.id)).copied();
         let pslot = imp.slot(&pid, (&item.id, Some("P")), || {
+            let by = done_by
+                .map(|(n, pr)| {
+                    format!("Done by intake #{n}: this item is on the default branch since its PR #{pr} merged.\n\n")
+                })
+                .unwrap_or_default();
             let intro = format!(
-                "Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
+                "{by}Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
                  with the code of the tasks that implement them; there are no pending tests. \
                  The item's tasks become ready when this merges (run `bosun plan import` again); \
                  if the plan is already on the default branch, there is nothing to commit: \
@@ -738,9 +828,33 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             (
                 format!("{pid}: plan"),
                 task_body(&pid, &intro, &plan_task_meta(item, &plan_path, epic.issue)),
-                labels("plan", &item.area, "ready"),
+                labels(
+                    "plan",
+                    &item.area,
+                    if done_by.is_some() { "merged" } else { "ready" },
+                ),
             )
         })?;
+        let mut pslot = pslot;
+        if let (Some(_), "created" | "would-create") = (done_by, pslot.action) {
+            // Made already merged: close it as completed so the tasks promote on this run.
+            if let (false, Some(n)) = (imp.dry, pslot.issue) {
+                imp.gh.update_issue(
+                    n,
+                    IssuePatch {
+                        state: Some(PatchState::Closed),
+                        state_reason: Some("completed".into()),
+                        ..IssuePatch::default()
+                    },
+                )?;
+            }
+            pslot.merged = true;
+            pslot.closed = !imp.dry;
+            if let Some(kept) = imp.tasks.iter_mut().rev().find(|t| t.id == pslot.id) {
+                kept.merged = true;
+                kept.closed = pslot.closed;
+            }
+        }
         let mut slots = vec![];
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);

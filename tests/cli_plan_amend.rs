@@ -275,6 +275,276 @@ fn amend_also_imports_new_items() {
     assert_eq!(v["data"]["epics"][0]["action"], "existing");
 }
 
+const M3: &str = "\n## M3: New\n\narea: new\n\n### Tasks\n\n- T1: Fresh\n  touch: src/n.rs\n\n### Done when\n\n- UC-M3-1: it works.\n";
+
+/// Open the intake with the real command, then let its PR land as `mode` says: `open` (no PR yet),
+/// `merged` (adds M3), `not-added` (merged, M3 not in the file), `no-base-file` (merged, the plan
+/// file is missing at the PR's base), `bad-base` (merged, the file at the base does not parse) or `unmerged` (closed without merging). The plan file on disk
+/// has M3 in every case. Returns the temp dir, the fake and the plan file.
+fn intake_env(mode: &str) -> (tempfile::TempDir, FakeGithub, String) {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let dir = tmp.path().to_str().unwrap();
+    let args = [
+        "-C", dir, "intake", "add M3", "--source", "human", "--plan", "plan.md",
+    ];
+    let (code, v) = common::run(&fake, "session_test", T0, &args);
+    assert_eq!(code, 0, "{v}");
+    let intake = v["data"]["issue"].as_u64().unwrap();
+    let with_m3 = format!("{PLAN}{M3}");
+    if mode != "open" {
+        let body = format!("Closes #{intake}\n<!-- bosun:task-pr 60 -->");
+        fake.pull(60, "plan", "plan-m3", &body);
+        if mode == "unmerged" {
+            fake.pull_set(60, "state", serde_json::json!("closed"));
+        } else {
+            fake.pull_merged(60, "merge60");
+            if mode != "no-base-file" {
+                let base = if mode == "bad-base" {
+                    "not a plan\n"
+                } else {
+                    PLAN
+                };
+                fake.content("plan.md", "base0000", base);
+            }
+            let after = if mode == "not-added" { PLAN } else { &with_m3 };
+            fake.content("plan.md", "merge60", after);
+        }
+        fake.close_issue(intake, T0);
+    }
+    write_plan(tmp.path(), &with_m3);
+    (tmp, fake, file)
+}
+
+fn amend_after_intake(merged: bool, plan_file_in_pr: bool) -> (FakeGithub, serde_json::Value) {
+    let mode = match (merged, plan_file_in_pr) {
+        (false, _) => "open",
+        (true, true) => "merged",
+        (true, false) => "not-added",
+    };
+    let (tmp, fake, file) = intake_env(mode);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    (fake, v)
+}
+
+#[test]
+fn amend_dry_run_reports_the_intake_promotion_and_writes_nothing() {
+    let (tmp, fake, file) = intake_env("merged");
+    let before = writes(&fake);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(writes(&fake), before);
+    assert_eq!(
+        v["data"]["would_promote"],
+        serde_json::json!(["M3", "M3/T1"])
+    );
+}
+
+#[test]
+fn a_second_amend_after_the_intake_promotion_changes_nothing() {
+    let (tmp, fake, file) = intake_env("merged");
+    let (_, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(v["data"]["promoted"], serde_json::json!(["M3", "M3/T1"]));
+    let before = writes(&fake);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(writes(&fake), before);
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+}
+
+#[test]
+fn the_born_closed_plan_task_is_reported_closed() {
+    let (_, v) = amend_after_intake(true, true);
+    let p = v["data"]["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "M3/P")
+        .unwrap();
+    assert_eq!(p["closed"], true, "{p}");
+}
+
+#[test]
+fn a_plan_file_missing_at_the_base_counts_as_all_added() {
+    let (tmp, fake, file) = intake_env("no-base-file");
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!(["M3", "M3/T1"]));
+}
+
+#[test]
+fn a_plan_file_that_does_not_parse_at_the_base_is_not_trusted() {
+    let (tmp, fake, file) = intake_env("bad-base");
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+}
+
+/// Open an intake `text` with the real command and let PR `pr` merge it: the plan file is `before`
+/// at `base` and `after` at `merge`, the intake closes as completed.
+fn landed_intake(
+    fake: &FakeGithub,
+    dir: &Path,
+    text: &str,
+    pr: u64,
+    shas: (&str, &str),
+    files: (&str, &str),
+) {
+    let dir = dir.to_str().unwrap();
+    let args = [
+        "-C", dir, "intake", text, "--source", "human", "--plan", "plan.md",
+    ];
+    let (code, v) = common::run(fake, "session_test", T0, &args);
+    assert_eq!(code, 0, "{v}");
+    let intake = v["data"]["issue"].as_u64().unwrap();
+    fake.pull(
+        pr,
+        "plan",
+        &format!("plan-{pr}"),
+        &format!("Closes #{intake}"),
+    );
+    fake.pull_merged(pr, shas.1);
+    fake.pull_set(
+        pr,
+        "base",
+        serde_json::json!({"sha": shas.0, "ref": "main"}),
+    );
+    fake.content("plan.md", shas.0, files.0);
+    fake.content("plan.md", shas.1, files.1);
+    fake.close_issue(intake, T0);
+}
+
+fn plan_with(items: &[&str]) -> String {
+    items.iter().fold(PLAN.to_string(), |p, m| {
+        format!("{p}{}", M3.replace("M3", m))
+    })
+}
+
+#[test]
+fn two_merged_intakes_each_promote_their_own_item() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let (p0, p3, p34) = (
+        PLAN.to_string(),
+        plan_with(&["M3"]),
+        plan_with(&["M3", "M4"]),
+    );
+    landed_intake(&fake, tmp.path(), "add M3", 60, ("b0", "m60"), (&p0, &p3));
+    landed_intake(&fake, tmp.path(), "add M4", 61, ("b1", "m61"), (&p3, &p34));
+    write_plan(tmp.path(), &p34);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["promoted"],
+        serde_json::json!(["M3", "M3/T1", "M4", "M4/T1"]),
+        "{v}"
+    );
+    for (item, pr) in [("M3", "PR #60"), ("M4", "PR #61")] {
+        let p = fake.issue_state(find(&fake, &format!("<!-- bosun:plan {item}/P -->")));
+        let first = p
+            .body
+            .split("-->\n\n")
+            .nth(1)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap();
+        assert!(
+            first.starts_with("Done by intake #") && first.contains(pr),
+            "{}",
+            p.body
+        );
+    }
+}
+
+#[test]
+fn the_scan_stops_once_every_new_item_has_an_owner() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let file = imported(&fake, tmp.path());
+    let (p0, p3, p34) = (
+        PLAN.to_string(),
+        plan_with(&["M3"]),
+        plan_with(&["M3", "M4"]),
+    );
+    landed_intake(&fake, tmp.path(), "add M3", 60, ("b0", "m60"), (&p0, &p3));
+    write_plan(tmp.path(), &p3);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    landed_intake(&fake, tmp.path(), "add M4", 61, ("b1", "m61"), (&p3, &p34));
+    write_plan(tmp.path(), &p34);
+    let seen = fake.requests().len();
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["promoted"],
+        serde_json::json!(["M4", "M4/T1"]),
+        "{v}"
+    );
+    let later: Vec<_> = fake
+        .requests()
+        .into_iter()
+        .skip(seen)
+        .map(|r| r.path)
+        .collect();
+    assert!(later.iter().any(|p| p.ends_with("/pulls/61")), "{later:?}");
+    assert!(!later.iter().any(|p| p.ends_with("/pulls/60")), "{later:?}");
+}
+
+#[test]
+fn a_linked_pr_closed_without_merging_promotes_nothing() {
+    let (tmp, fake, file) = intake_env("unmerged");
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+}
+
+#[test]
+fn a_linked_pr_into_another_branch_promotes_nothing() {
+    let (tmp, fake, file) = intake_env("merged");
+    fake.pull_set(
+        60,
+        "base",
+        serde_json::json!({"sha": "base0000", "ref": "release"}),
+    );
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+}
+
+#[test]
+fn amend_trusts_a_merged_intake_and_promotes_the_new_tasks_at_once() {
+    let (fake, v) = amend_after_intake(true, true);
+    assert_eq!(v["data"]["promoted"], serde_json::json!(["M3", "M3/T1"]));
+    let p = fake.issue_state(find(&fake, "<!-- bosun:plan M3/P -->"));
+    assert!(p.labels.contains(&"bosun:state/merged".to_string()));
+    assert_eq!(p.state, "closed");
+    assert_eq!(p.state_reason.as_deref(), Some("completed"));
+    assert!(p.body.contains("Done by intake #"), "{}", p.body);
+    assert!(p.body.contains("PR #60"), "{}", p.body);
+    let t = fake.issue_state(find(&fake, "<!-- bosun:plan M3/T1 -->"));
+    assert!(t.labels.contains(&"bosun:state/ready".to_string()));
+}
+
+#[test]
+fn amend_ignores_a_merged_intake_whose_pr_did_not_add_the_item() {
+    let (fake, v) = amend_after_intake(true, false);
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+    let p = fake.issue_state(find(&fake, "<!-- bosun:plan M3/P -->"));
+    assert_eq!(p.state, "open");
+}
+
+#[test]
+fn amend_keeps_the_plan_task_when_the_intake_is_still_open() {
+    let (fake, v) = amend_after_intake(false, true);
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+    let p = fake.issue_state(find(&fake, "<!-- bosun:plan M3/P -->"));
+    assert!(p.labels.contains(&"bosun:state/ready".to_string()));
+    assert_eq!(p.state, "open");
+    let t = fake.issue_state(find(&fake, "<!-- bosun:plan M3/T1 -->"));
+    assert!(t.labels.contains(&"bosun:state/planned".to_string()));
+}
+
 #[test]
 fn every_spelling_of_the_plan_path_reconciles_the_same() {
     for spelling in ["plans/x.md", "./plans/x.md", "ABS"] {

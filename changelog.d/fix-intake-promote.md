@@ -1,0 +1,1 @@
+- `bosun plan amend` and `plan import` make the plan task of an item already merged when a merged intake PR added the item to the plan file, and promote its epic and tasks at once.
