@@ -1,0 +1,1 @@
+- 2026-10-27 · Label-lock read-only allowlist · follow-up to #250: the read-only GitHub MCP skip is an explicit, test-pinned list; unknown tools fail closed · PR (fix/mcp-read-allowlist)

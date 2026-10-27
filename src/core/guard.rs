@@ -60,6 +60,42 @@ fn is_mine(holder: &str, me: &str) -> bool {
 /// empty list is the hook's directory. `None` when it cannot be read.
 pub type BranchAt<'a> = &'a dyn Fn(&[String]) -> Option<String>;
 
+/// The read-only tools of the GitHub MCP server (names without `mcp__github__`), which never set a
+/// label. A new tool is not on the list until someone reads what it does.
+const READ_ONLY_GITHUB: &[&str] = &[
+    "get_me",
+    "get_file_contents",
+    "get_commit",
+    "get_label",
+    "get_tag",
+    "get_latest_release",
+    "get_release_by_tag",
+    "get_check_run",
+    "get_job_logs",
+    "get_team_members",
+    "get_teams",
+    "get_copilot_job_status",
+    "list_branches",
+    "list_commits",
+    "list_issues",
+    "list_issue_types",
+    "list_issue_fields",
+    "list_pull_requests",
+    "list_releases",
+    "list_tags",
+    "list_repository_collaborators",
+    "actions_list",
+    "actions_get",
+    "search_code",
+    "search_commits",
+    "search_issues",
+    "search_pull_requests",
+    "search_repositories",
+    "search_users",
+    "issue_read",
+    "pull_request_read",
+];
+
 /// Label-lock and merge-lock; `None` allows the call. `branch_at` reads the checked-out branch
 /// of the directory a git command acts on (after `cd dir &&` and `git -C dir`), and
 /// `default_branch` is the repo's default branch.
@@ -77,12 +113,9 @@ pub fn tool_rules(
         if matches!(name, "merge_pull_request" | "enable_pr_auto_merge") {
             return Some(format!("`{tool}` is refused: {MERGE_FIX}"));
         }
-        // Reading or listing sets no label, even when the filter names a state label.
-        if name.starts_with("list_")
-            || name.starts_with("search_")
-            || name.starts_with("get_")
-            || name.ends_with("_read")
-        {
+        // Reading or listing sets no label, even when the filter names a state label. Only known
+        // read-only tools are skipped; a tool not listed is judged below (fails closed).
+        if READ_ONLY_GITHUB.contains(&name) {
             return None;
         }
         // A label tool is judged on its whole input; any other tool only on its label fields,
@@ -1272,10 +1305,59 @@ mod tests {
         ] {
             assert_eq!(call(tool, ready.clone()), None, "{tool}");
         }
+        // The list is pinned: every name is skipped, an unknown one is judged like a write.
+        for name in READ_ONLY_GITHUB {
+            let tool = format!("mcp__github__{name}");
+            assert_eq!(call(&tool, ready.clone()), None, "{tool}");
+        }
+        let expected = [
+            "actions_get",
+            "actions_list",
+            "get_check_run",
+            "get_commit",
+            "get_copilot_job_status",
+            "get_file_contents",
+            "get_job_logs",
+            "get_label",
+            "get_latest_release",
+            "get_me",
+            "get_release_by_tag",
+            "get_tag",
+            "get_team_members",
+            "get_teams",
+            "issue_read",
+            "list_branches",
+            "list_commits",
+            "list_issue_fields",
+            "list_issue_types",
+            "list_issues",
+            "list_pull_requests",
+            "list_releases",
+            "list_repository_collaborators",
+            "list_tags",
+            "pull_request_read",
+            "search_code",
+            "search_commits",
+            "search_issues",
+            "search_pull_requests",
+            "search_repositories",
+            "search_users",
+        ];
+        let mut have = READ_ONLY_GITHUB.to_vec();
+        have.sort_unstable();
+        assert_eq!(
+            have, expected,
+            "the read-only list changed: review the new tool first"
+        );
         for tool in [
+            "mcp__github__get_new_thing",
+            "mcp__github__list_x",
+            "mcp__github__search_x",
+            "mcp__github__x_read",
             "mcp__github__issue_write",
             "mcp__github__update_pull_request",
             "mcp__github__create_label",
+            "mcp__github__actions_run_trigger",
         ] {
             assert!(call(tool, ready.clone()).is_some(), "{tool}");
         }

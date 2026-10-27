@@ -1,0 +1,1 @@
+- The label-lock skips only an explicit allowlist of read-only GitHub MCP tools (`READ_ONLY_GITHUB`), pinned by a test, so an unknown `get_*`/`list_*` tool is judged like a write.
