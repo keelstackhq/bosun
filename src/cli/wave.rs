@@ -89,7 +89,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         .filter(|i| i.state == Some(State::Ready))
         .collect();
     if let Some(path) = epic_plan(epic_issue.body_text()).filter(|_| !ready.is_empty()) {
-        match open_items(gh, &path, None, &|_| true) {
+        match open_items(gh, &path, None, &|_| true, None) {
             Ok(Some((_, ticks))) => {
                 // open_items just read the plan; if it cannot be read again, all are held.
                 let known = plan_ids(gh, &path).unwrap_or_default();
