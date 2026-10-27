@@ -1,0 +1,1 @@
+- `bosun wave plan` leaves out ready tasks that an open owner-checklist item blocks (`data.held`) and, when the checklist cannot be read, every ready task of the plan with a warning that names the fix (`data.warnings`).
