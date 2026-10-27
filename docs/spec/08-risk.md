@@ -4,7 +4,7 @@
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
   `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
 - Consumer repos (`channel/pieces/core/files/.bosun/risk.toml.jinja`): R-gov also lists `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` (a nested agent-rule file is read by every later agent; `**/` matches the root file too).
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `azure-pipelines.yml`, `.gitlab-ci.yml`, `.buildkite/**`, `jenkinsfile`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/ci/**`, `.buildkite/**`, `**/jenkinsfile` (any case), `azure-pipelines.y*ml`, `bitbucket-pipelines.yml`, `.travis.yml`, `.drone.yml`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
 - R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**`, `.config/**` (build inputs), `src/anthropic.rs`, `src/core/lessons.rs`, `src/core/budget.rs`, `src/sessions/**` (review feeders), `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
 - R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Paths `**/secrets.toml`, `**/access.toml` and `**/*.sops.*` (`.sops.yaml` included); content `(?i)(api[_-]?key|secret|token)\s*=` or `AGE-SECRET-KEY-1` or `SOPS_AGE_KEY\s*[:=]` (a path or the content matches). It is critical, so it never goes to a delegate. Risk paths also match the lowercased path (a case-insensitive filesystem treats `Secrets.toml` and `.CircleCI/` as the same files), so patterns are written in lowercase.
@@ -126,7 +126,7 @@ High-risk PRs:
   (renames count both ways) is `.bosun/**` (approvers.toml and risk.toml included),
   `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), `.github/workflows/**` or
   `.github/actions/**` (any workflow with `statuses: write` can post a `risk-check` status for
-  any PR) or `.circleci/**`. Where the base has `src/cli/risk_check.rs` (bosun and its forks), bosun's code is
+  any PR), `.circleci/**` or another CI provider's config (the R-ci list). Where the base has `src/cli/risk_check.rs` (bosun and its forks), bosun's code is
   critical too: all of `src/**` (the approval modules call most others, and any module can do
   I/O with the workflow's token once released), `Cargo.toml`, `Cargo.lock`, `build.rs` (any
   directory), `.cargo/**` and `npm/**` (`CRITICAL_PATHS` and `APPROVAL_CODE_PATHS` in

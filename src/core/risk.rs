@@ -257,7 +257,7 @@ pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 /// them (also when renamed from or to them). Every workflow is here: any workflow with
 /// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR; so can a
 /// CircleCI config, which is why `.circleci/**` is here too.
-pub const CRITICAL_PATHS: [&str; 8] = [
+pub const CRITICAL_PATHS: [&str; 16] = [
     ".bosun/**",
     "governance/**",
     "CODEOWNERS",
@@ -266,6 +266,15 @@ pub const CRITICAL_PATHS: [&str; 8] = [
     ".github/workflows/**",
     ".github/actions/**",
     ".circleci/**",
+    // Other CI providers: their config runs with the repo's secrets too.
+    ".gitlab-ci.yml",
+    ".gitlab/ci/**",
+    ".buildkite/**",
+    "**/jenkinsfile",
+    "azure-pipelines.y*ml",
+    "bitbucket-pipelines.yml",
+    ".travis.yml",
+    ".drone.yml",
 ];
 
 /// bosun's own code, critical in a repo whose base has bosun's code (bosun itself and its
