@@ -102,6 +102,14 @@ impl Env {
         Ok(())
     }
 
+    /// The checklist issue of the plan, if one exists (any state).
+    pub(crate) fn issue_of(&self, plan_path: &str) -> Option<&Issue> {
+        let marker = pq::issue_marker(plan_path);
+        self.existing
+            .iter()
+            .find(|i| i.body_text().starts_with(&marker))
+    }
+
     /// The items, approvals and (with `post_it`) the issue of one plan. `setup` items are added.
     pub(crate) fn checklist(
         &mut self,
@@ -284,7 +292,7 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
 
 /// Create the issue or update it (body, and open or closed to match the open count).
 /// Returns its number and whether it was created.
-fn post(
+pub(crate) fn post(
     gh: &dyn Github,
     issue: Option<&Issue>,
     title: &str,
