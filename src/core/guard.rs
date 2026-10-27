@@ -1111,15 +1111,15 @@ fn decrypt_reason(what: &str) -> String {
 const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
 /// Readers: their arguments are data (patterns, text).
 #[rustfmt::skip]
-const READERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "pcregrep",
-    "pcre2grep", "rg", "ag", "ack", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which",
-    "type"];
+const READERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "ugrep+",
+    "ug+", "pcregrep", "pcre2grep", "rg", "ag", "ack", "ack-grep", "cat", "head", "tail", "ls", "wc",
+    "echo", "printf", "which", "type"];
 /// The grep family; rg, ag, ack and rgrep always recurse, rg and ag skip hidden directories.
 #[rustfmt::skip]
-const SEARCHERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "pcregrep",
-    "pcre2grep", "rg", "ag", "ack"];
+const SEARCHERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "ug", "ugrep+",
+    "ug+", "pcregrep", "pcre2grep", "rg", "ag", "ack", "ack-grep"];
 /// Searchers whose options and environment run commands: only their pattern is data.
-const PAGED: &[&str] = &["ack", "ugrep", "ug"];
+const PAGED: &[&str] = &["ack", "ack-grep", "ugrep", "ug", "ugrep+", "ug+"];
 #[rustfmt::skip]
 const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
     "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
@@ -1318,9 +1318,11 @@ fn long_values<'a>(args: &[&'a str], full: &str, min: usize) -> Vec<&'a str> {
 
 /// Whether the commands ack and ugrep run on their output or files are all known pagers:
 /// `--pager` and ugrep's `--view` (also abbreviated), `ACK_PAGER`, `ACK_PAGER_COLOR` and the
-/// options in `ACK_OPTIONS` (set anywhere in the command); `LESS`, `LESSOPEN`, `LESSCLOSE`,
-/// `BAT_PAGER` and `PAGER` may not be set. A pager is a known name, bare or in `/usr/bin` or
-/// `/bin`, with plain flag clusters (`-R`, `-`); an editor may only view, with no arguments.
+/// options in `ACK_OPTIONS` and `PAGER` (set anywhere in the command); `LESS` may hold only
+/// such flags, and `LESSOPEN`, `LESSCLOSE`, `LESSKEY*`, `LESSSECURE` and `BAT_PAGER` may not be
+/// set. A pager is a known name, bare or in `/usr/bin` or `/bin`, with plain flag clusters
+/// (`-R`, `-`; no `k`, `o` or `O`, which read keys or write files); an editor may only view,
+/// with no arguments.
 fn pagers_ok(name: &str, words: &[String], args: &[&str]) -> bool {
     let mut opts: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     let mut cmds: Vec<(String, bool)> = Vec::new();
@@ -1329,9 +1331,11 @@ fn pagers_ok(name: &str, words: &[String], args: &[&str]) -> bool {
         .filter_map(|w| Some((assigned(w)?, w.split_once('=')?.1)))
     {
         match k {
-            "ACK_PAGER" | "ACK_PAGER_COLOR" => cmds.push((v.to_string(), false)),
+            "ACK_PAGER" | "ACK_PAGER_COLOR" | "PAGER" => cmds.push((v.to_string(), false)),
             "ACK_OPTIONS" => opts.extend(shell_words(v)),
-            "LESS" | "LESSOPEN" | "LESSCLOSE" | "BAT_PAGER" | "PAGER" => return false,
+            "LESS" if shell_words(v).iter().all(|a| pager_flag(a)) => {}
+            "LESS" | "LESSOPEN" | "LESSCLOSE" | "LESSKEY" | "LESSKEYIN" | "LESSKEY_SYSTEM"
+            | "LESSSECURE" | "BAT_PAGER" => return false,
             _ => {}
         }
     }
@@ -1345,15 +1349,21 @@ fn pagers_ok(name: &str, words: &[String], args: &[&str]) -> bool {
         .chain(view.into_iter().map(|c| (c.to_string(), true))));
     cmds.iter().all(|(c, view)| {
         let w = shell_words(c);
-        let Some((cmd, rest)) = w.split_first() else { return false };
+        let Some((cmd, rest)) = w.split_first() else {
+            return false;
+        };
         #[rustfmt::skip]
         let cmd = ["/usr/bin/", "/bin/"].iter().find_map(|d| cmd.strip_prefix(d)).unwrap_or(cmd);
-        #[rustfmt::skip]
-        let flags = |a: &String| a == "-" || a.len() > 1 && a.starts_with('-') && a[1..].chars().all(|c| c.is_ascii_alphabetic());
-        let pager = PAGERS_OK.contains(&cmd) && rest.iter().all(flags);
+        let pager = PAGERS_OK.contains(&cmd) && rest.iter().all(|a| pager_flag(a));
         let editor = *view && VIEWERS_OK.contains(&cmd) && rest.is_empty();
         !c.contains(['|', ';', '&', '<', '>', '(', ')', '`', '$', '\n']) && (pager || editor)
     })
+}
+
+/// A plain pager flag cluster (`-R`, `-` alone), without less's `k`, `o` or `O`.
+fn pager_flag(a: &str) -> bool {
+    let f = |c: char| c.is_ascii_alphabetic() && !matches!(c, 'k' | 'o' | 'O');
+    a == "-" || a.len() > 1 && a.starts_with('-') && a[1..].chars().all(f)
 }
 
 /// `sops` may print info or encrypt; `sops FILE` decrypts, so any other argument is refused.
@@ -1605,7 +1615,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             // family, and for rg and ag only with --hidden, -u or -. .
             let (rg, always) = (
                 matches!(name.as_str(), "rg" | "ag"),
-                matches!(name.as_str(), "rg" | "ag" | "ack" | "rgrep"),
+                matches!(name.as_str(), "rg" | "ag" | "ack" | "ack-grep" | "rgrep"),
             );
             // Long options by unique prefix (`--rec`, `--der`, `--dir=rec`, ag `--hi`, `--u`).
             let short = |a: &&str| a.starts_with('-') && !a.starts_with("--");
@@ -3009,6 +3019,14 @@ mod tests {
         ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=grep.fallbackToNoIndex GIT_CONFIG_VALUE_0=true git -C ~ grep x", true),
         ("git --config-env=grep.fallbackToNoIndex=X -C ~ grep x", true),
         ("git --config-env grep.FallbackToNoIndex=X -C ~ grep x", true),
+        // Aliases, less key and output options, pager variables that pass the allowlist.
+        ("ug+ --pager=sh x f", true), ("ugrep+ --pager=sh x f", true), ("ack-grep --pager=sh x", true),
+        ("ack-grep x ~/.config", true), ("ugrep+ -r x ~", true), ("ack-grep TODO src", false),
+        ("ack --pager='less -kevil' x", true), ("ack --pager='less -oout' x", true),
+        ("ack --pager='less -Ofile' x", true), ("LESSKEY=evil ack --pager=less x", true),
+        ("LESSSECURE=0 ack x", true), ("LESS=-k ack x", true),
+        ("export PAGER=cat; ack TODO src", false), ("PAGER=cat ugrep x src", false),
+        ("LESS=-R ack x", false), ("PAGER='less -R' ack x", false),
     ];
 
     #[test]
