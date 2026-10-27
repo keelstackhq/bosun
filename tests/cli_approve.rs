@@ -4,7 +4,7 @@ use common::fake::FakeGithub;
 use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
-const HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
+const HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 const OWNER_TOKEN: &str = "canary-owner-token-7f3a";
 const WAITING: &str = "high risk, owner approval needed: R-gov, R-ci";

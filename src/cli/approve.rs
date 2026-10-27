@@ -15,8 +15,8 @@ use crate::cli::risk_check::{
     decisive_review, dismissed_review, enrolled_keys, owner_comment, owner_logins,
 };
 use crate::core::approve::{
-    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, in_cloud,
-    parse_target, readiness, signed_comment, signed_message, signed_message_v2,
+    APPROVERS_PATH, Readiness, Role, Run, Stat, api_url_ok, approve_command, batch_message,
+    in_cloud, parse_target, readiness, signed_comment, signed_message, signed_message_v2,
 };
 use crate::core::records::{PrHead, Record};
 use crate::ctx::Ctx;
@@ -71,7 +71,7 @@ const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/b
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts";
+const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 struct Board {
     ready: Vec<Ready>,
@@ -213,7 +213,19 @@ fn exec(
         let b = board(gh)?;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
+        let items: Vec<(u64, String, String)> = b
+            .ready
+            .iter()
+            .map(|r| (r.pr, r.head_sha.clone(), r.title.clone()))
+            .collect();
+        let (message_id, message, message_pairs) = match batch_message(&items) {
+            Some(m) => (json!(m.id), json!(m.text), json!(m.pairs)),
+            None => (Value::Null, Value::Null, Value::Null),
+        };
         return Ok(Outcome::data(json!({
+            "message_id": message_id,
+            "message": message,
+            "message_pairs": message_pairs,
             "ready": b.ready.iter().map(ready_json).collect::<Vec<_>>(),
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
