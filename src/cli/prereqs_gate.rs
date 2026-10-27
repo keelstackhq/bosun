@@ -4,12 +4,36 @@
 
 use super::plan::{epic_item, epic_plan};
 use super::prereqs::verify;
-use crate::app::{Result, default_branch};
+use crate::app::{Result, default_branch, notes};
 use crate::core::meta::TaskMeta;
 use crate::core::plan::{self, PlanError};
 use crate::core::prereqs::{self as pq, CheckItem};
+use crate::core::records::{Record, parse_record};
 use crate::github::{Github, Issue, IssueState};
 use crate::output::BosunError;
+
+/// The `bosun hold` steps of one task (design F6): its hold records, as (id, sum), and the
+/// `blocks` key (`M1/T1`) that the open ones get.
+pub(crate) struct Holds {
+    pub key: String,
+    pub task: u64,
+    pub records: Vec<(String, String)>,
+}
+
+/// Whether a plan item takes over hold `id` of the task `key` (`M1/T1`): it names the hold in
+/// `replaces` and blocks that task or its item, so it never releases another task's hold.
+pub(crate) fn replaces_hold(prereqs: &[pq::Prereq], id: &str, key: &str) -> bool {
+    let item = key.split('/').next().unwrap_or(key);
+    prereqs.iter().any(|p| {
+        p.replaces.iter().any(|r| r == id) && p.blocks.iter().any(|b| b == key || b == item)
+    })
+}
+
+/// The plan key (`M1/T1`) of task issue `n`; `None` when it is not a plan task.
+pub(crate) fn task_key(gh: &dyn Github, n: u64) -> Result<Option<String>> {
+    let meta = gh.get_issue(n)?.as_ref().and_then(crate::app::task_meta);
+    Ok(meta.map(|m| format!("{}/{}", m.item, m.task)))
+}
 
 /// An open prerequisite: its id and what it blocks, from the plan.
 pub(crate) struct Held {
@@ -34,6 +58,7 @@ pub(crate) fn open_items(
     plan_path: &str,
     target: Option<(&str, Option<&str>)>,
     wants: &dyn Fn(&[String]) -> bool,
+    holds: Option<&Holds>,
 ) -> Result<Option<(String, Vec<Held>)>> {
     super::prereqs::check_plan_path(plan_path).map_err(|e| closed(plan_path, e.message))?;
     let branch = default_branch(gh)?;
@@ -47,7 +72,7 @@ pub(crate) fn open_items(
     let bad = |e: Vec<PlanError>| closed(plan_path, format!("{plan_path}: {}", e[0].message));
     let parsed = plan::parse(&text).map_err(bad)?;
     let prereqs = pq::parse(&text, &parsed).map_err(bad)?;
-    if prereqs.is_empty() {
+    if prereqs.is_empty() && holds.is_none() {
         return Ok(None);
     }
     if let Some((item, task)) = target {
@@ -80,6 +105,28 @@ pub(crate) fn open_items(
         .map_or_else(Vec::new, |i| pq::read_issue(i.body_text()));
     let mut open = Vec::new();
     let mut known = Some(branch.clone());
+    // A hold is open until its box is ticked; an H item that `replaces` it governs instead.
+    if let Some(h) = holds {
+        let replaced = |id: &str| replaces_hold(&prereqs, id, &h.key);
+        let mut sums: Vec<(String, String)> = h.records.clone();
+        let boxes = ticks
+            .iter()
+            .filter(|t| t.task == Some(h.task) && pq::is_hold_id(&t.id));
+        for t in boxes {
+            // A box without a record vouches for itself: its own sum.
+            if !sums.iter().any(|(id, _)| *id == t.id) {
+                sums.push((t.id.clone(), t.sum.clone()));
+            }
+        }
+        for (id, sum) in sums.into_iter().filter(|(id, _)| !replaced(id)) {
+            if !pq::ticked(&ticks, &id, &sum) {
+                open.push(Held {
+                    id,
+                    blocks: vec![h.key.clone()],
+                });
+            }
+        }
+    }
     for p in prereqs.into_iter().filter(|p| wants(&p.blocks)) {
         let sum = CheckItem::from(&p).sum;
         let done = match verify(gh, &p.verify, &mut known)? {
@@ -159,7 +206,8 @@ pub(crate) fn refuse_epic_if_held(gh: &dyn Github, epic: &Issue) -> Result<()> {
         _ => return Ok(()),
     };
     let wants = |b: &[String]| b.contains(&item);
-    let Some((issue, ticks)) = open_items(gh, &plan_path, Some((&item, None)), &wants)? else {
+    let Some((issue, ticks)) = open_items(gh, &plan_path, Some((&item, None)), &wants, None)?
+    else {
         return Ok(());
     };
     let ids = blockers(&ticks, &item, None);
@@ -187,8 +235,22 @@ pub(crate) fn refuse_if_held(gh: &dyn Github, n: u64, meta: &Option<TaskMeta>) -
     };
     let full = format!("{}/{}", meta.item, meta.task);
     let wants = |b: &[String]| b.iter().any(|x| *x == meta.item || *x == full);
+    let mut records: Vec<(String, String)> = Vec::new();
+    for c in notes(gh, n)? {
+        if let Some(Record::Hold { id, step, .. }) = parse_record(&c.body)
+            && pq::is_hold_id(&id)
+            && !records.iter().any(|(r, _)| *r == id)
+        {
+            records.push((id, pq::hold_sum(&step)));
+        }
+    }
+    let holds = Holds {
+        key: full.clone(),
+        task: n,
+        records,
+    };
     let target = Some((meta.item.as_str(), Some(meta.task.as_str())));
-    let Some((issue, ticks)) = open_items(gh, &plan_path, target, &wants)? else {
+    let Some((issue, ticks)) = open_items(gh, &plan_path, target, &wants, Some(&holds))? else {
         return Ok(());
     };
     let ids = blockers(&ticks, &meta.item, Some(&meta.task));

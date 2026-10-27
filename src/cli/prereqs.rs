@@ -7,10 +7,11 @@ use serde_json::{Value, json};
 
 use super::PrereqsArgs;
 use super::plan::{plan_errors, plan_key};
+use super::prereqs_gate::{replaces_hold, task_key};
 use crate::app::{App, Result, default_branch, kill_switch};
 use crate::core::approve::{APPROVERS_PATH, Role, parse_approvers};
 use crate::core::plan;
-use crate::core::prereqs::{self as pq, CheckItem, Verify};
+use crate::core::prereqs::{self as pq, CheckItem, HoldBox, Verify};
 use crate::core::risk::Rules;
 use crate::github::http::enc;
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState};
@@ -198,13 +199,28 @@ impl Env {
             items.push(delegate_key());
         }
         pq::sort(&mut items);
-        let open = items.iter().filter(|i| !i.done).count();
+        // The boxes of `bosun hold` ride along on every rewrite (each re-rendered from its
+        // marker, with its tick), unless a plan item `replaces` the hold.
+        // Only an item that blocks the hold's own task replaces it; an unknown task keeps it.
+        let (_, boxes) = issue.map_or_else(Default::default, |i| pq::split_found(i.body_text()));
+        let mut found: Vec<HoldBox> = Vec::new();
+        for b in boxes {
+            let named = prereqs.iter().any(|p| p.replaces.contains(&b.id));
+            let key = if named { task_key(gh, b.task)? } else { None };
+            if !key.is_some_and(|k| replaces_hold(&prereqs, &b.id, &k)) {
+                found.push(b);
+            }
+        }
+        let open =
+            items.iter().filter(|i| !i.done).count() + found.iter().filter(|b| !b.ticked).count();
+        let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
+        let body = pq::with_found(&body, &found);
+        let any = !items.is_empty() || !approvals.is_empty() || !found.is_empty();
+        items.extend(found.iter().map(HoldBox::item));
         let issue = issue.cloned();
         let existing = issue.as_ref().map(|i| (i.number, false));
         let url = existing.map(|(n, _)| format!("https://github.com/{}/issues/{n}", app.ctx.repo));
         let message = pq::message(&plan.title, &items, &approvals, url.as_deref());
-        let body = pq::render_issue(&plan.title, &plan_path, &items, &approvals);
-        let any = !items.is_empty() || !approvals.is_empty();
         let list = PlanChecklist {
             plan_path,
             title: plan.title,
@@ -266,6 +282,15 @@ pub fn run(dir: Option<&Path>, args: &PrereqsArgs) -> CmdResult {
         // Setup steps belong to the repo: listed once.
         let first = if k == 0 { &setup[..] } else { &[] };
         let p = env.prepare(&app, file, &text, args.post, first, &mut warnings)?;
+        // The same plan named twice (`plans/x.md ./plans/x.md`) is one checklist.
+        let path = &p.list.plan_path;
+        if prepared
+            .iter()
+            .any(|(_, q): &(_, Prepared)| q.list.plan_path == *path)
+        {
+            warnings.push(format!("{file} names {path} again: listed once"));
+            continue;
+        }
         prepared.push((file, p));
     }
     // Every plan passed its refusal checks: only now write.

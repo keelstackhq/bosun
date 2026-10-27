@@ -305,3 +305,17 @@ fn every_verify_kind_reads_its_api_path() {
     assert_eq!(done(&v), [true, true, false, false, true, false]);
     assert_eq!(item(&v, "H6")["state"], "api 403");
 }
+
+#[test]
+fn a_plan_named_twice_gets_one_issue() {
+    let (tmp, fake) = setup();
+    let (code, v) = go(&fake, tmp.path(), &["./plans/x.md", "--post", "--no-setup"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["plans"].as_array().unwrap().len(), 1, "{v}");
+    let s = fake.state.lock().unwrap();
+    let n = s
+        .issues
+        .iter()
+        .filter(|i| i.labels.iter().any(|l| l == "bosun:prereqs"));
+    assert_eq!(n.count(), 1);
+}
