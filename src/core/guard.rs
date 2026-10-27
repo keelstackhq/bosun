@@ -1,6 +1,9 @@
 //! What the PreToolUse hook refuses (spec §4 edit hook, label-lock; D13 merge-lock). Pure: the
 //! hook passes the tool call, the repo-relative path, the current branch and the live leases.
 
+use std::sync::LazyLock;
+
+use regex::Regex;
 use serde_json::Value;
 
 use crate::core::glob;
@@ -180,9 +183,12 @@ pub fn tool_rules(
     None
 }
 
-/// Markers bosun writes into issue bodies and comments: the owner checklist (`bosun:prereq`) and
-/// task and epic metadata (which plan gates a task).
-const BOSUN_MARKERS: [&str; 3] = ["bosun:prereq", "bosun:task", "bosun:epic"];
+/// The marker syntax bosun's parsers read (owner checklist `bosun:prereq|prereqs`, task and epic
+/// metadata): an HTML comment opener, then the name, then a space, `{` or the comment end.
+/// Prose that only mentions `bosun:task`, and `bosun:task-pr`, are not markers.
+static MARKER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*bosun:(?:prereqs?|task|epic)(?:[\s{]|-->|$)").expect("marker regex")
+});
 
 /// MCP tools that write an issue body or comment, and the input fields that hold the text.
 const ISSUE_TEXT_TOOLS: [&str; 4] = [
@@ -193,62 +199,83 @@ const ISSUE_TEXT_TOOLS: [&str; 4] = [
 ];
 
 fn has_marker(text: &str) -> bool {
-    BOSUN_MARKERS.iter().any(|m| text.contains(m))
+    MARKER.is_match(text)
 }
 
 /// Does one simple command (words, quotes removed) write an issue body or comment through
-/// `gh` or `curl`?
+/// `gh`, `hub` or `curl`?
 fn writes_issue_text(words: &[String]) -> bool {
     let name = |w: &String| w.rsplit('/').next().unwrap_or(w).to_string();
     let Some(at) = words
         .iter()
-        .position(|w| ["gh", "curl"].contains(&name(w).as_str()))
+        .position(|w| ["gh", "hub", "curl"].contains(&name(w).as_str()))
     else {
         return false;
     };
     let args: Vec<&str> = words[at + 1..].iter().map(String::as_str).collect();
     let has = |f: &[&str]| args.iter().any(|a| f.contains(a));
     let flag = |long: &str| args.iter().any(|a| a.starts_with(&format!("{long}=")));
-    let method = args.iter().enumerate().any(|(i, a)| {
-        let write = |v: &str| ["POST", "PATCH", "PUT"].contains(&v.to_ascii_uppercase().as_str());
-        let given = if ["-X", "--method", "--request"].contains(a) {
+    // `-b`, `-b TEXT`, `-bTEXT`, `--body`, `--body=TEXT` (not `--body-file`).
+    let body = has(&["--body"])
+        || flag("--body")
+        || args
+            .iter()
+            .any(|a| a.starts_with("-b") && !a.starts_with("--"));
+    let explicit = args.iter().enumerate().find_map(|(i, a)| {
+        if ["-X", "--method", "--request"].contains(a) {
             args.get(i + 1).copied()
         } else {
             a.strip_prefix("--method=")
                 .or_else(|| a.strip_prefix("--request="))
                 .or_else(|| a.strip_prefix("-X"))
-        };
-        given.is_some_and(write)
+        }
     });
+    let write = |v: &str| ["POST", "PATCH", "PUT"].contains(&v.to_ascii_uppercase().as_str());
     if name(&words[at]) == "curl" {
-        return method
-            || args
-                .iter()
-                .any(|a| a.starts_with("-d") || a.starts_with("--data"));
+        return explicit.is_some_and(write)
+            || args.iter().any(|a| {
+                a.starts_with("-d") || a.starts_with("--data") || a.starts_with("--json")
+            });
     }
     match args.first().copied() {
-        Some("issue") => {
-            has(&["edit", "comment", "create", "close"])
-                && (has(&["--body", "-b"]) || flag("--body"))
-        }
-        Some("pr") => has(&["comment"]) && (has(&["--body", "-b"]) || flag("--body")),
-        Some("api") => {
-            method
-                || has(&["-f", "-F", "--field", "--raw-field"])
-                || flag("--field")
-                || flag("--raw-field")
-        }
+        Some("issue") => has(&["edit", "comment", "create", "close"]) && body,
+        Some("pr") => has(&["comment"]) && body,
+        Some("api") if args.get(1) == Some(&"graphql") => args
+            .iter()
+            .any(|a| a.to_ascii_lowercase().contains("mutation")),
+        Some("api") => match explicit {
+            Some(m) => write(m),
+            None => {
+                has(&["-f", "-F", "--field", "--raw-field"])
+                    || flag("--field")
+                    || flag("--raw-field")
+            }
+        },
         _ => false,
     }
 }
 
+/// Does `command`, or a command nested in it (`bash -c`, `eval`, `$( )`, groups), write issue
+/// text that carries a marker?
+fn writes_marker(command: &str, depth: usize) -> bool {
+    depth <= MAX_DEPTH
+        && (shell_words(command)
+            .split(|w| w == SEP)
+            .any(|seg| writes_issue_text(seg) && has_marker(&seg.join(" ")))
+            || nested(command).iter().any(|n| writes_marker(n, depth + 1)))
+}
+
 /// Markers-lock (design F4): refuses a write of an issue body or comment that carries a bosun
-/// marker (`BOSUN_MARKERS`). Only writes are judged: `gh issue edit|comment|create|close` and
-/// `gh pr comment` with `--body`/`-b`, `gh api` with a write method or field flag, `curl` with a
-/// write method or data flag, and the MCP tools in `ISSUE_TEXT_TOOLS` (their `body` and `comment`
-/// fields only). Best effort. Known and accepted bypasses: `--body-file`, `--input`, `curl` or
-/// `gh api` with the text in a variable or a file, wget, httpie and python urllib. The real
-/// guarantees are elsewhere: bosun re-reads the checklist and trusts only its own writes.
+/// marker (`MARKER`: `<!-- bosun:prereq|prereqs|task|epic`; prose that names one is allowed).
+/// Only writes are judged: `gh|hub issue edit|comment|create|close` and `gh pr comment` with
+/// `--body`/`-b` (also `-bTEXT`), `gh|hub api` with a write method or field flag (never with an
+/// explicit GET; `gh api graphql` only with a `mutation`), `curl` with a write method or a data
+/// flag (`-d`, `--data*`, `--json`), the same inside `bash -c`, `eval` and `$( )`, and the MCP
+/// tools in `ISSUE_TEXT_TOOLS` (their `body` and `comment` fields only). Best effort. Known and
+/// accepted bypasses: `--body-file`, `--input`, `curl` or `gh api` with the text in a variable or
+/// a file, a marker split by quotes (`'bosun:'"task"`) or built by `printf` in `$( )`, wget,
+/// httpie and python urllib. The real guarantees are elsewhere: bosun re-reads the checklist and
+/// trusts only its own writes.
 pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
     let hit = match tool.strip_prefix("mcp__github__") {
         Some(name) => {
@@ -260,11 +287,7 @@ pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
         }
         None if tool == "Bash" => {
             let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-            has_marker(command)
-                && !read_only(command, 0)
-                && shell_words(command)
-                    .split(|w| w == SEP)
-                    .any(|seg| writes_issue_text(seg) && seg.iter().any(|w| has_marker(w)))
+            has_marker(command) && !read_only(command, 0) && writes_marker(command, 0)
         }
         None => false,
     };
@@ -1234,7 +1257,7 @@ mod tests {
         assert!(!deny("mcp__github__issue_read", json!({ "body": body })));
         assert!(sh(&format!("gh issue edit 5 --body \"{body}\"")));
         assert!(sh(
-            "gh api -X PATCH repos/o/r/issues/5 -f body='x bosun:prereq y'"
+            "gh api -X PATCH repos/o/r/issues/5 -f body='x <!-- bosun:prereq H1 --> y'"
         ));
         assert!(sh(&format!(
             "curl -X PATCH -d '{body}' https://api.github.com/x"
@@ -1243,7 +1266,7 @@ mod tests {
         assert!(sh("gh issue comment 5 -b '<!-- bosun:epic 3 -->'"));
         assert!(deny(
             "mcp__github__add_issue_comment",
-            json!({ "body": "bosun:epic" })
+            json!({ "body": "<!-- bosun:epic 3 -->" })
         ));
         assert!(!sh("gh issue view 5"));
         assert!(!sh("gh issue list"));
@@ -1252,6 +1275,40 @@ mod tests {
         assert!(!sh("bosun prereqs plans/x.md --post"));
         // Documented best-effort gap (design F4): the body comes from a file, so no marker here.
         assert!(!sh("gh issue edit 5 --body-file f"));
+        // Nested shells, attached short flags, curl --json, hub.
+        assert!(sh(
+            "bash -c 'gh issue edit 5 --body \"<!-- bosun:task {} -->\"'"
+        ));
+        assert!(sh("echo $(gh issue comment 5 -b '<!-- bosun:epic 3 -->')"));
+        assert!(sh("gh issue comment 5 -b'<!-- bosun:task {\"n\":1} -->'"));
+        assert!(sh("gh issue comment 5 -b\"<!-- bosun:task {} -->\""));
+        assert!(sh(
+            "curl --json '<!-- bosun:prereqs p.md -->' https://api.github.com/x"
+        ));
+        assert!(sh(
+            "hub api -X PATCH repos/o/r/issues/5 -f body='<!-- bosun:task {} -->'"
+        ));
+        // Prose, `bosun:task-pr` and read-only calls are not refused.
+        assert!(!sh(
+            "gh issue comment 5 --body 'I fixed how bosun:task metadata is read'"
+        ));
+        assert!(!sh(
+            "gh pr comment 5 -b 'Closes #5 <!-- bosun:task-pr 5 -->'"
+        ));
+        assert!(!sh("gh api -X GET search/issues -f q='<!-- bosun:task'"));
+        assert!(!sh(
+            "gh api --method GET search/issues -f q='<!-- bosun:task'"
+        ));
+        assert!(!sh(
+            "gh api graphql -f query='{ search(query: \"<!-- bosun:task\") { issueCount } }'"
+        ));
+        assert!(sh(
+            "gh api graphql -f query='mutation { x(body: \"<!-- bosun:task {} -->\") }'"
+        ));
+        assert!(!deny(
+            "mcp__github__add_issue_comment",
+            json!({ "body": "I fixed how bosun:task metadata is read" })
+        ));
     }
 
     #[test]
