@@ -1,0 +1,1 @@
+- `docs/spec.md` is split into `docs/spec/NN-<section>.md`, one file per section (a pure move), so PRs that change different sections never conflict.
