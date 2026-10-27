@@ -205,7 +205,21 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
     {
         return Ok(());
     }
-    set_state(gh, n, &fresh, State::Ready).map_err(|e| e.to_string())
+    set_state(gh, n, &fresh, State::Ready).map_err(|e| e.to_string())?;
+    // A third claimer may have won while the state was `claimed` and posted its lease before our
+    // `ready` write: its task must not be left `ready`. Look again and restore `claimed`.
+    let theirs = notes(gh, n).map_err(|e| e.to_string())?;
+    if leases_of(n, &theirs)
+        .iter()
+        .any(|l| l.session != session && l.is_live(now))
+    {
+        let again = gh.get_issue(n).map_err(|e| e.to_string())?;
+        if let Some(again) = again.filter(|i| state_of(&i.labels) == Some(State::Ready)) {
+            set_state(gh, n, &again, State::Claimed)
+                .map_err(|e| format!("re-claiming it for the winner failed: {e}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn lease_data(issue: u64, session: &str, expires: &str, touch: &[String], id: u64) -> Value {
