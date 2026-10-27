@@ -1110,9 +1110,13 @@ fn decrypt_reason(what: &str) -> String {
 
 const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
 /// Readers: their arguments are data (patterns, text).
-const READERS: &[&str] = &[
-    "grep", "rg", "ag", "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type",
-];
+#[rustfmt::skip]
+const READERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "rg", "ag", "ack",
+    "cat", "head", "tail", "ls", "wc", "echo", "printf", "which", "type"];
+/// The grep family; rg, ag, ack and rgrep always recurse, rg and ag skip hidden directories.
+#[rustfmt::skip]
+const SEARCHERS: &[&str] = &["grep", "egrep", "fgrep", "rgrep", "zgrep", "ugrep", "rg", "ag",
+    "ack"];
 #[rustfmt::skip]
 const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
     "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
@@ -1164,21 +1168,40 @@ fn sops_dir(w: &str) -> bool {
         .any(|(i, m)| w[i + m.len()..].is_empty() || w[i + m.len()..].starts_with('/'))
 }
 
-/// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
-/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), 1 for home or above it
-/// (`~`, `/root`, `/home/<user>`, `/home`, `/`), 0 for anything else (`~/projects/x`).
-fn key_root(word: &str) -> u8 {
-    let mut n = word.trim_matches(|c| c == '"' || c == '\'').to_string();
-    loop {
-        let m = n.replace("//", "/").replace("/./", "/");
-        let m = m.strip_suffix("/.").map_or(m.clone(), str::to_string);
-        if m == n {
-            break;
+/// A path with `//`, `.` and `dir/..` collapsed, lexically (no fs). `..` stays after `~`, `$X`,
+/// a glob or another `..`, and `/..` is `/`.
+fn lexical(path: &str) -> String {
+    let abs = path.starts_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for s in path.split('/') {
+        let plain =
+            |l: &&str| *l != ".." && !l.starts_with(['~', '$']) && !l.contains(['*', '?', '[']);
+        match s {
+            "" | "." => {}
+            ".." if out.last().is_some_and(plain) => drop(out.pop()),
+            ".." if abs && out.is_empty() => {}
+            _ => out.push(s),
         }
-        n = m;
     }
+    let j = out.join("/");
+    match (abs, j.is_empty() && !path.is_empty()) {
+        (true, _) => format!("/{j}"),
+        (false, true) => ".".to_string(),
+        _ => j,
+    }
+}
+
+/// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
+/// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), or a root above an unknown
+/// cwd (`..`); 1 for home or above it (`~`, `~user`, `/root`, `/home/<user>`, `/home`, `/`);
+/// 0 for anything else (`~/projects/x`).
+fn key_root(word: &str) -> u8 {
+    let n = lexical(word.trim_matches(|c| c == '"' || c == '\''));
     let word = n.as_str();
     let t = word.trim_end_matches('/');
+    if t == ".." || t.starts_with("../") {
+        return 2;
+    }
     let odd = t.contains("..") || t.contains(['*', '?', '[']);
     let under = |r: &str, own: &str| {
         r == own
@@ -1198,9 +1221,13 @@ fn key_root(word: &str) -> u8 {
             0
         };
     }
-    let rest = ["~", "$HOME", "${HOME}", "/root"]
+    let rest = ["$HOME", "${HOME}", "/root"]
         .iter()
         .find_map(|h| t.strip_prefix(h))
+        .or_else(|| {
+            let user = t.strip_prefix('~')?;
+            Some(user.find('/').map_or("", |i| &user[i..]))
+        })
         .or_else(|| {
             let user = t.strip_prefix("/home/")?;
             Some(user.find('/').map_or("", |i| &user[i..]))
@@ -1212,6 +1239,13 @@ fn key_root(word: &str) -> u8 {
         None if under(t.trim_start_matches("./"), ".config") => 2,
         _ => 0,
     }
+}
+
+/// Whether a search of these roots reads the age key: one is under `.config/sops`, or the
+/// search recurses into `.config` or an ancestor (home or above only when it enters hidden dirs).
+fn key_search(roots: &[&str], recursive: bool, hidden: bool) -> bool {
+    let root = roots.iter().map(|a| key_root(a)).max().unwrap_or(0);
+    roots.iter().any(|a| sops_dir(a)) || recursive && (root == 2 || root == 1 && hidden)
 }
 
 /// A redirect word: `>`, `>>`, `2>`, `&>`, `<`, `2>&1`, `>file`.
@@ -1394,6 +1428,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // `bosun main-triage --run CMD` and `rg --pre CMD FILE` run a command.
         let run = match name.as_str() {
             "bosun" => long("--run").map(str::to_string),
+            "ack" | "ugrep" => long("--pager").map(str::to_string),
             "rg" => long("--pre").map(|c| format!("{c} FILE")),
             #[rustfmt::skip]
             "git" if verb == "grep" => long("--open-files-in-pager").or_else(|| args.iter().enumerate().find_map(|(i, a)| a.strip_prefix("-O").map(|v| if v.is_empty() { args.get(i + 1).copied().unwrap_or("") } else { v }))).map(|c| format!("{c} FILE")),
@@ -1401,6 +1436,26 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         };
         if let Some(why) = run.and_then(|c| decrypt_rule(&c, depth + 1)) {
             return Some(why);
+        }
+        // `git grep --no-index` searches its paths (or the cwd) like `grep -r`, hidden ones too.
+        if git && verb == "grep" && args.contains(&"--no-index") {
+            #[rustfmt::skip]
+            const VALUE: &[&str] = &["-e", "-f", "-A", "-B", "-C", "-m", "--max-depth", "--threads"];
+            // The first bare word is the pattern, unless `-e` or `-f` gave it.
+            let mut pat = args.iter().any(|a| matches!(*a, "-e" | "-f"));
+            let (mut roots, mut it, mut paths) = (Vec::new(), it.clone(), false);
+            while let Some(a) = it.next() {
+                match *a {
+                    "--" if !paths => paths = true,
+                    _ if !paths && VALUE.contains(a) => drop(it.next()),
+                    _ if !paths && a.starts_with('-') => {}
+                    _ if !std::mem::replace(&mut pat, true) => {}
+                    _ => roots.push(*a),
+                }
+            }
+            if key_search(&roots, true, true) {
+                return Some(decrypt_reason("a search of the age key directory"));
+            }
         }
         if name == "bosun" {
             continue;
@@ -1411,7 +1466,8 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             let pos: Vec<&str> = da.iter().copied().filter(|a| !a.starts_with('-')).collect();
             #[rustfmt::skip]
             let pat_flag = args.iter().any(|a| matches!(*a, "-e" | "-f") || a.starts_with("--file"));
-            let search = matches!(name.as_str(), "grep" | "rg" | "ag") && !pat_flag;
+            let finds = SEARCHERS.contains(&name.as_str());
+            let search = finds && !pat_flag;
             // A search pattern naming the key marker is data, unless it searches home or `.config`.
             let home = |a: &&str| {
                 a.starts_with(['~', '/']) || a.contains("$HOME") || a.contains(".config")
@@ -1424,31 +1480,30 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 return Some(decrypt_reason("an age secret key"));
             }
             // A recursive search whose root holds the age key reads it, whatever the pattern:
-            // `.config` and its ancestors always; home (hidden dirs included) for grep, and for
-            // rg and ag only with --hidden, -u or -. .
-            let finds = matches!(name.as_str(), "grep" | "rg" | "ag");
+            // `.config` and its ancestors always; home (hidden dirs included) for the grep
+            // family, and for rg and ag only with --hidden, -u or -. .
+            let (rg, always) = (
+                matches!(name.as_str(), "rg" | "ag"),
+                matches!(name.as_str(), "rg" | "ag" | "ack" | "rgrep"),
+            );
             let dirs = args
                 .windows(2)
                 .any(|w| matches!(w[0], "-d" | "--directories") && w[1] == "recurse")
                 || args
                     .iter()
                     .any(|a| matches!(*a, "-drecurse" | "--directories=recurse"));
-            let recursive = name != "grep"
+            let recursive = always
                 || dirs
                 || args.iter().any(|a| {
                     matches!(*a, "--recursive" | "--dereference-recursive")
                         || a.starts_with('-') && !a.starts_with("--") && a.contains(['r', 'R'])
                 });
-            let hidden = name == "grep"
+            let hidden = !rg
                 || args.iter().any(|a| {
                     matches!(*a, "--hidden" | "--unrestricted")
                         || a.starts_with('-') && !a.starts_with("--") && a.contains(['u', '.'])
                 });
-            let root = pos.iter().map(|a| key_root(a)).max().unwrap_or(0);
-            if finds
-                && (pos.iter().any(|a| sops_dir(a))
-                    || recursive && (root == 2 || root == 1 && hidden))
-            {
+            if finds && key_search(&pos, recursive, hidden) {
                 return Some(decrypt_reason("a search of the age key directory"));
             }
             let cfg = |a: &&str| a.contains(".config/") && a.contains(['*', '?', '[', ']']);
@@ -2710,7 +2765,45 @@ mod tests {
         ("grep -ri secret ~/.config/sops-test", false), ("grep -r x ~/.config/sops/", true),
         ("bun test", false), ("bun run build", false), ("bun install", false),
         ("bun -e 'console.log(1)'", false),
+        ("egrep -r AGE ~/.config", true), ("fgrep -r x ~", true), ("rgrep x ~/.config", true),
+        ("rgrep x ~", true), ("zgrep -r x ~/.config", true), ("ugrep -r x ~", true),
+        ("ugrep -R x ~/.config", true), ("ack x ~/.config", true), ("ack x ~", true),
+        ("git grep --no-index x ~/.config", true), ("git grep --no-index -e x -- ~", true),
+        ("git -C . grep --no-index -n x /root", true), ("egrep x ~/.config", false),
+        ("fgrep -r x src/", false), ("rgrep TODO src", false), ("zgrep x f.gz", false),
+        ("ugrep x f.txt", false), ("ugrep -r x src", false), ("ack TODO src", false),
+        ("ack AGE-SECRET-KEY src/", false), ("git grep --no-index x src", false),
+        ("git grep --no-index x", false), ("git grep -n x ~/.config", false),
+        ("ack --pager='sops -d f' x", true), ("ugrep --pager='sops -d f' x f", true),
+        ("grep -r AGE ..", true), ("rg x ../..", true), ("grep -R x ../", true),
+        ("rg x src/../..", true), ("grep x ../f.txt", false), ("rg x ./src", false),
+        ("grep -r x ~root", true), ("rg x ~root/.config", true), ("grep -r x ~bob/.config", true),
+        ("rg x ~root", false), ("grep -r x ~bob/.config/nvim", false), ("rg x ~bob/src", false),
+        ("grep -r x /etc/../root/.config", true), ("rg x /etc/../root/.config/./sops", true),
+        ("grep -r x /etc/../home/bob", true), ("rg x /tmp/../../..", false),
+        ("grep -r x /root/../tmp", false), ("rg x src/../src", false), ("grep -r x ~/../bob", true),
     ];
+
+    #[test]
+    fn key_root_resolves_dot_dot_lexically() {
+        for (root, want) in [
+            ("/etc/../root/.config", 2),
+            ("/etc/../root", 1),
+            ("/root/../tmp", 0),
+            ("/..", 1),
+            ("a/../..", 2),
+            ("../x", 2),
+            ("~/../bob", 2),
+            ("~root", 1),
+            ("~root/.config/", 2),
+            ("~+/src", 0),
+            (".", 0),
+            ("./.config", 2),
+            ("src/..", 0),
+        ] {
+            assert_eq!(key_root(root), want, "{root}");
+        }
+    }
 
     #[test]
     fn decrypt_lock_table() {

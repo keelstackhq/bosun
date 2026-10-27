@@ -1,0 +1,1 @@
+- Hooks: the decrypt-lock judges egrep, fgrep, rgrep, zgrep, ugrep, ack and git grep --no-index by root too, refuses recursive roots above the cwd (..) and ~user homes, and resolves dir/.. before matching.
