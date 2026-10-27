@@ -11,12 +11,13 @@ paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".spl
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", "azure-pipelines.yml", ".gitlab-ci.yml", ".buildkite/**", "jenkinsfile"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
 
 [[rule]]
 id = "R-secrets"
 why = "A secret in the repo is a leak."
-content = '(?i)(api[_-]?key|secret|token)\s*='
+paths = ["**/secrets.toml", "**/access.toml", "**/*.sops.*"]
+content = '(?i)(api[_-]?key|secret|token)\s*=|AGE-SECRET-KEY-1|SOPS_AGE_KEY\s*[:=]'
 
 [[rule]]
 id = "R-deps"
