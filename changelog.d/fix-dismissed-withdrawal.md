@@ -1,0 +1,1 @@
+- `risk-check`: an owner request for changes that someone dismissed (GitHub then reports DISMISSED) still withdraws comment, signed and delegate approvals; only a newer owner APPROVED review or a newer plain-token owner comment clears it, never a signature.

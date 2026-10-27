@@ -160,7 +160,7 @@ pub fn evaluate(
         for f in files {
             let hit = std::iter::once(&f.path)
                 .chain(f.previous_path.as_ref())
-                .any(|p| rule.paths.iter().any(|g| g.matches(p)));
+                .any(|p| rule.paths.iter().any(|g| matches_any_case(g, p)));
             if hit {
                 evidence.push(format!("path {}", f.path));
             }
@@ -255,8 +255,9 @@ pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 
 /// Paths of the approval and risk system in every repo: a delegate never approves a change to
 /// them (also when renamed from or to them). Every workflow is here: any workflow with
-/// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR.
-pub const CRITICAL_PATHS: [&str; 7] = [
+/// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR; so can a
+/// CircleCI config, which is why `.circleci/**` is here too.
+pub const CRITICAL_PATHS: [&str; 16] = [
     ".bosun/**",
     "governance/**",
     "CODEOWNERS",
@@ -264,6 +265,16 @@ pub const CRITICAL_PATHS: [&str; 7] = [
     "docs/CODEOWNERS",
     ".github/workflows/**",
     ".github/actions/**",
+    ".circleci/**",
+    // Other CI providers: their config runs with the repo's secrets too.
+    ".gitlab-ci.yml",
+    ".gitlab/ci/**",
+    ".buildkite/**",
+    "**/jenkinsfile",
+    "azure-pipelines.y*ml",
+    "bitbucket-pipelines.yml",
+    ".travis.yml",
+    ".drone.yml",
 ];
 
 /// bosun's own code, critical in a repo whose base has bosun's code (bosun itself and its
@@ -301,12 +312,19 @@ pub fn critical(matches: &[Match], files: &[ChangedFile], bosun_code: bool) -> V
     for f in files {
         let hit = std::iter::once(&f.path)
             .chain(f.previous_path.as_ref())
-            .any(|p| globs.iter().any(|g| g.matches(p)));
+            .any(|p| globs.iter().any(|g| matches_any_case(g, p)));
         if hit {
             why.push(f.path.clone());
         }
     }
     why
+}
+
+/// A risk path also matches its lowercased form: on a case-insensitive filesystem (macOS,
+/// Windows) `Secrets.toml` or `.CircleCI/` is the same file, and a wider match only asks for
+/// more review. Patterns are written in lowercase where case can vary.
+fn matches_any_case(g: &Glob, path: &str) -> bool {
+    g.matches(path) || g.matches(&path.to_lowercase())
 }
 
 /// The floor: on a critical PR every delegate match needs the owner.

@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P6 · edit hook: a root file named `..x` is inside the repo · PR (feat/risk-touch-warning)
