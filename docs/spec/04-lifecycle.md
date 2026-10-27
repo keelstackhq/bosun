@@ -74,6 +74,17 @@ Conflict avoidance (three layers):
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.
+   Own touch: a session whose plain session id holds a live lease with a non-empty touch may edit
+   only files that the union of those leases' globs, plus lockfile companions (`Cargo.toml` gives
+   `Cargo.lock`, `package.json` gives `pnpm-lock.yaml`), covers. Leases of per-task ids `S/x` never
+   restrict `S`, so a wave orchestrator and its agents are not restricted by the hook (`bosun pr`
+   checks them). Always allowed: a file not on the default branch (`origin/HEAD`, `origin/main` or
+   `origin/master`; with none of them every file counts as new), fragments under `changelog.d/` and
+   `docs/progress.d/`, and paths outside the repo after `.` and `..` are resolved lexically. Before
+   it denies, the hook re-reads the leases from GitHub once, bypassing and refreshing the cache, and
+   denies only if the fresh view still denies; the fix names `bosun claim <issue> --touch <path>`. A
+   bad glob in an own lease covers nothing. Case-insensitive file systems and symlinks are not
+   resolved (known limit).
    The label-lock skips the read-only GitHub MCP tools on an explicit allowlist (`READ_ONLY_GITHUB` in `core::guard`; a tool not on it, even `get_*` or `list_*`, is judged like a write), and treats the body of a heredoc as data: in an unquoted body only the command substitutions (`$( )`, backticks) are judged as commands. Anything the guard cannot parse safely is refused as before: a body with `$name` or `${`, a substitution with a quote, `#`, `<<`, a newline, a backslash or `case`, an unterminated substitution, or a line ending in a backslash (bash joins it with the next line before it looks for the delimiter).
    The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`). Its default-branch rules (commit, merge, rebase, reset, cherry-pick, plain push) read the branch where git acts: the hook's directory moved by a `cd dir` joined with `&&`, `;` or a newline, and by `git -C dir`, `--git-dir` and `--work-tree`; a `cd` counts only when the shell surely runs it here (after the start, `;`, a newline, or in an `&&` chain that reaches the git command; never in a pipeline or a `( .. )` group); a directory it cannot read literally (`$VAR`, `~`, `cd -`), a moved target git cannot read (a failed `cd`), or `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` count as the default branch. Branch protection stays the real guard, since a hook cannot see every shell trick.
 

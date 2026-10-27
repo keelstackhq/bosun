@@ -22,8 +22,54 @@ pub fn edited_path(tool: &str, input: &Value) -> Option<String> {
 /// Edit-lock: a path inside a live lease of another session. The edited path is a literal
 /// path (`app/[id]/page.tsx` has brackets), so each lease glob is matched against it and it is
 /// never parsed as a glob itself. A lease with a bad glob covers everything. An agent may edit
-/// the paths its own orchestrator leased (`S/task` runs inside `S`); see spec §4.
-pub fn edit_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
+/// the paths its own orchestrator leased (`S/task` runs inside `S`); see spec §4. A session that
+/// holds a lease with a touch list must also stay inside it (`own_touch_lock`); `exists` says
+/// whether the path is already a file (the hook checks, core stays pure).
+pub fn edit_lock(path: &str, exists: bool, leases: &[Lease], me: &str) -> Option<String> {
+    foreign_lock(path, leases, me).or_else(|| own_touch_lock(path, exists, leases, me))
+}
+
+/// The leases held by exactly `me` that list a touch. The hook sees only the plain session id,
+/// so a per-task lease (`S/x`) never restricts `S`, and a wave orchestrator edits freely.
+fn own_leases<'a>(leases: &'a [Lease], me: &str) -> Vec<&'a Lease> {
+    leases
+        .iter()
+        .filter(|l| l.session == me && !l.touch.is_empty())
+        .collect()
+}
+
+/// An existing file that no own glob (nor a lockfile companion) covers is refused. Fragments and
+/// new files are free. A bad glob in an own lease covers nothing.
+fn own_touch_lock(path: &str, exists: bool, leases: &[Lease], me: &str) -> Option<String> {
+    let own = own_leases(leases, me);
+    let first = own.first()?;
+    if !exists || path.starts_with("changelog.d/") || path.starts_with("docs/progress.d/") {
+        return None;
+    }
+    let touch: Vec<String> = own.iter().flat_map(|l| l.touch.clone()).collect();
+    let all = crate::core::touch::companions(&touch);
+    let valid: Vec<glob::Glob> = all
+        .iter()
+        .filter_map(|g| glob::Glob::parse(g).ok())
+        .collect();
+    if valid.iter().any(|g| g.matches(path)) {
+        return None;
+    }
+    let bad = if valid.len() < all.len() {
+        " One of your globs is invalid: re-claim with valid globs."
+    } else {
+        ""
+    };
+    Some(format!(
+        "{path} is outside your lease (touch: {}). Add it with `bosun claim {} --touch {path}` \
+         (exit 3 if another session holds it), or leave the file alone.{bad}",
+        touch.join(", "),
+        first.issue
+    ))
+}
+
+/// The first half of `edit_lock`: the path lies in a live lease of another session.
+pub fn foreign_lock(path: &str, leases: &[Lease], me: &str) -> Option<String> {
     let hit = leases
         .iter()
         .filter(|l| !is_mine(&l.session, me))
@@ -1722,11 +1768,11 @@ mod tests {
             comment_id: 1,
         };
         // The hook sees the plain session `S`; its lease was taken under `S/19`.
-        assert_eq!(edit_lock("crates/a.rs", &[lease("S/19")], "S"), None);
+        assert_eq!(edit_lock("crates/a.rs", true, &[lease("S/19")], "S"), None);
         // `S/19` and `S/20` still conflict; so do a stranger and a prefix lookalike.
-        assert!(edit_lock("crates/a.rs", &[lease("S/19")], "S/20").is_some());
-        assert!(edit_lock("crates/a.rs", &[lease("S2/19")], "S").is_some());
-        assert!(edit_lock("crates/a.rs", &[lease("T/19")], "S").is_some());
+        assert!(edit_lock("crates/a.rs", true, &[lease("S/19")], "S/20").is_some());
+        assert!(edit_lock("crates/a.rs", true, &[lease("S2/19")], "S").is_some());
+        assert!(edit_lock("crates/a.rs", true, &[lease("T/19")], "S").is_some());
     }
 
     #[test]
@@ -1740,12 +1786,12 @@ mod tests {
             comment_id: 1,
         };
         let leases = [lease];
-        let why = edit_lock("src/core/wave.rs", &leases, "me").unwrap();
+        let why = edit_lock("src/core/wave.rs", true, &leases, "me").unwrap();
         assert!(
             why.contains("#7") && why.contains("bosun wait --issue 7"),
             "{why}"
         );
-        assert_eq!(edit_lock("docs/x.md", &leases, "me"), None);
+        assert_eq!(edit_lock("docs/x.md", true, &leases, "me"), None);
         // Brackets and braces are literal in an edited path, never a way past the lock.
         let app = Lease {
             touch: vec!["app/**".into()],
@@ -1753,16 +1799,75 @@ mod tests {
         };
         for p in ["app/[id]/page.tsx", "app/{team}/x.tsx", "app/(group)/a.tsx"] {
             assert!(
-                edit_lock(p, std::slice::from_ref(&app), "me").is_some(),
+                edit_lock(p, true, std::slice::from_ref(&app), "me").is_some(),
                 "{p}"
             );
         }
-        assert_eq!(edit_lock("web/[id]/p.tsx", &[app], "me"), None);
-        assert_eq!(edit_lock("src/core/wave.rs", &leases, "other"), None);
+        assert_eq!(edit_lock("web/[id]/p.tsx", true, &[app], "me"), None);
+        assert_eq!(edit_lock("src/core/wave.rs", true, &leases, "other"), None);
         assert_eq!(
             edited_path("Write", &json!({"file_path": "a.rs"})),
             Some("a.rs".to_string())
         );
         assert_eq!(edited_path("Read", &json!({"file_path": "a.rs"})), None);
+    }
+
+    fn own(issue: u64, session: &str, touch: &[&str]) -> Lease {
+        Lease {
+            issue,
+            session: session.into(),
+            origin: "claimed".into(),
+            expires: Timestamp(i64::MAX),
+            touch: touch.iter().map(|t| t.to_string()).collect(),
+            comment_id: 1,
+        }
+    }
+
+    #[test]
+    fn edit_lock_keeps_edits_inside_the_own_touch() {
+        let mine = [own(8, "me", &["src/core/**", "Cargo.toml"])];
+        // Covered by a glob, or a lockfile companion.
+        assert_eq!(edit_lock("src/core/a.rs", true, &mine, "me"), None);
+        assert_eq!(edit_lock("Cargo.lock", true, &mine, "me"), None);
+        // Fragments and new files are always free.
+        assert_eq!(edit_lock("changelog.d/x.md", true, &mine, "me"), None);
+        assert_eq!(edit_lock("docs/progress.d/x.md", true, &mine, "me"), None);
+        assert_eq!(edit_lock("src/new.rs", false, &mine, "me"), None);
+        // An existing file outside the touch is denied, naming issue, globs and the fix.
+        let why = edit_lock("src/cli/x.rs", true, &mine, "me").unwrap();
+        assert!(
+            why.contains("src/cli/x.rs is outside your lease (touch: src/core/**, Cargo.toml)")
+                && why.contains("`bosun claim 8 --touch src/cli/x.rs`")
+                && why.contains("exit 3"),
+            "{why}"
+        );
+        // Several own leases are one union; the first names the issue.
+        let two = [mine[0].clone(), own(9, "me", &["docs/**"])];
+        assert_eq!(edit_lock("docs/a.md", true, &two, "me"), None);
+        let why = edit_lock("web/a.ts", true, &two, "me").unwrap();
+        assert!(why.contains("claim 8"), "{why}");
+    }
+
+    #[test]
+    fn edit_lock_without_an_own_touch_allows() {
+        assert_eq!(edit_lock("src/a.rs", true, &[], "me"), None);
+        let epic = [own(3, "me", &[])];
+        assert_eq!(edit_lock("src/a.rs", true, &epic, "me"), None);
+        // Another session's lease does not make one of mine, and still denies.
+        let other = [own(4, "other", &["src/**"])];
+        assert!(edit_lock("src/a.rs", true, &other, "me").is_some());
+        // An orchestrator holding only per-task wave leases is not restricted by them.
+        let wave = [own(7, "me/x", &["src/a/**"]), own(8, "me/y", &["src/c/**"])];
+        assert_eq!(edit_lock("src/b.rs", true, &wave, "me"), None);
+    }
+
+    #[test]
+    fn edit_lock_bad_own_glob_covers_nothing() {
+        let bad = [own(6, "me", &["src/**", "src/[a"])];
+        assert_eq!(edit_lock("src/a.rs", true, &bad, "me"), None);
+        let why = edit_lock("docs/a.md", true, &bad, "me").unwrap();
+        assert!(why.contains("re-claim with valid globs"), "{why}");
+        let only = [own(6, "me", &["src/[a"])];
+        assert!(edit_lock("src/[a", true, &only, "me").is_some());
     }
 }
