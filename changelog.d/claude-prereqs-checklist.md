@@ -1,0 +1,1 @@
+- `core::prereqs`: the owner checklist as an issue body: one bosun marker per line naming what an item blocks and whether bosun verified it, read back so that an API item is done only when verified; the parser takes `replaces:`.
