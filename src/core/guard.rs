@@ -1037,8 +1037,8 @@ const RUNNERS: &[(&str, &[&str], usize, &[&str])] = &[
     ("watch", &["-n", "--interval", "-q", "--equexit"], 0, &[]),
     // `FILE -c CMD`: `-c` is a flag here, so its value is the command.
     ("flock", &["-w", "--timeout", "--wait", "-E", "--conflict-exit-code"], 1, &[]),
-    ("strace", &["-a", "-b", "-e", "-E", "-I", "-o", "-O", "-p", "-P", "-s", "-S", "-u", "-U", "-X", "--output", "--attach", "--string-limit", "--user", "--env", "--detach-on", "--columns", "--overhead", "--summary-sort-by", "--trace-path"], 0, &[]),
-    ("ltrace", &["-a", "-A", "-D", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x", "--align", "--indent", "--library", "--output"], 0, &[]),
+    ("strace", &["-a", "-b", "-e", "-E", "-I", "-o", "-O", "-p", "-P", "-s", "-S", "-u", "-U", "-X", "--output", "--attach", "--string-limit", "--user", "--env", "--detach-on", "--columns", "--overhead", "--summary-sort-by", "--trace-path", "--summary-columns", "--const-print-style", "--trace", "--trace-fds", "--signal", "--signals", "--status", "--abbrev", "--verbose", "--raw", "--read", "--write", "--fault", "--inject", "--kvm", "--decode-pids"], 0, &[]),
+    ("ltrace", &["-a", "-A", "-D", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x", "--align", "--indent", "--library", "--output", "--config", "--where"], 0, &[]),
     ("unshare", &["-S", "--setuid", "-G", "--setgid", "-R", "--root", "-w", "--wd", "--propagation", "--setgroups", "--map-user", "--map-group", "--map-users", "--map-groups", "--monotonic", "--boottime"], 0, &["-w", "--wd"]),
     ("chroot", &["--userspec", "--groups"], 1, &[]),
     ("caffeinate", &["-t", "-w"], 0, &[]),
@@ -1047,6 +1047,11 @@ const RUNNERS: &[(&str, &[&str], usize, &[&str])] = &[
 /// Runner options that change the root (`unshare -R dir`, `sudo --chroot dir`): the command
 /// starts in the new `/`, read as `/` of this filesystem (`chroot` does the same).
 const NEW_ROOT: &[&str] = &["-R", "--root", "--chroot"];
+
+/// strace options with an optional value, which getopt takes only after `=`: a flag in
+/// `RUNNERS`, and judged again as taking the next word (`--decode-fds all cmd`).
+#[rustfmt::skip]
+const STRACE_OPTIONAL: &[&str] = &["--quiet", "--silent", "--silence", "--decode-fds", "--timestamps", "--absolute-timestamps", "--syscall-times"];
 
 /// The command after leading runners (`nice -n 5 sudo -u x grep ..`), the directories
 /// their options move to (`env -C dir`, `--chdir=dir`, `sudo -D dir`, `unshare -w dir`, `/`
@@ -1572,7 +1577,17 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         // option they take that is not known may hide the real command, so after a runner no
         // command exempts its words from being tried as commands.
         let (cmd, cds, shell) = unwrap_runners(&rest);
-        let script = shell.then(|| cmd.join(" "));
+        let script = shell.then(|| cmd.join(" ")).or_else(|| {
+            let s = rest.iter().position(|w| base(w) == "strace")?;
+            let p = s + rest[s..].iter().position(|w| STRACE_OPTIONAL.contains(w))?;
+            let v = rest.get(p + 1)?;
+            let glued = format!("{}={v}", rest[p]);
+            Some(
+                [&rest[..p], &[glued.as_str()], &rest[p + 2..]]
+                    .concat()
+                    .join(" "),
+            )
+        });
         if let Some(why) = script.and_then(|s| decrypt_rule(&s, depth + 1)) {
             return Some(why);
         }
@@ -3238,6 +3253,12 @@ mod tests {
         ("busybox grep -r x ~/.config", true), ("busybox env", true),
         ("strace -f grep -r x ~/.config", true), ("strace -o /tmp/t -e trace=open printenv", true),
         ("strace -ff -tt -s 99 -E X=1 grep -r x ~/.config", true), ("ltrace -o /tmp/t -n 2 printenv", true),
+        ("strace --trace open grep -r x ~/.config", true), ("strace --signal none printenv", true),
+        ("strace --status failed --kvm vcpu printenv", true), ("ltrace --library x printenv", true),
+        // Optional values (`--decode-fds[=set]`) are judged as a flag and as taking the next word.
+        ("strace --decode-fds all printenv", true), ("strace --decode-fds printenv", true),
+        ("strace --quiet attach --timestamps grep -r x ~/.config", true),
+        ("strace -c -f cargo build", false), ("strace --timestamps -f cargo test", false),
         ("unshare -r grep -r x ~/.config", true), ("unshare --map-root-user -S 0 printenv", true),
         ("unshare --mount=/tmp/m -G 0 grep -r x ~/.config", true), ("unshare -w ~ git grep x", true),
         ("unshare --wd=~ git grep x", true), ("unshare -R /jail git grep x", true),
