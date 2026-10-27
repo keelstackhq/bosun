@@ -106,7 +106,22 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             state_of(&issue.labels),
             Some(State::Claimed | State::Building)
         );
-        if !expired.is_empty() && early && !held {
+        // A claim that lost a race ends its lease and sets the task back to ready; when that
+        // last step failed the task sits claimed with no lease: its newest lease record is a
+        // `lost-race` lease-end.
+        let lost = notes
+            .iter()
+            .rev()
+            .find_map(|n| match parse_record(&n.body) {
+                Some(Record::Lease { .. }) => Some(false),
+                Some(Record::LeaseEnd { reason, .. }) => Some(reason == "lost-race"),
+                _ => None,
+            })
+            .unwrap_or(false);
+        // Only when the issue is quiet: a re-claim that just set the state has not posted yet.
+        let quiet =
+            parse_rfc3339(&issue.updated_at).is_some_and(|t| t.0 <= now.minus_secs(QUIET_SECS).0);
+        if (!expired.is_empty() || (lost && quiet)) && early && !held {
             set_state(gh, issue.number, &issue, State::Ready)?;
         }
     }

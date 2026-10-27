@@ -9,7 +9,7 @@ use super::PrArg;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
-    trust_files_changed, verify_ed25519,
+    signed_message_v2, trust_files_changed, verify_ed25519,
 };
 use crate::core::meta::linked_issues;
 use crate::core::risk::{
@@ -21,6 +21,7 @@ use crate::core::risk::{
 use crate::ctx::RepoId;
 use crate::github::{Comment, Github, Review, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
+use crate::time::{Timestamp, parse_rfc3339};
 
 const RULES_PATH: &str = ".bosun/risk.toml";
 pub const OWNERS_PATH: &str = "governance/owners.toml";
@@ -217,9 +218,11 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             head,
             &excluded,
         );
-        if !delegate_verdicts.is_empty() && !withdrawn(gh, n, head, &owners)? {
-            approved_by = signed_approver(gh, &app.ctx.repo, n, head, &comments, Role::Delegate)?
-                .map(|id| format!("delegate {id}"));
+        if !delegate_verdicts.is_empty() && !owners_withdrawn(gh, n, head, &owners)? {
+            let v1 = |after: Option<u64>| after.is_none();
+            approved_by =
+                signed_approver(gh, &app.ctx.repo, n, head, &comments, Role::Delegate, &v1)?
+                    .map(|id| format!("delegate {id}"));
         }
     }
     let by_verdicts = verdicts.len() >= VERDICTS_NEEDED;
@@ -309,19 +312,28 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     .with_data(data))
 }
 
-/// The state of `owner`'s newest approve, request-changes or dismissed review on `head`.
-pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<String> {
-    reviews
-        .iter()
-        .rev()
-        .filter(|r| r.user.eq_ignore_ascii_case(owner) && r.commit_id == head)
-        .find(|r| {
-            matches!(
+/// `owner`'s newest approve, request-changes or dismissed review on `head`.
+fn decisive<'a>(reviews: &'a [Review], owner: &str, head: &str) -> Option<&'a Review> {
+    reviews.iter().rev().find(|r| {
+        r.user.eq_ignore_ascii_case(owner)
+            && r.commit_id == head
+            && matches!(
                 r.state.as_str(),
                 "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED"
             )
-        })
-        .map(|r| r.state.clone())
+    })
+}
+
+/// The id of `owner`'s decisive review on `head` when it was dismissed.
+pub fn dismissed_review(reviews: &[Review], owner: &str, head: &str) -> Option<u64> {
+    decisive(reviews, owner, head)
+        .filter(|r| r.state == "DISMISSED")
+        .map(|r| r.id)
+}
+
+/// The state of `owner`'s newest approve, request-changes or dismissed review on `head`.
+pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<String> {
+    decisive(reviews, owner, head).map(|r| r.state.clone())
 }
 
 /// The owner who approved `head`: by a GitHub review (their newest decisive review on `head` is
@@ -335,10 +347,10 @@ fn approver(
     signed_ok: bool,
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
-    let decisive = |o: &str| decisive_review(&reviews, o, head);
+    let state = |o: &str| decisive_review(&reviews, o, head);
     let by_review = owners
         .iter()
-        .find(|o| decisive(o).as_deref() == Some("APPROVED"));
+        .find(|o| state(o).as_deref() == Some("APPROVED"));
     if let Some(o) = by_review {
         return Ok(Some(o.clone()));
     }
@@ -346,25 +358,82 @@ fn approver(
     // Only a comment written with a plain user token counts: agent sessions act as the same
     // login through an app, and GitHub marks that in `performed_via_github_app` (spec §8).
     // An edited comment does not count: users with write access can edit others' comments. An
-    // owner whose newest decisive review on `head` requests changes has withdrawn the approval.
-    let by_comment = owners
-        .iter()
-        .filter(|o| decisive(o).as_deref() != Some("CHANGES_REQUESTED"))
-        .find(|o| owner_comment(&comments, o, head).is_some());
+    // owner whose newest decisive review on `head` requests changes, or was dismissed, has
+    // withdrawn the approval; after a dismissal only a comment made later than the dismissal
+    // (its time on the issue timeline, not the review's) clears it.
+    let by_comment = owners.iter().find(|o| match state(o).as_deref() {
+        Some("DISMISSED") => {
+            let newer = newer_than(&comments, dismissed_at(gh, pr, &reviews, o, head));
+            owner_comment(&newer, o, head).is_some()
+        }
+        s if withdrawn(s) => false,
+        _ => owner_comment(&comments, o, head).is_some(),
+    });
     if let Some(o) = by_comment {
         return Ok(Some(o.clone()));
     }
     // A signed approval stands for the owner: with no owners it counts for no one, and any
-    // owner's request for changes withdraws it.
-    if !signed_ok
-        || owners.is_empty()
-        || owners
-            .iter()
-            .any(|o| decisive(o).as_deref() == Some("CHANGES_REQUESTED"))
-    {
+    // owner's request for changes withdraws it. A v1 signature carries no time, so a re-posted
+    // old one could pass for new: it never clears a dismissal. Each dismissed owner review needs
+    // an owner v2 signature naming its id, and the timeline must show the dismissal.
+    let changes = |o: &String| state(o).as_deref() == Some("CHANGES_REQUESTED");
+    if !signed_ok || owners.is_empty() || owners.iter().any(changes) {
         return Ok(None);
     }
-    Ok(signed_approver(gh, repo, pr, head, &comments, Role::Owner)?.map(|id| format!("key {id}")))
+    let sign = |accept: &dyn Fn(Option<u64>) -> bool| {
+        signed_approver(gh, repo, pr, head, &comments, Role::Owner, accept)
+    };
+    let ids: Vec<u64> = (owners.iter())
+        .filter_map(|o| dismissed_review(&reviews, o, head))
+        .collect();
+    if ids.is_empty() {
+        return Ok(sign(&|_| true)?.map(|id| format!("key {id}")));
+    }
+    let mut by = None;
+    for id in ids {
+        let seen = (gh.review_dismissed_at(pr, id))
+            .map_err(|e| eprintln!("bosun: risk-check: cannot read the timeline: {}", e.message))
+            .ok()
+            .flatten();
+        if id == 0 || seen.and_then(|t| parse_rfc3339(&t)).is_none() {
+            return Ok(None);
+        }
+        let Some(key) = sign(&|after| after == Some(id))? else {
+            return Ok(None);
+        };
+        by.get_or_insert(key);
+    }
+    Ok(by.map(|id| format!("key {id}")))
+}
+
+/// A decisive review in this state withdraws the owner's approvals (anyone with write access can
+/// dismiss a review; GitHub then reports DISMISSED).
+pub fn withdrawn(state: Option<&str>) -> bool {
+    matches!(state, Some("CHANGES_REQUESTED" | "DISMISSED"))
+}
+
+/// When `owner`'s decisive review was dismissed (issue timeline); `None` when unknown.
+fn dismissed_at(
+    gh: &dyn Github,
+    pr: u64,
+    reviews: &[Review],
+    owner: &str,
+    head: &str,
+) -> Option<Timestamp> {
+    let id = decisive(reviews, owner, head)?.id;
+    parse_rfc3339(&gh.review_dismissed_at(pr, id).ok()??)
+}
+
+/// The comments created after `since`; with no time nothing is newer (fail closed).
+fn newer_than(comments: &[Comment], since: Option<Timestamp>) -> Vec<Comment> {
+    let Some(since) = since else {
+        return Vec::new();
+    };
+    comments
+        .iter()
+        .filter(|c| parse_rfc3339(&c.created_at).is_some_and(|t| t > since))
+        .cloned()
+        .collect()
 }
 
 /// Why a delegate cannot approve now, if it cannot: bosun is halted (or cannot tell), the PR
@@ -407,13 +476,13 @@ fn delegation_blocked(gh: &dyn Github, base_ref: &str, linked: &[u64]) -> Result
 }
 
 /// Whether a signed approval of `head` cannot count: no owners, or an owner's newest decisive
-/// review on `head` requests changes.
-fn withdrawn(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<bool> {
+/// review on `head` requests changes or was dismissed.
+fn owners_withdrawn(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> Result<bool> {
     let reviews = gh.list_reviews(pr)?;
     Ok(owners.is_empty()
         || owners
             .iter()
-            .any(|o| decisive_review(&reviews, o, head).as_deref() == Some("CHANGES_REQUESTED")))
+            .any(|o| withdrawn(decisive_review(&reviews, o, head).as_deref())))
 }
 
 /// The PR's comments oldest first, and the sessions that cannot review it independently: every
@@ -431,9 +500,10 @@ fn verdict_inputs(gh: &dyn Github, n: u64, linked: &[u64]) -> Result<(Vec<Commen
 }
 
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
-/// approvals). The keys come from the default branch only, so a PR cannot enroll its own.
-/// Any author and app count: the signature is the proof. A missing or malformed key file, an
-/// unknown key or a bad signature is no approval, logged to stderr, never an error.
+/// approvals); `accept` takes the review a v2 names (`None`: v1). Only an owner key signs v2.
+/// The keys come from the default branch only, so a PR cannot enroll its own. Any author and app
+/// count: the signature is the proof. A missing or malformed key file, an unknown key or a bad
+/// signature is no approval, logged to stderr, never an error.
 fn signed_approver(
     gh: &dyn Github,
     repo: &RepoId,
@@ -441,13 +511,14 @@ fn signed_approver(
     head: &str,
     comments: &[Comment],
     role: Role,
+    accept: &dyn Fn(Option<u64>) -> bool,
 ) -> Result<Option<String>> {
-    let sigs: Vec<(u64, &str, &str)> = comments
+    let sigs: Vec<(u64, Option<u64>, &str, &str)> = comments
         .iter()
         .flat_map(|c| {
             signature_lines(&c.body, head)
                 .into_iter()
-                .map(move |(id, sig)| (c.id, id, sig))
+                .map(move |(after, id, sig)| (c.id, after, id, sig))
         })
         .collect();
     if sigs.is_empty() {
@@ -460,8 +531,17 @@ fn signed_approver(
             return Ok(None);
         }
     };
-    let msg = signed_message(role, &repo.owner, &repo.name, pr, head);
-    for (comment, id, sig) in sigs {
+    for (comment, after, id, sig) in sigs {
+        let msg = match after {
+            None => signed_message(role, &repo.owner, &repo.name, pr, head),
+            Some(r) if role == Role::Owner => {
+                signed_message_v2(&repo.owner, &repo.name, pr, head, r)
+            }
+            Some(_) => continue,
+        };
+        if !accept(after) {
+            continue;
+        }
         let Some(key) = keys.iter().find(|k| k.id == id) else {
             eprintln!("bosun: risk-check: comment {comment}: unknown key {id:?}, not counted");
             continue;

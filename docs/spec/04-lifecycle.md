@@ -30,6 +30,8 @@ Only bosun commands change the state label. A hook guards against accidental or 
 
 `bosun pr` sets claimed -> building -> review (a PR exists only after the first push). An open PR on the branch that does not link the task is refused (exit 3, before any change). `bosun pr` or `bosun reap` sets a building, review, fixing or queued task to merged once its PR merged into the default branch (auto-merge or a human), and ends the leases on the issue with reason `merged`. `bosun pr` and `result` count only a PR merged into the default branch. `reap` and `result` move a building, review or fixing task only when its issue is closed (GitHub closes it when a `Closes #N` PR merges; an open issue means the work is not done, so an old merged PR linking it is ignored and no PR list is read for it); a queued task counts whatever the issue state. `reap` runs this before expiring leases, so a merged task is never reaped back to ready. `bosun result <epic> --outcome merged --pr N` reads PR N; when it is merged, the tasks it links move to merged, this session's leases on them end with reason `merged`, and `data.tasks_merged` lists them; an unmerged PR changes nothing. Before it turns on auto-merge, `bosun pr --auto-merge` posts `{"bosun":"task-pr","session":..,"pr":N}` on the task; `reap` reads the newest such record and that one PR (it must link the task: open means wait, merged into the default branch means merged). Only a task without a usable record (none, as for older tasks; a PR that is gone, does not link the task, is closed unmerged or merged into another branch) costs the list of all PRs.
 
+Touch check: before it opens or reuses the PR, moves any state or turns on auto-merge, `bosun pr <issue>` reads the PR's changed files (with no PR yet, the comparison of the default branch with the pushed branch; the compare API lists at most 300 files) and checks them against the touch of the session's live lease on the issue (or, failing that, a live lease held by a per-task id of this orchestrator) plus lockfile companions (`Cargo.toml` gives `Cargo.lock`, `package.json` gives `pnpm-lock.yaml`). Modified and removed files, and the old name of a renamed file, that no glob covers make it exit 3 with `data.outside`; the fix names `bosun claim <issue> --touch <path>`. Added files, the new name of a rename, copied files and `changelog.d/*.md` and `docs/progress.d/*.md` always pass. It is an accident guard, not enforcement: with no matching live lease, a diff at the file cap or cut short, or an unreadable diff, it is skipped and never blocks. `data.touch_check` is `ok`, `skipped (no lease)`, `skipped (diff too large)` or `skipped (diff unavailable)`.
+
 Stop rules:
 - The same failure signature 3 times in a row: the task goes to blocked.
 - A fix round with 0 changed lines: the task goes to blocked.
@@ -62,11 +64,31 @@ Conflict avoidance (three layers):
 2. Claim check: `bosun claim` refuses a task if its touch paths overlap a live lease, or if another
    orchestrator owns its area. Exit 3 with a JSON reason. An area owner that is the
    parent of the claiming session does not block it, so spawned workers can claim in their
-   orchestrator's area.
+   orchestrator's area. A re-claim of an own active task with `--touch` grows the lease: the
+   globs it lacks pass the same overlap check (exit 3 on a clash), then a new lease record with
+   the old touch plus the added globs is written (`data.added`), without changing the state;
+   without new globs it changes nothing. A grow that loses the claim race edits its record back
+   to the previous one (the lease is never ended) and exits 3 naming the winner; if that edit
+   fails it exits 1 and the fix says to release the task. The grow re-reads the active issues
+   after it writes, and if the task is no longer held (state not active, or a newer `lease-end`
+   of the session) it edits its record back and exits 3.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.
+   Own touch: a session whose plain session id holds a live lease with a non-empty touch may edit
+   only files that the union of those leases' globs, plus lockfile companions (`Cargo.toml` gives
+   `Cargo.lock`, `package.json` gives `pnpm-lock.yaml`), covers. Leases of per-task ids `S/x` never
+   restrict `S`, so a wave orchestrator and its agents are not restricted by the hook (`bosun pr`
+   checks them). Always allowed: a file not on the default branch (`origin/HEAD`, `origin/main` or
+   `origin/master`; with none of them every file counts as new), fragments under `changelog.d/` and
+   `docs/progress.d/`, and paths outside the repo. The edited path is canonicalised when the file (or, for a new file, its parent) exists, so symlinks and `link/../x` are judged by their real target; a path whose real target lies outside the repo counts as outside; else `.` and `..` are resolved lexically. Before
+   it denies, the hook re-reads the leases from GitHub once, bypassing and refreshing the cache, and
+   denies only if the fresh view still denies; the fix names `bosun claim <issue> --touch <path>`. A
+   bad glob in an own lease covers nothing. Known limits: case-insensitive file systems are not
+   handled; a stale `origin/<default>` (a file added upstream since the last fetch) counts that
+   file as new; a new file under a symlinked directory whose parent does not exist yet is judged
+   lexically.
    The label-lock skips the read-only GitHub MCP tools on an explicit allowlist (`READ_ONLY_GITHUB` in `core::guard`; a tool not on it, even `get_*` or `list_*`, is judged like a write), and treats the body of a heredoc as data: in an unquoted body only the command substitutions (`$( )`, backticks) are judged as commands. Anything the guard cannot parse safely is refused as before: a body with `$name` or `${`, a substitution with a quote, `#`, `<<`, a newline, a backslash or `case`, an unterminated substitution, or a line ending in a backslash (bash joins it with the next line before it looks for the delimiter).
    The merge-lock also checks commands nested in `$(..)`, backticks, `( .. )`, `sh|bash|zsh -c` and `eval` (depth 3), `gh api`, `curl`, `wget` and `http` writes that merge, create refs or releases or set auto-merge, and pushes of version-like refs (`v1.2.3`). Its default-branch rules (commit, merge, rebase, reset, cherry-pick, plain push) read the branch where git acts: the hook's directory moved by a `cd dir` joined with `&&`, `;` or a newline, and by `git -C dir`, `--git-dir` and `--work-tree`; a `cd` counts only when the shell surely runs it here (after the start, `;`, a newline, or in an `&&` chain that reaches the git command; never in a pipeline or a `( .. )` group); a directory it cannot read literally (`$VAR`, `~`, `cd -`), a moved target git cannot read (a failed `cd`), or `GIT_DIR`, `GIT_WORK_TREE` or `core.worktree` count as the default branch. Branch protection stays the real guard, since a hook cannot see every shell trick.
 
@@ -78,9 +100,17 @@ on the issue being claimed is the same claim (a re-claim is idempotent). Give ea
 blocks picks that overlap their touch paths. The edit hook keeps the session rule (an agent may edit
 paths its orchestrator `S` leased), a known limit: without per-task ids it cannot tell wave agents apart.
 The hook sees only the plain session id, so a session `S` may also edit the paths of leases held under `S/<task>`; `S/x` and `S/y` still block each other.
-Claim and spawn re-check after writing: they re-read the comments of the claimed issue and the active
-issues, and when a live overlapping lease has an earlier comment (creation time, then comment id) they
-post `lease-end` with reason `lost-race`, leave the state alone and exit 3 naming the winner.
+Claim and spawn re-check after writing: a fresh claim sets the state `claimed` first (it relies on the label-filtered issue list reflecting that at once), posts the lease, then lists
+the active issues anew and re-reads their comments (so of two ready tasks claimed at the same time the later
+listing sees the other), and when a live overlapping lease has an earlier comment (creation time, then comment id) they
+post `lease-end` with reason `lost-race`, exit 3 naming the winner and, for a claim lost to another task, set the state back to `ready` (only while it is still exactly `claimed` with no other live lease; after the `ready` write the comments are read once more, and a live lease of another session that appeared meanwhile (a third claimer that won) gets the state set back to `claimed`, best effort with a stderr note; a failed revert stays exit 3 with `data.revert_failed`, and `bosun reap` resets a claimed or building task with no live lease whose newest lease record is a `lost-race` lease-end and whose issue was last updated over 10 minutes ago). A claim that dies between the state change and the lease leaves a `claimed` task with no lease record: a known limit, `bosun release` fixes it.
+A race is decided per contested glob pair: for each glob of the new lease that overlaps a glob of
+a rival, a lease counts from its session's earliest lease record on its issue since its last
+lease-end that has a glob overlapping the other's glob, and the new lease loses if the rival is
+earlier on any pair. So a grow keeps its priority on the globs it had and races at grow time for the
+globs it added; both sides compute the same times per pair, so they never both win (both may lose and
+retry). Known limit: a lease that
+expired without a `lease-end` (not yet reaped) keeps its older records in that history.
 
 Trust in records: a `{"bosun":…}` record in a comment is trusted from any commenter with write access to the repo; bosun does not check who wrote it. Checks that do not rely on records: commit statuses (`ci-ok`, `risk-check`, `review-verdict`, `main-open`), and the files read from the base or default branch (`docs/lessons.toml`, `REVIEW.md`, `.bosun/limits.toml`). A `spend` record with a negative or non-finite amount is ignored. A delta review (`since_sha` of `review-pack`) needs the `verdict` record and a successful `review-verdict` status on that sha (records on heads without one are skipped), and the sha must be an ancestor of the head and a commit of this PR; otherwise the review is full.
 
