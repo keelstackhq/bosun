@@ -1,0 +1,59 @@
+# Parallel conflicts: Implementation Plan
+
+> **For agentic workers:** use superpowers:subagent-driven-development and
+> superpowers:test-driven-development. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** PRs opened in parallel never need a merge-conflict resolution: leases tell the truth
+about the files a PR edits, plans show overlap before work starts, shared files are split, and a
+clean merge of main costs no re-review.
+
+**Design:** `docs/superpowers/specs/2026-10-27-parallel-conflicts-design.md` (C1-C8).
+**Spec:** §4 (leases, claim check, edit hook), §8 (risk-check, signed approvals), §9 (main-health).
+Seed constraints hold: one task per PR of at most 400 changed lines, `src/core` does no I/O, tests
+never reach a real API, one envelope on stdout, `error.fix` never empty, fragments instead of
+CHANGELOG/PROGRESS edits. No new CI job or run (D-007).
+
+Each task lists its touch. Two tasks without `depends` between them have disjoint touch lists,
+and none overlaps the open PRs #251, #253, #254 (`src/cli/plan.rs`, `src/cli/reap.rs`,
+`src/core/state.rs`, `src/gates/*`, `src/github/*`, and `docs/spec.md` near "Intake:" and §7 gates).
+
+## Tasks
+
+- [ ] **P0: design and plan** (this PR)
+  touch: docs/superpowers/specs/2026-10-27-parallel-conflicts-design.md,
+  docs/superpowers/plans/2026-10-27-parallel-conflicts.md, fragments
+- [ ] **P1: `core::touch`, plan overlap and hotspots (C4)**
+  touch: src/core/touch.rs (new), src/core/mod.rs, src/core/plan.rs, docs/plan-format.md,
+  tests/cli_plan_overlap.rs (new), fragments
+  - `touch::companions(globs)`: `Cargo.toml` -> `Cargo.lock`, `package.json` -> `pnpm-lock.yaml`.
+  - `touch::parallel_overlaps(tasks, depends)`: pairs that overlap with no depends path (transitive,
+    across items) -> plan warnings with the fix `add "depends: X"`.
+  - `touch::hotspots(tasks, 3)`: globs/paths matched by 3+ tasks -> `plan check` `data.hotspots`
+    (via `Plan`, so `src/cli/plan.rs` stays untouched).
+- [ ] **P2: a lease grows on re-claim (C2)**
+  touch: src/cli/claim.rs, tests/cli_claim_grow.rs (new), docs/spec.md (§4 layer 2), fragments
+  - `bosun claim N --touch G..` on an own active task: overlap check of the new globs against
+    other live leases (exit 3), then a new lease record with the union; `data.added`.
+- [ ] **P3: edit hook keeps edits inside own touch (C1)** — depends P2
+  touch: src/core/guard.rs (edit_lock), src/hooks/pre_tool_use.rs, tests/hook_edit_own_touch.rs (new),
+  docs/spec.md (§4 layer 3), fragments
+  - With an own live lease: deny an edit of an existing repo file no own lease covers, except
+    fragments and companions; new files pass; fix names `bosun claim <issue> --touch <path>`.
+- [ ] **P4: `bosun pr` refuses files outside the lease (C3)** — depends P1
+  touch: src/cli/pr.rs, tests/cli_pr_touch.rs (new), docs/spec.md (§4 `bosun pr` paragraph), fragments
+- [ ] **P5: guidance (C5, C8)** — depends P1
+  touch: docs/plan-format.md, AGENTS.md, channel/pieces/core/files/sections/agents.md, fragments
+- [ ] **P6: risk-check warns on out-of-touch files (C3)** — depends P4
+  touch: src/cli/risk_check.rs, tests/cli_risk_touch.rs (new), docs/spec.md (§8), fragments
+- [ ] **P7: split docs/spec.md into docs/spec/ (C6)** — depends P2-P6, #251, #253, #254; owner OK
+  (mechanical, over 400 lines)
+- [ ] **P8: main-health flags conflicting PRs (C7)** — depends #251, #254
+  touch: src/cli/main_health.rs, src/github/types.rs, tests/cli_main_health_dirty.rs (new), spec §9
+- [ ] **P9: approval carry-over across a clean merge of main (C7)** — depends P6; owner signs off
+  the rule (R-high)
+- [ ] **P10: `src/cli/mod.rs` Args split (C6)** — last, optional
+
+## Owner items
+
+- OK for P7 (a generated move over 400 lines) and the carry-over rule of P9 (design §3 C7).
+- Nothing here changes `.github/workflows`, `.bosun/*`, governance or CODEOWNERS.
