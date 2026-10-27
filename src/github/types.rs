@@ -109,6 +109,9 @@ pub struct Pull {
     pub merge_commit_sha: Option<String>,
     /// Number of commits in the PR; 0 when GitHub did not say.
     pub commits: u64,
+    /// GitHub's lazily computed `mergeable_state` (`dirty`, `clean`, ...); `None` for `null`,
+    /// and always `None` in lists (only the pull detail has it).
+    pub mergeable_state: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +147,8 @@ struct RawPull {
     merge_commit_sha: Option<String>,
     #[serde(default)]
     commits: u64,
+    #[serde(default)]
+    mergeable_state: Option<String>,
 }
 
 impl From<RawPull> for Pull {
@@ -165,6 +170,7 @@ impl From<RawPull> for Pull {
             changed_files: r.changed_files,
             merge_commit_sha: r.merge_commit_sha,
             commits: r.commits,
+            mergeable_state: r.mergeable_state,
         }
     }
 }
