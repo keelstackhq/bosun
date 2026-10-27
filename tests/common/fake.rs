@@ -97,6 +97,8 @@ pub struct State {
     pub permissions: HashMap<String, String>,
     /// (path suffix, status) answered for every matching request.
     pub fail_paths: Vec<(String, u16)>,
+    /// (path suffix, status, message) answered for every matching request.
+    pub fail_messages: Vec<(String, u16, String)>,
     /// `fail_paths` answers carry the request's Authorization header as the message.
     pub echo_auth: bool,
     /// Scripted mutations; see `FakeGithub::after_requests`.
@@ -105,6 +107,8 @@ pub struct State {
     pub compare_statuses: HashMap<String, String>,
     /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
     pub pull_commits: HashMap<u64, Vec<String>>,
+    /// Branches `GET /branches/<name>` answers 404 for; every other branch exists.
+    pub missing_branches: Vec<String>,
 }
 
 type Mutation = Box<dyn FnOnce(&mut State) + Send>;
@@ -413,6 +417,15 @@ impl FakeGithub {
         self.state.lock().unwrap().auto_merge.get(&number).cloned()
     }
 
+    /// Mark a branch as not pushed: `GET /branches/<name>` answers 404.
+    pub fn branch_missing(&self, name: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .missing_branches
+            .push(name.into());
+    }
+
     pub fn graphql_status(&self, status: u16, message: &str) {
         self.state.lock().unwrap().graphql_status = Some((status, message.into()));
     }
@@ -519,6 +532,13 @@ impl FakeGithub {
     /// Answer the next `times` requests with `status` and a JSON message.
     pub fn fail_next(&self, status: u16, times: u32) {
         self.state.lock().unwrap().fail = Some((status, times));
+    }
+
+    /// Like `fail_path`, with GitHub's `message`.
+    pub fn fail_path_message(&self, suffix: &str, status: u16, message: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.fail_messages
+            .push((suffix.into(), status, message.into()));
     }
 
     /// Answer every request whose path ends with `suffix` with `status`.
@@ -953,6 +973,12 @@ fn route(
             }
             ok(Value::Array(vec![]))
         }
+        ("GET", ["branches", name]) => {
+            if s.missing_branches.iter().any(|b| b == name) {
+                return msg(404, "Branch not found");
+            }
+            ok(json!({"name": name}))
+        }
         ("GET", ["labels", name]) => match s.labels.iter().find(|l| l.0 == *name) {
             Some(l) => ok(json!({"name": l.0, "color": l.1})),
             None => msg(404, "Not Found"),
@@ -1306,6 +1332,8 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
         } else if let Some((code, left)) = s.fail.filter(|f| f.1 > 0) {
             s.fail = Some((code, left - 1));
             msg(code, "fake failure")
+        } else if let Some((_, code, m)) = s.fail_messages.iter().find(|f| path.ends_with(&f.0)) {
+            msg(*code, m)
         } else if let Some((_, code)) = s.fail_paths.iter().find(|f| path.ends_with(&f.0)) {
             let code = *code;
             if s.echo_auth {

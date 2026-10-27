@@ -107,6 +107,21 @@ fn a_fully_set_up_repo_is_ok() {
     assert_eq!(statuses(&v)[10], "missing");
 }
 
+#[test]
+fn step_9_says_when_auto_merge_is_off() {
+    let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+    fake.repo_set("allow_auto_merge", json!(false));
+    let (code, v) = doctor(&fake, tmp.path(), true);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(statuses(&v)[8], "missing");
+    assert!(
+        v["data"]["items"][8]["detail"]
+            .as_str()
+            .is_some_and(|s| s.contains("allow_auto_merge is off")),
+        "{v}"
+    );
+}
+
 fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let d = tmp.path();

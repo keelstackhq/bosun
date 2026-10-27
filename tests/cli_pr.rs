@@ -35,6 +35,20 @@ fn repo(branch: &str) -> tempfile::TempDir {
     dir
 }
 
+/// A repo on `branch` whose head commit has `subject`.
+fn repo_with(branch: &str, subject: &str) -> tempfile::TempDir {
+    let dir = repo(branch);
+    let st = Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["commit", "-q", "--allow-empty", "-m", subject])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    dir
+}
+
 fn bosun_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
@@ -420,4 +434,139 @@ fn an_open_branch_pr_that_links_the_task_in_any_form_is_used() {
         assert_eq!(v["data"]["pr"], 12);
         assert_eq!(v["data"]["created"], false);
     }
+}
+
+fn created_title(fake: &FakeGithub) -> String {
+    let body = fake
+        .requests()
+        .iter()
+        .find(|r| r.method == "POST" && r.path.ends_with("/pulls"))
+        .and_then(|r| r.body.clone())
+        .expect("a PR was created");
+    let v: Value = serde_json::from_str(&body).unwrap();
+    v["title"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn the_pr_title_is_a_conventional_head_commit_subject() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/building");
+    let dir = repo_with("claude/t7", "fix(hello): trim the name");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(created_title(&fake), "fix(hello): trim the name");
+}
+
+#[test]
+fn a_title_flag_beats_the_commit_subject() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/building");
+    let dir = repo_with("claude/t7", "fix: trim the name");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--title", "chosen"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(created_title(&fake), "chosen");
+}
+
+#[test]
+fn a_non_conventional_subject_falls_back_to_the_issue_title() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/building");
+    let dir = repo_with("claude/t7", "Trim the name");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(created_title(&fake), "the task");
+}
+
+#[test]
+fn an_unpushed_branch_says_to_push_it() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/building");
+    fake.branch_missing("claude/t7");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("git push -u origin claude/t7"), "{fix}");
+    assert!(fix.contains("bosun pr 7"), "{fix}");
+    assert!(
+        !fake
+            .requests()
+            .iter()
+            .any(|r| r.method == "POST" && r.path.ends_with("/pulls"))
+    );
+}
+
+#[test]
+fn an_existing_pr_is_reused_without_a_branch_check() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.branch_missing("claude/t7");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["created"], false);
+}
+
+fn assert_auto_merge_off_fix(v: &Value) {
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("Allow auto-merge"), "{fix}");
+    assert!(fix.contains("hoist apply"), "{fix}");
+    assert!(!fix.contains("githubstatus"), "{fix}");
+}
+
+#[test]
+fn a_graphql_error_saying_auto_merge_is_not_allowed_gets_the_fix() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_error("Pull request Auto merge is not allowed for this repository");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    assert_auto_merge_off_fix(&v);
+}
+
+#[test]
+fn the_ccr_route_422_saying_auto_merge_is_not_allowed_gets_the_fix() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_status(403, CCR_MSG);
+    fake.fail_path_message(
+        "/pulls/20/ccr/auto_merge",
+        422,
+        "Auto merge is not allowed for this repository",
+    );
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    assert_auto_merge_off_fix(&v);
+}
+
+#[test]
+fn an_unreadable_branch_check_does_not_block_the_pr() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/building");
+    fake.fail_path("/branches/claude%2Ft7", 403);
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["created"], true);
+    assert!(
+        fake.requests()
+            .iter()
+            .any(|r| r.path.ends_with("/branches/claude%2Ft7"))
+    );
+}
+
+#[test]
+fn a_repo_that_forbids_auto_merge_says_how_to_allow_it() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.graphql_status(422, "Auto merge is not allowed for this repository");
+    let dir = repo("claude/t7");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("Allow auto-merge"), "{fix}");
+    assert!(fix.contains("hoist apply"), "{fix}");
+    assert!(!fix.contains("githubstatus"), "{fix}");
 }

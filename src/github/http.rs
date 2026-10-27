@@ -393,10 +393,20 @@ impl Http {
             401 => "the token was rejected; check GITHUB_TOKEN",
             403 | 429 => "the token lacks permission or hit a rate limit",
             404 if method != "GET" => "check BOSUN_REPO and the issue/PR number",
+            422 if auto_merge_off(&api) => AUTO_MERGE_OFF_FIX,
             _ => "retry; if it persists check https://www.githubstatus.com",
         };
         BosunError::error(message.trim_end(), fix)
     }
+}
+
+/// The fix for a repo whose settings forbid auto-merge.
+pub const AUTO_MERGE_OFF_FIX: &str = "auto-merge is off for this repo: turn on 'Allow auto-merge' in the repo settings (`hoist apply`), or ask the owner or orchestrator to merge";
+
+/// Whether GitHub's message says that the repo does not allow auto-merge.
+pub fn auto_merge_off(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    (m.contains("auto merge") || m.contains("auto-merge")) && m.contains("not allowed")
 }
 
 /// The path without its query string.

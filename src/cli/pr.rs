@@ -12,6 +12,7 @@ use crate::core::checks;
 use crate::core::meta::linked_issues;
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
+use crate::core::title::is_conventional;
 use crate::github::{Github, IssueState, enable_auto_merge_any};
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -43,6 +44,18 @@ fn current_branch(dir: &Path) -> Result<String, BosunError> {
         ));
     }
     Ok(branch)
+}
+
+/// The subject line of the head commit; `None` when git cannot say.
+fn head_subject(dir: &Path) -> Option<String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["log", "-1", "--format=%s"])
+        .output()
+        .ok()?;
+    let subject = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !subject.is_empty()).then_some(subject)
 }
 
 /// `(context, state)` of every required check that is not green on `sha`.
@@ -128,7 +141,24 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         }
         Some(p) => (p, false),
         None => {
-            let title = args.title.clone().unwrap_or_else(|| issue.title.clone());
+            // Only a definite "not found" stops here; an unreadable check (a proxy's 403) does not.
+            let pushed = gh.branch_exists(&branch).unwrap_or_else(|e| {
+                eprintln!("bosun: cannot check that {branch} is pushed: {}", e.message);
+                true
+            });
+            if !pushed {
+                return Err(BosunError::error(
+                    format!("branch {branch} is not on GitHub yet"),
+                    format!(
+                        "push the branch first: git push -u origin {branch}, then run `bosun pr {n}` again"
+                    ),
+                ));
+            }
+            let title = args
+                .title
+                .clone()
+                .or_else(|| head_subject(&app.ctx.dir).filter(|s| is_conventional(s)))
+                .unwrap_or_else(|| issue.title.clone());
             let body = format!("Closes #{n}\n\n<!-- bosun:task-pr {n} -->");
             (gh.create_pull(&title, &branch, &base, &body)?, true)
         }

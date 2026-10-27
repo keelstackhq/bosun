@@ -216,12 +216,11 @@ fn review_pack_lists_matching_lessons_and_the_base_review_md() {
         .collect();
     assert_eq!(ids, ["L-001", "L-002"]);
     assert_eq!(d["review_md"], "Review rules");
-    assert!(
-        d["instructions"]
-            .as_str()
-            .unwrap()
-            .contains("bosun verdict post")
-    );
+    let instructions = d["instructions"].as_str().unwrap();
+    assert!(instructions.contains("bosun verdict post"));
+    assert!(instructions.contains("escalate_risk"));
+    assert!(instructions.contains("never turns green"));
+    assert!(instructions.contains("R-gov"));
 }
 
 #[test]
