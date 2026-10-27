@@ -41,7 +41,7 @@ Root causes, in order: (1) touch lists are not enforced, so overlap checks see t
 ## 3. Decisions, ranked by impact vs cost
 
 Impact = how many of the observed conflicts it would have prevented. Cost = lines and CI minutes.
-None adds a CI job or a CI run (D-007: CI minutes are scarce); every check runs inside commands
+None adds a CI job or a CI run (CI minutes are scarce: `docs/ci-minutes.md`; the orchestrator's D-007); every check runs inside commands
 that already run (`bosun pr`, `risk-check`, the edit hook, `plan check`).
 
 ### C1. Truthful leases: the edit hook keeps edits inside your own touch (high impact, ~150 lines)
@@ -70,6 +70,9 @@ checks see the real file set, and two sessions can never edit the same file.
 lease after the same overlap check as a new claim (exit 3 naming the holder), and posts a new
 lease record (the newest lease is the live one, so no format change). Without `--touch` a re-claim
 stays idempotent. Reason: C1 needs a way to make a lease true without releasing work.
+A grow that loses the claim race must keep the session's old lease: `settle_race` posts a
+`lost-race` lease-end, which ends every lease of the session on the issue, so the grow re-posts
+the old touch before it exits 3.
 
 ### C3. PR files must match the lease (high impact, ~120 lines, no CI minutes)
 
@@ -92,7 +95,11 @@ pure module `core::touch`:
   split the shared file`. Not an error: the runtime is still safe, and existing plans keep
   importing.
 - **Hotspot report:** a path or glob matched by 3 or more tasks is listed with its tasks and the
-  fix "give one task the file, or split the file (see C6)". `data.hotspots` in `plan check`.
+  fix "give one task the file, or split the file (see C6)". 
+- Both are reported as warnings (`data.warnings`), because `plan check` builds its output field
+  by field in `src/cli/plan.rs`, which open PRs edit.
+- Both are warnings in `data.warnings`: `plan check` builds its output field by field in
+  `src/cli/plan.rs`, which open PRs edit, so a new `Plan` field would not reach it.
 - **Lockfile companions:** `Cargo.toml` implies `Cargo.lock`, `package.json` implies
   `pnpm-lock.yaml` (same directory, or the workspace root); used by C1-C4 alike, so two tasks that
   add dependencies overlap at plan time.
@@ -130,9 +137,10 @@ In `docs/plan-format.md` (a "Cutting tasks" section), AGENTS.md and the channel'
 
 ### C7. After a merge: no automatic branch updates; flag conflicts; carry approvals (medium-high)
 
-- **No automatic update of clean PRs.** Branch protection does not require up-to-date branches
-  (`hoist.toml`), so a PR behind main still auto-merges when GitHub can merge it. Updating every
-  open PR after each merge would cost one CI run each (~4-7 min, D-007) and void approvals, for no
+- **No automatic update of clean PRs.** `hoist.toml` sets no "require branches to be up to date"
+  rule (owner: confirm hoist's default leaves it off, and keep it off), so a PR behind main still
+  auto-merges when GitHub can merge it. Updating every
+  open PR after each merge would cost one CI run each (~4-7 min) and void approvals, for no
   gain.
 - **Flag a PR that became conflicting** (~100 lines): `bosun main-health --result success` already
   re-judges every open PR; it also reads `mergeable_state`, and for a `dirty` PR posts a `conflict`
@@ -141,23 +149,28 @@ In `docs/plan-format.md` (a "Cutting tasks" section), AGENTS.md and the channel'
   they merge.
 - **Approval carry-over across a clean merge of main** (security-sensitive, R-high, owner signs
   off on the rule first). A verdict (review-verdict status) or a signed approval for head `H`
-  also counts for the current head `H2` when all hold:
-  1. every commit on the first-parent path from `H2` back to `H` is a merge commit whose second
-     parent `M` is an ancestor of (or equal to) the default branch tip (at most 5 hops);
-  2. the PR's own change is byte-identical: the set of `(filename, status, blob sha,
-     previous_filename)` of `compare(M...H2)` (M = last merged main commit; its merge-base with
-     `H2` is `M` itself) equals that of `compare(B...H)` (B = merge-base of `H` and the default
-     branch);
-  3. neither compare is truncated (R-unseen), no trust file is in either (TRUST_FILES), and the
-     newest decisive owner review on `H2` does not request changes.
-  Why it is safe: any byte the merge commit adds beyond `M` and `H` shows up in `compare(M...H2)`,
-  either as a new file (set differs) or as a different blob (sha differs). A file main changed that
-  the PR also changed gives a new blob, so no carry-over: the reviewer never saw that combination.
-  CI (`ci-ok`) and `main-open` still run on `H2`, so behavioral breakage from the combination is
-  caught by the same gates as any merge. Residual risk: a semantic interaction between main's
-  change and the PR's in *different* files, the same risk auto-merge without "require up to date"
-  already accepts. Where: `risk-check` (counts the carried signature and posts the carried
-  review-verdict status, it already runs on every push with status rights), `core::approve`.
+  also counts for the current head `H2` only when all hold:
+  1. every commit on the first-parent path from `H2` back to `H` (at most 5) has exactly two
+     parents, and its second parent `M` is an ancestor of (or equal to) the default branch tip.
+     `M` below is the second parent of `H2`; `B` is the merge-base of `H` and the default branch.
+  2. Main did not touch the PR's files: the PR's paths `P` (every `filename` and
+     `previous_filename` of `compare(B...H)`) are disjoint from the paths of `compare(B...M)`.
+  3. `H2`'s tree is exactly the expected merge: take the recursive tree of `M`; for each path in
+     `P`, set it to `H`'s entry (mode, type, blob sha) or remove it when `H` has none. Every entry
+     of `H2`'s recursive tree (mode, type, sha) equals that, and nothing else is in it. Gitlinks
+     (submodules) count as entries, so a changed one fails.
+  4. No compare or tree read is truncated (R-unseen), no trust file is in `P` (TRUST_FILES), and
+     the newest decisive owner review on `H2` does not request changes.
+  Why it is safe: the merge author chooses `H2`'s tree, so bosun never trusts it; it recomputes
+  the tree from `M` and `H`, which were already judged (main by its own review and CI, `H` by
+  this approval). Rule 2 stops a "take ours" merge from silently reverting a main change to a PR
+  file (with overlapping paths the merged content is new, so no carry-over); rule 3 catches any
+  extra byte, mode bit, symlink or submodule change. CI (`ci-ok`) and `main-open` still run on
+  `H2`. Residual risk: a semantic interaction between main's change and the PR's in *different*
+  files, which auto-merge of a PR that is behind main already accepts today. Cost: two compares
+  and three recursive tree reads per carry-over attempt, only when the head is a merge.
+  Where: `risk-check` (counts the carried signature and posts the carried review-verdict status;
+  it already runs on every push with status rights), `core::approve`.
 
 ### C8. The channel (no extra cost)
 
@@ -171,15 +184,16 @@ consumers; the spec split is advice in the guidance ("split append-only and per-
 | # | Change | Impact | Lines | Can start |
 | --- | --- | --- | --- | --- |
 | 1 | C4 plan overlap, hotspots, companions (`core::touch`) | medium | ~250 | now |
-| 2 | C2 lease grows on re-claim | high | ~120 | now |
-| 3 | C1 edit hook own-touch rule | high | ~200 | after 2 (both edit spec §4 conflict layers) |
-| 4 | C3 `bosun pr` touch check | high | ~200 | after 1 (uses `core::touch`) |
+| 2 | C2 lease grows on re-claim | high | ~150 | now |
+| 3 | C1 edit hook own-touch rule | high | ~200 | after 1, 2 (companions; spec §4) |
+| 4 | C3 `bosun pr` touch check | high | ~200 | after 1, 3 (`core::touch`; spec §4) |
 | 5 | C5 guidance in plan-format, AGENTS, channel | medium | ~80 | after 1 (plan-format.md) |
 | 6 | C3 risk-check out-of-touch warning | low | ~120 | after 4 |
 | 7 | C6 spec split | high | mechanical | after #251/#253/#254 and 2-6; owner OK |
-| 8 | C7 conflict flag in main-health | medium | ~150 | after #251/#254 (src/github) |
+| 8 | C7 conflict flag in main-health | medium | ~150 | after #251/#254 (src/github), 6 (spec) |
 | 9 | C7 approval carry-over | medium-high | ~300 | after 6; owner signs off the rule |
 | 10 | C6 cli/mod.rs Args split | low-medium | mechanical | last, optional |
 
-The PRs of this plan follow the rule they introduce: their touch lists are disjoint unless
-chained by `depends`.
+The PRs of this plan follow the rule they introduce: their touch lists (whole files, the spec
+included) are disjoint unless chained by `depends`. The spec edits of 2, 3, 4, 6 and 8 form one
+chain until 7 splits the spec.
