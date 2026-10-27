@@ -1,11 +1,13 @@
 //! Front-loaded human prerequisites (docs/prerequisites.md): the `## Prerequisites` section of a
-//! plan, the tasks each prerequisite blocks, and the owner checklist (an issue body and a short
-//! chat message). Pure.
+//! plan, the tasks each prerequisite blocks, the approvals a plan will need at merge (an estimate
+//! from touch paths), and the owner checklist (an issue body and a short chat message). Pure.
 
+use crate::core::glob::Glob;
 use crate::core::plan::{Plan, PlanError};
+use crate::core::risk::{APPROVAL_CODE_PATHS, Approval, CRITICAL_PATHS, CRITICAL_RULES, Rules};
 use crate::core::text::inert;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -299,6 +301,98 @@ pub struct ApprovalNeed {
     pub batch: usize,
 }
 
+/// Dependency level of `item/task`: 1 + the deepest task it depends on, directly or through
+/// the items its item depends on.
+fn level(key: &str, plan: &Plan, memo: &mut HashMap<String, usize>) -> usize {
+    if let Some(&l) = memo.get(key) {
+        return l;
+    }
+    // Guard: a cycle through item and task depends (plan::parse checks each graph alone) gets
+    // an arbitrary batch instead of looping.
+    memo.insert(key.into(), 1);
+    let (iid, tid) = key.split_once('/').unwrap_or((key, ""));
+    let mut deps: Vec<String> = vec![];
+    if let Some(it) = plan.items.iter().find(|i| i.id == iid) {
+        if let Some(t) = it.tasks.iter().find(|t| t.id == tid) {
+            deps.extend(t.depends.iter().cloned());
+        }
+        for d in it.depends.iter().filter(|d| *d != "seed") {
+            for x in plan.items.iter().filter(|x| x.id == *d) {
+                deps.extend(x.tasks.iter().map(|t| t.plan_id(d)));
+            }
+        }
+    }
+    let l = 1 + deps.iter().map(|d| level(d, plan, memo)).max().unwrap_or(0);
+    memo.insert(key.into(), l);
+    l
+}
+
+/// The tasks of a plan whose PR will need an approval, in plan order, in dependency batches.
+pub fn approvals(plan: &Plan, rules: &Rules, bosun_code: bool) -> Vec<ApprovalNeed> {
+    let glob = |g: &&str| Glob::parse(g).expect("built-in critical glob");
+    let mut floor: Vec<Glob> = CRITICAL_PATHS.iter().map(glob).collect();
+    if bosun_code {
+        floor.extend(APPROVAL_CODE_PATHS.iter().map(glob));
+    }
+    let (mut out, mut memo) = (Vec::new(), HashMap::new());
+    for it in &plan.items {
+        for t in &it.tasks {
+            // A touch glob bosun cannot read, or one leaving the repo, counts as owner.
+            let bad: Vec<String> = t
+                .touch
+                .iter()
+                .filter(|g| Glob::parse(g).is_err() || outside(g))
+                .map(|g| format!("unreadable touch: {g}"))
+                .collect();
+            let touch: Vec<Glob> = t.touch.iter().filter_map(|g| Glob::parse(g).ok()).collect();
+            let hits: Vec<_> = rules
+                .rules
+                .iter()
+                .filter(|r| touch.iter().any(|g| r.paths.iter().any(|p| g.overlaps(p))))
+                .collect();
+            let crit: Vec<String> = touch
+                .iter()
+                .filter(|g| floor.iter().any(|f| g.overlaps(f)))
+                .map(|g| format!("critical: {}", g.as_str()))
+                .collect();
+            let any = |a| hits.iter().any(|r| r.approval == a);
+            let (high, d) = (t.risk == "high", any(Approval::Delegate));
+            let tv = any(Approval::TwoVerdicts);
+            let critical_rule = hits.iter().any(|r| CRITICAL_RULES.contains(&r.id.as_str()));
+            // As risk-check: the floor only turns delegate matches into owner ones, and a task
+            // the plan marks `risk: high` is expected to need the owner whatever it touches.
+            let floor_hit = d && !crit.is_empty();
+            let owner = any(Approval::Owner) || (d && tv) || floor_hit || critical_rule;
+            let needs = if owner || high || !bad.is_empty() {
+                "owner"
+            } else if d {
+                "delegate"
+            } else {
+                continue;
+            };
+            let mut why: Vec<String> = hits.iter().map(|r| r.id.clone()).collect();
+            if floor_hit {
+                why.extend(crit);
+            }
+            why.extend(high.then(|| "risk: high".to_string()));
+            why.extend(bad);
+            let task = t.plan_id(&it.id);
+            let batch = level(&task, plan, &mut memo);
+            out.push(ApprovalNeed {
+                task,
+                needs: needs.into(),
+                why,
+                batch,
+            });
+        }
+    }
+    let levels: BTreeSet<usize> = out.iter().map(|a| a.batch).collect();
+    for a in &mut out {
+        a.batch = levels.iter().position(|l| *l == a.batch).unwrap_or(0) + 1;
+    }
+    out
+}
+
 /// The first 8 hex characters of the SHA-256 of an item's title, steps and verify: a tick counts
 /// only on a line whose `sum` matches the plan's item now.
 pub fn digest(title: &str, steps: &str, verify: &str) -> String {
@@ -462,6 +556,71 @@ pub fn read_issue(body: &str) -> Vec<Tick> {
         });
     }
     out
+}
+
+/// The short checklist text for the owner's chat. Plan text is shown inert, so a title cannot
+/// fake a line, a link or a mention.
+pub fn message(
+    plan_title: &str,
+    items: &[CheckItem],
+    approvals: &[ApprovalNeed],
+    issue_url: Option<&str>,
+) -> String {
+    let mut open: Vec<&CheckItem> = items.iter().filter(|i| !i.done).collect();
+    open.sort_by_key(|i| u8::from(i.on != "computer"));
+    let computer = open.iter().filter(|i| i.on == "computer").count();
+    let plural =
+        |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+    let mut lines = vec![if open.is_empty() {
+        format!("{}: nothing for you to prepare.", inert(plan_title, 60))
+    } else {
+        let steps = plural(open.len(), "step", "steps");
+        let title = inert(plan_title, 60);
+        format!("{title}: {steps} before agents can finish ({computer} on a computer).")
+    }];
+    for i in open.iter().take(15) {
+        let (id, on, who) = (&i.id, &i.on, by(i));
+        lines.push(format!(
+            "- {id} ({on}){who}: {}: {}",
+            inert(&i.title, 60),
+            inert(&i.steps, 80)
+        ));
+    }
+    if open.len() > 15 {
+        lines.push(format!(
+            "- \u{2026} and {} more (see the issue)",
+            open.len() - 15
+        ));
+    }
+    if !approvals.is_empty() {
+        let batches = approvals
+            .iter()
+            .map(|a| a.batch)
+            .collect::<BTreeSet<_>>()
+            .len();
+        let owner: Vec<_> = approvals
+            .iter()
+            .filter(|a| a.needs == "owner")
+            .map(|a| a.task.as_str())
+            .collect();
+        let mut parts = Vec::new();
+        if !owner.is_empty() {
+            let shown = owner.iter().take(8).copied().collect::<Vec<_>>().join(", ");
+            let more = if owner.len() > 8 { ", \u{2026}" } else { "" };
+            parts.push(format!(
+                "{} need you: {shown}{more}",
+                plural(owner.len(), "PR", "PRs")
+            ));
+        }
+        let delegate = approvals.len() - owner.len();
+        if delegate > 0 {
+            parts.push(format!("{delegate} by a delegate"));
+        }
+        let batches = plural(batches, "approval batch", "approval batches");
+        lines.push(format!("Later: {batches} ({}).", parts.join("; ")));
+    }
+    lines.extend(issue_url.map(|u| format!("Tick them off here: {u}")));
+    lines.join("\n")
 }
 
 /// Whether the owner's tick counts for this item: exactly one box with its id, ticked, on a line

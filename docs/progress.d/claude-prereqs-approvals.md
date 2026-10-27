@@ -1,0 +1,1 @@
+- 2026-10-27 · Q1c · core::prereqs: approvals at merge in batches and the chat message · PR (claude/prereqs-approvals)
