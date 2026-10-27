@@ -98,9 +98,10 @@ fn post_creates_one_issue_and_updates_it_from_the_ticks() {
     assert_eq!(i.title, "Owner checklist: Plan: Ship it");
     assert_eq!(fake.labels_of(1), ["bosun:prereqs"]);
     assert!(i.body.starts_with("<!-- bosun:prereqs plans/x.md -->\n"));
+    let h1 = digest("npm token", "add it", "secret release/NPM_TOKEN");
     assert!(
         i.body
-            .contains("<!-- bosun:prereq H1 blocks=M1/T2 verify=api -->")
+            .contains(&format!("<!-- bosun:prereq H1 sum={h1} state=api -->"))
     );
     // A tick finishes an owner item, not an item the API reports missing.
     tick(&fake, "H1");
@@ -130,12 +131,8 @@ fn a_403_falls_back_to_the_tick() {
     fake.fail_path("secrets/NPM_TOKEN", 403);
     let (code, v) = go(&fake, tmp.path(), &["--no-setup", "--post"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(item(&v, "H1")["api"], false);
-    assert!(
-        fake.issue_state(1)
-            .body
-            .contains("blocks=M1/T2 verify=owner -->")
-    );
+    assert_eq!(item(&v, "H1")["state"], "api 403");
+    assert!(fake.issue_state(1).body.contains(" state=api 403 -->"));
     tick(&fake, "H1");
     let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
     assert_eq!(item(&v, "H1")["done"], true);
@@ -158,6 +155,10 @@ fn ticks_count_for_owner_items_only() {
     let done = |id| item(&v, id)["done"].as_bool();
     assert_eq!((done("H2"), done("H1")), (Some(true), Some(false)));
     assert_eq!(v["data"]["plans"][0]["issue"]["number"], 7);
+    // A tick on a line whose sum is stale (the plan changed the steps) does not count.
+    fake.state.lock().unwrap().issues[0].body = body.replace(&h2, "00000000");
+    let (_, v) = go(&fake, tmp.path(), &["--no-setup"]);
+    assert_eq!(item(&v, "H2")["done"], false);
 }
 
 #[test]
