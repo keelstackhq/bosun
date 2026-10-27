@@ -756,11 +756,15 @@ fn intake_added(imp: &Importer, wanted: &[&str]) -> Result<HashMap<String, (u64,
             };
             let after = full.merge_commit_sha.as_deref().unwrap_or(&full.head_sha);
             // What this PR added is the change from the merge commit's first parent, not from the
-            // PR's base: other PRs may have reached the branch in between.
-            let parent = imp
-                .gh
-                .first_parent(after)?
-                .unwrap_or_else(|| full.base_sha.clone());
+            // PR's base: other PRs may have reached the branch in between. An unknown merge commit
+            // tells nothing, so the intake is not trusted.
+            let Some(parent) = imp.gh.first_parent(after)? else {
+                eprintln!(
+                    "plan: GitHub does not know PR #{}'s merge commit {after}; intake #{} is not trusted",
+                    p.number, intake.number
+                );
+                continue;
+            };
             let before = ids(imp.gh.file_at(&imp.plan_path, &parent)?);
             let now = ids(imp.gh.file_at(&imp.plan_path, after)?);
             let (Some(before), Some(now)) = (before, now) else {

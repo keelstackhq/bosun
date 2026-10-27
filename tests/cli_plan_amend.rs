@@ -310,7 +310,9 @@ fn intake_env(mode: &str) -> (tempfile::TempDir, FakeGithub, String) {
             let after = if mode == "not-added" { PLAN } else { &with_m3 };
             fake.content("plan.md", "merge60", after);
             fake.content("plan.md", "main", &with_m3);
-            fake.first_parent("merge60", "base0000");
+            if mode != "no-parent" {
+                fake.first_parent("merge60", "base0000");
+            }
         }
         fake.close_issue(intake, T0);
     }
@@ -498,6 +500,15 @@ fn the_scan_stops_once_every_new_item_has_an_owner() {
 #[test]
 fn a_linked_pr_closed_without_merging_promotes_nothing() {
     let (tmp, fake, file) = intake_env("unmerged");
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["promoted"], serde_json::json!([]));
+}
+
+#[test]
+fn an_unknown_merge_parent_promotes_nothing() {
+    // GitHub does not know the merge commit: what the PR added cannot be told, so trust nothing.
+    let (tmp, fake, file) = intake_env("no-parent");
     let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]));
