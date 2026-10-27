@@ -73,7 +73,9 @@ pub fn readiness(statuses: &[Stat], runs: &[Run]) -> Readiness {
     let risk = status(statuses, "risk-check");
     // A run in flight or one that could not finish holds the PR: the owner board shows it.
     if risk.is_some_and(|s| matches!(s.state.as_str(), "pending" | "error")) {
-        return Readiness::Waiting("risk-check pending or errored: re-run the risk workflow");
+        return Readiness::Waiting(
+            "risk-check pending or errored: re-run the risk workflow if it stays",
+        );
     }
     let waiting =
         risk.filter(|s| s.state == "failure" && s.description.starts_with(WAITING_PREFIX));
@@ -481,7 +483,9 @@ mod tests {
             let s = [st("risk-check", state, "risk-check is judging this head")];
             assert_eq!(
                 readiness(&s, &[]),
-                Readiness::Waiting("risk-check pending or errored: re-run the risk workflow"),
+                Readiness::Waiting(
+                    "risk-check pending or errored: re-run the risk workflow if it stays"
+                ),
                 "{state}"
             );
         }

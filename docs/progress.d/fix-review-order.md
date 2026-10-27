@@ -1,0 +1,1 @@
+- 2026-10-27 · parallel-conflicts/P9d · decisive reviews ordered by submitted_at, more carry tests (revoked key, owner rules) · PR (feat/review-order)

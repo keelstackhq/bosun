@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use super::risk_check::{Found, decisive_review, delegation_blocked, verdict_inputs, withdrawn};
+use super::risk_check::{
+    Found, decisive_review, delegation_blocked, submitted, verdict_inputs, withdrawn,
+};
 use super::verdict::CONTEXT;
 use crate::core::approve::TRUST_FILES;
 use crate::core::carry::{self, CarryFacts, Entry, FileChange, Hop, Kind, RawTree, Refusal};
@@ -303,18 +305,18 @@ pub(crate) fn carry_approval(
         let Some(approval) = approval else {
             continue;
         };
-        // An owner whose newest decisive review on any commit (by id) withdraws, even one off the
-        // path (a force-pushed-away head), refuses; a later approval of h clears an older one.
+        // An owner whose newest decisive review on any commit (by `submitted_at`) withdraws, even one
+        // off the path (a force-pushed-away head), refuses; a later approval clears an older one. A
+        // decisive review without a usable time makes the order unknown: refuse.
         let anywhere = owners.iter().any(|o| {
-            let decisive = |r: &&Review| {
-                r.user.eq_ignore_ascii_case(o)
-                    && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains(&r.state.as_str())
-            };
-            reviews
-                .iter()
-                .rev()
-                .find(decisive)
-                .is_some_and(|r| withdrawn(Some(&r.state)))
+            let decisive = (reviews.iter())
+                .filter(|r| r.user.eq_ignore_ascii_case(o))
+                .filter(|r| {
+                    ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains(&r.state.as_str())
+                });
+            let newest = decisive.clone().max_by_key(|r| (submitted(r), r.id));
+            decisive.clone().any(|r| submitted(r).is_none())
+                || newest.is_some_and(|r| withdrawn(Some(&r.state)))
         });
         if !anywhere && standing(&comments, &reviews, owners, &path, (&h, approval)) {
             let counted = found.counted().unwrap_or_default().to_vec();
