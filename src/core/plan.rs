@@ -444,6 +444,11 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
             if t.touch.is_empty() {
                 bad!(errs, l; "add an indented `touch: path, path` line" => "{me} has no `touch:` paths");
             }
+            for g in &t.touch {
+                if let Err(m) = super::glob::Glob::parse(g) {
+                    bad!(errs, l; "use repo-relative globs with * ? ** only, such as src/core/**" => "{me} {m}");
+                }
+            }
             if let (true, Some(s @ 101..)) = (t.risk == "high", t.size) {
                 bad!(warns, l; "split the task or expect an owner review" => "{me} is risk high with size {s}, over 100");
             }
@@ -551,17 +556,18 @@ fn touch_warnings(items: &[Item], warns: &mut Vec<PlanError>) {
         .iter()
         .map(|i| (i.id.clone(), i.depends.clone()))
         .collect();
-    let overlaps = touch::parallel_overlaps(&tasks, &item_deps);
-    for o in overlaps.iter().take(MAX_OVERLAPS) {
+    let overlaps = touch::parallel_overlaps(&tasks, &item_deps, MAX_OVERLAPS);
+    for o in &overlaps.pairs {
         let l = line[&o.a].max(line[&o.b]);
         bad!(warns, l; format!("add \"depends: {}\" to {}, or give the file to one task", o.a, o.b)
             => "{} and {} touch overlapping paths ({} ~ {}) with no depends between them",
             o.a, o.b, o.glob_a, o.glob_b);
     }
-    if overlaps.len() > MAX_OVERLAPS {
-        let n = overlaps.len() - MAX_OVERLAPS;
+    if overlaps.more > 0 {
+        let n = overlaps.more;
+        let at_least = if overlaps.capped { "at least " } else { "" };
         bad!(warns, usize::MAX; "chain the tasks with depends or give shared files to one task, then check again"
-            => "{n} more overlapping pair{}", if n == 1 { "" } else { "s" });
+            => "{at_least}{n} more overlapping pair{}", if n == 1 { "" } else { "s" });
     }
     for h in touch::hotspots(&tasks, &item_deps, 3) {
         let (l, n) = (line[&h.tasks[0]], h.globs.len());

@@ -92,3 +92,34 @@ fn overlap_warnings_are_capped_at_twenty() {
         ["1 more overlapping pair"]
     );
 }
+
+#[test]
+fn a_huge_plan_stops_the_scan_and_says_so() {
+    let tasks: String = (1..=300)
+        .map(|k| format!("- T{k}: Task\n  touch: src/**\n"))
+        .collect();
+    let t = std::time::Instant::now();
+    let m = warned(&one_item(&tasks), "more overlapping pair");
+    assert_eq!(m, ["at least 980 more overlapping pairs"]);
+    assert!(t.elapsed().as_secs_f32() < 1.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn an_invalid_touch_glob_is_a_plan_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = one_item("- T1: Task\n  touch: src/[ab].rs\n");
+    std::fs::write(dir.path().join("plan.md"), text).unwrap();
+    let d = dir.path().to_str().unwrap();
+    let out = common::bosun()
+        .args(["-C", d, "plan", "check", "plan.md"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v = common::one_object(&out.stdout).to_string();
+    assert!(v.contains("src/[ab].rs"), "{v}");
+    assert!(v.contains("\"line\":9"), "{v}");
+    assert!(
+        v.contains("use repo-relative globs with * ? ** only, such as src/core/**"),
+        "{v}"
+    );
+}
