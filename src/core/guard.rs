@@ -943,7 +943,7 @@ const READERS: &[&str] = &[
 ];
 #[rustfmt::skip]
 const ENV_READS: &[&str] = &["environ", "process.env", "ENV[", "ENV.", "ENV{", "ENVIRON[", "getenv",
-    "Deno.env", ").env", "$_ENV", "$_SERVER"];
+    "Deno.env", "Bun.env", "%ENV", ").env", "$_ENV", "$_SERVER"];
 const INTERPS: &[&str] = &["python", "python3", "perl", "ruby", "node", "deno", "php"];
 const FILE_TOOLS: &[&str] = &[
     "mv", "cp", "install", "chmod", "chown", "ln", "mkdir", "rmdir", "rm", "touch", "tar", "unzip",
@@ -964,6 +964,31 @@ const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox", "python", "python3", "perl", "ruby",
     "node", "deno", "php", "source", "xargs", "eval",
 ];
+
+/// The files that `> f`, `>> f` and `tee f` write in these words.
+fn write_targets(w: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, x) in w.iter().enumerate() {
+        let r = x.trim_start_matches('>');
+        #[rustfmt::skip]
+        let t = if x.starts_with('>') { if r.is_empty() { w.get(i + 1).map(String::as_str) } else { Some(r) } }
+            else if x == "tee" { w[i + 1..].iter().map(String::as_str).find(|a| !a.starts_with('-')) } else { None };
+        out.extend(t.map(str::to_string));
+    }
+    out
+}
+
+/// An age secret key line (or its tail) named in a word, in any case.
+fn keyline(w: &str) -> bool {
+    let w = w.to_lowercase();
+    w.contains("age-secret") || w.contains("secret-key-1")
+}
+
+/// A redirect word: `>`, `>>`, `2>`, `&>`, `<`, `2>&1`, `>file`.
+fn redirect(a: &str) -> bool {
+    a.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&')
+        .starts_with(['>', '<'])
+}
 
 fn procenv(w: &str) -> bool {
     w.contains("/proc/") && w.contains("env")
@@ -1063,7 +1088,11 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
     }
     let (named, mentions) = (low.contains("sops"), mentions_secrets(text));
     let words = shell_words(text);
+    let mut hits = if wrote { targets } else { Vec::new() };
     for segment in words.split(|w| w == SEP) {
+        if mentions_secrets(&segment.join(" ")) {
+            hits.extend(write_targets(segment));
+        }
         let mut rest: Vec<&str> = segment.iter().map(String::as_str).collect();
         while rest.first().is_some_and(|w| assigned(w).is_some()) {
             rest.remove(0);
@@ -1081,7 +1110,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         let name = base(first);
         let args = &rest[1..];
         #[rustfmt::skip]
-        let da = &args[..args.iter().position(|a| a.starts_with(['>', '<'])).unwrap_or(args.len())];
+        let da = &args[..args.iter().position(|a| redirect(a)).unwrap_or(args.len())];
         let dump = match name.as_str() {
             "printenv" => da.is_empty() || named,
             "compgen" => da.iter().any(|a| matches!(*a, "-e" | "-v")),
@@ -1149,10 +1178,25 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         if READERS.contains(&name.as_str()) {
             let env = |w: &&str| procenv(w);
             #[rustfmt::skip]
-            let pos: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with('-')).collect();
+            let pos: Vec<&str> = da.iter().copied().filter(|a| !a.starts_with('-')).collect();
             #[rustfmt::skip]
             let pat_flag = args.iter().any(|a| matches!(*a, "-e" | "-f") || a.starts_with("--file"));
             let search = matches!(name.as_str(), "grep" | "rg" | "ag") && !pat_flag;
+            // A search pattern naming the key marker is data, unless it searches home or `.config`.
+            let home = |a: &&str| {
+                a.starts_with(['~', '/']) || a.contains("$HOME") || a.contains(".config")
+            };
+            let pat_ok = search && !pos.is_empty() && !pos[1..].iter().any(home);
+            if args
+                .iter()
+                .any(|a| keyline(a) && !(pat_ok && pos.first() == Some(a)))
+            {
+                return Some(decrypt_reason("an age secret key"));
+            }
+            let cfg = |a: &&str| a.contains(".config/") && a.contains(['*', '?', '[', ']']);
+            if matches!(name.as_str(), "cat" | "head" | "tail") && args.iter().any(cfg) {
+                return Some(decrypt_reason("a glob in .config"));
+            }
             if args.iter().any(env)
                 && !(search && pos.first().is_some_and(env) && !pos[1..].iter().any(env))
             {
@@ -1207,10 +1251,13 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             } else {
                 w
             };
+            if keyline(w) {
+                return Some(decrypt_reason("an age secret key"));
+            }
             if !safe && !(api && !w.starts_with('-')) && t.contains("SOPS_AGE_KEY") {
                 return Some(decrypt_reason("the age key"));
             }
-            if w.contains(".config/") && w.contains(['*', '?', '[']) {
+            if w.contains(".config/") && w.contains(['*', '?', '[', ']']) {
                 return Some(decrypt_reason("a glob in .config"));
             }
             let value = w.split_once('=').map(|(_, v)| v);
@@ -1231,21 +1278,20 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             }
             let (n, after) = (base(rest[i]), &rest[i + 1..]);
             let tgt = |a: &str| {
-                targets
-                    .iter()
+                hits.iter()
                     .any(|t| t.trim_start_matches("./") == a.trim_start_matches("./"))
             };
             #[rustfmt::skip]
             let refused = match n.as_str() {
-                "sops" => !sops_ok(after),
-                "age" | "rage" => !age_ok(after),
+                "sops" => !sops_ok(&after[..after.iter().position(|a| redirect(a)).unwrap_or(after.len())]),
+                "age" | "rage" => !age_ok(&after[..after.iter().position(|a| redirect(a)).unwrap_or(after.len())]),
                 "hoist" => after.iter().position(|a| *a == "secrets").is_some_and(|p| after[p + 1..].iter().take_while(|a| **a != "--" && **a != "exec").any(|a| HOIST_SECRETS.contains(a))),
                 "alias" => after.iter().filter_map(|a| a.split_once('=')).any(|(_, v)| matches!(base(v.split(' ').next().unwrap_or("")).as_str(), "sops" | "age" | "rage")),
                 "awk" | "gawk" | "mawk" => after.iter().any(|a| a.contains("ENVIRON")),
-                "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t.starts_with("env."))),
+                "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t == "env" || t.starts_with("env."))),
                 n if INTERPS.contains(&n) && after.iter().any(|a| ENV_READS.iter().any(|e| a.contains(e) && (*e != "environ" || runs_code(n, after)))) => true,
-                _ if wrote && i == 0 && tgt(rest[0]) => true,
-                n if wrote && (SHELLS.contains(&n) || n == ".") => after.iter().any(|a| tgt(a)),
+                _ if i == 0 && tgt(rest[0]) => true,
+                n if (SHELLS.contains(&n) || n == ".") && after.iter().any(|a| tgt(a)) => true,
                 n if SHELLS.contains(&n) && mentions => {
                     let interp = INTERPS.contains(&n);
                     let code = runs_code(n, after);
@@ -1310,25 +1356,7 @@ fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
                 && let Some(end) = spec[1..].find(q)
             {
                 skip = Some((spec[1..=end].to_string(), dash));
-                let w = shell_words(line);
-                for (i, x) in w.iter().enumerate() {
-                    let r = x.trim_start_matches('>');
-                    let t = if x.starts_with('>') {
-                        if r.is_empty() {
-                            w.get(i + 1).map(String::as_str)
-                        } else {
-                            Some(r)
-                        }
-                    } else if x == "tee" {
-                        w[i + 1..]
-                            .iter()
-                            .map(String::as_str)
-                            .find(|a| !a.starts_with('-'))
-                    } else {
-                        None
-                    };
-                    targets.extend(t.map(str::to_string));
-                }
+                targets.extend(write_targets(&shell_words(line)));
             }
         }
     }
@@ -2299,6 +2327,22 @@ mod tests {
         ("git --git-dir=.git grep --open-files-in-pager=sops x", true),
         ("git -C . grep SOPS_AGE_KEY", false), ("git --no-pager grep -n sops docs/", false),
         ("git -C . log --grep sops --oneline", false),
+        ("grep -r AGE-SECRET-KEY ~/.config", true), ("grep -r SECRET-KEY-1 ~", true),
+        ("rg -uu AGE-SECRET ~", true), ("cat ~/.config/sop[s]/age/key[s].txt", true),
+        ("printf 'sops -d f\\n' > /tmp/x.sh; bash /tmp/x.sh", true),
+        ("echo 'sops -d f' > x.sh; . x.sh", true),
+        ("echo 'sops -d f' > x.sh && chmod +x x.sh && ./x.sh", true),
+        ("perl -e 'print %ENV'", true), ("node -e 'Bun.env'", true), ("jq -n env", true),
+        ("jq -n 'env'", true), ("git commit -m \"docs: AGE-SECRET-KEY lines are R-secrets\"", false),
+        ("git commit -m \"$(cat <<'EOF'\nAGE-SECRET-KEY lines\nEOF\n)\"", false),
+        ("cargo test age_secret", false), ("echo hi > out.txt; cat out.txt", false),
+        ("cargo test > log.txt; bash scripts/check.sh", false), ("jq '.env' f", false),
+        ("jq -r .env.name file", false),
+        ("grep -rn AGE-SECRET-KEY src/", false), ("rg 'SECRET-KEY-1' .bosun/risk.toml", false),
+        ("echo AGE-SECRET-KEY", true), ("sops --version 2>&1 | head -1", false),
+        ("sops --version > /dev/null", false), ("age --version 2>/dev/null", false),
+        ("sops --version > v.txt && cat v.txt", false), ("sops -d f > out.yaml", true),
+        ("sops f 2>/dev/null", true),
     ];
 
     #[test]
