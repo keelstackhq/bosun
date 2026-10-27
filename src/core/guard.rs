@@ -1196,30 +1196,38 @@ fn lexical(path: &str) -> String {
 
 /// How much of the age key directory a search root contains: 2 for `.config` or an ancestor
 /// of `.config/sops` inside it (`~/.config`, `$XDG_CONFIG_HOME`), or a pure `..` chain above
-/// an unknown place (`..`, `$PWD/..`); 1 for home or above it (`~`, `~user`, `/root`,
-/// `/home/<user>`, `/home`, `/`, `../bob`); 0 for anything else (`~/projects/x`, `../x/src`).
+/// an unknown place (`..`, `$PWD/..`) or a glob there (`/*`, `../*`); 1 for home or above it
+/// (`~`, `~user`, `/root`, `/home/<user>`, `/home`, `/`, `../bob`, `../home/bob`); 0 for
+/// anything else (`~/projects/x`, `../x/src`).
 fn key_root(word: &str) -> u8 {
     let n = lexical(word.trim_matches(|c| c == '"' || c == '\''));
     let word = n.as_str();
     let t = word.trim_end_matches('/');
     // A `..` left after `lexical` climbs from an unknown place: what follows the last one is
-    // judged as under an unknown home (`..` alone is above it, `../bob` may be a home).
+    // judged as under `/` and as under a home (`..` alone is above it, `../bob` may be a home).
     let segs: Vec<&str> = t.split('/').collect();
     if let Some(i) = segs.iter().rposition(|s| *s == "..") {
         let tail = &segs[i + 1..];
-        return match tail.len() {
-            0 => 2,
-            _ if tail
-                .iter()
-                .any(|s| matches!(*s, ".config" | "sops" | "age")) =>
-            {
-                2
-            }
-            1 => 1,
-            _ => 0,
+        #[rustfmt::skip]
+        let key = tail.iter().any(|s| matches!(*s, ".config" | "sops" | "age") || s.contains(['*', '?', '[']));
+        let j = tail.join("/");
+        let as_root = key_root(&format!("/{j}")).max(key_root(&format!("~/{j}")));
+        return if tail.is_empty() || key {
+            2
+        } else {
+            as_root.max(u8::from(tail.len() == 1))
         };
     }
     let odd = t.contains(['*', '?', '[']);
+    // A glob in a segment of home or above it may match the key directory (`/*`, `/r*`).
+    if let Some(g) = t.find(['*', '?', '[']) {
+        let dir = t[..g]
+            .rfind('/')
+            .map_or("", |i| if i == 0 { "/" } else { &t[..i] });
+        if !dir.is_empty() && key_root(dir) == 1 {
+            return 2;
+        }
+    }
     let under = |r: &str, own: &str| {
         r == own
             || r.strip_prefix(own)
@@ -2872,6 +2880,11 @@ mod tests {
         ("git --work-tree=/root grep --no-index x", true), ("git -C src grep --no-index x", false),
         ("ug -r x ~", true), ("pcregrep -r x ~/.config", true), ("pcre2grep -r x ~", true),
         ("ug --pager='sops -d f' x f", true), ("pcregrep x f.txt", false), ("ug x src", false),
+        ("grep -r x ../home/bob", true), ("grep -r x ../../home/bob", true),
+        ("rg -uu x ../../../home/user", true), ("grep -r x ../*/*", true),
+        ("grep -r x ../../*/*", true), ("rg TODO ../bosun", false), ("rg x ../.claude", false),
+        ("grep -r x /*", true), ("grep -r x /r*", true), ("grep -r x /ro?t", true),
+        ("grep -r x /home/b*", true), ("grep -r x /tmp/*", false), ("grep -r x src/*", false),
     ];
 
     #[test]
@@ -2885,6 +2898,11 @@ mod tests {
             ("../x", 1),
             ("~/../bob", 1),
             ("../other/src", 0),
+            ("../home/bob", 1),
+            ("../root/.config", 2),
+            ("../*/*", 2),
+            ("/r*", 2),
+            ("/tmp/*", 0),
             ("../.config", 2),
             ("../a/sops", 2),
             ("$PWD/..", 2),
