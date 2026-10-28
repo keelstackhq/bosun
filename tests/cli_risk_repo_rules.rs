@@ -130,3 +130,37 @@ fn ordinary_code_is_normal_risk() {
     let (code, v) = check(&fake);
     assert_eq!(code, 0, "{v}");
 }
+
+/// Every file cargo deny reads (`deny.toml`, `.deny.toml`, the `deny.exceptions.toml` files,
+/// at any depth) is R-ci in the built-in rules, bosun's committed rules and the channel's.
+#[test]
+fn every_cargo_deny_file_is_r_ci() {
+    // bosun's committed file: CI swaps the base branch's `.bosun/` into the checkout.
+    let git = std::process::Command::new("git")
+        .args(["show", "HEAD:.bosun/risk.toml"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    let committed = String::from_utf8(git.stdout).unwrap();
+    let builtin = include_str!("../src/core/risk_default.toml").to_string();
+    let files = [
+        "deny.toml",
+        ".deny.toml",
+        "deny.exceptions.toml",
+        ".deny.exceptions.toml",
+    ];
+    for (name, text) in [("built-in", builtin), (".bosun/risk.toml", committed)] {
+        let rules = bosun::core::risk::Rules::parse(&text).unwrap();
+        let ci = rules.rules.iter().find(|r| r.id == "R-ci").unwrap();
+        for f in files
+            .iter()
+            .flat_map(|f| [f.to_string(), format!("crates/x/{f}")])
+        {
+            assert!(ci.paths.iter().any(|g| g.matches(&f)), "{name}: {f}");
+        }
+    }
+    let channel = include_str!("../channel/pieces/core/files/.bosun/risk.toml.jinja");
+    for f in files {
+        assert!(channel.contains(&format!("\"**/{f}\"")), "channel: {f}");
+    }
+}
