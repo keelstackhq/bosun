@@ -470,6 +470,48 @@ fn setup_scripts_read_the_rust_toolchain_file_and_pin_no_version() {
     }
 }
 
+/// The channel reaches `rustup` as root, so the setup scripts take only a toolchain name
+/// (`^[A-Za-z0-9][A-Za-z0-9._-]*$`) and treat anything else like a missing file.
+#[test]
+fn setup_scripts_reject_a_channel_that_is_not_a_toolchain_name() {
+    let files = variant(&["rust"], "");
+    let own =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
+            .unwrap();
+    for (name, script) in [
+        ("channel", file(&files, "docs/setup-script.sh")),
+        ("bosun", &own),
+    ] {
+        for (channel, accepted) in [
+            ("1.99.1", true),
+            ("stable", true),
+            ("1.0; rm -rf /", false),
+            ("-x", false),
+            ("a b", false),
+        ] {
+            let repo = tempfile::tempdir().unwrap();
+            fs::write(
+                repo.path().join("rust-toolchain.toml"),
+                format!("[toolchain]\nchannel = \"{channel}\"\n"),
+            )
+            .unwrap();
+            let (ok, out, err) = setup_rust_version(script, repo.path());
+            if accepted {
+                assert!(ok, "{name} {channel:?}: {err}");
+                assert_eq!(out, format!("{channel}\n"), "{name} {channel:?}");
+            } else {
+                assert!(!ok, "{name} {channel:?} passed: {out}");
+                assert!(out.is_empty(), "{name} {channel:?}: {out}");
+                assert!(err.contains("invalid channel"), "{name} {channel:?}: {err}");
+                assert!(
+                    err.contains("skipping the Rust toolchain install"),
+                    "{name} {channel:?}: {err}"
+                );
+            }
+        }
+    }
+}
+
 /// The required check's job: `ci-ok`, or `bosun-ok` beside the repo's own ci.
 fn check_name(own_ci: &str) -> &'static str {
     if own_ci.is_empty() {
