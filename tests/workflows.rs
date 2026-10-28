@@ -950,3 +950,91 @@ fn the_gates_use_the_bases_config() {
         "1.2.3\n"
     );
 }
+
+/// The events of a workflow's `on:` block: its keys indented by exactly two spaces.
+fn events(yaml: &str) -> Vec<String> {
+    let start = yaml.find("\non:\n").expect("an on: block") + "\non:\n".len();
+    yaml[start..]
+        .lines()
+        .take_while(|l| l.is_empty() || l.starts_with(' ') || l.starts_with('#'))
+        .filter(|l| l.starts_with("  ") && !l.starts_with("   "))
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter_map(|l| l.trim().split(':').next().map(str::to_string))
+        .collect()
+}
+
+/// Every workflow of bosun and of the channel: (path, text).
+fn all_workflows() -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut dirs = vec![root.join(".github/workflows")];
+    for piece in fs::read_dir(root.join("channel/pieces")).unwrap() {
+        let wf = piece.unwrap().path().join("files/.github/workflows");
+        if wf.is_dir() {
+            dirs.push(wf);
+        }
+    }
+    let mut out = Vec::new();
+    for dir in dirs {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            out.push((
+                path.display().to_string(),
+                fs::read_to_string(&path).unwrap(),
+            ));
+        }
+    }
+    assert!(out.len() >= 10, "{out:?}");
+    out
+}
+
+/// `pull_request_review` and `pull_request_review_comment` run the PR's own copy of the file
+/// with the repo's token and secrets, so a PR author could rewrite the job and post any status
+/// (spec §8). `workflow_run` runs the default branch's file: it must never check out PR code.
+#[test]
+fn no_workflow_runs_a_pr_copy_on_review_events() {
+    for (path, yaml) in all_workflows() {
+        let on = events(&yaml);
+        assert!(!on.is_empty(), "{path}: no events");
+        for bad in ["pull_request_review", "pull_request_review_comment"] {
+            assert!(!on.iter().any(|e| e == bad), "{path} runs on {bad}");
+        }
+        if on.iter().any(|e| e == "workflow_run") {
+            for l in yaml.lines().filter(|l| l.trim_start().starts_with("ref:")) {
+                for head in [
+                    "workflow_run",
+                    "head_sha",
+                    "head_branch",
+                    "head.",
+                    "refs/pull",
+                ] {
+                    assert!(!l.contains(head), "{path} checks out PR code: {l}");
+                }
+            }
+        }
+    }
+}
+
+/// `/bosun recheck` re-judges a PR without a push (an owner's GitHub review is read on the next
+/// run): it runs the job and shares the judge's concurrency group, as `/bosun approve` does.
+#[test]
+fn risk_rechecks_on_a_bosun_recheck_comment() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/risk.yml");
+    let yaml = fs::read_to_string(path).unwrap();
+    let recheck = "contains(github.event.comment.body, '/bosun recheck')";
+    let job_if = block_of(&yaml, "    if: >-", "    runs-on:");
+    assert!(job_if.contains(recheck), "{job_if}");
+    let group = block_of(&yaml, "\nconcurrency:", "\npermissions:");
+    assert!(group.contains(&format!("!{recheck}")), "{group}");
+    assert_eq!(
+        events(&yaml),
+        ["pull_request_target", "issue_comment"],
+        "risk.yml events"
+    );
+}
+
+/// The text from `start` up to `end` (exclusive).
+fn block_of<'a>(yaml: &'a str, start: &str, end: &str) -> &'a str {
+    let i = yaml.find(start).unwrap_or_else(|| panic!("no {start:?}"));
+    let j = yaml[i..].find(end).unwrap_or_else(|| panic!("no {end:?}")) + i;
+    &yaml[i..j]
+}

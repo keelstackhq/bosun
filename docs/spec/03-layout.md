@@ -43,9 +43,12 @@ The channel's workflows run the release pinned in `.bosun/version` from npm, nev
 from the change: bosun.yml reads the pin of the PR's base commit (the setup PR, whose base has no
 pin yet, uses its own and says so in a warning); risk.yml and verdict.yml read it from the base
 or the default branch and never check out PR code. main-health's weekly run calls bosun.yml
-(`workflow_call`), so it runs `bosun gate <name> --all` for any stack. Consumers inherit the
-residual of PROGRESS Blocked item 5: a same-repo PR can add a workflow that posts a forged
-status; such a PR is R-ci and needs the owner.
+(`workflow_call`), so it runs `bosun gate <name> --all` for any stack. No channel workflow runs
+on a review event (those run the PR's copy of the file). Consumers inherit the open residual of
+spec §8 and PROGRESS Blocked item 5: a same-repo PR can add or edit an `on: pull_request`
+workflow (bosun.yml, the repo's ci.yml or a new file) that posts a forged `risk-check` status,
+and the R-ci class does not stop it, since the owner gate is that status. B2 (a check run from a
+dedicated GitHub App, pinned in the ruleset) closes it.
 
 The channel never needs a file another template owns (a hull template owns ci.yml, CLAUDE.md
 and .claude/settings.json): its gates run in `.github/workflows/bosun.yml`, whose aggregate job is

@@ -204,6 +204,9 @@ fn owner_approval_counts_only_on_the_head_sha() {
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
     assert_eq!(last_status(&fake)["state"], "failure");
+    // No review event runs the risk workflow: a review counts on the next run.
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("then comment `/bosun recheck`"), "{fix}");
 
     fake.review(1, "mallory", "APPROVED", HEAD);
     let (code, _) = check(&fake);
