@@ -888,6 +888,14 @@ fn the_gates_use_the_bases_config() {
         "crates/x/deny.toml",
         "[advisories]\nignore = [\"RUSTSEC-0000-0000\"]\n",
     );
+    // cargo deny also reads `.deny.toml` and the `deny.exceptions.toml` files.
+    for f in [
+        ".deny.toml",
+        "deny.exceptions.toml",
+        "crates/x/.deny.exceptions.toml",
+    ] {
+        w(f, "[[exceptions]]\nallow = [\"GPL-3.0\"]\n");
+    }
     w(".npmrc", "node-options=--require ./evil.js\n");
     w(
         ".pnpmfile.cjs",
@@ -934,6 +942,13 @@ fn the_gates_use_the_bases_config() {
         !d.join("crates/x/deny.toml").exists(),
         "a PR-only deny.toml is gone"
     );
+    for f in [
+        ".deny.toml",
+        "deny.exceptions.toml",
+        "crates/x/.deny.exceptions.toml",
+    ] {
+        assert!(!d.join(f).exists(), "a PR-only {f} is gone");
+    }
     assert!(!d.join(".npmrc").exists(), "the PR's .npmrc is gone");
     assert!(
         !d.join(".pnpmfile.cjs").exists(),
