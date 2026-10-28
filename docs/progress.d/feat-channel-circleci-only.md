@@ -1,1 +1,1 @@
-- 2026-10-28 · BO-3a (2/2) channel piece `circleci-only` · hull's shared CircleCI files without own_ci (vendored from hull 58c488b, MANIFEST test; re-vendor at the next hull tag), main-health on `status` in circleci-only mode · PR (feat/channel-circleci-only)
+- 2026-10-28 · BO-3a (2/2) channel piece `circleci-only` · hull's shared CircleCI files without own_ci (vendored from hull 58c488b, MANIFEST test; re-vendor at the next hull tag), main-health on `status` for main's head in circleci-only mode, min_splice 0.3.0 · PR (feat/channel-circleci-only)

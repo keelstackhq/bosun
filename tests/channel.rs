@@ -42,8 +42,8 @@ fn manifest_names_the_bosun_channel_with_core_as_base() {
     assert_eq!(m["format"].as_integer(), Some(1));
     assert_eq!(m["name"].as_str(), Some("bosun"));
     assert_eq!(m["base"].as_str(), Some("core"));
-    // Sections and raw blocks need splice 0.2.0 (template format §9.23, §9.26).
-    assert_eq!(m["min_splice"].as_str(), Some("0.2.0"));
+    // circleci-only removes bosun.yml: an empty re-render deletes an owned file (rule 9.27).
+    assert_eq!(m["min_splice"].as_str(), Some("0.3.0"));
     let vars = m["vars"].as_table().unwrap();
     for v in [
         "project",

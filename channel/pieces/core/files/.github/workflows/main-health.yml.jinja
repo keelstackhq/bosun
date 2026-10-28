@@ -30,14 +30,18 @@ permissions:
 {% endif %}{% raw %}
 jobs:
 {% endraw %}{% if "circleci-only" in pieces %}{% raw %}  report:
-    # Only a terminal ci-ok or bosun-ok status from the CircleCI app on a commit that heads main
-    # (hull's mirror filter); no runner starts for any other status.
+    # Only a terminal ci-ok or bosun-ok status from the CircleCI app (hull's mirror filter) for the
+    # default branch's head: for a status event github.sha is that head, while `branches` lists
+    # every branch that contains the commit. No runner starts for any other status.
     if: >-
       (github.event.context == 'ci/circleci: ci-ok' || github.event.context == 'ci/circleci: bosun-ok')
       && github.event.state != 'pending'
       && github.event.sender.login == 'circleci-app[bot]'
       && github.event.sender.type == 'Bot'
       && contains(github.event.branches.*.name, 'main')
+      && github.event.sha == github.sha
+    # One report at a time: the statuses of one commit arrive together.
+    concurrency: main-health
 {% endraw %}{% else %}{% raw %}  # The gates of bosun.yml on all of main, weekly (`bosun gate <name> --all`), whatever the stacks are.
   nightly:
     if: github.event_name != 'workflow_run'
@@ -98,7 +102,8 @@ jobs:
             echo "::warning::the pinned bosun has no main-health command yet; running the shell fallback"
           fi
 {% endraw %}{% if "circleci-only" in pieces %}{% raw %}      # The status is the result (error counts as failure). With own_ci both CircleCI checks judge
-      # main: green only when neither latest status on this commit is failure or error.
+      # main: green only when both latest statuses on this commit are success (pending or missing
+      # is neither green nor red).
       - name: the CircleCI status
         id: result
         env:
@@ -109,8 +114,9 @@ jobs:
           RESULT=failure
           if [ "$STATE" = success ]; then RESULT=success; fi
 {% endraw %}{% if own_ci %}          for c in "ci/circleci: ci-ok" "ci/circleci: bosun-ok"; do
+            [ "$RESULT" = failure ] && break
             s=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" --jq "[.statuses[] | select(.context == \"$c\")][0].state // \"\"")
-            if [ "$s" = failure ] || [ "$s" = error ]; then RESULT=failure; fi
+            case "$s" in success) ;; failure | error) RESULT=failure ;; *) RESULT=pending ;; esac
           done
 {% endif %}          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
 {% else %}{% if own_ci %}{% raw %}      # Two workflows judge main: green only when the latest push run on main of each is green.
@@ -134,7 +140,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           BOSUN_REPO: ${{ github.repository }}
           RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% if "circleci-only" in pieces %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% raw %}${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}{% endraw %}{% endif %}{% endif %}{% raw %}
-          RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          RUN_URL: ${{ github.event.target_url || github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
         run: ./target/release/bosun main-health --result "$RESULT" --run-url "$RUN_URL"
       # Fallback: open or close the main-red issue in shell.
       - if: steps.has.outputs.supported != 'true'
@@ -142,7 +148,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% if "circleci-only" in pieces %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% raw %}${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}{% endraw %}{% endif %}{% endif %}{% raw %}
-          RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          RUN_URL: ${{ github.event.target_url || github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
         run: |
           repo="$GITHUB_REPOSITORY"
           open=$(gh api "repos/$repo/issues?labels=bosun:main-red&state=open" --jq '.[0].number // empty')

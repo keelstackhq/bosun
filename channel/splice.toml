@@ -5,7 +5,7 @@
 # version to a consumer as one R-gov PR.
 format = 1
 name = "bosun"
-min_splice = "0.2.0"
+min_splice = "0.3.0"
 base = "core"
 
 [vars]

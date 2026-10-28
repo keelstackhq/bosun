@@ -136,13 +136,69 @@ fn circleci_only_drops_bosun_yml_and_main_health_follows_circleci_statuses() {
                 "github.event.context == 'ci/circleci: bosun-ok'",
                 "github.event.state != 'pending'",
                 "github.event.sender.login == 'circleci-app[bot]'",
-                "contains(github.event.branches.*.name, 'main')",
+                "github.event.sender.type == 'Bot'",
+                "github.event.sha == github.sha",
             ] {
                 assert!(cond.contains(want), "{cond}");
             }
             let both_checks = wf.contains("ci/circleci: bosun-ok\"");
             assert_eq!(both_checks, !own_ci.is_empty(), "{wf}");
+            assert_eq!(jobs["report"]["concurrency"], "main-health", "{wf}");
+            assert!(
+                wf.contains("RUN_URL: ${{ github.event.target_url || "),
+                "{wf}"
+            );
         }
+    }
+}
+
+/// main-health's result step in circleci-only mode with own_ci, with a fake `gh` that answers
+/// each context's latest state: green only when both are `success`.
+#[test]
+fn circleci_only_main_is_green_only_when_both_checks_succeeded() {
+    let only = mode(&["rust"], &["circleci", "circleci-only"], "1");
+    let Some(j) = yaml_json(text(&only, ".github/workflows/main-health.yml")) else {
+        return;
+    };
+    let steps = j["jobs"]["report"]["steps"].as_array().unwrap().clone();
+    let script = step(&steps, "name", "the CircleCI status")["run"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let gh =
+        "#!/bin/sh\ncase \"$*\" in *bosun-ok*) echo \"$BOSUN_OK\" ;; *) echo \"$CI_OK\" ;; esac\n";
+    fs::write(d.join("gh"), gh).unwrap();
+    git_in(d, "chmod +x gh");
+    let path = format!("{}:{}", d.display(), std::env::var("PATH").unwrap());
+    let out = d.join("out");
+    for (state, ci, bosun, want) in [
+        ("success", "success", "success", "success"),
+        ("success", "success", "pending", "pending"),
+        ("success", "success", "", "pending"),
+        ("success", "error", "success", "failure"),
+        ("failure", "failure", "success", "failure"),
+    ] {
+        let _ = fs::remove_file(&out);
+        let env = [
+            ("PATH", path.as_str()),
+            ("GITHUB_OUTPUT", out.to_str().unwrap()),
+            ("STATE", state),
+        ];
+        let env = [
+            &env[..],
+            &[
+                ("CI_OK", ci),
+                ("BOSUN_OK", bosun),
+                ("SHA", "abc"),
+                ("GITHUB_REPOSITORY", "o/r"),
+            ],
+        ]
+        .concat();
+        assert!(bash_in(d, &script, &env));
+        let got = fs::read_to_string(&out).unwrap();
+        assert_eq!(got.trim(), format!("result={want}"), "{state} {ci} {bosun}");
     }
 }
 
