@@ -6,6 +6,9 @@ Design: spec §15 (B2, the gates as check runs of a dedicated App, pinned in the
 (B4, owner teams). Seed constraints hold: one task per PR of at most 400 changed lines, `src/core`
 does no I/O, tests never reach a real API, fragments instead of CHANGELOG/PROGRESS edits.
 B2 lands first. B4 code starts only once B2's App token reaches the workflows (B2W/T1).
+B2W builds on B1 (`fix/risk-no-review-event`): risk.yml has no `pull_request_review` trigger,
+so no job with the environment runs the PR's copy; reviews are judged on the next run.
+Owner order: H1-H4, H6, H7, then H5.
 `.bosun/bosun.toml` `[checks]` and an owners.toml `team` entry land only after the pin is a release
 that knows them, since unknown keys are errors.
 
@@ -84,9 +87,10 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
 
 ### Done when
 
-- UC-B2W-1: every job with the bosun-app environment runs on pull_request_target, issue_comment, workflow_run or push to main, never checks out the PR head, and passes the key only to the token step.
+- UC-B2W-1: no workflow with the bosun-app environment has a pull_request or pull_request_review trigger; every such job runs on pull_request_target, issue_comment, workflow_run or push to main, never checks out the PR head, and passes the key only to the token step.
 - UC-B2W-2: no job that runs repo code (ci, main-health's test job) names the environment or asks for checks or statuses write.
 - UC-B2W-3: hoist.toml pins risk-check, review-verdict and main-open to the App and ci-ok to GitHub Actions.
+- UC-B2W-4: every keyed workflow_run job filters as main-health does: `branches: [main]`, `event == 'push'`, the run's `head_repository` is this repo, and it checks out `github.sha`.
 
 ## Outside this repo
 
@@ -122,4 +126,8 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
 - H6: Release B2 and pin it
   on: phone
   steps: run the release workflow for a version with B2 (docs/releasing.md), then approve the pin PR that moves .bosun/version to it
+  blocks: B2W
+- H7: Check the agents' GitHub credential
+  on: computer
+  steps: the Claude GitHub App or token the agents use has no Administration, Environments or Secrets write on the repo; remove any it has
   blocks: B2W

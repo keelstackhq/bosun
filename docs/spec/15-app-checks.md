@@ -11,6 +11,16 @@ workflow that a same-repo PR adds or edits runs the PR's copy of that file and g
 source unless the ruleset pins the source, so a statuses-based gate can be forged by anyone who
 can push a branch. Dropping `pull_request_review` from risk.yml closes one path, not this one.
 
+**Builds on B1.** B1 (merged first) removes `pull_request_review` from both risk.yml files, so
+risk.yml runs only on `pull_request_target` and `issue_comment`, both from the default branch.
+That is a precondition here: a `pull_request_review` job runs the PR's copy and evaluates the
+environment against `refs/pull/<n>/merge`, so with `bosun-app` it would fail. An owner review (or
+a withdrawal: request changes, dismiss) is judged on the next run: a push, a `/bosun recheck` PR
+comment, or a re-run. Optional, not planned: an automatic re-judge on review through a relay
+workflow (`pull_request_review`, `permissions: {}`, no steps that read the payload) and a keyed
+`workflow_run` job on it that finds the PR by the run's `head_sha` through the API and trusts no
+payload field, with the `workflow_run` filters of UC-B2W-4.
+
 **D33: the gates are App check runs, pinned in the ruleset.**
 
 The App. One per org (or user account) that owns the repos, created by the owner (§14): for
@@ -18,7 +28,8 @@ example `keelstackhq-bosun-gate` (a slug is global). No webhook (Active off), no
 URL, "Only on this account", installed on the selected repos only. Repository permissions: Checks
 read and write; Pull requests read and write (the verdict record comment); Contents read; Issues
 read; Metadata read (mandatory); Commit statuses none; nothing else. Organization permission:
-Members read (§16 teams; a user account has no teams and skips it).
+Members read (§16 teams; a user account has no teams and skips it). Only the gate jobs ever use
+this App; any other bot App (the splice bot of B5, §17) is a separate App with its own key.
 
 Which token writes what. The App token writes the three check runs, the verdict record comment and
 the team reads. `GITHUB_TOKEN` keeps the Risk note body edit, the labels and the other comments:
@@ -89,8 +100,9 @@ the key goes only to the token step and the token only to the bosun step. main-h
 - Reading the gate's own state: in `checks` mode the newest check run of that name whose `app_id`
   is `[checks] app_id`, statuses ignored; in `statuses` and `dual` the statuses, as today, since
   they are the authority until the switch. Readers: risk-check (pending repair, carry), `bosun
-  approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (a gate context counts
-  only as a check run of the App; `ci-ok` only from github-actions).
+  approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (in `checks` mode a gate
+  context counts only as a check run of the App and `ci-ok` only from github-actions; in
+  `statuses` and `dual` a status or check run, as today).
 - Verdict records: in `checks` mode `verdict apply` writes the record with the App token, and
   only records by `<app_slug>[bot]` count (two verdicts, delegate, carry). This closes the §8
   residual "a workflow can post a record as github-actions[bot]". Older records stop counting at
@@ -100,28 +112,41 @@ the key goes only to the token step and the token only to the bosun step. main-h
   cannot either: in `checks` mode it is exit 3 with the fix "re-run the main-open workflow" (O4).
 - `bosun pr` and `doctor` read hoist.toml `required_checks` entries in both forms (string or
   table, below). `doctor --remote` warns in `checks` mode when a gate context is not pinned to
-  `app_id` in the live required checks.
+  `app_id` in the live required checks, and when the session's token can read the Actions
+  secrets list or the rulesets' bypass list (a sign it may hold the writes; no read proves a
+  write scope is absent, so the precondition below stays an owner check).
 - Tests use the fake GitHub only: check-run create and update, `app_id` on runs, a same-name run
   from github-actions that must not count, each mode, the missing token.
 
 **hoist (a change to request in the hoist repo, not done here).** `[github] required_checks`
 accepts tables beside strings: `{ context = "risk-check", app = "keelstackhq-bosun-gate" }` or
-`{ context = "ci-ok", integration_id = 15368 }`. hoist resolves `app` with `GET /apps/{slug}`
-(public) to its id, writes `integration_id` into the ruleset, and `hoist check` reports a missing
+`{ context = "ci-ok", integration_id = 15368 }`. hoist resolves `app` with an authenticated `GET /apps/{slug}`
+(a private App needs it) to its id, writes `integration_id` into the ruleset, and `hoist check` reports a missing
 or different source as drift.
 
 **Transition.** Each step is its own PR or owner action:
-1. A bosun release with the check-run client, `[checks]`, dual posting and the hoist.toml table
-   form; the pin moves to it.
+1. Owner step H6: a bosun release with the check-run client, `[checks]`, dual posting and the
+   hoist.toml table form; the pin moves to it.
 2. Owner steps H1-H4 (§14): the App, its key, the environment, the variable and secret.
-3. The workflows and channel copies get the environment and the token step; `[checks]
-   mode = "dual"` with the App's id and slug. Both kinds post; the ruleset still requires statuses.
+3. With B1 merged (risk.yml has no `pull_request_review` trigger), the `pull_request_target`,
+   `issue_comment` and keyed `workflow_run` jobs of the workflows and channel copies get the
+   environment and the token step; `[checks] mode = "dual"` with the App's id and slug. Both
+   kinds post; the ruleset still requires statuses. Reviews are judged on the next run.
 4. Verify: check runs of the App appear; a probe branch whose `pull_request` job names
    `bosun-app` fails (O1).
 5. hoist ships pinning; hoist.toml lists the four checks with their sources.
 6. Owner step H5: `hoist apply --area github` switches the ruleset (now the check runs count).
 7. `[checks] mode = "checks"`: statuses stop. Never before step 6: an unpinned ruleset would wait
    for statuses that no longer come, and every PR would block.
+
+Rollback and recovery. Undo step 7 with a PR that sets `mode = "dual"` (it passes while the
+check runs still post). Undo step 6 with `hoist apply` from hoist.toml with plain string entries
+(unpinned); in `dual` the statuses then satisfy it at once. When main breaks the gates themselves
+(main-open.yml, risk.yml or the pinned release fails, or the key is lost), every PR is blocked,
+the fix PR included, and `bosun approve --main-open` cannot help in `checks` mode. Recovery is
+an owner action: merge the fix PR by hand through the ruleset's bypass (an owner merge, which
+D-006 allows; agents never merge), or unpin with hoist (undo step 6) and, in `checks` mode,
+merge the `mode = "dual"` PR by bypass first, since no status is posted.
 
 **Option, not adopted: code-owner review of `.github/**`.** The ruleset could set
 `require_code_owner_review` with CODEOWNERS covering `.github/**` (it already names the owner
@@ -140,7 +165,13 @@ account.
 - A leaked App key (or token) forges all three gates until the key is revoked. The key is only in
   the environment and only the token step sees it; the jobs run actions and the npm release, so a
   compromised action or package in those jobs could take the token (pin actions by sha).
-- A fork's PR gets no secrets anyway, and its `pull_request_target` jobs run from main.
+- Precondition: agents act as the owner's login, so the agent's GitHub credential must hold no
+  Administration, Environments or Secrets write; else an agent can widen the environment's branch
+  policy, add a repo secret, or edit the ruleset. An owner step (H7) checks it; `doctor --remote`
+  warns where it can (above).
+- A fork's PR gets no secrets in its own `pull_request` jobs, but its `pull_request_target` jobs
+  do get the environment key, as every PR's do. That is safe only because those jobs run main's
+  file and never check out or run PR code.
 - main-health issues, CI-log and other non-gating statuses stay on `GITHUB_TOKEN`: out of scope.
 - `ci-ok` stays as forgeable as the PR's own CI (above).
 
@@ -154,7 +185,7 @@ account.
   Risk note and the labels stay on `GITHUB_TOKEN`. Moving them to the App would need Issues write
   and would start workflows on each write.
 - O4: why `--main-open` exists (a PR that changes main-open.yml) and whether the base workflow
-  judging it under `pull_request_target` now suffices.
+  judging it under `pull_request_target` now suffices; recovery when it breaks is above.
 - O5: the channel copies take the environment only where the App is set up (a splice template
   var, since `environment:` with an empty name is not documented as "none"); a repo without it
   stays in `statuses` mode.
