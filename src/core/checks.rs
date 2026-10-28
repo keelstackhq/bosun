@@ -83,6 +83,57 @@ pub fn workflow_checks(yaml: &str) -> Vec<String> {
     jobs.into_iter().map(|(k, n)| n.unwrap_or(k)).collect()
 }
 
+/// The environments the jobs of a workflow deploy to: each job's `environment:`, a name or a
+/// mapping's `name:`. Names with an expression (`${{`) are skipped. Not a YAML parser.
+pub fn workflow_environments(yaml: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |v: &str| {
+        let skip = v.is_empty() || v.starts_with('{') || v.contains("${{");
+        if !skip && !out.iter().any(|o| o == v) {
+            out.push(v.to_string());
+        }
+    };
+    let (mut in_jobs, mut job_indent, mut key_indent) = (false, None::<usize>, None::<usize>);
+    // The indent of an `environment:` mapping whose `name:` is still to come.
+    let mut open = None::<usize>;
+    for line in yaml.lines() {
+        let body = line.trim_start();
+        if body.is_empty() || body.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - body.len();
+        if indent == 0 {
+            in_jobs = body.split(" #").next().unwrap_or(body).trim_end() == "jobs:";
+            (job_indent, key_indent, open) = (None, None, None);
+            continue;
+        }
+        if !in_jobs {
+            continue;
+        }
+        if indent <= *job_indent.get_or_insert(indent) {
+            (key_indent, open) = (None, None);
+            continue;
+        }
+        if open.is_some_and(|ei| indent > ei) {
+            if let Some(v) = body.strip_prefix("name:") {
+                push(unquote(v));
+                open = None;
+            }
+            continue;
+        }
+        open = None;
+        if indent == *key_indent.get_or_insert(indent)
+            && let Some(v) = body.strip_prefix("environment:")
+        {
+            match unquote(v) {
+                "" => open = Some(indent),
+                v => push(v),
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +163,11 @@ mod tests {
     fn workflow_checks_reads_only_top_level_jobs() {
         let y = "on:\n  push:\n    branches: [main]\nname: x\njobs: # all\n  ci-ok: # agg\n    runs-on: x\n    steps:\n      - name: not a job name\n  \"quoted\":\n    name: Pretty\n    runs-on: x\n  other:\n    steps:\n      - run: a\nenv:\n  late:\n    x: 1\n";
         assert_eq!(workflow_checks(y), ["ci-ok", "Pretty", "other"]);
+    }
+
+    #[test]
+    fn workflow_environments_reads_each_jobs_environment() {
+        let y = "on:\n  workflow_dispatch:\n    inputs:\n      environment:\n        name: no\njobs:\n  a:\n    environment: release-pr # pr\n    steps:\n      - environment: no\n  b:\n    environment:\n      url: x\n      name: 'splice-bot'\n    env:\n      name: no\n  c:\n    environment: release-pr\n  d:\n    environment: ${{ inputs.e }}\n";
+        assert_eq!(workflow_environments(y), ["release-pr", "splice-bot"]);
     }
 }

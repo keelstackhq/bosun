@@ -66,6 +66,8 @@ pub struct State {
     pub variables: HashMap<String, String>,
     /// Repo paths that answer 200: `actions/secrets/N`, `environments/E[/secrets/N|/variables/N]`.
     pub present: Vec<String>,
+    /// Environment name -> (`deployment_branch_policy`, its `branch_policies` [{name, type}]).
+    pub environments: HashMap<String, (Value, Value)>,
     /// Contexts a ruleset on the default branch requires (`GET /rules/branches/<b>`).
     pub ruleset_checks: Vec<String>,
     /// Contexts classic branch protection requires; empty answers 404.
@@ -614,6 +616,12 @@ impl FakeGithub {
             .unwrap()
             .variables
             .insert(name.into(), value.into());
+    }
+
+    /// An environment with this `deployment_branch_policy` and these branch policies.
+    pub fn environment(&self, name: &str, policy: Value, branches: Value) {
+        let mut s = self.state.lock().unwrap();
+        s.environments.insert(name.into(), (policy, branches));
     }
 
     pub fn present(&self, path: &str) {
@@ -1392,6 +1400,16 @@ fn route(
             Some(v) => ok(json!({"name": name, "value": v})),
             None => msg(404, "Not Found"),
         },
+        ("GET", ["environments", name]) if s.environments.contains_key(*name) => {
+            let policy = &s.environments[*name].0;
+            ok(json!({"name": name, "deployment_branch_policy": policy}))
+        }
+        ("GET", ["environments", name, "deployment-branch-policies"])
+            if s.environments.contains_key(*name) =>
+        {
+            let list = &s.environments[*name].1;
+            ok(json!({"total_count": list.as_array().map_or(0, Vec::len), "branch_policies": list}))
+        }
         ("GET", p @ (["environments", ..] | ["actions", "secrets", _])) => {
             if s.present.contains(&p.join("/")) {
                 ok(json!({"name": "x"}))
