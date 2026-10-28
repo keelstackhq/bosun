@@ -90,8 +90,11 @@ opts in per path, not per rule: a match is lowered only when every file it match
 `[template_update] paths` at base and outside the template floor below. (A per-rule opt-in
 would not work: the lock is under `.splice/**`, R-gov, so R-gov would opt in and lower
 `REVIEW.md`, which steers verdicts, and `docs/lessons.toml`, which feeds agents.) A floor path
-listed in `paths` never lowers, and risk-check logs it to stderr. Any other match keeps its
-class, and the strictest class wins as in §8. The status reads `high risk
+listed in `paths` never lowers, and risk-check logs it to stderr. The class is all or
+nothing for the PR: when any changed path (old or new name) is outside `paths` or in the
+floor, nothing is lowered, the PR keeps its §8 class and needs the owner, whatever that class
+is (a file that matches no rule, such as `hoist.toml` or `docs/setup-script.sh` today, cannot
+ride along at normal risk). The status reads `high risk
 (<ids>), clean template update: <source>@<7 hex>`, and `data.template_update` holds `{clean,
 source, commit, reason}`.
 
@@ -99,7 +102,9 @@ source, commit, reason}`.
 (`.bosun/**`, `governance/**`, CODEOWNERS, R-secrets, R-prod-write, R-unseen and, in bosun,
 `src/**` and the manifests), every R-ci path (`.github/workflows/**`, `.github/actions/**`,
 the other CI configs, `deny.toml`, the toolchain files), `.claude/**`, `REVIEW.md`,
-`docs/lessons.toml` and the §8 trust files. Why: C1-C7 prove that
+`docs/lessons.toml`, the §8 trust files, `hoist.toml` (the required checks and, after §15,
+the App pins) and `docs/setup-script.sh` (the owner pastes it into cloud environments, where
+it runs as root). Why: C1-C7 prove that
 the PR is exactly what upstream published, not that upstream is safe. A compromised or careless
 template could ship a workflow with `statuses: write` that posts `risk-check` success for every
 PR, a step that leaks secrets, a looser `deny.toml`, or a `.claude/settings.json` hook that runs
@@ -117,7 +122,9 @@ agent reads. Default: they stay out of `paths` unless C7 (b) or (c) is chosen fo
 The re-render (C2, C4) runs as a separate job `template` in `risk.yml`, before the `risk` job,
 only on `pull_request_target` for PRs whose author login is `bot` and whose `user.type` is
 `Bot`, and that change `.splice/**`. Before any git or splice call it checks that
-`template.commit` matches `^[0-9a-f]{40}$`. It checks out the base SHA (never the head),
+`template.commit` matches `^[0-9a-f]{40}$`, and then C7 through the API (the compare of
+`track` and the commit, with read-only calls): a commit that fails C7 is never fetched or
+rendered, so fork content never reaches splice. It checks out the base SHA (never the head),
 installs the splice release named at base and checks its sha256, fetches the source at
 `template.commit`, renders, and runs `splice check`. Its permissions are `contents: read` with
 no persisted credentials, no secrets and no App key. It never runs code from the PR or from

@@ -7,7 +7,8 @@ update PR whose lock diff only moves an allowlisted source's pin, whose content 
 render at base, and whose author is the splice bot App, gets the `template` approval class: the
 bot plus green gates, no owner, for the paths in `[template_update] paths` only. The template
 floor (the §8 critical floor, every R-ci path, `.claude/**`, `REVIEW.md`, `docs/lessons.toml`,
-the trust files) still needs the owner.
+the trust files, `hoist.toml`, `docs/setup-script.sh`) still needs the owner, and so does a
+whole PR that touches any path outside `paths`.
 
 Status: **blocked on the owner and on §15.** No task starts before the decisions in §17 "Owner
 decision needed" are made (H1) and §15 (App check runs, B2) is built (H3); the answers may cut
@@ -45,7 +46,7 @@ Lower approval class for clean splice template updates (spec §17, C1-C7).
 
 ### Tasks
 
-- T1: `[template_update]` config (`sources`, `bot`, `paths`, `splice`, `splice_sha256`), parsed from base; floor paths in `paths` never lower
+- T1: `[template_update]` config (`sources`, `bot`, `paths`, `splice`, `splice_sha256`), parsed from base; floor paths in `paths` never lower, and one changed path outside `paths` makes the whole PR owner-only
   touch: src/core/risk.rs, src/core/template_update.rs, src/core/mod.rs, tests/risk_template_config.rs, docs/spec/17-template-updates.md
   risk: high
   size: 200
@@ -64,7 +65,7 @@ Lower approval class for clean splice template updates (spec §17, C1-C7).
   depends: T2, T3
   risk: high
   size: 350
-- T5: the `template` render job in `risk.yml` (bot login and `user.type`, 40-hex commit check, base checkout, pinned splice with sha256, `contents: read`, no credentials or key; `risk` job `needs` it with `if: always()`) and its channel copy
+- T5: the `template` render job in `risk.yml` (bot login and `user.type`, 40-hex commit check, C7 before any fetch, base checkout, pinned splice with sha256, `contents: read`, no credentials or key; `risk` job `needs` it with `if: always()`) and its channel copy
   touch: .github/workflows/risk.yml, channel/pieces/core/files/.github/workflows/risk.yml, tests/workflows.rs, docs/spec/17-template-updates.md
   depends: T4
   risk: high
@@ -78,10 +79,10 @@ Lower approval class for clean splice template updates (spec §17, C1-C7).
 
 - UC-B5-1: a bot PR that only moves an allowlisted source's version and commit, whose head tree equals the render at base and whose changed files are all in `paths`, passes risk-check with the `template` class and no owner.
 - UC-B5-2: the same PR with one hand-edited rendered line, a changed `template.source`, a fork commit that is not an ancestor of `track`, a deleted file, a non-bot merge commit or a PAT author fails closed to the owner class with a `reason`.
-- UC-B5-3: a clean update that changes a file under `.github/workflows/**`, `.bosun/**`, `.claude/**`, `REVIEW.md` or a path outside `paths` still needs the owner.
+- UC-B5-3: a clean update that also changes a file under `.github/workflows/**`, `.bosun/**` or `.claude/**`, `REVIEW.md`, `hoist.toml`, `docs/setup-script.sh` or any other path outside `paths` (also one that matches no rule) lowers nothing: the whole PR needs the owner.
 - UC-B5-4: any failure of the render job (no tree SHA, checksum mismatch, timeout, a commit that is not 40 hex) leaves the PR in its §8 class and never posts an `error` status.
 - UC-B5-5: a later risk-check on the same head (the verdict.yml re-run) keeps the class through the gate App's `template-render` check run, and ignores a check run of another app or a commit status of that name.
-- UC-B5-6: the render job checks out the base SHA, holds `contents: read` only, persists no credentials, and the `risk` job runs when it is skipped (`tests/workflows.rs`).
+- UC-B5-6: the render job checks C7 through the API before it fetches or renders anything (a fork commit is never fetched), checks out the base SHA, holds `contents: read` only, persists no credentials, and the `risk` job runs when it is skipped (`tests/workflows.rs`).
 
 ## Notes
 
