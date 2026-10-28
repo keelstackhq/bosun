@@ -260,6 +260,8 @@ High-risk PRs:
   this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
   copy of the file; and a same-repo PR can add a workflow of its own that requests
   `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
+  §15 (B2, designed) closes the second: the gates become check runs of a dedicated App, pinned
+  in the ruleset, so a workflow's `GITHUB_TOKEN` can no longer satisfy them.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.

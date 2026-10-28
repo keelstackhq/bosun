@@ -213,12 +213,17 @@ Human-only items, in order. Each has the exact action.
    opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
    token (keelstackhq/bosun, Contents and Pull requests: write), then
    `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
-5. **Trusted source for `risk-check` (owner decision).** Every workflow posts statuses as the
-   github-actions app, so a same-repo PR can add or edit a workflow (also via the
-   `pull_request_review` trigger, which runs the PR's copy of `risk.yml`) and post a forged
-   `risk-check` success. Closing this needs the verdict posted by a dedicated GitHub App (or a
-   check run) and that source required in the `main` ruleset. Until then it is an accepted
-   residual: such a PR is R-ci, so it needs an owner's look anyway.
+5. **Trusted source for the gates (B2, designed in spec §15).** Every workflow posts statuses as
+   the github-actions app, so a same-repo PR can add or edit a workflow and post a forged
+   `risk-check` success. The fix is designed: check runs of a dedicated GitHub App, its key in
+   a `main`-only environment, and the ruleset pinned to the App. Owner steps, in order (H1-H6 of
+   `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`): create the App
+   (keelstackhq-bosun-gate: Checks rw, Pull requests rw, Contents r, Issues r, Commit statuses
+   none, org Members r, webhook off, installed on keelstackhq/bosun only); generate its private
+   key; create the environment `bosun-app` (deployment branches: only `main`); `gh variable set
+   BOSUN_APP_ID --env bosun-app` and `gh secret set BOSUN_APP_KEY --env bosun-app < key.pem`
+   (never a repo secret), then delete the .pem; after the dual phase, `hoist apply --area
+   github --yes`. Until then it is an accepted residual: such a PR is R-ci, so it needs an owner.
 6. **Review mode b (M8): off, no API key.** The owner decided (2026-10-24) not to add an Anthropic
    API key. Reviews stay mode a: a session runs `bosun review-pack`, posts the verdict with `bosun
    verdict comment`, and `verdict.yml` applies it. `.github/workflows/review.yml` (PR #183) stays
