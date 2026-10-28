@@ -506,6 +506,6 @@ mod environments {
         };
         warns(policies, "cannot verify", grant);
         let env500 = |f: &FakeGithub| f.fail_path("/environments/release-pr", 500);
-        warns(env500, "cannot verify", grant);
+        warns(env500, "cannot verify", "run `bosun doctor --remote` again");
     }
 }

@@ -117,9 +117,8 @@ fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
                     }
                 })
                 .collect();
-            let list = list.join(", ");
             warn(
-                format!("environment {name} allows {list}, not only the branch main"),
+                format!("environment {name} allows {}, not only the branch main", list.join(", ")),
                 steps,
             )
         }
@@ -129,7 +128,7 @@ fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
         ),
         Err(e) => warn(
             format!("cannot verify environment {name}: {}", e.message),
-            ENV_GRANT_FIX.into(),
+            "run `bosun doctor --remote` again; if it persists, check the token can read environments".into(),
         ),
     }
 }

@@ -170,4 +170,14 @@ mod tests {
         let y = "on:\n  workflow_dispatch:\n    inputs:\n      environment:\n        name: no\njobs:\n  a:\n    environment: release-pr # pr\n    steps:\n      - environment: no\n  b:\n    environment:\n      url: x\n      name: 'splice-bot'\n    env:\n      name: no\n  c:\n    environment: release-pr\n  d:\n    environment: ${{ inputs.e }}\n";
         assert_eq!(workflow_environments(y), ["release-pr", "splice-bot"]);
     }
+
+    #[test]
+    fn workflow_environments_finds_bosuns_own() {
+        // Each file starts at indent 0, so the files read as one.
+        let all = include_str!("../../.github/workflows/release.yml").to_owned()
+            + include_str!("../../.github/workflows/review.yml")
+            + include_str!("../../.github/workflows/splice.yml");
+        let want = ["release-pr", "release", "review", "splice-bot"];
+        assert_eq!(workflow_environments(&all), want);
+    }
 }
