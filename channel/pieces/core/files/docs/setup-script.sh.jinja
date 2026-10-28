@@ -14,7 +14,7 @@ BOSUN_VERSION={% if bosun_version %}{{ bosun_version }}{% else %}{{ template.ver
 {% if "rust" in pieces %}
 # Rust is not pinned here: the version is the `channel` of the repo's rust-toolchain.toml (or the
 # legacy rust-toolchain file), so gates and sessions share a toolchain. Without one the script
-# stops. `bash docs/setup-script.sh --rust-version` prints the version and installs nothing.
+# warns and skips Rust. `bash docs/setup-script.sh --rust-version` prints the version and installs nothing.
 RUST_VERSION=""
 for f in "{{ rust_path }}/rust-toolchain.toml" "{{ rust_path }}/rust-toolchain" rust-toolchain.toml rust-toolchain; do
   [ -f "$f" ] || continue
@@ -27,8 +27,9 @@ for f in "{{ rust_path }}/rust-toolchain.toml" "{{ rust_path }}/rust-toolchain" 
   if [ -n "$v" ]; then RUST_VERSION="$v"; break; fi
 done
 if [ -z "$RUST_VERSION" ]; then
-  echo "setup-script: no rust-toolchain.toml with a channel in {{ rust_path }} or $PWD; run the script in the repo checkout, or add rust-toolchain.toml with [toolchain] channel = \"x.y.z\"" >&2
-  exit 1
+  # Never fail here: a failing setup script blocks every session of the environment.
+  echo "setup-script: no rust-toolchain.toml with a channel in {{ rust_path }} or $PWD; skipping the Rust toolchain install and the cargo tools, rustup installs the checkout's pinned toolchain on first cargo use" >&2
+  if [ "${1:-}" = --rust-version ]; then exit 1; fi
 fi
 if [ "${1:-}" = --rust-version ]; then echo "$RUST_VERSION"; exit 0; fi
 {% endif %}
@@ -43,9 +44,11 @@ npm install -g "pnpm@${PNPM_VERSION}"
 (cd "$(npm root -g)/pnpm" && node install.js) || true
 {% endif %}{% if "rust" in pieces %}
 # Rust (the version read above) and the cargo tools the gates run.
-rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
-rustup default "${RUST_VERSION}"
-cargo install --locked cargo-nextest cargo-deny
+if [ -n "$RUST_VERSION" ]; then
+  rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
+  rustup default "${RUST_VERSION}"
+  cargo install --locked cargo-nextest cargo-deny
+fi
 {% endif %}
 # The keelstackhq tools, pinned.
 npm install -g "@keelstackhq/splice@${SPLICE_VERSION}" "@keelstackhq/hoist@${HOIST_VERSION}" \

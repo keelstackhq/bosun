@@ -13,15 +13,16 @@ BERTH_VERSION=0.1.0
 BOSUN_VERSION=0.2.3
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
-# Without one the script stops. `bash docs/setup-script.sh --rust-version` prints the version
+# Without one the script warns and skips Rust. `bash docs/setup-script.sh --rust-version` prints the version
 # and installs nothing.
 RUST_VERSION=""
 if [ -f rust-toolchain.toml ]; then
   RUST_VERSION="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" rust-toolchain.toml | head -n1)"
 fi
 if [ -z "$RUST_VERSION" ]; then
-  echo "setup-script: no rust-toolchain.toml with a channel in $PWD; run the script in the repo checkout, or add rust-toolchain.toml with [toolchain] channel = \"x.y.z\"" >&2
-  exit 1
+  # Never fail here: a failing setup script blocks every session of the environment.
+  echo "setup-script: no rust-toolchain.toml with a channel in $PWD; skipping the Rust toolchain install and the cargo tools, rustup installs the checkout's pinned toolchain on first cargo use" >&2
+  if [ "${1:-}" = --rust-version ]; then exit 1; fi
 fi
 if [ "${1:-}" = --rust-version ]; then echo "$RUST_VERSION"; exit 0; fi
 
@@ -36,9 +37,11 @@ npm install -g "pnpm@${PNPM_VERSION}"
 (cd "$(npm root -g)/pnpm" && node install.js) || true
 
 # Rust (the version read above) and the cargo tools the gates run.
-rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
-rustup default "${RUST_VERSION}"
-cargo install --locked cargo-nextest cargo-deny
+if [ -n "$RUST_VERSION" ]; then
+  rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
+  rustup default "${RUST_VERSION}"
+  cargo install --locked cargo-nextest cargo-deny
+fi
 
 # The keelstackhq tools, pinned.
 npm install -g "@keelstackhq/splice@${SPLICE_VERSION}" "@keelstackhq/hoist@${HOIST_VERSION}" \

@@ -390,7 +390,7 @@ fn rust_gates_install_the_toolchain_file_once() {
         assert!(wf.contains("rustup component add rustfmt clippy"), "{wf}");
         assert!(wf.contains("cache-bin: \"false\""), "{wf}");
         // Without a toolchain file in rust_path or a parent, the old pin, never `stable` (the
-        // setup script has no fallback: it stops).
+        // setup script has no fallback: it skips Rust).
         let pin = "1.97";
         assert!(
             wf.contains(&format!(
@@ -421,7 +421,7 @@ fn setup_rust_version(script: &str, cwd: &Path) -> (bool, String, String) {
 }
 
 /// The setup scripts users copy (the channel's and bosun's own) pin no Rust version: they install
-/// the `channel` of the repo's rust-toolchain.toml, and without one they stop with a fix.
+/// the `channel` of the repo's rust-toolchain.toml, and without one they warn and skip Rust.
 #[test]
 fn setup_scripts_read_the_rust_toolchain_file_and_pin_no_version() {
     let files = variant(&["rust"], "");
@@ -439,6 +439,20 @@ fn setup_scripts_read_the_rust_toolchain_file_and_pin_no_version() {
         });
         assert!(!pinned, "{name}: a hard-coded RUST_VERSION\n{script}");
         assert!(script.contains("rust-toolchain.toml"), "{name}");
+        // Without the file the full script warns and skips Rust: a failing setup script would
+        // block every session. Only the --rust-version mode exits 1.
+        assert!(
+            script.contains("skipping the Rust toolchain install"),
+            "{name}"
+        );
+        for l in script.lines().filter(|l| l.contains("exit 1")) {
+            assert!(l.contains("--rust-version"), "{name}: {l}");
+        }
+        let guard = script
+            .find("if [ -n \"$RUST_VERSION\" ]; then")
+            .expect(name);
+        let install = script.find("rustup toolchain install").unwrap();
+        assert!(guard < install, "{name}: rustup runs without a version");
         let repo = tempfile::tempdir().unwrap();
         fs::write(
             repo.path().join("rust-toolchain.toml"),
