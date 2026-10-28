@@ -427,43 +427,68 @@ fn shipped_scripts_are_only_ever_called_through_bash() {
     assert!(found >= 2, "the fold script is documented for both copies");
 }
 
-/// Both setup scripts install splice only from npm tarballs whose sha512 matches the pinned
-/// integrity, never by version alone; a mismatch stops the script.
+/// The setup scripts install the keelstackhq tools only from npm tarballs whose sha512 matches
+/// the pinned integrity (launcher and linux binary package), never by version alone. The one
+/// exception is bosun in the channel's script: its pin is the channel's release (or
+/// `bosun_version`), whose integrity is not known when the channel is written. A mismatch or a
+/// failed install warns and skips the tool; the script goes on.
 #[test]
-fn setup_scripts_install_splice_checked_against_its_pinned_integrity() {
+fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_integrity() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let own = fs::read_to_string(root.join("docs/setup-script.sh")).unwrap();
-    let ch =
-        fs::read_to_string(channel().join("pieces/core/files/docs/setup-script.sh.jinja")).unwrap();
+    let ch_path = channel().join("pieces/core/files/docs/setup-script.sh.jinja");
+    let ch = fs::read_to_string(ch_path).unwrap();
     let pins = |t: &str| -> Vec<String> {
-        t.lines()
-            .filter(|l| l.starts_with("SPLICE_") && l.contains("SHA512="))
-            .map(str::to_string)
-            .collect()
+        let sums = t
+            .lines()
+            .filter(|l| l.contains("_SHA512=") && !l.starts_with("BOSUN_"));
+        sums.map(str::to_string).collect()
     };
-    assert_eq!(pins(&own).len(), 3, "launcher, linux-x64, linux-arm64");
+    assert_eq!(
+        pins(&own).len(),
+        9,
+        "splice, hoist, berth: launcher, linux-x64, linux-arm64"
+    );
     assert_eq!(
         pins(&own),
         pins(&ch),
         "the two scripts pin the same integrity"
     );
-    for t in [&own, &ch] {
-        assert!(
-            !t.contains("\"@keelstackhq/splice@${SPLICE_VERSION}\""),
-            "never by version alone"
-        );
-        assert!(t.contains(
-            "  npm install -g --ignore-scripts --omit=optional \"$launcher\" \"$binary\""
-        ));
-        assert!(t.contains(
-            "if launcher=\"$(splice_pack @keelstackhq/splice \"$t\" \"$SPLICE_SHA512\")\" &&"
-        ));
+    assert_eq!(
+        own.matches("\nBOSUN_").count(),
+        4,
+        "BOSUN_VERSION and 3 sums"
+    );
+    let bosun_ch = "npm install -g --ignore-scripts \"@keelstackhq/bosun@${BOSUN_VERSION}\"";
+    for (t, tools, want) in [
+        (&own, &["splice", "hoist", "berth", "bosun"][..], &[][..]),
+        (&ch, &["splice", "hoist", "berth"], &[bosun_ch][..]),
+    ] {
+        for tool in tools {
+            let up = tool.to_uppercase();
+            let call = format!(
+                "install_tool {tool} \"${up}_VERSION\" \"${up}_SHA512\" \"${up}_LINUX_X64_SHA512\" \"${up}_LINUX_ARM64_SHA512\""
+            );
+            assert!(t.contains(&call), "no {call}");
+        }
+        // No other install of a keelstackhq package goes by version alone.
+        let by_version: Vec<&str> = t
+            .lines()
+            .filter(|l| l.contains("npm install") && l.contains("@keelstackhq/"))
+            .collect();
+        assert_eq!(by_version, want);
     }
-    let start = own.find("splice_pack() {").unwrap();
-    let func = &own[start..start + own[start..].find("\n}\n").unwrap() + 3];
+    assert!(
+        own.contains("\nbosun --version || echo"),
+        "a skipped bosun never fails the script"
+    );
+    let start = own.find("tool_pack() {").unwrap();
+    let funcs = &own[start..start + own[start..].find("\n}\ninstall_tool ").unwrap() + 3];
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    fs::write(d.join("npm"), "#!/bin/sh\nprintf abc > x.tgz\necho x.tgz\n").unwrap();
+    // A fake npm: `pack` writes "abc", `install` logs its args and exits with $INSTALL.
+    let fake = "#!/bin/sh\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; *) echo \"$*\" >> log; exit \"$INSTALL\" ;; esac\n";
+    fs::write(d.join("npm"), fake).unwrap();
     std::fs::set_permissions(
         d.join("npm"),
         std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -473,43 +498,28 @@ fn setup_scripts_install_splice_checked_against_its_pinned_integrity() {
     // sha512("abc"), base64.
     let abc =
         "3a81oZNherrMQXNJriBBMRLm+k6JqX6iCp7u5ktV05ohkpkqJ0/BqDa6PCOj/uu9RU1EI2Q86A4qmslPpUyknw==";
-    for (sum, ok) in [(abc, true), ("bad", false)] {
-        let script = format!(
-            "{func}SPLICE_VERSION=0.3.0\nf=\"$(splice_pack @keelstackhq/splice \"$PWD\" {sum})\"\necho \"$f\""
-        );
-        let o = std::process::Command::new("bash")
-            .args(["-eo", "pipefail", "-c", &script])
-            .current_dir(d)
-            .env("PATH", &path)
-            .output()
-            .unwrap();
-        assert_eq!(
-            o.status.success(),
-            ok,
-            "{}",
-            String::from_utf8_lossy(&o.stderr)
-        );
-    }
-    // A failing `npm install -g` (a registry error fetching the optional packuments) warns and
-    // the script goes on, in both scripts.
-    let fake =
-        "#!/bin/sh\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; *) exit 1 ;; esac\n";
-    fs::write(d.join("npm"), fake).unwrap();
-    for t in [&own, &ch] {
-        let start = t.find("splice_pack() {").unwrap();
-        let block = &t[start..start + t[start..].find("\nfi\n").unwrap() + 4];
-        let sums = [
-            "SPLICE_SHA512",
-            "SPLICE_LINUX_X64_SHA512",
-            "SPLICE_LINUX_ARM64_SHA512",
-        ]
-        .map(|k| format!("{k}={abc}\n"))
-        .concat();
-        let script = format!("SPLICE_VERSION=0.3.0\n{sums}{block}echo went-on");
+    for (sum, install, logged, warn) in [
+        (abc, "0", true, ""),
+        (
+            "bad",
+            "0",
+            false,
+            "hoist-linux-x64@0.2.0 does not match its pinned sha512",
+        ),
+        (
+            abc,
+            "1",
+            true,
+            "setup-script: hoist install failed; skipping hoist",
+        ),
+    ] {
+        let _ = fs::remove_file(d.join("log"));
+        let script = format!("{funcs}install_tool hoist 0.2.0 {abc} {sum} {sum}\necho went-on");
         let o = std::process::Command::new("bash")
             .args(["-euo", "pipefail", "-c", &script])
             .current_dir(d)
             .env("PATH", &path)
+            .env("INSTALL", install)
             .output()
             .unwrap();
         let err = String::from_utf8_lossy(&o.stderr);
@@ -517,9 +527,38 @@ fn setup_scripts_install_splice_checked_against_its_pinned_integrity() {
             o.status.success() && String::from_utf8_lossy(&o.stdout).contains("went-on"),
             "{err}"
         );
-        assert!(
-            err.contains("setup-script: splice install failed; skipping splice"),
-            "{err}"
+        assert!(err.contains(warn), "{err}");
+        let log = fs::read_to_string(d.join("log")).unwrap_or_default();
+        assert_eq!(
+            log.starts_with("install -g --ignore-scripts --omit=optional "),
+            logged,
+            "{log}"
         );
+    }
+}
+
+/// The splice update action runs with a write token: pinned by commit, never by a movable tag.
+#[test]
+fn the_splice_action_is_pinned_by_commit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for f in [
+        root.join(".github/workflows/splice.yml"),
+        channel().join("pieces/core/files/.github/workflows/splice.yml"),
+    ] {
+        let y = fs::read_to_string(&f).unwrap();
+        let uses: Vec<&str> = y
+            .lines()
+            .filter_map(|l| l.split_once("uses: keelstackhq/splice/action@"))
+            .map(|(_, r)| r)
+            .collect();
+        assert!(!uses.is_empty(), "{}", f.display());
+        for r in uses {
+            let (sha, tag) = r.split_once(" # ").unwrap_or((r, ""));
+            assert!(
+                sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "{r}"
+            );
+            assert_eq!(tag, "v0.3.0", "{r}");
+        }
     }
 }
