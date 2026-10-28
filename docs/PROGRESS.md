@@ -208,11 +208,35 @@ Human-only items, in order. Each has the exact action.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
    15 min, Haiku). Create them in claude.ai → Routines.
-4. **Splice bot token (optional, D-004).** `.github/workflows/splice.yml` opens the weekly
-   `splice/update` PR with `GITHUB_TOKEN` unless the secret `SPLICE_BOT_TOKEN` is set, and a PR
-   opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
-   token (keelstackhq/bosun, Contents and Pull requests: write), then
-   `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
+4. **Workflow secrets into main-only environments (PR fix/secrets-environments).** A same-repo
+   PR's own `on: pull_request` workflow can read repository secrets, so each secret moves into
+   an environment that only `main` may deploy to. Until then the jobs still read the repository
+   secrets (a job's environment falls back to them), so nothing breaks in between. Do the steps
+   in order. **Do step 1 before this PR merges:** release.yml runs on every push to `main`, the
+   merge included, and with `BOSUN_RELEASE=enabled` that run creates `release-pr` without
+   protection (splice.yml does the same with `splice-bot` on its next run, Monday 06:17 UTC). An
+   environment can exist before any workflow names it. Steps 2 and 3 can follow at any time.
+   1. Create `release-pr` and `splice-bot` with deployment branches = selected → `main`. Run
+      again, the `POST deployment-branch-policies` call fails harmlessly when the policy exists:
+      ```bash
+      for e in release-pr splice-bot; do
+        gh api -X PUT repos/keelstackhq/bosun/environments/$e --input - <<EOF
+      {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+      EOF
+        gh api -X POST repos/keelstackhq/bosun/environments/$e/deployment-branch-policies \
+          -f name=main -f type=branch
+      done
+      ```
+   2. Move each secret into its environment (a new value: a secret cannot be read back):
+      `gh secret set SPLICE_BOT_TOKEN --env splice-bot --repo keelstackhq/bosun`, and
+      `gh secret set HOIST_RELEASE_TOKEN --env release-pr --repo keelstackhq/bosun` if you use it.
+   3. Delete the repository-level copies: `gh secret delete SPLICE_BOT_TOKEN --repo
+      keelstackhq/bosun` (and `HOIST_RELEASE_TOKEN` if it exists). `gh secret list --repo
+      keelstackhq/bosun` then shows neither.
+
+   The splice bot token itself stays optional (D-004): without it splice.yml opens the weekly
+   `splice/update` PR with `GITHUB_TOKEN`, and that PR runs no CI, so `ci-ok` never reports on
+   it. Token: fine-grained, keelstackhq/bosun, Contents and Pull requests: write.
 5. **Trusted source for the gates (owner decision, B2 designed in spec §15).** Every workflow
    posts statuses as the github-actions app. `risk.yml` no longer runs a PR's copy (the
    `pull_request_review` trigger is gone; an owner's GitHub review is honoured on the next run: a

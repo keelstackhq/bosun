@@ -326,6 +326,12 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
         bot.contains(&format!("version: {pinned}\n")),
         "splice.yml moves with the setup script's SPLICE_VERSION"
     );
+    // Its token lives in environment splice-bot (main only): a PR's own workflow cannot read it.
+    assert!(
+        bot.contains("  update:\n    environment: splice-bot\n"),
+        "{bot}"
+    );
+    assert!(bot.contains("secrets.SPLICE_BOT_TOKEN"));
 }
 
 /// Every occurrence of `script` in `text` is a call through bash: `bash <script>`.

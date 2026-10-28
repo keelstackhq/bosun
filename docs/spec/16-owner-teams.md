@@ -49,10 +49,14 @@ team counts, never an error that passes. User entries still count. The command s
 the fix is "give the bosun App Members read and pass BOSUN_APP_TOKEN, or list the owner by login
 in governance/owners.toml". The status text appends `(team <org>/<slug> unreadable)`.
 Withdrawals fail closed too: while any team is unreadable, a CHANGES_REQUESTED or DISMISSED
-review on the head by any login that is not a listed user counts as an owner's withdrawal
-(§8: it blocks what any owner's withdrawal blocks, such as verdicts, delegates, signed
-approvals and a carried approval, `anywhere` included), since its author may be a member. A
-listed user's own approval still counts, as with any other owner's withdrawal. The kill
+review on the head by any login that is not a listed user, and whose `author_association` is
+OWNER, MEMBER or COLLABORATOR (a team member is at least MEMBER; an outsider on a public repo
+cannot block), counts as an owner's withdrawal (§8: it blocks what any owner's withdrawal
+blocks, such as verdicts, delegates, signed approvals and a carried approval, `anywhere`
+included), since its author may be a member. A listed user's own approval still counts, as with
+any other owner's withdrawal. Residual: GitHub may report a member whose org membership is
+private as CONTRIBUTOR to a token that cannot see it, so their withdrawal is missed while the
+team is unreadable; team members should make their membership public. The kill
 switch is the inverse: an open `bosun:halt` issue by a login that is no listed user while a team
 is unreadable halts (exit 4), as any error reading the owners does today. Since sessions usually
 cannot read a team, a halt issue by any non-user then halts sessions: list at least one owner
@@ -79,6 +83,7 @@ Expansion: two pages, case; a team with a child team counts no members. One memb
 reads. Approvals: a member's review, comment and request for changes; a non-member's do not count.
 Failure: 403 and 404 on either read give no team members, `data.owner_teams_unreadable` and the fix; a listed
 user still approves. With the team unreadable, a non-user's CHANGES_REQUESTED or DISMISSED
-review withdraws (two verdicts present: the check fails). Kill switch: a member's halt issue halts; an unreadable team and a
+review by a MEMBER withdraws (two verdicts present: the check fails); a CONTRIBUTOR's or NONE's
+does not. Kill switch: a member's halt issue halts; an unreadable team and a
 non-user's halt issue halt. Without `BOSUN_APP_TOKEN` and with a session token that cannot
 read members, `approve --list` and `ask` report the team unreadable. `bosun ask` mentions the team.

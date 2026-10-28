@@ -16,7 +16,8 @@ Rule evaluation:
 - risk-check adds the built-in match `R-unseen` ("bosun could not see the whole diff", so high) when GitHub lists fewer files than the PR changed, or lists a file with changed lines but without a patch (GitHub reports 0 changed lines for a binary file; the file name never exempts a file).
 - risk-check evaluates the rules from the base branch, never from the PR head. A PR cannot change
   the rules that judge it.
-- A rule only escalates; nothing de-escalates.
+- A rule only escalates; nothing de-escalates. (Proposed, not built: §17 would lower a clean
+  template update from the splice bot; the critical floor and every R-ci path stay with the owner.)
 - The bosun version pin (`.bosun/version`) is R-gov.
 - A rule with several conditions matches when any one does. Content rules read only the lines a PR adds, and their evidence names the file and line number, not the line, so a secret is not copied into the PR body. `bosun risk-check` reads capabilities from the `capabilities` list of the linked task's metadata and from `bosun:capability/<c>` labels on the PR.
 
@@ -68,7 +69,8 @@ High-risk PRs:
   CHANGES_REQUESTED one) ends also with a v2 owner signature, which names the dismissed review
   (below). No review event runs the `risk` workflow, so a withdrawal does not change a green
   `risk-check` by itself (the ruleset requires status checks, not reviews): to withdraw, request
-  changes or dismiss the approval, then comment `/bosun recheck` (it re-judges and fails);
+  changes or dismiss the approval, then comment `/bosun recheck` (or re-run the risk workflow;
+  it re-judges and fails);
   turning off auto-merge also stops a merge. `tests/cli_risk.rs` pins that the next run fails.
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
@@ -257,8 +259,14 @@ High-risk PRs:
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited) and
   on PR comments (`issue_comment` created) that contain `/bosun approve` or `/bosun recheck`, so
   a comment re-evaluates `risk-check` without a push. `/bosun recheck` approves nothing: it only
-  re-judges the current head, so anyone may post it (the job filters nothing by author; only an
-  owner's approval counts), and it shares the judge's concurrency group, as an approval does.
+  re-judges the current head. It runs only for the repo's owners, members and collaborators
+  (`author_association` `OWNER`, `MEMBER` or `COLLABORATOR`) and then shares the judge's
+  concurrency group, as an approval does; anyone else's recheck gets a group of its own and runs
+  no job. The filter limits CI minutes only: an outsider's `/bosun approve` still re-judges (and
+  joins the judge's group), harmlessly. It also drops a recheck from an owner with private org
+  membership or from an app or bot (`NONE`): re-run the risk workflow then, which every hint that
+  says to comment `/bosun recheck` also names. `/bosun approve` is not filtered by author: bosun
+  checks the commenter against `governance/owners.toml` itself.
   There is no review trigger: an owner's GitHub review (APPROVED on the head SHA) is read through
   the API on the next run, a push, a `/bosun recheck` comment or any re-run of the workflow.
   `pull_request_target` and `issue_comment` run
@@ -281,6 +289,14 @@ High-risk PRs:
   workflow's `GITHUB_TOKEN` can satisfy them. The pins live in `hoist.toml`, which no rule or
   floor covers yet (normal risk today, a gap of its own): B2/T6 makes it R-gov and critical
   before the ruleset switch.
+  Such a workflow can also read every repository secret, so no workflow secret is a repository
+  secret: each lives in an environment whose deployment branch policy allows only `main` (as the
+  App key in `bosun-app`, §15), and only the jobs that need it name that environment
+  (`HOIST_RELEASE_TOKEN` in `release-pr`, jobs `release-token` and `prepare` of release.yml;
+  `SPLICE_BOT_TOKEN` in `splice-bot`, job `update` of splice.yml, also in the channel's copy;
+  `ANTHROPIC_API_KEY` in `review`). `tests/workflows.rs` asserts that every job that reads a
+  secret other than `GITHUB_TOKEN` names a literal environment (also as `{ name: x, .. }`), and
+  none is read outside a job.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.

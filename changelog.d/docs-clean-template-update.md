@@ -1,0 +1,1 @@
+- docs: design (proposed, not built): spec §17 clean template updates, a lower approval class for clean splice bot updates; plan `docs/superpowers/plans/2026-10-28-clean-template-update.md`.

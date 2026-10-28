@@ -139,7 +139,7 @@ depends: B2
 
 - UC-B4-1: a team member's APPROVED review or `/bosun approve` comment on the head approves a high PR, and a non-member's does not.
 - UC-B4-2: a team with child teams, or a 403 or 404 on the team reads, counts no member, lists the team in `data.owner_teams_unreadable`, and the fix names Members read.
-- UC-B4-2b: with a team unreadable, a CHANGES_REQUESTED or DISMISSED review by a login that is no listed user withdraws: two verdicts, a delegate or a carried approval do not pass.
+- UC-B4-2b: with a team unreadable, a CHANGES_REQUESTED or DISMISSED review by a login that is no listed user, with `author_association` OWNER, MEMBER or COLLABORATOR, withdraws (a CONTRIBUTOR's or NONE's does not): two verdicts, a delegate or a carried approval do not pass.
 - UC-B4-3: a two-page team list is read once per run although several owner checks need it.
 - UC-B4-4: a halt issue by a team member halts, and with the team unreadable a halt issue by a non-user halts too.
 

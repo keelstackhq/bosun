@@ -67,8 +67,21 @@ publishers that step 4 registers expire when they are not used for 2 days (D24).
    and Pull requests: write on keelstackhq/bosun. With it, `prepare` opens the release PR and
    that PR runs CI. Without it, `prepare` is skipped with a warning (`GITHUB_TOKEN` may not open
    PRs here, 403, and a PR it opened would run no checks), and a session opens the release PR
-   instead. `publish` does not need it.
-   `gh secret set HOIST_RELEASE_TOKEN --repo keelstackhq/bosun`
+   instead. `publish` does not need it. Store it in environment `release-pr` (limited to `main`),
+   never as a repository secret: a PR's own workflow can read those. Create the environment
+   first, before the PR that names it in release.yml (fix/secrets-environments) merges: that
+   merge is a push to `main`, and with `BOSUN_RELEASE=enabled` its run would create
+   `release-pr` without protection. An environment can exist before any workflow names it. Run
+   again, the `POST deployment-branch-policies` call fails harmlessly when the policy exists.
+
+   ```bash
+   gh api -X PUT repos/keelstackhq/bosun/environments/release-pr --input - <<EOF
+   {"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+   EOF
+   gh api -X POST repos/keelstackhq/bosun/environments/release-pr/deployment-branch-policies \
+     -f name=main -f type=branch
+   gh secret set HOIST_RELEASE_TOKEN --env release-pr --repo keelstackhq/bosun
+   ```
 3. **Turn on the gate.** `gh variable set BOSUN_RELEASE --body enabled --repo keelstackhq/bosun`,
    then `gh workflow run release.yml --repo keelstackhq/bosun --ref main` (or wait for the next
    push to `main`). Approve the `release` deployment. `publish` tags `v0.1.0` and creates the

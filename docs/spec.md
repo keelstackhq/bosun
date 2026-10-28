@@ -34,3 +34,4 @@ task that changes a section lists that file in its `touch`. `§N` in the text me
 - [14. Front-loaded human prerequisites](spec/14-prereqs.md)
 - [15. Trusted check source: App check runs](spec/15-app-checks.md)
 - [16. Owner teams](spec/16-owner-teams.md)
+- [17. Clean template updates (proposed, not built)](spec/17-template-updates.md)
