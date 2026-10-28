@@ -367,3 +367,169 @@ fn step_3_notes_when_only_the_classic_endpoint_is_unreadable() {
         "{item}"
     );
 }
+
+/// `--remote` checks the environment of every workflow job: only `main` may deploy to it.
+#[cfg(unix)]
+mod environments {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    const STEPS: &str = "Deployment branches → Selected branches → add `main`";
+    const CUSTOM: &str = r#"{"protected_branches": false, "custom_branch_policies": true}"#;
+
+    fn main_only(fake: &FakeGithub, name: &str) {
+        let main = json!([{"name": "main", "type": "branch"}]);
+        fake.environment(name, serde_json::from_str(CUSTOM).unwrap(), main);
+    }
+
+    /// A full repo whose workflows name `release-pr` twice and `splice-bot` as a mapping.
+    fn env_repo() -> (tempfile::TempDir, FakeGithub) {
+        let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+        let wf = "on:\n  workflow_dispatch:\n    inputs:\n      environment:\n        name: no\njobs:\n  prepare:\n    environment: release-pr\n    steps:\n      - name: x\n  again:\n    environment: \"release-pr\" # twice\n  update:\n    environment:\n      name: splice-bot\n      url: x\n";
+        write(tmp.path(), ".github/workflows/rel.yml", wf);
+        let hoist = tmp.path().join("fake-hoist");
+        let report = r#"{"version":1,"command":"check","ok":true,"exit_code":0,"items":[]}"#;
+        std::fs::write(&hoist, format!("#!/bin/sh\necho '{report}'\n")).unwrap();
+        std::fs::set_permissions(&hoist, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (tmp, fake)
+    }
+
+    fn remote(fake: &FakeGithub, dir: &Path) -> (i32, Value) {
+        let out = bosun()
+            .env("BOSUN_GITHUB_API", fake.url())
+            .env("BOSUN_HOIST", dir.join("fake-hoist"))
+            .env("BOSUN_ROUTINES_OK", "1")
+            .arg("-C")
+            .arg(dir)
+            .args(["doctor", "--remote"])
+            .output()
+            .unwrap();
+        (out.status.code().unwrap(), one_object(&out.stdout))
+    }
+
+    /// `splice-bot` is main-only; returns the exit code, step 5 and the `release-pr` entry.
+    fn release_pr(setup: impl FnOnce(&FakeGithub)) -> (i32, Value, Value) {
+        let (tmp, fake) = env_repo();
+        main_only(&fake, "splice-bot");
+        setup(&fake);
+        let (code, v) = remote(&fake, tmp.path());
+        let envs = v["data"]["environments"].as_array().unwrap().clone();
+        assert_eq!(envs.len(), 2, "{v}");
+        assert_eq!(envs[1]["status"], "ok", "{v}");
+        (code, v["data"]["items"][4].clone(), envs[0].clone())
+    }
+
+    /// A warning, never a failure: exit 0, step 5 warns with the entry's detail and fix.
+    fn warns(setup: impl FnOnce(&FakeGithub), detail: &str, fix: &str) {
+        let (code, step5, env) = release_pr(setup);
+        assert_eq!(code, 0, "{step5}");
+        assert_eq!(env["name"], "release-pr", "{env}");
+        assert_eq!(env["status"], "warn", "{env}");
+        let (d, f) = (
+            env["detail"].as_str().unwrap(),
+            env["fix"].as_str().unwrap(),
+        );
+        assert!(d.contains(detail), "{d}");
+        assert!(f.contains(fix), "{f}");
+        assert_eq!(step5["status"], "warn", "{step5}");
+        assert!(step5["detail"].as_str().unwrap().contains(d), "{step5}");
+        assert!(step5["fix"].as_str().unwrap().contains(f), "{step5}");
+    }
+
+    #[test]
+    fn an_environment_doctor_cannot_read_warns() {
+        let (tmp, fake) = env_repo();
+        let dynamic = "jobs:\n  deploy:\n    environment: ${{ inputs.e }}\n  flow:\n    environment: {url: x}\n";
+        write(tmp.path(), ".github/workflows/dyn.yml", dynamic);
+        main_only(&fake, "release-pr");
+        main_only(&fake, "splice-bot");
+        let (code, v) = remote(&fake, tmp.path());
+        assert_eq!(code, 0, "{v}");
+        let envs = v["data"]["environments"].as_array().unwrap();
+        for job in ["deploy", "flow"] {
+            let e = envs.iter().find(|e| e["job"] == job).expect(job);
+            assert_eq!(e["status"], "warn", "{e}");
+            let d = e["detail"].as_str().unwrap();
+            assert!(
+                d.contains(&format!(
+                    "cannot read the environment of job {job} in dyn.yml"
+                )),
+                "{d}"
+            );
+        }
+        assert_eq!(v["data"]["items"][4]["status"], "warn", "{v}");
+    }
+
+    #[test]
+    fn main_only_environments_are_ok() {
+        let (code, step5, env) = release_pr(|f| main_only(f, "release-pr"));
+        assert_eq!(code, 0, "{step5}");
+        assert_eq!(env["status"], "ok", "{env}");
+        assert_eq!(step5["status"], "ok", "{step5}");
+        let d = step5["detail"].as_str().unwrap();
+        assert!(
+            d.contains("only main deploys to release-pr, splice-bot"),
+            "{d}"
+        );
+        // A missing `type` is a branch too.
+        let main = json!([{"name": "main"}]);
+        let custom = serde_json::from_str(CUSTOM).unwrap();
+        let (_, _, env) = release_pr(|f| f.environment("release-pr", custom, main));
+        assert_eq!(env["status"], "ok", "{env}");
+    }
+
+    #[test]
+    fn a_missing_environment_warns() {
+        warns(|_| {}, "does not exist", STEPS);
+        let (_, _, env) = release_pr(|_| {});
+        let fix = env["fix"].as_str().unwrap();
+        let new = "Settings → Environments → New environment `release-pr`";
+        assert!(fix.contains(new), "{fix}");
+        assert!(fix.contains("/acme/widget/settings/environments"), "{fix}");
+    }
+
+    #[test]
+    fn no_policy_warns_that_any_branch_can_deploy() {
+        let fix = format!("Settings → Environments → release-pr → {STEPS}");
+        let none = |f: &FakeGithub| f.environment("release-pr", Value::Null, json!([]));
+        warns(none, "any branch", &fix);
+    }
+
+    #[test]
+    fn protected_branches_warn() {
+        let p = json!({"protected_branches": true, "custom_branch_policies": false});
+        let set = |f: &FakeGithub| f.environment("release-pr", p, json!([]));
+        warns(set, "every protected branch", STEPS);
+    }
+
+    #[test]
+    fn other_branch_policies_warn() {
+        let custom: Value = serde_json::from_str(CUSTOM).unwrap();
+        let with = |list: Value| {
+            let c = custom.clone();
+            move |f: &FakeGithub| f.environment("release-pr", c, list)
+        };
+        let dev = json!([{"name": "main", "type": "branch"}, {"name": "dev", "type": "branch"}]);
+        warns(with(dev), "main, dev", STEPS);
+        warns(
+            with(json!([{"name": "main", "type": "tag"}])),
+            "main (tag)",
+            STEPS,
+        );
+        warns(with(json!([])), "no branch", STEPS);
+    }
+
+    #[test]
+    fn an_unreadable_environment_warns_cannot_verify() {
+        let grant = "give the token Environments: read (or Administration: read)";
+        let env403 = |f: &FakeGithub| f.fail_path("/environments/release-pr", 403);
+        warns(env403, "cannot verify", grant);
+        let policies = |f: &FakeGithub| {
+            main_only(f, "release-pr");
+            f.fail_path("/release-pr/deployment-branch-policies", 403);
+        };
+        warns(policies, "cannot verify", grant);
+        let env500 = |f: &FakeGithub| f.fail_path("/environments/release-pr", 500);
+        warns(env500, "cannot verify", "run `bosun doctor --remote` again");
+    }
+}

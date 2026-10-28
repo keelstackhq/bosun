@@ -160,6 +160,23 @@ pub trait Github {
     /// Whether the repo path `rest` (such as `/actions/secrets/NAME`) exists: 200 is `Some(true)`,
     /// 404 `Some(false)`, 403 (the token cannot read it) `None`.
     fn exists(&self, rest: &str) -> Result<Option<bool>>;
+    /// Which branches may deploy to the environment `name`.
+    fn environment_branches(&self, name: &str) -> Result<EnvBranches>;
+}
+
+/// An environment's deployment branches as the token sees them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvBranches {
+    /// 404: no such environment.
+    Missing,
+    /// 403 (not a rate limit) on the environment or its branch policies.
+    Forbidden,
+    /// `deployment_branch_policy` is null: any branch can deploy.
+    Any,
+    /// `protected_branches`: every protected branch can deploy.
+    Protected,
+    /// Custom branch policies: (name, type) each; a missing type is `branch`.
+    Custom(Vec<(String, String)>),
 }
 
 /// What the Claude Code cloud proxy says when it refuses GraphQL.
@@ -779,5 +796,35 @@ impl Github for LiveGithub {
             Ok(found) => Some(found.is_some()),
             Err(()) => None,
         })
+    }
+
+    fn environment_branches(&self, name: &str) -> Result<EnvBranches> {
+        let base = format!("/environments/{}", enc(name));
+        let env = match self.http.get_json_or_forbidden(&self.path(&base))? {
+            Ok(Some(v)) => v,
+            Ok(None) => return Ok(EnvBranches::Missing),
+            Err(()) => return Ok(EnvBranches::Forbidden),
+        };
+        let p = &env["deployment_branch_policy"];
+        if p["custom_branch_policies"] != true {
+            let protected = p["protected_branches"] == true;
+            return Ok(if protected {
+                EnvBranches::Protected
+            } else {
+                EnvBranches::Any
+            });
+        }
+        // One page of 100: more than one policy is not main-only anyway.
+        let rest = format!("{base}/deployment-branch-policies?per_page=100");
+        let list = match self.http.get_json_or_forbidden(&self.path(&rest))? {
+            Ok(v) => v.map_or(Value::Null, |v| v["branch_policies"].clone()),
+            Err(()) => return Ok(EnvBranches::Forbidden),
+        };
+        let field = |b: &Value, k: &str| b[k].as_str().map(String::from);
+        let policies = list.as_array().into_iter().flatten().map(|b| {
+            let kind = field(b, "type").unwrap_or_else(|| "branch".into());
+            (field(b, "name").unwrap_or_default(), kind)
+        });
+        Ok(EnvBranches::Custom(policies.collect()))
     }
 }

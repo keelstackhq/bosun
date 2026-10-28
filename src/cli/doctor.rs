@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
 use crate::core::checks;
-use crate::github::{Github, IssueState, Live};
+use crate::github::{EnvBranches, Github, IssueState, Live};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -53,6 +53,131 @@ fn workflow_jobs(root: &Path) -> Vec<String> {
         .filter_map(|e| std::fs::read_to_string(e.path()).ok())
         .flat_map(|t| checks::workflow_checks(&t))
         .collect()
+}
+
+/// Environments of every workflow job (see `checks::workflow_environments`), sorted, and the
+/// jobs whose environment doctor cannot read, as (job, workflow file).
+fn workflow_environments(root: &Path) -> (Vec<String>, Vec<(String, String)>) {
+    let (mut names, mut unread) = (Vec::new(), Vec::new());
+    let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
+        return (names, unread);
+    };
+    for e in dir.flatten() {
+        let file = e.file_name().to_string_lossy().into_owned();
+        let Some(t) = (file.ends_with(".yml") || file.ends_with(".yaml"))
+            .then(|| std::fs::read_to_string(e.path()).ok())
+            .flatten()
+        else {
+            continue;
+        };
+        for r in checks::workflow_environments(&t) {
+            match r {
+                Ok(n) => names.push(n),
+                Err(job) => unread.push((job, file.clone())),
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    unread.sort();
+    (names, unread)
+}
+
+const ENV_GRANT_FIX: &str = "give the token Environments: read (or Administration: read), then run `bosun doctor --remote` again";
+
+/// One environment: ok only when its custom deployment branches are exactly `main`.
+fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
+    let page = format!("https://github.com/{repo}/settings/environments");
+    let steps = format!(
+        "Settings → Environments → {name} → Deployment branches → Selected branches → add `main` and remove every other rule ({page})"
+    );
+    let warn = |detail: String, fix: String| json!({"name": name, "status": "warn", "detail": detail, "fix": fix});
+    match gh.environment_branches(name) {
+        Ok(EnvBranches::Custom(p)) if p.len() == 1 && p[0].0 == "main" && p[0].1 == "branch" => {
+            json!({"name": name, "status": "ok", "detail": format!("only main deploys to {name}"), "fix": steps})
+        }
+        Ok(EnvBranches::Missing) => warn(
+            format!(
+                "environment {name} does not exist; a workflow run creates it with no branch limit"
+            ),
+            format!("Settings → Environments → New environment `{name}`, then {steps}"),
+        ),
+        Ok(EnvBranches::Any) => warn(
+            format!("environment {name} has no deployment branch policy: any branch can deploy"),
+            steps,
+        ),
+        Ok(EnvBranches::Protected) => warn(
+            format!("environment {name} lets every protected branch deploy, not only main"),
+            steps,
+        ),
+        Ok(EnvBranches::Custom(p)) if p.is_empty() => warn(
+            format!("environment {name} allows no branch, not main"),
+            steps,
+        ),
+        Ok(EnvBranches::Custom(p)) => {
+            let list: Vec<String> = p
+                .iter()
+                .map(|(n, k)| {
+                    if k == "branch" {
+                        n.clone()
+                    } else {
+                        format!("{n} ({k})")
+                    }
+                })
+                .collect();
+            warn(
+                format!("environment {name} allows {}, not only the branch main", list.join(", ")),
+                steps,
+            )
+        }
+        Ok(EnvBranches::Forbidden) => warn(
+            format!("cannot verify environment {name} (403)"),
+            ENV_GRANT_FIX.into(),
+        ),
+        Err(e) => warn(
+            format!("cannot verify environment {name}: {}", e.message),
+            "run `bosun doctor --remote` again; if it persists, check the token can read environments".into(),
+        ),
+    }
+}
+
+/// Check each workflow environment and fold the warnings into step 5. Returns `data.environments`.
+fn apply_environments(items: &mut [Value], gh: &dyn Github, repo: &str, root: &Path) -> Value {
+    let (names, unread) = workflow_environments(root);
+    let mut envs: Vec<Value> = names
+        .iter()
+        .map(|n| environment_check(gh, repo, n))
+        .collect();
+    envs.extend(unread.iter().map(|(job, file)| json!({"job": job, "status": "warn",
+        "detail": format!("cannot read the environment of job {job} in {file} (an expression, or no name)"),
+        "fix": format!("name the environment literally in {file} (`environment: <name>`) so doctor can check it, or check its deployment branches by hand")})));
+    let warned: Vec<&Value> = envs.iter().filter(|e| e["status"] == "warn").collect();
+    let it = &mut items[4];
+    let text = |k: &str| it[k].as_str().unwrap_or("").to_string();
+    let (detail, fix) = (text("detail"), text("fix"));
+    let join = |k: &str| {
+        warned
+            .iter()
+            .filter_map(|e| e[k].as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    if warned.is_empty() {
+        if !names.is_empty() && it["status"] == "ok" {
+            it["detail"] = json!(format!(
+                "{detail}; only main deploys to {}",
+                names.join(", ")
+            ));
+        }
+    } else if it["status"] == "ok" {
+        it["status"] = json!("warn");
+        it["detail"] = json!(format!("{detail}; {}", join("detail")));
+        it["fix"] = json!(join("fix"));
+    } else {
+        it["detail"] = json!(format!("{detail}; {}", join("detail")));
+        it["fix"] = json!(format!("{fix}; then {}", join("fix")));
+    }
+    json!(envs)
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -590,10 +715,14 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root));
+    let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
     let mut data = json!({"items": items, "missing": missing, "routines": routines()});
     if let Some(h) = hoist_data {
         data["hoist"] = h;
+    }
+    if let Some(e) = envs {
+        data["environments"] = e;
     }
     if missing > 0 {
         return Err(BosunError::needs_human(
