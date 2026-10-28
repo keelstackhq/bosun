@@ -1,0 +1,1 @@
+- 2026-10-28 · fix · bosun init sets hoist.toml merge_queue = false unless the owner set it · PR (fix/init-merge-queue)

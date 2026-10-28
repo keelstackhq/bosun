@@ -191,6 +191,8 @@ fn array_span(text: &str, from: usize) -> Option<(usize, usize, Option<usize>)> 
 enum HoistErr {
     Invalid(String),
     ByHand(Vec<String>),
+    /// `[github] merge_queue` is there but not a bool.
+    MergeQueue,
 }
 
 impl HoistErr {
@@ -207,6 +209,10 @@ impl HoistErr {
                     add.join(", ")
                 ),
             ),
+            HoistErr::MergeQueue => BosunError::error(
+                "[github] merge_queue in hoist.toml is not true or false",
+                "set `merge_queue = false` under [github] in hoist.toml by hand, then rerun `bosun init`",
+            ),
         }
     }
 }
@@ -216,19 +222,22 @@ fn checks_in(doc: &toml::Table) -> Option<Vec<&str>> {
     Some(rc.iter().filter_map(toml::Value::as_str).collect())
 }
 
-/// The text edit alone: `None` when the layout is not one it knows how to edit.
-fn edit_checks(text: &str, quoted: &[String], has_github: bool) -> Option<String> {
-    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
-    // Where the [github] header ends and where the required_checks line starts.
+/// Where the `[github]` header line ends and where its `required_checks` line starts.
+fn github_lines(text: &str) -> (Option<usize>, Option<usize>) {
     let (mut header, mut key, mut pos) = (None, None, 0);
     for line in text.split_inclusive('\n') {
         let t = line.trim();
         if header.is_some() && t.starts_with('[') {
             break;
         }
+        // `[github]`, also spaced (`[ github ]`) or quoted (`["github"]`), then a comment at most.
         let is_github = t
-            .strip_prefix("[github]")
-            .is_some_and(|r| r.trim().is_empty() || r.trim().starts_with('#'));
+            .strip_prefix('[')
+            .and_then(|r| r.split_once(']'))
+            .is_some_and(|(name, r)| {
+                matches!(name.trim(), "github" | "\"github\"" | "'github'")
+                    && (r.trim().is_empty() || r.trim().starts_with('#'))
+            });
         if header.is_none() && is_github {
             header = Some(pos + line.len());
         } else if header.is_some()
@@ -240,6 +249,13 @@ fn edit_checks(text: &str, quoted: &[String], has_github: bool) -> Option<String
         }
         pos += line.len();
     }
+    (header, key)
+}
+
+/// The text edit alone: `None` when the layout is not one it knows how to edit.
+fn edit_checks(text: &str, quoted: &[String], has_github: bool) -> Option<String> {
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let (header, key) = github_lines(text);
     let mut out = text.to_string();
     match (header, key) {
         (_, Some(k)) => {
@@ -329,7 +345,81 @@ fn add_required_checks(text: &str, want: &[&str]) -> Result<(String, Vec<String>
     Ok((out, add))
 }
 
-fn pr_body(pieces: &[String], changes: &Value, kept: &[String], steps: &[String]) -> String {
+/// What init did with `[github] merge_queue`.
+#[derive(Debug, PartialEq)]
+enum MergeQueue {
+    Added,
+    Kept(bool),
+    /// Absent, and no safe place for it (no `[github]` header): the file stays, `run` warns.
+    Unset,
+}
+
+impl MergeQueue {
+    fn label(&self) -> &'static str {
+        match self {
+            MergeQueue::Added => "added",
+            MergeQueue::Kept(true) => "kept_true",
+            MergeQueue::Kept(false) => "kept_false",
+            MergeQueue::Unset => "unset",
+        }
+    }
+}
+
+/// Pure: make hoist.toml `text` say `[github] merge_queue = false` unless the owner set it.
+///
+/// bosun posts risk-check and review-verdict as commit statuses on each PR head; nothing posts
+/// them on the merge-queue (`merge_group`) refs, so with a queue those required checks never
+/// arrive and every queued PR blocks. An explicit bool is the owner's and is kept (`run` warns
+/// on `true`); any other value is refused. The key goes right after `required_checks` (else
+/// after the header). With no header, or when the result does not parse with the key `false`
+/// and the checks unchanged, the text stays as it is (`Unset`).
+fn set_merge_queue(text: &str) -> Result<(String, MergeQueue), HoistErr> {
+    let doc: toml::Table = text
+        .parse()
+        .map_err(|e| HoistErr::Invalid(format!("{e}")))?;
+    if let Some(v) = doc.get("github").and_then(|g| g.get("merge_queue")) {
+        let b = v.as_bool().ok_or(HoistErr::MergeQueue)?;
+        return Ok((text.to_string(), MergeQueue::Kept(b)));
+    }
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let unset = Ok((text.to_string(), MergeQueue::Unset));
+    let at = match github_lines(text) {
+        (_, Some(k)) => array_span(text, k).map(|(_, close, _)| {
+            text[close..]
+                .find('\n')
+                .map_or(text.len(), |n| close + n + 1)
+        }),
+        (Some(h), None) => Some(h),
+        (None, None) => None,
+    };
+    let Some(at) = at else { return unset };
+    let lead = if at == 0 || text[..at].ends_with('\n') {
+        ""
+    } else {
+        nl
+    };
+    let mut out = text.to_string();
+    out.insert_str(at, &format!("{lead}merge_queue = false{nl}"));
+    let ok = out.parse::<toml::Table>().is_ok_and(|d| {
+        d.get("github")
+            .and_then(|g| g.get("merge_queue"))
+            .and_then(toml::Value::as_bool)
+            == Some(false)
+            && checks_in(&d) == checks_in(&doc)
+    });
+    if !ok {
+        return unset;
+    }
+    Ok((out, MergeQueue::Added))
+}
+
+fn pr_body(
+    pieces: &[String],
+    changes: &Value,
+    kept: &[String],
+    steps: &[String],
+    warnings: &[String],
+) -> String {
     let files: Vec<&str> = changes
         .as_array()
         .map(|c| c.iter().filter_map(|x| x["path"].as_str()).collect())
@@ -346,6 +436,12 @@ fn pr_body(pieces: &[String], changes: &Value, kept: &[String], steps: &[String]
     for (i, step) in steps.iter().enumerate() {
         s += &format!("{}. {step}\n", i + 1);
     }
+    if !warnings.is_empty() {
+        s += "\nWarnings:\n";
+        for w in warnings {
+            s += &format!("- {w}\n");
+        }
+    }
     s
 }
 
@@ -354,12 +450,12 @@ fn setup(
     root: &Path,
     args: &InitArgs,
     argv: &[String],
-    hoist: &Option<(String, Vec<String>)>,
+    hoist: &Option<(String, Vec<String>, MergeQueue)>,
 ) -> Result<(Value, Option<String>, Vec<String>), BosunError> {
     let splice = run_splice(argv)?;
     let mut added = Vec::new();
-    if let Some((text, new)) = hoist {
-        if !new.is_empty() {
+    if let Some((text, new, mq)) = hoist {
+        if !new.is_empty() || *mq == MergeQueue::Added {
             std::fs::write(root.join("hoist.toml"), text).map_err(|e| {
                 BosunError::error(
                     format!("cannot write hoist.toml: {e}"),
@@ -537,10 +633,28 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
                 "make hoist.toml a readable file, then rerun `bosun init`",
             )
         })?;
-        Some(add_required_checks(&text, &checks).map_err(HoistErr::into_error)?)
+        let (text, added) = add_required_checks(&text, &checks).map_err(HoistErr::into_error)?;
+        let (text, mq) = set_merge_queue(&text).map_err(HoistErr::into_error)?;
+        Some((text, added, mq))
     } else {
         None
     };
+    let mut warnings: Vec<String> = Vec::new();
+    // risk-check is always among the required checks after the edit above.
+    match hoist {
+        Some((_, _, MergeQueue::Kept(true))) => warnings.push(
+            "hoist.toml sets [github] merge_queue = true while risk-check is a required check: \
+             bosun posts risk-check and review-verdict on each PR head, not on merge_group refs, \
+             so queued PRs would wait for them forever; set merge_queue = false"
+                .into(),
+        ),
+        Some((_, _, MergeQueue::Unset)) => warnings.push(
+            "hoist.toml: add `merge_queue = false` to the github table by hand (risk-check and \
+             review-verdict are not posted on merge-queue refs)"
+                .into(),
+        ),
+        _ => {}
+    }
     let mut pieces = args.stack.clone();
     if claude_md {
         pieces.push("claude-md".into());
@@ -629,7 +743,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     };
     let commit = git(&root, &["rev-parse", "HEAD"])?;
 
-    let body = pr_body(&pieces, &changes, &kept, &steps);
+    let body = pr_body(&pieces, &changes, &kept, &steps, &warnings);
     let mut pr = None;
     if let Some((app, base)) = &github {
         let pull = app
@@ -650,6 +764,8 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         "changes": changes, "excluded": kept, "plan": plan, "branch": branch,
         "commit": commit, "pr": pr, "risk": "high", "owner_steps": steps,
         "own_ci": own_ci, "claude_md": claude_md, "hoist_checks_added": added,
+        "hoist_merge_queue": hoist.as_ref().map(|(_, _, mq)| mq.label()),
+        "warnings": warnings,
     });
     if args.no_pr {
         out["pr_title"] = json!(PR_TITLE);
@@ -660,7 +776,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
 
 #[cfg(test)]
 mod tests {
-    use super::add_required_checks;
+    use super::{HoistErr, MergeQueue, add_required_checks, set_merge_queue};
 
     const ALL: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
 
@@ -743,7 +859,7 @@ mod tests {
         ok_or_refused("[ github ]\nrequired_checks = [\"ci-ok\"]\n");
         for t in [
             "[github]\nrequired_checks = \"ci-ok\"\n[release]\nx = 1\n",
-            "[ github ]\nrequired_checks = [\"ci-ok\"]\n",
+            "github.required_checks = [\"ci-ok\"]\n",
         ] {
             assert!(matches!(
                 add_required_checks(t, &ALL),
@@ -769,5 +885,76 @@ mod tests {
             out.ends_with("]\r\n") && out.contains("\r\n[github]\r\n"),
             "{out:?}"
         );
+    }
+
+    /// Both edits, as `run` does them.
+    fn full(t: &str) -> (String, MergeQueue) {
+        let (out, _) = edit(t);
+        set_merge_queue(&out).unwrap()
+    }
+
+    #[test]
+    fn merge_queue_goes_after_required_checks_or_stays() {
+        let (out, mq) = full("[github]\nrequired_checks = [\n  \"ci-ok\",\n]\nx = 1\n");
+        assert_eq!(mq, MergeQueue::Added);
+        assert!(
+            out.ends_with("  \"main-open\",\n]\nmerge_queue = false\nx = 1\n"),
+            "{out}"
+        );
+        let (out, mq) = full("[other]\r\na = 1\r\n");
+        assert_eq!(mq, MergeQueue::Added);
+        assert!(out.ends_with("]\r\nmerge_queue = false\r\n"), "{out:?}");
+        let t = "[github]\nmerge_queue = true\n";
+        assert_eq!(full(t), (edit(t).0, MergeQueue::Kept(true)));
+        let t = "[github]\nmerge_queue = false # mine\n";
+        assert_eq!(full(t), (edit(t).0, MergeQueue::Kept(false)));
+    }
+
+    #[test]
+    fn a_second_run_changes_nothing() {
+        for t in [
+            "",
+            "# c\n[github]\nrequired_checks = [\"ci-ok\"] # why\n[release]\n",
+            "[github]\r\nrequired_checks = [\r\n  \"ci-ok\"\r\n]\r\n",
+        ] {
+            let (once, _) = full(t);
+            let (twice, mq) = full(&once);
+            assert_eq!(
+                (twice, mq),
+                (once.clone(), MergeQueue::Kept(false)),
+                "{t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn spaced_and_quoted_headers_are_github() {
+        for h in [
+            "[ github ]",
+            "[\"github\"]",
+            "['github'] # c",
+            "[ \"github\" ]",
+        ] {
+            let (out, mq) = full(&format!("{h}\nrequired_checks = [\"ci-ok\"]\n"));
+            assert_eq!(mq, MergeQueue::Added, "{h}");
+            assert!(
+                out.starts_with(&format!(
+                    "{h}\nrequired_checks = [\"ci-ok\", \"risk-check\""
+                )) && out.ends_with("]\nmerge_queue = false\n"),
+                "{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_merge_queue_init_cannot_place_is_unset_and_a_non_bool_is_refused() {
+        const C: &str =
+            "required_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]";
+        // No [github] header to put the key under: the file stays as it is.
+        for t in [format!("github = {{ {C} }}\n"), format!("github.{C}\n")] {
+            assert_eq!(set_merge_queue(&t), Ok((t.clone(), MergeQueue::Unset)));
+        }
+        let t = "[github]\nmerge_queue = \"no\"\n";
+        assert_eq!(set_merge_queue(t), Err(HoistErr::MergeQueue));
     }
 }
