@@ -757,18 +757,18 @@ fn main_open_skips_label_events_but_the_mainfix_label_in_a_group_of_their_own() 
 }
 
 #[test]
-fn risk_rules_put_every_agent_rule_file_under_r_gov() {
+fn risk_rules_cover_agent_rules_hoist_and_the_setup_script() {
     use bosun::core::risk::{ChangedFile, Rules, evaluate};
     let files = variant(&["rust"], "");
     let rules = Rules::parse(file(&files, ".bosun/risk.toml")).unwrap();
-    let hit = |p: &str| {
+    let hit = |p: &str, rule: &str| {
         let f = ChangedFile {
             path: p.into(),
             ..Default::default()
         };
         evaluate(&rules, &[f], &[], &[])
             .iter()
-            .any(|m| m.rule == "R-gov")
+            .any(|m| m.rule == rule)
     };
     for p in [
         "AGENTS.md",
@@ -777,10 +777,23 @@ fn risk_rules_put_every_agent_rule_file_under_r_gov() {
         "docs/agents/project.md",
         "crates/foo/AGENTS.md",
         "crates/foo/CLAUDE.md",
+        "claude.md",
+        "Claude.md",
+        "agents.md",
+        "CLAUDE.local.md",
+        "crates/x/Claude.md",
+        "hoist.toml",
+        "crates/foo/hoist.toml",
     ] {
-        assert!(hit(p), "{p} is not R-gov");
+        assert!(hit(p, "R-gov"), "{p} is not R-gov");
     }
-    assert!(!hit("crates/foo/src/lib.rs") && !hit("docs/guide.md"));
+    assert!(
+        hit("docs/setup-script.sh", "R-gov") && !hit("docs/setup-script.sh", "R-ci"),
+        "the pasted setup script runs as root"
+    );
+    for p in ["crates/foo/src/lib.rs", "docs/guide.md"] {
+        assert!(!hit(p, "R-gov") && !hit(p, "R-ci"), "{p}");
+    }
 }
 
 #[test]

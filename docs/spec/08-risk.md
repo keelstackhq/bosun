@@ -2,8 +2,8 @@
 
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
-  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
-- Consumer repos (`channel/pieces/core/files/.bosun/risk.toml.jinja`): R-gov also lists `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` (a nested agent-rule file is read by every later agent; `**/` matches the root file too).
+  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `docs/setup-script.sh` (the pasted copy runs as root in cloud environments, so it is owner class and never a delegate's; consumer repos list it too, and the channel's template of it stays R-ci-review like every shipped file), `**/hoist.toml` (the root file holds `[github]`, the required checks, and later the App pins, that `hoist apply` puts in the ruleset, so dropping `risk-check` there removes the gate; a package's file holds the `[publish]` and `[deploy]` targets hoist mints tokens for), `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack), `docs/agents/**`, `**/agents.md`, `**/claude.md` and `**/claude.local.md` (the agent-instruction files steer every later agent; `**/` matches the root file too, and the lowercase patterns match any case, as `CLAUDE.md` or `Claude.md`). The org-decisions sync commit (`chore: sync org decisions`, which rewrites `docs/agents/org-decisions.md`, imported by `CLAUDE.md`, and its hash in `.splice/channels/decisions.toml`) already needed the owner through `.splice/**`; these entries do not change who approves it.
+- Consumer repos (`channel/pieces/core/files/.bosun/risk.toml.jinja`): the same R-gov paths but `docs/lessons.toml`.
 - R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/ci/**`, `.buildkite/**`, `**/jenkinsfile` (any case), `azure-pipelines.y*ml`, `bitbucket-pipelines.yml`, `.travis.yml`, `.drone.yml`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
 - R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**`, `.config/**` (build inputs), `src/anthropic.rs`, `src/core/lessons.rs`, `src/core/budget.rs`, `src/sessions/**` (review feeders), `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
 - R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
@@ -174,8 +174,8 @@ High-risk PRs:
   R-secrets, R-prod-write and R-unseen (bosun could not see the whole diff, so it cannot rule
   out a critical file or a secret in it), and any changed file whose path or previous path
   (renames count both ways) is `.bosun/**` (approvers.toml and risk.toml included),
-  `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), `.github/workflows/**` or
-  `.github/actions/**` (any workflow with `statuses: write` can post a `risk-check` status for
+  `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), the root `hoist.toml` (the
+  ruleset's required checks), `.github/workflows/**` or `.github/actions/**` (any workflow with `statuses: write` can post a `risk-check` status for
   any PR), `.circleci/**` or another CI provider's config (the R-ci list). Where the base has `src/cli/risk_check.rs` (bosun and its forks), bosun's code is
   critical too: all of `src/**` (the approval modules call most others, and any module can do
   I/O with the workflow's token once released), `Cargo.toml`, `Cargo.lock`, `build.rs` (any
@@ -195,9 +195,8 @@ High-risk PRs:
   self-declared, so a steered delegate can post the one verdict itself under a session without a
   lease: the mode lets one session decide by design, and the verdict is a quality gate, not
   proof of independence. A workflow on a pushed branch can post a record as
-  `github-actions[bot]` (Limits above). Files that match no rule (`hoist.toml`,
-  `docs/setup-script.sh`, `tests/**` in this repo) are normal risk, so neither the
-  owner nor the floor sees them; that is a follow-up for the rules. A self-made task issue
+  `github-actions[bot]` (Limits above). Files that match no rule (`tests/**` in this repo) are
+  normal risk, so neither the owner nor the floor sees them; that is a follow-up for the rules. A self-made task issue
   with its own lease record still passes the task check, hiding the real task's capabilities
   (the same trust class as the self-declared session). No job that runs repo code (tests, build
   scripts, `.config/nextest.toml`) holds a token that can write statuses or issues: main-health's
