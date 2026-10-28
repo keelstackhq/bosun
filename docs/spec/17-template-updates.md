@@ -1,4 +1,4 @@
-## 15. Clean template updates
+## 17. Clean template updates
 
 **Status: proposed, not built (design B5, 2026-10-28).** Nothing below is in the code. risk-check
 works as §8 says until the owner decides the open choices at the end and the plan
@@ -135,12 +135,13 @@ default branch, like any other approval; else the bot's next refresh re-renders.
 
 - **R-ci.** Every R-ci path is in the template floor, so a template update that touches CI is
   never lowered, delegate-class R-ci paths included (decision 4 may give those to a delegate).
-- **B2 (a dedicated GitHub App that posts `risk-check` as a check run; `docs/PROGRESS.md`
-  Blocked item 5).** Today any workflow on a pushed branch can post a forged `risk-check`; the
-  template class neither opens nor closes that. With B2, the render job's result can be a check
-  run of that App, so later runs (reviews, comments) reuse it instead of falling back. The bot
-  App that opens update PRs must not be the App that judges them: a leaked bot key must never
-  post `risk-check`. Proposed order: B2 first (decision 5).
+- **§15, App check runs (B2: a GitHub App posts `risk-check`, `review-verdict` and `main-open`
+  as check runs pinned by `integration_id`).** Until then any workflow on a pushed branch can
+  post a forged `risk-check`; the template class neither opens nor closes that. With §15, the
+  render job's result can be a check run of the gate App, so later runs (reviews, comments)
+  reuse it instead of falling back. The bot App that opens update PRs must never be the gate
+  App that judges them (§15 keeps them separate): a leaked bot key must never post
+  `risk-check`. Proposed order: §15 first (decision 5).
 - **Two verdicts and delegates.** The template class never counts as a verdict or a delegate
   approval, and no signature is involved.
 
@@ -169,7 +170,7 @@ default branch, like any other approval; else the bot's next refresh re-renders.
    `docs/agents/**`) without the owner? Default proposed: yes for the decisions source only.
 3. C7 per source: default-branch ancestor, a GitHub Release, or a signed tag (which keys).
 4. Delegate-class R-ci paths (`deny.toml`, toolchain files) in a clean update: owner, or delegate.
-5. Build after B2, or before it with the job-output hand-off above.
+5. Build after §15 (App check runs), or before it with the job-output hand-off above.
 6. Refuse downgrades (new commit must descend from the base lock's commit)?
 7. Class name and status text: a new `template` class (proposed), or plain `normal`.
 8. Should a clean update also get `review-verdict` automatically, or still need a session review?

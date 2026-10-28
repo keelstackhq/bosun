@@ -1,1 +1,1 @@
-- 2026-10-28 · B5 · design and plan for clean template updates (spec §15, proposed; blocked on owner decisions) · PR (docs/clean-template-update)
+- 2026-10-28 · B5 · design and plan for clean template updates (spec §17, proposed; blocked on owner decisions) · PR (docs/clean-template-update)
