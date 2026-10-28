@@ -3,7 +3,7 @@
 project: bosun
 
 Design: spec §15 (B2, the gates as check runs of a dedicated App, pinned in the ruleset) and §16
-(B4, owner teams). Seed constraints hold: one task per PR of at most 400 changed lines, `src/core`
+(B4, owner teams; §16, B4: next PR). Seed constraints hold: one task per PR of at most 400 changed lines, `src/core`
 does no I/O, tests never reach a real API, fragments instead of CHANGELOG/PROGRESS edits.
 B2 lands first. B4 code starts only once B2's App token reaches the workflows (B2W/T1).
 B2W builds on B1 (`fix/risk-no-review-event`): risk.yml has no `pull_request_review` trigger,
@@ -54,6 +54,7 @@ gates (and the verdict records) back by App (§15, "bosun changes").
 - UC-B2-4: in checks mode a verdict record not written by `<app_slug>[bot]` counts for no verdict class.
 - UC-B2-5: checks mode without BOSUN_APP_TOKEN is exit 1 with a fix that names the bosun-app environment.
 - UC-B2-6: no conclusion other than success or failure is ever posted for a gate.
+- UC-B2-7: no comment written with the App token contains `<!-- bosun:verdict -->`, `/bosun approve` or `/bosun recheck`.
 
 ## B2W: Workflows on the App token
 
@@ -83,6 +84,12 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
   touch: .bosun/bosun.toml, docs/spec/01-summary.md, docs/spec/07-gates.md, docs/spec/08-risk.md, docs/spec/15-app-checks.md
   depends: T3
   size: 60
+  risk: high
+
+- T5: Optional, the owner's choice: re-judge on review through a no-permission relay
+  touch: .github/workflows/review-relay.yml, .github/workflows/risk.yml, tests/workflows.rs
+  depends: T1
+  size: 120
   risk: high
 
 ### Done when

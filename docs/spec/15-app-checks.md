@@ -16,7 +16,10 @@ risk.yml runs only on `pull_request_target` and `issue_comment`, both from the d
 That is a precondition here: a `pull_request_review` job runs the PR's copy and evaluates the
 environment against `refs/pull/<n>/merge`, so with `bosun-app` it would fail. An owner review (or
 a withdrawal: request changes, dismiss) is judged on the next run: a push, a `/bosun recheck` PR
-comment, or a re-run. Optional, not planned: an automatic re-judge on review through a relay
+comment, or a re-run. The trade-off: an owner's request for changes or dismissal takes effect
+only on that next run; until then a green risk-check from verdicts or a delegate can still
+auto-merge, so an owner who withdraws also comments `/bosun recheck`. Optional (B2W/T5, the
+owner's choice, not needed for B2): an automatic re-judge on review through a relay
 workflow (`pull_request_review`, `permissions: {}`, no steps that read the payload) and a keyed
 `workflow_run` job on it that finds the PR by the run's `head_sha` through the API and trusts no
 payload field, with the `workflow_run` filters of UC-B2W-4.
@@ -28,14 +31,15 @@ example `keelstackhq-bosun-gate` (a slug is global). No webhook (Active off), no
 URL, "Only on this account", installed on the selected repos only. Repository permissions: Checks
 read and write; Pull requests read and write (the verdict record comment); Contents read; Issues
 read; Metadata read (mandatory); Commit statuses none; nothing else. Organization permission:
-Members read (§16 teams; a user account has no teams and skips it). Only the gate jobs ever use
+Members read (§16 teams, B4: next PR; a user account has no teams and skips it). Only the gate jobs ever use
 this App; any other bot App (the splice bot of B5, §17) is a separate App with its own key.
 
 Which token writes what. The App token writes the three check runs, the verdict record comment and
 the team reads. `GITHUB_TOKEN` keeps the Risk note body edit, the labels and the other comments:
 a write with an App token starts workflows (a `GITHUB_TOKEN` write does not), and an App body
 edit would start risk.yml again (`edited`). An App comment therefore never contains
-`<!-- bosun:verdict -->` or `/bosun approve`, so no `if:` of ours matches it (a test asserts it;
+`<!-- bosun:verdict -->`, `/bosun approve` or `/bosun recheck` (which would start a keyed
+re-run and could loop), so no `if:` of ours matches it (a test asserts it;
 a skipped job uses no runner).
 
 Check runs. `name` is the context, `head_sha` the head judged, `output.title` the description
@@ -156,7 +160,7 @@ review counts: `/bosun approve` comments and signatures (§8) do not satisfy it.
 opened as the owner's login and GitHub forbids approving your own PR, so with one owner every
 workflow PR would need a bypass, which is a human merge outside auto-merge (D13 and D-006 stay:
 agents never merge). With B2 in place risk-check already needs the owner for these PRs and cannot
-be forged. Revisit when at least two humans own the repo (§16) and agents open PRs as their own
+be forged. Revisit when at least two humans own the repo (§16, B4: next PR) and agents open PRs as their own
 account.
 
 **Residuals.**
