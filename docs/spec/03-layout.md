@@ -12,7 +12,7 @@ src/gates/                gate contract, profiles, adapters
 src/plan/                 plan.md parser, import, amend
 src/hooks/                PreToolUse and SessionStart hook entry points
 profiles/                 rust.toml, ts-pnpm.toml
-channel/                  the splice channel that `bosun init` adds (pieces core, rust, ts-pnpm, circleci)
+channel/                  the splice channel that `bosun init` adds (pieces core, rust, ts-pnpm, circleci, circleci-only)
 docs/spec.md (index), docs/spec/ (one file per section), docs/defaults.md, docs/plan-format.md
 .bosun/                   bosun runs on itself
 ```
@@ -70,8 +70,8 @@ dtolnay step; the old 1.97 pin when there is no toolchain file, never the runner
 required checks and `merge_queue = false` (unless set) into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
 the owner then adds the two bosun hooks there (an owner step), since only one source may own it.
 
-CircleCI (hull secrets-ci design §6.5): piece `circleci` adds `.circleci/src/jobs/bosun-ok.yml` and
-`.circleci/src/workflows/bosun.yml`, one unfiltered workflow (no branch, path or `when` filter)
+CircleCI (hull secrets-ci design §6.5, §7.4): piece `circleci` adds `.circleci/src/jobs/bosun-ok.yml`
+and `.circleci/src/workflows/bosun.yml`, one unfiltered workflow (no branch, path or `when` filter)
 whose job reports `ci/circleci: bosun-ok`, or `ci/circleci: ci-ok` without `own_ci` (workflow `name:`).
 The job (cimg/node by digest) runs `git fetch origin main` into `origin/main` and sets `origin/HEAD`
 before anything reads the base, since a stale cached `origin/<default>` would hide what main gained (a
@@ -90,5 +90,15 @@ The ts-pnpm stack runs in the same job: test-integrity, then deps with every pac
 pnpm-workspace.yaml from origin/main (as bosun-trusted; a path whose directory links outside the
 checkout stops the job before anything is removed), then the PR's copies back,
 `pnpm install --frozen-lockfile`, fmt, lint and test. There are no draft, docs-only or body-edit
-fast paths. risk, verdict, main-open and splice.yml are the same with
-or without the piece.
+fast paths.
+Piece `circleci-only` (requires `circleci`; channel `min_splice` 0.3.0, whose contract rule 27 deletes
+an owned file whose re-render is empty) drops the GitHub bosun.yml, and main-health then triggers on
+`status` (`concurrency: main-health`) with a job-level `if:`: a terminal `ci/circleci: ci-ok` or
+`bosun-ok` from the `circleci-app[bot]` Bot for `github.sha`, the default branch's head (a status
+of an older main commit never counts); with `own_ci` main is green only when both contexts are
+`success` on that commit, read across every page of its statuses (pending or missing is not). Its weekly gates are a CircleCI scheduled
+pipeline (an owner step). Without `own_ci` (no hull) the channel also ships hull's
+`.circleci/config.yml`, `.circleci/src/@config.yml` and the mirror
+`.github/workflows/circleci-status.yml`, byte-identical to the copies vendored in
+`tests/fixtures/hull/<ref>/` (`MANIFEST`); beside hull they render empty and hull owns them. risk,
+verdict, main-open and splice.yml are the same in every mode.

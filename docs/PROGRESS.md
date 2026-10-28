@@ -317,3 +317,7 @@ Human-only items, in order. Each has the exact action.
     plan (`bosun doctor` says "cannot verify" then). Each weekly splice update PR is R-gov and
     needs `/bosun approve <sha>`. In a Claude cloud session `bosun init` pushes to
     `claude/bosun-init` (or `--branch`).
+11. **CircleCI weekly gates (circleci-only consumers).** With the channel pieces `circleci` and
+    `circleci-only`, main-health has no weekly GitHub run: in the repo's CircleCI project settings →
+    Triggers, add a scheduled pipeline on `main`, weekly (for example Monday 03:17 UTC), so the
+    bosun workflow runs every gate on all of main; its `ci-ok`/`bosun-ok` status feeds main-health.

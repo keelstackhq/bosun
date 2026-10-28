@@ -1,0 +1,35 @@
+name: circleci-status
+
+# Mirrors the terminal CircleCI statuses `ci/circleci: ci-ok` and `ci/circleci: bosun-ok` as `ci-ok`
+# and `bosun-ok`, the required checks. A `status` workflow always runs the default branch's
+# definition, so a PR cannot change it. It never reads the repository and has no environment.
+on: status
+
+permissions:
+  statuses: write
+
+jobs:
+  mirror:
+    # Job-level `if`: no runner starts for any other status. The sender login is the CircleCI GitHub
+    # App's bot (unverified constant, spec S12 item 1). Pending is not mirrored: a missing required
+    # check already blocks the merge.
+    if: >-
+      (github.event.context == 'ci/circleci: ci-ok' || github.event.context == 'ci/circleci: bosun-ok')
+      && github.event.state != 'pending'
+      && github.event.sender.login == 'circleci-app[bot]'
+      && github.event.sender.type == 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Post the matching status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.sha }}
+          STATE: ${{ github.event.state }}
+          CONTEXT: ${{ github.event.context }}
+          URL: ${{ github.event.target_url }}
+        run: |
+          set -- -f state="$STATE" -f context="${CONTEXT#ci/circleci: }"
+          if [ -n "$URL" ]; then set -- "$@" -f target_url="$URL"; fi
+          gh api "repos/$REPO/statuses/$SHA" "$@"

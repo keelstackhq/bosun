@@ -42,8 +42,8 @@ fn manifest_names_the_bosun_channel_with_core_as_base() {
     assert_eq!(m["format"].as_integer(), Some(1));
     assert_eq!(m["name"].as_str(), Some("bosun"));
     assert_eq!(m["base"].as_str(), Some("core"));
-    // Sections and raw blocks need splice 0.2.0 (template format §9.23, §9.26).
-    assert_eq!(m["min_splice"].as_str(), Some("0.2.0"));
+    // circleci-only removes bosun.yml: an empty re-render deletes an owned file (rule 9.27).
+    assert_eq!(m["min_splice"].as_str(), Some("0.3.0"));
     let vars = m["vars"].as_table().unwrap();
     for v in [
         "project",
@@ -64,13 +64,22 @@ fn each_piece_matches_its_directory_and_lists_real_files() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     ids.sort();
-    assert_eq!(ids, ["circleci", "claude-md", "core", "rust", "ts-pnpm"]);
+    let want = [
+        "circleci",
+        "circleci-only",
+        "claude-md",
+        "core",
+        "rust",
+        "ts-pnpm",
+    ];
+    assert_eq!(ids, want);
     for id in &ids {
         let dir = channel().join("pieces").join(id);
         let p = toml_at(&dir.join("piece.toml"));
         assert_eq!(p["id"].as_str(), Some(id.as_str()));
+        let needs = ["core", "circleci"][usize::from(id == "circleci-only")];
         if id != "core" {
-            assert_eq!(strings(p.get("requires")), ["core"], "{id} requires core");
+            assert_eq!(strings(p.get("requires")), [needs], "{id} requires {needs}");
         }
         let files = p.get("files").and_then(toml::Value::as_table);
         for class in ["owned", "shared", "seed"] {
@@ -255,6 +264,17 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
         let mine = fs::read_to_string(ours.join(f)).unwrap();
         // main-health watches bosun (and the repo's ci) where bosun's own watches ci, and with
         // the repo's ci it also reads the runs of both: the rest of `on:` and `permissions:` match.
+        // Without circleci-only (whose trigger is a CircleCI status, tests/channel_render/circleci.rs).
+        let ci_only = theirs.find("{% endraw %}{% if \"circleci-only\" in pieces %}  #");
+        let theirs = match ci_only {
+            Some(i) => {
+                let j = theirs[i..].find("{% else %}{% raw %}").unwrap() + i;
+                let end = "  workflow_dispatch:\n{% endraw %}{% endif %}{% raw %}";
+                let (head, tail) = (&theirs[..i], &theirs[j + "{% else %}{% raw %}".len()..]);
+                format!("{head}{}", tail.replacen(end, "  workflow_dispatch:\n", 1))
+            }
+            None => theirs,
+        };
         let theirs = theirs
             .replace(WATCH, "    workflows: [ci]\n")
             .replace(ACTIONS_READ, "");

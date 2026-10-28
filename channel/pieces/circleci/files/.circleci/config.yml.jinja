@@ -1,0 +1,36 @@
+{% if own_ci %}{% else %}{% raw %}version: 2.1
+setup: true
+
+# Packs .circleci/src with the pinned CircleCI CLI and continues the pipeline with it (no orbs).
+jobs:
+  setup:
+    docker:
+      # cimg/base 2026.10, digest of the multi-arch index verified 2026-10-28 (Docker Hub registry)
+      - image: cimg/base:2026.10@sha256:e133b1e03b06cafa4a66dbe6bdb350e6ed7133729b1a4f812635b82c6e1e5389
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Install CircleCI CLI
+          environment:
+            # circleci-cli 1.11.0, verified 2026-10-28 (release circleci-cli_1.11.0_checksums.txt)
+            CIRCLECI_CLI_VERSION: 1.11.0
+            CIRCLECI_CLI_SHA256: 70c3a935e0c2d71d42ba65f0005696eb17fd65fb625c678f45311b826d56de47
+          command: |
+            curl -fsSL -o /tmp/cli.tgz "https://github.com/CircleCI-Public/circleci-cli/releases/download/v${CIRCLECI_CLI_VERSION}/circleci-cli_${CIRCLECI_CLI_VERSION}_linux_amd64.tar.gz"
+            echo "${CIRCLECI_CLI_SHA256}  /tmp/cli.tgz" | sha256sum -c - || exit 1
+            sudo tar -xzf /tmp/cli.tgz -C /usr/local/bin circleci
+      - run:
+          name: Pack and continue
+          command: |
+            circleci config pack .circleci/src > /tmp/continue.yml
+            jq -n --arg key "$CIRCLE_CONTINUATION_KEY" --rawfile cfg /tmp/continue.yml \
+              '{"continuation-key": $key, configuration: $cfg}' \
+              | curl -fsS -X POST -H "Content-Type: application/json" --data @- \
+                https://circleci.com/api/v2/pipeline/continue
+
+workflows:
+  setup:
+    jobs:
+      - setup
+{% endraw %}{% endif %}

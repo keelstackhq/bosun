@@ -1,0 +1,6 @@
+id = "circleci-only"
+description = "CircleCI is the only CI: no GitHub bosun.yml, main-health on CircleCI statuses, hull's status mirror without own_ci"
+requires = ["circleci"]
+
+[files]
+owned = [".github/workflows/circleci-status.yml"]

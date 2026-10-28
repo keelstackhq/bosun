@@ -1,6 +1,12 @@
 id = "circleci"
-description = "CircleCI runs bosun's gates: job bosun-ok, or ci-ok without own_ci"
+description = "CircleCI runs bosun's gates (job bosun-ok, or ci-ok without own_ci); without hull, also hull's setup config"
 requires = ["core"]
 
 [files]
-owned = [".circleci/src/jobs/bosun-ok.yml", ".circleci/src/workflows/bosun.yml"]
+# config.yml and @config.yml are hull's; beside hull (own_ci) they render empty.
+owned = [
+  ".circleci/config.yml",
+  ".circleci/src/@config.yml",
+  ".circleci/src/jobs/bosun-ok.yml",
+  ".circleci/src/workflows/bosun.yml",
+]

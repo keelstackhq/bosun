@@ -1,0 +1,5 @@
+# Vendored from keelstackhq/hull at commit 58c488bbae852bae2ef2dfce50eeedc7a2c1271e (origin/main,
+# 2026-10-28). One file per line, at its hull path; template-rust/ has byte-identical copies.
+template/pieces/circleci/files/.circleci/config.yml
+template/pieces/circleci/files/.circleci/src/@config.yml
+template/pieces/circleci-only/files/.github/workflows/circleci-status.yml
