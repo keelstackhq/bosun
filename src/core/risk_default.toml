@@ -5,7 +5,7 @@
 id = "R-gov"
 why = "Governance files decide who approves what."
 # REVIEW.md and docs/lessons.toml are read into every review pack.
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "hoist.toml", "REVIEW.md", "docs/lessons.toml"]
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "REVIEW.md", "docs/lessons.toml", "docs/agents/**", "**/AGENTS.md", "**/CLAUDE.md"]
 
 [[rule]]
 id = "R-ci"

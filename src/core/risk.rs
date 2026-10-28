@@ -266,7 +266,7 @@ pub const CRITICAL_PATHS: [&str; 17] = [
     "CODEOWNERS",
     ".github/CODEOWNERS",
     "docs/CODEOWNERS",
-    // The required checks `hoist apply` puts in the ruleset (root only: hoist reads no other).
+    // The required checks `hoist apply` puts in the ruleset: only the root file has `[github]`.
     "hoist.toml",
     ".github/workflows/**",
     ".github/actions/**",
