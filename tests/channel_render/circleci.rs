@@ -141,6 +141,8 @@ fn circleci_only_drops_bosun_yml_and_main_health_follows_circleci_statuses() {
             ] {
                 assert!(cond.contains(want), "{cond}");
             }
+            // The payload lists at most 10 branches: main may be missing from it.
+            assert!(!cond.contains("branches"), "{cond}");
             let both_checks = wf.contains("ci/circleci: bosun-ok\"");
             assert_eq!(both_checks, !own_ci.is_empty(), "{wf}");
             assert_eq!(jobs["report"]["concurrency"], "main-health", "{wf}");
@@ -153,7 +155,8 @@ fn circleci_only_drops_bosun_yml_and_main_health_follows_circleci_statuses() {
 }
 
 /// main-health's result step in circleci-only mode with own_ci, with a fake `gh` that answers
-/// each context's latest state: green only when both are `success`.
+/// each context's latest state: green only when both are `success`. bosun-ok sits past the first
+/// page of statuses (a page holds 30 by default): the fake answers it only to a paginated read.
 #[test]
 fn circleci_only_main_is_green_only_when_both_checks_succeeded() {
     let only = mode(&["rust"], &["circleci", "circleci-only"], "1");
@@ -167,8 +170,8 @@ fn circleci_only_main_is_green_only_when_both_checks_succeeded() {
         .to_string();
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    let gh =
-        "#!/bin/sh\ncase \"$*\" in *bosun-ok*) echo \"$BOSUN_OK\" ;; *) echo \"$CI_OK\" ;; esac\n";
+    let gh = "#!/bin/sh\ncase \"$*\" in *--paginate*per_page=100*bosun-ok*) echo \"$BOSUN_OK\" ;; \
+        *bosun-ok*) ;; *) echo \"$CI_OK\" ;; esac\n";
     fs::write(d.join("gh"), gh).unwrap();
     git_in(d, "chmod +x gh");
     let path = format!("{}:{}", d.display(), std::env::var("PATH").unwrap());

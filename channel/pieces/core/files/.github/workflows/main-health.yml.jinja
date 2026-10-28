@@ -31,14 +31,13 @@ permissions:
 jobs:
 {% endraw %}{% if "circleci-only" in pieces %}{% raw %}  report:
     # Only a terminal ci-ok or bosun-ok status from the CircleCI app (hull's mirror filter) for the
-    # default branch's head: for a status event github.sha is that head, while `branches` lists
-    # every branch that contains the commit. No runner starts for any other status.
+    # default branch's head: for a status event github.sha is that head (`branches` lists at most
+    # 10 branches, so main may be missing there). No runner starts for any other status.
     if: >-
       (github.event.context == 'ci/circleci: ci-ok' || github.event.context == 'ci/circleci: bosun-ok')
       && github.event.state != 'pending'
       && github.event.sender.login == 'circleci-app[bot]'
       && github.event.sender.type == 'Bot'
-      && contains(github.event.branches.*.name, 'main')
       && github.event.sha == github.sha
     # One report at a time: the statuses of one commit arrive together.
     concurrency: main-health
@@ -115,7 +114,9 @@ jobs:
           if [ "$STATE" = success ]; then RESULT=success; fi
 {% endraw %}{% if own_ci %}          for c in "ci/circleci: ci-ok" "ci/circleci: bosun-ok"; do
             [ "$RESULT" = failure ] && break
-            s=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" --jq "[.statuses[] | select(.context == \"$c\")][0].state // \"\"")
+            # Every page: a commit can carry more than one page of contexts.
+            s=$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$SHA/status?per_page=100" --jq ".statuses[] | select(.context == \"$c\") | .state")
+            s="${s%%$'\n'*}"
             case "$s" in success) ;; failure | error) RESULT=failure ;; *) RESULT=pending ;; esac
           done
 {% endif %}          echo "result=$RESULT" >> "$GITHUB_OUTPUT"

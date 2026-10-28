@@ -96,7 +96,7 @@ an owned file whose re-render is empty) drops the GitHub bosun.yml, and main-hea
 `status` (`concurrency: main-health`) with a job-level `if:`: a terminal `ci/circleci: ci-ok` or
 `bosun-ok` from the `circleci-app[bot]` Bot for `github.sha`, the default branch's head (a status
 of an older main commit never counts); with `own_ci` main is green only when both contexts are
-`success` on that commit (pending or missing is not). Its weekly gates are a CircleCI scheduled
+`success` on that commit, read across every page of its statuses (pending or missing is not). Its weekly gates are a CircleCI scheduled
 pipeline (an owner step). Without `own_ci` (no hull) the channel also ships hull's
 `.circleci/config.yml`, `.circleci/src/@config.yml` and the mirror
 `.github/workflows/circleci-status.yml`, byte-identical to the copies vendored in
