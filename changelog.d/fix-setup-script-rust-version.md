@@ -1,0 +1,1 @@
+- The setup scripts (the channel's `docs/setup-script.sh` and bosun's own) install the `channel` of the repo's `rust-toolchain.toml` instead of a hard-coded Rust 1.97, stop with a fix when the file is missing, and print the version with `--rust-version`.

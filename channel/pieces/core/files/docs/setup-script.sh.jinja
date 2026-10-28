@@ -6,25 +6,16 @@ set -euo pipefail
 # Pinned tool versions; the bosun channel moves them with its own versions.
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
-RUST_VERSION=1.97 # fallback; the repo's rust-toolchain.toml wins (read below)
 SPLICE_VERSION=0.2.1
 HOIST_VERSION=0.2.0
 BERTH_VERSION=0.1.0
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION={% if bosun_version %}{{ bosun_version }}{% else %}{{ template.version }}{% endif %}
-
-# Node 24 from NodeSource, unless it is already there (the keelstackhq tools ship through npm).
-if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
-  apt-get install -y nodejs
-fi
-{% if "ts-pnpm" in pieces %}
-# pnpm 12 ships a native binary; its install.js puts it in place.
-npm install -g "pnpm@${PNPM_VERSION}"
-(cd "$(npm root -g)/pnpm" && node install.js) || true
-{% endif %}{% if "rust" in pieces %}
-# Rust and the cargo tools the gates run. The version is the `channel` of the repo's
-# rust-toolchain.toml (or the legacy rust-toolchain file) when the script runs in a checkout, so gates and sessions share a toolchain.
+{% if "rust" in pieces %}
+# Rust is not pinned here: the version is the `channel` of the repo's rust-toolchain.toml (or the
+# legacy rust-toolchain file), so gates and sessions share a toolchain. Without one the script
+# stops. `bash docs/setup-script.sh --rust-version` prints the version and installs nothing.
+RUST_VERSION=""
 for f in "{{ rust_path }}/rust-toolchain.toml" "{{ rust_path }}/rust-toolchain" rust-toolchain.toml rust-toolchain; do
   [ -f "$f" ] || continue
   v="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" "$f" | head -n1)"
@@ -35,6 +26,23 @@ for f in "{{ rust_path }}/rust-toolchain.toml" "{{ rust_path }}/rust-toolchain" 
   fi
   if [ -n "$v" ]; then RUST_VERSION="$v"; break; fi
 done
+if [ -z "$RUST_VERSION" ]; then
+  echo "setup-script: no rust-toolchain.toml with a channel in {{ rust_path }} or $PWD; run the script in the repo checkout, or add rust-toolchain.toml with [toolchain] channel = \"x.y.z\"" >&2
+  exit 1
+fi
+if [ "${1:-}" = --rust-version ]; then echo "$RUST_VERSION"; exit 0; fi
+{% endif %}
+# Node 24 from NodeSource, unless it is already there (the keelstackhq tools ship through npm).
+if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
+  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+  apt-get install -y nodejs
+fi
+{% if "ts-pnpm" in pieces %}
+# pnpm 12 ships a native binary; its install.js puts it in place.
+npm install -g "pnpm@${PNPM_VERSION}"
+(cd "$(npm root -g)/pnpm" && node install.js) || true
+{% endif %}{% if "rust" in pieces %}
+# Rust (the version read above) and the cargo tools the gates run.
 rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
 rustup default "${RUST_VERSION}"
 cargo install --locked cargo-nextest cargo-deny

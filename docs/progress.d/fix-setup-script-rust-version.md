@@ -1,0 +1,1 @@
+- 2026-10-28 · Fix setup-script Rust version · `docs/setup-script.sh` (channel and own) reads `rust-toolchain.toml`, no hard-coded `RUST_VERSION`, stops without it, `--rust-version` prints it; spec §1 D23, §3 · `tests/channel_render.rs` · PR (fix/setup-script-rust-version)

@@ -6,12 +6,24 @@ set -euo pipefail
 # Pinned tool versions. Move a pin with a PR that edits this file (R-ci reviews it).
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
-RUST_VERSION=1.97
 SPLICE_VERSION=0.2.1
 HOIST_VERSION=0.2.0
 BERTH_VERSION=0.1.0
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION=0.2.3
+
+# Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
+# Without one the script stops. `bash docs/setup-script.sh --rust-version` prints the version
+# and installs nothing.
+RUST_VERSION=""
+if [ -f rust-toolchain.toml ]; then
+  RUST_VERSION="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" rust-toolchain.toml | head -n1)"
+fi
+if [ -z "$RUST_VERSION" ]; then
+  echo "setup-script: no rust-toolchain.toml with a channel in $PWD; run the script in the repo checkout, or add rust-toolchain.toml with [toolchain] channel = \"x.y.z\"" >&2
+  exit 1
+fi
+if [ "${1:-}" = --rust-version ]; then echo "$RUST_VERSION"; exit 0; fi
 
 # Node 24 from NodeSource, unless it is already there.
 if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
@@ -23,7 +35,7 @@ fi
 npm install -g "pnpm@${PNPM_VERSION}"
 (cd "$(npm root -g)/pnpm" && node install.js) || true
 
-# Rust and the cargo tools the gates run.
+# Rust (the version read above) and the cargo tools the gates run.
 rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
 rustup default "${RUST_VERSION}"
 cargo install --locked cargo-nextest cargo-deny
