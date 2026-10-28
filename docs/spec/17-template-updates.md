@@ -3,8 +3,10 @@
 **Status: proposed, not built (design B5, 2026-10-28).** Nothing below is in the code. risk-check
 works as §8 says until the owner decides the open choices at the end and the plan
 `docs/superpowers/plans/2026-10-28-clean-template-update.md` lands. Until then "a rule only
-escalates" (§8) holds without exception. §15 (App check runs, B2) is a hard prerequisite: this
-design merges after the B2/B4 design and is built only after §15 is built.
+escalates" (§8) holds without exception. §15 (App check runs, B2; design merged in #315) is a
+hard prerequisite: this is built only after §15 is, with `[checks] mode` `dual` or `checks`
+(§15 Transition step 3 on), so the risk job holds the gate App token (`BOSUN_APP_TOKEN`). In
+`statuses` mode the class is off.
 
 ### Problem
 
@@ -94,28 +96,27 @@ listed in `paths` never lowers, and risk-check logs it to stderr. The class is a
 nothing for the PR: when any changed path (old or new name) is outside `paths` or in the
 floor, nothing is lowered, the PR keeps its §8 class and needs the owner, whatever that class
 is (a file that matches no rule, such as `hoist.toml` or `docs/setup-script.sh` today, cannot
-ride along at normal risk). The status reads `high risk
-(<ids>), clean template update: <source>@<7 hex>`, and `data.template_update` holds `{clean,
-source, commit, reason}`.
+ride along at normal risk). The status reads `high risk (<ids>), clean template update:
+<source>@<7 hex>`, and `data.template_update` holds `{clean, source, commit, reason}`.
 
 **The template floor still needs the owner, also in a clean update:** the §8 critical floor
 (`.bosun/**`, `governance/**`, CODEOWNERS, R-secrets, R-prod-write, R-unseen and, in bosun,
-`src/**` and the manifests), every R-ci path (`.github/workflows/**`, `.github/actions/**`,
-the other CI configs, `deny.toml`, the toolchain files), `.claude/**`, `REVIEW.md`,
-`docs/lessons.toml`, the §8 trust files, `hoist.toml` (the required checks and, after §15,
-the App pins) and `docs/setup-script.sh` (the owner pastes it into cloud environments, where
-it runs as root). Why: C1-C7 prove that
-the PR is exactly what upstream published, not that upstream is safe. A compromised or careless
-template could ship a workflow with `statuses: write` that posts `risk-check` success for every
-PR, a step that leaks secrets, a looser `deny.toml`, or a `.claude/settings.json` hook that runs
-commands in every agent session. One bad upstream commit would then reach every consumer with no
-human look. So a bosun channel update that moves `.bosun/version` or a workflow still waits for
-the owner; the class removes the owner only from pins and plain rendered files (the decisions
-channel). Agent-instruction files (`CLAUDE.md`, `AGENTS.md`, `docs/agents/**`) are prompts
-for every later agent. In bosun the only rendered files are such files (`org-decisions.md`
-and a `CLAUDE.md` section), so the whole benefit here is to skip a human look at files every
-agent reads. Default: they stay out of `paths` unless C7 (b) or (c) is chosen for the source
-(decision 2); with the default, a bosun decisions update still needs the owner.
+`src/**` and the manifests), every R-ci path (`.github/workflows/**`, `.github/actions/**`, the
+other CI configs, `deny.toml`, the toolchain files), `.claude/**`, `REVIEW.md`,
+`docs/lessons.toml`, the §8 trust files, `hoist.toml` (the required checks and, after §15, the App
+pins; R-gov and critical once B2/T6 lands, a code PR of its own) and `docs/setup-script.sh` (the
+owner pastes it into cloud environments, where it runs as root). Why: C1-C7 prove that the PR is
+exactly what upstream published, not that upstream is safe. A compromised or careless template
+could ship a workflow with `statuses: write` that posts `risk-check` success for every PR, a step
+that leaks secrets, a looser `deny.toml`, or a `.claude/settings.json` hook that runs commands in
+every agent session. One bad upstream commit would then reach every consumer with no human look.
+So a bosun channel update that moves `.bosun/version` or a workflow still waits for the owner; the
+class removes the owner only from pins and plain rendered files (the decisions channel).
+Agent-instruction files (`CLAUDE.md`, `AGENTS.md`, `docs/agents/**`) are prompts for every later
+agent. In bosun the only rendered files are such files (`org-decisions.md` and a `CLAUDE.md`
+section), so the whole benefit here is to skip a human look at files every agent reads. Default:
+they stay out of `paths` unless C7 (b) or (c) is chosen for the source (decision 2); with the
+default, a bosun decisions update still needs the owner.
 
 ### Where the re-render runs
 
@@ -133,12 +134,14 @@ or scripts; a channel that needs them is never clean). The job outputs one value
 tree SHA (or empty on any failure). The `risk` job has `needs: template` and `if: always()`
 (with its own conditions), so a skipped or failed render never skips risk-check. It passes
 the value to the pinned bosun (`BOSUN_TEMPLATE_TREE`), which compares it with the head tree
-read through the API and checks C1 and C3-C7 itself. With the gate App key of §15, risk-check
-then posts a per-head `template-render` check run (conclusion `success` or `failure`; the
-summary names the base SHA and the rendered tree). Every later risk-check on that head (the
-re-run in verdict.yml after `bosun verdict apply`, reviews, comments) reads the newest
-`template-render` check run of the gate App, pinned by App id as §15 pins its checks, and
-counts it only while its base SHA is the PR's current base. A check run of any other app,
+read through the API and checks C1 and C3-C7 itself. With the gate App token of §15 (the
+risk job's `bosun-app` environment), risk-check then posts a per-head `template-render` check
+run through §15's gate writer (conclusion `success` or `failure`, never `neutral` or
+`skipped`; the summary names the base SHA and the rendered tree). Every later risk-check on
+that head (the re-run in verdict.yml after `bosun verdict apply`, a `/bosun recheck` or
+`/bosun approve` comment, a re-run) reads the newest `template-render` check run whose
+`app_id` is `[checks] app_id`, as §15 reads its own gates, and counts it only while its base
+SHA is the PR's current base. A check run of any other app,
 or a commit status of that name, is ignored. Without §15 a later run has no render and no
 unforgeable record of one, so the class would flip to "owner needed" as soon as
 `review-verdict` lands; that is why §15 is a hard prerequisite. So a fault in the render job

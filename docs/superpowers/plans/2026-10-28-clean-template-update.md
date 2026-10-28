@@ -12,8 +12,9 @@ whole PR that touches any path outside `paths`.
 
 Status: **blocked on the owner and on §15.** No task starts before the decisions in §17 "Owner
 decision needed" are made (H1) and §15 (App check runs, B2) is built (H3); the answers may cut
-or change tasks. This plan merges after the B2/B4 design PR (§15, §16), and its tasks touch
-`risk.yml` and risk-check only after §15's tasks have landed there. Every task changes
+or change tasks. The §15 design merged in #315; this plan's tasks touch `risk.yml` and
+risk-check only after §15's tasks (the gate writer, `[checks]`, the `bosun-app` environment,
+B2/T6 for `hoist.toml`) have landed there. Every task changes
 risk-check, the gate code, or a workflow, so each one is `risk: high` and needs the owner.
 
 Seed constraints hold: one task per PR of at most 400 changed lines, `src/core` does no I/O,

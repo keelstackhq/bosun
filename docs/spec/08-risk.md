@@ -23,7 +23,7 @@ Rule evaluation:
 
 Approval classes (mechanism): a rule has `approval = "owner"` (the default), `"two-verdicts"` or `"delegate"`; any other value is a parse error naming the rule (risk-check exits 1 and posts an `error` status, see Pending below). A high PR needs the owner when any match needs the owner (a rule without `approval`, and the built-in R-unseen), else a delegate when any match is `delegate` (see delegated decisions below), else two verdicts. `risk-check` sets `data.requirement` (`owner`, `delegate` or `two-verdicts`) and, for two verdicts, `data.verdicts` (the sessions). The built-in rules use the two-verdicts class for R-ci-review only and never delegate; this repo's `.bosun/risk.toml` also makes R-ci, R-gate and R-deps `delegate` (risk.yml judges every PR with the release pinned in `.bosun/version`, so the rules on main must parse with the pin: `delegate` needs 0.2.1 or later; `tests/governance.rs` checks it). A test keeps the two files equal apart from that opt-in.
 
-Pending: every `risk-check` run first posts `risk-check` `pending` ("risk-check is judging this head") on the head, so auto-merge waits while a run is in flight; the run's verdict (`success`, or `failure` with exit 5) then replaces it. A run that cannot finish (exit 1: an unreadable file, a GitHub error, a rules parse error) posts `error` ("risk-check could not finish; fix the error and re-run the risk workflow"), never leaving `pending` behind. A failed `pending` post is logged to stderr and the run goes on. Stale pending: a run killed before its verdict (runner loss, a timeout, a newer run in the same concurrency group cancelling it) can leave `pending`; it only blocks, never passes, and the next run on the head (a push, an owner review, a `/bosun approve` comment, a verdict) overwrites it. Without such an event, re-run the risk workflow for the PR. `bosun approve --list` shows a head whose newest `risk-check` is `pending` or `error` as waiting ("risk-check pending or errored: re-run the risk workflow if it stays"), so a stuck run is on the owner board.
+Pending: every `risk-check` run first posts `risk-check` `pending` ("risk-check is judging this head") on the head, so auto-merge waits while a run is in flight; the run's verdict (`success`, or `failure` with exit 5) then replaces it. A run that cannot finish (exit 1: an unreadable file, a GitHub error, a rules parse error) posts `error` ("risk-check could not finish; fix the error and re-run the risk workflow"), never leaving `pending` behind. A failed `pending` post is logged to stderr and the run goes on. Stale pending: a run killed before its verdict (runner loss, a timeout, a newer run in the same concurrency group cancelling it) can leave `pending`; it only blocks, never passes, and the next run on the head (a push, a `/bosun approve` or `/bosun recheck` comment, a verdict) overwrites it. Without such an event, comment `/bosun recheck` or re-run the risk workflow for the PR. `bosun approve --list` shows a head whose newest `risk-check` is `pending` or `error` as waiting ("risk-check pending or errored: comment `/bosun recheck` (or re-run the risk workflow) if it stays"), so a stuck run is on the owner board.
 
 Touch warning (design C3): `risk-check` takes the first linked issue with task metadata, its newest live lease (any session) and applies the same `touch::outside` rules as `bosun pr` to the PR's files (added and copied files, lockfile companions and the fragments pass; a rename is checked by its old name). `data.out_of_touch` lists the paths outside, and a high-risk PR's Risk note gains the line `- **warning:** <n> files outside the task's lease: <paths>` (ten names at most, then `and N more`); each name, like every file name in the Risk note, is shown with backticks, angle brackets and anything but printable ASCII (control, bidi and zero-width characters, line separators, other non-ASCII) as `?`, and in backticks (each name in the warning, each evidence line in the note); `data` keeps the raw names, so a name cannot end the note, one stderr line is printed, and the status description is unchanged. It is a warning only: it never changes the level or the state. With no linked task, no live lease or a cut file list (fewer files listed than the PR changes) it is `null` and nothing is added. The linked task is the first linked issue with task metadata; leases with an empty touch are ignored. It costs one paginated comments read of that task issue, and a failed read only logs to stderr and gives `null`.
 
@@ -39,7 +39,8 @@ Two verdicts:
 High-risk PRs:
 - A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
-  approve, request-changes or dismissed review on that SHA), or a PR comment by the owner whose
+  approve, request-changes or dismissed review on that SHA; read on the next run, as no review
+  event runs the `risk` workflow: a push, a `/bosun recheck` comment or a re-run), or a PR comment by the owner whose
   body, trimmed, is exactly `/bosun approve <head_sha>` with the full 40-character SHA. The
   comment path exists because GitHub forbids approving your own PR, and an owner may also be the
   account that opens the PRs. A comment binds to that SHA: a new push needs a new comment. An
@@ -64,7 +65,10 @@ High-risk PRs:
   and delegate approvals. A v1 signature, owner or delegate, never ends a withdrawal: it carries
   no time, so a re-posted old one would pass for new. A DISMISSED withdrawal (never a
   CHANGES_REQUESTED one) ends also with a v2 owner signature, which names the dismissed review
-  (below).
+  (below). No review event runs the `risk` workflow, so a withdrawal does not change a green
+  `risk-check` by itself (the ruleset requires status checks, not reviews): to withdraw, request
+  changes or dismiss the approval, then comment `/bosun recheck` (it re-judges and fails);
+  turning off auto-merge also stops a merge. `tests/cli_risk.rs` pins that the next run fails.
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
   in its own container (never shared) and, on the owner's chat message, posts a PR comment whose
@@ -249,18 +253,33 @@ High-risk PRs:
   decision of `bosun gate main-open`, exit 4 when main is red and the PR is no mainfix, and
   records it as `main_open`. The comment still counts only for an owner in
   `governance/owners.toml`, on an unedited comment of a plain user token.
-- The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited), on
-  reviews, and on PR comments (`issue_comment` created) that contain `/bosun approve`, so a
-  comment re-evaluates `risk-check` without a push. `pull_request_target` and `issue_comment` run
+- The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited) and
+  on PR comments (`issue_comment` created) that contain `/bosun approve` or `/bosun recheck`, so
+  a comment re-evaluates `risk-check` without a push. `/bosun recheck` approves nothing: it only
+  re-judges the current head, so anyone may post it (the job filters nothing by author; only an
+  owner's approval counts), and it shares the judge's concurrency group, as an approval does.
+  There is no review trigger: an owner's GitHub review (APPROVED on the head SHA) is read through
+  the API on the next run, a push, a `/bosun recheck` comment or any re-run of the workflow.
+  `pull_request_target` and `issue_comment` run
   the workflow file from the base branch, so a PR cannot rewrite the job that judges it. The job
   never checks out or runs PR-head code: it runs the release pinned in `.bosun/version` of the
   PR's base SHA (on a comment, the default branch; built from it only while the pin says
   `unreleased`), so a base that does not compile cannot block its own mainfix, and reads the PR through the API. Event data reaches scripts through `env`
   only. Permissions: `contents: read`, `issues: read`, `statuses: write`, and
   `pull-requests: write` for the Risk note in the PR body. `tests/workflows.rs` asserts all of
-  this. Limits: `pull_request_review` has no base-branch variant, so a review event runs the PR's
-  copy of the file; and a same-repo PR can add a workflow of its own that requests
-  `statuses: write`. Both are R-ci, so an owner sees them, but neither is blocked by bosun.
+  this, and that no workflow of bosun or the channel runs on `pull_request_review` or
+  `pull_request_review_comment` (both run the PR's copy of the file, with its token and the
+  repo's secrets) or checks out PR code on `workflow_run`.
+  Residual (open): any `on: pull_request` workflow that a same-repo PR adds or edits (ci.yml,
+  bosun.yml or a new file) runs the PR's copy with a token that can be given `statuses: write`,
+  so it can post a forged `risk-check` (or `review-verdict`, `main-open`) success on its own head.
+  The status context is not bound to a source, so the required check is only as strong as that.
+  Making such a PR R-ci does not help: the owner gate is the `risk-check` status that gets
+  forged. The close is B2 (designed in §15): the three gates become check runs of a dedicated
+  GitHub App whose key only `main` jobs get, and the `main` ruleset pins each to that App, so no
+  workflow's `GITHUB_TOKEN` can satisfy them. The pins live in `hoist.toml`, which no rule or
+  floor covers yet (normal risk today, a gap of its own): B2/T6 makes it R-gov and critical
+  before the ruleset switch.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.

@@ -1,0 +1,1 @@
+- Design and plan: gates as check runs of a dedicated GitHub App pinned in the ruleset (B2).

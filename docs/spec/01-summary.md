@@ -28,7 +28,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D20 | Usage (A8) | The usage provider `claude-sessions` reads `usage.cost_usd` from the claude-code-remote `get_session` result. It ships in the seed with the `generic` estimate. |
 | D21 | Exit codes (A9) | Exit codes 0-6 as in §1.1; 2 is usage, as in splice and berth. Every error JSON has a `fix` field that says how to fix it. |
 | D22 | Seed shape (A10) | The seed is a sequence of PRs of at most 400 changed lines each, not one seed PR. |
-| D23 | Environment (A11) | The environment setup script installs Node 24, pnpm 12 (native binary), rust 1.97, cargo-nextest, cargo-deny, and the pinned bosun, splice, hoist and berth. |
+| D23 | Environment (A11) | The environment setup script installs Node 24, pnpm 12 (native binary), rust (the `channel` of the repo's `rust-toolchain.toml`; without it the script warns and skips rust and the cargo tools, never fails), cargo-nextest, cargo-deny, and the pinned bosun, splice, hoist and berth. |
 | D24 | First publish (A12) | The first publish follows the hoist bootstrap flow (`hoist release bootstrap`). npm trusted publishers expire if unused for 2 days, so the first workflow release follows within 2 days. `release.yml` publishes nothing until the owner sets the repo variable `BOSUN_RELEASE=enabled`; the steps are in `docs/releasing.md`. |
 | D25 | Repo and scope (A13) | The repo is `keelstackhq/bosun` (Q1 answered). SP2, the runtime, is out of scope. |
 | D26 | Org rule (A14) | "Agents never merge or tag; merges happen via auto-merge after the gates" is org decision D-006 in keelstackhq/decisions (settled 2026-10-22). It reaches this repo through the decisions channel (D-004): `docs/agents/org-decisions.md`, imported by CLAUDE.md. |
@@ -37,7 +37,8 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D29 | Session tools | bosun never calls the claude-code-remote tools itself; a binary cannot. A command that needs a tool call returns it in `next` (tool name and arguments). The session makes the call and passes the result back with `--from -` on stdin. |
 | D30 | Clock and tests | Time comes from `BOSUN_NOW` (RFC 3339) when set; the GitHub base URL from `BOSUN_GITHUB_API`. Tests use a fake GitHub server and never reach a real API. |
 | D31 | Identity | The repo comes from `BOSUN_REPO` (`owner/name`), else the `origin` remote. The session id comes from `BOSUN_SESSION`, else `CLAUDE_CODE_REMOTE_SESSION_ID` with its `cse_` prefix changed to `session_`, else `local-<host>`. The GitHub token comes from `GITHUB_TOKEN` or `GH_TOKEN`, never argv. |
-| D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. |
+| D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. Any workflow's `GITHUB_TOKEN` can post them, so D33 replaces this once the ruleset is switched (§15). |
+| D33 | Gate source (B2, designed) | `risk-check`, `review-verdict` and `main-open` become check runs of a dedicated GitHub App whose key lives in a `main`-only environment, and the ruleset pins each to that App's `integration_id` (§15). |
 
 ### 1.1 Exit codes
 

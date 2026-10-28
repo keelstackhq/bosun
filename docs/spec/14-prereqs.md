@@ -61,3 +61,12 @@ the held task; `replaces` never releases another task's hold).
 titles and the reply `approve 12 15`), `data.message_id` (8 hex of the SHA-256 of the shown pairs'
 sorted `<pr>@<head>` lines) and `data.message_pairs`. Only the latest relayed message is
 answerable; PR numbers come only from the owner's chat; each (id, pr) is signed at most once (§8).
+
+**App check runs (B2, §15).** Once per org, mostly from a computer, as H1-H7 of
+`docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, in this order: H1 create the App
+(the permissions of §15, webhook off, installed on the chosen repos only); H2 generate its
+private key; H3 create the environment `bosun-app` whose deployment branch policy allows only
+`main`; H4 set the variable `BOSUN_APP_ID` and the secret `BOSUN_APP_KEY` in that environment,
+never as a repo or org secret; H6 release B2 and pin it; H7 check that the agents' credential
+has no Administration, Environments or Secrets write; H5, after the dual phase, switch the
+ruleset with `hoist apply --area github`. A repo in another org makes its own App.
