@@ -213,16 +213,18 @@ Human-only items, in order. Each has the exact action.
    opened with `GITHUB_TOKEN` runs no CI, so `ci-ok` never reports on it. Create a fine-grained
    token (keelstackhq/bosun, Contents and Pull requests: write), then
    `gh secret set SPLICE_BOT_TOKEN --repo keelstackhq/bosun`.
-5. **Trusted source for `risk-check` (owner decision, B2).** Every workflow posts statuses as the
-   github-actions app. `risk.yml` no longer runs a PR's copy (the `pull_request_review` trigger
-   is gone; an owner's GitHub review is honoured on the next run: a push, a `/bosun recheck`
-   comment or a re-run; `/bosun approve <sha>` and signatures work as before). But any
-   `on: pull_request` workflow that a same-repo PR adds or edits (ci.yml or a new file) still
-   gets a token that can post commit statuses, so it can post a forged `risk-check` success on
-   its own head. R-ci does not stop this: the owner gate is that status. The close is B2
-   (planned, spec and plan to come): `risk-check` as a check run posted by a dedicated GitHub
-   App, and the `main` ruleset requiring that App as the check's source. Until then only
-   same-repo push access limits it.
+5. **Trusted source for the gates (owner decision, B2 designed in spec §15).** Every workflow
+   posts statuses as the github-actions app. `risk.yml` no longer runs a PR's copy (the
+   `pull_request_review` trigger is gone; an owner's GitHub review is honoured on the next run: a
+   push, a `/bosun recheck` comment or a re-run; `/bosun approve <sha>` and signatures work as
+   before). But any `on: pull_request` workflow that a same-repo PR adds or edits (ci.yml or a
+   new file) still gets a token that can post commit statuses, so it can post a forged
+   `risk-check` success on its own head. R-ci does not stop this: the owner gate is that status.
+   Until B2 lands only same-repo push access limits it. The close (spec §15): check runs of a
+   dedicated GitHub App, its key in a `main`-only environment, the ruleset pinned to the App.
+   Owner steps, in order H1-H4, H6, H7, H5 of
+   `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md` (App, key, environment,
+   variable and secret, release, agent credential check, then `hoist apply --area github`).
 6. **Review mode b (M8): off, no API key.** The owner decided (2026-10-24) not to add an Anthropic
    API key. Reviews stay mode a: a session runs `bosun review-pack`, posts the verdict with `bosun
    verdict comment`, and `verdict.yml` applies it. `.github/workflows/review.yml` (PR #183) stays

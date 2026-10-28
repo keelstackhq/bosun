@@ -37,7 +37,8 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D29 | Session tools | bosun never calls the claude-code-remote tools itself; a binary cannot. A command that needs a tool call returns it in `next` (tool name and arguments). The session makes the call and passes the result back with `--from -` on stdin. |
 | D30 | Clock and tests | Time comes from `BOSUN_NOW` (RFC 3339) when set; the GitHub base URL from `BOSUN_GITHUB_API`. Tests use a fake GitHub server and never reach a real API. |
 | D31 | Identity | The repo comes from `BOSUN_REPO` (`owner/name`), else the `origin` remote. The session id comes from `BOSUN_SESSION`, else `CLAUDE_CODE_REMOTE_SESSION_ID` with its `cse_` prefix changed to `session_`, else `local-<host>`. The GitHub token comes from `GITHUB_TOKEN` or `GH_TOKEN`, never argv. |
-| D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. |
+| D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. Any workflow's `GITHUB_TOKEN` can post them, so D33 replaces this once the ruleset is switched (§15). |
+| D33 | Gate source (B2, designed) | `risk-check`, `review-verdict` and `main-open` become check runs of a dedicated GitHub App whose key lives in a `main`-only environment, and the ruleset pins each to that App's `integration_id` (§15). |
 
 ### 1.1 Exit codes
 

@@ -274,8 +274,11 @@ High-risk PRs:
   so it can post a forged `risk-check` (or `review-verdict`, `main-open`) success on its own head.
   The status context is not bound to a source, so the required check is only as strong as that.
   Making such a PR R-ci does not help: the owner gate is the `risk-check` status that gets
-  forged. The close is B2 (planned; spec and plan to come): `risk-check` posted as a check run by
-  a dedicated GitHub App, with the `main` ruleset pinning that App as the source of the check.
+  forged. The close is B2 (designed in §15): the three gates become check runs of a dedicated
+  GitHub App whose key only `main` jobs get, and the `main` ruleset pins each to that App, so no
+  workflow's `GITHUB_TOKEN` can satisfy them. The pins live in `hoist.toml`, which no rule or
+  floor covers yet (normal risk today, a gap of its own): B2/T6 makes it R-gov and critical
+  before the ruleset switch.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
