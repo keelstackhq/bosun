@@ -26,23 +26,32 @@ entry only. The file is R-gov and a trust file (§8) as today. Unknown keys are 
 release that knows `team` is pinned before a team entry lands.
 
 **Expansion.** At check time `GET /orgs/{org}/teams/{slug}/members?per_page=100`, every page.
-GitHub's docs say the list includes members of child teams, so nested teams count; a repo that
-wants direct members only lists users. bosun does not read the `role` of a member: maintainers
-and members count alike. Logins compare case-insensitively. The read needs Members read, which
-`GITHUB_TOKEN` cannot have: it uses `BOSUN_APP_TOKEN` (§15) when set, else the command's token
-(a session or owner token of an org member may read it). More than 1000 members is an error.
+GitHub's docs say that list includes members of child teams, and a maintainer of any child team
+could then make owners. So bosun first reads `GET /orgs/{org}/teams/{slug}/teams`: a team with
+child teams fails closed (below; the fix says to list a team without child teams, or the users).
+bosun does not read a member's `role`: maintainers and members count alike. Logins compare
+case-insensitively. More than 1000 members is an error.
+
+**Which contexts can expand.** The reads need Members read, which `GITHUB_TOKEN` cannot have.
+They use `BOSUN_APP_TOKEN` (§15) when set, else the command's own token. Only the gate jobs
+(risk.yml, verdict.yml, main-open, main-health's re-judge) get `BOSUN_APP_TOKEN`; sessions never
+do. So in session-run commands (the kill switch of every command, `bosun approve --list`, `ask`,
+`notify`) and in `bosun approve` with `BOSUN_OWNER_TOKEN`, a team is unreadable unless that
+token can read the org's members (an org member's token with `read:org` or Members read).
 
 **Caching.** Within one process, once per `org/slug`, behind the owner reader
 (`owner_logins`), so risk-check's several owner reads cost one expansion. Never on disk and never
 across runs: a membership change counts from the next run.
 
-**Failure: fail closed.** A 403, 404, error or bad page in the expansion means no member of that
+**Failure: fail closed.** Child teams, or a 403, 404, error or bad page in either read, means no member of that
 team counts, never an error that passes. User entries still count. The command says so:
 `data.owner_teams_unreadable` lists the teams, one stderr line, and where an owner was needed
 the fix is "give the bosun App Members read and pass BOSUN_APP_TOKEN, or list the owner by login
 in governance/owners.toml". The status text appends `(team <org>/<slug> unreadable)`. The kill
 switch is the inverse: an open `bosun:halt` issue by a login that is no listed user while a team
-is unreadable halts (exit 4), as any error reading the owners does today.
+is unreadable halts (exit 4), as any error reading the owners does today. Since sessions usually
+cannot read a team, a halt issue by any non-user then halts sessions: list at least one owner
+by login so an owner's own halt issue is judged without the team.
 
 **Where owners count.** Everywhere a login is checked against the owners, an expanded member is
 an owner:
@@ -56,13 +65,14 @@ an owner:
   (the PAT then needs organization Members read); otherwise exit 5 with the fix above.
 - `bosun ask` and `notify` mention users and `@<org>/<slug>`; Slack IDs come from user entries only.
 
-**Residual.** Team membership is set in the org, not in a PR: an org owner or a team maintainer
-who adds someone to the team makes them a bosun owner without an R-gov PR. Use a team whose
-maintainers are the owners themselves.
+**Residual.** Team membership is set in the org, not in a PR: an org owner or a maintainer of
+the team who adds someone makes them a bosun owner without an R-gov PR. Use a team without child
+teams whose maintainers are the owners themselves.
 
 **Tests (fake GitHub).** Parse: user, team, both, neither, `slack` on a team, another org.
-Expansion: two pages, a child-team member, case. One members call per run with several owner
+Expansion: two pages, case; a team with a child team counts no members. One members call per run with several owner
 reads. Approvals: a member's review, comment and request for changes; a non-member's do not count.
-Failure: 403 and 404 give no team members, `data.owner_teams_unreadable` and the fix; a listed
+Failure: 403 and 404 on either read give no team members, `data.owner_teams_unreadable` and the fix; a listed
 user still approves. Kill switch: a member's halt issue halts; an unreadable team and a
-non-user's halt issue halt. `bosun ask` mentions the team.
+non-user's halt issue halt. Without `BOSUN_APP_TOKEN` and with a session token that cannot
+read members, `approve --list` and `ask` report the team unreadable. `bosun ask` mentions the team.
