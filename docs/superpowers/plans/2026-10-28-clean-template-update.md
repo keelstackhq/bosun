@@ -27,11 +27,11 @@ Each task updates `docs/spec/17-template-updates.md` for what it builds and move
   on: phone
   steps: read docs/spec/17-template-updates.md "Owner decision needed" and answer each item in the B5 PR or to the orchestrator
   blocks: B5
-- H2: a splice bot GitHub App with Contents and Pull requests write on this repo; its key in the environment splice-bot with a main-only branch policy
+- H2: a splice bot GitHub App with Contents and Pull requests write on this repo (plus Workflows write in a repo that uses the bosun channel, to push rendered workflow files, which stay in the floor); its key in the environment splice-bot with a main-only branch policy
   on: computer
   steps: GitHub > Settings > Developer settings > GitHub Apps > New; install on keelstackhq/bosun; repo > Settings > Environments > New splice-bot, deployment branches main only, add the App id and key
   blocks: B5
-- H3: §15 App check runs (B2) and §16 (B4) built and merged, the gate App installed
+- H3: §15 App check runs (B2) built and merged, the gate App installed
   on: computer
   steps: see docs/spec/15-app-checks.md and its plan
   blocks: B5

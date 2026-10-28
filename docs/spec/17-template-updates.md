@@ -71,8 +71,9 @@ decides it with the rules, owners and config read at base (§8), never at the he
   `GET /repos/{o}/{r}/compare/{track}...{commit}` has status `behind` or `identical`. "The
   commit exists in the source repo" is not enough: GitHub serves commits of any fork through
   the parent's API. This relies on the source refusing force-pushes to `track` (a ruleset
-  there); a force-pushed ref could make an attacker commit an ancestor for a while. `template.version` agrees with the commit: `0.0.0+g<first 7 hex>` for a
-  tracked branch, else a tag of the source that points at the commit. Options, per source:
+  there); a force-pushed ref could make an attacker commit an ancestor for a while.
+  `template.version` agrees with the commit: `0.0.0+g<first 7 hex>` for a tracked branch,
+  else a tag of the source that points at the commit. Options, per source:
   (a) `track` ancestor only (the minimum); (b) a published, non-draft, non-prerelease
   GitHub Release; (c) a tag signed by a key listed at base in `[template_update]`. The owner
   picks (decision 3).
@@ -116,10 +117,11 @@ agent reads. Default: they stay out of `paths` unless C7 (b) or (c) is chosen fo
 The re-render (C2, C4) runs as a separate job `template` in `risk.yml`, before the `risk` job,
 only on `pull_request_target` for PRs whose author login is `bot` and whose `user.type` is
 `Bot`, and that change `.splice/**`. Before any git or splice call it checks that
-`template.commit` matches `^[0-9a-f]{40}$`. It checks out the base SHA (never the head), installs the splice release named at base and checks
-its sha256, fetches the source at `template.commit`, renders, and runs `splice check`. Its
-permissions are `contents: read` with no persisted credentials, no secrets and no App key. It never runs
-code from the PR or from the template: rendering is data only (splice must run no piece hooks
+`template.commit` matches `^[0-9a-f]{40}$`. It checks out the base SHA (never the head),
+installs the splice release named at base and checks its sha256, fetches the source at
+`template.commit`, renders, and runs `splice check`. Its permissions are `contents: read` with
+no persisted credentials, no secrets and no App key. It never runs code from the PR or from
+the template: rendering is data only (splice must run no piece hooks
 or scripts; a channel that needs them is never clean). The job outputs one value, the rendered
 tree SHA (or empty on any failure). The `risk` job has `needs: template` and `if: always()`
 (with its own conditions), so a skipped or failed render never skips risk-check. It passes
@@ -132,8 +134,15 @@ re-run in verdict.yml after `bosun verdict apply`, reviews, comments) reads the 
 counts it only while its base SHA is the PR's current base. A check run of any other app,
 or a commit status of that name, is ignored. Without §15 a later run has no render and no
 unforgeable record of one, so the class would flip to "owner needed" as soon as
-`review-verdict` lands; that is why §15 is a hard prerequisite. So a fault in the render job can at most make a PR not clean, except a
-splice bug that a hostile template exploits to print the head's tree SHA (a residual).
+`review-verdict` lands; that is why §15 is a hard prerequisite. So a fault in the render job
+can at most make a PR not clean, except a splice bug that a hostile template exploits to print
+the head's tree SHA (a residual).
+
+Accepted liveness limit: any merge to main changes the PR's base SHA and voids the
+`template-render` result, so the class falls back to "owner needed" until the bot refreshes
+the PR on the new base. Keying the result on the head's merge base would not help: C2 and C4
+require that merge base to be the current base, so an old render cannot judge a new base. The
+limit fails closed; a `workflow_dispatch` of splice.yml refreshes at once.
 
 Versions: bosun is the release in `.bosun/version` at base (as for every risk-check); splice is
 `[template_update] splice` at base, so a PR cannot choose the renderer that judges it. A splice
@@ -151,11 +160,12 @@ Any of these leaves the PR in the class §8 gives it today, with `data.template_
 false` and a `reason`, never an `error` status: no `[template_update]` table or a parse error
 in it; a splice download, checksum, fetch, render or check failure; a job timeout; an empty or
 missing tree SHA; a `template.commit` that is not 40 lowercase hex; a tree mismatch; an API
-error or a 403; `mergeable` null; a commit not on the `track` ref; no `template-render` check run of the gate App for this head and base. "Base"
-in C2 and C4 is the PR's base SHA, and a head whose merge base is another commit is not
-clean. The class is not carried over (§8 approval carry-over): a merge of main by anyone but
-the bot fails C5. When main moves, the bot's next refresh (the weekly run, or a
-`workflow_dispatch` of splice.yml) re-renders.
+error or a 403; `mergeable` null; a commit not on the `track` ref; no `template-render` check
+run of the gate App for this head and base. "Base" in C2 and C4 is the PR's base SHA, and a
+head whose merge base is another commit is not clean. The class is not carried over (§8
+approval carry-over): a merge of main by anyone but the bot fails C5. When main moves, the
+bot's next refresh (the weekly run, or a `workflow_dispatch` of splice.yml) re-renders (the
+liveness limit above).
 
 ### Interactions
 
@@ -191,7 +201,9 @@ the bot fails C5. When main moves, the bot's next refresh (the weekly run, or a
 ### Owner decision needed
 
 1. Create a splice bot GitHub App (Contents and Pull requests: write on this repo), its key in
-   the `splice-bot` environment (main-only); or keep the PAT and the class stays off.
+   the `splice-bot` environment (main-only); or keep the PAT and the class stays off. In a repo
+   that uses the bosun channel the App also needs Workflows: write, since Contents: write
+   cannot push rendered workflow files; those files stay in the floor either way.
 2. May a clean update change agent-instruction files (`CLAUDE.md` sections, `AGENTS.md`,
    `docs/agents/**`) without the owner? Default proposed: no, unless C7 (b) or (c) is chosen.
 3. C7 per source: `track` ancestor, a GitHub Release, or a signed tag (which keys).
