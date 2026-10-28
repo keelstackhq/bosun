@@ -7,15 +7,24 @@ set -euo pipefail
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
 SPLICE_VERSION=0.3.0
-# npm's dist.integrity (sha512) of splice 0.3.0's launcher and linux binary packages, from
-# `npm view @keelstackhq/<package>@0.3.0 dist.integrity`; move them with SPLICE_VERSION.
+# npm's dist.integrity (sha512) of each tool's launcher and linux binary packages, from
+# `npm view @keelstackhq/<package>@<version> dist.integrity`; move them with the version.
 SPLICE_SHA512=NmTKFPnwnLN0fNFdt7yUAikv+XXgFd3DV/kJzBTxWkXdwJn7geSl5tDmr71B3pEofjQ3V7SxMfejZcff1eAlsA==
 SPLICE_LINUX_X64_SHA512=lx56ekCHokRBLZr8iuUpRh4fG8YO99m8VXJUHiHmjZ3vx9VpqX1QtLRbplpL1lHbN36ovZqTlAgAIZJsoJ5sUQ==
 SPLICE_LINUX_ARM64_SHA512=NS1EGfcTkR2RYfnb0LH0+/zpXtbaJMKUpw+CgLWDcpnv+2K/ClLAjiVX7iUenHhaA6H4vOjC4aWSf52jL4xc4g==
 HOIST_VERSION=0.2.0
+HOIST_SHA512=GK2LeMe4A6uVva2ipIt39xPIn4ggW7Aaia95BnksSyRF6OhevCOeCebYAw2hU3106PR9ZsQ+v2YDLjq6E+3UVA==
+HOIST_LINUX_X64_SHA512=vGMKf3DA7v8U3K8697e5BtWENkcdsDmZ/vpgJj+LhDpfe8MWBcd53DBiag+LhnFhe6umPkdNTWb0ps4ft35S7Q==
+HOIST_LINUX_ARM64_SHA512=exVDP67JLgbXoBqa6vVKx7l4fpGXnLFEnJnBXhtcmnr/+swChU08absd5IUspsA6vDCXILejFEQMSUr6T30uow==
 BERTH_VERSION=0.1.0
+BERTH_SHA512=4V71F1YqcduupUm/yqc3HaK5/VMH6bD1PZa6xskA+84UiSs1UZRnkX7W+zoLPNizoT2CM1bVGmEtk2cjjYg3Eg==
+BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+J+jEvUBHKxS3xfQMT7HqCO35TUysw==
+BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION=0.2.3
+BOSUN_SHA512=Yq2HuQvfkGUDz+iHWsK2PvRxhQzOZQV6by5PmAcqPfT8TURc67FpTyOw4zLUM5GOsg8vHruZol1GurCZzepk4A==
+BOSUN_LINUX_X64_SHA512=maGN5YlNG4daWMPx6AkJc2rTzV8vlRQ3hlNUVUoN0pL350FaBpbBtg1bTY8FFINtzv8OVe17Kf+XGd4LeNXwdQ==
+BOSUN_LINUX_ARM64_SHA512=0tm83YUOhYjCh6brvB/sxIqOIznTtxF3U3+oHFIxDXPzoNUPZ7RWbZ4kor0Xzcdy/OhA6crtOJFz1lgsMZHxiw==
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
 # Without one the script warns and skips Rust. `bash docs/setup-script.sh --rust-version` prints the version
@@ -48,24 +57,28 @@ if [ -n "$RUST_VERSION" ]; then
   cargo install --locked cargo-nextest cargo-deny
 fi
 
-# The keelstackhq tools, pinned. splice (it writes the repo's files) installs only from tarballs
-# that match the pinned sha512: the launcher and this machine's binary package, side by side. A
-# mismatch skips splice with a warning (a failing setup script blocks every session).
-splice_pack() {
-  f="$(cd "$2" && npm pack --silent "$1@${SPLICE_VERSION}")"
+# The keelstackhq tools, pinned, install only from npm tarballs that match the pinned sha512:
+# each launcher and this machine's binary package, side by side. A mismatch or a failed install
+# skips that tool with a warning (a failing setup script blocks every session).
+tool_pack() {
+  f="$(cd "$2" && npm pack --silent "$1")"
   got="$(node -e 'process.stdout.write(require("crypto").createHash("sha512").update(require("fs").readFileSync(process.argv[1])).digest("base64"))' "$2/$f")"
-  if [ "$got" != "$3" ]; then echo "setup-script: $1@${SPLICE_VERSION} does not match its pinned sha512; skipping splice" >&2; return 1; fi
+  if [ "$got" != "$3" ]; then echo "setup-script: $1 does not match its pinned sha512; skipping it" >&2; return 1; fi
   echo "$2/$f"
 }
-case "$(uname -m)" in aarch64 | arm64) arch=arm64 sum="$SPLICE_LINUX_ARM64_SHA512" ;; *) arch=x64 sum="$SPLICE_LINUX_X64_SHA512" ;; esac
-t="$(mktemp -d)"
-if launcher="$(splice_pack @keelstackhq/splice "$t" "$SPLICE_SHA512")" &&
-  binary="$(splice_pack "@keelstackhq/splice-linux-$arch" "$t" "$sum")"; then
-  # npm still reads the optional packages' metadata: a registry error must not stop the script.
-  npm install -g --ignore-scripts --omit=optional "$launcher" "$binary" ||
-    echo "setup-script: splice install failed; skipping splice" >&2
-fi
-npm install -g "@keelstackhq/hoist@${HOIST_VERSION}" "@keelstackhq/berth@${BERTH_VERSION}" \
-  "@keelstackhq/bosun@${BOSUN_VERSION}"
+# install_tool <name> <version> <launcher sha512> <linux-x64 sha512> <linux-arm64 sha512>
+install_tool() {
+  case "$(uname -m)" in aarch64 | arm64) a=arm64 s="$5" ;; *) a=x64 s="$4" ;; esac
+  t="$(mktemp -d)"
+  if l="$(tool_pack "@keelstackhq/$1@$2" "$t" "$3")" && b="$(tool_pack "@keelstackhq/$1-linux-$a@$2" "$t" "$s")"; then
+    # npm still reads the optional packages' metadata: a registry error must not stop the script.
+    npm install -g --ignore-scripts --omit=optional "$l" "$b" ||
+      echo "setup-script: $1 install failed; skipping $1" >&2
+  fi
+}
+install_tool splice "$SPLICE_VERSION" "$SPLICE_SHA512" "$SPLICE_LINUX_X64_SHA512" "$SPLICE_LINUX_ARM64_SHA512"
+install_tool hoist "$HOIST_VERSION" "$HOIST_SHA512" "$HOIST_LINUX_X64_SHA512" "$HOIST_LINUX_ARM64_SHA512"
+install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$BERTH_LINUX_ARM64_SHA512"
+install_tool bosun "$BOSUN_VERSION" "$BOSUN_SHA512" "$BOSUN_LINUX_X64_SHA512" "$BOSUN_LINUX_ARM64_SHA512"
 
-bosun --version
+bosun --version || echo "setup-script: bosun is not installed" >&2

@@ -121,7 +121,8 @@ download do not work. Build from source with `cargo install --path .`.
 
 Done for v0.1.0 (the first pin also switched `ci.yml` and the setup script to npm, see below)
 and for v0.2.0 (#205). For a later release, the PR sets `.bosun/version` and `BOSUN_VERSION` in
-`docs/setup-script.sh` to the new version and updates the Status in `docs/PROGRESS.md`; the
+`docs/setup-script.sh` to the new version (and its three `BOSUN_*_SHA512` to the `npm view
+@keelstackhq/<package>@<version> dist.integrity` of `bosun`, `bosun-linux-x64` and `bosun-linux-arm64`) and updates the Status in `docs/PROGRESS.md`; the
 owner then pastes the setup script again.
 
 For v0.1.0, an agent opened one PR, and the owner approved it on its head SHA (R-gov, R-ci). It:
