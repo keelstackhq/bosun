@@ -32,3 +32,4 @@ task that changes a section lists that file in its `touch`. `§N` in the text me
 - [12. Implementation plan](spec/12-plan.md)
 - [13. Open questions](spec/13-open-questions.md)
 - [14. Front-loaded human prerequisites](spec/14-prereqs.md)
+- [15. Clean template updates (proposed, not built)](spec/15-template-updates.md)
