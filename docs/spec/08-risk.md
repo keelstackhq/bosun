@@ -37,6 +37,8 @@ Two verdicts:
 - More residual risks. A `review-ci` record (session `review-ci`, mode b, dormant) counts as one verdict, and review.yml does not re-run risk-check. Any workflow that runs with `GITHUB_TOKEN` (for example on a pushed branch) can post a comment of the shape `apply` writes as `github-actions[bot]`; this is the same trust class as the `statuses: write` limit below. The repository's default workflow token should be read-only (an owner setting: Settings > Actions > General > Workflow permissions, read repository contents): it narrows this, since a workflow that asks for no write scope then cannot comment or post a status, but it does not close it, as a workflow can still ask for write scopes in its own `permissions:` key. Binding verdict records to the verdict workflow run is #298. The risk-check step in verdict.yml runs outside risk.yml's concurrency group, so a stale run can overwrite a newer risk-check status until the next trigger (liveness only).
 
 High-risk PRs:
+- Owners: with one owner, nothing that needs an owner merges while that owner is away (fail
+  closed, by design); list at least two owners, or a team once §16 (B4) is built.
 - A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
   CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
   approve, request-changes or dismissed review on that SHA; read on the next run, as no review
