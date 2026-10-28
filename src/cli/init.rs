@@ -191,7 +191,7 @@ fn array_span(text: &str, from: usize) -> Option<(usize, usize, Option<usize>)> 
 enum HoistErr {
     Invalid(String),
     ByHand(Vec<String>),
-    /// `[github] merge_queue` is not a bool, or init cannot place it.
+    /// `[github] merge_queue` is there but not a bool.
     MergeQueue,
 }
 
@@ -210,7 +210,7 @@ impl HoistErr {
                 ),
             ),
             HoistErr::MergeQueue => BosunError::error(
-                "init cannot set [github] merge_queue in hoist.toml safely",
+                "[github] merge_queue in hoist.toml is not true or false",
                 "set `merge_queue = false` under [github] in hoist.toml by hand, then rerun `bosun init`",
             ),
         }
@@ -230,9 +230,14 @@ fn github_lines(text: &str) -> (Option<usize>, Option<usize>) {
         if header.is_some() && t.starts_with('[') {
             break;
         }
+        // `[github]`, also spaced (`[ github ]`) or quoted (`["github"]`), then a comment at most.
         let is_github = t
-            .strip_prefix("[github]")
-            .is_some_and(|r| r.trim().is_empty() || r.trim().starts_with('#'));
+            .strip_prefix('[')
+            .and_then(|r| r.split_once(']'))
+            .is_some_and(|(name, r)| {
+                matches!(name.trim(), "github" | "\"github\"" | "'github'")
+                    && (r.trim().is_empty() || r.trim().starts_with('#'))
+            });
         if header.is_none() && is_github {
             header = Some(pos + line.len());
         } else if header.is_some()
@@ -345,15 +350,29 @@ fn add_required_checks(text: &str, want: &[&str]) -> Result<(String, Vec<String>
 enum MergeQueue {
     Added,
     Kept(bool),
+    /// Absent, and no safe place for it (no `[github]` header): the file stays, `run` warns.
+    Unset,
+}
+
+impl MergeQueue {
+    fn label(&self) -> &'static str {
+        match self {
+            MergeQueue::Added => "added",
+            MergeQueue::Kept(true) => "kept_true",
+            MergeQueue::Kept(false) => "kept_false",
+            MergeQueue::Unset => "unset",
+        }
+    }
 }
 
 /// Pure: make hoist.toml `text` say `[github] merge_queue = false` unless the owner set it.
 ///
 /// bosun posts risk-check and review-verdict as commit statuses on each PR head; nothing posts
 /// them on the merge-queue (`merge_group`) refs, so with a queue those required checks never
-/// arrive and every queued PR blocks. An explicit value is the owner's and is kept (`run` warns
-/// on `true`). The key goes right after `required_checks` (else after the header), and the
-/// result must parse with the key `false` and the checks unchanged, else the edit is refused.
+/// arrive and every queued PR blocks. An explicit bool is the owner's and is kept (`run` warns
+/// on `true`); any other value is refused. The key goes right after `required_checks` (else
+/// after the header). With no header, or when the result does not parse with the key `false`
+/// and the checks unchanged, the text stays as it is (`Unset`).
 fn set_merge_queue(text: &str) -> Result<(String, MergeQueue), HoistErr> {
     let doc: toml::Table = text
         .parse()
@@ -363,6 +382,7 @@ fn set_merge_queue(text: &str) -> Result<(String, MergeQueue), HoistErr> {
         return Ok((text.to_string(), MergeQueue::Kept(b)));
     }
     let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let unset = Ok((text.to_string(), MergeQueue::Unset));
     let at = match github_lines(text) {
         (_, Some(k)) => array_span(text, k).map(|(_, close, _)| {
             text[close..]
@@ -371,8 +391,8 @@ fn set_merge_queue(text: &str) -> Result<(String, MergeQueue), HoistErr> {
         }),
         (Some(h), None) => Some(h),
         (None, None) => None,
-    }
-    .ok_or(HoistErr::MergeQueue)?;
+    };
+    let Some(at) = at else { return unset };
     let lead = if at == 0 || text[..at].ends_with('\n') {
         ""
     } else {
@@ -388,7 +408,7 @@ fn set_merge_queue(text: &str) -> Result<(String, MergeQueue), HoistErr> {
             && checks_in(&d) == checks_in(&doc)
     });
     if !ok {
-        return Err(HoistErr::MergeQueue);
+        return unset;
     }
     Ok((out, MergeQueue::Added))
 }
@@ -434,14 +454,15 @@ fn setup(
 ) -> Result<(Value, Option<String>, Vec<String>), BosunError> {
     let splice = run_splice(argv)?;
     let mut added = Vec::new();
-    if let Some((text, new, _)) = hoist {
-        // Unchanged text writes the same bytes, which git sees as no change.
-        std::fs::write(root.join("hoist.toml"), text).map_err(|e| {
-            BosunError::error(
-                format!("cannot write hoist.toml: {e}"),
-                "check that hoist.toml is writable",
-            )
-        })?;
+    if let Some((text, new, mq)) = hoist {
+        if !new.is_empty() || *mq == MergeQueue::Added {
+            std::fs::write(root.join("hoist.toml"), text).map_err(|e| {
+                BosunError::error(
+                    format!("cannot write hoist.toml: {e}"),
+                    "check that hoist.toml is writable",
+                )
+            })?;
+        }
         added.clone_from(new);
     }
     let changes = splice.get("changes").cloned().unwrap_or_else(|| json!([]));
@@ -619,13 +640,20 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         None
     };
     let mut warnings: Vec<String> = Vec::new();
-    if matches!(hoist, Some((_, _, MergeQueue::Kept(true)))) && checks.contains(&"risk-check") {
-        warnings.push(
+    // risk-check is always among the required checks after the edit above.
+    match hoist {
+        Some((_, _, MergeQueue::Kept(true))) => warnings.push(
             "hoist.toml sets [github] merge_queue = true while risk-check is a required check: \
              bosun posts risk-check and review-verdict on each PR head, not on merge_group refs, \
              so queued PRs would wait for them forever; set merge_queue = false"
                 .into(),
-        );
+        ),
+        Some((_, _, MergeQueue::Unset)) => warnings.push(
+            "hoist.toml: add `merge_queue = false` to the github table by hand (risk-check and \
+             review-verdict are not posted on merge-queue refs)"
+                .into(),
+        ),
+        _ => {}
     }
     let mut pieces = args.stack.clone();
     if claude_md {
@@ -736,10 +764,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         "changes": changes, "excluded": kept, "plan": plan, "branch": branch,
         "commit": commit, "pr": pr, "risk": "high", "owner_steps": steps,
         "own_ci": own_ci, "claude_md": claude_md, "hoist_checks_added": added,
-        "hoist_merge_queue": hoist.as_ref().map(|(_, _, mq)| match mq {
-            MergeQueue::Added => "added",
-            MergeQueue::Kept(_) => "kept",
-        }),
+        "hoist_merge_queue": hoist.as_ref().map(|(_, _, mq)| mq.label()),
         "warnings": warnings,
     });
     if args.no_pr {
@@ -834,7 +859,7 @@ mod tests {
         ok_or_refused("[ github ]\nrequired_checks = [\"ci-ok\"]\n");
         for t in [
             "[github]\nrequired_checks = \"ci-ok\"\n[release]\nx = 1\n",
-            "[ github ]\nrequired_checks = [\"ci-ok\"]\n",
+            "github.required_checks = [\"ci-ok\"]\n",
         ] {
             assert!(matches!(
                 add_required_checks(t, &ALL),
@@ -903,10 +928,32 @@ mod tests {
     }
 
     #[test]
-    fn a_merge_queue_init_cannot_set_is_refused() {
-        // Complete checks in an inline table: there is no [github] header to put the key under.
-        let t = "github = { required_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"] }\n";
-        assert_eq!(set_merge_queue(t), Err(HoistErr::MergeQueue));
+    fn spaced_and_quoted_headers_are_github() {
+        for h in [
+            "[ github ]",
+            "[\"github\"]",
+            "['github'] # c",
+            "[ \"github\" ]",
+        ] {
+            let (out, mq) = full(&format!("{h}\nrequired_checks = [\"ci-ok\"]\n"));
+            assert_eq!(mq, MergeQueue::Added, "{h}");
+            assert!(
+                out.starts_with(&format!(
+                    "{h}\nrequired_checks = [\"ci-ok\", \"risk-check\""
+                )) && out.ends_with("]\nmerge_queue = false\n"),
+                "{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_merge_queue_init_cannot_place_is_unset_and_a_non_bool_is_refused() {
+        const C: &str =
+            "required_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]";
+        // No [github] header to put the key under: the file stays as it is.
+        for t in [format!("github = {{ {C} }}\n"), format!("github.{C}\n")] {
+            assert_eq!(set_merge_queue(&t), Ok((t.clone(), MergeQueue::Unset)));
+        }
         let t = "[github]\nmerge_queue = \"no\"\n";
         assert_eq!(set_merge_queue(t), Err(HoistErr::MergeQueue));
     }
