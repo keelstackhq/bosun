@@ -470,6 +470,48 @@ fn setup_scripts_read_the_rust_toolchain_file_and_pin_no_version() {
     }
 }
 
+/// The channel reaches `rustup` as root, so the setup scripts take only a toolchain name
+/// (`^[A-Za-z0-9][A-Za-z0-9._-]*$`) and treat anything else like a missing file.
+#[test]
+fn setup_scripts_reject_a_channel_that_is_not_a_toolchain_name() {
+    let files = variant(&["rust"], "");
+    let own =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
+            .unwrap();
+    for (name, script) in [
+        ("channel", file(&files, "docs/setup-script.sh")),
+        ("bosun", &own),
+    ] {
+        for (channel, accepted) in [
+            ("1.99.1", true),
+            ("stable", true),
+            ("1.0; rm -rf /", false),
+            ("-x", false),
+            ("a b", false),
+        ] {
+            let repo = tempfile::tempdir().unwrap();
+            fs::write(
+                repo.path().join("rust-toolchain.toml"),
+                format!("[toolchain]\nchannel = \"{channel}\"\n"),
+            )
+            .unwrap();
+            let (ok, out, err) = setup_rust_version(script, repo.path());
+            if accepted {
+                assert!(ok, "{name} {channel:?}: {err}");
+                assert_eq!(out, format!("{channel}\n"), "{name} {channel:?}");
+            } else {
+                assert!(!ok, "{name} {channel:?} passed: {out}");
+                assert!(out.is_empty(), "{name} {channel:?}: {out}");
+                assert!(err.contains("invalid channel"), "{name} {channel:?}: {err}");
+                assert!(
+                    err.contains("skipping the Rust toolchain install"),
+                    "{name} {channel:?}: {err}"
+                );
+            }
+        }
+    }
+}
+
 /// The required check's job: `ci-ok`, or `bosun-ok` beside the repo's own ci.
 fn check_name(own_ci: &str) -> &'static str {
     if own_ci.is_empty() {
@@ -757,18 +799,18 @@ fn main_open_skips_label_events_but_the_mainfix_label_in_a_group_of_their_own() 
 }
 
 #[test]
-fn risk_rules_put_every_agent_rule_file_under_r_gov() {
+fn risk_rules_cover_agent_rules_hoist_and_the_setup_script() {
     use bosun::core::risk::{ChangedFile, Rules, evaluate};
     let files = variant(&["rust"], "");
     let rules = Rules::parse(file(&files, ".bosun/risk.toml")).unwrap();
-    let hit = |p: &str| {
+    let hit = |p: &str, rule: &str| {
         let f = ChangedFile {
             path: p.into(),
             ..Default::default()
         };
         evaluate(&rules, &[f], &[], &[])
             .iter()
-            .any(|m| m.rule == "R-gov")
+            .any(|m| m.rule == rule)
     };
     for p in [
         "AGENTS.md",
@@ -777,10 +819,23 @@ fn risk_rules_put_every_agent_rule_file_under_r_gov() {
         "docs/agents/project.md",
         "crates/foo/AGENTS.md",
         "crates/foo/CLAUDE.md",
+        "claude.md",
+        "Claude.md",
+        "agents.md",
+        "CLAUDE.local.md",
+        "crates/x/Claude.md",
+        "hoist.toml",
+        "crates/foo/hoist.toml",
     ] {
-        assert!(hit(p), "{p} is not R-gov");
+        assert!(hit(p, "R-gov"), "{p} is not R-gov");
     }
-    assert!(!hit("crates/foo/src/lib.rs") && !hit("docs/guide.md"));
+    assert!(
+        hit("docs/setup-script.sh", "R-gov") && !hit("docs/setup-script.sh", "R-ci"),
+        "the pasted setup script runs as root"
+    );
+    for p in ["crates/foo/src/lib.rs", "docs/guide.md"] {
+        assert!(!hit(p, "R-gov") && !hit(p, "R-ci"), "{p}");
+    }
 }
 
 #[test]
