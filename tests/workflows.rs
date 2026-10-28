@@ -663,7 +663,7 @@ fn main_health_reports_with_bosun_built_from_the_default_branch() {
 fn splice_pins_its_version() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/splice.yml");
     let yaml = fs::read_to_string(path).unwrap();
-    assert!(yaml.contains("          version: \"0.2.0\"\n"), "{yaml}");
+    assert!(yaml.contains("          version: \"0.3.0\"\n"), "{yaml}");
 }
 
 /// The text of ci.yml's step that starts at `from`, up to the next step.

@@ -321,7 +321,34 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
         .lines()
         .find_map(|l| l.strip_prefix("SPLICE_VERSION="))
         .expect("the setup script pins SPLICE_VERSION");
-    assert_eq!(pinned, "0.2.1");
+    assert_eq!(pinned, "0.3.0");
+    // Every splice pin (both setup scripts, both splice.yml) is at least the channel's min_splice.
+    let ver = |v: &str| -> Vec<u64> { v.split('.').map(|n| n.parse().unwrap()).collect() };
+    let m = toml_at(&channel().join("splice.toml"));
+    let min = m["min_splice"].as_str().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let own = fs::read_to_string(root.join("docs/setup-script.sh")).unwrap();
+    let own_bot = fs::read_to_string(root.join(".github/workflows/splice.yml")).unwrap();
+    let mut pins = vec![pinned.to_string()];
+    pins.extend(
+        own.lines()
+            .filter_map(|l| l.strip_prefix("SPLICE_VERSION="))
+            .map(str::to_string),
+    );
+    for y in [&bot, &own_bot] {
+        let v = y
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("version: "))
+            .unwrap();
+        pins.push(v.trim_matches('"').to_string());
+    }
+    assert_eq!(pins.len(), 4, "{pins:?}");
+    for v in &pins {
+        assert!(
+            ver(v) >= ver(min),
+            "splice {v} is older than min_splice {min}"
+        );
+    }
     assert!(
         bot.contains(&format!("version: {pinned}\n")),
         "splice.yml moves with the setup script's SPLICE_VERSION"
@@ -398,4 +425,140 @@ fn shipped_scripts_are_only_ever_called_through_bash() {
         }
     }
     assert!(found >= 2, "the fold script is documented for both copies");
+}
+
+/// The setup scripts install the keelstackhq tools only from npm tarballs whose sha512 matches
+/// the pinned integrity (launcher and linux binary package), never by version alone. The one
+/// exception is bosun in the channel's script: its pin is the channel's release (or
+/// `bosun_version`), whose integrity is not known when the channel is written. A mismatch or a
+/// failed install warns and skips the tool; the script goes on.
+#[test]
+fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_integrity() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let own = fs::read_to_string(root.join("docs/setup-script.sh")).unwrap();
+    let ch_path = channel().join("pieces/core/files/docs/setup-script.sh.jinja");
+    let ch = fs::read_to_string(ch_path).unwrap();
+    let pins = |t: &str| -> Vec<String> {
+        let sums = t
+            .lines()
+            .filter(|l| l.contains("_SHA512=") && !l.starts_with("BOSUN_"));
+        sums.map(str::to_string).collect()
+    };
+    assert_eq!(
+        pins(&own).len(),
+        9,
+        "splice, hoist, berth: launcher, linux-x64, linux-arm64"
+    );
+    assert_eq!(
+        pins(&own),
+        pins(&ch),
+        "the two scripts pin the same integrity"
+    );
+    assert_eq!(
+        own.matches("\nBOSUN_").count(),
+        4,
+        "BOSUN_VERSION and 3 sums"
+    );
+    let bosun_ch = "npm install -g --ignore-scripts \"@keelstackhq/bosun@${BOSUN_VERSION}\"";
+    for (t, tools, want) in [
+        (&own, &["splice", "hoist", "berth", "bosun"][..], &[][..]),
+        (&ch, &["splice", "hoist", "berth"], &[bosun_ch][..]),
+    ] {
+        for tool in tools {
+            let up = tool.to_uppercase();
+            let call = format!(
+                "install_tool {tool} \"${up}_VERSION\" \"${up}_SHA512\" \"${up}_LINUX_X64_SHA512\" \"${up}_LINUX_ARM64_SHA512\""
+            );
+            assert!(t.contains(&call), "no {call}");
+        }
+        // No other install of a keelstackhq package goes by version alone.
+        let by_version: Vec<&str> = t
+            .lines()
+            .filter(|l| l.contains("npm install") && l.contains("@keelstackhq/"))
+            .collect();
+        assert_eq!(by_version, want);
+    }
+    assert!(
+        own.contains("\nbosun --version || echo"),
+        "a skipped bosun never fails the script"
+    );
+    let start = own.find("tool_pack() {").unwrap();
+    let funcs = &own[start..start + own[start..].find("\n}\ninstall_tool ").unwrap() + 3];
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    // A fake npm: `pack` writes "abc", `install` logs its args and exits with $INSTALL.
+    let fake = "#!/bin/sh\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; *) echo \"$*\" >> log; exit \"$INSTALL\" ;; esac\n";
+    fs::write(d.join("npm"), fake).unwrap();
+    std::fs::set_permissions(
+        d.join("npm"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!("{}:{}", d.display(), std::env::var("PATH").unwrap());
+    // sha512("abc"), base64.
+    let abc =
+        "3a81oZNherrMQXNJriBBMRLm+k6JqX6iCp7u5ktV05ohkpkqJ0/BqDa6PCOj/uu9RU1EI2Q86A4qmslPpUyknw==";
+    for (sum, install, logged, warn) in [
+        (abc, "0", true, ""),
+        (
+            "bad",
+            "0",
+            false,
+            "hoist-linux-x64@0.2.0 does not match its pinned sha512",
+        ),
+        (
+            abc,
+            "1",
+            true,
+            "setup-script: hoist install failed; skipping hoist",
+        ),
+    ] {
+        let _ = fs::remove_file(d.join("log"));
+        let script = format!("{funcs}install_tool hoist 0.2.0 {abc} {sum} {sum}\necho went-on");
+        let o = std::process::Command::new("bash")
+            .args(["-euo", "pipefail", "-c", &script])
+            .current_dir(d)
+            .env("PATH", &path)
+            .env("INSTALL", install)
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            o.status.success() && String::from_utf8_lossy(&o.stdout).contains("went-on"),
+            "{err}"
+        );
+        assert!(err.contains(warn), "{err}");
+        let log = fs::read_to_string(d.join("log")).unwrap_or_default();
+        assert_eq!(
+            log.starts_with("install -g --ignore-scripts --omit=optional "),
+            logged,
+            "{log}"
+        );
+    }
+}
+
+/// The splice update action runs with a write token: pinned by commit, never by a movable tag.
+#[test]
+fn the_splice_action_is_pinned_by_commit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for f in [
+        root.join(".github/workflows/splice.yml"),
+        channel().join("pieces/core/files/.github/workflows/splice.yml"),
+    ] {
+        let y = fs::read_to_string(&f).unwrap();
+        let uses: Vec<&str> = y
+            .lines()
+            .filter_map(|l| l.split_once("uses: keelstackhq/splice/action@"))
+            .map(|(_, r)| r)
+            .collect();
+        assert!(!uses.is_empty(), "{}", f.display());
+        for r in uses {
+            let (sha, tag) = r.split_once(" # ").unwrap_or((r, ""));
+            assert!(
+                sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+                "{r}"
+            );
+            assert_eq!(tag, "v0.3.0", "{r}");
+        }
+    }
 }

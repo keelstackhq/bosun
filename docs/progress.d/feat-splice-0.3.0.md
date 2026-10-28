@@ -1,0 +1,1 @@
+- 2026-10-28 · splice 0.3.0 pins with integrity · setup scripts check the launcher and binary tarballs against the pinned sha512; both splice.yml at 0.3.0; test: every pin ≥ min_splice · PR (feat/splice-0.3.0)
