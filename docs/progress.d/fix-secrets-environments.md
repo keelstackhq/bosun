@@ -1,0 +1,1 @@
+- 2026-10-28 · Fix · workflow secrets only in main-only environments (`splice-bot`, `release-pr`; jobs splice.yml `update`, release.yml `release-token` and `prepare`, the channel's splice.yml), as hull#40; owner steps in Blocked · `tests/workflows.rs`, `tests/channel.rs` · PR (fix/secrets-environments)

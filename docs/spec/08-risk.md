@@ -286,6 +286,14 @@ High-risk PRs:
   workflow's `GITHUB_TOKEN` can satisfy them. The pins live in `hoist.toml`, which no rule or
   floor covers yet (normal risk today, a gap of its own): B2/T6 makes it R-gov and critical
   before the ruleset switch.
+  Such a workflow can also read every repository secret, so no workflow secret is a repository
+  secret: each lives in an environment whose deployment branch policy allows only `main` (as the
+  App key in `bosun-app`, §15), and only the jobs that need it name that environment
+  (`HOIST_RELEASE_TOKEN` in `release-pr`, jobs `release-token` and `prepare` of release.yml;
+  `SPLICE_BOT_TOKEN` in `splice-bot`, job `update` of splice.yml, also in the channel's copy;
+  `ANTHROPIC_API_KEY` in `review`). `tests/workflows.rs` asserts that every job that reads a
+  secret other than `GITHUB_TOKEN` names a literal environment (also as `{ name: x, .. }`), and
+  none is read outside a job.
 - bosun writes a Risk note into the PR body: the rules that matched, why, and what the owner (or, for two verdicts, the two reviewers) must check.
 - `bosun ask` sends the question to the owner (GitHub mention, and Slack if set). Seed: the GitHub mention only, owners read from `governance/owners.toml` on `main`; the comment carries an `ask` record. There is no
   timeout and no automatic approval.
