@@ -5,12 +5,12 @@
 id = "R-gov"
 why = "Governance files decide who approves what."
 # REVIEW.md and docs/lessons.toml are read into every review pack.
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "REVIEW.md", "docs/lessons.toml"]
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "hoist.toml", "REVIEW.md", "docs/lessons.toml"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "deny.toml", "rust-toolchain.toml", "rust-toolchain", "docs/setup-script.sh"]
 
 [[rule]]
 id = "R-gate"

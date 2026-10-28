@@ -260,12 +260,14 @@ pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 /// approving such a change: a same-repo PR's own `on: pull_request` copy can post a forged
 /// status on its head before anyone approves, so it is no owner gate (spec §8 residual; B2, a
 /// check run from a dedicated GitHub App pinned in the ruleset, closes it).
-pub const CRITICAL_PATHS: [&str; 16] = [
+pub const CRITICAL_PATHS: [&str; 17] = [
     ".bosun/**",
     "governance/**",
     "CODEOWNERS",
     ".github/CODEOWNERS",
     "docs/CODEOWNERS",
+    // The required checks `hoist apply` puts in the ruleset (root only: hoist reads no other).
+    "hoist.toml",
     ".github/workflows/**",
     ".github/actions/**",
     ".circleci/**",

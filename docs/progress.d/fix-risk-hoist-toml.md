@@ -1,0 +1,1 @@
+- 2026-10-28 · Risk covers hoist.toml and the setup script · `hoist.toml` joins R-gov and `CRITICAL_PATHS`; `docs/setup-script.sh` joins R-ci (built-ins, `.bosun/risk.toml`, channel risk.toml) · PR (fix/risk-hoist-toml)

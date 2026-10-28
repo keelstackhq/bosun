@@ -1,0 +1,1 @@
+- risk: `hoist.toml` is R-gov and on the critical floor (owner only, never a delegate), so a PR cannot drop a required check from the ruleset at normal risk; `docs/setup-script.sh` (runs as root in cloud environments) is R-ci, in bosun and in the channel's risk.toml.

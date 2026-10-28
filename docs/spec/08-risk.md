@@ -2,9 +2,9 @@
 
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
-  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
+  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `hoist.toml` (it holds the required checks, and later the App pins, that `hoist apply` puts in the ruleset: dropping `risk-check` there removes the gate; root only, hoist reads no other), `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack).
 - Consumer repos (`channel/pieces/core/files/.bosun/risk.toml.jinja`): R-gov also lists `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` (a nested agent-rule file is read by every later agent; `**/` matches the root file too).
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/ci/**`, `.buildkite/**`, `**/jenkinsfile` (any case), `azure-pipelines.y*ml`, `bitbucket-pipelines.yml`, `.travis.yml`, `.drone.yml`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/ci/**`, `.buildkite/**`, `**/jenkinsfile` (any case), `azure-pipelines.y*ml`, `bitbucket-pipelines.yml`, `.travis.yml`, `.drone.yml`, `deny.toml`, `rust-toolchain.toml`, the legacy `rust-toolchain` and `docs/setup-script.sh` (it runs as root in every cloud environment; consumer repos list it too; the channel's template of it stays R-ci-review like every shipped file).
 - R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**`, `.config/**` (build inputs), `src/anthropic.rs`, `src/core/lessons.rs`, `src/core/budget.rs`, `src/sessions/**` (review feeders), `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
 - R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Paths `**/secrets.toml`, `**/access.toml` and `**/*.sops.*` (`.sops.yaml` included); content `(?i)(api[_-]?key|secret|token)\s*=` or `AGE-SECRET-KEY-1` or `SOPS_AGE_KEY\s*[:=]` (a path or the content matches). It is critical, so it never goes to a delegate. Risk paths also match the lowercased path (a case-insensitive filesystem treats `Secrets.toml` and `.CircleCI/` as the same files), so patterns are written in lowercase.
@@ -170,7 +170,8 @@ High-risk PRs:
   R-secrets, R-prod-write and R-unseen (bosun could not see the whole diff, so it cannot rule
   out a critical file or a secret in it), and any changed file whose path or previous path
   (renames count both ways) is `.bosun/**` (approvers.toml and risk.toml included),
-  `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), `.github/workflows/**` or
+  `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), the root `hoist.toml` (the
+  ruleset's required checks), `.github/workflows/**` or
   `.github/actions/**` (any workflow with `statuses: write` can post a `risk-check` status for
   any PR), `.circleci/**` or another CI provider's config (the R-ci list). Where the base has `src/cli/risk_check.rs` (bosun and its forks), bosun's code is
   critical too: all of `src/**` (the approval modules call most others, and any module can do
@@ -182,7 +183,7 @@ High-risk PRs:
   approval needed (or a delegate): <ids>` (so `bosun approve --list` lists it),
   `data.delegate_verdicts` lists the clean verdicts and `data.delegate_blocked` says why a
   delegate cannot approve now (null when it can). In bosun this leaves `deny.toml`, the toolchain
-  files, `.config/**` and `profiles/**` to a delegate (R-ci and R-gate); R-deps is delegate-class
+  files, `docs/setup-script.sh`, `.config/**` and `profiles/**` to a delegate (R-ci and R-gate); R-deps is delegate-class
   but every manifest it reads is critical here. Releases stay human through the `release`
   environment. To turn delegation off at once, the owner deletes the delegate key from
   `.bosun/approvers.toml` (read live from the default branch); deleting the `approval =
@@ -191,9 +192,8 @@ High-risk PRs:
   self-declared, so a steered delegate can post the one verdict itself under a session without a
   lease: the mode lets one session decide by design, and the verdict is a quality gate, not
   proof of independence. A workflow on a pushed branch can post a record as
-  `github-actions[bot]` (Limits above). Files that match no rule (`hoist.toml`,
-  `docs/setup-script.sh`, `tests/**` in this repo) are normal risk, so neither the
-  owner nor the floor sees them; that is a follow-up for the rules. A self-made task issue
+  `github-actions[bot]` (Limits above). Files that match no rule (`tests/**` in this repo) are
+  normal risk, so neither the owner nor the floor sees them; that is a follow-up for the rules. A self-made task issue
   with its own lease record still passes the task check, hiding the real task's capabilities
   (the same trust class as the self-declared session). No job that runs repo code (tests, build
   scripts, `.config/nextest.toml`) holds a token that can write statuses or issues: main-health's
