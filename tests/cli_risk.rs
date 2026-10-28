@@ -220,6 +220,42 @@ fn owner_approval_counts_only_on_the_head_sha() {
     assert_eq!(last_status(&fake)["state"], "success");
 }
 
+/// No review event runs the risk workflow, so a withdrawal shows only on the next run (the
+/// owner comments `/bosun recheck`): that run must fail, for a request for changes after the
+/// approval and for the approval itself dismissed (GitHub then reports it DISMISSED).
+#[test]
+fn a_withdrawn_review_approval_fails_the_next_run() {
+    let world = || {
+        let fake = pr("");
+        fake.pull_file(
+            1,
+            ".github/workflows/ci.yml",
+            "modified",
+            1,
+            0,
+            Some(&plus("x")),
+        );
+        fake
+    };
+    let fake = world();
+    fake.review(1, "ada", "APPROVED", HEAD);
+    assert_eq!(check(&fake).0, 0);
+    assert_eq!(last_status(&fake)["state"], "success");
+    fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
+    let (code, v) = check(&fake);
+    assert_eq!(
+        code, 5,
+        "request-changes withdraws the review approval: {v}"
+    );
+    assert_eq!(last_status(&fake)["state"], "failure");
+
+    let fake = world();
+    fake.review(1, "ada", "DISMISSED", HEAD);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "a dismissed approval is no approval: {v}");
+    assert_eq!(last_status(&fake)["state"], "failure");
+}
+
 #[test]
 fn a_comment_review_is_not_an_approval() {
     let fake = pr("");

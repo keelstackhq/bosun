@@ -4,7 +4,9 @@ name: risk
 # `/bosun approve <head sha>` (an owner's approval) or `/bosun recheck` (anyone: it only re-judges).
 # An owner's GitHub review is read on the next run (a push, `/bosun recheck` or a re-run): there
 # is no review trigger, because `pull_request_review` runs the PR's own copy of this file, with
-# this token, so a PR could rewrite the job and post its own `risk-check`.
+# this token, so a PR could rewrite the job and post its own `risk-check`. So a withdrawal
+# changes nothing by itself: to withdraw, request changes or dismiss the approval, then comment
+# `/bosun recheck` (it re-judges and fails); turning off auto-merge also stops a merge.
 #
 # pull_request_target and issue_comment run this file from the base (default) branch, so a PR
 # cannot rewrite the job that judges it. The job never checks out or runs PR-head code: it runs
