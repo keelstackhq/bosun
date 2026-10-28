@@ -138,10 +138,14 @@ or different source as drift.
    kinds post; the ruleset still requires statuses. Reviews are judged on the next run.
 4. Verify: check runs of the App appear; a probe branch whose `pull_request` job names
    `bosun-app` fails (O1).
-5. hoist ships pinning; hoist.toml lists the four checks with their sources.
+5. hoist ships pinning; hoist.toml lists the four checks with their sources. hoist.toml is
+   R-gov and on the critical floor by then (B2/T6), so no agent PR can unpin a check.
 6. Owner step H5: `hoist apply --area github` switches the ruleset (now the check runs count).
 7. `[checks] mode = "checks"`: statuses stop. Never before step 6: an unpinned ruleset would wait
-   for statuses that no longer come, and every PR would block.
+   for statuses that no longer come, and every PR would block. Before it, a forge probe: a
+   probe branch's `pull_request` job posts a `risk-check` check run and status with
+   `GITHUB_TOKEN` (success), and its PR must stay blocked. That proves the pin, and O6's
+   15368, live.
 
 Rollback and recovery. Undo step 7 with a PR that sets `mode = "dual"` (it passes while the
 check runs still post). Undo step 6 with `hoist apply` from hoist.toml with plain string entries
@@ -169,9 +173,19 @@ account.
 - A leaked App key (or token) forges all three gates until the key is revoked. The key is only in
   the environment and only the token step sees it; the jobs run actions and the npm release, so a
   compromised action or package in those jobs could take the token (pin actions by sha).
+  Rotation: generate a new key in the App settings, `gh secret set BOSUN_APP_KEY --env
+  bosun-app < new.pem`, re-run a gate workflow and see its check run, then delete the old key.
+- hoist.toml holds the pins (and today the required checks), but no risk rule or floor covers
+  it (`.bosun/risk.toml`, `src/core/risk_default.toml`, `CRITICAL_PATHS`), so an agent PR that
+  drops a check or unpins it is normal risk, and the next owner `hoist apply` undoes it. That
+  gap exists today, without B2. B2/T6 closes it, and can land at once: hoist.toml becomes R-gov
+  and critical (owner, never delegate), here and in the channel (`hoist.toml.jinja` is the
+  consumers' copy, `.bosun/risk.toml.jinja` their rules).
 - Precondition: agents act as the owner's login, so the agent's GitHub credential must hold no
   Administration, Environments or Secrets write; else an agent can widen the environment's branch
-  policy, add a repo secret, or edit the ruleset. An owner step (H7) checks it; `doctor --remote`
+  policy, add a repo secret, or edit the ruleset. An owner step (H7) checks it (the Claude
+  GitHub App's permissions are set by its publisher: narrow its repos, move agents to a
+  fine-grained token without those scopes, or accept and record the risk); `doctor --remote`
   warns where it can (above).
 - A fork's PR gets no secrets in its own `pull_request` jobs, but its `pull_request_target` jobs
   do get the environment key, as every PR's do. That is safe only because those jobs run main's

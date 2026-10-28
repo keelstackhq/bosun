@@ -37,13 +37,17 @@ gates (and the verdict records) back by App (§15, "bosun changes").
   risk: high
 - T4: Read gates and verdict records back by App
   touch: src/core/approve.rs, src/core/risk.rs, src/cli/carry_over.rs, src/cli/review_pack.rs, src/cli/pr.rs, src/cli/approve.rs, src/cli/verdict.rs, tests/cli_checks_read.rs
-  depends: T3
+  depends: T3, T6
   size: 350
   risk: high
 - T5: Refusals in checks mode and the doctor pin check
   touch: src/cli/verdict.rs, src/cli/approve.rs, src/cli/doctor.rs, tests/cli_checks_refuse.rs
   depends: T4
   size: 200
+  risk: high
+- T6: hoist.toml is R-gov and on the critical floor (lands early, before H5)
+  touch: .bosun/risk.toml, src/core/risk_default.toml, src/core/risk.rs, channel/pieces/core/files/.bosun/risk.toml.jinja, tests/risk_hoist_toml.rs, docs/spec/08-risk.md
+  size: 60
   risk: high
 
 ### Done when
@@ -55,6 +59,7 @@ gates (and the verdict records) back by App (§15, "bosun changes").
 - UC-B2-5: checks mode without BOSUN_APP_TOKEN is exit 1 with a fix that names the bosun-app environment.
 - UC-B2-6: no conclusion other than success or failure is ever posted for a gate.
 - UC-B2-7: no comment written with the App token contains `<!-- bosun:verdict -->`, `/bosun approve` or `/bosun recheck`.
+- UC-B2-8: a PR that changes hoist.toml (here or a channel consumer's) needs the owner; a delegate signature never passes it.
 
 ## B2W: Workflows on the App token
 
@@ -128,7 +133,7 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
   blocks: B2W
 - H5: Switch the ruleset to the pinned sources
   on: computer
-  steps: after B2W/T3 merges and dual runs show the App's check runs, from a checkout of main with an admin token: hoist plan --area github, then hoist apply --area github --yes
+  steps: after B2/T6 and B2W/T3 merge and dual runs show the App's check runs, from a checkout of main with an admin token: hoist plan --area github, then hoist apply --area github --yes
   blocks: B2W/T4
 - H6: Release B2 and pin it
   on: phone
@@ -136,5 +141,5 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
   blocks: B2W
 - H7: Check the agents' GitHub credential
   on: computer
-  steps: the Claude GitHub App or token the agents use has no Administration, Environments or Secrets write on the repo; remove any it has
+  steps: the Claude GitHub App or token the agents use has no Administration, Environments or Secrets write on the repo; the Claude App's permissions are fixed by its publisher, so if it has them narrow its repos, move agents to a fine-grained token without them, or accept and record the risk in PROGRESS Blocked
   blocks: B2W
