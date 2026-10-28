@@ -64,7 +64,7 @@ fn each_piece_matches_its_directory_and_lists_real_files() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     ids.sort();
-    assert_eq!(ids, ["claude-md", "core", "rust", "ts-pnpm"]);
+    assert_eq!(ids, ["circleci", "claude-md", "core", "rust", "ts-pnpm"]);
     for id in &ids {
         let dir = channel().join("pieces").join(id);
         let p = toml_at(&dir.join("piece.toml"));

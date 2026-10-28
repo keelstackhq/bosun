@@ -1,0 +1,6 @@
+id = "circleci"
+description = "CircleCI runs bosun's gates: job bosun-ok, or ci-ok without own_ci"
+requires = ["core"]
+
+[files]
+owned = [".circleci/src/jobs/bosun-ok.yml", ".circleci/src/workflows/bosun.yml"]

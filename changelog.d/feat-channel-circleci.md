@@ -1,0 +1,1 @@
+- Channel piece `circleci`: a CircleCI job `bosun-ok` (or `ci-ok` without `own_ci`) that fetches the default branch first and runs bosun.yml's gates with the pinned, sha256-checked bosun.
