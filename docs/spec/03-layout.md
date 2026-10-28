@@ -75,12 +75,18 @@ CircleCI (hull secrets-ci design §6.5): piece `circleci` adds `.circleci/src/jo
 whose job reports `ci/circleci: bosun-ok`, or `ci/circleci: ci-ok` without `own_ci` (workflow `name:`).
 The job (cimg/node by digest) runs `git fetch origin main` into `origin/main` and sets `origin/HEAD`
 before anything reads the base, since a stale cached `origin/<default>` would hide what main gained (a
-deleted test); then, as bosun.yml, the release the base (`git merge-base HEAD origin/main`) pins,
-checked by its version and by its sha256 before each gate, the pin check, the base's gate config, the
-rust toolchain (rustup-init, cargo-nextest and cargo-deny each checked against a pinned sha256) or
-pnpm, and the gates of bosun.yml in order (a test keeps the lists equal; with `own_ci` a pull request
-runs only test-integrity unless the project variable `BOSUN_ALL_GATES=1`). The ts-pnpm stack runs in
-the same job: test-integrity and deps first, then `pnpm install --frozen-lockfile`, then fmt, lint and
-test; unlike bosun-trusted, deps reads the PR's package.json and pnpm-workspace.yaml. There are no
-draft, docs-only or body-edit fast paths. risk, verdict, main-open and splice.yml are the same with
+deleted test); then, as bosun.yml, the release that origin/main's tip pins (as `base.sha`; never the
+merge-base, which the author picks; the setup-PR fallback to this change's pin and `.bosun` only when
+origin/main has no `.bosun`), checked by its version and by its sha256 before each gate, the pin
+check, origin/main's gate config, the rust toolchain (rustup-init, cargo-nextest and cargo-deny each
+checked against a pinned sha256; the channel of the toolchain file, `^[A-Za-z0-9][A-Za-z0-9._-]*$`,
+else 1.97, exported as `RUSTUP_TOOLCHAIN`) or pnpm, and the gates of bosun.yml in order (a test keeps
+the lists equal; with `own_ci` a pull request runs only test-integrity unless the project variable
+`BOSUN_ALL_GATES=1`; main and `gh-readonly-queue/*` run all five). When HEAD is the merge-base (an
+empty diff) every gate runs with `--all`. `BOSUN_INTEGRITY_ALLOW` and `BOSUN_PR_BODY` are empty: no
+CircleCI variable can allow a finding, and a `snapshot-change:` line cannot apply (fails closed).
+The ts-pnpm stack runs in the same job: test-integrity, then deps with every package.json and
+pnpm-workspace.yaml from origin/main (as bosun-trusted), then the PR's copies back,
+`pnpm install --frozen-lockfile`, fmt, lint and test. There are no draft, docs-only or body-edit
+fast paths. risk, verdict, main-open and splice.yml are the same with
 or without the piece.

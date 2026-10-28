@@ -155,3 +155,181 @@ fn the_circleci_job_runs_a_pinned_bosun_checked_by_sha256() {
         assert!(job.contains("image: cimg/node:24.22.1@sha256:"), "{job}");
     }
 }
+
+/// A step of the rendered job: its script and its `environment`.
+fn job_step(stack: &[&str], own_ci: &str, name: &str) -> Option<(String, Vec<(String, String)>)> {
+    let j = yaml_json(text(&mode(stack, &["circleci"], own_ci), JOB))?;
+    let steps = j["steps"].as_array().unwrap();
+    let run = steps.iter().find(|s| s["run"]["name"] == name).unwrap()["run"].clone();
+    let env = run["environment"].as_object().map_or(Vec::new(), |m| {
+        m.iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+            .collect()
+    });
+    Some((run["command"].as_str().unwrap().to_string(), env))
+}
+
+/// A repo whose `origin/main` is commit `main` and HEAD is `head`, both as `git` commands; a
+/// fake bosun in `$HOME/.bosun-ci` logs `gate <args>` and fails the gate named in `FAIL`.
+fn ci_repo(main: &str, head: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    fs::create_dir_all(d.join("home/.bosun-ci")).unwrap();
+    fs::create_dir_all(d.join("repo")).unwrap();
+    let bin = d.join("home/.bosun-ci/bosun");
+    let fake = "#!/bin/sh\necho \"$* $(cat package.json 2>/dev/null)\" >> \"$HOME/log\"\n[ \"$2\" != \"$FAIL\" ]\n";
+    fs::write(&bin, fake).unwrap();
+    let sum = git_in(
+        d,
+        "chmod +x home/.bosun-ci/bosun && sha256sum home/.bosun-ci/bosun | cut -d' ' -f1",
+    );
+    let r = d.join("repo");
+    git_in(
+        &r,
+        "git init -q -b main && git config user.email a@b.c && git config user.name n",
+    );
+    git_in(&r, main);
+    git_in(&r, "git update-ref refs/remotes/origin/main HEAD");
+    git_in(&r, head);
+    (dir, sum)
+}
+
+/// Runs a job step in the repo; `(exit ok, the fake bosun's log)`.
+fn run_step(
+    dir: &Path,
+    sum: &str,
+    step: &(String, Vec<(String, String)>),
+    env: &[(&str, &str)],
+) -> (bool, String) {
+    let base = git_in(&dir.join("repo"), "git rev-parse origin/main");
+    let home = dir.join("home");
+    let mut all: Vec<(&str, &str)> =
+        vec![("HOME", home.to_str().unwrap()), ("DEFAULT_BRANCH", "main")];
+    all.extend([
+        ("BOSUN_SHA256", sum),
+        ("BOSUN_BASE", base.as_str()),
+        ("FAIL", ""),
+    ]);
+    all.extend(step.1.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    all.extend_from_slice(env);
+    let ok = bash_in(&dir.join("repo"), &step.0, &all);
+    (ok, fs::read_to_string(home.join("log")).unwrap_or_default())
+}
+
+const COMMIT: &str = "git add -A && git commit -qm c";
+
+#[test]
+fn the_circleci_gates_run_what_the_branch_needs_and_stop_at_a_failure() {
+    let ahead = "git checkout -qb pr && echo x > f && git add -A && git commit -qm pr";
+    let five = |all: &str| ALL_GATES.map(|g| format!("gate {g}{all} \n")).concat();
+    for own_ci in ["", "1"] {
+        let Some(step) = job_step(&["rust"], own_ci, "bosun gates") else {
+            return;
+        };
+        let (d, sum) = ci_repo(&format!("echo a > a && {COMMIT}"), ahead);
+        let (_, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", "feat/x")]);
+        let pr = if own_ci.is_empty() {
+            five("")
+        } else {
+            "gate test-integrity \n".into()
+        };
+        assert_eq!(log, pr, "own_ci={own_ci:?}");
+        for branch in ["main", "gh-readonly-queue/main/pr-1-ab"] {
+            let (d, sum) = ci_repo(&format!("echo a > a && {COMMIT}"), ahead);
+            let (ok, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", branch)]);
+            assert!(ok && log == five(""), "{branch}: {log}");
+        }
+        // HEAD is the merge-base (a fresh branch): every gate, on everything.
+        let (d, sum) = ci_repo(&format!("echo a > a && {COMMIT}"), "git checkout -qb fresh");
+        let (_, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", "fresh")]);
+        assert_eq!(log, five(" --all"));
+        let (d, sum) = ci_repo(&format!("echo a > a && {COMMIT}"), ahead);
+        let (ok, log) = run_step(
+            d.path(),
+            &sum,
+            &step,
+            &[("CIRCLE_BRANCH", "main"), ("FAIL", "deps")],
+        );
+        assert!(!ok, "a failed gate fails the job");
+        assert_eq!(
+            log, "gate test-integrity \ngate deps \n",
+            "no gate after a failure"
+        );
+    }
+}
+
+#[test]
+fn the_circleci_gate_config_and_pin_come_from_the_default_branch_tip() {
+    let job = text(&mode(&["rust"], &["circleci"], ""), JOB).to_string();
+    assert!(
+        job.contains(r#"base="$(git rev-parse "origin/$DEFAULT_BRANCH")""#),
+        "{job}"
+    );
+    let Some(step) = job_step(&["rust"], "", "the base's config for the gates") else {
+        return;
+    };
+    let prof = ".bosun/profiles/rust.toml";
+    // The PR branches off an old main commit (before bosun, too); main's tip pins the config.
+    for old in [
+        "echo a > a",
+        "mkdir -p .bosun/profiles && echo old > .bosun/profiles/rust.toml",
+    ] {
+        let main = format!(
+            "{old} && {COMMIT} && git tag old && rm -rf .bosun && mkdir -p .bosun/profiles && echo tip > {prof} && echo 1.2.3 > .bosun/version && {COMMIT}"
+        );
+        let pr = format!(
+            "git checkout -qb pr old && mkdir -p .bosun/profiles && echo pr > {prof} && echo 1.2.3 > .bosun/version && {COMMIT}"
+        );
+        let (d, sum) = ci_repo(&main, &pr);
+        assert!(run_step(d.path(), &sum, &step, &[]).0);
+        assert_eq!(
+            fs::read_to_string(d.path().join("repo").join(prof)).unwrap(),
+            "tip\n"
+        );
+    }
+}
+
+#[test]
+fn circleci_deps_audits_with_the_bases_manifests_and_the_rest_sees_the_prs() {
+    let Some(step) = job_step(&["ts-pnpm"], "", "bosun gates") else {
+        return;
+    };
+    let main = format!("echo base > package.json && echo base > pnpm-workspace.yaml && {COMMIT}");
+    let pr = format!(
+        "git checkout -qb pr && echo pr > package.json && rm pnpm-workspace.yaml && {COMMIT}"
+    );
+    let (d, sum) = ci_repo(&main, &pr);
+    let (ok, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", "pr")]);
+    assert!(ok, "{log}");
+    let want = "gate test-integrity pr\ngate deps base\ngate fmt pr\ngate lint pr\ngate test pr\n";
+    assert_eq!(log, want);
+    assert!(
+        !d.path().join("repo/pnpm-workspace.yaml").exists(),
+        "a base-only copy goes"
+    );
+}
+
+#[test]
+fn the_circleci_toolchain_is_validated_and_pinned_for_later_steps() {
+    let job = text(&mode(&["rust"], &["circleci"], ""), JOB).to_string();
+    for want in [
+        "[[ \"$ch\" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]",
+        "echo \"export RUSTUP_TOOLCHAIN=$ch\" >> \"$BASH_ENV\"",
+        "rustup toolchain install \"$ch\" --profile minimal -c rustfmt,clippy",
+    ] {
+        assert!(job.contains(want), "no {want}");
+    }
+    assert!(
+        !job.contains("rustup toolchain install\n"),
+        "never what a file names"
+    );
+    let Some((_, env)) = job_step(&["rust"], "", "bosun gates") else {
+        return;
+    };
+    for k in ["BOSUN_INTEGRITY_ALLOW", "BOSUN_PR_BODY"] {
+        assert!(
+            env.contains(&(k.to_string(), String::new())),
+            "{k} is cleared: {env:?}"
+        );
+    }
+}
