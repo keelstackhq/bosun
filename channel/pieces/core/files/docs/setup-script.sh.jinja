@@ -68,7 +68,9 @@ case "$(uname -m)" in aarch64 | arm64) arch=arm64 sum="$SPLICE_LINUX_ARM64_SHA51
 t="$(mktemp -d)"
 if launcher="$(splice_pack @keelstackhq/splice "$t" "$SPLICE_SHA512")" &&
   binary="$(splice_pack "@keelstackhq/splice-linux-$arch" "$t" "$sum")"; then
-  npm install -g --ignore-scripts --omit=optional "$launcher" "$binary"
+  # npm still reads the optional packages' metadata: a registry error must not stop the script.
+  npm install -g --ignore-scripts --omit=optional "$launcher" "$binary" ||
+    echo "setup-script: splice install failed; skipping splice" >&2
 fi
 npm install -g "@keelstackhq/hoist@${HOIST_VERSION}" "@keelstackhq/berth@${BERTH_VERSION}" \
   "@keelstackhq/bosun@${BOSUN_VERSION}"

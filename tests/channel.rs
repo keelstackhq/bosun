@@ -490,4 +490,36 @@ fn setup_scripts_install_splice_checked_against_its_pinned_integrity() {
             String::from_utf8_lossy(&o.stderr)
         );
     }
+    // A failing `npm install -g` (a registry error fetching the optional packuments) warns and
+    // the script goes on, in both scripts.
+    let fake =
+        "#!/bin/sh\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; *) exit 1 ;; esac\n";
+    fs::write(d.join("npm"), fake).unwrap();
+    for t in [&own, &ch] {
+        let start = t.find("splice_pack() {").unwrap();
+        let block = &t[start..start + t[start..].find("\nfi\n").unwrap() + 4];
+        let sums = [
+            "SPLICE_SHA512",
+            "SPLICE_LINUX_X64_SHA512",
+            "SPLICE_LINUX_ARM64_SHA512",
+        ]
+        .map(|k| format!("{k}={abc}\n"))
+        .concat();
+        let script = format!("SPLICE_VERSION=0.3.0\n{sums}{block}echo went-on");
+        let o = std::process::Command::new("bash")
+            .args(["-euo", "pipefail", "-c", &script])
+            .current_dir(d)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(
+            o.status.success() && String::from_utf8_lossy(&o.stdout).contains("went-on"),
+            "{err}"
+        );
+        assert!(
+            err.contains("setup-script: splice install failed; skipping splice"),
+            "{err}"
+        );
+    }
 }
