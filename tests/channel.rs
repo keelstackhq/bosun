@@ -321,7 +321,34 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
         .lines()
         .find_map(|l| l.strip_prefix("SPLICE_VERSION="))
         .expect("the setup script pins SPLICE_VERSION");
-    assert_eq!(pinned, "0.2.1");
+    assert_eq!(pinned, "0.3.0");
+    // Every splice pin (both setup scripts, both splice.yml) is at least the channel's min_splice.
+    let ver = |v: &str| -> Vec<u64> { v.split('.').map(|n| n.parse().unwrap()).collect() };
+    let m = toml_at(&channel().join("splice.toml"));
+    let min = m["min_splice"].as_str().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let own = fs::read_to_string(root.join("docs/setup-script.sh")).unwrap();
+    let own_bot = fs::read_to_string(root.join(".github/workflows/splice.yml")).unwrap();
+    let mut pins = vec![pinned.to_string()];
+    pins.extend(
+        own.lines()
+            .filter_map(|l| l.strip_prefix("SPLICE_VERSION="))
+            .map(str::to_string),
+    );
+    for y in [&bot, &own_bot] {
+        let v = y
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("version: "))
+            .unwrap();
+        pins.push(v.trim_matches('"').to_string());
+    }
+    assert_eq!(pins.len(), 4, "{pins:?}");
+    for v in &pins {
+        assert!(
+            ver(v) >= ver(min),
+            "splice {v} is older than min_splice {min}"
+        );
+    }
     assert!(
         bot.contains(&format!("version: {pinned}\n")),
         "splice.yml moves with the setup script's SPLICE_VERSION"
@@ -398,4 +425,69 @@ fn shipped_scripts_are_only_ever_called_through_bash() {
         }
     }
     assert!(found >= 2, "the fold script is documented for both copies");
+}
+
+/// Both setup scripts install splice only from npm tarballs whose sha512 matches the pinned
+/// integrity, never by version alone; a mismatch stops the script.
+#[test]
+fn setup_scripts_install_splice_checked_against_its_pinned_integrity() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let own = fs::read_to_string(root.join("docs/setup-script.sh")).unwrap();
+    let ch =
+        fs::read_to_string(channel().join("pieces/core/files/docs/setup-script.sh.jinja")).unwrap();
+    let pins = |t: &str| -> Vec<String> {
+        t.lines()
+            .filter(|l| l.starts_with("SPLICE_") && l.contains("SHA512="))
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(pins(&own).len(), 3, "launcher, linux-x64, linux-arm64");
+    assert_eq!(
+        pins(&own),
+        pins(&ch),
+        "the two scripts pin the same integrity"
+    );
+    for t in [&own, &ch] {
+        assert!(
+            !t.contains("\"@keelstackhq/splice@${SPLICE_VERSION}\""),
+            "never by version alone"
+        );
+        assert!(t.contains(
+            "  npm install -g --ignore-scripts --omit=optional \"$launcher\" \"$binary\""
+        ));
+        assert!(t.contains(
+            "if launcher=\"$(splice_pack @keelstackhq/splice \"$t\" \"$SPLICE_SHA512\")\" &&"
+        ));
+    }
+    let start = own.find("splice_pack() {").unwrap();
+    let func = &own[start..start + own[start..].find("\n}\n").unwrap() + 3];
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    fs::write(d.join("npm"), "#!/bin/sh\nprintf abc > x.tgz\necho x.tgz\n").unwrap();
+    std::fs::set_permissions(
+        d.join("npm"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!("{}:{}", d.display(), std::env::var("PATH").unwrap());
+    // sha512("abc"), base64.
+    let abc =
+        "3a81oZNherrMQXNJriBBMRLm+k6JqX6iCp7u5ktV05ohkpkqJ0/BqDa6PCOj/uu9RU1EI2Q86A4qmslPpUyknw==";
+    for (sum, ok) in [(abc, true), ("bad", false)] {
+        let script = format!(
+            "{func}SPLICE_VERSION=0.3.0\nf=\"$(splice_pack @keelstackhq/splice \"$PWD\" {sum})\"\necho \"$f\""
+        );
+        let o = std::process::Command::new("bash")
+            .args(["-eo", "pipefail", "-c", &script])
+            .current_dir(d)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            o.status.success(),
+            ok,
+            "{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
 }

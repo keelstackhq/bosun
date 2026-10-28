@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
       - uses: keelstackhq/splice/action@v1
         with:
-          version: "0.2.0"
+          version: "0.3.0"
           scope: all
           # GITHUB_TOKEN works, but its PRs do not trigger CI.
           token: ${{ secrets.SPLICE_BOT_TOKEN || github.token }}

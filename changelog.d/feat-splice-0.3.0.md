@@ -1,0 +1,1 @@
+- splice 0.3.0 everywhere (both setup scripts, both `splice.yml`); the setup scripts install splice only from `npm pack` tarballs whose sha512 matches the pinned npm integrity (launcher and linux binary package), and skip it with a warning on a mismatch. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
