@@ -39,6 +39,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D31 | Identity | The repo comes from `BOSUN_REPO` (`owner/name`), else the `origin` remote. The session id comes from `BOSUN_SESSION`, else `CLAUDE_CODE_REMOTE_SESSION_ID` with its `cse_` prefix changed to `session_`, else `local-<host>`. The GitHub token comes from `GITHUB_TOKEN` or `GH_TOKEN`, never argv. |
 | D32 | Status posts | `risk-check` and `review-verdict` are commit statuses, because only GitHub Apps can create check runs. Any workflow's `GITHUB_TOKEN` can post them, so D33 replaces this once the ruleset is switched (§15). |
 | D33 | Gate source (B2, designed) | `risk-check`, `review-verdict` and `main-open` become check runs of a dedicated GitHub App whose key lives in a `main`-only environment, and the ruleset pins each to that App's `integration_id` (§15). |
+| D34 | Owner teams (B4, designed) | `governance/owners.toml` may list `team = "org/slug"`, expanded per run on the App token; an unreadable team counts no members (§16). |
 
 ### 1.1 Exit codes
 

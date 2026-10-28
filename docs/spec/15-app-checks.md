@@ -29,7 +29,7 @@ example `keelstackhq-bosun-gate` (a slug is global). No webhook (Active off), no
 URL, "Only on this account", installed on the selected repos only. Repository permissions: Checks
 read and write; Pull requests read and write (the verdict record comment); Contents read; Issues
 read; Metadata read (mandatory); Commit statuses none; nothing else. Organization permission:
-Members read (§16 teams, B4: next PR; a user account has no teams and skips it). Only the gate jobs ever use
+Members read (§16 teams; a user account has no teams and skips it). Only the gate jobs ever use
 this App; any other bot App (the splice bot of B5, §17) is a separate App with its own key.
 
 Which token writes what. The App token writes the three check runs, the verdict record comment and
@@ -162,7 +162,7 @@ review counts: `/bosun approve` comments and signatures (§8) do not satisfy it.
 opened as the owner's login and GitHub forbids approving your own PR, so with one owner every
 workflow PR would need a bypass, which is a human merge outside auto-merge (D13 and D-006 stay:
 agents never merge). With B2 in place risk-check already needs the owner for these PRs and cannot
-be forged. Revisit when at least two humans own the repo (§16, B4: next PR) and agents open PRs as their own
+be forged. Revisit when at least two humans own the repo (§16) and agents open PRs as their own
 account.
 
 **Residuals.**

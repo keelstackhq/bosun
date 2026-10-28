@@ -33,7 +33,13 @@ RUST_VERSION=""
 if [ -f rust-toolchain.toml ]; then
   RUST_VERSION="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" rust-toolchain.toml | head -n1)"
 fi
-if [ -z "$RUST_VERSION" ]; then
+# The channel reaches rustup as root: only a toolchain name passes, anything else is skipped like a
+# missing file (printf %q shows the rejected value safely).
+if [ -n "$RUST_VERSION" ] && ! [[ "$RUST_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  printf 'setup-script: invalid channel %q in rust-toolchain.toml; skipping the Rust toolchain install and the cargo tools\n' "$RUST_VERSION" >&2
+  RUST_VERSION=""
+  if [ "${1:-}" = --rust-version ]; then exit 1; fi
+elif [ -z "$RUST_VERSION" ]; then
   # Never fail here: a failing setup script blocks every session of the environment.
   echo "setup-script: no rust-toolchain.toml with a channel in $PWD; skipping the Rust toolchain install and the cargo tools, rustup installs the checkout's pinned toolchain on first cargo use" >&2
   if [ "${1:-}" = --rust-version ]; then exit 1; fi

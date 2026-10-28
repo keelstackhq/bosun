@@ -1,0 +1,1 @@
+- Design and plan: owner teams in governance/owners.toml, expanded per run and failing closed (B4).
