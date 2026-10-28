@@ -385,7 +385,7 @@ mod environments {
     /// A full repo whose workflows name `release-pr` twice and `splice-bot` as a mapping.
     fn env_repo() -> (tempfile::TempDir, FakeGithub) {
         let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
-        let wf = "on:\n  workflow_dispatch:\n    inputs:\n      environment:\n        name: no\njobs:\n  prepare:\n    environment: release-pr\n    steps:\n      - name: x\n  again:\n    environment: \"release-pr\" # twice\n  update:\n    environment:\n      name: splice-bot\n      url: x\n  dyn:\n    environment: ${{ inputs.environment }}\n";
+        let wf = "on:\n  workflow_dispatch:\n    inputs:\n      environment:\n        name: no\njobs:\n  prepare:\n    environment: release-pr\n    steps:\n      - name: x\n  again:\n    environment: \"release-pr\" # twice\n  update:\n    environment:\n      name: splice-bot\n      url: x\n";
         write(tmp.path(), ".github/workflows/rel.yml", wf);
         let hoist = tmp.path().join("fake-hoist");
         let report = r#"{"version":1,"command":"check","ok":true,"exit_code":0,"items":[]}"#;
@@ -434,6 +434,30 @@ mod environments {
         assert_eq!(step5["status"], "warn", "{step5}");
         assert!(step5["detail"].as_str().unwrap().contains(d), "{step5}");
         assert!(step5["fix"].as_str().unwrap().contains(f), "{step5}");
+    }
+
+    #[test]
+    fn an_environment_doctor_cannot_read_warns() {
+        let (tmp, fake) = env_repo();
+        let dynamic = "jobs:\n  deploy:\n    environment: ${{ inputs.e }}\n  flow:\n    environment: {url: x}\n";
+        write(tmp.path(), ".github/workflows/dyn.yml", dynamic);
+        main_only(&fake, "release-pr");
+        main_only(&fake, "splice-bot");
+        let (code, v) = remote(&fake, tmp.path());
+        assert_eq!(code, 0, "{v}");
+        let envs = v["data"]["environments"].as_array().unwrap();
+        for job in ["deploy", "flow"] {
+            let e = envs.iter().find(|e| e["job"] == job).expect(job);
+            assert_eq!(e["status"], "warn", "{e}");
+            let d = e["detail"].as_str().unwrap();
+            assert!(
+                d.contains(&format!(
+                    "cannot read the environment of job {job} in dyn.yml"
+                )),
+                "{d}"
+            );
+        }
+        assert_eq!(v["data"]["items"][4]["status"], "warn", "{v}");
     }
 
     #[test]

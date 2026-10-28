@@ -55,24 +55,32 @@ fn workflow_jobs(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// Environments of every workflow job (see `checks::workflow_environments`), sorted.
-fn workflow_environments(root: &Path) -> Vec<String> {
+/// Environments of every workflow job (see `checks::workflow_environments`), sorted, and the
+/// jobs whose environment doctor cannot read, as (job, workflow file).
+fn workflow_environments(root: &Path) -> (Vec<String>, Vec<(String, String)>) {
+    let (mut names, mut unread) = (Vec::new(), Vec::new());
     let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
-        return Vec::new();
+        return (names, unread);
     };
-    let mut out: Vec<String> = dir
-        .flatten()
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|x| x == "yml" || x == "yaml")
-        })
-        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
-        .flat_map(|t| checks::workflow_environments(&t))
-        .collect();
-    out.sort();
-    out.dedup();
-    out
+    for e in dir.flatten() {
+        let file = e.file_name().to_string_lossy().into_owned();
+        let Some(t) = (file.ends_with(".yml") || file.ends_with(".yaml"))
+            .then(|| std::fs::read_to_string(e.path()).ok())
+            .flatten()
+        else {
+            continue;
+        };
+        for r in checks::workflow_environments(&t) {
+            match r {
+                Ok(n) => names.push(n),
+                Err(job) => unread.push((job, file.clone())),
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    unread.sort();
+    (names, unread)
 }
 
 const ENV_GRANT_FIX: &str = "give the token Environments: read (or Administration: read), then run `bosun doctor --remote` again";
@@ -135,11 +143,14 @@ fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
 
 /// Check each workflow environment and fold the warnings into step 5. Returns `data.environments`.
 fn apply_environments(items: &mut [Value], gh: &dyn Github, repo: &str, root: &Path) -> Value {
-    let names = workflow_environments(root);
-    let envs: Vec<Value> = names
+    let (names, unread) = workflow_environments(root);
+    let mut envs: Vec<Value> = names
         .iter()
         .map(|n| environment_check(gh, repo, n))
         .collect();
+    envs.extend(unread.iter().map(|(job, file)| json!({"job": job, "status": "warn",
+        "detail": format!("cannot read the environment of job {job} in {file} (an expression, or no name)"),
+        "fix": format!("name the environment literally in {file} (`environment: <name>`) so doctor can check it, or check its deployment branches by hand")})));
     let warned: Vec<&Value> = envs.iter().filter(|e| e["status"] == "warn").collect();
     let it = &mut items[4];
     let text = |k: &str| it[k].as_str().unwrap_or("").to_string();
