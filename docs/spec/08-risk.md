@@ -66,7 +66,8 @@ High-risk PRs:
   CHANGES_REQUESTED one) ends also with a v2 owner signature, which names the dismissed review
   (below). No review event runs the `risk` workflow, so a withdrawal does not change a green
   `risk-check` by itself (the ruleset requires status checks, not reviews): to withdraw, request
-  changes or dismiss the approval, then comment `/bosun recheck` (it re-judges and fails);
+  changes or dismiss the approval, then comment `/bosun recheck` (or re-run the risk workflow;
+  it re-judges and fails);
   turning off auto-merge also stops a merge. `tests/cli_risk.rs` pins that the next run fails.
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
@@ -255,8 +256,14 @@ High-risk PRs:
 - The `risk` workflow runs on `pull_request_target` (opened, synchronize, reopened, edited) and
   on PR comments (`issue_comment` created) that contain `/bosun approve` or `/bosun recheck`, so
   a comment re-evaluates `risk-check` without a push. `/bosun recheck` approves nothing: it only
-  re-judges the current head, so anyone may post it (the job filters nothing by author; only an
-  owner's approval counts), and it shares the judge's concurrency group, as an approval does.
+  re-judges the current head. It runs only for the repo's owners, members and collaborators
+  (`author_association` `OWNER`, `MEMBER` or `COLLABORATOR`) and then shares the judge's
+  concurrency group, as an approval does; anyone else's recheck gets a group of its own and runs
+  no job. The filter limits CI minutes only: an outsider's `/bosun approve` still re-judges (and
+  joins the judge's group), harmlessly. It also drops a recheck from an owner with private org
+  membership or from an app or bot (`NONE`): re-run the risk workflow then, which every hint that
+  says to comment `/bosun recheck` also names. `/bosun approve` is not filtered by author: bosun
+  checks the commenter against `governance/owners.toml` itself.
   There is no review trigger: an owner's GitHub review (APPROVED on the head SHA) is read through
   the API on the next run, a push, a `/bosun recheck` comment or any re-run of the workflow.
   `pull_request_target` and `issue_comment` run

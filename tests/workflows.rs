@@ -1097,29 +1097,56 @@ fn the_pr_copy_scan_catches_jinja_events_and_workflow_run_head_code() {
 }
 
 /// `/bosun recheck` re-judges a PR without a push (an owner's GitHub review is read on the next
-/// run): it runs the job and shares the judge's concurrency group, as `/bosun approve` does.
+/// run): from the repo's owners, members and collaborators only (that limits CI minutes, no
+/// more: an outsider's `/bosun approve` still re-judges, harmlessly), it runs the job and shares
+/// the judge's concurrency group, as `/bosun approve` does. Anyone else's recheck gets a group of
+/// its own and is skipped; a dropped recheck (private org membership, an app: `NONE`) re-runs the
+/// workflow instead. `/bosun approve` stays open: bosun checks the commenter against the owners.
 #[test]
 fn risk_rechecks_on_a_bosun_recheck_comment() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/risk.yml");
     let yaml = fs::read_to_string(path).unwrap();
-    let recheck = "contains(github.event.comment.body, '/bosun recheck')";
-    let job_if = block_of(&yaml, "    if: >-", "    runs-on:");
-    assert!(job_if.contains(recheck), "{job_if}");
-    let group = block_of(&yaml, "\nconcurrency:", "\npermissions:");
-    assert!(group.contains(&format!("!{recheck}")), "{group}");
+    let channel = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/channel/pieces/core/files/.github/workflows/risk.yml"
+    );
+    let channel = fs::read_to_string(channel).unwrap();
+    let recheck = "(contains(github.event.comment.body, '/bosun recheck') &&\n    \
+        contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.comment.author_association))";
+    let approve = "contains(github.event.comment.body, '/bosun approve')";
+    for y in [&yaml, &channel] {
+        let job_if = block_of(y, "    if: >-", "    runs-on:");
+        assert!(
+            job_if.contains(&format!(
+                "{approve} ||\n      {}",
+                recheck.replace("\n    ", "\n      ")
+            )),
+            "{job_if}"
+        );
+        assert_eq!(job_if.matches("author_association").count(), 1, "{job_if}");
+        let group = block_of(y, "\nconcurrency:", "\npermissions:");
+        assert!(group.contains(&format!("!{approve}")), "{group}");
+        assert!(group.contains(&format!("&& !{recheck})")), "{group}");
+        assert!(group.contains("&& github.run_id || 'judge' }}"), "{group}");
+        assert!(y.contains("`/bosun recheck` (a repo owner, member or\n# collaborator: it only"));
+        assert!(
+            !y.contains("(anyone"),
+            "risk.yml still says anyone may recheck"
+        );
+        // The filter limits CI minutes only: an outsider's approve comment still cancels.
+        assert!(y.contains("limits CI minutes only"), "{y}");
+        assert!(!y.contains("cancels a run in flight"), "{y}");
+        assert!(y.contains("(author_association NONE) is dropped too: re-run the workflow"));
+    }
     assert_eq!(
         events(&yaml),
         ["pull_request_target", "issue_comment"],
         "risk.yml events"
     );
     // A withdrawal re-runs nothing: both copies tell the owner how to make it count.
-    let channel = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/channel/pieces/core/files/.github/workflows/risk.yml"
-    );
-    for y in [yaml.clone(), fs::read_to_string(channel).unwrap()] {
+    for y in [yaml.clone(), channel] {
         assert!(
-            y.contains("to withdraw, request changes or dismiss the approval, then comment\n# `/bosun recheck` (it re-judges and fails)"),
+            y.contains("to withdraw, request changes or dismiss the approval, then comment\n# `/bosun recheck` (or re-run the risk workflow; it re-judges and fails)"),
             "{y}"
         );
     }
