@@ -7,10 +7,13 @@ name: release
 #   run (workflow_dispatch = dry run: builds and smoke-tests, publishes nothing).
 # - publish (pending AND enabled): tags, the GitHub Release, npm (launcher + platform packages)
 #   and crates.io through trusted publishing, in environment `release`, with hoist from npm.
+# - release-token (enabled, on main): is the secret HOIST_RELEASE_TOKEN set? It lives in
+#   environment `release-pr` (main only), so a PR's own workflow cannot read it, and only the jobs
+#   in that environment see it; detect stays out of it, so a dry run works on any branch.
 # - prepare (enabled, and the secret HOIST_RELEASE_TOKEN is set): open, update or close the
-#   release PR (branch hoist/release). Without the secret it is skipped: GITHUB_TOKEN may not open
-#   PRs here, and a PR it opens runs no CI, so the job only failed (CI minutes). A session opens
-#   the release PR instead.
+#   release PR (branch hoist/release), in environment `release-pr`. Without the secret it is
+#   skipped: GITHUB_TOKEN may not open PRs here, and a PR it opens runs no CI, so the job only
+#   failed (CI minutes). A session opens the release PR instead.
 #
 # The gate: with BOSUN_RELEASE unset a push to main runs `detect` only, so merging this file (or
 # any commit) never tags, releases or publishes. See docs/releasing.md for the one-time setup.
@@ -37,7 +40,6 @@ jobs:
       pending: ${{ steps.version.outputs.pending }}
       version: ${{ steps.version.outputs.version }}
       enabled: ${{ steps.gate.outputs.enabled }}
-      release_token: ${{ steps.gate.outputs.release_token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -60,17 +62,29 @@ jobs:
       - id: gate
         env:
           BOSUN_RELEASE: ${{ vars.BOSUN_RELEASE }}
-          # Only whether the secret is set, never its value.
-          HAS_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN != '' }}
         run: |
           if [ "$BOSUN_RELEASE" = "enabled" ]; then enabled=true; else enabled=false; fi
           echo "release gate (vars.BOSUN_RELEASE): $enabled"
           echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
-          if [ "$HAS_RELEASE_TOKEN" = true ]; then token=true; else token=false; fi
-          if [ "$enabled" = true ] && [ "$token" = false ]; then
-            echo "::warning::secret HOIST_RELEASE_TOKEN is not set, so job prepare is skipped; a session opens the release PR (docs/releasing.md)"
+
+  release-token:
+    needs: detect
+    if: ${{ github.ref == 'refs/heads/main' && needs.detect.outputs.enabled == 'true' }}
+    runs-on: ubuntu-latest
+    environment: release-pr
+    outputs:
+      set: ${{ steps.token.outputs.set }}
+    steps:
+      - id: token
+        env:
+          # Only whether the secret is set, never its value.
+          HAS_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN != '' }}
+        run: |
+          if [ "$HAS_RELEASE_TOKEN" = true ]; then set=true; else set=false; fi
+          if [ "$set" = false ]; then
+            echo "::warning::secret HOIST_RELEASE_TOKEN is not set in environment release-pr, so job prepare is skipped; a session opens the release PR (docs/releasing.md)"
           fi
-          echo "release_token=$token" >> "$GITHUB_OUTPUT"
+          echo "set=$set" >> "$GITHUB_OUTPUT"
 
   build:
     needs: detect
@@ -196,10 +210,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   prepare:
-    needs: [detect, publish]
+    needs: [detect, publish, release-token]
     # Only from main, like publish: the release PR is computed from main's version.
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.detect.outputs.enabled == 'true' && needs.detect.outputs.release_token == 'true' && (needs.detect.outputs.pending == 'false' || needs.publish.result == 'success') }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.detect.outputs.enabled == 'true' && needs.release-token.outputs.set == 'true' && (needs.detect.outputs.pending == 'false' || needs.publish.result == 'success') }}
     runs-on: ubuntu-latest
+    environment: release-pr
     permissions:
       contents: write
       pull-requests: write

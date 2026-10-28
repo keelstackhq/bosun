@@ -35,7 +35,7 @@ const OWNER_STEPS: [&str; 7] = [
     "Fill governance/owners.toml with the owners' GitHub logins (the channel seeds it from --owner).",
     "Run `hoist apply` for branch protection, auto-merge and the required checks ci-ok, risk-check, review-verdict, main-open (hoist.toml).",
     "Create the kill-switch label: `gh label create bosun:halt --color B60205`.",
-    "Add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) so the splice update bot's PRs run CI.",
+    "Create the environment splice-bot (deployment branches: main only), then add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) to it, never as a repository secret, so the splice update bot's PRs run CI.",
     "Review this setup PR; it is R-gov, so approve its head SHA (`/bosun approve <sha>`). While main has no bosun workflows, risk-check, review-verdict and main-open cannot run on it: merge it yourself, then apply the required checks.",
     "Create the Routines (janitor, curator, notify); `bosun doctor` prints their prompts.",
     "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA with `/bosun approve <sha>`.",

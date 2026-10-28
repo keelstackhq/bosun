@@ -294,18 +294,30 @@ fn release_runs_only_on_main_pushes_and_never_puts_event_data_in_a_script() {
         }
     }
     // Without HOIST_RELEASE_TOKEN, prepare is skipped (GITHUB_TOKEN may not open the release PR,
-    // and its PR would run no CI); only whether the secret is set reaches the detect job.
+    // and its PR would run no CI). The secret lives in environment release-pr (main only), so
+    // detect (which a dry run on any branch runs) cannot see it: job release-token, in that
+    // environment, passes on only whether it is set.
     let prepare = &yaml[yaml.find("\n  prepare:\n").unwrap()..];
     let cond = prepare
         .lines()
         .find(|l| l.trim_start().starts_with("if:"))
         .unwrap();
     assert!(
-        cond.contains("needs.detect.outputs.release_token == 'true'"),
+        cond.contains("needs.release-token.outputs.set == 'true'"),
         "{cond}"
     );
-    assert!(yaml.contains("HAS_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN != '' }}"));
-    assert!(yaml.contains("release_token: ${{ steps.gate.outputs.release_token }}"));
+    let (jobs, _) = jobs_of(&yaml);
+    let job = |id: &str| &jobs.iter().find(|(j, _)| j == id).unwrap().1;
+    assert!(!reads_a_secret(job("detect")), "{}", job("detect"));
+    let token = job("release-token");
+    assert!(token.contains("HAS_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN != '' }}"));
+    assert!(token.contains("set: ${{ steps.token.outputs.set }}"));
+    assert_eq!(environment_of(token).as_deref(), Some("release-pr"));
+    assert_eq!(
+        environment_of(job("prepare")).as_deref(),
+        Some("release-pr")
+    );
+    assert!(job("prepare").contains("needs: [detect, publish, release-token]"));
     // Event data reaches scripts through env only.
     for s in run_scripts(&yaml) {
         for bad in ["github.event", "head_ref", "github.actor", "inputs."] {
@@ -1130,4 +1142,203 @@ fn block_of<'a>(yaml: &'a str, start: &str, end: &str) -> &'a str {
     let i = yaml.find(start).unwrap_or_else(|| panic!("no {start:?}"));
     let j = yaml[i..].find(end).unwrap_or_else(|| panic!("no {end:?}")) + i;
     &yaml[i..j]
+}
+
+/// Each secret bosun's workflows read, and the environment that holds it. Each environment's
+/// deployment branch policy allows only `main`, so a PR's own `on: pull_request` workflow (which
+/// can read repository secrets) cannot read these.
+const SECRET_ENVIRONMENTS: [(&str, &str); 3] = [
+    ("HOIST_RELEASE_TOKEN", "release-pr"),
+    ("SPLICE_BOT_TOKEN", "splice-bot"),
+    ("ANTHROPIC_API_KEY", "review"),
+];
+
+/// A line without its comment (a `#` line, or ` # ...` after a value), Jinja tags stripped.
+/// A line with `${{` keeps its `#`s: Actions expands the expression before any shell or YAML
+/// comment applies (a `# ${{ secrets.X }}` line in a `run: |` script, `curl -H "a #1" ${{ .. }}`).
+fn code_of(line: &str) -> String {
+    let line = strip_jinja(line);
+    if line.contains("${{") {
+        return line;
+    }
+    if line.trim_start().starts_with('#') {
+        return String::new();
+    }
+    match line.find(" #") {
+        Some(i) => line[..i].to_string(),
+        None => line,
+    }
+}
+
+/// True when the text reads a secret other than GITHUB_TOKEN: `secrets.X`, `secrets['X']`,
+/// `toJSON(secrets)` or `secrets: inherit` (any case; comments do not count). A bare `secrets:`
+/// mapping key reads nothing: `on: workflow_call: secrets:` declares them, and a job's
+/// `secrets:` map is judged by its values.
+fn reads_a_secret(text: &str) -> bool {
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-';
+    text.lines().any(|l| {
+        let l = code_of(l)
+            .to_lowercase()
+            .replace("secrets.github_token", "");
+        if l.trim() == "secrets:" {
+            return false;
+        }
+        let b = l.as_bytes();
+        l.match_indices("secrets").any(|(i, _)| {
+            (i == 0 || (!word(b[i - 1]) && b[i - 1] != b'.'))
+                && b.get(i + "secrets".len()).is_none_or(|c| !word(*c))
+        })
+    })
+}
+
+/// (job id, job text) of each job, and the text outside `jobs:`.
+fn jobs_of(yaml: &str) -> (Vec<(String, String)>, String) {
+    let mut jobs: Vec<(String, String)> = Vec::new();
+    let mut outside = String::new();
+    let mut in_jobs = false;
+    for line in yaml.lines() {
+        let code = code_of(line);
+        if code.trim_end() == "jobs:" {
+            in_jobs = true;
+            continue;
+        }
+        if !code.trim().is_empty() && !code.starts_with(' ') {
+            in_jobs = false;
+        }
+        if !in_jobs {
+            outside.push_str(line);
+            outside.push('\n');
+        } else if code.starts_with("  ")
+            && !code.starts_with("   ")
+            && code.trim_end().ends_with(':')
+        {
+            jobs.push((code.trim().trim_end_matches(':').to_string(), String::new()));
+        } else if let Some((_, text)) = jobs.last_mut() {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    (jobs, outside)
+}
+
+/// A job's `environment:`, only as a literal name (`environment: x`, or `name: x` under it),
+/// never an expression.
+fn environment_of(job: &str) -> Option<String> {
+    let lines: Vec<String> = job.lines().map(code_of).collect();
+    let i = lines
+        .iter()
+        .position(|l| l.starts_with("    environment:"))?;
+    let mut name = lines[i]["    environment:".len()..].trim().to_string();
+    if name.is_empty() {
+        name = lines[i + 1..]
+            .iter()
+            .take_while(|l| l.starts_with("      "))
+            .find_map(|l| l.trim().strip_prefix("name:").map(str::to_string))?;
+    }
+    // The flow form `{ name: x, deployment: false }` (spec §15).
+    if let Some(flow) = name.trim().strip_prefix('{') {
+        name = flow
+            .trim_end_matches('}')
+            .split(',')
+            .find_map(|kv| kv.trim().strip_prefix("name:").map(str::to_string))?;
+    }
+    let name = name.trim().trim_matches(['"', '\'']).to_string();
+    (!name.is_empty() && !name.contains("${{")).then_some(name)
+}
+
+/// What is wrong with a workflow's secrets: a secret read outside a job (it would reach every
+/// job), a job that reads one without a literal environment, or a known secret in the wrong one.
+fn secret_problems(path: &str, yaml: &str) -> Vec<String> {
+    let (jobs, outside) = jobs_of(yaml);
+    let mut out = Vec::new();
+    if reads_a_secret(&outside) {
+        out.push(format!("{path}: a secret outside a job"));
+    }
+    for (id, job) in jobs {
+        if !reads_a_secret(&job) {
+            continue;
+        }
+        let env = environment_of(&job);
+        if env.is_none() {
+            out.push(format!("{path} job {id}: a secret without an environment"));
+        }
+        for (secret, want) in SECRET_ENVIRONMENTS {
+            if job.contains(secret) && env.as_deref() != Some(want) {
+                out.push(format!(
+                    "{path} job {id}: {secret} outside environment {want}"
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// A same-repo PR's own `on: pull_request` workflow can read repository secrets: every secret
+/// lives in an environment limited to `main`, and only the jobs that need it name it.
+#[test]
+fn every_job_that_reads_a_secret_declares_its_environment() {
+    let all = all_workflows();
+    let problems: Vec<String> = all
+        .iter()
+        .flat_map(|(p, y)| secret_problems(p, y))
+        .collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    // Not vacuous: bosun's own workflows read each secret, the channel's splice.yml its token.
+    for (secret, _) in SECRET_ENVIRONMENTS {
+        assert!(
+            all.iter()
+                .any(|(p, y)| !p.contains("/channel/") && y.contains(&format!("secrets.{secret}"))),
+            "{secret} is read nowhere"
+        );
+    }
+    let bot = all
+        .iter()
+        .find(|(p, _)| p.contains("/channel/") && p.ends_with("/splice.yml"))
+        .expect("the channel ships splice.yml");
+    assert!(bot.1.contains("secrets.SPLICE_BOT_TOKEN"));
+}
+
+/// The scan itself: each form of secret use, a workflow-wide secret, expression environments.
+#[test]
+fn the_secret_scan_catches_each_form_of_secret_use() {
+    let job = |body: &str| format!("name: x\non:\n  push:\n\njobs:\n  j:\n{body}");
+    for body in [
+        "    steps:\n      - env:\n          T: ${{ secrets.NPM_TOKEN || github.token }}\n",
+        "    steps:\n      - env:\n          T: ${{ secrets['NPM_TOKEN'] }}\n",
+        "    steps:\n      - env:\n          T: ${{ toJSON(secrets) }}\n",
+        "    steps:\n      - env:\n          T: ${{ SECRETS.NPM_TOKEN }}\n",
+        "    uses: ./.github/workflows/x.yml\n    secrets: inherit\n",
+        "    environment: ${{ inputs.env }}\n    env:\n      T: ${{ secrets.X }}\n",
+        "    environment:\n      url: u\n    env:\n      T: ${{ secrets.X }}\n",
+        "    environment: release\n    env:\n      T: ${{ secrets.SPLICE_BOT_TOKEN }}\n",
+    ] {
+        assert_eq!(secret_problems("x", &job(body)).len(), 1, "{body}");
+    }
+    for body in [
+        "    env:\n      T: ${{ secrets.GITHUB_TOKEN }}\n",
+        "    env:\n      T: ${{ Secrets.github_token }}\n",
+        "    steps:\n      # rotate secrets.X\n      - name: rotate the keys # secrets.X\n",
+        "    environment: e\n    secrets: inherit\n",
+        "    environment:\n      name: splice-bot\n    env:\n      T: ${{ secrets.SPLICE_BOT_TOKEN }}\n",
+        // The flow form spec §15 uses for the App key's environment.
+        "    environment: { name: splice-bot, deployment: false }\n    env:\n      T: ${{ secrets.SPLICE_BOT_TOKEN }}\n",
+    ] {
+        let got = secret_problems("x", &job(body));
+        assert!(got.is_empty(), "{body}: {got:?}");
+    }
+    let wide =
+        "name: x\non:\n  push:\nenv:\n  T: ${{ secrets.X }}\n\njobs:\n  a:\n    environment: e\n";
+    assert_eq!(secret_problems("x", wide).len(), 1);
+    // Actions expands `${{ }}` before the shell sees a `#`: a shell comment in a script, or a
+    // `#` inside a quoted argument, still reads the secret.
+    for body in [
+        "    steps:\n      - run: |\n          # ${{ secrets.X }}\n",
+        "    steps:\n      - run: curl -H \"a #1\" ${{ secrets.X }}\n",
+    ] {
+        assert_eq!(secret_problems("x", &job(body)).len(), 1, "{body}");
+    }
+    // A reusable workflow declares the secrets it takes: a declaration reads nothing.
+    let called = "name: x\non:\n  workflow_call:\n    secrets:\n      TOKEN:\n        required: true\n\njobs:\n  a:\n    steps:\n      - run: echo hi\n";
+    let got = secret_problems("x", called);
+    assert!(got.is_empty(), "{got:?}");
 }
