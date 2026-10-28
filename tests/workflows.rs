@@ -868,6 +868,7 @@ fn the_gates_use_the_bases_config() {
     w(".cargo/config.toml", "[net]\nretry = 3\n");
     w("rust-toolchain.toml", "[toolchain]\nchannel = \"1.97\"\n");
     w("crates/x/lib.rs", "base\n");
+    w("deny.toml", "[licenses]\nallow = [\"MIT\"]\n");
     run("git add -A && git commit -qm base");
     let base = run("git rev-parse HEAD").trim().to_string();
     // Each bypass the reviews found, in one PR, plus a real code change.
@@ -881,6 +882,20 @@ fn the_gates_use_the_bases_config() {
     );
     w("crates/y/rust-toolchain", "/opt/evil\n");
     w("crates/x/lib.rs", "changed\n");
+    // cargo deny reads the base's policy: a PR cannot allow a license or skip an advisory.
+    w("deny.toml", "[licenses]\nallow = [\"GPL-3.0\"]\n");
+    w(
+        "crates/x/deny.toml",
+        "[advisories]\nignore = [\"RUSTSEC-0000-0000\"]\n",
+    );
+    // cargo deny also reads `.deny.toml` and the `deny.exceptions.toml` files.
+    for f in [
+        ".deny.toml",
+        "deny.exceptions.toml",
+        "crates/x/.deny.exceptions.toml",
+    ] {
+        w(f, "[[exceptions]]\nallow = [\"GPL-3.0\"]\n");
+    }
     w(".npmrc", "node-options=--require ./evil.js\n");
     w(
         ".pnpmfile.cjs",
@@ -922,6 +937,18 @@ fn the_gates_use_the_bases_config() {
     );
     assert!(!d.join("crates/y/rust-toolchain").exists());
     assert_eq!(read("crates/x/lib.rs"), "changed\n", "code is the PR's");
+    assert_eq!(read("deny.toml"), "[licenses]\nallow = [\"MIT\"]\n");
+    assert!(
+        !d.join("crates/x/deny.toml").exists(),
+        "a PR-only deny.toml is gone"
+    );
+    for f in [
+        ".deny.toml",
+        "deny.exceptions.toml",
+        "crates/x/.deny.exceptions.toml",
+    ] {
+        assert!(!d.join(f).exists(), "a PR-only {f} is gone");
+    }
     assert!(!d.join(".npmrc").exists(), "the PR's .npmrc is gone");
     assert!(
         !d.join(".pnpmfile.cjs").exists(),

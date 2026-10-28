@@ -1,0 +1,210 @@
+# Written by the bosun splice channel (owned). The gates of .github/workflows/bosun.yml on
+# CircleCI, in one job: the bosun release the base pins, the base's gate config, then each gate in
+# order; the first failure stops the job. bosun.yml's GitHub-only fast paths (draft, docs only, a
+# body edit) are not here: every pipeline runs the gates.
+docker:
+  # cimg/node 24.22.1, the digest of hull's executors (multi-arch index verified 2026-10-28).
+  - image: cimg/node:24.22.1@sha256:af46387c805de6dc3bc101a66de590daf4d01d5565ea66a99cf438fba323a055
+resource_class: medium
+environment:
+  # The channel's workflows name main as the default branch (bosun.yml, main-health.yml).
+  DEFAULT_BRANCH: main
+  # `npm install -g` into the home directory (the image's prefix is root's); on PATH below.
+  NPM_CONFIG_PREFIX: /home/circleci/.npm-global
+  # A PR's .cargo/config.toml must not swap the compiler cargo runs (as in bosun.yml).
+  RUSTC: rustc
+  RUSTC_WRAPPER: ""
+  RUSTC_WORKSPACE_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WRAPPER: ""
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: ""
+{% if "ts-pnpm" in pieces %}  npm_config_ignore_pnpmfile: "true"
+  pnpm_config_ignore_pnpmfile: "true"
+  npm_config_manage_package_manager_versions: "false"
+  pnpm_config_manage_package_manager_versions: "false"
+{% endif %}steps:
+  - checkout:
+      method: blobless
+  # First: a cached checkout can hold a stale origin/<default>, and a stale base hides what the
+  # default branch gained since (a test it deleted, say). bosun finds the default via origin/HEAD.
+  - run:
+      name: fetch the default branch
+      command: |
+        git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+        git remote set-head origin "$DEFAULT_BRANCH"
+  # The release the default branch's tip pins (as bosun.yml's base.sha; never the merge-base, which
+  # the author picks), so a change to the pin takes effect only after it merges.
+  - run:
+      name: install the pinned release of the base
+      command: |
+        base="$(git rev-parse "origin/$DEFAULT_BRANCH")"
+        v="$(git show "$base:.bosun/version" 2>/dev/null | tr -d '[:space:]' || true)"
+        # The default branch has no bosun yet (the setup PR): this change's pin.
+        if [ -z "$v" ]; then v="$(tr -d '[:space:]' < .bosun/version)"; fi
+        printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo ".bosun/version must be an exact x.y.z, not '$v'"; exit 1; }
+        npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
+        dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+        mkdir -p "$HOME/.bosun-ci"
+        cp "$dir/bin/bosun" "$HOME/.bosun-ci/bosun"
+        got="$("$HOME/.bosun-ci/bosun" --version)"
+        echo "$got"
+        test "$got" = "bosun ${v}"
+        # The gates check the binary against this hash before each gate.
+        echo "export BOSUN_SHA256=$(sha256sum "$HOME/.bosun-ci/bosun" | cut -d' ' -f1)" >> "$BASH_ENV"
+        { echo "export BOSUN_BASE=$base"; echo "export PATH=\"$NPM_CONFIG_PREFIX/bin:\$PATH\""; } >> "$BASH_ENV"
+  # The pin a change sets must be a published release that reports its own version.
+  - run:
+      name: the pinned release installs and reports its version
+      command: |
+        v="$(tr -d '[:space:]' < .bosun/version)"
+        printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo ".bosun/version must be an exact x.y.z, not '$v'"; exit 1; }
+        npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
+        test "$(bosun --version)" = "bosun ${v}"
+  # The base's copies of the files that decide what runs, as in bosun.yml (the same step).
+  - run:
+      name: the base's config for the gates
+      command: |
+        pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|(^|/)\.?deny(\.exceptions)?\.toml$|^\.bosun(/|$)'
+        if ! git cat-file -e "$BOSUN_BASE:.bosun/version" 2>/dev/null; then
+          echo "the default branch has no .bosun yet (setup PR): this change's .bosun is used"
+          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|(^|/)\.?deny(\.exceptions)?\.toml$'
+        fi
+        git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+          rm -rf -- "$p"
+        done
+        git ls-tree -r -z --name-only "$BOSUN_BASE" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+          mkdir -p -- "$(dirname -- "$p")"
+          git show "$BOSUN_BASE:$p" > "$p"
+        done
+{% if "rust" in pieces %}  - run:
+      name: rustup and the cargo tools
+      command: |
+        # rustup 1.29.2, verified 2026-10-28 (static.rust-lang.org rustup-init.sha256), as hull's
+        curl -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/1.29.2/x86_64-unknown-linux-gnu/rustup-init"
+        echo "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4  /tmp/rustup-init" | sha256sum -c - || exit 1
+        chmod +x /tmp/rustup-init
+        /tmp/rustup-init -y --profile minimal --default-toolchain none
+        echo 'export PATH="$HOME/.bosun-tools/bin:$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+        . "$HOME/.cargo/env"
+        # Never from a cache (CircleCI caches are not branch-scoped); each checked on every run.
+        tools="$HOME/.bosun-tools"; t="$(mktemp -d)"
+        mkdir -p "$tools/bin"
+        # cargo-nextest 0.9.148 linux-gnu; sha256 computed 2026-10-28 (no checksum file is published), as hull's
+        curl -fsSL -o "$t/nextest.tgz" "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.148/cargo-nextest-0.9.148-x86_64-unknown-linux-gnu.tar.gz"
+        echo "223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc  $t/nextest.tgz" | sha256sum -c - || exit 1
+        tar -xzf "$t/nextest.tgz" -C "$t" cargo-nextest
+        install -m 755 "$t/cargo-nextest" "$tools/bin/cargo-nextest"
+        # cargo-deny 0.20.2 musl, sha256 from the release's .sha256 asset, 2026-10-28
+        curl -fsSL -o "$t/deny.tgz" "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
+        echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  $t/deny.tgz" | sha256sum -c - || exit 1
+        tar -xzf "$t/deny.tgz" -C "$t" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
+        install -m 755 "$t/cargo-deny" "$tools/bin/cargo-deny"
+  # The (base's) toolchain file in rust_path or a parent (rust-toolchain wins, as for rustup), else
+  # the old pin. Like bosun.yml's check, only a [toolchain] with plain-name channel, components,
+  # targets and profile passes (a `path` would run another compiler); rustup then installs what
+  # it names, and RUSTUP_TOOLCHAIN makes rustup ignore any toolchain file a later step writes.
+  - run:
+      name: rust toolchain
+      working_directory: {{ rust_path }}
+      command: |
+        d="$PWD"; f=""
+        while :; do
+          for n in rust-toolchain.toml rust-toolchain; do if [ -f "$d/$n" ]; then f="$d/$n"; fi; done
+          if [ -n "$f" ] || [ "$d" = "$HOME/project" ] || [ "$d" = / ]; then break; fi
+          d="$(dirname "$d")"
+        done
+        if [ -z "$f" ]; then
+          ch=1.97
+          rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
+        else
+          n='[A-Za-z0-9][A-Za-z0-9._-]*'; q="[\"']"; s='[[:space:]]*'
+          ch=""; head=""
+          if [ "${f##*/}" = rust-toolchain ] && [[ "$(cat "$f")" =~ ^$s($n)$s$ ]]; then
+            ch="${BASH_REMATCH[1]}"
+          else
+            while IFS= read -r l || [ -n "$l" ]; do
+              if [[ "$l" =~ ^$s(#.*)?$ ]]; then continue; fi
+              if [[ "$l" =~ ^$s\[toolchain\]$s$ ]] && [ -z "$head" ]; then head=t; continue; fi
+              if [ -n "$head" ] && [[ "$l" =~ ^$s(channel|profile)$s=$s$q($n)$q$s$ ]]; then
+                if [ "${BASH_REMATCH[1]}" = channel ]; then ch="${BASH_REMATCH[2]}"; fi
+                continue
+              fi
+              if [ -n "$head" ] && [[ "$l" =~ ^$s(components|targets)$s=$s\[($s$q$n$q$s,?)*\]$s$ ]]; then continue; fi
+              echo "$f: only a [toolchain] with a plain channel, components, targets and profile: $l"; exit 1
+            done < "$f"
+          fi
+          if [ -z "$ch" ]; then echo "$f: name a released channel"; exit 1; fi
+          (cd "$d" && env -u RUSTUP_TOOLCHAIN rustup toolchain install)
+          rustup component add --toolchain "$ch" rustfmt clippy
+        fi
+        echo "export RUSTUP_TOOLCHAIN=$ch" >> "$BASH_ENV"
+{% endif %}{% if "ts-pnpm" in pieces %}  # The exact pnpm release (9 or later) the base's package.json names (the PR's while the base names
+  # none), as in bosun.yml; skipped while the stack has no lockfile.
+  - run:
+      name: pnpm
+      command: |
+        [ -f "{{ ts_path }}/pnpm-lock.yaml" ] || exit 0
+        pm() { node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{let v="";try{v=JSON.parse(s).packageManager??""}catch(e){}console.log(typeof v==="string"?v:"!")})'; }
+        v="$(git show "$BOSUN_BASE:{{ ts_path }}/package.json" 2>/dev/null | pm || true)"
+        if [ -z "$v" ]; then v="$(pm < "{{ ts_path }}/package.json" || true)"; fi
+        v="${v%%+*}"
+        [[ "$v" =~ ^pnpm@(9|[1-9][0-9]+)\.[0-9]+\.[0-9]+$ ]] || { echo "{{ ts_path }}/package.json: packageManager must name pnpm@x.y.z (9 or later), not '$v'"; exit 1; }
+        (cd /tmp && npm install -g --ignore-scripts "$v")
+        if [ -f "$(npm root -g)/pnpm/install.js" ]; then (cd "$(npm root -g)/pnpm" && node install.js); fi
+        test "pnpm@$(pnpm --version)" = "$v"
+{% endif %}  # In order, the gates that run no PR code first; PR code (build.rs, tests{% if "ts-pnpm" in pieces %}, install scripts{% endif %})
+  # runs only after they passed, so it cannot change their result.
+  - run:
+      name: bosun gates
+      environment:
+        GATES: test-integrity deps fmt lint test
+        # No project or context variable may allow test-integrity findings. CircleCI has no PR body,
+        # so a `snapshot-change:` line cannot apply here: such a change fails closed.
+        BOSUN_INTEGRITY_ALLOW: ""
+        BOSUN_PR_BODY: ""
+{% if own_ci %}        # Beside hull's ci-ok a pull request runs only this; the project env var BOSUN_ALL_GATES=1
+        # runs all five there too. The default branch and the merge queue run all five.
+        PR_GATES: test-integrity
+{% endif %}      command: |
+        bosun="$HOME/.bosun-ci/bosun"
+{% if own_ci %}        case "${CIRCLE_BRANCH:-}" in
+          "$DEFAULT_BRANCH" | gh-readonly-queue/*) ;;
+          *) if [ "${BOSUN_ALL_GATES:-}" != 1 ]; then GATES="$PR_GATES"; fi ;;
+        esac
+{% endif %}        # An empty diff (HEAD is the merge-base: a fresh branch, main itself) runs every gate on all.
+        all=""
+        if [ "$(git rev-parse HEAD)" = "$(git merge-base HEAD "origin/$DEFAULT_BRANCH")" ]; then
+          all="--all"; GATES="test-integrity deps fmt lint test"
+        fi
+{% if "ts-pnpm" in pieces %}        # deps (pnpm audit) reads every package.json and pnpm-workspace.yaml from the base, as in
+        # bosun-trusted; the PR's come back (base-only ones go) before the install runs PR code.
+        top="$(pwd -P)"
+        swap() {
+          pat='(^|/)package\.json$|(^|/)pnpm-workspace\.ya?ml$'
+          inside() { case "$(realpath -m -- "$(dirname -- "$1")")" in "$top" | "$top"/*) ;; *) echo "$1: its directory links outside the checkout"; return 1 ;; esac; }
+          { git ls-tree -r -z --name-only HEAD; git ls-tree -r -z --name-only "$BOSUN_BASE"; } | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+            inside "$p" || exit 1
+            rm -rf -- "$p"
+          done || return 1
+          git ls-tree -r -z --name-only "$1" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+            inside "$p" || exit 1
+            mkdir -p -- "$(dirname -- "$p")"
+            git show "$1:$p" > "$p"
+          done || return 1
+          if [ -d "{{ ts_path }}" ] && [ ! -e "{{ ts_path }}/package.json" ] && [ "$1" != HEAD ]; then
+            inside "{{ ts_path }}/package.json" || return 1
+            echo '{}' > "{{ ts_path }}/package.json"
+          fi
+        }
+{% endif %}        for g in $GATES; do
+{% if "ts-pnpm" in pieces %}          case "$g" in
+            test-integrity) ;;
+            deps) swap "$BOSUN_BASE" || exit 1; swapped=1 ;;
+            *)
+              if [ -n "${swapped:-}" ]; then swap HEAD || exit 1; swapped=""; fi
+              if [ -z "${installed:-}" ] && [ -f "{{ ts_path }}/pnpm-lock.yaml" ]; then (cd "{{ ts_path }}" && pnpm install --frozen-lockfile); installed=1; fi
+              ;;
+          esac
+{% endif %}          # Defence in depth: the pinned bosun, unchanged since it was installed.
+          echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "$bosun changed"; exit 1; }
+          "$bosun" gate "$g" $all || { echo "gate $g failed; later gates did not run"; exit 1; }
+        done

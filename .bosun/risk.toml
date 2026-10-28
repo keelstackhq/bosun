@@ -17,7 +17,7 @@ why = "CI decides what is verified."
 # so here a delegate decides deny.toml, the toolchain files, .config/** and profiles/**. Delete
 # the delegate key in .bosun/approvers.toml to turn delegation off. Needs .bosun/version 0.2.1+.
 approval = "delegate"
-paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "**/deny.toml", "**/.deny.toml", "**/deny.exceptions.toml", "**/.deny.exceptions.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"

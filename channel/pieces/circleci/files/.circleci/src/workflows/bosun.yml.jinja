@@ -1,0 +1,8 @@
+# Written by the bosun splice channel (owned). No branch, path or `when` filter: every PR branch,
+# gh-readonly-queue/* (merge queue), the default branch and scheduled pipelines (the weekly gates
+# on all of main in circleci-only mode) run the job. It reports `ci/circleci: <name>`.
+jobs:
+{% if own_ci %}  - bosun-ok
+{% else %}  - bosun-ok:
+      name: ci-ok
+{% endif %}

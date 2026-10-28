@@ -12,7 +12,7 @@ src/gates/                gate contract, profiles, adapters
 src/plan/                 plan.md parser, import, amend
 src/hooks/                PreToolUse and SessionStart hook entry points
 profiles/                 rust.toml, ts-pnpm.toml
-channel/                  the splice channel that `bosun init` adds (pieces core, rust, ts-pnpm)
+channel/                  the splice channel that `bosun init` adds (pieces core, rust, ts-pnpm, circleci)
 docs/spec.md (index), docs/spec/ (one file per section), docs/defaults.md, docs/plan-format.md
 .bosun/                   bosun runs on itself
 ```
@@ -69,3 +69,26 @@ dtolnay step; the old 1.97 pin when there is no toolchain file, never the runner
 `bosun init` sets `own_ci`, adds `claude-md` unless the main template owns CLAUDE.md, merges the
 required checks and `merge_queue = false` (unless set) into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
 the owner then adds the two bosun hooks there (an owner step), since only one source may own it.
+
+CircleCI (hull secrets-ci design §6.5): piece `circleci` adds `.circleci/src/jobs/bosun-ok.yml` and
+`.circleci/src/workflows/bosun.yml`, one unfiltered workflow (no branch, path or `when` filter)
+whose job reports `ci/circleci: bosun-ok`, or `ci/circleci: ci-ok` without `own_ci` (workflow `name:`).
+The job (cimg/node by digest) runs `git fetch origin main` into `origin/main` and sets `origin/HEAD`
+before anything reads the base, since a stale cached `origin/<default>` would hide what main gained (a
+deleted test); then, as bosun.yml, the release that origin/main's tip pins (as `base.sha`; never the
+merge-base, which the author picks; the setup-PR fallback to this change's pin and `.bosun` only when
+origin/main has no `.bosun`), checked by its version and by its sha256 before each gate, the pin
+check, origin/main's gate config, the rust toolchain (rustup-init, cargo-nextest and cargo-deny each
+checked against a pinned sha256; the toolchain file in rust_path or a parent, checked line by line
+like bosun.yml's (only `[toolchain]` with plain-name channel, components, targets and profile), is
+installed as it names, else 1.97, and its channel is exported as `RUSTUP_TOOLCHAIN`) or pnpm, and the gates of bosun.yml in order (a test keeps
+the lists equal; with `own_ci` a pull request runs only test-integrity unless the project variable
+`BOSUN_ALL_GATES=1`; main and `gh-readonly-queue/*` run all five). When HEAD is the merge-base (an
+empty diff) every gate runs with `--all`. `BOSUN_INTEGRITY_ALLOW` and `BOSUN_PR_BODY` are empty: no
+CircleCI variable can allow a finding, and a `snapshot-change:` line cannot apply (fails closed).
+The ts-pnpm stack runs in the same job: test-integrity, then deps with every package.json and
+pnpm-workspace.yaml from origin/main (as bosun-trusted; a path whose directory links outside the
+checkout stops the job before anything is removed), then the PR's copies back,
+`pnpm install --frozen-lockfile`, fmt, lint and test. There are no draft, docs-only or body-edit
+fast paths. risk, verdict, main-open and splice.yml are the same with
+or without the piece.

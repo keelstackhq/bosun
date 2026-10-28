@@ -1598,3 +1598,6 @@ fn bosun_trusted_deps_passes_before_the_ts_stack_exists() {
         "pr_gates=fmt lint test"
     );
 }
+
+#[path = "channel_render/circleci.rs"]
+mod circleci;

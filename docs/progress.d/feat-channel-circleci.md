@@ -1,0 +1,1 @@
+- 2026-10-28 · BO-3a (1/2) channel piece `circleci` · CircleCI job with gate parity, default-branch fetch before the gates, pinned sha256-checked bosun · PR (feat/channel-circleci)

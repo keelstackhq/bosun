@@ -177,13 +177,14 @@ jobs:
           # The gates use the base commit's copies of the files that decide what runs: .bosun/ (the gate
           # commands are in its profiles), every .cargo directory (aliases, includes, rustc wrappers)
           # every rust-toolchain(.toml) (a path would run a compiler from the PR), every .npmrc
-          # (node-options would load PR code into each pnpm call) and every .pnpmfile. Files the base
+          # (node-options would load PR code into each pnpm call), every .pnpmfile and every
+          # deny.toml (cargo deny's policy). Files the base
           # lacks are deleted, also when the PR made the path a symlink. A PR's changes to them take
           # effect after it merges; they are R-gov or R-ci, so the owner sees them.
-          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|^\.bosun(/|$)'
+          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|(^|/)\.?deny(\.exceptions)?\.toml$|^\.bosun(/|$)'
           if ! git cat-file -e "$BASE:.bosun/version" 2>/dev/null; then
             echo "::warning::the base has no .bosun yet (setup PR): this change's .bosun is used"
-            pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$'
+            pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|(^|/)\.?deny(\.exceptions)?\.toml$'
           fi
           changed="$(git diff --name-only -z "$BASE" HEAD | { grep -zE "$pat" || true; } | tr '\0' ' ')"
           if [ -n "$changed" ]; then
