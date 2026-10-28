@@ -1,8 +1,13 @@
 # Written by the bosun splice channel (owned).
 name: risk
 
-# Posts the required `risk-check` status (spec §8, D32). It runs again when an owner reviews or
-# comments `/bosun approve <head sha>`, so an approval on the head SHA turns the status green.
+# Posts the required `risk-check` status (spec §8, D32). It runs again on a PR comment
+# `/bosun approve <head sha>` (an owner's approval) or `/bosun recheck` (anyone: it only re-judges).
+# An owner's GitHub review is read on the next run (a push, `/bosun recheck` or a re-run): there
+# is no review trigger, because `pull_request_review` runs the PR's own copy of this file, with
+# this token, so a PR could rewrite the job and post its own `risk-check`. So a withdrawal
+# changes nothing by itself: to withdraw, request changes or dismiss the approval, then comment
+# `/bosun recheck` (it re-judges and fails); turning off auto-merge also stops a merge.
 #
 # pull_request_target and issue_comment run this file from the base (default) branch, so a PR
 # cannot rewrite the job that judges it. The job never checks out or runs PR-head code: it
@@ -12,18 +17,16 @@ on:
   pull_request_target:
     branches: [main]
     types: [opened, synchronize, reopened, edited]
-  # GitHub has no base-branch variant of this event: it runs the PR's copy of this file.
-  pull_request_review:
-    types: [submitted, dismissed]
   issue_comment:
     types: [created]
 
-# A comment that is not an approval gets a group of its own: its run is skipped and must never
-# cancel the run that judges a new head.
+# A comment that is neither an approval nor a recheck gets a group of its own: its run is
+# skipped and must never cancel the run that judges a new head.
 concurrency:
   group: >-
     risk-${{ github.event.pull_request.number || github.event.issue.number }}-${{
-    (github.event_name == 'issue_comment' && !contains(github.event.comment.body, '/bosun approve'))
+    (github.event_name == 'issue_comment' && !contains(github.event.comment.body, '/bosun approve')
+    && !contains(github.event.comment.body, '/bosun recheck'))
     && github.run_id || 'judge' }}
   cancel-in-progress: true
 
@@ -37,10 +40,12 @@ permissions:
 
 jobs:
   risk:
-    # On a comment: only PR comments that ask for an approval.
+    # On a comment: only PR comments that ask for an approval or a recheck. Anyone may ask: the
+    # run computes the same verdict, and only an owner's approval counts.
     if: >-
       github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request && contains(github.event.comment.body, '/bosun approve'))
+      (github.event.issue.pull_request && (contains(github.event.comment.body, '/bosun approve') ||
+      contains(github.event.comment.body, '/bosun recheck')))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

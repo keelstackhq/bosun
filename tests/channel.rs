@@ -154,6 +154,11 @@ fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
     }
     let risk = fs::read_to_string(wf.join("risk.yml")).unwrap();
     assert!(risk.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"));
+    // An owner's review is read on the next run; `/bosun recheck` starts one without a push, and
+    // no review event runs the PR's copy of the file (tests/workflows.rs scans every workflow).
+    let recheck = "contains(github.event.comment.body, '/bosun recheck')";
+    assert_eq!(risk.matches(recheck).count(), 2, "job if: and concurrency");
+    assert!(!risk.contains("\n  pull_request_review:"), "{risk}");
 }
 
 #[test]

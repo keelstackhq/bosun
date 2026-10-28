@@ -256,7 +256,10 @@ pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 /// Paths of the approval and risk system in every repo: a delegate never approves a change to
 /// them (also when renamed from or to them). Every workflow is here: any workflow with
 /// `statuses: write` can post a `risk-check` or `review-verdict` status for any PR; so can a
-/// CircleCI config, which is why `.circleci/**` is here too.
+/// CircleCI config, which is why `.circleci/**` is here too. This only keeps a delegate from
+/// approving such a change: a same-repo PR's own `on: pull_request` copy can post a forged
+/// status on its head before anyone approves, so it is no owner gate (spec §8 residual; B2, a
+/// check run from a dedicated GitHub App pinned in the ruleset, closes it).
 pub const CRITICAL_PATHS: [&str; 16] = [
     ".bosun/**",
     "governance/**",
