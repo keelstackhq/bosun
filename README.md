@@ -39,10 +39,12 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
   exactly `/bosun approve <head sha>` (the full 40-character SHA of the current head). The
   `risk` workflow re-runs and `risk-check` turns green. A new push needs a new comment. A GitHub
   review that approves the head SHA counts too, when the owner did not open the PR; no review
-  event runs the workflow, so comment `/bosun recheck` after it (anyone may: it only re-judges,
-  as the next push or a re-run does). To withdraw, request changes or dismiss the approval,
-  then comment `/bosun recheck` (it re-judges and fails); turning off auto-merge also stops a
-  merge. Post the
+  event runs the workflow, so comment `/bosun recheck` (or re-run the risk workflow) after it:
+  it only re-judges, as the next push does. A recheck runs only for a repo owner, member or
+  collaborator, which limits CI minutes only; one from an owner with private org membership or
+  an app (`NONE`) is dropped, so re-run the workflow then. To withdraw, request changes or
+  dismiss the approval, then comment `/bosun recheck` (or re-run the risk workflow; it re-judges
+  and fails); turning off auto-merge also stops a merge. Post the
   comment yourself (web UI or `gh` with your own token): a comment that an agent session writes
   through the Claude app does not count, even under your login. To approve from a Claude chat,
   tell the orchestrator: it posts the same line with a `bosun-sig ed25519` signature line from a

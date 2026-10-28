@@ -1,0 +1,1 @@
+- 2026-10-28 · Fix · `/bosun recheck` in risk.yml (both copies) only from owners, members and collaborators (CI minutes only); hints that say to comment `/bosun recheck` also name re-running the risk workflow · `tests/workflows.rs`, `tests/cli_risk.rs` · PR (fix/recheck-filter)

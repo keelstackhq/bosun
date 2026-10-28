@@ -329,7 +329,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         format!("fill {OWNERS_PATH} on the base branch, then an owner must approve head {head}")
     } else {
         format!(
-            "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review (then comment `/bosun recheck`), or the PR comment `/bosun approve {head}`"
+            "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review (then comment `/bosun recheck` (or re-run the risk workflow)), or the PR comment `/bosun approve {head}`"
         )
     };
     let fix = if unlinked {
