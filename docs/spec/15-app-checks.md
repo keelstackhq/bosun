@@ -11,7 +11,7 @@ workflow that a same-repo PR adds or edits runs the PR's copy of that file and g
 source unless the ruleset pins the source, so a statuses-based gate can be forged by anyone who
 can push a branch. Dropping `pull_request_review` from risk.yml closes one path, not this one.
 
-**Builds on B1.** B1 (merged first) removes `pull_request_review` from both risk.yml files, so
+**Builds on B1.** B1 (#312) removed `pull_request_review` from both risk.yml files, so
 risk.yml runs only on `pull_request_target` and `issue_comment`, both from the default branch.
 That is a precondition here: a `pull_request_review` job runs the PR's copy and evaluates the
 environment against `refs/pull/<n>/merge`, so with `bosun-app` it would fail. An owner review (or
@@ -49,7 +49,8 @@ run to `completed`. `success` is `conclusion: success`; `failure` and `error` ar
 `conclusion: failure` (an error's title starts `error:`). Never `neutral` or `skipped`: both
 satisfy a required check. A newer run of the same name and App on the sha supersedes the older;
 readers take the newest by id. The Re-run button sends `rerequested` to the App, which has no
-webhook, so nothing happens: fix texts say "re-run the <name> workflow".
+webhook, so nothing happens: fix texts keep B1's wording ("comment `/bosun recheck` (or re-run
+the risk workflow)"; for main-open and review-verdict, re-run that workflow).
 
 **Source pinning.** The `main` ruleset's `required_status_checks` lists
 `{context: "risk-check", integration_id: <App id>}`, and the same for `review-verdict` and

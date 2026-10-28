@@ -74,7 +74,7 @@ pub fn readiness(statuses: &[Stat], runs: &[Run]) -> Readiness {
     // A run in flight or one that could not finish holds the PR: the owner board shows it.
     if risk.is_some_and(|s| matches!(s.state.as_str(), "pending" | "error")) {
         return Readiness::Waiting(
-            "risk-check pending or errored: re-run the risk workflow if it stays",
+            "risk-check pending or errored: comment `/bosun recheck` (or re-run the risk workflow) if it stays",
         );
     }
     let waiting =
@@ -484,7 +484,7 @@ mod tests {
             assert_eq!(
                 readiness(&s, &[]),
                 Readiness::Waiting(
-                    "risk-check pending or errored: re-run the risk workflow if it stays"
+                    "risk-check pending or errored: comment `/bosun recheck` (or re-run the risk workflow) if it stays"
                 ),
                 "{state}"
             );

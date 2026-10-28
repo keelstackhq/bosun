@@ -236,7 +236,7 @@ jobs:
           done
 {% endraw %}{% if "rust" in pieces %}      # rust stack: one toolchain install. With a rust-toolchain(.toml) in rust_path or a parent
       # up to the repo root, `rustup toolchain install` installs what it names. Without one, the
-      # old pin (the RUST_VERSION fallback of docs/setup-script.sh; a test keeps them equal): a bare
+      # old pin (docs/setup-script.sh has none: it skips Rust without the file): a bare
       # `rustup toolchain install` would install the runner's default (stable).
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         name: rust toolchain
