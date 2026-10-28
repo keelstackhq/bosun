@@ -1,0 +1,1 @@
+- Setup scripts: a `rust-toolchain.toml` channel that is not a toolchain name (`^[A-Za-z0-9][A-Za-z0-9._-]*$`) never reaches `rustup`; it is skipped like a missing file, with an `invalid channel` warning.
