@@ -3,9 +3,9 @@
 //! Only the root file holds `[github]`, the required checks (and later the App pins) that
 //! `hoist apply` puts in the ruleset, so only the root file is on the critical floor. The
 //! agent-instruction files steer every agent, so they are R-gov too. The pasted copy of
-//! `docs/setup-script.sh` runs as root in cloud environments, so the file is R-ci. R-gov is
-//! made delegate-able here so that `data.critical` shows what the floor still forces to the
-//! owner.
+//! `docs/setup-script.sh` runs as root in cloud environments, so the file is R-gov. R-gov is
+//! made delegate-able here (but in `the_setup_script_needs_the_owner`) so that
+//! `data.critical` shows what the floor still forces to the owner.
 mod common;
 
 use common::fake::FakeGithub;
@@ -96,8 +96,9 @@ fn a_package_hoist_toml_is_r_gov_but_not_critical() {
 #[test]
 fn agent_instruction_files_are_r_gov() {
     #[rustfmt::skip]
-    let paths = ["AGENTS.md", "CLAUDE.md", "docs/agents/org-decisions.md",
-        "crates/foo/AGENTS.md", "crates/foo/CLAUDE.md"];
+    let paths = ["AGENTS.md", "agents.md", "CLAUDE.md", "claude.md", "Claude.md",
+        "CLAUDE.local.md", "claude.local.md", "crates/x/Claude.md", "crates/x/Agents.md",
+        "docs/agents/org-decisions.md", "crates/foo/AGENTS.md", "crates/foo/CLAUDE.md"];
     for path in paths {
         let (code, v) = check(path);
         assert_eq!((code, rules(&v)), (5, vec!["R-gov"]), "{path}: {v}");
@@ -105,24 +106,22 @@ fn agent_instruction_files_are_r_gov() {
 }
 
 #[test]
-fn the_setup_script_is_r_ci_and_the_builtin_rules_need_the_owner() {
-    let (code, v) = check("docs/setup-script.sh");
-    assert_eq!((code, rules(&v)), (5, vec!["R-ci"]), "{v}");
-    assert_eq!(v["data"]["matches"][0]["approval"], json!("owner"), "{v}");
-}
-
-#[test]
-fn bosuns_own_rules_let_a_delegate_approve_the_setup_script() {
-    // The committed file: CI swaps the base branch's `.bosun/` into the checkout before tests.
-    let repo = committed(".bosun/risk.toml");
-    let (code, v) = check_with(&repo, "docs/setup-script.sh", None);
-    assert_eq!((code, rules(&v)), (5, vec!["R-ci"]), "{v}");
-    assert_eq!(
-        v["data"]["matches"][0]["approval"],
-        json!("delegate"),
-        "{v}"
-    );
-    assert!(v["data"]["critical"].is_null(), "not on the floor: {v}");
+fn the_setup_script_needs_the_owner() {
+    // bosun's committed file: CI swaps the base branch's `.bosun/` into the checkout before tests.
+    let sets = [
+        (
+            "built-in",
+            include_str!("../src/core/risk_default.toml").to_string(),
+        ),
+        (".bosun/risk.toml", committed(".bosun/risk.toml")),
+    ];
+    for (name, rules_text) in sets {
+        let (code, v) = check_with(&rules_text, "docs/setup-script.sh", None);
+        assert_eq!((code, rules(&v)), (5, vec!["R-gov"]), "{name}: {v}");
+        let m = &v["data"]["matches"][0];
+        assert_eq!(m["approval"], json!("owner"), "{name}: {v}");
+        assert_eq!(v["data"]["requirement"], json!("owner"), "{name}: {v}");
+    }
 }
 
 #[test]
@@ -131,7 +130,7 @@ fn other_files_are_not() {
         "src/hoist.rs",
         "docs/hoist.md",
         "crates/foo/docs/setup-script.sh",
-        "docs/agents.md",
+        "docs/agent.md",
     ] {
         let (code, v) = check(path);
         assert_eq!((code, rules(&v)), (0, vec![]), "{path}: {v}");

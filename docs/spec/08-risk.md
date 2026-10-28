@@ -2,9 +2,9 @@
 
 `.bosun/risk.toml` rules:
 - R-gov: "Governance files decide who approves what." Paths `.bosun/**`, `governance/**`,
-  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `**/hoist.toml` (the root file holds `[github]`, the required checks, and later the App pins, that `hoist apply` puts in the ruleset, so dropping `risk-check` there removes the gate; a package's file holds the `[publish]` and `[deploy]` targets hoist mints tokens for), `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack), `docs/agents/**`, `**/AGENTS.md` and `**/CLAUDE.md` (the agent-instruction files steer every later agent; `**/` matches the root file too).
+  `.github/CODEOWNERS`, `.claude/**`, `.splice/**`, `docs/setup-script.sh` (the pasted copy runs as root in cloud environments, so it is owner class and never a delegate's; consumer repos list it too, and the channel's template of it stays R-ci-review like every shipped file), `**/hoist.toml` (the root file holds `[github]`, the required checks, and later the App pins, that `hoist apply` puts in the ruleset, so dropping `risk-check` there removes the gate; a package's file holds the `[publish]` and `[deploy]` targets hoist mints tokens for), `REVIEW.md` and `docs/lessons.toml` (both are read into every review pack), `docs/agents/**`, `**/agents.md`, `**/claude.md` and `**/claude.local.md` (the agent-instruction files steer every later agent; `**/` matches the root file too, and the lowercase patterns match any case, as `CLAUDE.md` or `Claude.md`). The org-decisions sync commit (`chore: sync org decisions`, which rewrites `docs/agents/org-decisions.md`, imported by `CLAUDE.md`, and its hash in `.splice/channels/decisions.toml`) already needed the owner through `.splice/**`; these entries do not change who approves it.
 - Consumer repos (`channel/pieces/core/files/.bosun/risk.toml.jinja`): the same R-gov paths but `docs/lessons.toml`.
-- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/ci/**`, `.buildkite/**`, `**/jenkinsfile` (any case), `azure-pipelines.y*ml`, `bitbucket-pipelines.yml`, `.travis.yml`, `.drone.yml`, `deny.toml`, `rust-toolchain.toml`, the legacy `rust-toolchain` and `docs/setup-script.sh` (its pasted copy runs as root in cloud environments; consumer repos list it too; the channel's template of it stays R-ci-review like every shipped file).
+- R-ci: "CI decides what is verified." Paths `.github/workflows/**`, `.github/actions/**`, `.circleci/**`, `.gitlab-ci.yml`, `.gitlab/ci/**`, `.buildkite/**`, `**/jenkinsfile` (any case), `azure-pipelines.y*ml`, `bitbucket-pipelines.yml`, `.travis.yml`, `.drone.yml`, `deny.toml`, `rust-toolchain.toml` and the legacy `rust-toolchain`.
 - R-gate: "The gate code decides what passes." The risk, verdict, records, meta, glob and approve logic in `src/core` and their CLI commands, the test-integrity, gate and review commands, the config, lease, state and review logic, `src/gates/**`, `src/github/**`, `Cargo.toml`, `Cargo.lock`, `build.rs` (any directory), `.cargo/**`, `.config/**` (build inputs), `src/anthropic.rs`, `src/core/lessons.rs`, `src/core/budget.rs`, `src/sessions/**` (review feeders), `src/app.rs`, `src/output.rs`, `src/lib.rs`, `src/main.rs`, `profiles/**`, `npm/**`. A module is listed as `x.rs` and `x/**`. The full list is in `.bosun/risk.toml`.
 - R-ci-review (`approval = "two-verdicts"`): "Shipped CI for other repos; two independent reviews instead of the owner." Path `channel/**` (the CI and governance `bosun init` ships).
 - R-secrets: "A secret in the repo is a leak." Paths `**/secrets.toml`, `**/access.toml` and `**/*.sops.*` (`.sops.yaml` included); content `(?i)(api[_-]?key|secret|token)\s*=` or `AGE-SECRET-KEY-1` or `SOPS_AGE_KEY\s*[:=]` (a path or the content matches). It is critical, so it never goes to a delegate. Risk paths also match the lowercased path (a case-insensitive filesystem treats `Secrets.toml` and `.CircleCI/` as the same files), so patterns are written in lowercase.
@@ -171,8 +171,7 @@ High-risk PRs:
   out a critical file or a secret in it), and any changed file whose path or previous path
   (renames count both ways) is `.bosun/**` (approvers.toml and risk.toml included),
   `governance/**`, `CODEOWNERS` (root, `.github/`, `docs/`), the root `hoist.toml` (the
-  ruleset's required checks), `.github/workflows/**` or
-  `.github/actions/**` (any workflow with `statuses: write` can post a `risk-check` status for
+  ruleset's required checks), `.github/workflows/**` or `.github/actions/**` (any workflow with `statuses: write` can post a `risk-check` status for
   any PR), `.circleci/**` or another CI provider's config (the R-ci list). Where the base has `src/cli/risk_check.rs` (bosun and its forks), bosun's code is
   critical too: all of `src/**` (the approval modules call most others, and any module can do
   I/O with the workflow's token once released), `Cargo.toml`, `Cargo.lock`, `build.rs` (any
@@ -183,7 +182,7 @@ High-risk PRs:
   approval needed (or a delegate): <ids>` (so `bosun approve --list` lists it),
   `data.delegate_verdicts` lists the clean verdicts and `data.delegate_blocked` says why a
   delegate cannot approve now (null when it can). In bosun this leaves `deny.toml`, the toolchain
-  files, `docs/setup-script.sh`, `.config/**` and `profiles/**` to a delegate (R-ci and R-gate); R-deps is delegate-class
+  files, `.config/**` and `profiles/**` to a delegate (R-ci and R-gate); R-deps is delegate-class
   but every manifest it reads is critical here. Releases stay human through the `release`
   environment. To turn delegation off at once, the owner deletes the delegate key from
   `.bosun/approvers.toml` (read live from the default branch); deleting the `approval =

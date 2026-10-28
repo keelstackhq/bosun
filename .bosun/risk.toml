@@ -4,20 +4,20 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what."
-# REVIEW.md and docs/lessons.toml are read into every review pack.
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "REVIEW.md", "docs/lessons.toml", "docs/agents/**", "**/AGENTS.md", "**/CLAUDE.md"]
+# REVIEW.md and docs/lessons.toml are read into every review pack; docs/setup-script.sh runs
+# as root wherever it is pasted.
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "docs/setup-script.sh", "REVIEW.md", "docs/lessons.toml", "docs/agents/**", "**/agents.md", "**/claude.md", "**/claude.local.md"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
 # Delegate-able (spec §8, delegated decisions): a delegate key with one clean verdict may
 # approve. The critical floor (every workflow, .bosun/**, governance/**, CODEOWNERS, hoist.toml,
-# all of src/** and the manifests, R-secrets, R-prod-write, R-unseen) always needs the owner, so
-# here a delegate decides deny.toml, the toolchain files, docs/setup-script.sh, .config/** and
-# profiles/**. Delete the delegate key in .bosun/approvers.toml to turn delegation off. Needs
-# .bosun/version 0.2.1+.
+# all of src/** and the manifests, R-secrets, R-prod-write, R-unseen) always needs the owner,
+# so here a delegate decides deny.toml, the toolchain files, .config/** and profiles/**. Delete
+# the delegate key in .bosun/approvers.toml to turn delegation off. Needs .bosun/version 0.2.1+.
 approval = "delegate"
-paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "deny.toml", "rust-toolchain.toml", "rust-toolchain", "docs/setup-script.sh"]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "deny.toml", "rust-toolchain.toml", "rust-toolchain"]
 
 [[rule]]
 id = "R-gate"

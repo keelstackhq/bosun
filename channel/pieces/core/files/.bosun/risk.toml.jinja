@@ -5,13 +5,13 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what, and the rules agents and reviewers follow."
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml",
-  "REVIEW.md", "docs/agents/**", "**/AGENTS.md", "**/CLAUDE.md"]
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "docs/setup-script.sh",
+  "REVIEW.md", "docs/agents/**", "**/agents.md", "**/claude.md", "**/claude.local.md"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml", "docs/setup-script.sh"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
+paths = [".github/workflows/**", ".github/actions/**", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml"{% if "rust" in pieces %}, "deny.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
 
 [[rule]]
 id = "R-secrets"

@@ -777,13 +777,18 @@ fn risk_rules_cover_agent_rules_hoist_and_the_setup_script() {
         "docs/agents/project.md",
         "crates/foo/AGENTS.md",
         "crates/foo/CLAUDE.md",
+        "claude.md",
+        "Claude.md",
+        "agents.md",
+        "CLAUDE.local.md",
+        "crates/x/Claude.md",
         "hoist.toml",
         "crates/foo/hoist.toml",
     ] {
         assert!(hit(p, "R-gov"), "{p} is not R-gov");
     }
     assert!(
-        hit("docs/setup-script.sh", "R-ci"),
+        hit("docs/setup-script.sh", "R-gov") && !hit("docs/setup-script.sh", "R-ci"),
         "the pasted setup script runs as root"
     );
     for p in ["crates/foo/src/lib.rs", "docs/guide.md"] {
