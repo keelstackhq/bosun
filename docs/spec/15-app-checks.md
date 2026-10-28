@@ -19,10 +19,8 @@ a withdrawal: request changes, dismiss) is judged on the next run: a push, a `/b
 comment, or a re-run. The trade-off: an owner's request for changes or dismissal takes effect
 only on that next run; until then a green risk-check from verdicts or a delegate can still
 auto-merge, so an owner who withdraws also comments `/bosun recheck`. Optional (B2W/T5, the
-owner's choice, not needed for B2): an automatic re-judge on review through a relay
-workflow (`pull_request_review`, `permissions: {}`, no steps that read the payload) and a keyed
-`workflow_run` job on it that finds the PR by the run's `head_sha` through the API and trusts no
-payload field, with the `workflow_run` filters of UC-B2W-4.
+owner's choice): a relay workflow on `pull_request_review` with `permissions: {}` and a keyed
+`workflow_run` job that finds the PR by `head_sha` through the API, trusting no payload (UC-B2W-4).
 
 **D33: the gates are App check runs, pinned in the ruleset.**
 
@@ -82,12 +80,11 @@ fails before its first step, and one that does not gets no key.
 The `pull_request_target` ref, precisely. `GITHUB_REF` is the default branch, not the PR's base,
 and `github.sha` is the default branch's tip, not `pull_request.base.sha`. A PR into another base
 still runs main's file and passes the `main` policy. risk.yml keeps checking out
-`pull_request.base.sha` (the rules that judge a PR are its base's) and keeps `branches: [main]`.
-Before 2025-12-08 the base branch's file ran and the base ref was evaluated; a GitHub Enterprise
-Server without the change behaves that way (out of scope). A job holding the key still never
-checks out or runs PR code (`tests/workflows.rs`, extended to every job with the environment);
-the key goes only to the token step and the token only to the bosun step. main-health re-judges
-`main-open` on every open PR (§9): its re-judge job gets the environment, its test job does not.
+`pull_request.base.sha` (the rules that judge a PR are its base's) and keeps `branches: [main]`
+(older GitHub Enterprise Server, without the change, is out of scope). A job holding the key
+never checks out or runs PR code (`tests/workflows.rs`, for every job with the environment); the
+key goes only to the token step, the token only to the bosun step. main-health's re-judge job
+(§9) gets the environment, its test job does not.
 
 **bosun changes (planned).**
 - `.bosun/bosun.toml` `[checks]`: `mode = "statuses" | "dual" | "checks"` (default `statuses`),
@@ -192,7 +189,6 @@ account.
   do get the environment key, as every PR's do. That is safe only because those jobs run main's
   file and never check out or run PR code.
 - main-health issues, CI-log and other non-gating statuses stay on `GITHUB_TOKEN`: out of scope.
-- `ci-ok` stays as forgeable as the PR's own CI (above).
 
 **Open questions.**
 - O1: GitHub's docs on `deployment: false` confirm that required reviewers still apply but do not
@@ -205,8 +201,7 @@ account.
   and would start workflows on each write.
 - O4: why `--main-open` exists (a PR that changes main-open.yml) and whether the base workflow
   judging it under `pull_request_target` now suffices; recovery when it breaks is above.
-- O5: the channel copies take the environment only where the App is set up (a splice template
-  var, since `environment:` with an empty name is not documented as "none"); a repo without it
-  stays in `statuses` mode.
+- O5: channel copies take the environment only where the App is set up (a splice template var:
+  an empty `environment:` name is not documented as "none"); others stay in `statuses` mode.
 - O6: 15368 as the GitHub Actions integration id comes from ruleset exports, not a GitHub doc:
   read it from the live ruleset before step 6.
