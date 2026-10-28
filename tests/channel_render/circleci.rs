@@ -1,11 +1,31 @@
-//! The `circleci` piece (hull secrets-ci design §6.5): a CircleCI job runs bosun.yml's gates.
+//! The `circleci` and `circleci-only` pieces (hull secrets-ci design §6.5, §7.4): a CircleCI job
+//! runs bosun.yml's gates, and without hull (`own_ci` empty) the channel ships hull's shared files.
 
 use super::*;
 
+/// TODO(hull-release): the vendored hull copies; move to the next hull tag (see its README.md).
+const HULL_REF: &str = "58c488b";
 const JOB: &str = ".circleci/src/jobs/bosun-ok.yml";
 const WORKFLOW: &str = ".circleci/src/workflows/bosun.yml";
-const MODES: [&[&str]; 2] = [&[], &["circleci"]];
+const MODES: [&[&str]; 3] = [&[], &["circleci"], &["circleci", "circleci-only"]];
 const STACKS: [&[&str]; 3] = [&["rust"], &["ts-pnpm"], &["rust", "ts-pnpm"]];
+
+fn hull_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/hull/{HULL_REF}"))
+}
+
+/// The MANIFEST paths, as `(hull path, channel piece, path in the consumer repo)`.
+fn manifest() -> Vec<(String, String, String)> {
+    let text = fs::read_to_string(hull_dir().join("MANIFEST")).unwrap();
+    text.lines()
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| {
+            let rest = l.strip_prefix("template/pieces/").expect(l);
+            let (piece, path) = rest.split_once("/files/").expect(l);
+            (l.to_string(), piece.to_string(), path.to_string())
+        })
+        .collect()
+}
 
 fn mode(stack: &[&str], m: &[&str], own_ci: &str) -> Vec<(String, String)> {
     variant(&[stack, m].concat(), own_ci)
@@ -17,6 +37,51 @@ fn text<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
         .iter()
         .find(|(n, _)| n == name)
         .map_or("", |(_, t)| t.as_str())
+}
+
+#[test]
+fn the_vendored_files_are_the_manifest_and_the_channels_own_ci_guarded_files() {
+    let mut on_disk = Vec::new();
+    collect(&hull_dir(), &mut on_disk);
+    let rel = |p: &PathBuf| p.strip_prefix(hull_dir()).unwrap().display().to_string();
+    let mut on_disk: Vec<String> = on_disk
+        .iter()
+        .map(rel)
+        .filter(|p| p != "MANIFEST" && p != "README.md")
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = manifest().into_iter().map(|(h, _, _)| h).collect();
+    listed.sort();
+    assert_eq!(on_disk, listed, "vendored files and MANIFEST differ");
+    // Every file of the two pieces that `own_ci` empties is a vendored hull file, and back.
+    let all = mode(&["rust"], &["circleci", "circleci-only"], "");
+    let mut guarded: Vec<String> = mode(&["rust"], &["circleci", "circleci-only"], "1")
+        .into_iter()
+        .filter(|(n, t)| t.is_empty() && !text(&all, n).is_empty() && n != BOSUN_YML)
+        .map(|(n, _)| n)
+        .collect();
+    guarded.sort();
+    let mut want: Vec<String> = manifest().into_iter().map(|(_, _, p)| p).collect();
+    want.sort();
+    assert_eq!(guarded, want);
+}
+
+#[test]
+fn without_own_ci_the_shared_files_are_hulls_byte_for_byte() {
+    for stack in STACKS {
+        for own_ci in ["", "1"] {
+            let files = mode(stack, &["circleci", "circleci-only"], own_ci);
+            for (hull, _, path) in manifest() {
+                let got = text(&files, &path);
+                if own_ci.is_empty() {
+                    let want = fs::read_to_string(hull_dir().join(&hull)).unwrap();
+                    assert_eq!(got, want, "{path} differs from hull {HULL_REF}");
+                } else {
+                    assert_eq!(got, "", "{path}: hull owns it beside own_ci");
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -34,7 +99,7 @@ fn the_circleci_job_carries_the_required_checks_name_on_every_branch() {
         // No branch, path or `when` filter: PR branches, gh-readonly-queue/* and scheduled runs.
         assert_eq!(wf, serde_json::json!({"jobs": [job]}), "own_ci={own_ci:?}");
         assert!(yaml_json(text(&files, JOB)).unwrap()["steps"].is_array());
-        for name in [JOB, WORKFLOW] {
+        for name in [JOB, WORKFLOW, ".circleci/config.yml"] {
             assert!(!text(&files, name).contains("paths:"), "{name}");
         }
     }
@@ -42,6 +107,43 @@ fn the_circleci_job_carries_the_required_checks_name_on_every_branch() {
         !text(&variant(&["rust"], ""), JOB).contains("steps"),
         "no CircleCI without the piece"
     );
+}
+
+#[test]
+fn circleci_only_drops_bosun_yml_and_main_health_follows_circleci_statuses() {
+    let health = ".github/workflows/main-health.yml";
+    for stack in STACKS {
+        for own_ci in ["", "1"] {
+            let github = variant(stack, own_ci);
+            let both = mode(stack, &["circleci"], own_ci);
+            let only = mode(stack, &["circleci", "circleci-only"], own_ci);
+            assert_eq!(text(&both, BOSUN_YML), text(&github, BOSUN_YML));
+            assert_eq!(text(&both, health), text(&github, health));
+            assert_eq!(text(&only, BOSUN_YML), "", "no GitHub gates");
+            let wf = text(&only, health);
+            // No nightly call of bosun.yml, no workflow_run, no schedule.
+            for bad in ["uses: ./", "workflow_run:", "schedule:", "needs.nightly"] {
+                assert!(!wf.contains(bad), "{bad}: {wf}");
+            }
+            let Some(j) = yaml_json(wf) else { return };
+            // PyYAML reads the key `on` as true.
+            assert_eq!(j["true"], serde_json::json!({"status": null}), "{wf}");
+            let jobs = j["jobs"].as_object().unwrap();
+            assert_eq!(jobs.keys().collect::<Vec<_>>(), ["report"], "{wf}");
+            let cond = jobs["report"]["if"].as_str().unwrap();
+            for want in [
+                "github.event.context == 'ci/circleci: ci-ok'",
+                "github.event.context == 'ci/circleci: bosun-ok'",
+                "github.event.state != 'pending'",
+                "github.event.sender.login == 'circleci-app[bot]'",
+                "contains(github.event.branches.*.name, 'main')",
+            ] {
+                assert!(cond.contains(want), "{cond}");
+            }
+            let both_checks = wf.contains("ci/circleci: bosun-ok\"");
+            assert_eq!(both_checks, !own_ci.is_empty(), "{wf}");
+        }
+    }
 }
 
 #[test]

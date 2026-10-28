@@ -1,4 +1,4 @@
-{% raw %}name: bosun
+{% if "circleci-only" in pieces %}{% else %}{% raw %}name: bosun
 
 # Written by the bosun splice channel (owned: `splice update --channel bosun` replaces it, so a
 # local edit is drift). Every gate runs `bosun gate <name>`; change a gate's command in
@@ -555,4 +555,4 @@ jobs:
             "$bosun" gate "$g" $all || { echo "::error::gate $g failed; later gates did not run"; exit 1; }
             echo "::endgroup::"
           done
-{% endraw %}{% endif %}
+{% endraw %}{% endif %}{% endif %}

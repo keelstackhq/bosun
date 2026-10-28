@@ -981,6 +981,10 @@ fn strip_jinja(line: &str) -> String {
 /// The events of a workflow's `on:` block: its keys indented by exactly two spaces (Jinja tags
 /// stripped first, so an event behind `{% if %}` counts too).
 fn events(yaml: &str) -> Vec<String> {
+    // `on: status` (hull's CircleCI status mirror): one event on the same line.
+    if let Some(l) = yaml.lines().find_map(|l| l.strip_prefix("on: ")) {
+        return vec![l.trim().to_string()];
+    }
     let start = yaml.find("\non:\n").expect("an on: block") + "\non:\n".len();
     yaml[start..]
         .lines()
@@ -1077,7 +1081,7 @@ fn no_workflow_runs_a_pr_copy_on_review_events() {
         .1;
     assert_eq!(
         events(&jinja),
-        ["workflow_run", "schedule", "workflow_dispatch"]
+        ["status", "workflow_run", "schedule", "workflow_dispatch"]
     );
 }
 

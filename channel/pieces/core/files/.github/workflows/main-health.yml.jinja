@@ -7,7 +7,10 @@ name: main-health
 # The report job runs the bosun release pinned on the default branch head (shell fallback while
 # the pin lacks the command); it never checks out PR code.
 on:
-  workflow_run:
+{% endraw %}{% if "circleci-only" in pieces %}  # circleci-only: CircleCI runs the gates (weekly too, as a scheduled pipeline) and workflow_run
+  # never fires for it, so the trigger is the CircleCI status (spec §9).
+  status:
+{% else %}{% raw %}  workflow_run:
 {% endraw %}    workflows: [bosun{% if own_ci %}, ci{% endif %}]
 {% raw %}    types: [completed]
     branches: [main]
@@ -15,7 +18,7 @@ on:
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
-
+{% endraw %}{% endif %}{% raw %}
 permissions:
   contents: read
   issues: write
@@ -26,7 +29,16 @@ permissions:
 {% endraw %}{% if own_ci %}  actions: read
 {% endif %}{% raw %}
 jobs:
-  # The gates of bosun.yml on all of main, weekly (`bosun gate <name> --all`), whatever the stacks are.
+{% endraw %}{% if "circleci-only" in pieces %}{% raw %}  report:
+    # Only a terminal ci-ok or bosun-ok status from the CircleCI app on a commit that heads main
+    # (hull's mirror filter); no runner starts for any other status.
+    if: >-
+      (github.event.context == 'ci/circleci: ci-ok' || github.event.context == 'ci/circleci: bosun-ok')
+      && github.event.state != 'pending'
+      && github.event.sender.login == 'circleci-app[bot]'
+      && github.event.sender.type == 'Bot'
+      && contains(github.event.branches.*.name, 'main')
+{% endraw %}{% else %}{% raw %}  # The gates of bosun.yml on all of main, weekly (`bosun gate <name> --all`), whatever the stacks are.
   nightly:
     if: github.event_name != 'workflow_run'
     uses: ./.github/workflows/bosun.yml
@@ -38,7 +50,7 @@ jobs:
       always() && (github.event_name != 'workflow_run' ||
       (github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
-    runs-on: ubuntu-latest
+{% endraw %}{% endif %}{% raw %}    runs-on: ubuntu-latest
     steps:
       # github.sha is the head of the default branch for workflow_run and schedule events.
       - uses: actions/checkout@v4
@@ -85,7 +97,23 @@ jobs:
             echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::warning::the pinned bosun has no main-health command yet; running the shell fallback"
           fi
-{% endraw %}{% if own_ci %}{% raw %}      # Two workflows judge main: green only when the latest push run on main of each is green.
+{% endraw %}{% if "circleci-only" in pieces %}{% raw %}      # The status is the result (error counts as failure). With own_ci both CircleCI checks judge
+      # main: green only when neither latest status on this commit is failure or error.
+      - name: the CircleCI status
+        id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ github.event.state }}
+          SHA: ${{ github.event.sha }}
+        run: |
+          RESULT=failure
+          if [ "$STATE" = success ]; then RESULT=success; fi
+{% endraw %}{% if own_ci %}          for c in "ci/circleci: ci-ok" "ci/circleci: bosun-ok"; do
+            s=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/status" --jq "[.statuses[] | select(.context == \"$c\")][0].state // \"\"")
+            if [ "$s" = failure ] || [ "$s" = error ]; then RESULT=failure; fi
+          done
+{% endif %}          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+{% else %}{% if own_ci %}{% raw %}      # Two workflows judge main: green only when the latest push run on main of each is green.
       - name: both workflows are green on main
         id: result
         env:
@@ -100,12 +128,12 @@ jobs:
             done
           fi
           echo "result=$RESULT" >> "$GITHUB_OUTPUT"
-{% endraw %}{% endif %}{% raw %}      - if: steps.has.outputs.supported == 'true'
+{% endraw %}{% endif %}{% endif %}{% raw %}      - if: steps.has.outputs.supported == 'true'
         name: bosun main-health
         env:
           GITHUB_TOKEN: ${{ github.token }}
           BOSUN_REPO: ${{ github.repository }}
-          RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% raw %}${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}{% endraw %}{% endif %}{% raw %}
+          RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% if "circleci-only" in pieces %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% raw %}${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}{% endraw %}{% endif %}{% endif %}{% raw %}
           RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
         run: ./target/release/bosun main-health --result "$RESULT" --run-url "$RUN_URL"
       # Fallback: open or close the main-red issue in shell.
@@ -113,7 +141,7 @@ jobs:
         name: open or close the main-red issue (shell)
         env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% raw %}${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}{% endraw %}{% endif %}{% raw %}
+          RESULT: {% endraw %}{% if own_ci %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% if "circleci-only" in pieces %}{% raw %}${{ steps.result.outputs.result }}{% endraw %}{% else %}{% raw %}${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}{% endraw %}{% endif %}{% endif %}{% raw %}
           RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
         run: |
           repo="$GITHUB_REPOSITORY"

@@ -1,0 +1,1 @@
+- Channel piece `circleci-only` (no GitHub bosun.yml, main-health on CircleCI statuses) and, without hull (`own_ci` empty), hull's CircleCI setup config and status mirror, byte-identical to copies vendored from hull 58c488b.
