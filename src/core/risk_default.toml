@@ -4,8 +4,9 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what."
-# REVIEW.md and docs/lessons.toml are read into every review pack.
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "REVIEW.md", "docs/lessons.toml"]
+# REVIEW.md and docs/lessons.toml are read into every review pack; docs/setup-script.sh runs
+# as root wherever it is pasted.
+paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "docs/setup-script.sh", "REVIEW.md", "docs/lessons.toml", "docs/agents/**", "**/agents.md", "**/claude.md", "**/claude.local.md"]
 
 [[rule]]
 id = "R-ci"
