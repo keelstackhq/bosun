@@ -1,0 +1,1 @@
+- `bosun init` sets `[github] merge_queue = false` in an existing hoist.toml when the key is absent (bosun's statuses are not posted on `merge_group` refs), keeps an explicit value, and warns in `data.warnings` and the PR body on `true`; `data.hoist_merge_queue` says `added` or `kept`.

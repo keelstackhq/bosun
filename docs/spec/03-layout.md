@@ -64,5 +64,5 @@ test-integrity (it reads the body; the earlier run may have read another one) wi
 a late edit event can replace a pending push run, which leaves the new head without the check until its next event; with two jobs the edit step in bosun-trusted looks up the required check's name); the rust gates install the toolchain of the repo's `rust-toolchain.toml` once (the step looks in `rust_path` and its parents up to the repo root; no
 dtolnay step; the old 1.97 pin when there is no toolchain file, never the runner's stable), and the setup script reads its `channel` too (1.97 is the fallback); the CLAUDE.md section is the optional piece `claude-md`; seeds that exist stay the repo's own.
 `bosun init` sets `own_ci`, adds `claude-md` unless the main template owns CLAUDE.md, merges the
-required checks into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
+required checks and `merge_queue = false` (unless set) into an existing hoist.toml, and excludes a .claude/settings.json it does not own;
 the owner then adds the two bosun hooks there (an owner step), since only one source may own it.

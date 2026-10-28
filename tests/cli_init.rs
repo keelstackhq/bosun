@@ -389,8 +389,8 @@ fn a_hull_repo_gets_own_ci_excludes_and_hoist_checks() {
     assert_eq!(
         hoist,
         HOIST.replace(
-            "[\"ci-ok\"]",
-            "[\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\", \"bosun-ok\"]"
+            "[\"ci-ok\"] # trailing\n",
+            "[\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\", \"bosun-ok\"] # trailing\nmerge_queue = false\n"
         )
     );
     let d = &v["data"];
@@ -652,4 +652,69 @@ fn a_failed_init_on_a_custom_branch_deletes_it() {
     let args = ["--stack", "rust", "--branch", "custom/x", "--no-pr"];
     let (code, v) = e.run(&fake, &ok, &args);
     assert_eq!(code, 0, "{v}");
+}
+
+/// Commit `hoist` and run `init --no-pr`: `(exit code, output, hoist.toml after)`.
+fn init_with_hoist(hoist: &str) -> (i32, Value, String) {
+    let e = Env::new();
+    commit_file(&e, "hoist.toml", hoist);
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "hoist"]);
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    let after = std::fs::read_to_string(e.repo.path().join("hoist.toml")).unwrap();
+    (code, v, after)
+}
+
+const ALL_CHECKS: &str =
+    "required_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]";
+
+/// A hoist.toml without the key gets `[github] merge_queue = false` after required_checks.
+#[test]
+fn a_missing_merge_queue_is_set_to_false() {
+    let (code, v, after) =
+        init_with_hoist("# keep\n[github]\nrequired_checks = [\"ci-ok\"] # gates\nx = 1\n");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        after,
+        "# keep\n[github]\nrequired_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"] # gates\nmerge_queue = false\nx = 1\n"
+    );
+    assert_eq!(v["data"]["hoist_merge_queue"], "added");
+    assert_eq!(v["data"]["warnings"], serde_json::json!([]));
+}
+
+/// The owner's explicit `false` stays as it is, and nothing is written.
+#[test]
+fn an_explicit_merge_queue_false_is_kept() {
+    let hoist = format!("[github]\n{ALL_CHECKS}\nmerge_queue   = false # no queue\n");
+    let (code, v, after) = init_with_hoist(&hoist);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(after, hoist);
+    assert_eq!(v["data"]["hoist_merge_queue"], "kept");
+    assert_eq!(v["data"]["hoist_checks_added"], serde_json::json!([]));
+    assert_eq!(v["data"]["warnings"], serde_json::json!([]));
+}
+
+/// The owner's explicit `true` stays, with a warning: risk-check never posts on merge_group refs.
+#[test]
+fn an_explicit_merge_queue_true_is_kept_with_a_warning() {
+    let hoist = format!("[github]\nmerge_queue = true\n{ALL_CHECKS}\n");
+    let (code, v, after) = init_with_hoist(&hoist);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(after, hoist);
+    assert_eq!(v["data"]["hoist_merge_queue"], "kept");
+    let warnings = v["data"]["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{v}");
+    let w = warnings[0].as_str().unwrap();
+    assert!(
+        w.contains("merge_queue = true") && w.contains("risk-check") && w.contains("merge_group"),
+        "{w}"
+    );
+    assert!(
+        v["data"]["pr_body"]
+            .as_str()
+            .unwrap()
+            .contains("merge_group")
+    );
 }
