@@ -99,6 +99,44 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
 - UC-B2W-3: hoist.toml pins risk-check, review-verdict and main-open to the App and ci-ok to GitHub Actions.
 - UC-B2W-4: every keyed workflow_run job filters as main-health does: `branches: [main]`, `event == 'push'`, the run's `head_repository` is this repo, and it checks out `github.sha`.
 
+## B4: Owner teams
+
+area: risk
+depends: B2
+
+`[[owner]] team = "org/slug"`, expanded on the App token, cached per run, failing closed (§16).
+
+### Tasks
+
+- T1: owners.toml team entries
+  touch: src/core/risk.rs, tests/owners_parse.rs
+  depends: B2W/T1
+  size: 120
+  risk: high
+- T2: Team expansion with the per-run cache, failing closed
+  touch: src/github/mod.rs, src/github/types.rs, src/cli/risk_check.rs, tests/common/fake.rs, tests/cli_owner_teams.rs, docs/spec/16-owner-teams.md
+  depends: T1
+  size: 350
+  risk: high
+- T3: Kill switch, approve, ask and notify with teams
+  touch: src/app.rs, src/cli/approve.rs, src/cli/ask.rs, src/cli/notify.rs, tests/cli_owner_teams_cmds.rs
+  depends: T2
+  size: 250
+  risk: high
+- T4: Bus-factor note and a team example in the shipped owners files
+  touch: governance/owners.toml, channel/pieces/core/files/governance/**, docs/spec/03-layout.md
+  depends: T3
+  kind: bookkeeping
+  size: 30
+  risk: high
+
+### Done when
+
+- UC-B4-1: a team member's APPROVED review or `/bosun approve` comment on the head approves a high PR, and a non-member's does not.
+- UC-B4-2: a 403 or 404 on the team list counts no member, lists the team in `data.owner_teams_unreadable`, and the fix names Members read.
+- UC-B4-3: a two-page team list is read once per run although several owner checks need it.
+- UC-B4-4: a halt issue by a team member halts, and with the team unreadable a halt issue by a non-user halts too.
+
 ## Outside this repo
 
 - hoist: request (an issue in keelstackhq/hoist) required-check source pinning, as in §15: table
@@ -111,7 +149,7 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
 - H1: Create the bosun gate GitHub App
   on: computer
   steps: Org settings > Developer settings > GitHub Apps > New: name keelstackhq-bosun-gate, Webhook Active off, repo permissions Checks rw, Pull requests rw, Contents r, Issues r, Commit statuses none; org permission Members r; Only on this account; install on keelstackhq/bosun only
-  blocks: B2W
+  blocks: B2W, B4
 - H2: Generate the App's private key
   on: computer
   steps: App settings > Private keys > Generate; keep the .pem only until H4, then delete it
