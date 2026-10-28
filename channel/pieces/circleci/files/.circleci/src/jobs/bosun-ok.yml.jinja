@@ -63,10 +63,10 @@ environment:
   - run:
       name: the base's config for the gates
       command: |
-        pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|^\.bosun(/|$)'
+        pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|(^|/)deny\.toml$|^\.bosun(/|$)'
         if ! git cat-file -e "$BOSUN_BASE:.bosun/version" 2>/dev/null; then
           echo "the default branch has no .bosun yet (setup PR): this change's .bosun is used"
-          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$'
+          pat='(^|/)\.cargo(/|$)|(^|/)rust-toolchain(\.toml)?$|(^|/)\.npmrc$|(^|/)\.pnpmfile\.[cm]?js$|(^|/)deny\.toml$'
         fi
         git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
           rm -rf -- "$p"

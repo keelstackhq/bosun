@@ -275,17 +275,17 @@ fn the_circleci_gate_config_and_pin_come_from_the_default_branch_tip() {
         "mkdir -p .bosun/profiles && echo old > .bosun/profiles/rust.toml",
     ] {
         let main = format!(
-            "{old} && {COMMIT} && git tag old && rm -rf .bosun && mkdir -p .bosun/profiles && echo tip > {prof} && echo 1.2.3 > .bosun/version && {COMMIT}"
+            "{old} && {COMMIT} && git tag old && rm -rf .bosun && mkdir -p .bosun/profiles && echo tip > {prof} && echo tip > deny.toml && echo 1.2.3 > .bosun/version && {COMMIT}"
         );
         let pr = format!(
-            "git checkout -qb pr old && mkdir -p .bosun/profiles && echo pr > {prof} && echo 1.2.3 > .bosun/version && {COMMIT}"
+            "git checkout -qb pr old && mkdir -p .bosun/profiles && echo pr > {prof} && echo pr > deny.toml && echo 1.2.3 > .bosun/version && {COMMIT}"
         );
         let (d, sum) = ci_repo(&main, &pr);
         assert!(run_step(d.path(), &sum, &step, &[]).0);
-        assert_eq!(
-            fs::read_to_string(d.path().join("repo").join(prof)).unwrap(),
-            "tip\n"
-        );
+        for f in [prof, "deny.toml"] {
+            let got = fs::read_to_string(d.path().join("repo").join(f)).unwrap();
+            assert_eq!(got, "tip\n", "{f} comes from main's tip");
+        }
     }
 }
 
