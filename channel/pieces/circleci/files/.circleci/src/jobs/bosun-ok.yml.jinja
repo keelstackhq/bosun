@@ -75,10 +75,8 @@ environment:
           mkdir -p -- "$(dirname -- "$p")"
           git show "$BOSUN_BASE:$p" > "$p"
         done
-{% if "rust" in pieces %}  # The toolchain of the (base's) rust-toolchain file in rust_path or a parent, else the old pin.
-  - run:
-      name: rust toolchain
-      working_directory: {{ rust_path }}
+{% if "rust" in pieces %}  - run:
+      name: rustup and the cargo tools
       command: |
         # rustup 1.29.2, verified 2026-10-28 (static.rust-lang.org rustup-init.sha256), as hull's
         curl -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/1.29.2/x86_64-unknown-linux-gnu/rustup-init"
@@ -87,24 +85,6 @@ environment:
         /tmp/rustup-init -y --profile minimal --default-toolchain none
         echo 'export PATH="$HOME/.bosun-tools/bin:$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
         . "$HOME/.cargo/env"
-        # The channel of the (base's) toolchain file here or in a parent (rust-toolchain wins, as for
-        # rustup), else the old pin; RUSTUP_TOOLCHAIN then makes rustup ignore any toolchain file a
-        # later step (a build.rs) writes.
-        d="$PWD"; ch=""
-        while [ -z "$ch" ]; do
-          for f in "$d/rust-toolchain.toml" "$d/rust-toolchain"; do
-            [ -f "$f" ] || continue
-            ch="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" "$f" | head -n1)"
-            if [ -z "$ch" ] && [ "${f##*/}" = rust-toolchain ]; then ch="$(head -n1 "$f" | tr -d '[:space:]')"; fi
-            ch="${ch:-!}"
-          done
-          if [ "$d" = "$HOME/project" ] || [ "$d" = / ]; then break; fi
-          d="$(dirname "$d")"
-        done
-        ch="${ch:-1.97}"
-        [[ "$ch" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "rust-toolchain: name a released channel, not '$ch'"; exit 1; }
-        rustup toolchain install "$ch" --profile minimal -c rustfmt,clippy
-        echo "export RUSTUP_TOOLCHAIN=$ch" >> "$BASH_ENV"
         # Never from a cache (CircleCI caches are not branch-scoped); each checked on every run.
         tools="$HOME/.bosun-tools"; t="$(mktemp -d)"
         mkdir -p "$tools/bin"
@@ -118,6 +98,45 @@ environment:
         echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  $t/deny.tgz" | sha256sum -c - || exit 1
         tar -xzf "$t/deny.tgz" -C "$t" --strip-components=1 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny
         install -m 755 "$t/cargo-deny" "$tools/bin/cargo-deny"
+  # The (base's) toolchain file in rust_path or a parent (rust-toolchain wins, as for rustup), else
+  # the old pin. Like bosun.yml's check, only a [toolchain] with plain-name channel, components,
+  # targets and profile passes (a `path` would run another compiler); rustup then installs what
+  # it names, and RUSTUP_TOOLCHAIN makes rustup ignore any toolchain file a later step writes.
+  - run:
+      name: rust toolchain
+      working_directory: {{ rust_path }}
+      command: |
+        d="$PWD"; f=""
+        while :; do
+          for n in rust-toolchain.toml rust-toolchain; do if [ -f "$d/$n" ]; then f="$d/$n"; fi; done
+          if [ -n "$f" ] || [ "$d" = "$HOME/project" ] || [ "$d" = / ]; then break; fi
+          d="$(dirname "$d")"
+        done
+        if [ -z "$f" ]; then
+          ch=1.97
+          rustup toolchain install 1.97 --profile minimal -c rustfmt,clippy
+        else
+          n='[A-Za-z0-9][A-Za-z0-9._-]*'; q="[\"']"; s='[[:space:]]*'
+          ch=""; head=""
+          if [ "${f##*/}" = rust-toolchain ] && [[ "$(cat "$f")" =~ ^$s($n)$s$ ]]; then
+            ch="${BASH_REMATCH[1]}"
+          else
+            while IFS= read -r l || [ -n "$l" ]; do
+              if [[ "$l" =~ ^$s(#.*)?$ ]]; then continue; fi
+              if [[ "$l" =~ ^$s\[toolchain\]$s$ ]] && [ -z "$head" ]; then head=t; continue; fi
+              if [ -n "$head" ] && [[ "$l" =~ ^$s(channel|profile)$s=$s$q($n)$q$s$ ]]; then
+                if [ "${BASH_REMATCH[1]}" = channel ]; then ch="${BASH_REMATCH[2]}"; fi
+                continue
+              fi
+              if [ -n "$head" ] && [[ "$l" =~ ^$s(components|targets)$s=$s\[($s$q$n$q$s,?)*\]$s$ ]]; then continue; fi
+              echo "$f: only a [toolchain] with a plain channel, components, targets and profile: $l"; exit 1
+            done < "$f"
+          fi
+          if [ -z "$ch" ]; then echo "$f: name a released channel"; exit 1; fi
+          (cd "$d" && env -u RUSTUP_TOOLCHAIN rustup toolchain install)
+          rustup component add --toolchain "$ch" rustfmt clippy
+        fi
+        echo "export RUSTUP_TOOLCHAIN=$ch" >> "$BASH_ENV"
 {% endif %}{% if "ts-pnpm" in pieces %}  # The exact pnpm release (9 or later) the base's package.json names (the PR's while the base names
   # none), as in bosun.yml; skipped while the stack has no lockfile.
   - run:
@@ -161,22 +180,27 @@ environment:
         top="$(pwd -P)"
         swap() {
           pat='(^|/)package\.json$|(^|/)pnpm-workspace\.ya?ml$'
+          inside() { case "$(realpath -m -- "$(dirname -- "$1")")" in "$top" | "$top"/*) ;; *) echo "$1: its directory links outside the checkout"; return 1 ;; esac; }
           { git ls-tree -r -z --name-only HEAD; git ls-tree -r -z --name-only "$BOSUN_BASE"; } | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+            inside "$p" || exit 1
             rm -rf -- "$p"
-          done
+          done || return 1
           git ls-tree -r -z --name-only "$1" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
-            case "$(realpath -m -- "$(dirname -- "$p")")" in "$top" | "$top"/*) ;; *) echo "$p: its directory links outside the checkout"; exit 1 ;; esac
+            inside "$p" || exit 1
             mkdir -p -- "$(dirname -- "$p")"
             git show "$1:$p" > "$p"
-          done
-          if [ -d "{{ ts_path }}" ] && [ ! -e "{{ ts_path }}/package.json" ] && [ "$1" != HEAD ]; then echo '{}' > "{{ ts_path }}/package.json"; fi
+          done || return 1
+          if [ -d "{{ ts_path }}" ] && [ ! -e "{{ ts_path }}/package.json" ] && [ "$1" != HEAD ]; then
+            inside "{{ ts_path }}/package.json" || return 1
+            echo '{}' > "{{ ts_path }}/package.json"
+          fi
         }
 {% endif %}        for g in $GATES; do
 {% if "ts-pnpm" in pieces %}          case "$g" in
             test-integrity) ;;
-            deps) swap "$BOSUN_BASE"; swapped=1 ;;
+            deps) swap "$BOSUN_BASE" || exit 1; swapped=1 ;;
             *)
-              if [ -n "${swapped:-}" ]; then swap HEAD; swapped=""; fi
+              if [ -n "${swapped:-}" ]; then swap HEAD || exit 1; swapped=""; fi
               if [ -z "${installed:-}" ] && [ -f "{{ ts_path }}/pnpm-lock.yaml" ]; then (cd "{{ ts_path }}" && pnpm install --frozen-lockfile); installed=1; fi
               ;;
           esac

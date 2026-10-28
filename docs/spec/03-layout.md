@@ -79,14 +79,16 @@ deleted test); then, as bosun.yml, the release that origin/main's tip pins (as `
 merge-base, which the author picks; the setup-PR fallback to this change's pin and `.bosun` only when
 origin/main has no `.bosun`), checked by its version and by its sha256 before each gate, the pin
 check, origin/main's gate config, the rust toolchain (rustup-init, cargo-nextest and cargo-deny each
-checked against a pinned sha256; the channel of the toolchain file, `^[A-Za-z0-9][A-Za-z0-9._-]*$`,
-else 1.97, exported as `RUSTUP_TOOLCHAIN`) or pnpm, and the gates of bosun.yml in order (a test keeps
+checked against a pinned sha256; the toolchain file in rust_path or a parent, checked line by line
+like bosun.yml's (only `[toolchain]` with plain-name channel, components, targets and profile), is
+installed as it names, else 1.97, and its channel is exported as `RUSTUP_TOOLCHAIN`) or pnpm, and the gates of bosun.yml in order (a test keeps
 the lists equal; with `own_ci` a pull request runs only test-integrity unless the project variable
 `BOSUN_ALL_GATES=1`; main and `gh-readonly-queue/*` run all five). When HEAD is the merge-base (an
 empty diff) every gate runs with `--all`. `BOSUN_INTEGRITY_ALLOW` and `BOSUN_PR_BODY` are empty: no
 CircleCI variable can allow a finding, and a `snapshot-change:` line cannot apply (fails closed).
 The ts-pnpm stack runs in the same job: test-integrity, then deps with every package.json and
-pnpm-workspace.yaml from origin/main (as bosun-trusted), then the PR's copies back,
+pnpm-workspace.yaml from origin/main (as bosun-trusted; a path whose directory links outside the
+checkout stops the job before anything is removed), then the PR's copies back,
 `pnpm install --frozen-lockfile`, fmt, lint and test. There are no draft, docs-only or body-edit
 fast paths. risk, verdict, main-open and splice.yml are the same with
 or without the piece.

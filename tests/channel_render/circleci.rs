@@ -307,22 +307,97 @@ fn circleci_deps_audits_with_the_bases_manifests_and_the_rest_sees_the_prs() {
         !d.path().join("repo/pnpm-workspace.yaml").exists(),
         "a base-only copy goes"
     );
+    // A PR that links a stack directory outside the checkout stops deps; nothing outside goes.
+    let main = format!("mkdir web && echo base > web/package.json && {COMMIT}");
+    let out = "mkdir -p ../out && echo keep > ../out/package.json";
+    let pr = format!("git checkout -qb pr && rm -r web && {out} && ln -s ../out web && {COMMIT}");
+    let (d, sum) = ci_repo(&main, &pr);
+    let (ok, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", "pr")]);
+    assert!(!ok, "{log}");
+    assert_eq!(log, "gate test-integrity \n", "deps never ran");
+    assert!(d.path().join("out/package.json").exists());
 }
 
 #[test]
 fn the_circleci_toolchain_is_validated_and_pinned_for_later_steps() {
-    let job = text(&mode(&["rust"], &["circleci"], ""), JOB).to_string();
-    for want in [
-        "[[ \"$ch\" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]",
-        "echo \"export RUSTUP_TOOLCHAIN=$ch\" >> \"$BASH_ENV\"",
-        "rustup toolchain install \"$ch\" --profile minimal -c rustfmt,clippy",
-    ] {
-        assert!(job.contains(want), "no {want}");
+    let Some((script, _)) = job_step(&["rust"], "", "rust toolchain") else {
+        return;
+    };
+    // `$HOME/project` is the checkout; a fake rustup logs its args and directory. Rows: files
+    // (`path=text`, `|`-separated), where the step runs, and the first rustup call and channel
+    // (none: refused). A parent's file is found; rustup installs what it names (targets too)
+    // from its directory; rust-toolchain wins over rust-toolchain.toml.
+    let toml = "[toolchain]\nchannel = \"1.95.0\"\ntargets = [\"wasm32-unknown-unknown\"]\n";
+    let rows = [
+        (
+            String::new(),
+            "sub",
+            Some((
+                "toolchain install 1.97 --profile minimal -c rustfmt,clippy @sub",
+                "1.97",
+            )),
+        ),
+        (
+            format!("rust-toolchain.toml={toml}"),
+            "sub",
+            Some(("toolchain install @project", "1.95.0")),
+        ),
+        (
+            format!("sub/rust-toolchain.toml={toml}|sub/rust-toolchain=nightly-2026-01-01\n"),
+            "sub",
+            Some(("toolchain install @sub", "nightly-2026-01-01")),
+        ),
+        (
+            "rust-toolchain.toml=[toolchain]\npath = \"/opt/evil\"\n".into(),
+            ".",
+            None,
+        ),
+        (
+            "rust-toolchain.toml=[toolchain]\nchannel = \"../x\"\n".into(),
+            ".",
+            None,
+        ),
+        (
+            "rust-toolchain.toml=channel = \"1.95.0\"\n".into(),
+            ".",
+            None,
+        ),
+    ];
+    for (files, cwd, want) in rows {
+        let dir = tempfile::tempdir().unwrap();
+        let (home, project) = (dir.path(), dir.path().join("project"));
+        fs::create_dir_all(project.join("sub")).unwrap();
+        for (f, t) in files.split('|').filter_map(|e| e.split_once('=')) {
+            fs::write(project.join(f), t).unwrap();
+        }
+        fs::write(
+            home.join("rustup"),
+            "#!/bin/sh\necho \"$* @${PWD##*/}\" >> \"$HOME/log\"\n",
+        )
+        .unwrap();
+        git_in(home, "chmod +x rustup");
+        let path = format!("{}:{}", home.display(), std::env::var("PATH").unwrap());
+        let (h, e) = (
+            home.to_str().unwrap(),
+            home.join("env").display().to_string(),
+        );
+        let env = [
+            ("HOME", h),
+            ("PATH", path.as_str()),
+            ("BASH_ENV", e.as_str()),
+        ];
+        let ok = bash_in(&project.join(cwd), &script, &env);
+        let log = fs::read_to_string(home.join("log")).unwrap_or_default();
+        let Some((install, ch)) = want else {
+            assert!(!ok && log.is_empty(), "{files}: {log}");
+            continue;
+        };
+        assert!(ok && log.lines().next() == Some(install), "{files}: {log}");
+        let pinned = fs::read_to_string(&e).unwrap();
+        assert_eq!(pinned, format!("export RUSTUP_TOOLCHAIN={ch}\n"));
+        let components = format!("component add --toolchain {ch} rustfmt clippy");
+        assert!(ch == "1.97" || log.contains(&components), "{log}");
     }
-    assert!(
-        !job.contains("rustup toolchain install\n"),
-        "never what a file names"
-    );
     let Some((_, env)) = job_step(&["rust"], "", "bosun gates") else {
         return;
     };
