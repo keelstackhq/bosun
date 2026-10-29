@@ -8,4 +8,3 @@ profile = "rust"
 [review]
 # "subagent" (mode a) until M8 adds the CI review (mode b).
 mode = "subagent"
-
