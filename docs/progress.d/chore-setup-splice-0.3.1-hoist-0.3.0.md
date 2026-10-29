@@ -1,0 +1,1 @@
+- 2026-10-29 · Tool pins · setup scripts: splice 0.3.1 and hoist 0.3.0 with integrity; both splice.yml: splice 0.3.1, action at v0.3.1 (f7ac4ef) · PR (chore/setup-splice-0.3.1-hoist-0.3.0)

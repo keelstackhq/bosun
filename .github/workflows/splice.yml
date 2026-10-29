@@ -18,9 +18,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: keelstackhq/splice/action@5d64f250fd1e0fcf27690b425a2f9f8de5fd4ac0 # v0.3.0
+      - uses: keelstackhq/splice/action@f7ac4efddb3b23b4f1dca29dfb72e3f81a707f32 # v0.3.1
         with:
-          version: "0.3.0"
+          version: "0.3.1"
           scope: all
           # GITHUB_TOKEN works, but its PRs do not trigger CI.
           token: ${{ secrets.SPLICE_BOT_TOKEN || github.token }}
