@@ -296,6 +296,66 @@ pub const APPROVAL_CODE_PATHS: [&str; 7] = [
     "npm/**",
 ];
 
+/// What a bootstrap-mode approval (D-012) never covers: the setting, governance, the risk rules,
+/// the required checks and the jobs with an environment; in bosun also every
+/// [`APPROVAL_CODE_PATHS`] entry (the code that checks it and verifies signatures). Apart from
+/// [`CRITICAL_PATHS`], so the window is never widened or reopened from inside it.
+pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
+    // `.bosun/version` pins the gate release that runs the check.
+    ".bosun/**",
+    "governance/**",
+    "CODEOWNERS",
+    ".github/CODEOWNERS",
+    "docs/CODEOWNERS",
+    "hoist.toml",
+    "channel/pieces/core/files/.bosun/**",
+    ".github/workflows/release.yml",
+    "**/workflows/splice.yml",
+    // They run the approval check (root and channel copies).
+    "**/workflows/risk.yml",
+    "**/workflows/verdict.yml",
+];
+
+/// Why a bootstrap-mode approval cannot count: the excluded paths among `(path, previous path,
+/// patch)` (a rename counts on both sides), a workflow whose diff names `environment:` or is not
+/// shown, and an R-secrets match. `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: it can count.
+pub fn bootstrap_excluded(
+    files: &[(&str, Option<&str>, Option<&str>)],
+    matches: &[Match],
+    bosun_code: bool,
+) -> Vec<String> {
+    let code: &[&str] = if bosun_code {
+        &APPROVAL_CODE_PATHS
+    } else {
+        &[]
+    };
+    let globs: Vec<Glob> = (BOOTSTRAP_EXCLUDED.iter().chain(code))
+        .map(|g| Glob::parse(g).expect("built-in bootstrap glob"))
+        .collect();
+    let environment = |patch: Option<&str>| {
+        patch.is_none_or(|p| {
+            p.lines().any(|l| {
+                (l.starts_with('+') || l.starts_with('-'))
+                    && l.to_ascii_lowercase().contains("environment:")
+            })
+        })
+    };
+    let mut why: Vec<String> = (files.iter())
+        .filter(|(path, prev, patch)| {
+            let mut both = std::iter::once(*path).chain(*prev);
+            both.clone()
+                .any(|p| globs.iter().any(|g| matches_any_case(g, p)))
+                || (both.any(|p| p.to_ascii_lowercase().starts_with(".github/workflows/"))
+                    && environment(*patch))
+        })
+        .map(|(path, ..)| path.to_string())
+        .collect();
+    if matches.iter().any(|m| m.rule == "R-secrets") {
+        why.push("R-secrets".into());
+    }
+    why
+}
+
 /// Why a PR is critical: the critical rules it matches and the changed critical paths (a
 /// rename counts on both sides). `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: not critical.
 pub fn critical(matches: &[Match], files: &[ChangedFile], bosun_code: bool) -> Vec<String> {
@@ -600,6 +660,23 @@ pub fn comment_approves(body: &str, head: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_excludes_every_approval_code_path_in_bosun_only() {
+        for g in APPROVAL_CODE_PATHS {
+            let path = g.replace("**", "x/y");
+            let f = [(path.as_str(), None, Some("@@\n+x"))];
+            assert_eq!(
+                bootstrap_excluded(&f, &[], true),
+                std::slice::from_ref(&path),
+                "{g}"
+            );
+            assert!(
+                bootstrap_excluded(&f, &[], false).is_empty(),
+                "{g} in a consumer repo"
+            );
+        }
+    }
 
     fn file(path: &str, added: &[&str]) -> ChangedFile {
         ChangedFile {

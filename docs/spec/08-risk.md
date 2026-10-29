@@ -145,6 +145,35 @@ High-risk PRs:
   delegate has no v2. Keys stand for the owners: any enrolled owner key's v2 clears any
   owner's dismissed review, whichever owner the key belongs to. A v2 signed for another PR
   number or another repo does not verify and clears nothing.
+- Bootstrap mode (D-012). `[approvals] bootstrap_until = "YYYY-MM-DD"` in `.bosun/bosun.toml`
+  is the last day (UTC, inclusive) on which the orchestrator may approve gated PRs itself, after
+  an independent reviewer approved the head; bosun's own file says `2026-11-30`. An invalid date
+  is a parse error naming the key; missing means off. `bosun approve <pr>@<head> --sign-key <pem>
+  --bootstrap` (an owner key only; `--as delegate` is exit 2) reads the setting on the default
+  branch (off, ended or invalid: exit 1, nothing signed, the fix names D-012) and signs
+  `bosun-bootstrap v1 <owner>/<repo>#<pr> <head_sha>`; the comment's first line is
+  `/bosun approve <head_sha> bootstrap`, its second `Signed in bootstrap mode (D-012, until
+  <date>)` (for the reader only), and `data.bootstrap_until` gives the date. The marker is the
+  signed prefix: an owner v1 or v2 signature never verifies as bootstrap, nor the reverse, and
+  adding or stripping the first-line marker breaks the signature. It never clears a dismissal
+  (after one it is exit 3). risk-check counts it as the owner, `approved by key <id> (bootstrap
+  mode, D-012)` in the status, only when all hold: it verifies with an enrolled `owner` key on
+  the default branch, as owner signatures do (trust files and R-unseen exclude it too); today
+  (`BOSUN_NOW`, UTC) is on or before `bootstrap_until` read at the base SHA; the PR's
+  requirement is `owner`; and the PR touches no path of `BOOTSTRAP_EXCLUDED` in
+  `src/core/risk.rs`: `.bosun/**` (`.bosun/version` pins the gate release),
+  `governance/**`, the `CODEOWNERS` files, the root `hoist.toml`, in bosun (its base has
+  `src/cli/risk_check.rs`) every `APPROVAL_CODE_PATHS` entry (`src/**`, `Cargo.toml`,
+  `Cargo.lock`, `build.rs` in any directory, `.cargo/**`, `npm/**`: the code of the check and of
+  signature verification, derived from the same list so the two never drift), the channel's
+  `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow
+  (root and channel copies), nor a `.github/workflows/**` file whose diff adds or removes a line
+  naming `environment:` (or is not shown), nor matches R-secrets. The list is separate from
+  `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
+  bootstrap signature counts for nothing, and the error message and fix start with `a
+  bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
+  Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` does not set
+  `bootstrap_until`: other repos opt in by adding it themselves.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate
