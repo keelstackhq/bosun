@@ -31,14 +31,15 @@ const BRANCH: &str = "bosun/init";
 const CLOUD_BRANCH: &str = "claude/bosun-init";
 
 const PR_TITLE: &str = "chore: set up bosun";
-const OWNER_STEPS: [&str; 7] = [
+const OWNER_STEPS: [&str; 8] = [
     "Fill governance/owners.toml with the owners' GitHub logins (the channel seeds it from --owner).",
     "Run `hoist apply` for branch protection, auto-merge and the required checks ci-ok, risk-check, review-verdict, main-open (hoist.toml).",
     "Create the kill-switch label: `gh label create bosun:halt --color B60205`.",
     "Create the environment splice-bot (deployment branches: main only), then add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) to it, never as a repository secret, so the splice update bot's PRs run CI.",
     "Review this setup PR; it is R-gov, so approve its head SHA: the session asks you with a form in the Claude Code chat and the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself). While main has no bosun workflows, risk-check, review-verdict and main-open cannot run on it: merge it yourself, then apply the required checks.",
     "Create the Routines (janitor, curator, notify); `bosun doctor` prints their prompts.",
-    "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA when the session asks with a form in the Claude Code chat; the orchestrator posts the signed `bosun approve` comment (fallback: comment `/bosun approve <sha>` yourself).",
+    "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA when the session asks with a form in the Claude Code chat; the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself).",
+    "This enables bootstrap mode until 2026-11-30 (D-012): the orchestrator's bootstrap-signed approvals count on owner-class PRs; drop [approvals] in .bosun/bosun.toml to opt out.",
 ];
 
 /// A name `git check-ref-format --branch` accepts (git is the judge; it needs no repo).
