@@ -1,0 +1,1 @@
+- The setup scripts pin splice 0.3.1 (it strips token-like env vars from what it posts) and hoist 0.3.0, each with its npm integrity; both `splice.yml` move to splice 0.3.1 and pin `keelstackhq/splice/action` at v0.3.1's commit. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
