@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.3.0 (2026-10-29)
+
 - `bosun approve --list` adds `data.message`, `data.message_id` (8 hex characters) and `data.message_pairs`: one short chat text for the owner with inert titles, at most 10 PRs, and the `Reply: approve ...` line; the id hashes only the shown `pr@head` pairs (all null when nothing is ready).
 - `core::text::inert`: text an agent or a plan wrote, shown to a person as one plain line (control, format and separator characters as spaces, as an inline code span, cut to a length).
 - `core::prereqs`: `approvals` estimates which plan tasks will need the owner or a delegate at merge (as risk-check would, from touch paths; `risk: high` needs the owner), in dependency batches; `message` is the short checklist text for the owner's chat.

@@ -1,6 +1,6 @@
 {
   "name": "@keelstackhq/bosun-win32-x64",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "The bosun binary for Windows x64",
   "license": "MIT",
   "repository": {
