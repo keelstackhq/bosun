@@ -1,0 +1,1 @@
+- bosun pins 0.3.0 and turns on bootstrap mode (D-012) until 2026-11-30: `[approvals] bootstrap_until` in its own `.bosun/bosun.toml`, and in the channel for repos that pin the channel version. After it merges, paste `docs/setup-script.sh` into the cloud environments again.

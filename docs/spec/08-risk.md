@@ -150,7 +150,7 @@ High-risk PRs:
   number or another repo does not verify and clears nothing.
 - Bootstrap mode (D-012). `[approvals] bootstrap_until = "YYYY-MM-DD"` in `.bosun/bosun.toml`
   is the last day (UTC, inclusive) on which the orchestrator may approve gated PRs itself, after
-  an independent reviewer approved the head; bosun's own file sets it in the pin PR of the first release that reads `[approvals]` (the gates run the pinned release, which rejects unknown keys; `tests/pinned_config.rs`). An invalid date
+  an independent reviewer approved the head; bosun's own file says `2026-11-30` since the 0.3.0 pin, the first release that reads `[approvals]` (the gates run the pinned release, which rejects unknown keys; `tests/pinned_config.rs`). An invalid date
   is a parse error naming the key; missing means off. `bosun approve <pr>@<head> --sign-key <pem>
   --bootstrap` (an owner key only; `--as delegate` is exit 2) reads the setting on the default
   branch (off, ended or invalid: exit 1, nothing signed, the fix names D-012) and signs
@@ -175,10 +175,11 @@ High-risk PRs:
   `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
   bootstrap signature counts for nothing, and the error message and fix start with `a
   bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
-  Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` does not set
-  `bootstrap_until` yet: a consumer's gates run its pinned bosun, which rejects unknown keys, so
-  the channel renders it only for a `bosun_version` that reads it (with a channel test), in the
-  pin PR of that release.
+  Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` sets
+  `bootstrap_until = "2026-11-30"` only while `bosun_version` is empty, so the repo pins the
+  channel's own release (0.3.0 or later); a repo pinning an explicit version gets no
+  `[approvals]`, since its release may reject the key (`tests/channel_render.rs`). A consumer
+  drops the key to opt out.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

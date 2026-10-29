@@ -3,7 +3,13 @@
 //! newer key breaks every gate on main until a release that reads it is pinned.
 
 /// The top-level keys each pinned release accepts. Add the new release when pinning it.
-const KNOWN: &[(&str, &[&str])] = &[("0.2.3", &["project", "stack", "review", "slack", "prices"])];
+const KNOWN: &[(&str, &[&str])] = &[
+    ("0.2.3", &["project", "stack", "review", "slack", "prices"]),
+    (
+        "0.3.0",
+        &["project", "stack", "review", "slack", "prices", "approvals"],
+    ),
+];
 
 /// `path` as committed at HEAD: CI swaps the base branch's `.bosun/` into the checkout.
 fn committed(path: &str) -> String {

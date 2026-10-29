@@ -13,3 +13,10 @@ profile = "ts-pnpm"
 [review]
 # "subagent" (mode a): a fresh subagent reviews each PR (spec §7).
 mode = "subagent"
+{% if bosun_version %}{% else %}
+[approvals]
+# Bootstrap mode (D-012, spec §8): until this day (UTC, inclusive) an owner key's
+# `--bootstrap` signature counts as the owner on owner-class PRs outside the excluded paths.
+# Rendered while this repo pins the channel's own bosun release (0.3.0 or later); drop it to opt out.
+bootstrap_until = "2026-11-30"
+{% endif %}

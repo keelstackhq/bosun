@@ -1601,3 +1601,37 @@ fn bosun_trusted_deps_passes_before_the_ts_stack_exists() {
 
 #[path = "channel_render/circleci.rs"]
 mod circleci;
+
+/// D-012: bootstrap mode reaches consumers only when their pinned bosun reads `[approvals]`. An
+/// empty `bosun_version` pins the channel's own release (0.3.0 or later from this channel on),
+/// so `.bosun/bosun.toml` gets `bootstrap_until`; a repo pinning an explicit version does not
+/// (its release may reject the key), and adds it by hand once it pins a release that reads it.
+#[test]
+fn bootstrap_until_renders_only_for_the_channel_version() {
+    for (bosun_version, want) in [("", true), ("0.2.3", false), ("0.3.0", false)] {
+        let pieces = ["core", "rust"];
+        let vars: BTreeMap<&str, String> = [
+            ("project", "app"),
+            ("owner", ""),
+            ("bosun_version", bosun_version),
+            ("template.version", "0.3.0"),
+            ("rust_path", "."),
+            ("ts_path", "."),
+            ("own_ci", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
+        let files = render_channel(&pieces, &vars);
+        let config: toml::Table = file(&files, ".bosun/bosun.toml").parse().unwrap();
+        let until = config
+            .get("approvals")
+            .and_then(|a| a.get("bootstrap_until"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            until == Some("2026-11-30"),
+            want,
+            "bosun_version={bosun_version:?}: {config:?}"
+        );
+    }
+}
