@@ -276,11 +276,13 @@ Human-only items, in order. Each has the exact action.
    - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor`
      data.routines from the new release, and attach the Slack connector to it: the Routine reads
      the channel facts and posts with its Slack tool.
-9. **Owner approvals.** An approval counts only as the owner's own comment
-   `/bosun approve <head sha>` (the full 40-character SHA, typed exactly, nothing else, never
-   edited: an edited comment never counts, post a new one) or a GitHub review approving that
-   head, sent with the owner's own credentials. A newer review of yours requesting changes on
-   that head cancels the comment. Two ways work:
+9. **Owner approvals.** The default (D-012): the session asks the owner with a form in the
+   Claude Code chat; on approve the orchestrator posts the signed `bosun approve` comment
+   (`bosun approve <pr>@<head> --sign-key <pem>`; details below). Fallbacks: the owner's own
+   comment `/bosun approve <head sha>` (the full 40-character SHA, typed exactly, nothing else,
+   never edited: an edited comment never counts, post a new one) or a GitHub review approving
+   that head, sent with the owner's own credentials. A newer review of yours requesting changes
+   on that head cancels them. Two fallback ways work:
    - the GitHub web or mobile app: type the comment on the PR (a review works only on a PR you
      did not open; agent PRs are opened as your login, so use the comment);
    - `bosun approve` on the owner's own machine (a local shell or a local Claude Code session,
@@ -295,8 +297,7 @@ Human-only items, in order. Each has the exact action.
    write (app attribution and a Claude footer), so risk-check ignores it, and `bosun approve`
    refuses there (exit 5). The Claude GitHub tool does the same. Never put the PAT in a cloud
    environment.
-   A third way, from a Claude chat: a signed approval (spec §8). The orchestrator, on your
-   message, runs `bosun approve <pr>@<head> --sign-key <pem>` for the head you approved, and the signature from the key in
+   The signed approval (spec §8): the orchestrator, on your answer to the form, runs `bosun approve <pr>@<head> --sign-key <pem>` for the head you approved, and the signature from the key in
    `.bosun/approvers.toml` on main counts whoever posts it. Approving the PR that adds that file
    on GitHub is the enrollment; rotate a key the same way. It counts in CI once `.bosun/version`
    pins a release with this feature (cut a release, then bump the pin).

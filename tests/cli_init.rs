@@ -164,6 +164,15 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     assert_eq!(d["pieces"][0], "rust");
     assert_eq!(d["changes"][0]["path"], ".bosun/bosun.toml");
     assert_eq!(d["owner_steps"].as_array().unwrap().len(), 7);
+    // D-012: signed approvals count once the orchestrator's key is enrolled.
+    let steps = d["owner_steps"].to_string();
+    assert_eq!(
+        steps
+            .matches("once its key is in .bosun/approvers.toml")
+            .count(),
+        2,
+        "{steps}"
+    );
     assert!(d["pr"]["number"].as_u64().is_some());
     assert!(v["next"].as_array().unwrap().is_empty());
     assert!(e.repo.path().join("plans/my-plan.md").exists());
@@ -185,7 +194,9 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     let body = posts[0].body.as_deref().unwrap_or("");
     assert!(body.contains(r#""base":"main""#), "{body}");
     assert!(
-        body.contains("R-gov") && body.contains("hoist apply"),
+        body.contains("R-gov")
+            && body.contains("hoist apply")
+            && body.contains("form in the Claude Code chat"),
         "{body}"
     );
 }

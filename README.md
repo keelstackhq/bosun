@@ -35,22 +35,26 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
 
 ## Owner controls
 
-- **Approve a high-risk PR.** Comment on the PR, as a login in `governance/owners.toml`, with
-  exactly `/bosun approve <head sha>` (the full 40-character SHA of the current head). The
-  `risk` workflow re-runs and `risk-check` turns green. A new push needs a new comment. A GitHub
+- **Approve a high-risk PR.** The session asks you with a form in the Claude Code chat (repo, PR,
+  head SHA; approve or hold); on approve the orchestrator posts the signed `bosun approve`
+  comment for that exact head (`bosun approve <pr>@<head> --sign-key <pem>`), the `risk`
+  workflow re-runs and `risk-check` turns green (D-012, spec §8, signed approvals). Fallback:
+  comment on the PR yourself, as a login in `governance/owners.toml`, with exactly
+  `/bosun approve <head sha>` (the full 40-character SHA of the current head). A new push needs
+  a new approval. A GitHub
   review that approves the head SHA counts too, when the owner did not open the PR; no review
   event runs the workflow, so comment `/bosun recheck` (or re-run the risk workflow) after it:
   it only re-judges, as the next push does. A recheck runs only for a repo owner, member or
   collaborator, which limits CI minutes only; one from an owner with private org membership or
   an app (`NONE`) is dropped, so re-run the workflow then. To withdraw, request changes or
   dismiss the approval, then comment `/bosun recheck` (or re-run the risk workflow; it re-judges
-  and fails); turning off auto-merge also stops a merge. Post the
-  comment yourself (web UI or `gh` with your own token): a comment that an agent session writes
-  through the Claude app does not count, even under your login. To approve from a Claude chat,
-  tell the orchestrator: it posts the same line with a `bosun-sig ed25519` signature line from a
-  key enrolled in `.bosun/approvers.toml` on the default branch, and that counts whoever posts it
-  (spec §8, signed approvals). Enroll or rotate a key with a PR to that file that you approve on
-  GitHub.
+  and fails); turning off auto-merge also stops a merge. A fallback
+  comment must be your own (web UI or `gh` with your own token): an unsigned comment that an
+  agent session writes through the Claude app does not count, even under your login. The signed
+  comment carries a `bosun-sig ed25519` line from a key enrolled in `.bosun/approvers.toml` on
+  the default branch, and counts whoever posts it. Enroll or rotate a key with a PR to that file
+  that you approve on GitHub. Until `[approvals] bootstrap_until` (2026-11-30) the orchestrator
+  may also sign gate approvals itself in bootstrap mode, never for the excluded paths (D-012).
 - **Delegate decisions.** A key with `role = "delegate"` lets one Claude session approve PRs whose
   risk rules are all `approval = "delegate"`, with one clean review verdict on the head, while
   bosun is not halted. Critical changes (`.bosun/`, `governance/`, CODEOWNERS, every workflow,

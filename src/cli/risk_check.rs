@@ -338,7 +338,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         format!("fill {OWNERS_PATH} on the base branch, then an owner must approve head {head}")
     } else {
         format!(
-            "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review (then comment `/bosun recheck` (or re-run the risk workflow)), or the PR comment `/bosun approve {head}`"
+            "an owner in {OWNERS_PATH} must approve head {head}: the session asks the owner with a form in the Claude Code chat and the orchestrator posts the signed comment (`bosun approve {n}@{head} --sign-key <pem>`); fallback: an owner's GitHub review (then comment `/bosun recheck` (or re-run the risk workflow)), or the owner's own PR comment `/bosun approve {head}`"
         )
     };
     // A bootstrap-mode signature that does not count says why (D-012).

@@ -40,7 +40,10 @@ High-risk PRs:
 - Owners: with one owner, nothing that needs an owner merges while that owner is away (fail
   closed, by design); list at least two owners, or a team once §16 (B4) is built.
 - A high PR needs an approval on the head SHA by a user in `governance/owners.toml`, and
-  CODEOWNERS. Either counts: a GitHub review that approves the head SHA (the owner's newest
+  CODEOWNERS. The default way (D-012): the session asks the owner with a form in the Claude Code
+  chat (repo, PR, head SHA; approve or hold), and on approve the orchestrator posts the signed
+  `bosun approve` comment (signed approvals, below). The owner's own review or comment is the
+  fallback. Either counts: a GitHub review that approves the head SHA (the owner's newest
   approve, request-changes or dismissed review on that SHA; read on the next run, as no review
   event runs the `risk` workflow: a push, a `/bosun recheck` comment or a re-run), or a PR comment by the owner whose
   body, trimmed, is exactly `/bosun approve <head_sha>` with the full 40-character SHA. The
@@ -74,7 +77,7 @@ High-risk PRs:
   turning off auto-merge also stops a merge. `tests/cli_risk.rs` pins that the next run fails.
 - Signed approvals let the owner approve from a Claude chat, whose GitHub writes the cloud
   proxy re-attributes to the Claude app. The orchestrator session holds an ed25519 private key
-  in its own container (never shared) and, on the owner's chat message, posts a PR comment whose
+  in its own container (never shared) and, on the owner's answer to the chat form, posts a PR comment whose
   first line, trimmed, is `/bosun approve <head_sha>` and of which some later line, trimmed, is
   exactly `bosun-sig ed25519 <key id> <base64 64-byte signature>` (single spaces). Any author
   and any app attribution count, and edits do not matter: the signature is the proof. Other
@@ -173,7 +176,9 @@ High-risk PRs:
   bootstrap signature counts for nothing, and the error message and fix start with `a
   bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
   Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` does not set
-  `bootstrap_until`: other repos opt in by adding it themselves.
+  `bootstrap_until` yet: a consumer's gates run its pinned bosun, which rejects unknown keys, so
+  the channel renders it only for a `bosun_version` that reads it (with a channel test), in the
+  pin PR of that release.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate
