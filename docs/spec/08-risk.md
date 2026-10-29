@@ -162,10 +162,10 @@ High-risk PRs:
   (`BOSUN_NOW`, UTC) is on or before `bootstrap_until` read at the base SHA; the PR's
   requirement is `owner`; and the PR touches no path of `BOOTSTRAP_EXCLUDED` in
   `src/core/risk.rs`: `.bosun/**` (`.bosun/version` pins the gate release),
-  `governance/**`, the `CODEOWNERS` files, the root `hoist.toml`, the code of the check and of
-  signature verification (`src/config.rs`, `src/time.rs`, `src/cli/risk_check.rs`,
-  `src/cli/approve.rs`, `src/core/approve.rs`, `src/core/risk.rs`, `src/core/risk_default.toml`,
-  `src/core/glob.rs`, `src/github/b64.rs`), `Cargo.toml`, `Cargo.lock`, the channel's
+  `governance/**`, the `CODEOWNERS` files, the root `hoist.toml`, in bosun (its base has
+  `src/cli/risk_check.rs`) every `APPROVAL_CODE_PATHS` entry (`src/**`, `Cargo.toml`,
+  `Cargo.lock`, `build.rs` in any directory, `.cargo/**`, `npm/**`: the code of the check and of
+  signature verification, derived from the same list so the two never drift), the channel's
   `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow
   (root and channel copies), nor a `.github/workflows/**` file whose diff adds or removes a line
   naming `environment:` (or is not shown), nor matches R-secrets. The list is separate from

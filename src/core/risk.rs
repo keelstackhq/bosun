@@ -296,11 +296,11 @@ pub const APPROVAL_CODE_PATHS: [&str; 7] = [
     "npm/**",
 ];
 
-/// What a bootstrap-mode approval (D-012) never covers: the setting, the code that checks it and
-/// verifies signatures, governance, the risk rules, the required checks and the jobs with an
-/// environment. Apart from [`CRITICAL_PATHS`], so the window is never widened or reopened from
-/// inside it.
-pub const BOOTSTRAP_EXCLUDED: [&str; 22] = [
+/// What a bootstrap-mode approval (D-012) never covers: the setting, governance, the risk rules,
+/// the required checks and the jobs with an environment; in bosun also every
+/// [`APPROVAL_CODE_PATHS`] entry (the code that checks it and verifies signatures). Apart from
+/// [`CRITICAL_PATHS`], so the window is never widened or reopened from inside it.
+pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
     // `.bosun/version` pins the gate release that runs the check.
     ".bosun/**",
     "governance/**",
@@ -308,17 +308,6 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 22] = [
     ".github/CODEOWNERS",
     "docs/CODEOWNERS",
     "hoist.toml",
-    "src/config.rs",
-    "src/time.rs",
-    "src/cli/risk_check.rs",
-    "src/cli/approve.rs",
-    "src/core/approve.rs",
-    "src/core/risk.rs",
-    "src/core/risk_default.toml",
-    "src/core/glob.rs",
-    "src/github/b64.rs",
-    "Cargo.toml",
-    "Cargo.lock",
     "channel/pieces/core/files/.bosun/**",
     ".github/workflows/release.yml",
     "**/workflows/splice.yml",
@@ -329,12 +318,18 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 22] = [
 
 /// Why a bootstrap-mode approval cannot count: the excluded paths among `(path, previous path,
 /// patch)` (a rename counts on both sides), a workflow whose diff names `environment:` or is not
-/// shown, and an R-secrets match. Empty: it can count.
+/// shown, and an R-secrets match. `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: it can count.
 pub fn bootstrap_excluded(
     files: &[(&str, Option<&str>, Option<&str>)],
     matches: &[Match],
+    bosun_code: bool,
 ) -> Vec<String> {
-    let globs: Vec<Glob> = (BOOTSTRAP_EXCLUDED.iter())
+    let code: &[&str] = if bosun_code {
+        &APPROVAL_CODE_PATHS
+    } else {
+        &[]
+    };
+    let globs: Vec<Glob> = (BOOTSTRAP_EXCLUDED.iter().chain(code))
         .map(|g| Glob::parse(g).expect("built-in bootstrap glob"))
         .collect();
     let environment = |patch: Option<&str>| {
@@ -665,6 +660,23 @@ pub fn comment_approves(body: &str, head: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_excludes_every_approval_code_path_in_bosun_only() {
+        for g in APPROVAL_CODE_PATHS {
+            let path = g.replace("**", "x/y");
+            let f = [(path.as_str(), None, Some("@@\n+x"))];
+            assert_eq!(
+                bootstrap_excluded(&f, &[], true),
+                std::slice::from_ref(&path),
+                "{g}"
+            );
+            assert!(
+                bootstrap_excluded(&f, &[], false).is_empty(),
+                "{g} in a consumer repo"
+            );
+        }
+    }
 
     fn file(path: &str, added: &[&str]) -> ChangedFile {
         ChangedFile {

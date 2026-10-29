@@ -221,7 +221,8 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     let signed_ok = trust.is_empty() && !unseen;
     let requirement = requirement(&matches);
     let bootstrap = if high && signed_ok {
-        let excluded = bootstrap_excluded(&pr_files, &matches);
+        let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
+        let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         bootstrap_window(gh, base, app.ctx.now, requirement, &excluded)?
     } else {
         Err("signed approvals do not count on this PR".into())
@@ -893,7 +894,7 @@ fn bootstrap_window(
 }
 
 /// The paths and rules of the PR that a bootstrap-mode approval never covers.
-fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match]) -> Vec<String> {
+fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match], bosun_code: bool) -> Vec<String> {
     let f: Vec<_> = (files.iter())
         .map(|f| {
             (
@@ -903,7 +904,7 @@ fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match]) -> Vec<String> 
             )
         })
         .collect();
-    risk::bootstrap_excluded(&f, matches)
+    risk::bootstrap_excluded(&f, matches, bosun_code)
 }
 
 /// Whether a comment on the PR has a bootstrap-mode signature line for `head`, valid or not.
