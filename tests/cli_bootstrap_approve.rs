@@ -218,6 +218,11 @@ fn excluded_paths_always_need_the_owner() {
         ("hoist.toml", PLAIN),
         ("src/cli/risk_check.rs", PLAIN),
         ("src/core/approve.rs", PLAIN),
+        ("src/ctx.rs", PLAIN),
+        ("src/github/mod.rs", PLAIN),
+        ("build.rs", PLAIN),
+        (".cargo/config.toml", PLAIN),
+        ("npm/bosun/install.js", PLAIN),
         (".github/workflows/release.yml", PLAIN),
         (".bosun/version", PLAIN),
         ("Cargo.lock", PLAIN),
@@ -235,6 +240,8 @@ fn excluded_paths_always_need_the_owner() {
     ] {
         let k = key();
         let fake = pr(&k, file, patch, Some(CONFIG));
+        // The base is bosun: its approval code (`APPROVAL_CODE_PATHS`) is excluded too.
+        fake.content("src/cli/risk_check.rs", BASE, "// risk-check");
         post(&fake, &bootstrap_body(&k));
         let (code, v) = check(&fake, IN);
         assert_eq!(code, 5, "{file}: {v}");
