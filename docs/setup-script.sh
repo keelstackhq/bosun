@@ -22,9 +22,9 @@ BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+
 BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION=0.3.0
-BOSUN_SHA512=Yq2HuQvfkGUDz+iHWsK2PvRxhQzOZQV6by5PmAcqPfT8TURc67FpTyOw4zLUM5GOsg8vHruZol1GurCZzepk4A==
-BOSUN_LINUX_X64_SHA512=maGN5YlNG4daWMPx6AkJc2rTzV8vlRQ3hlNUVUoN0pL350FaBpbBtg1bTY8FFINtzv8OVe17Kf+XGd4LeNXwdQ==
-BOSUN_LINUX_ARM64_SHA512=0tm83YUOhYjCh6brvB/sxIqOIznTtxF3U3+oHFIxDXPzoNUPZ7RWbZ4kor0Xzcdy/OhA6crtOJFz1lgsMZHxiw==
+BOSUN_SHA512=9qaNf4PstfjZ92uMdChV9gY62Rb+wlCANRrcoBsN96MfGTf5g+gA+NdVXlngFlOVDynJZd7/rjW1hHyFoE1eYw==
+BOSUN_LINUX_X64_SHA512=a+LmXD+fvpcXosaUm0bOnjCqZ4cy0DziAQRtI/havMH/nXNbpzXZPdn5c4yg59f/ff/qKA+6dwSItiUftJA/lg==
+BOSUN_LINUX_ARM64_SHA512=/aQa03VNgR8k1mYoscze8nW62MNuMFJW28ZXwR6ubkpEJRBR5MeUuEU5dNPVsWH/D3AvHIgdiU4GA5dI9Rcqvg==
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
 # Without one the script warns and skips Rust. `bash docs/setup-script.sh --rust-version` prints the version
