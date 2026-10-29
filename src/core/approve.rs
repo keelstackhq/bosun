@@ -260,30 +260,40 @@ pub fn signed_message(role: Role, owner: &str, repo: &str, pr: u64, head: &str) 
     )
 }
 
-/// The review id a v2 comment names, from the first line `/bosun approve <head> after-review <id>`:
-/// plain decimal digits without a leading zero, else `None` (fail closed).
-fn after_review(first: &str, head: &str) -> Option<u64> {
-    let id = first
-        .strip_prefix(&format!("/bosun approve {head} after-review "))?
-        .trim_end();
-    let n: u64 = id.parse().ok()?;
-    (n.to_string() == id).then_some(n)
+/// What a signed approval comment's first line says it is; each form signs its own message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// `/bosun approve <head>`.
+    V1,
+    /// `/bosun approve <head> after-review <id>`: bound to a dismissed owner review.
+    V2(u64),
+    /// `/bosun approve <head> bootstrap`: an owner key in bootstrap mode (D-012).
+    Bootstrap,
 }
 
-/// The `(review id, key id, base64 signature)` of each `bosun-sig ed25519 <id> <sig>` line of a
-/// comment whose first line is `/bosun approve <head>` (review id `None`: a v1 signature) or
-/// `/bosun approve <head> after-review <id>` (a v2 signature); empty for any other comment.
-pub fn signature_lines<'a>(body: &'a str, head: &str) -> Vec<(Option<u64>, &'a str, &'a str)> {
+/// The form of a comment's first line for `head`: a v2 review id is plain decimal digits without
+/// a leading zero, else `None` (fail closed).
+fn form(first: &str, head: &str) -> Option<Form> {
+    let rest = first.strip_prefix(&format!("/bosun approve {head}"))?;
+    match rest {
+        "" => return Some(Form::V1),
+        " bootstrap" => return Some(Form::Bootstrap),
+        _ => {}
+    }
+    let id = rest.strip_prefix(" after-review ")?;
+    let n: u64 = id.parse().ok()?;
+    (n.to_string() == id).then_some(Form::V2(n))
+}
+
+/// The `(form, key id, base64 signature)` of each `bosun-sig ed25519 <id> <sig>` line of a
+/// comment whose first line has a `Form`; empty for any other comment.
+pub fn signature_lines<'a>(body: &'a str, head: &str) -> Vec<(Form, &'a str, &'a str)> {
     let mut lines = body.lines();
     let first = lines.next().unwrap_or_default().trim();
     if head.len() != 40 {
         return Vec::new();
     }
-    let review = if first == format!("/bosun approve {head}") {
-        None
-    } else if let Some(n) = after_review(first, head) {
-        Some(n)
-    } else {
+    let Some(form) = form(first, head) else {
         return Vec::new();
     };
     lines
@@ -291,7 +301,7 @@ pub fn signature_lines<'a>(body: &'a str, head: &str) -> Vec<(Option<u64>, &'a s
             let parts: Vec<&str> = l.trim().split(' ').collect();
             match parts.as_slice() {
                 ["bosun-sig", "ed25519", id, sig] if !id.is_empty() && !sig.is_empty() => {
-                    Some((review, *id, *sig))
+                    Some((form, *id, *sig))
                 }
                 _ => None,
             }
@@ -319,6 +329,18 @@ pub fn signed_message_v2(owner: &str, repo: &str, pr: u64, head: &str, review: u
     )
 }
 
+/// The bytes an owner key signs in bootstrap mode (D-012): its own prefix, so it never verifies
+/// as an owner v1 or v2 signature, nor they as it.
+pub fn signed_message_bootstrap(owner: &str, repo: &str, pr: u64, head: &str) -> String {
+    let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    format!("bosun-bootstrap v1 {o}/{r}#{pr} {head}")
+}
+
+/// The line a bootstrap-mode comment carries, for the reader; the first line is the marker.
+pub fn bootstrap_line(until: &str) -> String {
+    format!("Signed in bootstrap mode (D-012, until {until})")
+}
+
 /// Files that decide who approves: a PR that changes one (or renames one away) never passes on a
 /// signed approval, owner or delegate key, so a compromised key cannot enroll keys or owners.
 pub const TRUST_FILES: [&str; 5] = [
@@ -344,10 +366,21 @@ pub fn trust_files_changed<'a>(
         .collect()
 }
 
-/// The comment `bosun approve --sign-key` posts; `after` is the dismissed review a v2 names.
-pub fn signed_comment(head: &str, after: Option<u64>, key_id: &str, sig_b64: &str) -> String {
-    let after = after.map_or(String::new(), |r| format!(" after-review {r}"));
-    format!("/bosun approve {head}{after}\nbosun-sig ed25519 {key_id} {sig_b64}")
+/// The comment `bosun approve --sign-key` posts; `note` is a line for the reader.
+pub fn signed_comment(
+    head: &str,
+    form: Form,
+    note: Option<&str>,
+    key_id: &str,
+    sig_b64: &str,
+) -> String {
+    let tail = match form {
+        Form::V1 => String::new(),
+        Form::V2(r) => format!(" after-review {r}"),
+        Form::Bootstrap => " bootstrap".into(),
+    };
+    let note = note.map_or(String::new(), |n| format!("{n}\n"));
+    format!("/bosun approve {head}{tail}\n{note}bosun-sig ed25519 {key_id} {sig_b64}")
 }
 
 #[cfg(test)]
@@ -604,17 +637,28 @@ mod tests {
         let sig = "bosun-sig ed25519 k1 AAAA";
         let b1 = format!("/bosun approve {h}\n{sig}");
         let v1 = signature_lines(&b1, &h);
-        assert_eq!(v1, [(None, "k1", "AAAA")]);
+        assert_eq!(v1, [(Form::V1, "k1", "AAAA")]);
         let b2 = format!("/bosun approve {h} after-review 42\n{sig}");
         let v2 = signature_lines(&b2, &h);
-        assert_eq!(v2, [(Some(42), "k1", "AAAA")]);
+        assert_eq!(v2, [(Form::V2(42), "k1", "AAAA")]);
+        let b3 = format!(
+            "/bosun approve {h} bootstrap\n{}\n{sig}",
+            bootstrap_line("2026-11-30")
+        );
+        assert_eq!(signature_lines(&b3, &h), [(Form::Bootstrap, "k1", "AAAA")]);
         for bad in ["", "x", "07", "-1", "1 2", "99999999999999999999999"] {
             let body = format!("/bosun approve {h} after-review {bad}\n{sig}");
+            assert!(signature_lines(&body, &h).is_empty(), "{bad:?}");
+            let body = format!("/bosun approve {h} bootstrap {bad}x\n{sig}");
             assert!(signature_lines(&body, &h).is_empty(), "{bad:?}");
         }
         assert_eq!(
             signed_message_v2("Acme", "Widget", 3, &h, 7),
             format!("bosun-approve v2 acme/widget#3 {h} after-review 7")
+        );
+        assert_eq!(
+            signed_message_bootstrap("Acme", "Widget", 3, &h),
+            format!("bosun-bootstrap v1 acme/widget#3 {h}")
         );
     }
 }

@@ -403,6 +403,10 @@ pub struct ApproveArgs {
     /// role.
     #[arg(long = "as", value_name = "ROLE", requires = "sign_key", value_parser = ["owner", "delegate"])]
     pub role: Option<String>,
+    /// With --sign-key: sign in bootstrap mode (D-012), until `[approvals] bootstrap_until` on
+    /// the default branch; an owner key only.
+    #[arg(long, requires = "sign_key")]
+    pub bootstrap: bool,
 }
 
 #[derive(Debug, Args)]

@@ -9,9 +9,10 @@ use super::PrArg;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
 use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
+use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
-    APPROVERS_PATH, ApproverKey, Role, parse_approvers, signature_lines, signed_message,
-    signed_message_v2, trust_files_changed, verify_ed25519,
+    APPROVERS_PATH, ApproverKey, Form, Role, parse_approvers, signature_lines, signed_message,
+    signed_message_bootstrap, signed_message_v2, trust_files_changed, verify_ed25519,
 };
 use crate::core::lease::leases_of;
 use crate::core::meta::linked_issues;
@@ -219,6 +220,12 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     }
     let signed_ok = trust.is_empty() && !unseen;
     let requirement = requirement(&matches);
+    let bootstrap = if high && signed_ok {
+        let excluded = bootstrap_excluded(&pr_files, &matches);
+        bootstrap_window(gh, base, app.ctx.now, requirement, &excluded)?
+    } else {
+        Err("signed approvals do not count on this PR".into())
+    };
     let linked = linked_issues(&pull.body);
     // Without a linked task there is no lease to check the reviewers against: fail closed.
     let unlinked =
@@ -229,6 +236,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         base_ref: &pull.base_ref,
         owners: &owners,
         signed_ok,
+        bootstrap: bootstrap.is_ok(),
         requirement,
         linked: &linked,
         unlinked,
@@ -332,6 +340,14 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
             "an owner in {OWNERS_PATH} must approve head {head}: a GitHub review (then comment `/bosun recheck` (or re-run the risk workflow)), or the PR comment `/bosun approve {head}`"
         )
     };
+    // A bootstrap-mode signature that does not count says why (D-012).
+    let boot = match &bootstrap {
+        Err(why) if bootstrap_signed(gh, n, head)? => {
+            eprintln!("bosun: risk-check: a bootstrap-mode approval does not count: {why}");
+            format!("a bootstrap-mode approval (D-012) does not count: {why}; ")
+        }
+        _ => String::new(),
+    };
     let fix = if unlinked {
         format!(
             "the PR links no task (`Closes #N`), so verdicts cannot be checked for independence: link the task, or get an owner approval: {owner_fix}"
@@ -351,10 +367,10 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     };
     Err(BosunError::needs_human(
         format!(
-            "PR #{n} is high risk ({}) and not approved on head {head}",
+            "{boot}PR #{n} is high risk ({}) and not approved on head {head}",
             ids.join(", ")
         ),
-        fix,
+        format!("{boot}{fix}"),
     )
     .with_data(data))
 }
@@ -366,6 +382,8 @@ struct Need<'a> {
     base_ref: &'a str,
     owners: &'a [String],
     signed_ok: bool,
+    /// A bootstrap-mode signature counts as the owner (D-012): see `bootstrap_window`.
+    bootstrap: bool,
     requirement: Approval,
     linked: &'a [u64],
     unlinked: bool,
@@ -402,7 +420,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         repo, pr, owners, ..
     } = *need;
     let mut found = Found {
-        approved_by: approver(gh, repo, pr, sha, owners, need.signed_ok)?,
+        approved_by: approver(gh, repo, pr, sha, owners, need.signed_ok, need.bootstrap)?,
         ..Found::default()
     };
     let open = found.approved_by.is_none() && !need.unlinked;
@@ -426,7 +444,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
                 &excluded,
             );
             if !found.delegate_verdicts.is_empty() && !owners_withdrawn(gh, pr, sha, owners)? {
-                let v1 = |after: Option<u64>| after.is_none();
+                let v1 = |f: Form| f == Form::V1;
                 let key = signed_approver(gh, repo, pr, sha, &comments, Role::Delegate, &v1)?;
                 found.approved_by = key.map(|id| format!("delegate {id}"));
             }
@@ -598,6 +616,7 @@ fn approver(
     head: &str,
     owners: &[String],
     signed_ok: bool,
+    bootstrap: bool,
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let state = |o: &str| decisive_review(&reviews, o, head);
@@ -633,14 +652,23 @@ fn approver(
     if !signed_ok || owners.is_empty() || owners.iter().any(changes) {
         return Ok(None);
     }
-    let sign = |accept: &dyn Fn(Option<u64>) -> bool| {
+    let sign = |accept: &dyn Fn(Form) -> bool| {
         signed_approver(gh, repo, pr, head, &comments, Role::Owner, accept)
     };
     let ids: Vec<u64> = (owners.iter())
         .filter_map(|o| dismissed_review(&reviews, o, head))
         .collect();
+    // A bootstrap-mode signature never clears a dismissal.
     if ids.is_empty() {
-        return Ok(sign(&|_| true)?.map(|id| format!("key {id}")));
+        if let Some(id) = sign(&|f| f != Form::Bootstrap)? {
+            return Ok(Some(format!("key {id}")));
+        }
+        let boot = if bootstrap {
+            sign(&|f| f == Form::Bootstrap)?
+        } else {
+            None
+        };
+        return Ok(boot.map(|id| format!("key {id} (bootstrap mode, D-012)")));
     }
     let mut by = None;
     for id in ids {
@@ -651,7 +679,7 @@ fn approver(
         if id == 0 || seen.and_then(|t| parse_rfc3339(&t)).is_none() {
             return Ok(None);
         }
-        let Some(key) = sign(&|after| after == Some(id))? else {
+        let Some(key) = sign(&|f| f == Form::V2(id))? else {
             return Ok(None);
         };
         by.get_or_insert(key);
@@ -757,7 +785,7 @@ pub fn verdict_inputs(gh: &dyn Github, n: u64, ls: &[u64]) -> Result<(Vec<Commen
 }
 
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
-/// approvals); `accept` takes the review a v2 names (`None`: v1). Only an owner key signs v2.
+/// approvals); `accept` takes the comment's form. Only an owner key signs v2 and bootstrap.
 /// The keys come from the default branch only, so a PR cannot enroll its own. Any author and app
 /// count: the signature is the proof. A missing or malformed key file, an unknown key or a bad
 /// signature is no approval, logged to stderr, never an error.
@@ -768,14 +796,14 @@ fn signed_approver(
     head: &str,
     comments: &[Comment],
     role: Role,
-    accept: &dyn Fn(Option<u64>) -> bool,
+    accept: &dyn Fn(Form) -> bool,
 ) -> Result<Option<String>> {
-    let sigs: Vec<(u64, Option<u64>, &str, &str)> = comments
+    let sigs: Vec<(u64, Form, &str, &str)> = comments
         .iter()
         .flat_map(|c| {
             signature_lines(&c.body, head)
                 .into_iter()
-                .map(move |(after, id, sig)| (c.id, after, id, sig))
+                .map(move |(form, id, sig)| (c.id, form, id, sig))
         })
         .collect();
     if sigs.is_empty() {
@@ -788,15 +816,15 @@ fn signed_approver(
             return Ok(None);
         }
     };
-    for (comment, after, id, sig) in sigs {
-        let msg = match after {
-            None => signed_message(role, &repo.owner, &repo.name, pr, head),
-            Some(r) if role == Role::Owner => {
-                signed_message_v2(&repo.owner, &repo.name, pr, head, r)
-            }
-            Some(_) => continue,
+    let (o, r) = (&repo.owner, &repo.name);
+    for (comment, form, id, sig) in sigs {
+        let msg = match (form, role) {
+            (Form::V1, _) => signed_message(role, o, r, pr, head),
+            (Form::V2(v), Role::Owner) => signed_message_v2(o, r, pr, head, v),
+            (Form::Bootstrap, Role::Owner) => signed_message_bootstrap(o, r, pr, head),
+            _ => continue,
         };
-        if !accept(after) {
+        if !accept(form) {
             continue;
         }
         let Some(key) = keys.iter().find(|k| k.id == id) else {
@@ -822,6 +850,67 @@ fn signed_approver(
         );
     }
     Ok(None)
+}
+
+/// The last day of bootstrap mode (D-012) when a bootstrap-mode approval can count on this PR,
+/// else why not: `[approvals] bootstrap_until` at base, read like the rules, is set and valid
+/// and today (UTC, from `BOSUN_NOW`) is not after it, the class is owner and `excluded` is empty.
+fn bootstrap_window(
+    gh: &dyn Github,
+    base: &str,
+    now: Timestamp,
+    requirement: Approval,
+    excluded: &[String],
+) -> Result<std::result::Result<String, String>> {
+    let config = gh
+        .file_at(CONFIG_FILE, base)?
+        .map(|t| Config::parse(&t, CONFIG_FILE));
+    let until = match config {
+        Some(Err(e)) => return Ok(Err(format!("bootstrap mode is off: {}", e.message))),
+        Some(Ok(c)) => c.approvals.bootstrap_until,
+        None => None,
+    };
+    let Some(until) = until else {
+        return Ok(Err(format!(
+            "bootstrap mode is off: `[approvals] bootstrap_until` is not set in {CONFIG_FILE} at base"
+        )));
+    };
+    Ok(if now.to_string()[..10] > *until {
+        Err(format!("bootstrap mode ended on {until}"))
+    } else if requirement != Approval::Owner {
+        Err(format!(
+            "the PR needs {}, not the owner class (bootstrap mode until {until})",
+            requirement.name()
+        ))
+    } else if !excluded.is_empty() {
+        Err(format!(
+            "the PR touches {}, which always needs the owner (bootstrap mode until {until})",
+            excluded.join(", ")
+        ))
+    } else {
+        Ok(until)
+    })
+}
+
+/// The paths and rules of the PR that a bootstrap-mode approval never covers.
+fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match]) -> Vec<String> {
+    let f: Vec<_> = (files.iter())
+        .map(|f| {
+            (
+                &*f.filename,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            )
+        })
+        .collect();
+    risk::bootstrap_excluded(&f, matches)
+}
+
+/// Whether a comment on the PR has a bootstrap-mode signature line for `head`, valid or not.
+fn bootstrap_signed(gh: &dyn Github, pr: u64, head: &str) -> Result<bool> {
+    let comments = gh.list_comments(pr)?;
+    Ok((comments.iter())
+        .any(|c| (signature_lines(&c.body, head).iter()).any(|(f, ..)| *f == Form::Bootstrap)))
 }
 
 /// The keys of `.bosun/approvers.toml` on the default branch, read at `refs/heads/<branch>` so

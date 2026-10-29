@@ -19,6 +19,7 @@ pub struct Config {
     pub review: Review,
     pub slack: Option<Slack>,
     pub prices: BTreeMap<String, Price>,
+    pub approvals: Approvals,
 }
 
 impl Default for Config {
@@ -29,6 +30,7 @@ impl Default for Config {
             review: Review::default(),
             slack: None,
             prices: BTreeMap::new(),
+            approvals: Approvals::default(),
         }
     }
 }
@@ -99,6 +101,14 @@ impl Default for Slack {
             notify: Vec::new(),
         }
     }
+}
+
+/// `[approvals]`: `bootstrap_until` (`YYYY-MM-DD`, UTC, inclusive) is the last day of bootstrap
+/// mode (D-012, spec §8); absent means bootstrap mode is off.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Approvals {
+    pub bootstrap_until: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -241,6 +251,17 @@ impl Config {
                 return Err(BosunError::error(
                     format!("{file}: review.{key} must be at least 1"),
                     format!("edit {file}: set review.{key} to a positive number, or remove it"),
+                ));
+            }
+        }
+        if let Some(d) = &c.approvals.bootstrap_until {
+            let day = crate::time::parse_rfc3339(&format!("{d}T00:00:00Z"));
+            if day.is_none_or(|t| !t.to_string().starts_with(d.as_str())) {
+                return Err(BosunError::error(
+                    format!("{file}: approvals.bootstrap_until {d:?} is not a YYYY-MM-DD date"),
+                    format!(
+                        "edit {file}: set approvals.bootstrap_until to a date like \"2026-11-30\", or remove it"
+                    ),
                 ));
             }
         }
