@@ -161,17 +161,19 @@ High-risk PRs:
   the default branch, as owner signatures do (trust files and R-unseen exclude it too); today
   (`BOSUN_NOW`, UTC) is on or before `bootstrap_until` read at the base SHA; the PR's
   requirement is `owner`; and the PR touches no path of `BOOTSTRAP_EXCLUDED` in
-  `src/core/risk.rs`: `.bosun/bosun.toml`, `.bosun/risk.toml`, `.bosun/approvers.toml`,
+  `src/core/risk.rs`: `.bosun/**` (`.bosun/version` pins the gate release),
   `governance/**`, the `CODEOWNERS` files, the root `hoist.toml`, the code of the check and of
   signature verification (`src/config.rs`, `src/time.rs`, `src/cli/risk_check.rs`,
   `src/cli/approve.rs`, `src/core/approve.rs`, `src/core/risk.rs`, `src/core/risk_default.toml`,
-  `src/core/glob.rs`, `src/github/b64.rs`), the channel's `.bosun/**`, `release.yml` and every
-  `splice.yml` workflow, nor a `.github/workflows/**` file whose diff adds or removes a line
+  `src/core/glob.rs`, `src/github/b64.rs`), `Cargo.toml`, `Cargo.lock`, the channel's
+  `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow
+  (root and channel copies), nor a `.github/workflows/**` file whose diff adds or removes a line
   naming `environment:` (or is not shown), nor matches R-secrets. The list is separate from
   `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
   bootstrap signature counts for nothing, and the error message and fix start with `a
   bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
-  Normal owner approvals are unchanged.
+  Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` does not set
+  `bootstrap_until`: other repos opt in by adding it themselves.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

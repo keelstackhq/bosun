@@ -300,10 +300,9 @@ pub const APPROVAL_CODE_PATHS: [&str; 7] = [
 /// verifies signatures, governance, the risk rules, the required checks and the jobs with an
 /// environment. Apart from [`CRITICAL_PATHS`], so the window is never widened or reopened from
 /// inside it.
-pub const BOOTSTRAP_EXCLUDED: [&str; 20] = [
-    ".bosun/bosun.toml",
-    ".bosun/risk.toml",
-    ".bosun/approvers.toml",
+pub const BOOTSTRAP_EXCLUDED: [&str; 22] = [
+    // `.bosun/version` pins the gate release that runs the check.
+    ".bosun/**",
     "governance/**",
     "CODEOWNERS",
     ".github/CODEOWNERS",
@@ -318,9 +317,14 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 20] = [
     "src/core/risk_default.toml",
     "src/core/glob.rs",
     "src/github/b64.rs",
+    "Cargo.toml",
+    "Cargo.lock",
     "channel/pieces/core/files/.bosun/**",
     ".github/workflows/release.yml",
     "**/workflows/splice.yml",
+    // They run the approval check (root and channel copies).
+    "**/workflows/risk.yml",
+    "**/workflows/verdict.yml",
 ];
 
 /// Why a bootstrap-mode approval cannot count: the excluded paths among `(path, previous path,

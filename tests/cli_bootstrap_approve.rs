@@ -219,6 +219,14 @@ fn excluded_paths_always_need_the_owner() {
         ("src/cli/risk_check.rs", PLAIN),
         ("src/core/approve.rs", PLAIN),
         (".github/workflows/release.yml", PLAIN),
+        (".bosun/version", PLAIN),
+        ("Cargo.lock", PLAIN),
+        ("Cargo.toml", PLAIN),
+        (".github/workflows/risk.yml", PLAIN),
+        (
+            "channel/pieces/core/files/.github/workflows/verdict.yml",
+            PLAIN,
+        ),
         (
             ".github/workflows/ci.yml",
             "@@ -1,1 +1,1 @@\n-    environment: release\n+x",
