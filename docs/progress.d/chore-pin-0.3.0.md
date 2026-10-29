@@ -1,0 +1,1 @@
+- 2026-10-29 · Pin v0.3.0 · `.bosun/version` and `docs/setup-script.sh` (version and its three sha512) move to the published 0.3.0; bootstrap mode on (D-012): `bootstrap_until = "2026-11-30"` in `.bosun/bosun.toml` and in the channel while `bosun_version` is empty; 0.3.0 in `KNOWN` · PR (chore/pin-0.3.0)
