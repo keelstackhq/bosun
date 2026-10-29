@@ -66,7 +66,8 @@ by login so an owner's own halt issue is judged without the team.
 an owner:
 - GitHub reviews: a member's APPROVED review of the head approves; a member's CHANGES_REQUESTED
   or DISMISSED review withdraws (§8), so any member can block.
-- `/bosun approve <head>` comments: by a member, with the same tests (unedited, plain user
+- `/bosun approve <head>` comments (the fallback; the default is the chat form and the
+  orchestrator's signed comment, D-012): by a member, with the same tests (unedited, plain user
   token, exact text).
 - Signed approvals: keys stand for the owners; "no owners at base" means no listed user and no
   readable member.

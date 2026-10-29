@@ -4,7 +4,7 @@ use common::fake::FakeGithub;
 use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
-const HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
+const HINT: &str = "ask the owner with a form in the Claude Code chat (repo, PR, head; approve or hold); on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 const OWNER_TOKEN: &str = "canary-owner-token-7f3a";
 const WAITING: &str = "high risk, owner approval needed: R-gov, R-ci";
@@ -599,7 +599,11 @@ fn a_claude_cloud_session_cannot_post_an_approval() {
             let (code, v) = finish(approve_cmd(&fake).env(var, val).args(args));
             assert_eq!(code, 5, "{var}={val} {args:?} {v}");
             assert!(v["error"]["message"].as_str().unwrap().contains("cloud"));
-            assert!(v["error"]["fix"].as_str().unwrap().contains("own machine"));
+            let fix = v["error"]["fix"].as_str().unwrap();
+            assert!(
+                fix.contains("own machine") && fix.contains("form in the Claude Code chat"),
+                "{fix}"
+            );
         }
         assert!(fake.requests().is_empty(), "{var}={val}: no request at all");
     }

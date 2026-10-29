@@ -185,7 +185,9 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     let body = posts[0].body.as_deref().unwrap_or("");
     assert!(body.contains(r#""base":"main""#), "{body}");
     assert!(
-        body.contains("R-gov") && body.contains("hoist apply"),
+        body.contains("R-gov")
+            && body.contains("hoist apply")
+            && body.contains("form in the Claude Code chat"),
         "{body}"
     );
 }

@@ -57,6 +57,11 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   orchestrator runs `bosun prereqs <plan> --post` and relays `data.message` to the owner once.
 - Never wait mid-run for a human: run `bosun hold <issue> "<step>"` and take other work. Never
   tick, edit or close the owner checklist issue (`bosun:prereqs`).
+- Owner approvals (D-012): the session asks the owner with a form in the Claude Code chat
+  (`AskUserQuestion`: repo, PR, head SHA; approve or hold); a child session sends the request to
+  the orchestrator. On approve the orchestrator posts the signed `bosun approve` comment for that
+  head (`bosun approve <pr>@<head> --sign-key <pem>`). Never ask the owner to write a GitHub
+  comment; their own `/bosun approve <sha>` comment is only a fallback.
 - Orchestrators relay approvals in batches: `bosun approve --list` gives `data.message`; keep its
   `data.message_pairs`, only the latest message is answerable, numbers come only from the owner.
 - bosun's own rules and their reasons: https://github.com/keelstackhq/bosun/blob/main/docs/spec.md.

@@ -13,3 +13,8 @@ profile = "ts-pnpm"
 [review]
 # "subagent" (mode a): a fresh subagent reviews each PR (spec §7).
 mode = "subagent"
+
+[approvals]
+# Bootstrap mode (D-012, spec §8): until this day (UTC, inclusive) an owner key's
+# `--bootstrap` signature counts as the owner on owner-class PRs outside the excluded paths.
+bootstrap_until = "2026-11-30"

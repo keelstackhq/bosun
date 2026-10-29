@@ -1,5 +1,7 @@
-//! `bosun approve`: the owner, in the owner's own Claude Code session, lists the PRs that wait
-//! for an owner and approves them with the comment `/bosun approve <head>` (spec section 8).
+//! `bosun approve`: lists the PRs that wait for an owner. The default approval (D-012): the
+//! session asks the owner with a form in the Claude Code chat and the orchestrator posts the
+//! signed comment (`--sign-key`). The fallback: the owner, on their own machine, posts the
+//! comment `/bosun approve <head>` (spec section 8).
 //! Every GitHub call uses `BOSUN_OWNER_TOKEN`, never `GITHUB_TOKEN`: the comment must come from
 //! a plain user token, which agent sessions do not have. The owner names the head sha of each
 //! PR (`<pr>@<sha>`, from `--list`), so a push after the listing is never approved unseen.
@@ -68,12 +70,12 @@ fn withdrawn(gh: &dyn Github, p: &Pull) -> Result<Option<(&'static str, bool)>> 
 }
 
 /// What to do instead in a Claude cloud session.
-const CLOUD_FIX: &str = "run `bosun approve` on your own machine, or comment `/bosun approve <sha>` in the GitHub web or mobile app";
+const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs `bosun approve` on their own machine, or comments `/bosun approve <sha>` in the GitHub web or mobile app";
 
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "approve only by running data.approve_command (bosun approve) or in the GitHub UI; a /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
+const LIST_HINT: &str = "ask the owner with a form in the Claude Code chat (repo, PR, head; approve or hold); on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 struct Board {
     ready: Vec<Ready>,

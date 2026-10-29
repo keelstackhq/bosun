@@ -78,7 +78,15 @@ fn pr_that_weakens_the_rules_is_judged_by_the_base_rules() {
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["level"], "high");
     assert_eq!(rule_ids(&v), ["R-gov"]);
-    assert!(v["error"]["fix"].as_str().unwrap().contains(HEAD));
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains(HEAD) && fix.contains("form in the Claude Code chat"),
+        "{fix}"
+    );
+    assert!(
+        fix.contains("--sign-key") && fix.contains("fallback"),
+        "{fix}"
+    );
     assert_eq!(last_status(&fake)["state"], "failure");
     assert!(
         last_status(&fake)["description"]

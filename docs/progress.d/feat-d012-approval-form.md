@@ -1,0 +1,1 @@
+- 2026-10-29 · D-012 approval form · README, AGENTS.md and the channel agents section, PROGRESS Blocked 9, spec §8/§16, init owner steps, risk-check `owner_fix`, approve `CLOUD_FIX`/`LIST_HINT` name the chat form and the signed comment, the owner comment as fallback; channel `bosun.toml.jinja` sets `bootstrap_until` · PR (feat/d012-approval-form)
