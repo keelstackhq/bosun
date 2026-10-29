@@ -1,1 +1,0 @@
-- 2026-10-29 · D-012 bootstrap approvals · `[approvals] bootstrap_until = "2026-11-30"`, `bosun approve --bootstrap` (`bosun-bootstrap v1` signatures), risk-check accepts them inside the window on owner-class PRs outside `BOOTSTRAP_EXCLUDED`; spec §8 · `tests/cli_bootstrap_approve.rs` 6/6 · PR (feat/d012-bootstrap-approvals)

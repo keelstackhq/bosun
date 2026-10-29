@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P1b · invalid touch globs are plan errors; the overlap scan stops early · PR (feat/plan-touch-strict)

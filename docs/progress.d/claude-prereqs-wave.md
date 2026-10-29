@@ -1,1 +1,0 @@
-- 2026-10-27 · Q3a · wave plan leaves out tasks held by owner steps · PR (claude/prereqs-wave)

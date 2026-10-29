@@ -1,1 +1,0 @@
-- Risk: R-secrets also covers sops files (`secrets.toml`, `access.toml`, `.sops.yaml`, `*.sops.yaml|json`) and age keys in added lines; `.circleci/**` is R-ci and in the critical floor.

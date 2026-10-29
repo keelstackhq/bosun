@@ -1,1 +1,0 @@
-- `bosun plan check` now fails on a touch glob with braces, classes, escapes or `..`, and its overlap warnings stop counting at 1000 pairs ("at least N more").

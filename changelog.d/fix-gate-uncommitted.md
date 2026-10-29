@@ -1,1 +1,0 @@
-- `bosun gate` and `test-integrity` also see staged, unstaged and untracked changes: they select the gate, and `data.uncommitted` lists them.

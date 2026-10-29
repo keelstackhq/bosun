@@ -1,1 +1,0 @@
-- Hooks: the decrypt-lock refuses a recursive grep, rg or ag whose root holds the age key (.config and ancestors, any pattern), any search under .config/sops, and bun reading the environment.

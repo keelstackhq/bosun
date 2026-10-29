@@ -1,1 +1,0 @@
-- docs: spec 08 notes that the default workflow token should be read-only, and links #298 (bind verdict records to the verdict run).

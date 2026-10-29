@@ -1,1 +1,0 @@
-- feat(hooks): the PreToolUse hook refuses agents' GitHub writes that name the owner checklist marker `bosun:prereq` (best effort, design F4).

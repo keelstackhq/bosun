@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P8 · main-health: a queued task whose PR became conflicting gets a `conflict` record and a PR comment, state unchanged · PR (feat/main-health-dirty)

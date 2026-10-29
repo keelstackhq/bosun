@@ -1,1 +1,0 @@
-- 2026-10-27 · BO-1b decrypt-lock · PreToolUse refuses sops/age decryption, hoist secrets writes, the age key dir and SOPS_AGE_KEY prints · PR (feat/decrypt-lock)

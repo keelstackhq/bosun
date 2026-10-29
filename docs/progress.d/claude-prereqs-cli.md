@@ -1,1 +1,0 @@
-- 2026-10-27 · Q2a · bosun prereqs: verify, setup items, approvals, the chat message · PR (claude/prereqs-cli)

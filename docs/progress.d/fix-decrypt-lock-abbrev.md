@@ -1,1 +1,0 @@
-- 2026-10-27 · decrypt-lock abbreviations · ugrep --view and ack/ugrep pagers judged as commands on a file, shell pagers refused; long-option prefixes of git grep --no-index, grep -r/-R/-d recurse and ag --hidden/-u counted; sibling-repo over-denial listed · PR (fix/decrypt-lock-abbrev)

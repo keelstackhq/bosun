@@ -1,1 +1,0 @@
-- 2026-10-27 · P9b2 · carry-over gather: read the chain, trees and file lists by sha and apply the pure rule · PR (feat/carry-over-gather)

@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P1 · core::touch (companions, overlap, hotspots) and plan-check warnings · PR (feat/plan-overlap)

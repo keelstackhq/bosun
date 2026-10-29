@@ -1,1 +1,0 @@
-- docs: design and plan for front-loaded human prerequisites (D-009), and the `## Prerequisites` format in `docs/prerequisites.md`.

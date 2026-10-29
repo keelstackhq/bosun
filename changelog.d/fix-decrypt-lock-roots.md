@@ -1,1 +1,0 @@
-- Hooks: the decrypt-lock judges egrep, fgrep, rgrep, zgrep, ugrep, ug, pcregrep, ack and git grep --no-index (with -C) by root too, judges the option values of ack and ugrep as commands, refuses .. chains and ~user homes, and resolves dir/.. before matching.

@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P5 · planning guidance: cut tasks by file ownership, new tests in new files, regenerate lockfiles · PR (docs/conflict-guidance)

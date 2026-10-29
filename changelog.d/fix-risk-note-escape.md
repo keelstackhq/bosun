@@ -1,1 +1,0 @@
-- risk-check quotes file names in the Risk note and replaces backticks, angle brackets and control characters, so a file name cannot end the note.

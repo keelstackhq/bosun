@@ -1,1 +1,0 @@
-- `bosun claim` refuses (exit 5) a task that an open owner-checklist item blocks and `bosun spawn` refuses an epic blocked as a whole; ids, blocks and verify kinds come from the plan on the default branch, the checklist issue only gives ticks, and anything unreadable or ambiguous fails closed.

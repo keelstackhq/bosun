@@ -1,1 +1,0 @@
-- 2026-10-28 · Fix · risk.yml drops the `pull_request_review` trigger (it ran the PR's copy with a write token) and runs on `/bosun recheck`; a GitHub review counts on the next run; no workflow of bosun or the channel runs on a review event · `tests/workflows.rs`, `tests/channel.rs`, `tests/cli_risk.rs` · PR (fix/risk-no-review-event)

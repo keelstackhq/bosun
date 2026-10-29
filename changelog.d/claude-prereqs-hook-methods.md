@@ -1,1 +1,0 @@
-- The markers-lock hook treats a `gh api` or `curl` call with several method flags (`-X GET --method PATCH`, `-XGET -XPATCH`) as a write when any of them is a write method; the `gh api graphql -F query=@file` gap is listed with the known bypasses.

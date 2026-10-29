@@ -1,1 +1,0 @@
-- `risk-check`: the carry-over reader gathers the facts by sha from GitHub (commits, trees, compares) and hands them to the pure rule; any doubt refuses.

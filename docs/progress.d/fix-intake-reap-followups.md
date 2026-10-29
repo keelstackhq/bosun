@@ -1,1 +1,0 @@
-- 2026-10-27 · Canary G3/G9 follow-ups · intake skips a merge commit GitHub answers 422 for; reap sees hand-made open tasks of the item; test that a closed-completed epic without the merged label reopens · PR (fix/intake-reap-followups)

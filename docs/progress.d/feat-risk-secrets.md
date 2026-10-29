@@ -1,1 +1,0 @@
-- 2026-10-27 · BO-1a secrets risk rules · R-secrets covers sops files and age keys, `.circleci/**` in R-ci and the critical floor · PR (feat/risk-secrets)

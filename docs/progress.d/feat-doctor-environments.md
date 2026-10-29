@@ -1,1 +1,0 @@
-- 2026-10-28 · Doctor environments · `bosun doctor --remote` warns in step 5 unless each workflow job environment (`release`, `release-pr`, `review`, `splice-bot` here) lets only `main` deploy; `data.environments` · `tests/cli_doctor.rs` · PR (feat/doctor-environments)

@@ -1,1 +1,0 @@
-- 2026-10-27 · Q0 · design, plan and format reference for front-loaded prerequisites · PR (claude/prereqs-docs)

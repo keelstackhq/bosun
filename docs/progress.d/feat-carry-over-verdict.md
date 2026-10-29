@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P9b3 · risk-check carries review-verdict over a clean merge of main (rule 5) · PR (feat/carry-over-verdict)

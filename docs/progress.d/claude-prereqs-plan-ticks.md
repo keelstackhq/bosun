@@ -1,1 +1,0 @@
-- 2026-10-27 Front-loaded prerequisites: plan tasks Q0–Q4 ticked (Q5 in other repos stays open).

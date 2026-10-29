@@ -1,1 +1,0 @@
-- `bosun claim <issue> --touch <glob>` on a task the session already holds adds the globs to its lease after the same overlap check (exit 3 on a clash) and posts a newer lease record with the union (`data.added`); a grow that loses a race restores its previous record.
