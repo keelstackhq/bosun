@@ -150,7 +150,7 @@ High-risk PRs:
   number or another repo does not verify and clears nothing.
 - Bootstrap mode (D-012). `[approvals] bootstrap_until = "YYYY-MM-DD"` in `.bosun/bosun.toml`
   is the last day (UTC, inclusive) on which the orchestrator may approve gated PRs itself, after
-  an independent reviewer approved the head; bosun's own file says `2026-11-30`. An invalid date
+  an independent reviewer approved the head; bosun's own file sets it in the pin PR of the first release that reads `[approvals]` (the gates run the pinned release, which rejects unknown keys; `tests/pinned_config.rs`). An invalid date
   is a parse error naming the key; missing means off. `bosun approve <pr>@<head> --sign-key <pem>
   --bootstrap` (an owner key only; `--as delegate` is exit 2) reads the setting on the default
   branch (off, ended or invalid: exit 1, nothing signed, the fix names D-012) and signs

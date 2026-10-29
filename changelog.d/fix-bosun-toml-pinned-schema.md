@@ -1,0 +1,1 @@
+- `.bosun/bosun.toml` drops `[approvals]` until a release that reads it is pinned: the pinned 0.2.3 rejected the key and failed every gate on main; `tests/pinned_config.rs` keeps the file to the keys the pinned release knows.

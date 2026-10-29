@@ -1,0 +1,1 @@
+- 2026-10-29 · Fix · bosun.toml keeps only keys the pinned release knows (`[approvals]` waits for its release pin); tests/pinned_config.rs · PR (fix/bosun-toml-pinned-schema)
