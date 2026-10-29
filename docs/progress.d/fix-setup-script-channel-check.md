@@ -1,1 +1,0 @@
-- 2026-10-28 · setup scripts reject a channel that is not a toolchain name · PR (fix/setup-script-channel-check)

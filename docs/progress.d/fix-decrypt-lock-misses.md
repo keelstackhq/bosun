@@ -1,1 +1,0 @@
-- 2026-10-27 · decrypt-lock misses · recursive key-fragment search of home or .config, .config/sops searches and bun env reads refused; ~/projects/x stays searchable · PR (fix/decrypt-lock-misses)

@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P0 · design and plan for parallel PRs without merge conflicts · PR (docs/parallel-conflicts-design)

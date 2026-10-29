@@ -1,1 +1,0 @@
-- `bosun pr` names the fix when auto-merge is off or the branch is not pushed, titles the PR after a conventional head commit, the review pack tells reviewers when not to `escalate_risk`, and the channel pins splice 0.2.1.

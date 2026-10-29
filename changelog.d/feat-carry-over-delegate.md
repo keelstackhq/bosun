@@ -1,1 +1,0 @@
-- `bosun risk-check` also carries a delegate approval (v1 signature plus one clean verdict) over a clean merge of main, and refuses any carry when an owner withdrew on any commit, even off the path.

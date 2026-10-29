@@ -1,1 +1,0 @@
-- Channel piece `circleci-only` (no GitHub bosun.yml; main-health on the CircleCI status of main's head only, both checks `success` with own_ci) and, without hull (`own_ci` empty), hull's CircleCI setup config and status mirror, byte-identical to copies vendored from hull 58c488b. The channel needs splice 0.3.0 (`min_splice`).

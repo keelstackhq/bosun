@@ -1,1 +1,0 @@
-- Docs: spec §14 (front-loaded human prerequisites), the plan-format pointer, and AGENTS.md rules: front-load human steps, never wait mid-run (`bosun hold`), relay approvals in batches.

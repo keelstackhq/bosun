@@ -1,1 +1,0 @@
-- `bosun claim` re-lists the active issues after setting the task `claimed`, so two ready tasks claimed at the same time with overlapping touch no longer both win; the loser is set back to `ready` (exit 3).

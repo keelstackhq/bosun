@@ -1,1 +1,0 @@
-- 2026-10-27 · decrypt-lock git root · git grep on a key root judged as no-index, vim init variables and EDITOR/VISUAL judged for ugrep views, bare ugrep --pager/--view over-denial removed · PR (fix/decrypt-lock-gitroot)

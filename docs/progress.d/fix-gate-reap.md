@@ -1,1 +1,0 @@
-- 2026-10-27 · Canary G9 · reap closes finished epics, import/amend reopen them when work returns · PR (fix/gate-reap)

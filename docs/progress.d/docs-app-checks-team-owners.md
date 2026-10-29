@@ -1,1 +1,0 @@
-- 2026-10-28 · app-checks/P0 · design and plan for App check runs (B2) · PR (docs/app-checks-team-owners)

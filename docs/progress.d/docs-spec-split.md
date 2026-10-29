@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P7 · docs/spec.md split into one file per section (pure move) · PR (docs/spec-split)

@@ -1,1 +1,0 @@
-- `bosun pr` exits 3 when the PR modifies, removes or renames files outside this session's lease touch (lockfile companions, added files and the fragments always pass); a human PR without a lease or a diff of 3000+ files skips the check.

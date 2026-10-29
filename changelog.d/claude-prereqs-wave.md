@@ -1,1 +1,0 @@
-- `bosun wave plan` leaves out ready tasks that an open owner-checklist item blocks (`data.held`; when the checklist cannot be read, every ready task of the plan, with a warning that names the fix), and `bosun spawn` refuses an epic blocked as a whole item.

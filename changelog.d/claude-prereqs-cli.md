@@ -1,1 +1,0 @@
-- `bosun prereqs <plan>... [--no-setup]`: the human steps of a plan, checked through the API (secrets, variables, environments, files) and the ticks of its checklist issue, plus the `bosun doctor` steps, the approvals at merge and a delegate key, with a short message for the owner's chat.

@@ -1,1 +1,0 @@
-- 2026-10-27 · Canary G7/G8/G12 · edit-lock accepts `<session>/<task>` leases for the session, label-lock skips read-only GitHub MCP tools and heredoc prose, `git checkout -b` rule in AGENTS.md · PR (fix/hook-locks)

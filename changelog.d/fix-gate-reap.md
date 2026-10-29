@@ -1,1 +1,0 @@
-- `bosun reap` closes epics whose tasks are all merged or closed and quiet for 10 minutes (`data.epics_closed`, best-effort with `data.epics_error`), and `plan import`/`amend` reopen such an epic when it has an open task again (`data.reopened`, `data.would_reopen`).

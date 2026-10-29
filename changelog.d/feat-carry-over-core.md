@@ -1,1 +1,0 @@
-- `core::carry`: the pure rule that decides whether an approval carries over to a head that is a clean merge of main into the approved head (not wired yet).

@@ -1,1 +1,0 @@
-- `bosun hold` ids stay unique for the life of a plan (they skip the ids the plan `replaces`), `replaces:` releases only a hold of a task its item blocks, a hold re-adds its box once if a parallel write dropped it, and `bosun prereqs` lists a plan named twice once.

@@ -1,1 +1,0 @@
-- 2026-10-27 · Q4 · spec §14, AGENTS.md and plan-format guidance for front-loaded prerequisites · PR (claude/prereqs-docs-q4)

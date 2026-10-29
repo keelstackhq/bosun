@@ -1,1 +1,0 @@
-- 2026-10-27 · parallel-conflicts/P9b5 · risk-check carries the delegate approval over a clean merge of main · PR (feat/carry-over-delegate)

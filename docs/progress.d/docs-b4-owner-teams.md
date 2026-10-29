@@ -1,1 +1,0 @@
-- 2026-10-28 · app-checks/P0 · design and plan for owner teams (B4) · PR (docs/b4-owner-teams)

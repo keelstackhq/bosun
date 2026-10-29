@@ -1,1 +1,0 @@
-- 2026-10-27 · Q3c · approve --list adds message, message_id and message_pairs for the owner chat, inert titles (F7) · PR (claude/approve-message)

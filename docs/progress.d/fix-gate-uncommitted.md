@@ -1,1 +1,0 @@
-- 2026-10-27 · Canary G6 · gates see uncommitted work instead of skipping green · PR (fix/gate-uncommitted)

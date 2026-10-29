@@ -1,1 +1,0 @@
-- `bosun prereqs` builds each plan's checklist in one reusable function (`Env::checklist`); no behaviour change.

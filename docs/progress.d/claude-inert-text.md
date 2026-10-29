@@ -1,1 +1,0 @@
-- 2026-10-27 · Q1t · core::text::inert for owner-facing text · PR (claude/inert-text)

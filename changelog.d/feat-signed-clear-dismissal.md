@@ -1,1 +1,0 @@
-- `risk-check`, `approve`: a v2 owner signature (`bosun-approve v2 ... after-review <review_id>`) bound to the current dismissed owner review clears a dismissal; `approve --sign-key` signs it on a dismissed PR; v1 signatures, delegate keys and older review ids never clear.

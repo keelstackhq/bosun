@@ -1,1 +1,0 @@
-- 2026-10-27 · decrypt-lock pathspec · git grep pathspec magic judged as the base, ../../x bases read as homes · PR (fix/decrypt-lock-pathspec)

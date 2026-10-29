@@ -1,1 +1,0 @@
-- Owner approvals by chat form (D-012): docs, agent rules, `risk-check` and `bosun approve` fixes and hints, and `bosun init` owner steps say the session asks the owner with a form in the Claude Code chat and the orchestrator posts the signed `bosun approve` comment; an owner-written `/bosun approve <sha>` comment is the fallback.

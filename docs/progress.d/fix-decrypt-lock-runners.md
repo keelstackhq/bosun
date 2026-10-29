@@ -1,1 +1,0 @@
-- 2026-10-27 · decrypt-lock runners · doas, chrt, taskset, unbuffer, watch, flock, busybox, strace, ltrace, unshare, chroot and caffeinate unwrapped before the search and env-dump checks; stdin-fed and variable roots listed as known misses · PR (fix/decrypt-lock-runners)

@@ -1,1 +1,0 @@
-- Risk: R-ci and the critical floor cover GitLab (`.gitlab-ci.yml`, `.gitlab/ci/**`), Buildkite, Jenkins (`**/jenkinsfile`, any case), Azure Pipelines, Bitbucket Pipelines, Travis and Drone config.

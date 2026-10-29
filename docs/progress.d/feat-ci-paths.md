@@ -1,1 +1,0 @@
-- 2026-10-27 · CI provider paths · R-ci and CRITICAL_PATHS gain GitLab, Buildkite, Jenkins, Azure, Bitbucket, Travis and Drone config (follow-up to #263) · PR (feat/ci-paths)

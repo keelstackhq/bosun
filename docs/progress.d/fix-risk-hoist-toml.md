@@ -1,1 +1,0 @@
-- 2026-10-28 · Risk covers hoist.toml, agent rules and the setup script · `**/hoist.toml`, `docs/setup-script.sh` and the agent-instruction files (lowercase, any case) join R-gov (built-ins, `.bosun/risk.toml`, channel risk.toml); the root `hoist.toml` joins `CRITICAL_PATHS` · PR (fix/risk-hoist-toml)
