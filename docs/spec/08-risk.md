@@ -175,9 +175,10 @@ High-risk PRs:
   `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
   bootstrap signature counts for nothing, and the error message and fix start with `a
   bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
-  Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` sets
-  `bootstrap_until = "2026-11-30"` too, so consumer repos get it with their next channel update
-  (a consumer drops the key to opt out).
+  Normal owner approvals are unchanged. The channel's `bosun.toml.jinja` does not set
+  `bootstrap_until` yet: a consumer's gates run its pinned bosun, which rejects unknown keys, so
+  the channel renders it only for a `bosun_version` that reads it (with a channel test), in the
+  pin PR of that release.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

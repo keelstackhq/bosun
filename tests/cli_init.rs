@@ -163,17 +163,9 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     assert_eq!(d["plan"], "plans/my-plan.md");
     assert_eq!(d["pieces"][0], "rust");
     assert_eq!(d["changes"][0]["path"], ".bosun/bosun.toml");
-    assert_eq!(d["owner_steps"].as_array().unwrap().len(), 8);
-    // D-012: init says it turns bootstrap mode on, how to opt out, and when signed approvals count.
+    assert_eq!(d["owner_steps"].as_array().unwrap().len(), 7);
+    // D-012: signed approvals count once the orchestrator's key is enrolled.
     let steps = d["owner_steps"].to_string();
-    assert!(
-        steps.contains("bootstrap mode until 2026-11-30 (D-012)"),
-        "{steps}"
-    );
-    assert!(
-        steps.contains("drop [approvals] in .bosun/bosun.toml to opt out"),
-        "{steps}"
-    );
     assert_eq!(
         steps
             .matches("once its key is in .bosun/approvers.toml")
@@ -365,7 +357,7 @@ fn a_plain_repo_gets_claude_md_and_no_own_ci() {
     assert!(!argv.contains("--exclude"), "{argv}");
     assert_eq!(v["data"]["own_ci"], false);
     assert_eq!(v["data"]["hoist_checks_added"].as_array().unwrap().len(), 0);
-    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 8);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 7);
 }
 
 fn commit_file(e: &Env, path: &str, body: &str) {
@@ -454,7 +446,7 @@ fn settings_with_the_hooks_need_no_owner_step() {
     let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
     assert_eq!(code, 0, "{v}");
     assert!(e.argv().contains("--exclude .claude/settings.json"));
-    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 8);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 7);
 }
 
 /// An invalid hoist.toml fails before splice runs, so there is nothing to roll back.
