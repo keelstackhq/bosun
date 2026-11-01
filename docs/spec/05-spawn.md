@@ -11,6 +11,18 @@ state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside o
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
 and never uses send_later or send_message.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
+A wait keeps its caller alive: after the first snapshot and then every 10 min it runs a heartbeat
+(the caller's live leases and its registry record to now + TTL, `now` moving on with the wall
+clock), then the expiry part of `reap` (expired leases of any session end as `reaped`, an early
+task left with no live lease goes back to ready, expired registry members get a `leave`). So a
+child waiting on its PR keeps its epic lease, and an orchestrator waiting on children or the owner
+keeps its record. `data.heartbeat` is `{beats, leases, registry, reaped, left, error}`; a failed
+heartbeat never ends the wait (`error` holds the last failure, cleared by the next good one),
+and while the kill switch is on it writes nothing (`error` says halted). Its own writes can be
+the change a wait reports: `--issue N` on a task whose lease expired returns at once, with the
+task back to ready.
+`--pr` reports each check name once, with the conclusion of its newest run (highest id): a re-run
+hides the older failed run.
 
 `bosun spawn` checks, in this order:
 1. Main is not red, and process is not red (a mainfix or process-fix epic is exempt from process-red).
