@@ -1,0 +1,1 @@
+- PreToolUse guard (F9): a `gh api` read (GET, no field or input flag) may name `auto_merge`; nested commands are judged to depth 8 (was 3) with one clear "nested deeper than" reason; `git merge --ff-only` with `origin/main`, `@{u}` or `@{upstream}` (no other ref) passes on the default branch.
