@@ -7,9 +7,10 @@ use serde_json::json;
 use super::ResultArgs;
 use crate::app::{App, default_branch, end_lease, merge_counts, notes, set_state, sync_merged};
 use crate::core::lease::{leases_of, members};
-use crate::core::meta::linked_issues;
+use crate::core::meta::{linked_issues, parse_task_meta};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
+use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -38,11 +39,13 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     let comment_id = gh.add_comment(n, &body)?.id;
 
     // `merged` is only a report: the merge itself moves the state (D13). The other outcomes set
-    // their state, as this ends the lease and nothing else would move the epic (spec §5).
+    // their state, as this ends the lease and nothing else would move the epic (spec §5);
+    // `partial` hands the epic back as ready, so the parent can spawn again for the rest.
     let mut state = state_of(&epic.labels);
     let to = match args.outcome.as_str() {
         "blocked" => Some(State::Blocked),
         "needs-human" => Some(State::NeedsHuman),
+        "partial" => Some(State::Ready),
         _ => None,
     };
     if let Some(to) = to
@@ -55,8 +58,7 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
 
     // A merged PR moves the tasks it closes (the merge moves state, D13); an unmerged one is a report.
     let mut tasks_merged = Vec::new();
-    if args.outcome == "merged"
-        && let Some(pr) = args.pr
+    if let Some(pr) = args.pr
         && let Some(pull) = gh.get_pull(pr)?
         && pull.merged
         && pull.base_ref == default_branch(gh)?
@@ -70,6 +72,16 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
             }
         }
     }
+    // Plus every merged task of the epic, whatever the outcome: the parent sees what is done.
+    tasks_merged.extend(
+        gh.list_issues(&[&State::Merged.label()], IssueState::All)?
+            .iter()
+            .filter(|i| !i.pull_request && i.number != n)
+            .filter(|i| parse_task_meta(i.body_text()).is_some_and(|m| m.epic == Some(n)))
+            .map(|i| i.number),
+    );
+    tasks_merged.sort_unstable();
+    tasks_merged.dedup();
 
     let lease_ended = leases_of(n, &notes(gh, n)?)
         .iter()
