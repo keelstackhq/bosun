@@ -1,0 +1,1 @@
+- Plan tasks take `allow:` (delete-test, skip, only, fewer-asserts), stored in the task metadata at import; `bosun test-integrity --pr <n>` reads the PR body and the linked task's `allow` from GitHub. A refused snapshot change now says to add `snapshot-change: <reason>` to the PR body.

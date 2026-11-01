@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 /// Opens the task metadata comment; the space keeps `<!-- bosun:task-pr N -->` out.
 pub const OPEN: &str = "<!-- bosun:task ";
 
+/// Test-integrity finding kinds a task may allow (plan `allow:`, spec §7). `delete-test` also
+/// allows `fewer-tests`.
+pub const ALLOW_KINDS: [&str; 4] = ["delete-test", "skip", "only", "fewer-asserts"];
+
 fn feature() -> String {
     "feature".into()
 }

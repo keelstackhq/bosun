@@ -5,6 +5,8 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
+use crate::core::meta::ALLOW_KINDS;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Plan {
     pub title: String,
@@ -36,6 +38,8 @@ pub struct Task {
     pub size: Option<u32>,
     pub kind: String,
     pub risk: String,
+    /// Test-integrity finding kinds the task may raise (`allow:`), from [`ALLOW_KINDS`].
+    pub allow: Vec<String>,
     pub line: usize,
 }
 
@@ -352,8 +356,18 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                     "risk" => {
                         bad!(errs, n; "use `risk: high` or leave the line out" => "risk `{v}` is not valid")
                     }
+                    "allow" => {
+                        t.allow = csv(v);
+                        for k in t
+                            .allow
+                            .iter()
+                            .filter(|k| !ALLOW_KINDS.contains(&k.as_str()))
+                        {
+                            bad!(errs, n; "allow only delete-test, skip, only, fewer-asserts" => "allow `{k}` is not a test-integrity kind");
+                        }
+                    }
                     k => {
-                        bad!(errs, n; "use touch, depends, size, kind or risk" => "unknown task key `{k}`")
+                        bad!(errs, n; "use touch, depends, size, kind, risk or allow" => "unknown task key `{k}`")
                     }
                 }
             }
