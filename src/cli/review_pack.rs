@@ -122,8 +122,33 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
         {
             ucs = use_cases(e.body_text());
         }
+        // A re-claim with `--touch` widens the lease, not the task metadata: show every glob a
+        // lease record of the task held (ended ones too: the lease may be reaped by now). Only
+        // information: an unreadable comment list gives `null`, not a failed pack.
+        let lease_touch = match notes(gh, num) {
+            Ok(list) => {
+                let mut globs: Vec<String> = Vec::new();
+                for note in list {
+                    if let Some(Record::Lease { touch, .. }) = parse_record(&note.body) {
+                        for g in touch {
+                            if !globs.contains(&g) {
+                                globs.push(g);
+                            }
+                        }
+                    }
+                }
+                json!(globs)
+            }
+            Err(e) => {
+                eprintln!(
+                    "bosun: review-pack: cannot read the leases of #{num}: {}",
+                    e.message
+                );
+                Value::Null
+            }
+        };
         task = json!({"issue": num, "title": issue.title, "body": issue.body_text(),
-            "meta": meta});
+            "meta": meta, "lease_touch": lease_touch});
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;

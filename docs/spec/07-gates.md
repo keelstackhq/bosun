@@ -62,6 +62,11 @@ test-integrity:
 - ts adapters: test-integrity reads `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs` files with them, `.rs` files with the rust adapters, and no other file is a test file. Test files are `*.test.<ext>`, `*.spec.<ext>` and files under `__tests__/`. Comments (`//`, `/* */`), regex literals and the inside of string and template literals are ignored; `fit` and `fdescribe` count only when called with a string or template literal title, and a name after `function` or `.` is not a declaration. `ts-skip` finds `it`, `test` and `describe` (also `suite`) declarations with a `.skip`, `.todo`, `.skipIf`, `.runIf` or `.fixme` modifier anywhere in the chain (`describe.skip.each`, `test.concurrent.skip`), and `xit`, `xtest` and `xdescribe`; a new one is a `new-skip` finding. A new `.only` (`it.only`, `test.only`, `describe.only`, `fit`, `fdescribe`) is a `new-only` finding, allowed by `only`. `ts` counts `expect(`, `assert(` and `assert.`, and `it`/`test` declarations (skipped ones too) for `fewer-tests`. Each side of a change is read with the adapter for its own path; a file that was a test file and no longer is one (renamed to `a.test.ts.disabled`) is a `deleted-test` finding.
 - Mutants that survive fail the merge queue.
 
+The task in a review pack (below) has `lease_touch` too: every touch glob of the lease records on the task
+issue, in order, ended leases included, so a lease widened by `bosun claim <n> --touch ..` shows
+next to the metadata's `touch` (`null` when the comments cannot be read). The task metadata is
+not rewritten: it comes from the plan, and `plan amend` reconciles it.
+
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
 REVIEW.md). The reviewer returns:
 
