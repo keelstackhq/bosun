@@ -25,6 +25,7 @@ pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
         PlanCmd::Check(a) => check(dir, a),
         PlanCmd::Import(a) => run_import(dir, a, false),
         PlanCmd::Amend(a) => amend(dir, a),
+        PlanCmd::Pr(a) => super::plan_pr::run(dir, a),
     }
 }
 
