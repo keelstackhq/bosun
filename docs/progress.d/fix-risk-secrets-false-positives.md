@@ -1,0 +1,1 @@
+- 2026-11-01 · F3 · R-secrets exempts code bindings, test files/fixtures and `bosun:allow-secret <reason>` lines; strong key formats never exempt (`src/core/risk.rs`, `tests/cli_risk_secrets.rs`, spec §8)

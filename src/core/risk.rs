@@ -164,11 +164,18 @@ pub fn evaluate(
             if hit {
                 evidence.push(format!("path {}", f.path));
             }
-            if let Some(re) = &rule.content {
-                for (i, line) in f.added_lines.iter().enumerate() {
-                    if re.is_match(line) {
-                        evidence.push(format!("{}: added line {} matches", f.path, i + 1));
+            // R-secrets: exempt code bindings, test files and marked lines, but never a
+            // strong secret format, which matches even where `content` does not.
+            let secrets = rule.id == "R-secrets";
+            for (i, line) in f.added_lines.iter().enumerate() {
+                let hit = match &rule.content {
+                    Some(re) if re.is_match(line) => {
+                        !(secrets && secret_exempt(&f.path, line, |s| re.is_match(s)))
                     }
+                    _ => secrets && strong_secret(line),
+                };
+                if hit {
+                    evidence.push(format!("{}: added line {} matches", f.path, i + 1));
                 }
             }
         }
@@ -190,6 +197,106 @@ pub fn evaluate(
         }
     }
     out
+}
+
+/// Secret formats that are never exempt (R-secrets): age, PEM and PGP private keys, GitHub,
+/// Anthropic, OpenAI, Stripe, AWS and Slack tokens. They match even where the rule's own
+/// `content` does not.
+const STRONG_SECRETS: &str = concat!(
+    r"AGE-SECRET-KEY-[1]|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----",
+    r"|-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    r"|\bgh[pousr]_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{22,}",
+    r"|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\b[sr]k_live_[A-Za-z0-9]{16,}",
+    r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}",
+);
+
+/// The per-line marker that exempts a line from R-secrets: `bosun:allow-secret <reason>`, in a
+/// trailing comment.
+pub const ALLOW_SECRET: &str = "bosun:allow-secret";
+
+fn strong_secret(line: &str) -> bool {
+    static RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(STRONG_SECRETS).expect("static regex"));
+    RE.is_match(line)
+}
+
+/// A test file or fixture: a `test`, `tests`, `__tests__`, `fixtures`, `testdata`, `snapshots`
+/// or `__snapshots__` directory, a `.snap` file, or a `*_test.*`, `*.test.*`, `*_spec.*`,
+/// `*.spec.*` or `test_*` file name. Any case. An env or config file never is: a `.env*` or
+/// `*.env` name, or a `config` or `deploy` directory, even under a test directory.
+pub fn test_path(path: &str) -> bool {
+    const DIRS: [&str; 7] = [
+        "test",
+        "tests",
+        "__tests__",
+        "fixtures",
+        "testdata",
+        "snapshots",
+        "__snapshots__",
+    ];
+    let lower = path.to_ascii_lowercase();
+    let mut parts: Vec<&str> = lower.split('/').collect();
+    let name = parts.pop().unwrap_or_default();
+    let config = name.starts_with(".env")
+        || name.ends_with(".env")
+        || parts.iter().any(|d| *d == "config" || *d == "deploy");
+    if config {
+        return false;
+    }
+    if parts.iter().any(|d| DIRS.contains(d)) || name.ends_with(".snap") {
+        return true;
+    }
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    name.starts_with("test_")
+        || [".test", "_test", ".spec", "_spec"]
+            .iter()
+            .any(|s| stem.ends_with(s))
+}
+
+/// A code binding whose value holds no literal, like `let <name> = cfg.k`. Any quote after the
+/// `=` (a string, `String::from("...")`, `Some("...")`, an `||` fallback) makes it a literal.
+fn code_binding(stmt: &str) -> bool {
+    let t = stmt.trim_start();
+    let Some(rest) = ["let ", "const ", "var ", "val ", "my "]
+        .iter()
+        .find_map(|k| t.strip_prefix(k))
+    else {
+        return false;
+    };
+    let Some((_, value)) = rest.split_once('=') else {
+        return false;
+    };
+    let v = value.trim();
+    !v.is_empty() && !v.contains(['"', '\'', '`']) && !v.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// The part of `line` before a trailing `bosun:allow-secret <reason>` comment, when the line
+/// has one: the marker is its own token after a comment opener (`#`, `//`, `--`, `/*`, `<!--`),
+/// and the reason has a letter or digit.
+fn before_marker(line: &str) -> Option<&str> {
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"(?:#|//|--|/\*|<!--)\s*bosun:allow-secret[ \t]+[^\s]*[A-Za-z0-9]")
+            .expect("static regex")
+    });
+    RE.find(line).map(|m| &line[..m.start()])
+}
+
+/// Whether an added line that the R-secrets content matched is exempt. A strong secret never
+/// is. Otherwise: any line of a test file or fixture; a line with a trailing
+/// `bosun:allow-secret <reason>` comment whose reason the content does not match; a line where
+/// every statement (split on `;`) the content matches is a code binding without a literal.
+pub fn secret_exempt(path: &str, line: &str, matches: impl Fn(&str) -> bool) -> bool {
+    if strong_secret(line) {
+        return false;
+    }
+    if test_path(path) {
+        return true;
+    }
+    if let Some(code) = before_marker(line) {
+        return !matches(&line[code.len()..]);
+    }
+    line.split(';')
+        .all(|stmt| !matches(stmt) || code_binding(stmt))
 }
 
 /// A file as listed by GitHub, for [`unseen_diff`].
