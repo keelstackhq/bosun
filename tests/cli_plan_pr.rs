@@ -149,3 +149,82 @@ fn auto_merge_passes_on_to_bosun_pr() {
     assert_eq!(code, 5, "{v}");
     assert!(v["data"]["claim"]["lease"].is_object(), "{v}");
 }
+
+fn plan_pr_with(fake: &FakeGithub, dir: &Path, plan: &str) -> (i32, Value) {
+    common::run(
+        fake,
+        "session_test",
+        T0,
+        &[
+            "-C",
+            dir.to_str().unwrap(),
+            "plan",
+            "pr",
+            plan,
+            "why",
+            "--source",
+            "human",
+        ],
+    )
+}
+
+#[test]
+fn a_plan_path_that_could_widen_the_touch_is_refused() {
+    let fake = FakeGithub::start();
+    let dir = repo("claude/x");
+    for bad in [
+        "**",
+        "src/**",
+        "plans/*.md",
+        "plans/{a,b}.md",
+        "plans/[ab].md",
+        "plans/../src/main.md",
+        "/etc/plans/widget.md",
+        "plans/widget.txt",
+        "widget.md",
+        "./plans/widget.md",
+    ] {
+        let (code, v) = plan_pr_with(&fake, dir.path(), bad);
+        assert_eq!(code, 2, "{bad}: {v}");
+        assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains("plan path"),
+            "refused for the path, not a missing file: {msg}"
+        );
+    }
+    assert!(
+        fake.requests().iter().all(|r| r.method == "GET"),
+        "nothing is written"
+    );
+}
+
+#[test]
+fn intake_plan_refuses_globs_dots_absolute_and_non_markdown() {
+    let fake = FakeGithub::start();
+    let dir = repo("claude/x");
+    for bad in ["**", "src/**", "../plan.md", "/tmp/plan.md", "plans/widget"] {
+        let (code, v) = common::run(
+            &fake,
+            "session_test",
+            T0,
+            &[
+                "-C",
+                dir.path().to_str().unwrap(),
+                "intake",
+                "why",
+                "--source",
+                "human",
+                "--plan",
+                bad,
+            ],
+        );
+        assert_eq!(code, 2, "{bad}: {v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(
+            msg.contains("plan path"),
+            "refused for the path, not a missing file: {msg}"
+        );
+    }
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
+}

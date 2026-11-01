@@ -12,6 +12,15 @@ use crate::core::state::{State, state_of};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, a: &PlanPrArgs) -> CmdResult {
+    // The plan file is the PR's whole touch: one `.md` file under `plans/`, checked before
+    // anything is read or written.
+    super::intake::check_plan_path(&a.file)?;
+    if !a.file.starts_with("plans/") {
+        return Err(BosunError::usage(
+            format!("plan path {:?} is not under plans/", a.file),
+            "pass a plan file under plans/, for example plans/bosun.md",
+        ));
+    }
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
     let intake = super::intake::open(
