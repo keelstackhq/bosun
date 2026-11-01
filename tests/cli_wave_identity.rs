@@ -136,13 +136,13 @@ fn join_depth_lowers_a_root_record_but_not_below_its_parent() {
 }
 
 #[test]
-fn a_record_that_names_itself_as_parent_is_a_root_again() {
+fn a_record_that_names_itself_as_parent_keeps_its_depth() {
     let fake = FakeGithub::start();
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     fake.comment(1, &member("session_a", Some("session_a"), 2, Some("cli")));
     let (code, v) = run(&fake, "session_a", NOW, &["join", "--depth", "1"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["depth"], 1);
+    assert_eq!(v["data"]["depth"], 2, "not reset to a root's depth");
     assert!(!fake.comments_of(1)[0].body.contains(r#""parent""#));
 }
 
@@ -158,4 +158,53 @@ fn an_expired_parent_keeps_the_old_depth_as_the_floor() {
     let (code, v) = run(&fake, "session_c", NOW, &["join", "--depth", "1"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["depth"], 3);
+}
+
+#[test]
+fn spawn_record_refuses_the_spawner_as_its_own_child() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.comment(1, &member("session_test", None, 1, None));
+    fake.issue(
+        10,
+        "Epic",
+        &["bosun:state/ready", "bosun:area/lifecycle"],
+        "",
+    );
+    let (code, v) = run(&fake, "session_test", NOW, &["spawn", "10"]);
+    assert_eq!(code, 0, "{v}");
+    let before = fake.comments_of(1).len();
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_test")
+        .env("BOSUN_NOW", NOW)
+        .args(["spawn", "10", "--record", "--from", "-"])
+        .write_stdin(r#"{"id":"session_test"}"#)
+        .output()
+        .unwrap();
+    let v = common::one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert_eq!(fake.comments_of(1).len(), before, "no join is written");
+}
+
+#[test]
+fn spoofed_per_task_ids_do_not_claim_in_the_owners_area() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.comment(1, &member("session_root", None, 1, None));
+    fake.comment(
+        1,
+        &member("session_child", Some("session_root"), 2, Some("cli")),
+    );
+    task(&fake, 10);
+    for id in [
+        "session_childX/T1",
+        "session_other/../session_child",
+        "session_chil/d",
+        "/session_child",
+    ] {
+        let (code, v) = run(&fake, id, NOW, &["claim", "10"]);
+        assert_eq!(code, 3, "{id} is not a wave agent of session_child: {v}");
+    }
 }

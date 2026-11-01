@@ -54,13 +54,16 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             "pass the id of the session that spawned this one, or leave out --parent for a root session",
         ));
     }
-    // A record that names itself as parent (written before this check) is a root.
+    // A record that names itself as parent (written before this check) loses that parent but
+    // keeps its own depth as the floor, like an unknown parent: it is never reset to a root.
+    let self_parented = prior.and_then(|m| m.parent.as_deref()) == Some(session.as_str());
     let parent = prior
         .and_then(|m| m.parent.clone())
         .filter(|p| p != session)
         .or(spec.parent);
     // An unknown or expired parent keeps an existing record's depth as the floor.
     let floor = match parent.as_deref() {
+        None if self_parented => prior.map_or(1, |m| m.depth),
         None => 1,
         Some(p) => members(&notes)
             .iter()

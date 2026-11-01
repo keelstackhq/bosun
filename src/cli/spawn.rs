@@ -502,6 +502,14 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             )
         })?;
     let (gh, me, now, n) = (app.gh.as_ref(), &app.ctx.session, app.ctx.now, epic.number);
+    // A child that is the spawner itself would get a `join` naming itself as parent; with a later
+    // `join --depth` that could reset its depth. A spawn always makes a new session.
+    if &child == me {
+        return Err(BosunError::error(
+            format!("the create_session result names this session ({me}) as the child"),
+            "pass the JSON of the create_session call that started the child, not this session's own id",
+        ));
+    }
     // The thread is decided before any write: this spawner's own live lease, and only when
     // the comment's author can write (one permission call, none for a lease without a thread).
     // A failing check gives no thread (a missing reply, never a wrong thread) and a warning.
