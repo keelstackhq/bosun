@@ -93,6 +93,29 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         }
     }
 
+    let (reaped, left) = expire(gh, now)?;
+    // Closing epics is housekeeping: a failure there must not undo or hide the work above.
+    let mut epics_closed = Vec::new();
+    let epics_error = close_done_epics(gh, now, &mut epics_closed).err();
+    epics_closed.sort_unstable();
+    let mut data =
+        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": epics_closed});
+    if let Some(e) = epics_error {
+        eprintln!("reap: closing finished epics failed: {e}");
+        data["epics_error"] = json!(e.to_string());
+    }
+    Ok(Outcome::data(data))
+}
+
+const QUIET_SECS: i64 = 600;
+
+/// End expired leases (an early task with no live lease left goes back to `ready`, as does one
+/// stuck `claimed` after a lost race) and post `leave` for expired registry members. Returns the
+/// ended leases and the members that left. `reap` and `wait` run it.
+pub fn expire(
+    gh: &dyn Github,
+    now: Timestamp,
+) -> crate::app::Result<(Vec<serde_json::Value>, Vec<String>)> {
     let mut reaped = Vec::new();
     for (issue, notes) in active_issues(gh)? {
         let leases = leases_of(issue.number, &notes);
@@ -137,20 +160,8 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             left.push(m.session);
         }
     }
-    // Closing epics is housekeeping: a failure there must not undo or hide the work above.
-    let mut epics_closed = Vec::new();
-    let epics_error = close_done_epics(gh, now, &mut epics_closed).err();
-    epics_closed.sort_unstable();
-    let mut data =
-        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": epics_closed});
-    if let Some(e) = epics_error {
-        eprintln!("reap: closing finished epics failed: {e}");
-        data["epics_error"] = json!(e.to_string());
-    }
-    Ok(Outcome::data(data))
+    Ok((reaped, left))
 }
-
-const QUIET_SECS: i64 = 600;
 
 /// Close each open epic whose tasks are all merged or closed, one at least done (see
 /// `epic_complete`): state `merged`, closed as completed. A live lease (an orchestrator's) blocks
