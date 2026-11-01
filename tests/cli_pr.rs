@@ -106,7 +106,7 @@ fn refuses_the_main_branch() {
 }
 
 #[test]
-fn auto_merge_is_refused_while_review_verdict_is_pending() {
+fn auto_merge_is_enabled_while_review_verdict_is_pending() {
     let fake = FakeGithub::start();
     task(&fake, "bosun:state/review");
     fake.pull(20, "t", "claude/t7", "Closes #7");
@@ -116,17 +116,13 @@ fn auto_merge_is_refused_while_review_verdict_is_pending() {
     fake.status("sha20", "review-verdict", "pending", "");
     let dir = repo("claude/t7");
     let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
-    assert_eq!(code, 1, "{v}");
-    let msg = v["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("review-verdict: pending"), "{msg}");
-    assert!(
-        v["error"]["fix"]
-            .as_str()
-            .unwrap()
-            .contains("bosun wait --pr 20")
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["pending_checks"],
+        serde_json::json!([{"context": "review-verdict", "state": "pending"}])
     );
-    assert_eq!(fake.auto_merge_enabled(20), None);
-    assert!(fake.labels_of(7).contains(&"bosun:state/review".into()));
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+    assert!(fake.labels_of(7).contains(&"bosun:state/queued".into()));
 }
 
 #[test]
@@ -226,15 +222,15 @@ fn another_graphql_403_is_not_retried_on_the_ccr_route() {
 }
 
 #[test]
-fn a_missing_check_is_listed() {
+fn a_missing_check_is_listed_and_does_not_block() {
     let fake = FakeGithub::start();
     task(&fake, "bosun:state/review");
     fake.pull(20, "t", "claude/t7", "Closes #7");
     let dir = repo("claude/t7");
     let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
-    assert_eq!(code, 1);
-    assert_eq!(v["data"]["not_green"].as_array().unwrap().len(), 4);
-    assert_eq!(v["data"]["not_green"][0]["state"], "missing");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending_checks"].as_array().unwrap().len(), 4);
+    assert_eq!(v["data"]["pending_checks"][0]["state"], "missing");
 }
 
 #[test]
@@ -336,19 +332,16 @@ fn pr_setup(hoist: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
 const HULL: &str = "[github]\nrequired_checks = [\"ci-ok\", \"bosun-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]\n";
 
 #[test]
-fn hoist_toml_required_checks_are_enforced() {
+fn hoist_toml_required_checks_are_reported() {
     let (fake, dir) = pr_setup(Some(HULL));
     fake.status("sha20", "bosun-ok", "pending", "");
     let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
-    assert_eq!(code, 1, "{v}");
-    assert!(
-        v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("bosun-ok: pending"),
-        "{v}"
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["pending_checks"],
+        serde_json::json!([{"context": "bosun-ok", "state": "pending"}])
     );
-    assert_eq!(fake.auto_merge_enabled(20), None);
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
 }
 
 #[test]

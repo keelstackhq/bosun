@@ -195,6 +195,12 @@ pub fn enable_auto_merge_any(gh: &dyn Github, pull: &Pull) -> Result<&'static st
     }
 }
 
+/// Whether GitHub refused auto-merge because the PR is already mergeable ("Pull request is in
+/// clean status"): there is nothing left to wait for, so auto-merge cannot be turned on.
+pub fn is_already_clean(e: &BosunError) -> bool {
+    e.message.to_lowercase().contains("clean status")
+}
+
 /// The required status checks of a branch as the token sees them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Live {

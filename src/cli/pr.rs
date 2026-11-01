@@ -1,5 +1,6 @@
-//! `bosun pr <issue> [--auto-merge]`: open (or find) the PR of the current branch and, once every
-//! required check is green, turn on auto-merge. bosun never merges (spec D13).
+//! `bosun pr <issue> [--auto-merge]`: open (or find) the PR of the current branch and, with
+//! `--auto-merge`, turn on auto-merge at once; the ruleset's required checks gate the merge.
+//! bosun never merges (spec D13).
 
 use std::path::Path;
 use std::process::Command;
@@ -15,11 +16,12 @@ use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
 use crate::core::touch::{Changed, outside};
-use crate::github::{Github, IssueState, PrFile, enable_auto_merge_any};
+use crate::github::{Github, IssueState, PrFile, enable_auto_merge_any, is_already_clean};
 use crate::output::{BosunError, CmdResult, Outcome};
 
-/// The default checks that must be green before auto-merge (spec D15, D32). `required` lets
-/// `BOSUN_REQUIRED_CHECKS` replace them, and `hoist.toml` `[github] required_checks` add to them.
+/// The default checks the ruleset requires before a merge (spec D15, D32), reported as
+/// `pending_checks` while they are not green. `required` lets `BOSUN_REQUIRED_CHECKS` replace
+/// them, and `hoist.toml` `[github] required_checks` add to them; `bosun pr` does not need it.
 pub const REQUIRED: [&str; 4] = checks::DEFAULT_REQUIRED;
 
 /// Read from the default branch, so a PR cannot change the checks that judge it.
@@ -60,7 +62,7 @@ fn head_subject(dir: &Path) -> Option<String> {
     (out.status.success() && !subject.is_empty()).then_some(subject)
 }
 
-/// `(context, state)` of every required check that is not green on `sha`.
+/// `(context, state)` of every required check that is not green on `sha` (information only).
 fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
@@ -250,6 +252,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         state = Some(State::Review);
     }
     let mut route = None;
+    let mut pending = Vec::new();
     if args.auto_merge {
         if state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
@@ -258,23 +261,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
             ));
         }
-        let bad = not_green(gh, &base, &pull.head_sha)?;
-        if !bad.is_empty() {
-            let list: Vec<String> = bad.iter().map(|(c, s)| format!("{c}: {s}")).collect();
-            return Err(BosunError::error(
-                format!(
-                    "PR #{} is not ready for auto-merge: {}",
-                    pull.number,
-                    list.join(", ")
-                ),
-                format!("`bosun wait --pr {}`, then rerun", pull.number),
-            )
-            .with_data(json!({
-                "pr": pull.number, "head_sha": pull.head_sha,
-                "not_green": bad.iter().map(|(c, s)| json!({"context": c, "state": s}))
-                    .collect::<Vec<_>>(),
-            })));
-        }
+        pending = not_green(gh, &base, &pull.head_sha)?;
         // Before auto-merge: a failed write leaves nothing turned on, so a rerun is clean.
         let record = Record::TaskPr {
             session: app.ctx.session.clone(),
@@ -288,7 +275,26 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 record.to_line()
             ),
         )?;
-        route = Some(enable_auto_merge_any(gh, &pull)?);
+        route = match enable_auto_merge_any(gh, &pull) {
+            Ok(r) => Some(r),
+            // Already mergeable: bosun never merges (D13), the task stays in review.
+            Err(e) if is_already_clean(&e) => {
+                return Err(BosunError::needs_human(
+                    format!(
+                        "PR #{} is already mergeable with every required check green, so GitHub cannot turn on auto-merge",
+                        pull.number
+                    ),
+                    format!(
+                        "the owner merges PR #{0}, or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --auto-merge`",
+                        pull.number
+                    ),
+                )
+                .with_data(json!({
+                    "pr": pull.number, "head_sha": pull.head_sha, "already_clean": true,
+                })));
+            }
+            Err(e) => return Err(e),
+        };
         let fresh = gh.get_issue(n)?.unwrap_or(issue);
         set_state(gh, n, &fresh, State::Queued)?;
         state = Some(State::Queued);
@@ -297,5 +303,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
         "auto_merge": args.auto_merge, "auto_merge_route": route, "task_state": state.map(State::name),
         "touch_check": touch,
+        "pending_checks": pending.iter().map(|(c, s)| json!({"context": c, "state": s}))
+            .collect::<Vec<_>>(),
     })))
 }
