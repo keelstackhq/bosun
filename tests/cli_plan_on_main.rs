@@ -1,5 +1,5 @@
-//! `plan import` closes the plan task of an item whose plan file is already on the default
-//! branch with that item unchanged (F5): nothing is left to commit.
+//! `plan import` closes the plan tasks of a plan file that is already byte-identical on the
+//! default branch (F5): nothing is left to commit. `--keep-plan-tasks-open` opts out.
 
 mod common;
 
@@ -75,7 +75,7 @@ fn setup(text: &str) -> (tempfile::TempDir, FakeGithub, String) {
 fn a_plan_already_on_main_closes_its_plan_tasks_on_the_first_import() {
     let (tmp, fake, file) = setup(PLAN);
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--close-on-default"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
     for p in ["M1/P", "M2/P"] {
@@ -90,59 +90,60 @@ fn a_plan_already_on_main_closes_its_plan_tasks_on_the_first_import() {
 }
 
 #[test]
-fn only_the_items_that_match_main_are_closed_and_ready_ones_later() {
+fn a_file_that_differs_on_main_closes_nothing_and_ready_ones_close_later() {
     let (tmp, fake, file) = setup(PLAN);
-    // M2 differs on main: its plan task is still needed.
+    // One task title differs on main: the files are not the same blob.
     fake.content(
         "plan.md",
         "main",
         &PLAN.replace("- T1: Import", "- T1: Import it"),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--close-on-default"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["on_default"], json!(["M1/P"]));
-    assert_eq!(
-        state(&fake, "<!-- bosun:plan M1/P -->"),
-        ["bosun:state/merged"]
-    );
-    assert_eq!(
-        state(&fake, "<!-- bosun:plan M2/P -->"),
-        ["bosun:state/ready"]
-    );
-    assert_eq!(v["data"]["promoted"], json!(["M1", "M1/T1"]));
+    assert_eq!(v["data"]["on_default"], json!([]));
+    for p in ["M1/P", "M2/P"] {
+        let marker = format!("<!-- bosun:plan {p} -->");
+        assert_eq!(state(&fake, &marker), ["bosun:state/ready"], "{p}");
+    }
+    assert_eq!(v["data"]["promoted"], json!([]));
 
-    // Main catches up: the existing `ready` M2/P is closed too.
+    // A trailing newline is a different file too.
+    fake.content("plan.md", "main", &format!("{PLAN}\n"));
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    assert_eq!(v["data"]["on_default"], json!([]));
+
+    // Main catches up: the existing `ready` plan tasks are closed.
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--close-on-default"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["on_default"], json!(["M2/P"]));
+    assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
     assert_eq!(
         state(&fake, "<!-- bosun:plan M2/P -->"),
         ["bosun:state/merged"]
     );
     assert_eq!(issue_of(&fake, "<!-- bosun:plan M2/P -->").1, "closed");
-    assert_eq!(v["data"]["promoted"], json!(["M2", "M2/T1"]));
+    assert_eq!(v["data"]["promoted"], json!(["M1", "M1/T1", "M2", "M2/T1"]));
 }
 
 #[test]
 fn a_dry_run_only_reports_it() {
     let (tmp, fake, file) = setup(PLAN);
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(
-        &fake,
-        tmp.path(),
-        &["import", &file, "--dry-run", "--close-on-default"],
-    );
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
     assert!(fake.requests().iter().all(|r| r.method == "GET"));
 }
 
 #[test]
-fn without_the_flag_they_are_only_listed() {
+fn keep_plan_tasks_open_only_lists_them() {
     let (tmp, fake, file) = setup(PLAN);
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(
+        &fake,
+        tmp.path(),
+        &["import", &file, "--keep-plan-tasks-open"],
+    );
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!([]));
     assert_eq!(v["data"]["on_default_open"], json!(["M1/P", "M2/P"]));
@@ -151,6 +152,19 @@ fn without_the_flag_they_are_only_listed() {
         ["bosun:state/ready"]
     );
     assert_eq!(v["data"]["promoted"], json!([]));
+}
+
+#[test]
+fn plan_amend_never_closes_them() {
+    let (tmp, fake, file) = setup(PLAN);
+    fake.content("plan.md", "main", PLAN);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["on_default"], json!([]));
+    assert_eq!(
+        state(&fake, "<!-- bosun:plan M1/P -->"),
+        ["bosun:state/ready"]
+    );
 }
 
 #[test]
@@ -168,7 +182,7 @@ fn a_plan_task_someone_works_on_is_left_alone() {
         i.number
     };
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--close-on-default"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M2/P"]));
     assert_eq!(fake.issue_state(n).labels, ["bosun:state/review"]);
@@ -189,7 +203,7 @@ fn a_plan_long_only_by_merged_tasks_still_closes_on_default() {
         "<!-- bosun:plan M1/T1 -->\n",
     );
     fake.content("plan.md", "main", &long);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--close-on-default"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
 }

@@ -1,1 +1,1 @@
-- `plan import --close-on-default` closes plan tasks whose item is already on the default branch, and the critical-path rule counts only open tasks.
+- `plan import` closes the plan tasks of a plan file that is already byte-identical on the default branch (`--keep-plan-tasks-open` opts out), and the critical-path rule counts only open tasks.

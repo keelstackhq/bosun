@@ -194,8 +194,10 @@ struct Importer<'a> {
     held: Vec<Value>,
     /// Plan tasks closed because their item is on the default branch already (F5).
     on_default: Vec<String>,
-    /// Plan tasks that `--close-on-default` would close (listed when it is not given).
+    /// Plan tasks left open by `--keep-plan-tasks-open` although the file is on the default branch.
     on_default_open: Vec<String>,
+    /// The local plan file's text, compared byte for byte with the default branch's (F5).
+    local_text: String,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
@@ -449,7 +451,7 @@ fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
         file: a.file.clone(),
         dry_run: a.dry_run,
         item: vec![],
-        close_on_default: false,
+        keep_plan_tasks_open: false,
     };
     run_import(dir, &args, true)
 }
@@ -504,6 +506,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         held: vec![],
         on_default: vec![],
         on_default_open: vec![],
+        local_text: text.clone(),
         amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
@@ -980,6 +983,12 @@ fn plan_on_default(imp: &Importer) -> Result<Option<Plan>> {
         .and_then(|t| plan::parse_to_compare(&t).ok()))
 }
 
+/// Whether the plan file on the default branch is byte-identical to the local one.
+fn same_file_on_default(imp: &Importer) -> Result<bool> {
+    let head = default_branch(imp.gh)?;
+    Ok(imp.gh.file_at(&imp.plan_path, &head)?.as_deref() == Some(imp.local_text.as_str()))
+}
+
 fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
     let m = marker(pid);
     issues.iter().any(|i| i.body_text().contains(&m))
@@ -990,6 +999,8 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
     let mut added: Option<HashMap<String, (u64, u64)>> = None;
     // The plan file on the default branch, read once: an intake vouches only for what merged.
     let mut on_default: Option<Option<Plan>> = None;
+    // F5: whether the plan file on the default branch is this very file, read once when needed.
+    let mut same_file: Option<bool> = None;
     for item in p
         .items
         .iter()
@@ -1028,27 +1039,23 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 done_by = None;
             }
         }
-        // F5: a plan task whose item is on the default branch exactly as here has nothing left
-        // to commit. With `--close-on-default` a new one is made merged and closed (like one an
-        // intake vouches for) and an open `ready` one is closed; without it they are listed in
-        // `on_default_open`. Only `plan import`: an amendment's new items need their intake.
+        // F5: when the plan file on the default branch is byte-identical to this one, a plan task
+        // has nothing left to commit: a new one is made merged and closed (like one an intake
+        // vouches for) and an open `ready` one is closed. `--keep-plan-tasks-open` only lists
+        // them in `on_default_open`. Only `plan import`: an amendment's new items need their
+        // intake.
         let prior = lookup(&imp.issues, &pid, &item.id, Some("P"), &mut vec![]);
         let ready = prior.as_ref().is_some_and(|(i, adopted)| {
             !adopted && i.state == "open" && state_of(&i.labels) == Some(State::Ready)
         });
         let mut on_main = false;
         if done_by.is_none() && (prior.is_none() || ready) && !imp.amend {
-            if on_default.is_none() {
-                on_default = Some(plan_on_default(imp)?);
+            if same_file.is_none() {
+                same_file = Some(same_file_on_default(imp)?);
             }
-            let merged = on_default.as_ref().and_then(Option::as_ref);
-            on_main = merged.is_some_and(|m| m.items.iter().any(|i| same_item(i, item)));
-            if on_main && !a.close_on_default {
+            on_main = same_file == Some(true);
+            if on_main && a.keep_plan_tasks_open {
                 imp.on_default_open.push(pid.clone());
-                eprintln!(
-                    "plan: {pid}: {} is on the default branch as planned; `--close-on-default` closes it",
-                    item.id
-                );
                 on_main = false;
             }
         }
@@ -1098,7 +1105,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 n,
                 &format!(
                     "Done: {} on the default branch has {} as planned, so there is nothing to \
-                     commit. Closed by `bosun plan import --close-on-default`.",
+                     commit. Closed by `bosun plan import`.",
                     imp.plan_path, item.id
                 ),
             )?;
