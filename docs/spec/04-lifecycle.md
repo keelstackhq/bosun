@@ -65,7 +65,9 @@ Conflict avoidance (three layers):
 2. Claim check: `bosun claim` refuses a task if its touch paths overlap a live lease, or if another
    orchestrator owns its area. Exit 3 with a JSON reason. An area owner that is the
    parent of the claiming session does not block it, so spawned workers can claim in their
-   orchestrator's area. A re-claim of an own active task with `--touch` grows the lease: the
+   orchestrator's area. A per-task id `S/task` (a wave agent with
+   `BOSUN_SESSION=S/task`) claims as `S`: it is inside `S`'s area and inside the area of `S`'s
+   parent. A re-claim of an own active task with `--touch` grows the lease: the
    globs it lacks pass the same overlap check (exit 3 on a clash), then a new lease record with
    the old touch plus the added globs is written (`data.added`), without changing the state;
    without new globs it changes nothing. A grow that loses the claim race edits its record back
