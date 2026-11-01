@@ -292,8 +292,8 @@ pub struct ReleaseArgs {
 pub struct ResultArgs {
     /// The epic issue number.
     pub epic: u64,
-    /// How the work ended.
-    #[arg(long, value_parser = ["merged", "blocked", "needs-human"])]
+    /// How the work ended (`partial`: some tasks merged, the rest goes back to the parent).
+    #[arg(long, value_parser = ["merged", "partial", "blocked", "needs-human"])]
     pub outcome: String,
     /// The PR of the work.
     #[arg(long)]
