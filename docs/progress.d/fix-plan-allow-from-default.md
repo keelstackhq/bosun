@@ -1,0 +1,1 @@
+- Plan allow only from the default branch; plans/** owner-gated anywhere.

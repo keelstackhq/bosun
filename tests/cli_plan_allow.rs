@@ -59,6 +59,8 @@ fn meta_of(fake: &FakeGithub, marker: &str) -> Value {
 fn import_stores_the_allowed_kinds_in_the_task_metadata() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let text = plan_text("allow: delete-test, fewer-asserts");
+    // `allow:` counts only as merged: the same plan is on the default branch.
+    fake.content("plan.md", "main", &text);
     let (code, v) = plan(&fake, tmp.path(), &text, "import");
     assert_eq!(code, 0, "{v}");
     let m = meta_of(&fake, "<!-- bosun:plan M1/T1 -->");
