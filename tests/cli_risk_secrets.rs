@@ -1,6 +1,6 @@
 //! R-secrets: no false positives on code and test fixtures, real secrets still caught (spec §8).
-//! Lines are written with placeholders (`@TOK@`, `@SEC@`, `@AKEY@`) so this file does not match the
-//! rule that judges its own PR.
+//! Lines are written with placeholders (`@TOK@`, `@SEC@`, `@AKEY@`) so this file does not match
+//! the rule that judges its own PR.
 mod common;
 
 use common::fake::FakeGithub;
@@ -51,18 +51,23 @@ fn code_bindings_are_not_secrets() {
         "    let mut @AKEY@ = cfg.@AKEY@.clone();"
     ));
     assert!(!secret_match("web/a.ts", "const @TOK@ = await getToken();"));
+    assert!(!secret_match("src/a.rs", "let @TOK@ = a; let @SEC@ = b;"));
 }
 
 #[test]
 fn literals_in_code_still_match() {
-    assert!(secret_match(
-        "src/auth.rs",
-        "    let @TOK@ = \"s3cr3t-value\";"
-    ));
-    assert!(secret_match(
-        "src/auth.rs",
-        "    let @TOK@ = r\"s3cr3t-value\";"
-    ));
+    for line in [
+        "    let @TOK@ = \"s3cr3t-value\";",
+        "    let @TOK@ = r\"s3cr3t-value\";",
+        "    let @TOK@ = String::from(\"s3cr3t-value\");",
+        "    let @TOK@ = Some(\"s3cr3t-value\");",
+        "    let @TOK@ = &\"s3cr3t-value\";",
+        "const @TOK@ = process.env.T || 's3cr3t-value';",
+        "let a = v; let @TOK@ = \"s3cr3t-value\";",
+        "let a = v; @AKEY@ = s3cr3t",
+    ] {
+        assert!(secret_match("src/auth.rs", line), "{line}");
+    }
     assert!(secret_match("config/app.env", "API_@TOK@ = s3cr3t"));
     assert!(secret_match(
         "config/app.toml",
@@ -77,7 +82,7 @@ fn test_files_and_fixtures_are_not_secrets() {
         "    let body = \"@TOK@ = \\\"fake-service\\\"\";"
     ));
     assert!(!secret_match(
-        "crates/x/tests/fixtures/app.env",
+        "crates/x/tests/fixtures/app.toml",
         "client_@SEC@=s3cr3t-value-xyz"
     ));
     assert!(!secret_match("src/login_test.go", "@TOK@ = \"fake\""));
@@ -89,19 +94,38 @@ fn test_files_and_fixtures_are_not_secrets() {
 }
 
 #[test]
-fn the_marker_needs_a_reason() {
+fn env_and_config_files_are_never_test_files() {
+    for path in [
+        "tests/fixtures/app.env",
+        "tests/fixtures/.env.local",
+        "tests/config/app.toml",
+        "test/deploy/values.yaml",
+        "spec/app.toml",
+    ] {
+        assert!(secret_match(path, "@TOK@ = s3cr3t"), "{path}");
+    }
+}
+
+#[test]
+fn the_marker_needs_a_reason_in_a_trailing_comment() {
     assert!(!secret_match(
         "config/app.toml",
         "@TOK@ = \"s3cr3t-public-demo\" # bosun:allow-secret public demo key from the vendor docs"
     ));
-    assert!(secret_match(
-        "config/app.toml",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secret"
+    assert!(!secret_match(
+        "src/a.rs",
+        "let @TOK@ = \"s3cr3t-demo\"; // bosun:allow-secret documented sandbox value"
     ));
-    assert!(secret_match(
-        "config/app.toml",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secret  -->"
-    ));
+    for line in [
+        "@TOK@ = \"s3cr3t\" # bosun:allow-secret",
+        "@TOK@ = \"s3cr3t\" # bosun:allow-secret  -->",
+        "@TOK@ = \"s3cr3t\" # bosun:allow-secrets demo",
+        "@TOK@ = \"s3cr3t\" bosun:allow-secret demo",
+        "/* bosun:allow-secret demo */ @TOK@ = \"s3cr3t\"",
+        "@TOK@ = \"s3cr3t\" # bosun:allow-secret @TOK@ = s3cr3t",
+    ] {
+        assert!(secret_match("config/app.toml", line), "{line}");
+    }
 }
 
 #[test]
@@ -114,10 +138,13 @@ fn real_key_formats_are_never_exempt() {
     let lines = [
         age,
         "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----".to_string(),
         format!("    let t = \"{gh}\";"),
         format!("x = {gh} # bosun:allow-secret it is fake, honest"),
         format!("key: AKIA{}", "ABCDEFGHIJKLMNOP"),
         format!("anthropic: sk-ant-{}", "api03-abcdefghijklmnopqrstuv"),
+        format!("stripe: sk_live_{}", "abcdefghijklmnop1234"),
+        format!("stripe: rk_live_{}", "abcdefghijklmnop1234"),
         format!("SLACK=xoxb-{}", "1234567890-abcdef"),
     ];
     for line in &lines {
