@@ -189,3 +189,26 @@ fn a_cut_file_list_allows_nothing() {
             .contains("file list")
     );
 }
+
+#[test]
+fn an_added_file_outside_the_touch_borrows_nothing() {
+    let (_tmp, root) = repo_without_its_test();
+    let fake = FakeGithub::start();
+    pr(&fake, "Closes #7");
+    // The PR also adds a file outside the task's touch: added files count too.
+    fake.pull_file(5, "src/new.rs", "added", 3, 0, None);
+    fake.issue(7, "M1/T1", &[], &task(r#"["delete-test"]"#));
+    let (code, v) = check(&fake, &root);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["task"], Value::Null);
+    let why = v["data"]["allow_refused"].as_str().unwrap();
+    assert!(why.contains("src/new.rs"), "{why}");
+    // A rename counts by both names.
+    let fake = FakeGithub::start();
+    pr(&fake, "Closes #7");
+    fake.pull_file(5, "src/moved.rs", "renamed", 0, 0, None);
+    fake.renamed_from(5, "tests/old.rs");
+    fake.issue(7, "M1/T1", &[], &task(r#"["delete-test"]"#));
+    let (code, v) = check(&fake, &root);
+    assert_eq!((code, &v["data"]["task"]), (1, &Value::Null), "{v}");
+}

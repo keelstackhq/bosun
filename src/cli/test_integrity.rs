@@ -31,7 +31,7 @@ pub fn run(dir: Option<&Path>, args: &IntegrityArgs) -> CmdResult {
 
 /// The PR's body and an `allow` list (known kinds only), in place of `BOSUN_PR_BODY` and
 /// `BOSUN_INTEGRITY_ALLOW`. The list is the first linked task's (in body order) whose `touch`
-/// covers every file the PR modifies, removes or renames, by the rule `bosun pr` uses: the body
+/// covers every path the PR changes (added files and both names of a rename too): the body
 /// is the agent's, so a task lends its list only to its own work. No such task, or a cut file
 /// list, allows nothing. `data.task` and `data.allow` say what was used, `data.allow_refused` why
 /// nothing was.
@@ -44,12 +44,15 @@ fn from_pr(dir: Option<&Path>, base: Option<&str>, n: u64) -> CmdResult {
         )
     })?;
     let files = app.gh.pull_files(n)?;
+    // Every path counts, added files and both names of a rename too: an add-only PR must not
+    // borrow `skip` or `only` from a task whose touch it never edits. Checked as edits.
     let changed: Vec<Changed> = files
         .iter()
-        .map(|f| Changed {
-            path: f.filename.clone(),
-            status: f.status.clone(),
-            previous: f.previous_filename.clone(),
+        .flat_map(|f| std::iter::once(&f.filename).chain(&f.previous_filename))
+        .map(|p| Changed {
+            path: p.clone(),
+            status: "modified".into(),
+            previous: None,
         })
         .collect();
     let mut task = None;

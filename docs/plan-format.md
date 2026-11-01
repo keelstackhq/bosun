@@ -71,7 +71,7 @@ The state machine, stop rules and resume.
      `delete-test` (also allows `fewer-tests`), `skip`, `only`, `fewer-asserts`. Any other value
      is a plan error. Use it for a task that removes code with its tests, for example a seed
      crate. Import stores it in the task metadata; `bosun test-integrity --pr <n>` reads it from
-     the PR's linked task, when that task's `touch:` covers the files the PR edits. A snapshot change is not an `allow:` kind: it needs a
+     the PR's linked task, when that task's `touch:` covers every file the PR changes. A snapshot change is not an `allow:` kind: it needs a
      `snapshot-change: <reason>` line in the PR body.
    `bosun plan check` gives two warnings from the touch lists (not errors). Two tasks that touch
    overlapping files with no `depends` path between them (across items too; an item `depends:`
