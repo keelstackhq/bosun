@@ -101,11 +101,25 @@ pub enum Record {
         head_sha: String,
         base_sha: String,
     },
-    /// An owner's answer to an `ask`, given through Slack. The text is not in the record.
+    /// An owner's answer to an `ask`, given through Slack (`slack_user`) or relayed in chat and
+    /// signed: `key`, `issue`, `ask`, `sha256` (of the normalized text) and `sig` are everything
+    /// a later check needs to rebuild the signed message and verify it again. The text is not in
+    /// the record.
     Answer {
         session: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         slack_user: String,
         at: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        issue: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ask: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sig: Option<String>,
     },
     /// A human step found mid-run (`bosun hold`): `id` is the `X<n>` box that holds the task
     /// until the owner ticks it; `on` is `computer` or `phone`.

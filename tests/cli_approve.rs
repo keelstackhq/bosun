@@ -360,8 +360,9 @@ fn missing_or_blank_owner_token_is_needs_human_and_never_falls_back() {
     let fake = board();
     for token in [None, Some("  ")] {
         let mut cmd = bosun();
+        // Approving needs the owner token; `--list` does not (below).
         cmd.env("BOSUN_GITHUB_API", fake.url())
-            .args(["approve", "--list"]);
+            .args(["approve", &at(1)]);
         match token {
             Some(t) => cmd.env("BOSUN_OWNER_TOKEN", t),
             None => cmd.env_remove("BOSUN_OWNER_TOKEN"),
@@ -379,6 +380,88 @@ fn missing_or_blank_owner_token_is_needs_human_and_never_falls_back() {
         assert!(!fix.contains("environment"), "{fix}");
     }
     assert!(fake.requests().is_empty(), "no request without the token");
+}
+
+/// `bosun approve --list` with no token at all (neither the owner's nor the session's).
+fn list_without_token(fake: &FakeGithub) -> (i32, Value) {
+    let mut cmd = bosun();
+    cmd.env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_HTTP_MAX_SLEEP_MS", "0")
+        .env_remove("BOSUN_OWNER_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .args(["approve", "--list"]);
+    finish(&mut cmd)
+}
+
+#[test]
+fn list_works_without_any_token_and_writes_nothing() {
+    let fake = board();
+    fake.allow_anonymous_reads();
+    let (code, v) = list_without_token(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["auth"], "none");
+    assert_eq!(v["data"]["skipped"], json!([]));
+    let ready: Vec<_> = v["data"]["ready"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["pr"].clone())
+        .collect();
+    assert_eq!(ready, [json!(1), json!(3)]);
+    assert_eq!(
+        v["data"]["approve_command"],
+        format!("bosun approve {} {}", at(1), at(3))
+    );
+    let reqs = fake.requests();
+    assert!(!reqs.is_empty());
+    assert!(
+        reqs.iter().all(|r| r.method == "GET"),
+        "read-only: {reqs:?}"
+    );
+    assert!(reqs.iter().all(|r| r.headers[0].is_none()), "no token sent");
+    // With the owner token the listing says so.
+    let (_, v) = approve(&fake, &["--list"]);
+    assert_eq!(v["data"]["auth"], "owner-token");
+    assert_eq!(v["data"]["skipped"], json!([]));
+}
+
+#[test]
+fn list_without_a_token_lists_what_it_can_and_says_what_it_skipped() {
+    let fake = board();
+    fake.allow_anonymous_reads();
+    fake.fail_path(&format!("{}/statuses", sha(3)), 403);
+    let (code, v) = list_without_token(&fake);
+    assert_eq!(code, 0, "{v}");
+    let ready = v["data"]["ready"].as_array().unwrap();
+    assert_eq!(ready.len(), 1, "{v}");
+    assert_eq!(ready[0]["pr"], 1);
+    let skipped = v["data"]["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{v}");
+    assert_eq!(skipped[0]["pr"], 3);
+    assert!(skipped[0]["why"].as_str().unwrap().contains("403"), "{v}");
+    assert!(
+        v["data"]["skipped_fix"]
+            .as_str()
+            .unwrap()
+            .contains("BOSUN_OWNER_TOKEN")
+    );
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
+
+    // A private repo answers every unauthenticated read with an error: still exit 0, nothing
+    // listed, and the skipped PR list says why. No token error, no write.
+    let fake = board();
+    let (code, v) = list_without_token(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ready"], json!([]));
+    assert_eq!(v["data"]["approve_command"], Value::Null);
+    let skipped = v["data"]["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1, "{v}");
+    assert_eq!(skipped[0]["pr"], Value::Null);
+    assert!(
+        skipped[0]["why"].as_str().unwrap().contains("open PRs"),
+        "{v}"
+    );
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
 }
 
 #[test]
