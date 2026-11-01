@@ -53,7 +53,8 @@ Leases: a claim is an issue comment with one JSON line:
 {"bosun":"lease","session":"session_...","origin":"spawned","expires":"2026-10-22T10:30:00Z","touch":["src/core/lease.rs"]}
 ```
 
-The TTL is 30 min; `bosun heartbeat` extends it. `bosun reap` releases expired leases and sets the
+The TTL is 30 min; `bosun heartbeat` extends it, and so does `bosun wait` while it polls (§5),
+which also runs the expiry part of reap. `bosun reap` releases expired leases and sets the
 task back to ready. `bosun release` ends a lease in the normal way. A released or reaped lease gets
 a second comment `{"bosun":"lease-end","session":..,"reason":"released|reaped"}`; the live lease
 of an issue is the newest lease comment with no later lease-end for the same session.
