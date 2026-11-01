@@ -16,7 +16,9 @@ use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
 use crate::core::touch::{Changed, outside};
-use crate::github::{Github, IssueState, PrFile, enable_auto_merge_any, is_already_clean};
+use crate::github::{
+    Github, IssueState, Live, PrFile, enable_auto_merge_any, is_already_clean, is_unstable,
+};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// The default checks the ruleset requires before a merge (spec D15, D32), reported as
@@ -253,6 +255,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     }
     let mut route = None;
     let mut pending = Vec::new();
+    let mut enforced = None;
     if args.auto_merge {
         if state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
@@ -262,6 +265,32 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             ));
         }
         pending = not_green(gh, &base, &pull.head_sha)?;
+        // Auto-merge waits only for what the branch enforces: never turn it on for a branch
+        // that would merge without the gates. A 403 proves nothing, so it does not block.
+        enforced = Some(match gh.required_status_checks(&base)? {
+            Live::Checks(on) => {
+                let missing: Vec<&str> = (REQUIRED.iter().copied())
+                    .filter(|c| !on.iter().any(|o| o == c))
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(BosunError::needs_human(
+                        format!(
+                            "{base} does not require {}, so auto-merge could merge PR #{} ungated",
+                            missing.join(", "),
+                            pull.number
+                        ),
+                        format!(
+                            "an admin runs `hoist apply --area github` so the ruleset requires them, then rerun `bosun pr {n} --auto-merge`"
+                        ),
+                    )
+                    .with_data(json!({
+                        "pr": pull.number, "head_sha": pull.head_sha, "unenforced": missing,
+                    })));
+                }
+                "verified"
+            }
+            Live::Partial(..) | Live::Forbidden => "unknown",
+        });
         // Before auto-merge: a failed write leaves nothing turned on, so a rerun is clean.
         let record = Record::TaskPr {
             session: app.ctx.session.clone(),
@@ -293,6 +322,16 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     "pr": pull.number, "head_sha": pull.head_sha, "already_clean": true,
                 })));
             }
+            Err(e) if is_unstable(&e) => {
+                return Err(BosunError::error(
+                    format!("PR #{} has a failing check, so GitHub cannot turn on auto-merge", pull.number),
+                    format!(
+                        "`bosun wait --pr {0}` names the failing checks: fix them, push, then rerun `bosun pr {n} --auto-merge`",
+                        pull.number
+                    ),
+                )
+                .with_data(json!({"pr": pull.number, "head_sha": pull.head_sha, "unstable": true})));
+            }
             Err(e) => return Err(e),
         };
         let fresh = gh.get_issue(n)?.unwrap_or(issue);
@@ -302,7 +341,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     Ok(Outcome::data(json!({
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
         "auto_merge": args.auto_merge, "auto_merge_route": route, "task_state": state.map(State::name),
-        "touch_check": touch,
+        "touch_check": touch, "enforced_checks": enforced,
         "pending_checks": pending.iter().map(|(c, s)| json!({"context": c, "state": s}))
             .collect::<Vec<_>>(),
     })))

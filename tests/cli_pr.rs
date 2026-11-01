@@ -62,7 +62,10 @@ fn bosun_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
 
 fn task(fake: &FakeGithub, state: &str) {
     fake.issue(7, "the task", &[state], "Do it.");
+    fake.enforce_checks(&REQUIRED_FOUR);
 }
+
+const REQUIRED_FOUR: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
 
 fn merge_calls(fake: &FakeGithub) -> usize {
     fake.requests()

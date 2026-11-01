@@ -54,6 +54,7 @@ fn setup(green: &[&str]) -> (FakeGithub, tempfile::TempDir) {
     let fake = FakeGithub::start();
     fake.issue(7, "the task", &["bosun:state/review"], "Do it.");
     fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.enforce_checks(&ALL);
     for c in green {
         fake.status("sha20", c, "success", "");
     }
@@ -135,4 +136,80 @@ fn a_ccr_clean_answer_needs_the_owner_and_merges_nothing() {
             .iter()
             .any(|r| r.method == "PUT" && r.path.ends_with("/pulls/20/ccr/auto_merge"))
     );
+}
+
+fn assert_not_enabled(fake: &FakeGithub) {
+    assert_eq!(fake.auto_merge_enabled(20), None);
+    assert_eq!(merge_calls(fake), 0);
+    let labels = fake.labels_of(7);
+    assert!(labels.contains(&"bosun:state/review".into()), "{labels:?}");
+}
+
+#[test]
+fn a_required_check_the_ruleset_does_not_enforce_needs_the_owner() {
+    let (fake, dir) = setup(&ALL);
+    fake.enforce_checks(&["ci-ok", "risk-check", "main-open"]);
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["unenforced"], json!(["review-verdict"]), "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("review-verdict"), "{msg}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("hoist apply"));
+    assert_not_enabled(&fake);
+}
+
+#[test]
+fn a_branch_without_rules_never_gets_auto_merge() {
+    let (fake, dir) = setup(&ALL);
+    fake.enforce_checks(&[]);
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["unenforced"].as_array().unwrap().len(), 4, "{v}");
+    assert_not_enabled(&fake);
+}
+
+#[test]
+fn classic_protection_counts_as_enforcement() {
+    let (fake, dir) = setup(&ALL);
+    fake.enforce_checks(&["ci-ok"]);
+    fake.enforce_classic(&["risk-check", "review-verdict", "main-open"]);
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["enforced_checks"], "verified");
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+}
+
+#[test]
+fn unreadable_rules_are_unknown_and_do_not_block() {
+    let (fake, dir) = setup(&ALL);
+    fake.enforce_checks(&[]);
+    fake.fail_path("/rules/branches/main", 403);
+    fake.fail_path("/protection/required_status_checks", 403);
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["enforced_checks"], "unknown");
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+}
+
+#[test]
+fn partly_readable_rules_are_unknown_and_do_not_block() {
+    let (fake, dir) = setup(&ALL);
+    fake.enforce_checks(&["ci-ok"]);
+    fake.fail_path("/protection/required_status_checks", 403);
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["enforced_checks"], "unknown");
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+}
+
+#[test]
+fn an_unstable_answer_names_the_failing_checks() {
+    let (fake, dir) = setup(&ALL);
+    fake.graphql_error("Pull request is in unstable status");
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("bosun wait --pr 20"), "{fix}");
+    assert!(fix.contains("failing"), "{fix}");
+    assert_not_enabled(&fake);
 }

@@ -201,6 +201,12 @@ pub fn is_already_clean(e: &BosunError) -> bool {
     e.message.to_lowercase().contains("clean status")
 }
 
+/// Whether GitHub refused auto-merge because a check is failing ("Pull request is in unstable
+/// status").
+pub fn is_unstable(e: &BosunError) -> bool {
+    e.message.to_lowercase().contains("unstable status")
+}
+
 /// The required status checks of a branch as the token sees them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Live {
