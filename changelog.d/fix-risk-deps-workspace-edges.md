@@ -1,0 +1,1 @@
+- risk-check: R-deps no longer counts `x.workspace = true` edges, in-repo `path` dependencies or pnpm `catalog:`/`workspace:` references as new dependencies; new root pins and new `pnpm-workspace.yaml` catalog entries still count.

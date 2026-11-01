@@ -1,0 +1,1 @@
+- 2026-11-01 · F1 · R-deps counts new outside code only: workspace edges to existing pins, path deps and pnpm catalog/workspace refs are not new; pnpm-workspace.yaml catalogs are read (`src/core/risk.rs`, `tests/cli_risk_deps_edges.rs`, spec §8)

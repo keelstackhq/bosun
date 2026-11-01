@@ -513,8 +513,64 @@ const NPM_TABLES: [&str; 4] = [
     "peerDependencies",
 ];
 
-/// Dependency names declared in a `Cargo.toml` or `package.json` text (by the file name of
-/// `path`). Other files and unparsable texts have none.
+/// Whether a Cargo dependency entry adds code from outside the repo. `x.workspace = true` does
+/// not: it inherits a root pin, which counts where it is declared. Nor does a `path` entry
+/// without `git`: that code is in this repo and in the diff.
+fn cargo_outside(v: &toml::Value) -> bool {
+    let Some(t) = v.as_table() else { return true };
+    let inherits = t.get("workspace").and_then(toml::Value::as_bool) == Some(true);
+    let local = t.contains_key("path") && !t.contains_key("git");
+    !inherits && !local
+}
+
+/// Package names in the `catalog:` and `catalogs:` sections of a `pnpm-workspace.yaml`. A small
+/// line reader (bosun has no YAML parser) for block-style `name: spec` lines. A catalog line it
+/// cannot read counts as a dependency named by the line, so a new entry is never missed.
+fn pnpm_catalogs(text: &str, names: &mut BTreeSet<String>) {
+    let unquote = |s: &str| s.trim().trim_matches(['\'', '"']).to_string();
+    // Some(false): entries of `catalog:`; Some(true): named catalogs under `catalogs:`.
+    let mut section = None;
+    let mut named = false;
+    for raw in text.lines() {
+        let line = raw.find(" #").map_or(raw, |i| &raw[..i]);
+        let body = line.trim();
+        if body.is_empty() || body.starts_with('#') {
+            continue;
+        }
+        if !line.starts_with([' ', '\t']) {
+            section = match body {
+                "catalog:" => Some(false),
+                "catalogs:" => Some(true),
+                _ if body.starts_with("catalog") => {
+                    names.insert(body.to_string());
+                    None
+                }
+                _ => None,
+            };
+            named = false;
+            continue;
+        }
+        let Some(nested) = section else { continue };
+        let pair = body
+            .rsplit_once(": ")
+            .or_else(|| body.strip_suffix(':').map(|k| (k, "")));
+        match pair {
+            Some((_, "")) if nested => named = true,
+            Some((k, v)) if !v.is_empty() && (!nested || named) => {
+                names.insert(unquote(k));
+            }
+            _ => {
+                names.insert(body.to_string());
+            }
+        }
+    }
+}
+
+/// Dependency names a `Cargo.toml`, `package.json` or `pnpm-workspace.yaml` text declares (by
+/// the file name of `path`). Edges that add no outside code are left out: Cargo
+/// `workspace = true` and in-repo `path` entries, and npm `catalog:` and `workspace:`
+/// references (the root pins and the catalogs count where they are declared). Other files and
+/// unparsable texts have none.
 pub fn dependency_names(path: &str, text: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     match path.rsplit('/').next().unwrap_or(path) {
@@ -538,7 +594,8 @@ pub fn dependency_names(path: &str, text: &str) -> BTreeSet<String> {
                     .and_then(|v| v.as_table()),
             );
             for t in tables {
-                names.extend(t.keys().cloned());
+                let outside = t.iter().filter(|(_, v)| cargo_outside(v));
+                names.extend(outside.map(|(k, _)| k.clone()));
             }
         }
         "package.json" => {
@@ -546,11 +603,20 @@ pub fn dependency_names(path: &str, text: &str) -> BTreeSet<String> {
                 return names;
             };
             for key in NPM_TABLES {
-                if let Some(o) = doc.get(key).and_then(|v| v.as_object()) {
-                    names.extend(o.keys().cloned());
+                for (name, v) in doc
+                    .get(key)
+                    .and_then(|v| v.as_object())
+                    .into_iter()
+                    .flatten()
+                {
+                    let spec = v.as_str().unwrap_or_default();
+                    if !spec.starts_with("catalog:") && !spec.starts_with("workspace:") {
+                        names.insert(name.clone());
+                    }
                 }
             }
         }
+        "pnpm-workspace.yaml" => pnpm_catalogs(text, &mut names),
         _ => {}
     }
     names
@@ -797,6 +863,56 @@ libc = "0"
             Some("[dependencies]\nz=\"1\"".into()),
         )];
         assert_eq!(new_dependencies(&created), ["z"]);
+    }
+
+    fn deps(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<String> {
+        new_dependencies(&[(path.into(), base.map(Into::into), head.map(Into::into))])
+    }
+
+    #[test]
+    fn workspace_edges_to_existing_pins_are_not_new() {
+        let base = "[package]\nname = \"a\"\n[dependencies]\nserde = \"1\"\n";
+        let head = "[package]\nname = \"a\"\n[dependencies]\nserde = \"1\"\n\
+tokio.workspace = true\nanyhow = { workspace = true, features = [\"std\"] }\n\
+core = { path = \"../core\" }\n[dev-dependencies]\ninsta = { workspace = true }\n";
+        assert!(deps("crates/a/Cargo.toml", Some(base), Some(head)).is_empty());
+        // A new crate whose manifest only inherits pins adds nothing either.
+        let only_edges = "[package]\nname = \"b\"\n[dependencies]\ntokio.workspace = true\n";
+        assert!(deps("crates/b/Cargo.toml", None, Some(only_edges)).is_empty());
+    }
+
+    #[test]
+    fn new_root_pins_count_but_not_version_bumps() {
+        let base = "[workspace.dependencies]\nserde = \"1.0.1\"\ntokio = { version = \"1\" }\n";
+        let head = "[workspace.dependencies]\nserde = \"1.0.2\"\n\
+tokio = { version = \"1\", features = [\"rt\"] }\nreqwest = \"0.12\"\n";
+        assert_eq!(deps("Cargo.toml", Some(base), Some(head)), ["reqwest"]);
+        // A path edge that becomes a registry dependency is new code.
+        let b = "[dependencies]\nx = { path = \"../x\" }\n";
+        let h = "[dependencies]\nx = { path = \"../x\", git = \"https://e.test/x\" }\n";
+        assert_eq!(deps("a/Cargo.toml", Some(b), Some(h)), ["x"]);
+    }
+
+    #[test]
+    fn pnpm_catalog_and_workspace_refs_are_not_new() {
+        let base = r#"{"dependencies":{"a":"1"}}"#;
+        let head =
+            r#"{"dependencies":{"a":"1","b":"catalog:","c":"catalog:react18","d":"workspace:*"}}"#;
+        assert!(deps("web/package.json", Some(base), Some(head)).is_empty());
+        let head = r#"{"dependencies":{"a":"2","e":"^1"}}"#;
+        assert_eq!(deps("package.json", Some(base), Some(head)), ["e"]);
+    }
+
+    #[test]
+    fn pnpm_workspace_catalogs_count() {
+        let base = "packages:\n  - 'apps/*'\ncatalog:\n  react: ^18.2.0\n";
+        let head = "packages:\n  - 'apps/*'\ncatalog:\n  react: ^18.3.0\n  'zod': 3.23.0\n\
+catalogs:\n  legacy:\n    \"@scope/x\": 1.0.0 # pinned\n";
+        assert_eq!(
+            deps("pnpm-workspace.yaml", Some(base), Some(head)),
+            ["@scope/x", "zod"]
+        );
+        assert!(deps("pnpm-workspace.yaml", Some(head), Some(head)).is_empty());
     }
 
     #[test]
