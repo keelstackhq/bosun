@@ -6,6 +6,7 @@ use crate::core::lease::{Member, members};
 use crate::core::records::{Note, Record, replace_record};
 use crate::ctx::Origin;
 use crate::github::{Github, IssueState};
+use crate::output::BosunError;
 
 pub const LABEL: &str = "bosun:registry";
 
@@ -47,14 +48,38 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
     let mine = members(&notes).into_iter().find(|m| &m.session == session);
     let expires = app.ctx.now.plus_secs(crate::core::lease::TTL_SECS);
     let prior = mine.as_ref();
+    if spec.parent.as_ref() == Some(session) {
+        return Err(BosunError::error(
+            format!("--parent {session} is this session itself"),
+            "pass the id of the session that spawned this one, or leave out --parent for a root session",
+        ));
+    }
+    // A record that names itself as parent (written before this check) is a root.
+    let parent = prior
+        .and_then(|m| m.parent.clone())
+        .filter(|p| p != session)
+        .or(spec.parent);
+    // An unknown or expired parent keeps an existing record's depth as the floor.
+    let floor = match parent.as_deref() {
+        None => 1,
+        Some(p) => members(&notes)
+            .iter()
+            .find(|m| m.session == p && m.expires > app.ctx.now)
+            .map_or(prior.map_or(1, |m| m.depth), |m| m.depth + 1),
+    };
     let member = Member {
         session: session.clone(),
         origin: spec.origin.unwrap_or(app.ctx.origin).as_str().to_string(),
         area: spec.area.or_else(|| prior.and_then(|m| m.area.clone())),
-        // The parent and the depth are fixed at the first join (`spawn --record` writes them):
-        // a later join may raise the depth but never lowers it nor changes the parent.
-        parent: prior.and_then(|m| m.parent.clone()).or(spec.parent),
-        depth: spec.depth.unwrap_or(1).max(prior.map_or(0, |m| m.depth)),
+        // The parent is fixed at the first join (`spawn --record` writes it). A later `--depth`
+        // sets the depth, but never below its parent's depth + 1 (1 for a root), so a root that
+        // joined too deep can come back to 1 and a child can never spawn deeper than allowed.
+        parent: parent.clone(),
+        depth: match (spec.depth, prior) {
+            (Some(d), _) => d.max(floor),
+            (None, Some(m)) => m.depth,
+            (None, None) => 1.max(floor),
+        },
         expires,
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
