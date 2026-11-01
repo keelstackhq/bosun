@@ -1635,3 +1635,223 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
         );
     }
 }
+
+/// A sandbox for a full run of a setup script: stubs for every tool it calls log to `calls`.
+/// `node22` is first in PATH with a fake Node 22; `node24` holds a fake Node 24.
+struct SetupSandbox {
+    root: tempfile::TempDir,
+}
+
+impl SetupSandbox {
+    fn new() -> Self {
+        let s = Self {
+            root: tempfile::tempdir().unwrap(),
+        };
+        for d in ["bin", "node22", "node24", "repo"] {
+            fs::create_dir(s.root.path().join(d)).unwrap();
+        }
+        let log = s.root.path().join("calls");
+        let rec = format!("echo \"$(basename \"$0\") $*\" >> {}", log.display());
+        for t in ["cargo", "curl", "apt-get", "bosun"] {
+            s.stub("bin", t, &rec);
+        }
+        // `rustup show active-toolchain` fails: the image has no default toolchain.
+        let show = "[ \"$1 $2\" != \"show active-toolchain\" ]";
+        s.stub("bin", "rustup", &format!("{rec}\n{show}"));
+        s.stub("bin", "npm", "[ \"$1\" = pack ] && echo x.tgz; exit 0");
+        s.stub(
+            "node22",
+            "node",
+            "[ \"$1\" = --version ] && echo v22.3.0; exit 0",
+        );
+        s.stub(
+            "node24",
+            "node",
+            "[ \"$1\" = --version ] && echo v24.1.0; exit 0",
+        );
+        s
+    }
+
+    fn stub(&self, dir: &str, name: &str, body: &str) {
+        let p = self.path(dir).join(name);
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    }
+
+    fn path(&self, p: &str) -> PathBuf {
+        self.root.path().join(p)
+    }
+
+    fn calls(&self) -> String {
+        fs::read_to_string(self.path("calls")).unwrap_or_default()
+    }
+
+    /// Run the whole script in `repo/`; (exit ok, stderr).
+    fn run(&self, script: &str, node24_dir: &str) -> (bool, String) {
+        fs::write(self.path("setup.sh"), script).unwrap();
+        let path = format!(
+            "{}:{}:{}",
+            self.path("bin").display(),
+            self.path("node22").display(),
+            std::env::var("PATH").unwrap()
+        );
+        let out = Command::new("bash")
+            .arg(self.path("setup.sh"))
+            .current_dir(self.path("repo"))
+            .env("PATH", path)
+            .env("SETUP_NODE_BIN_DIR", self.path(node24_dir))
+            .env("SETUP_NODE_LINK_DIR", self.path("link"))
+            .env("SETUP_NODE_PROFILE", self.path("profile.sh"))
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+}
+
+fn setup_scripts() -> Vec<(&'static str, String)> {
+    let files = variant(&["rust"], "");
+    let own =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
+            .unwrap();
+    vec![
+        ("channel", file(&files, "docs/setup-script.sh").to_string()),
+        ("bosun", own),
+    ]
+}
+
+/// The checkout does not exist when the setup script runs, so there is no toolchain file: the
+/// cargo tools still install (with rustup's stable), and a failing tool never fails the script.
+#[test]
+fn setup_scripts_install_the_cargo_tools_without_a_toolchain_file() {
+    for (name, script) in setup_scripts() {
+        let sb = SetupSandbox::new();
+        let (ok, err) = sb.run(&script, "node24");
+        let calls = sb.calls();
+        assert!(ok, "{name}: {err}");
+        assert!(
+            calls.contains("rustup toolchain install stable"),
+            "{name}: {calls}"
+        );
+        assert!(calls.contains("rustup default stable"), "{name}: {calls}");
+        assert!(
+            calls.contains("cargo install --locked cargo-nextest cargo-deny"),
+            "{name}: {calls}"
+        );
+        assert!(err.contains("no rust-toolchain.toml"), "{name}: {err}");
+        assert!(
+            !err.contains("skipping the Rust toolchain install and the cargo tools"),
+            "{name}: {err}"
+        );
+
+        // A failing cargo only warns.
+        let sb = SetupSandbox::new();
+        sb.stub("bin", "cargo", "exit 101");
+        let (ok, err) = sb.run(&script, "node24");
+        assert!(ok, "{name}: {err}");
+        assert!(
+            err.contains("cargo-nextest and cargo-deny failed"),
+            "{name}: {err}"
+        );
+    }
+}
+
+/// With a valid channel the pinned toolchain installs; with an invalid one it is skipped with a
+/// warning and never reaches rustup, yet the cargo tools still install.
+#[test]
+fn setup_scripts_keep_the_channel_check_when_they_install_the_tools() {
+    for (name, script) in setup_scripts() {
+        for (channel, valid) in [("1.99.1", true), ("1.0; rm -rf /", false)] {
+            let sb = SetupSandbox::new();
+            fs::write(
+                sb.path("repo/rust-toolchain.toml"),
+                format!("[toolchain]\nchannel = \"{channel}\"\n"),
+            )
+            .unwrap();
+            let (ok, err) = sb.run(&script, "node24");
+            let calls = sb.calls();
+            assert!(ok, "{name} {channel}: {err}");
+            assert_eq!(
+                calls.contains("rustup toolchain install 1.99.1"),
+                valid,
+                "{name} {channel}: {calls}"
+            );
+            if !valid {
+                assert!(!calls.contains("rm -rf"), "{name}: {calls}");
+                assert!(err.contains("invalid channel"), "{name}: {err}");
+                assert!(
+                    err.contains("skipping the Rust toolchain install"),
+                    "{name}: {err}"
+                );
+            }
+            assert!(
+                calls.contains("cargo install --locked"),
+                "{name} {channel}: {calls}"
+            );
+        }
+    }
+}
+
+/// Node 24 must be the `node` that resolves, although an older Node is earlier in PATH.
+#[test]
+fn setup_scripts_make_node_24_the_node_that_resolves() {
+    for (name, script) in setup_scripts() {
+        let sb = SetupSandbox::new();
+        let (ok, err) = sb.run(&script, "node24");
+        assert!(ok, "{name}: {err}");
+        assert!(!err.contains("not Node 24"), "{name}: {err}");
+        // The old dir is still first in PATH, and the `node` there now is Node 24.
+        let path = format!(
+            "{}:{}",
+            sb.path("node22").display(),
+            std::env::var("PATH").unwrap()
+        );
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg("node --version")
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "v24.1.0\n", "{name}");
+        // Later shells put the Node 24 link dir first.
+        let profile = fs::read_to_string(sb.path("profile.sh")).unwrap();
+        let link = sb.path("link").display().to_string();
+        assert!(profile.contains(&link), "{name}: {profile}");
+        assert!(sb.path("link/node").exists(), "{name}");
+
+        // Node 24 missing: warn naming both paths, do not fail.
+        let sb = SetupSandbox::new();
+        let (ok, err) = sb.run(&script, "missing");
+        assert!(ok, "{name}: {err}");
+        assert!(err.contains("not Node 24"), "{name}: {err}");
+        for p in ["node22/node", "missing/node"] {
+            let p = sb.path(p).display().to_string();
+            assert!(err.contains(&p), "{name}: {err}");
+        }
+    }
+}
+
+/// When the NodeSource `node` is not Node 24 either, the script replaces nothing and links nothing.
+#[test]
+fn setup_scripts_never_replace_node_with_another_old_node() {
+    for (name, script) in setup_scripts() {
+        let sb = SetupSandbox::new();
+        fs::create_dir(sb.path("stale")).unwrap();
+        sb.stub(
+            "stale",
+            "node",
+            "[ \"$1\" = --version ] && echo v20.9.0; exit 0",
+        );
+        let (ok, err) = sb.run(&script, "stale");
+        assert!(ok, "{name}: {err}");
+        assert!(err.contains("not Node 24"), "{name}: {err}");
+        let old = sb.path("node22/node");
+        assert!(!old.is_symlink(), "{name}: {} was replaced", old.display());
+        let out = Command::new(&old).arg("--version").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "v22.3.0\n", "{name}");
+        assert!(!sb.path("link/node").exists(), "{name}");
+        assert!(!sb.path("profile.sh").exists(), "{name}");
+    }
+}

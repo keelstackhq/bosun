@@ -89,6 +89,8 @@ pub struct State {
     pub auto_merge: HashMap<u64, String>,
     /// Answers every GraphQL call with this error.
     pub graphql_error: Option<String>,
+    /// Auto-merge answers "Pull request is in clean status" (GraphQL error, ccr 422).
+    pub already_clean: bool,
     /// Answers every GraphQL call with this HTTP status and message.
     pub graphql_status: Option<(u16, String)>,
     pub log: Vec<Logged>,
@@ -527,6 +529,11 @@ impl FakeGithub {
 
     pub fn graphql_status(&self, status: u16, message: &str) {
         self.state.lock().unwrap().graphql_status = Some((status, message.into()));
+    }
+
+    /// Auto-merge is refused on both routes because the pull is already mergeable.
+    pub fn already_clean(&self) {
+        self.state.lock().unwrap().already_clean = true;
     }
 
     pub fn graphql_error(&self, message: &str) {
@@ -1057,6 +1064,9 @@ fn route(
             ))
         }
         ("PUT", ["pulls", n, "ccr", "auto_merge"]) => {
+            if s.already_clean {
+                return msg(422, "Pull request is in clean status");
+            }
             let method = body["merge_method"].as_str().unwrap_or("");
             if !["merge", "squash", "rebase"].contains(&method) {
                 return msg(400, "merge_method must be one of merge, squash, rebase.");
@@ -1425,6 +1435,9 @@ fn graphql(s: &mut State, body: &Value) -> Reply {
     let error = |m: &str| ok(json!({"data": null, "errors": [{"message": m}]}));
     if let Some(m) = s.graphql_error.clone() {
         return error(&m);
+    }
+    if s.already_clean {
+        return error("Pull request is in clean status");
     }
     if !body["query"]
         .as_str()

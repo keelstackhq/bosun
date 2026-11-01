@@ -93,6 +93,7 @@ fn green(fake: &FakeGithub, sha: &str) {
 fn uc_m1_1_a_task_goes_ready_to_merged_by_bosun_commands_only() {
     // planned -> ready comes from plan import (milestone M2, another session); start at ready.
     let fake = FakeGithub::start();
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     fake.issue(7, "the task", &["bosun:state/ready"], BODY);
     let dir = repo("claude/t7");
 
@@ -242,6 +243,7 @@ fn pull_lists_after(fake: &FakeGithub, skip: usize) -> usize {
 #[test]
 fn reap_reads_the_recorded_pr_without_listing_all_pulls() {
     let fake = FakeGithub::start();
+    fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     fake.issue(7, "the task", &["bosun:state/ready"], BODY);
     let dir = repo("claude/t7");
     assert_eq!(run(&fake, dir.path(), &["claim", "7"]).0, 0);

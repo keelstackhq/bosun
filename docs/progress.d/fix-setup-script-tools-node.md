@@ -1,0 +1,1 @@
+- 2026-11-01 · Setup script: cargo tools and Node 24 · without a toolchain file the script still installs rustup's stable default and cargo-nextest/cargo-deny; Node 24 is linked first (profile.d plus replacing the older `node`), verified, warns on failure; both copies; spec §1 D23, §3 · `tests/channel_render.rs` · PR (fix/setup-script-tools-node)
