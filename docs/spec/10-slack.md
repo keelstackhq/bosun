@@ -38,8 +38,18 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
   exit 5 (`data.reason`) and nothing is written; an ask id that is not the open ask is exit 3;
   a missing or malformed approvers file is exit 1. A counted answer is posted like a Slack one
   (fenced, cut at 4000 characters) under "Answer from the owner, relayed in chat (signature of
-  key <id> verified by bosun)", with an `answer` record carrying `key`, `ask` and `sig` instead
-  of `slack_user`; data adds `key_id` and `ask`. `--chat --sign-key <pem>` is the signer's
+  key <id> verified by bosun)", with an `answer` record carrying `key`, `issue`, `ask`, `sha256`
+  (of the answer text) and `sig` instead of `slack_user`, which is all a later check needs to
+  rebuild the signed message and verify it again; data adds `key_id` and `ask`. Unlike a Slack
+  answer, the chat form takes any state with an open ask. A counted answer on a needs-human task
+  moves it to ready (`set_state`; `data.state` `ready`, `data.moved` true). On any other state it
+  is recorded and the state is left alone (`data.moved` false, `data.not_moved` says why). It is
+  never moved while halted: the kill switch is exit 4 before anything is read or written, as for
+  every command; while main is red (an open `bosun:main-red` issue) an answer that would move a
+  task is exit 4 and writes nothing, as `bosun claim` refuses, except on a mainfix task. The ask
+  stays open, so the same signed answer can be relayed again once main is green. When the
+  move fails after the record is posted, it is exit 1 with `data.comment_id` and the fix to move
+  the task on GitHub. `--chat --sign-key <pem>` is the signer's
   helper: it signs the owner's plain answer (stdin or `--from`) for the open ask with an
   enrolled owner key (else exit 1, nothing signed) and returns the chat form in `data.chat`;
   it posts nothing. The key is read and never printed as for `bosun approve --sign-key`.

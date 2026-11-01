@@ -61,10 +61,15 @@ pub fn parse_chat(input: &str) -> Option<Chat<'_>> {
 /// The exact bytes an owner key signs for an answer: owner and repo lowercased, and the
 /// SHA-256 (lowercase hex) of the normalized text.
 pub fn answer_message(owner: &str, repo: &str, issue: u64, ask: u64, text: &str) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, normalize(text).as_bytes());
-    let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    let hex = text_sha256(text);
     let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
     format!("bosun-answer v1 {o}/{r}#{issue} ask {ask} sha256 {hex}")
+}
+
+/// The lowercase hex SHA-256 of the normalized text, as the signed message and the record carry it.
+pub fn text_sha256(text: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, normalize(text).as_bytes());
+    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// The chat form the signer relays.

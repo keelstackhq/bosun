@@ -1,8 +1,9 @@
 //! `bosun answer <issue> --slack-user U... [--from -|FILE]`: an owner's answer from Slack
 //! (spec section 10). Only an owner Slack ID counts; the text is fenced as data and never
-//! becomes a flag, a label or a command. The answer is recorded only: it never changes the
+//! becomes a flag, a label or a command. A Slack answer is recorded only: it never changes the
 //! task's state, the owner moves the task on GitHub. `--chat` takes the owner's answer relayed
-//! in chat by the orchestrator: it counts only with a verified signature of an enrolled owner key.
+//! in chat by the orchestrator: it counts only with a verified signature of an enrolled owner
+//! key, and then moves a needs-human task to ready.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -11,15 +12,15 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::AnswerArgs;
-use crate::app::{App, default_branch, kill_switch};
+use crate::app::{App, default_branch, kill_switch, main_red, set_state, task_meta};
 use crate::cli::approve::read_key;
 use crate::cli::intake::fence_text;
 use crate::cli::risk_check::{OWNERS_PATH, enrolled_keys, owner_slack_ids};
-use crate::core::answer::{answer_message, chat_form, normalize, parse_chat};
+use crate::core::answer::{answer_message, chat_form, normalize, parse_chat, text_sha256};
 use crate::core::approve::{APPROVERS_PATH, Role, verify_ed25519};
 use crate::core::records::{Record, parse_record};
 use crate::core::state::{State, state_of};
-use crate::github::{Github, b64};
+use crate::github::{Github, Issue, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 fn valid_slack_id(id: &str) -> bool {
@@ -117,7 +118,8 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         )
     })?;
     let state = state_of(&issue.labels);
-    if state != Some(State::NeedsHuman) {
+    // A signed chat answer is recorded whatever the state; only a needs-human task moves.
+    if state != Some(State::NeedsHuman) && args.slack_user.is_some() {
         let now = state.map_or("none".to_string(), |s| s.to_string());
         return Err(BosunError::conflict(
             format!("#{n} is {now}, not needs-human"),
@@ -127,8 +129,9 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         ));
     }
     let Some(ask) = open_ask(gh, n)? else {
+        let now = state.map_or("none".to_string(), |s| s.to_string());
         return Err(BosunError::conflict(
-            format!("#{n} is needs-human but has no open ask"),
+            format!("#{n} is {now} but has no open ask"),
             format!(
                 "no open ask on #{n}: the owner answers on GitHub, or a session runs `bosun ask`"
             ),
@@ -136,7 +139,7 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
     };
     let slack_user = match &args.slack_user {
         Some(u) => u.clone(),
-        None => return chat(&app, args, ask, &text),
+        None => return chat(&app, args, &issue, ask, &text),
     };
     let branch = default_branch(gh)?;
     let ids = owner_slack_ids(gh, &branch)?;
@@ -159,22 +162,26 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         slack_user,
         at: app.ctx.now.to_string(),
         key: None,
+        issue: None,
         ask: None,
+        sha256: None,
         sig: None,
     };
     let head = "Answer from the owner via Slack (sender id not verified by bosun)";
-    post(gh, n, head, &text, &record, json!({}))
+    let mut data = post(gh, n, head, &text, &record)?;
+    // The answer is data: the owner moves the task on GitHub.
+    data["state"] = json!("needs-human");
+    Ok(Outcome::data(data))
 }
 
-/// The fenced answer comment with its record; `data` gets the issue, comment and state.
+/// Post the fenced answer comment with its record; returns data with the issue and comment.
 fn post(
     gh: &dyn Github,
     n: u64,
     head: &str,
     text: &str,
     record: &Record,
-    mut data: Value,
-) -> CmdResult {
+) -> Result<Value, BosunError> {
     let truncated = text.trim_end().chars().count() > 4000;
     let cut = if truncated {
         "(cut at 4000 characters)\n\n"
@@ -187,14 +194,11 @@ fn post(
         record.to_line()
     );
     let comment = gh.add_comment(n, &body)?;
-    // The answer is data: the owner moves the task on GitHub.
-    data["issue"] = json!(n);
-    data["comment_id"] = json!(comment.id);
-    data["state"] = json!("needs-human");
+    let mut data = json!({"issue": n, "comment_id": comment.id});
     if truncated {
         data["truncated"] = json!(true);
     }
-    Ok(Outcome::data(data))
+    Ok(data)
 }
 
 /// What the orchestrator does when a chat answer does not count.
@@ -202,7 +206,7 @@ const CHAT_FIX: &str = "relay the owner's answer again in chat form, signed for 
 
 /// `--chat`: verify the relayed chat form and record it, or with `--sign-key` sign the owner's
 /// plain answer and print the chat form (nothing is posted).
-fn chat(app: &App, args: &AnswerArgs, ask: u64, text: &str) -> CmdResult {
+fn chat(app: &App, args: &AnswerArgs, issue: &Issue, ask: u64, text: &str) -> CmdResult {
     let (gh, n) = (app.gh.as_ref(), args.issue);
     let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
     let keys = enrolled_keys(gh).map_err(|why| {
@@ -263,18 +267,59 @@ fn chat(app: &App, args: &AnswerArgs, ask: u64, text: &str) -> CmdResult {
     if !verified {
         return Err(refuse("bad signature"));
     }
+    // Only a needs-human task moves, and never while main is red, except a mainfix task (as
+    // `bosun claim`): exit 4 before anything is written, so the same signed answer can be
+    // relayed again once main is green. The kill switch was checked before any read.
+    let state = state_of(&issue.labels);
+    let moves = state == Some(State::NeedsHuman);
+    let mainfix = task_meta(issue).is_some_and(|m| m.kind == "mainfix")
+        || issue.labels.iter().any(|l| l == "bosun:kind/mainfix");
+    if moves
+        && !mainfix
+        && let Some(red) = main_red(gh)?
+    {
+        return Err(BosunError::halted(
+            format!(
+                "main is red (#{red}); the answer would move #{n} to ready, so nothing was recorded"
+            ),
+            format!("wait for #{red} to close, then relay the same signed answer again"),
+        ));
+    }
     let record = Record::Answer {
         session: app.ctx.session.clone(),
         slack_user: String::new(),
         at: app.ctx.now.to_string(),
         key: Some(key.id.clone()),
+        issue: Some(n),
         ask: Some(ask),
+        sha256: Some(text_sha256(&form.text)),
         sig: Some(sig.to_string()),
     };
     let head = format!(
         "Answer from the owner, relayed in chat (signature of key {} verified by bosun)",
         key.id
     );
-    let data = json!({"key_id": key.id, "ask": ask});
-    post(gh, n, &head, &normalize(&form.text), &record, data)
+    let mut data = post(gh, n, &head, &normalize(&form.text), &record)?;
+    data["key_id"] = json!(key.id);
+    data["ask"] = json!(ask);
+    if moves {
+        set_state(gh, n, issue, State::Ready).map_err(|e| {
+            let fix = format!(
+                "the answer is recorded (comment {}); move #{n} from needs-human to ready on GitHub",
+                data["comment_id"]
+            );
+            BosunError::error(format!("the answer is recorded but #{n} did not move: {}", e.message), fix)
+                .with_data(data.clone())
+        })?;
+        data["state"] = json!("ready");
+        data["moved"] = json!(true);
+    } else {
+        let now = state.map_or("none".to_string(), |s| s.to_string());
+        data["state"] = json!(now);
+        data["moved"] = json!(false);
+        data["not_moved"] = json!(format!(
+            "#{n} is {now}, not needs-human: the answer is recorded and the state is left alone"
+        ));
+    }
+    Ok(Outcome::data(data))
 }

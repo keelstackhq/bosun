@@ -25,6 +25,7 @@ State machine:
 | building, review, fixing | merged | a human merged the PR; `bosun pr`, `bosun reap` or `bosun result --outcome merged --pr N` sees it |
 | any | blocked | stop rule, conflict, budget, a child's `bosun result --outcome blocked` |
 | any | needs-human | risk high, owner question, tier escalation used up, a child's `bosun result --outcome needs-human` |
+| needs-human | ready | `bosun answer --chat` counted an owner's signed answer to the open ask (§10); not while halted or main is red |
 
 Only bosun commands change the state label. A hook guards against accidental or casual label edits; it is not a sandbox. It fails closed: a Bash command that names a state label passes only when every command in it, nested ones included, is on a read-only allowlist (`bosun`, grep/cat/jq and similar text tools, `git show|log|diff|blame|status` with vouched options, `gh issue|pr list|view|status`, `gh pr diff|checks`, `gh search`, `gh label list`) and no `$` expansion appears outside single quotes; the body of a heredoc with a quoted delimiter is data, so prose that names a label passes. Known misses: a label split by quotes or escapes, built at run time or passed through a file, and repo or user config, or files, written by the same or an earlier command (a redirect whose literal target is in `.git/` or a gitconfig is refused; a globbed target, a command that writes a file operand such as `uniq IN OUT`, and other paths are not). A GitHub tool call is refused when its label fields (or, for a label tool, its whole input) name a state label.
 
