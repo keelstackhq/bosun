@@ -402,12 +402,14 @@ fn a_zero_or_invalid_timeout_uses_the_default() {
     }
 }
 
+const GH_ENV_DRIFT: &str = r#"{"area":"github","kind":"environment","key":"release","action":"create","reason":"absent","source":"default","verify":null}"#;
+const GH_ENV2_DRIFT: &str = r#"{"area":"github","kind":"environment","key":"release-npm","action":"create","reason":"absent","source":"default","verify":null}"#;
 const TOKEN_DRIFT: &str = r#"{"area":"github","kind":"secret","key":"HOIST_RELEASE_TOKEN","action":"create","reason":"absent","source":"default","verify":null}"#;
 
 #[test]
 fn release_drift_is_skipped_when_release_is_not_configured() {
     let tmp = tempfile::tempdir().unwrap();
-    let items = format!("{OK_ITEM},{ENV_DRIFT},{TOKEN_DRIFT},{NPM_DRIFT}");
+    let items = format!("{OK_ITEM},{GH_ENV_DRIFT},{TOKEN_DRIFT},{GH_ENV2_DRIFT}");
     let h = fake_hoist(tmp.path(), &report(&items, false, 1), 1);
     let repo = repo_with(false);
     let (_, v) = run(&h, repo.path(), true);
@@ -428,4 +430,35 @@ fn release_drift_is_skipped_when_release_is_not_configured() {
         skipped[1].as_str().unwrap().contains("HOIST_RELEASE_TOKEN"),
         "{v}"
     );
+}
+
+#[test]
+fn hoist_publish_items_mean_release_is_configured() {
+    let tmp = tempfile::tempdir().unwrap();
+    let items = format!("{OK_ITEM},{TOKEN_DRIFT},{NPM_DRIFT}");
+    let h = fake_hoist(tmp.path(), &report(&items, false, 1), 1);
+    let repo = repo_with(false);
+    let (_, v) = run(&h, repo.path(), true);
+    let s10 = step(&v, 10);
+    assert_eq!(s10["status"], "missing", "{v}");
+    assert!(
+        s10["fix"]
+            .as_str()
+            .unwrap()
+            .contains("hoist apply --area npm"),
+        "{s10}"
+    );
+    assert!(
+        step(&v, 5)["detail"]
+            .as_str()
+            .unwrap()
+            .contains("HOIST_RELEASE_TOKEN"),
+        "{v}"
+    );
+    assert_eq!(
+        v["data"]["hoist"]["skipped"].as_array().unwrap().len(),
+        0,
+        "{v}"
+    );
+    assert_eq!(v["data"]["hoist"]["release_inferred"], true, "{v}");
 }

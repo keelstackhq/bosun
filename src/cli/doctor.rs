@@ -56,7 +56,8 @@ fn routines(slack: bool) -> Value {
 }
 
 /// Whether the repo publishes releases: hoist.toml has `[release]` or `[publish]`, a workflow is
-/// `release.yml`/`release.yaml` or names a `release*` environment, or a release exists. Else
+/// `release.yml`/`release.yaml` or names a `release*` environment, a package is publishable, or a
+/// release exists. Else
 /// release (step 10, hoist's release items) is optional and skipped (F11).
 fn release_configured(root: &Path, hoist: Option<&toml::Table>, released: bool) -> bool {
     let wf = root.join(".github/workflows");
@@ -69,6 +70,58 @@ fn release_configured(root: &Path, hoist: Option<&toml::Table>, released: bool) 
             .0
             .iter()
             .any(|e| e.starts_with("release"))
+        || publishable_package(root)
+}
+
+/// A target hoist would publish: a Cargo `[package]` (the root or a workspace member) without
+/// `publish = false` or `publish = []`, or a `package.json` without `"private": true`.
+fn publishable_package(root: &Path) -> bool {
+    let npm = read(root, "package.json")
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .is_some_and(|p| p.is_object() && p["private"] != true);
+    let Some(cargo) = read(root, "Cargo.toml").and_then(|t| t.parse::<toml::Table>().ok()) else {
+        return npm;
+    };
+    let ws = cargo.get("workspace").and_then(|w| w.as_table());
+    let inherited = ws
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("publish"));
+    let publishes = |t: &toml::Table| {
+        t.get("package")
+            .and_then(|p| p.as_table())
+            .is_some_and(|p| {
+                let publish = match p.get("publish") {
+                    Some(toml::Value::Table(t)) if t.get("workspace").is_some() => inherited,
+                    other => other,
+                };
+                !matches!(publish, Some(toml::Value::Boolean(false)))
+                    && !matches!(publish, Some(toml::Value::Array(a)) if a.is_empty())
+            })
+    };
+    let members = ws
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.as_str())
+        .flat_map(|m| match m.strip_suffix("/*") {
+            Some(dir) => std::fs::read_dir(root.join(dir))
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .map(|e| e.path().join("Cargo.toml"))
+                .collect::<Vec<_>>(),
+            None => vec![root.join(m).join("Cargo.toml")],
+        });
+    npm || publishes(&cargo)
+        || members
+            .filter_map(|p| std::fs::read_to_string(p).ok()?.parse::<toml::Table>().ok())
+            .any(|t| publishes(&t))
+}
+
+/// An item hoist reports only when it infers a publish target: the release, npm and crates areas.
+fn publish_evidence(area: &str) -> bool {
+    matches!(area, "release" | "npm" | "crates")
 }
 
 /// A hoist item about releases: the release, npm and crates areas, a `release*` environment, or
@@ -388,8 +441,10 @@ struct StepFindings {
 }
 
 /// Run `hoist check --json` and fold its items into steps 3, 5 and 10. Returns `data.hoist`.
-/// Without a release setup, release items go to `skipped` and fail no step.
-fn apply_hoist(items: &mut [Value], root: &Path, release: bool) -> Value {
+/// Without a release setup, release items go to `skipped` and fail no step, unless hoist itself
+/// reports release, npm or crates items: then release is configured and step 10 becomes
+/// `release_step` (`data.hoist.release_inferred`).
+fn apply_hoist(items: &mut [Value], root: &Path, release: bool, release_step: Value) -> Value {
     let bin = std::env::var("BOSUN_HOIST")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -426,6 +481,16 @@ fn apply_hoist(items: &mut [Value], root: &Path, release: bool) -> Value {
         let detail = format!("hoist check exited with {exit_json} (expected 0 or 1)");
         return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
     }
+    let inferred = !release
+        && report["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|it| publish_evidence(it["area"].as_str().unwrap_or("")));
+    if inferred {
+        items[9] = release_step;
+    }
+    let release = release || inferred;
     let (mut drift, mut unknown, mut notes) = (Vec::new(), Vec::new(), Vec::new());
     let mut skipped = Vec::new();
     let mut per_step: std::collections::BTreeMap<usize, StepFindings> = [3, 5, 10]
@@ -490,7 +555,7 @@ fn apply_hoist(items: &mut [Value], root: &Path, release: bool) -> Value {
             it["detail"] = json!(format!("{}; {note}", it["detail"].as_str().unwrap_or("")));
         }
     }
-    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes, "skipped": skipped})
+    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes, "skipped": skipped, "release_inferred": inferred})
 }
 
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
@@ -732,15 +797,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
 
     let release = gh.latest_release();
     let release_set = release_configured(root, hoist.as_ref(), matches!(release, Ok(Some(_))));
-    items.push(if !release_set {
-        skipped(
-            10,
-            "release",
-            "release is optional and not configured (no [release] or [publish] in hoist.toml, no release workflow or environment, no release yet)",
-            "to publish: add [release] to hoist.toml, then run `hoist release bootstrap`",
-        )
-    } else {
-        item(
+    let release_step = item(
         10,
         "release",
         match &release {
@@ -757,7 +814,16 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .map_or("", |r| &r.tag_name)
         ),
         "run `hoist release bootstrap` (docs/PROGRESS.md Blocked)",
-    )
+    );
+    items.push(if release_set {
+        release_step.clone()
+    } else {
+        skipped(
+            10,
+            "release",
+            "release is optional and not configured (no [release] or [publish] in hoist.toml, no release workflow or environment, no publishable Cargo or npm package, no release yet)",
+            "to publish: add [release] to hoist.toml, then run `hoist release bootstrap`",
+        )
     });
 
     let routines_ok = std::env::var("BOSUN_ROUTINES_OK").is_ok_and(|v| v.trim() == "1");
@@ -785,7 +851,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
     ));
 
-    let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set));
+    let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
     let mut data = json!({"items": items, "missing": missing, "routines": routines(slack_set)});

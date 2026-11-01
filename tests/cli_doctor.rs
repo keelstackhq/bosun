@@ -597,3 +597,44 @@ fn release_is_missing_only_when_configured() {
         assert_eq!(v["data"]["items"][9]["status"], "missing", "{rel}: {v}");
     }
 }
+
+#[test]
+fn a_publishable_package_means_release_is_configured() {
+    let fake = FakeGithub::start();
+    let crate_toml = "[package]\nname = \"x\"\nversion = \"0.1.0\"\n";
+    for files in [
+        vec![("Cargo.toml", crate_toml)],
+        vec![("package.json", "{\"name\": \"x\", \"version\": \"1.0.0\"}")],
+        vec![
+            ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+            ("crates/a/Cargo.toml", crate_toml),
+        ],
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        for (rel, text) in &files {
+            write(tmp.path(), rel, text);
+        }
+        let (_, v) = doctor(&fake, tmp.path(), false);
+        assert_eq!(v["data"]["items"][9]["status"], "missing", "{files:?}: {v}");
+    }
+}
+
+#[test]
+fn unpublished_packages_leave_release_skipped() {
+    let fake = FakeGithub::start();
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path();
+    write(
+        d,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/*\"]\n[package]\nname = \"x\"\nversion = \"0.1.0\"\npublish = false\n",
+    );
+    write(
+        d,
+        "crates/a/Cargo.toml",
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\npublish = []\n",
+    );
+    write(d, "package.json", "{\"name\": \"x\", \"private\": true}");
+    let (_, v) = doctor(&fake, d, false);
+    assert_eq!(v["data"]["items"][9]["status"], "skipped", "{v}");
+}
