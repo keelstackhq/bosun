@@ -14,9 +14,22 @@ const CONFIGS: [&str; 7] = [
     "web/.yarnrc.yml",
 ];
 
+/// The committed text: CI puts the base's `.bosun/` over the checkout before the gates, so the
+/// file on disk is the base's there (tests/governance.rs reads it the same way).
+fn committed(rel: &str) -> String {
+    let root = env!("CARGO_MANIFEST_DIR");
+    std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{rel}")])
+        .current_dir(root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_else(|| std::fs::read_to_string(Path::new(root).join(rel)).unwrap())
+}
+
 fn rules_of(rel: &str) -> Rules {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    let text = std::fs::read_to_string(p).unwrap();
+    let text = committed(rel);
     // The channel template: render the jinja tags away (every piece on).
     let text: String = text
         .split("{%")
