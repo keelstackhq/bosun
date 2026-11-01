@@ -23,7 +23,8 @@ pub enum Lock {
     Pnpm,
 }
 
-/// The units of a lockfile: whole entries, each with its section, trailing blanks dropped.
+/// The units of a lockfile: whole entries, each with its section, byte for byte but for the
+/// newlines that end them.
 /// `None` when the text has the same unit twice (no tool writes that; fail closed).
 fn units(kind: Lock, text: &str) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
@@ -31,10 +32,11 @@ fn units(kind: Lock, text: &str) -> Option<Vec<String>> {
     let mut cur: Option<String> = None;
     let flush = |cur: &mut Option<String>, out: &mut Vec<String>| {
         if let Some(u) = cur.take() {
-            out.push(u.trim_end().to_string());
+            out.push(u.trim_end_matches('\n').to_string());
         }
     };
-    for line in text.lines() {
+    // Split on `\n` only: a `\r` stays in the line, so a CRLF copy is a different file.
+    for line in text.split('\n') {
         let starts = match kind {
             // `[[package]]`, `[metadata]`, ...: a new block. Text before the first is one unit.
             Lock::Cargo => line.starts_with('['),
@@ -66,8 +68,9 @@ fn units(kind: Lock, text: &str) -> Option<Vec<String>> {
     out.iter().all(|u| seen.insert(u.clone())).then_some(out)
 }
 
-/// Whether `merged` holds nothing that neither `approved` nor `main` holds, entry by entry.
-/// Entries may be dropped (a merge prunes them); none may be new or changed.
+/// Whether `merged` holds nothing that neither `approved` nor `main` holds, entry by entry, and
+/// keeps every entry both hold. An entry of one side may be dropped (a merge prunes it); none may
+/// be new or changed, and a subset or an empty file of the shared entries is refused.
 pub fn merged_lock_ok(kind: Lock, approved: &str, main: &str, merged: &str) -> bool {
     let (Some(a), Some(m), Some(x)) = (
         units(kind, approved),
@@ -77,7 +80,9 @@ pub fn merged_lock_ok(kind: Lock, approved: &str, main: &str, merged: &str) -> b
         return false;
     };
     let known: BTreeSet<&String> = a.iter().chain(&m).collect();
-    x.iter().all(|u| known.contains(u))
+    let kept: BTreeSet<&String> = x.iter().collect();
+    let shared_kept = a.iter().filter(|u| m.contains(u)).all(|u| kept.contains(u));
+    shared_kept && x.iter().all(|u| known.contains(u))
 }
 
 #[cfg(test)]
@@ -123,8 +128,45 @@ mod tests {
             tokio,
         ]);
         assert!(cargo(&h, &m, &merged));
-        // A dropped entry is fine: the merge pruned it.
-        assert!(cargo(&h, &m, &lock(&[member("app", &["anyhow"]), anyhow])));
+        // A dropped entry of one side is fine: the merge pruned it.
+        assert!(cargo(
+            &h,
+            &m,
+            &lock(&[
+                member("app", &["anyhow"]),
+                anyhow,
+                pkg("serde", "1.0.0", "aa")
+            ])
+        ));
+    }
+
+    #[test]
+    fn an_entry_both_sides_keep_cannot_be_dropped() {
+        let serde = pkg("serde", "1.0.0", "aa");
+        let h = lock(&[serde.clone(), pkg("anyhow", "1.0.0", "bb")]);
+        let m = lock(&[serde, pkg("tokio", "1.0.0", "cc")]);
+        assert!(!cargo(
+            &h,
+            &m,
+            &lock(&[pkg("anyhow", "1.0.0", "bb"), pkg("tokio", "1.0.0", "cc")])
+        ));
+        assert!(!cargo(&h, &m, ""));
+        assert!(!cargo(&h, &m, "# generated\n"));
+    }
+
+    #[test]
+    fn bytes_are_compared_exactly() {
+        let h = lock(&[pkg("anyhow", "1.0.0", "bb")]);
+        let m = lock(&[pkg("tokio", "1.0.0", "cc")]);
+        let merged = lock(&[pkg("anyhow", "1.0.0", "bb"), pkg("tokio", "1.0.0", "cc")]);
+        assert!(cargo(&h, &m, &merged));
+        assert!(!cargo(&h, &m, &merged.replace('\n', "\r\n")));
+        assert!(!cargo(
+            &h,
+            &m,
+            &merged.replace("checksum = \"bb\"", "checksum = \"bb\" ")
+        ));
+        assert!(!pnpm(&PNPM_MERGED.replace('\n', "\r\n")));
     }
 
     #[test]
