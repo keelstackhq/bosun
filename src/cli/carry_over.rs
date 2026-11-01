@@ -2,14 +2,16 @@
 //! and maps them to `core::carry`, which decides. Every error, `None`, mismatch or unknown value
 //! is a refusal with a short reason; no GitHub message reaches it, paths only escaped by core.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::risk_check::{
     Found, decisive_review, delegation_blocked, submitted, verdict_inputs, withdrawn,
 };
 use super::verdict::CONTEXT;
 use crate::core::approve::TRUST_FILES;
-use crate::core::carry::{self, CarryFacts, Entry, FileChange, Hop, Kind, RawTree, Refusal};
+use crate::core::carry::{
+    self, CarryFacts, Entry, FileChange, Hop, Kind, LockTexts, RawTree, Refusal,
+};
 use crate::core::records::{Record, parse_record};
 use crate::core::risk::{VERDICT_AUTHOR, apply_record};
 use crate::github::{Comment, Compare, GitCommit, Github, PrFile, Pull, Review, Status};
@@ -161,7 +163,7 @@ pub fn check(
         Ok::<_, String>(t)
     };
     let (tree_b, tree_m, tree_h, tree_h2) = (tr(&b)?, tr(&m)?, tr(h)?, tr(h2)?);
-    let facts = CarryFacts {
+    let mut facts = CarryFacts {
         base_is_default: true,
         h: h.into(),
         h2: h2.into(),
@@ -177,7 +179,23 @@ pub fn check(
         tree_h,
         tree_h2,
         trust_files: &TRUST_FILES,
+        lock_texts: BTreeMap::new(),
     };
+    // Rule 6 reads each lockfile both sides changed in place, at each commit by its sha. A text
+    // that cannot be read is left out, and the check then refuses.
+    let both: Vec<String> = facts
+        .pr_files
+        .iter()
+        .map(|c| c.filename.clone())
+        .filter(|p| carry::lock_in_place(&facts, p))
+        .collect();
+    for path in both {
+        let at = |sha: &str| gh.file_at(&path, sha).ok().flatten();
+        let (h, m, h2) = (at(&facts.h), at(&facts.m), at(&facts.h2));
+        if let (Some(h), Some(m), Some(h2)) = (h, m, h2) {
+            facts.lock_texts.insert(path, LockTexts { h, m, h2 });
+        }
+    }
     carry::check(&facts).map_err(|e| e.message())?;
     Ok(chain.into_iter().map(|c| c.sha).collect())
 }

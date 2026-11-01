@@ -35,7 +35,7 @@ hides the older failed run.
 
 `bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
-`spawn`, `claim`, `budget record`, `wave plan` and `status` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never lowers the depth nor changes the parent of an existing record (it may raise the depth).
+`spawn`, `claim`, `budget record`, `wave plan` and `status` read `.bosun/limits.toml` from the default branch (the working tree copy never raises a cap; a differing local file is mentioned on stderr), and use the spec defaults when the file is absent there. The depth of the spawner is its live `join` record: a session without one is refused (exit 6, check 3, fix "run `bosun join` first"), and a later `join` never changes the parent of an existing record. `join --depth N` sets the depth of the caller's own record, raised to at least its parent's depth + 1 (1 for a root; an unknown or expired parent keeps the old depth as the floor), so a root that joined too deep comes back to 1 and a child never gets a lower depth than its place; without `--depth` the depth is kept. `join --parent` equal to the caller's own id is refused (exit 1), and a record that already names itself as parent loses that parent but keeps its own depth as the floor. `spawn --record` refuses (exit 1, nothing written) a `create_session` result whose child id is the spawner's own. The spawn prompt tells the child to give its wave agents `BOSUN_SESSION=<session>/<task>` with its own id (`data.session` of its join), not the spawner's.
 
 A refusal is exit 6 (limit) with the failed check in the JSON; a conflict in check 6 is exit 3.
 After the session made the call, `bosun spawn --record --from -` reads the `create_session` result
@@ -70,8 +70,8 @@ per_task_usd = 25
 With `max_live_sessions = 1` the same code path runs: the root session does all the work in waves.
 
 Janitor, resume, results:
-- Janitor (Routine, every 15 min, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
-  `bosun notify`.
+- Janitor (Routine, every hour, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
+  `bosun notify` (only when `.bosun/bosun.toml` has a `[slack]` table; without one the prompt `bosun doctor` prints leaves it out).
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
   It renews the join record of the session (joining again if the registry has none) and every

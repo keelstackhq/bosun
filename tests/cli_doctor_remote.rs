@@ -25,12 +25,19 @@ fn fake_hoist(dir: &Path, json: &str, code: i32) -> std::path::PathBuf {
     bin
 }
 
-/// A repo whose local step 3 check passes.
+/// A repo whose local step 3 check passes and that configures releases (hoist.toml [release]).
 fn repo_with_checks() -> tempfile::TempDir {
+    repo_with(true)
+}
+
+fn repo_with(release: bool) -> tempfile::TempDir {
     let repo = tempfile::tempdir().unwrap();
     std::fs::write(
         repo.path().join("hoist.toml"),
-        "[github]\nrequired_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]\n",
+        format!(
+            "[github]\nrequired_checks = [\"ci-ok\", \"risk-check\", \"review-verdict\", \"main-open\"]\n{}",
+            if release { "[release]\n" } else { "" }
+        ),
     )
     .unwrap();
     std::fs::create_dir_all(repo.path().join(".github/workflows")).unwrap();
@@ -393,4 +400,65 @@ fn a_zero_or_invalid_timeout_uses_the_default() {
         let v = one_object(&out.stdout);
         assert_eq!(step(&v, 3)["status"], "ok", "{bad}: {v}");
     }
+}
+
+const GH_ENV_DRIFT: &str = r#"{"area":"github","kind":"environment","key":"release","action":"create","reason":"absent","source":"default","verify":null}"#;
+const GH_ENV2_DRIFT: &str = r#"{"area":"github","kind":"environment","key":"release-npm","action":"create","reason":"absent","source":"default","verify":null}"#;
+const TOKEN_DRIFT: &str = r#"{"area":"github","kind":"secret","key":"HOIST_RELEASE_TOKEN","action":"create","reason":"absent","source":"default","verify":null}"#;
+
+#[test]
+fn release_drift_is_skipped_when_release_is_not_configured() {
+    let tmp = tempfile::tempdir().unwrap();
+    let items = format!("{OK_ITEM},{GH_ENV_DRIFT},{TOKEN_DRIFT},{GH_ENV2_DRIFT}");
+    let h = fake_hoist(tmp.path(), &report(&items, false, 1), 1);
+    let repo = repo_with(false);
+    let (_, v) = run(&h, repo.path(), true);
+    let s5 = step(&v, 5);
+    assert!(
+        !s5["detail"].as_str().unwrap().contains("hoist check drift"),
+        "{s5}"
+    );
+    assert_eq!(step(&v, 10)["status"], "skipped", "{v}");
+    assert_eq!(
+        v["data"]["hoist"]["drift"].as_array().unwrap().len(),
+        0,
+        "{v}"
+    );
+    let skipped = v["data"]["hoist"]["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 3, "{v}");
+    assert!(
+        skipped[1].as_str().unwrap().contains("HOIST_RELEASE_TOKEN"),
+        "{v}"
+    );
+}
+
+#[test]
+fn hoist_publish_items_mean_release_is_configured() {
+    let tmp = tempfile::tempdir().unwrap();
+    let items = format!("{OK_ITEM},{TOKEN_DRIFT},{NPM_DRIFT}");
+    let h = fake_hoist(tmp.path(), &report(&items, false, 1), 1);
+    let repo = repo_with(false);
+    let (_, v) = run(&h, repo.path(), true);
+    let s10 = step(&v, 10);
+    assert_eq!(s10["status"], "missing", "{v}");
+    assert!(
+        s10["fix"]
+            .as_str()
+            .unwrap()
+            .contains("hoist apply --area npm"),
+        "{s10}"
+    );
+    assert!(
+        step(&v, 5)["detail"]
+            .as_str()
+            .unwrap()
+            .contains("HOIST_RELEASE_TOKEN"),
+        "{v}"
+    );
+    assert_eq!(
+        v["data"]["hoist"]["skipped"].as_array().unwrap().len(),
+        0,
+        "{v}"
+    );
+    assert_eq!(v["data"]["hoist"]["release_inferred"], true, "{v}");
 }
