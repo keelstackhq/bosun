@@ -1,0 +1,1 @@
+- 2026-11-01 · Release · pin bosun 0.4.0 (.bosun/version, setup-script BOSUN_VERSION and sha512, KNOWN) · PR (chore/pin-0.4.0)
