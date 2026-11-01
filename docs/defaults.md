@@ -17,8 +17,8 @@ changes this file in the same PR.
 
 | Value | Default | Evidence |
 | ----- | ------- | -------- |
-| Lease TTL | 30 min | Long enough for one build step between heartbeats; short enough that a dead session blocks a task for at most 45 min (TTL plus one 15-min janitor run). |
-| Janitor interval | 15 min | The shortest Routine interval we use. Every 15 min, Haiku, so the cost is small. |
+| Lease TTL | 30 min | Long enough for one build step between heartbeats; short enough that a dead session blocks a task for at most 90 min (TTL plus one hourly janitor run). |
+| Janitor interval | 1 hour | Routines run every hour (first-user feedback F10). Haiku, so the cost is small. |
 | Same failure signature | 3 times | One retry can be bad luck and two can be a flaky test; the third identical failure means the agent is stuck. Estimate. |
 | Fix round with 0 changed lines | blocked at once | A round that changes nothing cannot fix the failure; another round costs money for the same result. |
 | Tier escalation | haiku -> sonnet -> opus -> needs-human | A stuck task often needs a stronger model, not more turns. The orchestrator brief for this repo uses the same tiers (haiku to read, sonnet to build, opus for design and final review). |
