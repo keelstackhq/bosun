@@ -199,6 +199,8 @@ struct Importer<'a> {
     on_default_open: Vec<String>,
     /// The local plan file's text, compared byte for byte with the default branch's (F5).
     local_text: String,
+    /// `allow:` per task id of the plan file on the default branch, read once when a task has one.
+    main_allow: Option<HashMap<String, Vec<String>>>,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
@@ -208,6 +210,51 @@ struct Importer<'a> {
 }
 
 impl Importer<'_> {
+    /// The `allow:` of task `id` that may go into its metadata: test-integrity trusts it, so it
+    /// must be owner-approved, which means merged. It is `local` only when the same task in the
+    /// plan file on the default branch has exactly that list; otherwise none, with a warning (a
+    /// missing or unreadable file there allows nothing). Plans set no `capabilities`.
+    fn allowed(&mut self, id: &str, local: &[String]) -> Vec<String> {
+        if local.is_empty() {
+            return vec![];
+        }
+        if self.main_allow.is_none() {
+            let read =
+                default_branch(self.gh).and_then(|head| self.gh.file_at(&self.plan_path, &head));
+            let map = match read {
+                Ok(text) => text
+                    .and_then(|t| plan::parse_to_compare(&t).ok())
+                    .map(|p| {
+                        p.items
+                            .iter()
+                            .flat_map(|i| {
+                                i.tasks.iter().map(|t| (t.plan_id(&i.id), t.allow.clone()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                Err(e) => {
+                    self.warnings.push(format!(
+                        "cannot read {} on the default branch ({}); no task gets `allow:`",
+                        self.plan_path, e.message
+                    ));
+                    HashMap::new()
+                }
+            };
+            self.main_allow = Some(map);
+        }
+        let main = self.main_allow.as_ref().and_then(|m| m.get(id));
+        if main.is_some_and(|m| m.as_slice() == local) {
+            return local.to_vec();
+        }
+        self.warnings.push(format!(
+            "{id}: `allow: {}` is not in {} on the default branch; imported without it (merge the plan, then run `bosun plan amend`)",
+            local.join(", "),
+            self.plan_path
+        ));
+        vec![]
+    }
+
     /// Find or create one issue.
     fn slot(
         &mut self,
@@ -432,7 +479,7 @@ fn plan_task_meta(item: &Item, plan_path: &str, epic: Option<u64>) -> TaskMeta {
     }
 }
 
-fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>) -> TaskMeta {
+fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>, allow: Vec<String>) -> TaskMeta {
     TaskMeta {
         item: item.id.clone(),
         task: t.id.clone(),
@@ -441,7 +488,7 @@ fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>) -> TaskMeta {
         depends: t.depends.clone(),
         kind: t.kind.clone(),
         risk: t.risk.clone(),
-        allow: t.allow.clone(),
+        allow,
         capabilities: vec![],
     }
 }
@@ -508,6 +555,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         on_default: vec![],
         on_default_open: vec![],
         local_text: text.clone(),
+        main_allow: None,
         amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
@@ -824,6 +872,7 @@ fn reconcile(imp: &mut Importer, p: &Plan) -> Result<Changes> {
         let mut new = meta.clone();
         (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
         (new.kind, new.risk) = (t.kind.clone(), t.risk.clone());
+        new.allow = imp.allowed(&id, &t.allow);
         if new == meta && title == i.title {
             continue;
         }
@@ -985,9 +1034,19 @@ fn plan_on_default(imp: &Importer) -> Result<Option<Plan>> {
 }
 
 /// Whether the plan file on the default branch is byte-identical to the local one.
-fn same_file_on_default(imp: &Importer) -> Result<bool> {
-    let head = default_branch(imp.gh)?;
-    Ok(imp.gh.file_at(&imp.plan_path, &head)?.as_deref() == Some(imp.local_text.as_str()))
+/// A failed read counts as "not the same" (nothing is closed) and adds a warning.
+fn same_file_on_default(imp: &mut Importer) -> bool {
+    let read = default_branch(imp.gh).and_then(|head| imp.gh.file_at(&imp.plan_path, &head));
+    match read {
+        Ok(text) => text.as_deref() == Some(imp.local_text.as_str()),
+        Err(e) => {
+            imp.warnings.push(format!(
+                "cannot read {} on the default branch ({}); no plan task is closed as already merged",
+                imp.plan_path, e.message
+            ));
+            false
+        }
+    }
 }
 
 fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
@@ -1052,7 +1111,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         let mut on_main = false;
         if done_by.is_none() && (prior.is_none() || ready) && !imp.amend {
             if same_file.is_none() {
-                same_file = Some(same_file_on_default(imp)?);
+                same_file = Some(same_file_on_default(imp));
             }
             on_main = same_file == Some(true);
             if on_main && a.keep_plan_tasks_open {
@@ -1148,10 +1207,17 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         let mut slots = vec![];
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);
+            // Vetted only for a task that does not exist yet (the slot makes it).
+            let known = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]).is_some();
+            let allow = if known {
+                vec![]
+            } else {
+                imp.allowed(&tid, &t.allow)
+            };
             slots.push(imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),
-                    task_body(&tid, "", &task_meta_of(item, t, epic.issue)),
+                    task_body(&tid, "", &task_meta_of(item, t, epic.issue, allow)),
                     labels(&t.kind, &item.area, "planned"),
                 )
             })?);

@@ -70,7 +70,10 @@ The state machine, stop rules and resume.
    - `allow:` (optional) comma-separated test-integrity finding kinds the task may raise:
      `delete-test` (also allows `fewer-tests`), `skip`, `only`, `fewer-asserts`. Any other value
      is a plan error. Use it for a task that removes code with its tests, for example a seed
-     crate. Import stores it in the task metadata; `bosun test-integrity --pr <n>` reads it from
+     crate. Import stores it in the task metadata only when the same task in the plan file on
+     the default branch has exactly that list (the owner approved it by merging): a local edit, a
+     plan missing there or an unreadable one stores none, with a warning, and `plan amend` sets it
+     once the plan merged. `bosun test-integrity --pr <n>` reads it from
      the PR's linked task, when that task's `touch:` covers every file the PR changes. A snapshot change is not an `allow:` kind: it needs a
      `snapshot-change: <reason>` line in the PR body.
    `bosun plan check` gives two warnings from the touch lists (not errors). Two tasks that touch
