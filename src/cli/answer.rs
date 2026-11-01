@@ -1,21 +1,25 @@
 //! `bosun answer <issue> --slack-user U... [--from -|FILE]`: an owner's answer from Slack
 //! (spec section 10). Only an owner Slack ID counts; the text is fenced as data and never
 //! becomes a flag, a label or a command. The answer is recorded only: it never changes the
-//! task's state, the owner moves the task on GitHub.
+//! task's state, the owner moves the task on GitHub. `--chat` takes the owner's answer relayed
+//! in chat by the orchestrator: it counts only with a verified signature of an enrolled owner key.
 
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::AnswerArgs;
 use crate::app::{App, default_branch, kill_switch};
+use crate::cli::approve::read_key;
 use crate::cli::intake::fence_text;
-use crate::cli::risk_check::{OWNERS_PATH, owner_slack_ids};
+use crate::cli::risk_check::{OWNERS_PATH, enrolled_keys, owner_slack_ids};
+use crate::core::answer::{answer_message, chat_form, normalize, parse_chat};
+use crate::core::approve::{APPROVERS_PATH, Role, verify_ed25519};
 use crate::core::records::{Record, parse_record};
 use crate::core::state::{State, state_of};
-use crate::github::Github;
+use crate::github::{Github, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 fn valid_slack_id(id: &str) -> bool {
@@ -43,9 +47,9 @@ fn read_text(from: &str) -> Result<String, BosunError> {
     Ok(text)
 }
 
-/// The newest ask by a collaborator with write access is open when no `answer`, `escalate` or
-/// `failure` record follows it. A forged ask by anyone else never counts.
-fn ask_is_open(gh: &dyn Github, n: u64) -> Result<bool, BosunError> {
+/// The comment id of the open ask: the newest ask by a collaborator with write access, when no
+/// `answer`, `escalate` or `failure` record follows it. A forged ask by anyone else never counts.
+fn open_ask(gh: &dyn Github, n: u64) -> Result<Option<u64>, BosunError> {
     let comments = gh.list_comments(n)?;
     let mut cache: HashMap<String, bool> = HashMap::new();
     let mut newest_ask = None;
@@ -81,14 +85,19 @@ fn ask_is_open(gh: &dyn Github, n: u64) -> Result<bool, BosunError> {
             closed_at = Some(i);
         }
     }
-    Ok(matches!((newest_ask, closed_at), (Some(a), c) if c.is_none_or(|c| c < a)))
+    Ok(match (newest_ask, closed_at) {
+        (Some(a), c) if c.is_none_or(|c| c < a) => Some(comments[a].id),
+        _ => None,
+    })
 }
 
 pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, n) = (app.gh.as_ref(), args.issue);
     kill_switch(gh)?;
-    if !valid_slack_id(&args.slack_user) {
+    if let Some(user) = &args.slack_user
+        && !valid_slack_id(user)
+    {
         return Err(BosunError::usage(
             "--slack-user is not a Slack user ID",
             "pass the ID from the Claude Tag event, such as U01ABC23",
@@ -117,17 +126,21 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
             ),
         ));
     }
-    if !ask_is_open(gh, n)? {
+    let Some(ask) = open_ask(gh, n)? else {
         return Err(BosunError::conflict(
             format!("#{n} is needs-human but has no open ask"),
             format!(
                 "no open ask on #{n}: the owner answers on GitHub, or a session runs `bosun ask`"
             ),
         ));
-    }
+    };
+    let slack_user = match &args.slack_user {
+        Some(u) => u.clone(),
+        None => return chat(&app, args, ask, &text),
+    };
     let branch = default_branch(gh)?;
     let ids = owner_slack_ids(gh, &branch)?;
-    if !ids.contains(&args.slack_user) {
+    if !ids.contains(&slack_user) {
         let why = if ids.is_empty() {
             "no owner has a Slack ID"
         } else {
@@ -143,9 +156,25 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
     }
     let record = Record::Answer {
         session: app.ctx.session.clone(),
-        slack_user: args.slack_user.clone(),
+        slack_user,
         at: app.ctx.now.to_string(),
+        key: None,
+        ask: None,
+        sig: None,
     };
+    let head = "Answer from the owner via Slack (sender id not verified by bosun)";
+    post(gh, n, head, &text, &record, json!({}))
+}
+
+/// The fenced answer comment with its record; `data` gets the issue, comment and state.
+fn post(
+    gh: &dyn Github,
+    n: u64,
+    head: &str,
+    text: &str,
+    record: &Record,
+    mut data: Value,
+) -> CmdResult {
     let truncated = text.trim_end().chars().count() > 4000;
     let cut = if truncated {
         "(cut at 4000 characters)\n\n"
@@ -153,15 +182,99 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         ""
     };
     let body = format!(
-        "Answer from the owner via Slack (sender id not verified by bosun)\n\n```text\n{}\n```\n\n{cut}{}",
+        "{head}\n\n```text\n{}\n```\n\n{cut}{}",
         fence_text(text.trim_end()),
         record.to_line()
     );
     let comment = gh.add_comment(n, &body)?;
     // The answer is data: the owner moves the task on GitHub.
-    let mut data = json!({"issue": n, "comment_id": comment.id, "state": "needs-human"});
+    data["issue"] = json!(n);
+    data["comment_id"] = json!(comment.id);
+    data["state"] = json!("needs-human");
     if truncated {
         data["truncated"] = json!(true);
     }
     Ok(Outcome::data(data))
+}
+
+/// What the orchestrator does when a chat answer does not count.
+const CHAT_FIX: &str = "relay the owner's answer again in chat form, signed for the open ask with an enrolled owner key (`bosun answer <issue> --chat --sign-key <pem>`), or the owner answers on GitHub";
+
+/// `--chat`: verify the relayed chat form and record it, or with `--sign-key` sign the owner's
+/// plain answer and print the chat form (nothing is posted).
+fn chat(app: &App, args: &AnswerArgs, ask: u64, text: &str) -> CmdResult {
+    let (gh, n) = (app.gh.as_ref(), args.issue);
+    let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
+    let keys = enrolled_keys(gh).map_err(|why| {
+        BosunError::error(
+            format!("signed answers are off: {why}"),
+            format!("enroll the orchestrator's key in {APPROVERS_PATH} on the default branch with a PR the owner approves on GitHub"),
+        )
+    })?;
+    if let Some(path) = &args.sign_key {
+        let pair = read_key(path)?;
+        let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
+        let key = keys
+            .iter()
+            .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
+            .filter(|k| k.role == Role::Owner)
+            .ok_or_else(|| {
+                BosunError::error(
+                    format!("the key is not an owner key in {APPROVERS_PATH} on the default branch; nothing was signed"),
+                    format!("enroll the public key {public} as an owner key in {APPROVERS_PATH} with a PR the owner approves on GitHub"),
+                )
+            })?;
+        let sig = pair.sign(answer_message(owner, repo, n, ask, text).as_bytes());
+        let form = chat_form(n, ask, text, &key.id, &b64::encode(sig.as_ref()));
+        return Ok(Outcome::data(
+            json!({"issue": n, "ask": ask, "key_id": key.id, "chat": form}),
+        ));
+    }
+    let refuse = |why: &str| {
+        BosunError::needs_human(format!("the chat answer does not count: {why}"), CHAT_FIX)
+            .with_data(json!({"issue": n, "reason": why}))
+    };
+    let form = parse_chat(text).ok_or_else(|| refuse("not in chat form"))?;
+    if form.issue != n {
+        return Err(refuse("signed for another issue"));
+    }
+    if form.ask != ask {
+        return Err(BosunError::conflict(
+            format!(
+                "the chat answer is for ask comment {}, the open ask on #{n} is {ask}",
+                form.ask
+            ),
+            CHAT_FIX,
+        ));
+    }
+    let (key_id, sig) = form.sig.ok_or_else(|| refuse("not signed"))?;
+    let key = keys
+        .iter()
+        .find(|k| k.id == key_id)
+        .ok_or_else(|| refuse("key not enrolled"))?;
+    if key.role != Role::Owner {
+        return Err(refuse("not an owner key"));
+    }
+    let msg = answer_message(owner, repo, n, ask, &form.text);
+    let verified = match (b64::decode(&key.ed25519), b64::decode(sig)) {
+        (Some(public), Some(raw)) => verify_ed25519(&public, msg.as_bytes(), &raw),
+        _ => false,
+    };
+    if !verified {
+        return Err(refuse("bad signature"));
+    }
+    let record = Record::Answer {
+        session: app.ctx.session.clone(),
+        slack_user: String::new(),
+        at: app.ctx.now.to_string(),
+        key: Some(key.id.clone()),
+        ask: Some(ask),
+        sig: Some(sig.to_string()),
+    };
+    let head = format!(
+        "Answer from the owner, relayed in chat (signature of key {} verified by bosun)",
+        key.id
+    );
+    let data = json!({"key_id": key.id, "ask": ask});
+    post(gh, n, &head, &normalize(&form.text), &record, data)
 }

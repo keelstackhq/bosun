@@ -241,7 +241,11 @@ High-risk PRs:
   every GitHub write (app attribution and a footer), so an approval sent from there never counts,
   whatever the token. It
   reads `BOSUN_OWNER_TOKEN` (a fine-grained PAT of the owner) and makes all its calls with it,
-  never with `GITHUB_TOKEN`; without it the command is exit 5. It sends the token only to
+  never with `GITHUB_TOKEN`; without it the command is exit 5, except `--list`. `--list` only
+  reads and writes nothing; without `BOSUN_OWNER_TOKEN` it reads with no token at all (no
+  `Authorization` header, so any `BOSUN_GITHUB_API`), `data.auth` is `none` (else `owner-token`)
+  and a read that fails skips that PR, or the PR list, into `data.skipped` (`{pr, why}`, `pr`
+  null for the list) with `data.skipped_fix`, still exit 0. It sends the token only to
   `https://` or a loopback `BOSUN_GITHUB_API` (else exit 1) and redacts it from every message.
   Flow: the owner says "approve the ready PRs"; Claude runs `bosun approve --list`, shows the
   owner the ready list (PR, title, risk, files), then runs exactly `data.approve_command`, one

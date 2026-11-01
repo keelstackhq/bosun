@@ -264,6 +264,11 @@ impl LiveGithub {
         }
     }
 
+    /// No token at all against `BOSUN_GITHUB_API`: unauthenticated reads (a public repo).
+    pub fn anonymous(owner: &str, repo: &str) -> Self {
+        Self::with_token("", owner, repo)
+    }
+
     /// Explicit settings, for tests.
     pub fn with(base_url: &str, token: &str, owner: &str, repo: &str, max_sleep_ms: u64) -> Self {
         LiveGithub {

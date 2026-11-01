@@ -3,7 +3,8 @@
 //! signed comment (`--sign-key`). The fallback: the owner, on their own machine, posts the
 //! comment `/bosun approve <head>` (spec section 8).
 //! Every GitHub call uses `BOSUN_OWNER_TOKEN`, never `GITHUB_TOKEN`: the comment must come from
-//! a plain user token, which agent sessions do not have. The owner names the head sha of each
+//! a plain user token, which agent sessions do not have. `--list` only reads: without the owner
+//! token it reads with no token at all and lists what it can. The owner names the head sha of each
 //! PR (`<pr>@<sha>`, from `--list`), so a push after the listing is never approved unseen.
 
 use std::path::Path;
@@ -77,12 +78,18 @@ const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on a
 /// adds a footer, so its comments never count.
 const LIST_HINT: &str = "ask the owner with a form in the Claude Code chat (repo, PR, head; approve or hold); on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
+#[derive(Default)]
 struct Board {
     ready: Vec<Ready>,
     waiting: Vec<(u64, &'static str)>,
     /// Waiting PRs whose dismissed withdrawal a fresh `bosun approve` comment ends: (pr, head, base).
     dismissed: Vec<(u64, String, String)>,
+    /// What a tokenless listing could not read: (pr, or `None` for the PR list; why).
+    skipped: Vec<(Option<u64>, String)>,
 }
+
+/// Why a tokenless listing may miss PRs, and the fix.
+const SKIPPED_FIX: &str = "these were read without a token (a private repo, or GitHub's 60 requests an hour, refuse them); set BOSUN_OWNER_TOKEN for a full list";
 
 /// Put `p` in `waiting` when an owner's approval of it is withdrawn.
 fn hold(gh: &dyn Github, p: &Pull, board: &mut Board) -> Result<bool> {
@@ -98,15 +105,43 @@ fn hold(gh: &dyn Github, p: &Pull, board: &mut Board) -> Result<bool> {
 }
 
 /// The open PRs whose risk-check waits for an owner, split into ready and waiting, by number.
-/// Statuses, check runs and files all describe the head sha read with the PR.
-fn board(gh: &dyn Github) -> Result<Board> {
-    let mut pulls = gh.list_pulls(None, IssueState::Open)?;
-    pulls.sort_by_key(|p| p.number);
-    let mut board = Board {
-        ready: Vec::new(),
-        waiting: Vec::new(),
-        dismissed: Vec::new(),
+/// Statuses, check runs and files all describe the head sha read with the PR. With `lenient`
+/// (a tokenless listing) a failed read skips that PR, or the whole list, into `skipped`.
+fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
+    let mut pulls = match gh.list_pulls(None, IssueState::Open) {
+        Ok(p) => p,
+        Err(e) if lenient => {
+            let why = format!("cannot list the open PRs: {}", e.message);
+            let skipped = vec![(None, why)];
+            return Ok(Board {
+                skipped,
+                ..Board::default()
+            });
+        }
+        Err(e) => return Err(e),
     };
+    pulls.sort_by_key(|p| p.number);
+    if !lenient {
+        return board_of(gh, pulls);
+    }
+    let mut all = Board::default();
+    for p in pulls {
+        let n = p.number;
+        match board_of(gh, vec![p]) {
+            Ok(b) => {
+                all.ready.extend(b.ready);
+                all.waiting.extend(b.waiting);
+                all.dismissed.extend(b.dismissed);
+            }
+            Err(e) => all.skipped.push((Some(n), e.message)),
+        }
+    }
+    Ok(all)
+}
+
+/// The board of `pulls`, in their order.
+fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
+    let mut board = Board::default();
     for p in pulls {
         let statuses: Vec<Stat> = gh
             .status_history(&p.head_sha)?
@@ -181,6 +216,12 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             CLOUD_FIX,
         ));
     }
+    if args.list && !std::env::var(TOKEN_VAR).is_ok_and(|t| !t.trim().is_empty()) {
+        // Read-only and tokenless: no secret is sent, so any BOSUN_GITHUB_API will do.
+        let ctx = Ctx::load(dir)?;
+        let gh = LiveGithub::anonymous(&ctx.repo.owner, &ctx.repo.name);
+        return exec(&gh, args, targets, &ctx.now.to_string(), cloud, true);
+    }
     let token = std::env::var(TOKEN_VAR)
         .ok()
         .filter(|t| !t.trim().is_empty())
@@ -203,7 +244,7 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     let ctx = Ctx::load(dir)?;
     let gh = LiveGithub::with_token(&token, &ctx.repo.owner, &ctx.repo.name);
     let now = ctx.now.to_string();
-    redact(&token, exec(&gh, args, targets, &now, cloud))
+    redact(&token, exec(&gh, args, targets, &now, cloud, false))
 }
 
 fn exec(
@@ -212,9 +253,10 @@ fn exec(
     mut targets: Vec<(u64, String)>,
     now: &str,
     cloud: bool,
+    tokenless: bool,
 ) -> CmdResult {
     if args.list {
-        let b = board(gh)?;
+        let b = board(gh, tokenless)?;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
         let items: Vec<(u64, String, String)> = b
@@ -226,7 +268,7 @@ fn exec(
             Some(m) => (json!(m.id), json!(m.text), json!(m.pairs)),
             None => (Value::Null, Value::Null, Value::Null),
         };
-        return Ok(Outcome::data(json!({
+        let mut data = json!({
             "message_id": message_id,
             "message": message,
             "message_pairs": message_pairs,
@@ -235,12 +277,19 @@ fn exec(
                 .collect::<Vec<_>>(),
             "approve_command": approve_command(&heads),
             "cloud": cloud,
+            "auth": if tokenless { "none" } else { "owner-token" },
+            "skipped": b.skipped.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
+                .collect::<Vec<_>>(),
             "hint": if cloud {
                 format!("{LIST_HINT}; in a Claude cloud session an approval posted here never counts: {CLOUD_FIX}")
             } else {
                 LIST_HINT.to_string()
             },
-        })));
+        });
+        if !b.skipped.is_empty() {
+            data["skipped_fix"] = json!(SKIPPED_FIX);
+        }
+        return Ok(Outcome::data(data));
     }
     kill_switch(gh)?;
     if let Some(n) = args.main_open {
@@ -251,7 +300,7 @@ fn exec(
         ));
     }
 
-    let b = board(gh)?;
+    let b = board(gh, false)?;
     targets.sort_unstable();
     targets.dedup();
     let mut not_ready = Vec::new();
@@ -605,7 +654,7 @@ fn bootstrap_until(gh: &dyn Github, today: &str) -> Result<String> {
 
 /// An ed25519 key from a PKCS#8 PEM (`openssl genpkey -algorithm ed25519`). Errors name the
 /// path only, never the content.
-fn read_key(path: &Path) -> Result<ring::signature::Ed25519KeyPair> {
+pub(crate) fn read_key(path: &Path) -> Result<ring::signature::Ed25519KeyPair> {
     let bad = || {
         BosunError::error(
             format!(

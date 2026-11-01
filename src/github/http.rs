@@ -328,12 +328,17 @@ impl Http {
                 "check the network and BOSUN_GITHUB_API, then retry",
             )
         };
+        // An empty token sends no Authorization header: an unauthenticated read.
+        let auth = (!self.token.is_empty()).then(|| format!("Bearer {}", self.token));
         macro_rules! build {
             ($b:expr) => {
-                $b.header("Authorization", format!("Bearer {}", self.token))
-                    .header("Accept", "application/vnd.github+json")
-                    .header("X-GitHub-Api-Version", "2022-11-28")
-                    .header("User-Agent", concat!("bosun/", env!("CARGO_PKG_VERSION")))
+                match &auth {
+                    Some(a) => $b.header("Authorization", a),
+                    None => $b,
+                }
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .header("User-Agent", concat!("bosun/", env!("CARGO_PKG_VERSION")))
             };
         }
         let payload = body.map(|b| b.to_string());

@@ -22,6 +22,27 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
   exit 5 and nothing is written. `bosun doctor` warns when a channel is set and no owner has a
   Slack ID. bosun cannot verify `--slack-user`: the Claude Tag thread passes it from the Slack
   event, and any session holding the token could claim it.
+- `bosun answer <issue> --chat [--from -|FILE]`: the chat form, an owner's answer that the
+  orchestrator relays from the Claude chat (exactly one of `--chat` and `--slack-user`, else
+  exit 2). The text is `/bosun answer <issue> ask <ask comment id>` (plain decimal ids), the
+  answer lines, and a line `bosun-sig ed25519 <key id> <base64 signature>`; blank lines before
+  it and anything after the signature line (a footer) are ignored. The answer text is the lines
+  between, each with trailing whitespace cut, blank lines cut from both ends, joined with `\n`.
+  The signed message is the UTF-8 bytes `bosun-answer v1 <owner>/<repo>#<issue> ask <ask id>
+  sha256 <lowercase hex SHA-256 of the answer text>` (owner and repo lowercased, no trailing
+  newline), so a signature never moves to another repo, issue, ask or text. It counts only
+  when the key id is an `owner` key in `.bosun/approvers.toml` on the default branch, read as
+  for signed approvals (§8), and the signature verifies over the message built from this repo,
+  `<issue>` and the comment id of the open ask (same rule as above). Not in chat form, signed
+  for another issue, no signature line, an unknown key, a delegate key or a bad signature is
+  exit 5 (`data.reason`) and nothing is written; an ask id that is not the open ask is exit 3;
+  a missing or malformed approvers file is exit 1. A counted answer is posted like a Slack one
+  (fenced, cut at 4000 characters) under "Answer from the owner, relayed in chat (signature of
+  key <id> verified by bosun)", with an `answer` record carrying `key`, `ask` and `sig` instead
+  of `slack_user`; data adds `key_id` and `ask`. `--chat --sign-key <pem>` is the signer's
+  helper: it signs the owner's plain answer (stdin or `--from`) for the open ask with an
+  enrolled owner key (else exit 1, nothing signed) and returns the chat form in `data.chat`;
+  it posts nothing. The key is read and never printed as for `bosun approve --sign-key`.
 
 Intents:
 - ask: `bosun status`, explain, `bosun progress`.

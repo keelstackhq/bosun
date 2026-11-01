@@ -1,0 +1,1 @@
+- 2026-11-01 · F6 approve --list tokenless, answer --chat · `approve --list` reads without a token and reports `data.skipped`, writes nothing; `answer --chat` verifies the orchestrator-relayed answer signed by an enrolled owner key (`bosun-answer v1`, bound to repo, issue, ask and text), `--chat --sign-key` signs it; spec §8 and §10 · PR (fix/approve-list-answer-chat)

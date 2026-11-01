@@ -498,8 +498,16 @@ pub struct AnswerArgs {
     /// The task issue number.
     pub issue: u64,
     /// The Slack user ID of the answerer, from the Claude Tag event (an owner's `slack` ID).
+    #[arg(long, required_unless_present = "chat", conflicts_with = "chat")]
+    pub slack_user: Option<String>,
+    /// The answer is the chat form the orchestrator relays, signed by a key enrolled in
+    /// .bosun/approvers.toml; it is verified before it is recorded.
     #[arg(long)]
-    pub slack_user: String,
+    pub chat: bool,
+    /// With --chat: sign the owner's plain answer with this ed25519 PKCS#8 PEM key and print
+    /// the chat form in data.chat; nothing is posted.
+    #[arg(long, value_name = "PEM", conflicts_with = "slack_user")]
+    pub sign_key: Option<PathBuf>,
     /// The answer text: `-` for stdin, or a file.
     #[arg(long, default_value = "-")]
     pub from: String,

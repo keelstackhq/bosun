@@ -106,6 +106,8 @@ pub struct State {
     pub fail_messages: Vec<(String, u16, String)>,
     /// `fail_paths` answers carry the request's Authorization header as the message.
     pub echo_auth: bool,
+    /// A GET without an `Authorization` header is served, as for a public repo.
+    pub anonymous_reads: bool,
     /// Scripted mutations; see `FakeGithub::after_requests`.
     pub hooks: Vec<Hook>,
     /// `base...head` -> `status` of the comparison (default `ahead`).
@@ -485,6 +487,11 @@ impl FakeGithub {
     /// as a hostile server would.
     pub fn echo_auth_on_fail(&self) {
         self.state.lock().unwrap().echo_auth = true;
+    }
+
+    /// Serve GETs without a token, as GitHub does for a public repo.
+    pub fn allow_anonymous_reads(&self) {
+        self.state.lock().unwrap().anonymous_reads = true;
     }
 
     /// A file at a ref; the contents API serves it base64-encoded.
@@ -1484,7 +1491,7 @@ fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBo
             body: (!raw.is_empty()).then(|| raw.clone()),
             headers,
         });
-        let (status, value, headers) = if !authed {
+        let (status, value, headers) = if !authed && !(s.anonymous_reads && method == "GET") {
             msg(401, "Requires authentication")
         } else if let Some((code, left)) = s.fail.filter(|f| f.1 > 0) {
             s.fail = Some((code, left - 1));
