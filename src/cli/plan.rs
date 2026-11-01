@@ -200,7 +200,7 @@ struct Importer<'a> {
     /// The local plan file's text, compared byte for byte with the default branch's (F5).
     local_text: String,
     /// `allow:` per task id of the plan file on the default branch, read once when a task has one.
-    main_allow: Option<HashMap<String, Vec<String>>>,
+    main_tasks: Option<HashMap<String, Task>>,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
@@ -210,15 +210,17 @@ struct Importer<'a> {
 }
 
 impl Importer<'_> {
-    /// The `allow:` of task `id` that may go into its metadata: test-integrity trusts it, so it
-    /// must be owner-approved, which means merged. It is `local` only when the same task in the
-    /// plan file on the default branch has exactly that list; otherwise none, with a warning (a
-    /// missing or unreadable file there allows nothing). Plans set no `capabilities`.
-    fn allowed(&mut self, id: &str, local: &[String]) -> Vec<String> {
-        if local.is_empty() {
+    /// The `allow:` of task `t` (plan id `id`) that may go into its metadata: test-integrity
+    /// trusts it for the files of the task's `touch`, so the whole grant must be owner-approved,
+    /// which means merged. It is `t.allow` only when the same task in the plan file on the
+    /// default branch has the same `allow`, `touch`, `depends`, `kind` and `risk` (a local
+    /// `touch: **` must not borrow main's `allow`); otherwise none, with a warning (a missing or
+    /// unreadable file there allows nothing). Plans set no `capabilities`.
+    fn allowed(&mut self, id: &str, t: &Task) -> Vec<String> {
+        if t.allow.is_empty() {
             return vec![];
         }
-        if self.main_allow.is_none() {
+        if self.main_tasks.is_none() {
             let read =
                 default_branch(self.gh).and_then(|head| self.gh.file_at(&self.plan_path, &head));
             let map = match read {
@@ -227,9 +229,7 @@ impl Importer<'_> {
                     .map(|p| {
                         p.items
                             .iter()
-                            .flat_map(|i| {
-                                i.tasks.iter().map(|t| (t.plan_id(&i.id), t.allow.clone()))
-                            })
+                            .flat_map(|i| i.tasks.iter().map(|t| (t.plan_id(&i.id), t.clone())))
                             .collect()
                     })
                     .unwrap_or_default(),
@@ -241,15 +241,19 @@ impl Importer<'_> {
                     HashMap::new()
                 }
             };
-            self.main_allow = Some(map);
+            self.main_tasks = Some(map);
         }
-        let main = self.main_allow.as_ref().and_then(|m| m.get(id));
-        if main.is_some_and(|m| m.as_slice() == local) {
-            return local.to_vec();
+        fn same_grant(a: &Task, b: &Task) -> bool {
+            (&a.allow, &a.touch, &a.depends, &a.kind, &a.risk)
+                == (&b.allow, &b.touch, &b.depends, &b.kind, &b.risk)
+        }
+        let main = self.main_tasks.as_ref().and_then(|m| m.get(id));
+        if main.is_some_and(|m| same_grant(m, t)) {
+            return t.allow.clone();
         }
         self.warnings.push(format!(
-            "{id}: `allow: {}` is not in {} on the default branch; imported without it (merge the plan, then run `bosun plan amend`)",
-            local.join(", "),
+            "{id}: `allow: {}` with this touch, depends, kind and risk is not in {} on the default branch; imported without it (merge the plan, then run `bosun plan amend`)",
+            t.allow.join(", "),
             self.plan_path
         ));
         vec![]
@@ -555,7 +559,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         on_default: vec![],
         on_default_open: vec![],
         local_text: text.clone(),
-        main_allow: None,
+        main_tasks: None,
         amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
@@ -872,7 +876,7 @@ fn reconcile(imp: &mut Importer, p: &Plan) -> Result<Changes> {
         let mut new = meta.clone();
         (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
         (new.kind, new.risk) = (t.kind.clone(), t.risk.clone());
-        new.allow = imp.allowed(&id, &t.allow);
+        new.allow = imp.allowed(&id, t);
         if new == meta && title == i.title {
             continue;
         }
@@ -1209,11 +1213,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             let tid = t.plan_id(&item.id);
             // Vetted only for a task that does not exist yet (the slot makes it).
             let known = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]).is_some();
-            let allow = if known {
-                vec![]
-            } else {
-                imp.allowed(&tid, &t.allow)
-            };
+            let allow = if known { vec![] } else { imp.allowed(&tid, t) };
             slots.push(imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),

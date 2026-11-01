@@ -73,7 +73,10 @@ fn a_local_allow_not_on_main_is_dropped_with_a_warning() {
     let (code, v) = plan(&fake, tmp.path(), &local, "import");
     assert_eq!(code, 0, "{v}");
     assert_eq!(allow_of(&fake), json!([]));
-    assert!(warned(&v, "M1/T1: `allow: delete-test` is not in"), "{v}");
+    assert!(
+        warned(&v, "M1/T1: `allow: delete-test` with this touch"),
+        "{v}"
+    );
 }
 
 #[test]
@@ -140,4 +143,44 @@ fn amend_sets_the_allow_once_it_is_merged() {
     let (code, v) = plan(&fake, tmp.path(), &text, "amend");
     assert_eq!(code, 0, "{v}");
     assert_eq!(allow_of(&fake), json!(["delete-test"]));
+}
+
+#[test]
+fn a_widened_local_touch_does_not_borrow_mains_allow_at_import() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    fake.content("plan.md", "main", &plan_text("allow: delete-test"));
+    let local = plan_text("allow: delete-test").replace("touch: crates/seed/**", "touch: **");
+    let (code, v) = plan(&fake, tmp.path(), &local, "import");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(allow_of(&fake), json!([]));
+    assert!(warned(&v, "with this touch"), "{v}");
+}
+
+#[test]
+fn a_widened_local_touch_does_not_borrow_mains_allow_at_amend() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let text = plan_text("allow: delete-test");
+    fake.content("plan.md", "main", &text);
+    let (code, _) = plan(&fake, tmp.path(), &text, "import");
+    assert_eq!(code, 0);
+    assert_eq!(allow_of(&fake), json!(["delete-test"]));
+    // The local plan widens the touch; main still has the narrow one.
+    let wide = text.replace("touch: crates/seed/**", "touch: **");
+    let (code, v) = plan(&fake, tmp.path(), &wide, "amend");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        allow_of(&fake),
+        json!([]),
+        "the grant is dropped, not widened"
+    );
+}
+
+#[test]
+fn a_different_kind_or_risk_does_not_borrow_mains_allow() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    fake.content("plan.md", "main", &plan_text("allow: delete-test"));
+    let local = plan_text("allow: delete-test\n  risk: high");
+    let (code, v) = plan(&fake, tmp.path(), &local, "import");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(allow_of(&fake), json!([]));
 }

@@ -71,7 +71,8 @@ The state machine, stop rules and resume.
      `delete-test` (also allows `fewer-tests`), `skip`, `only`, `fewer-asserts`. Any other value
      is a plan error. Use it for a task that removes code with its tests, for example a seed
      crate. Import stores it in the task metadata only when the same task in the plan file on
-     the default branch has exactly that list (the owner approved it by merging): a local edit, a
+     the default branch has that list with the same `touch:`, `depends:`, `kind:` and `risk:`
+     (the owner approved the whole grant by merging): a local edit, a
      plan missing there or an unreadable one stores none, with a warning, and `plan amend` sets it
      once the plan merged. `bosun test-integrity --pr <n>` reads it from
      the PR's linked task, when that task's `touch:` covers every file the PR changes. A snapshot change is not an `allow:` kind: it needs a
