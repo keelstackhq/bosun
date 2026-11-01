@@ -29,7 +29,7 @@ fn units(kind: Lock, text: &str) -> Option<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     let mut section = String::new();
     let mut cur: Option<String> = None;
-    let mut flush = |cur: &mut Option<String>, out: &mut Vec<String>| {
+    let flush = |cur: &mut Option<String>, out: &mut Vec<String>| {
         if let Some(u) = cur.take() {
             out.push(u.trim_end().to_string());
         }
