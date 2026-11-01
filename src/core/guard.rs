@@ -951,7 +951,11 @@ fn nested(command: &str) -> Vec<String> {
     let words = shell_words(command);
     for (i, w) in words.iter().enumerate() {
         let name = w.rsplit('/').next().unwrap_or(w);
-        if name == "eval" {
+        if name == "env"
+            && let Some(inner) = env_split_string(&words[i + 1..])
+        {
+            out.push(inner);
+        } else if name == "eval" {
             let rest: Vec<&str> = words[i + 1..]
                 .iter()
                 .map(String::as_str)
@@ -971,6 +975,43 @@ fn nested(command: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// The command `env -S STR [ARGS]` runs (`-S` splits STR into words): STR and the words after
+/// it, read through env's options (`-u NAME`, `-C DIR`, `-i`, assignments).
+fn env_split_string(after: &[String]) -> Option<String> {
+    let after: Vec<&str> = after
+        .iter()
+        .map(String::as_str)
+        .take_while(|w| *w != SEP)
+        .collect();
+    let mut k = 0;
+    while let Some(&w) = after.get(k) {
+        let short = w.starts_with('-') && !w.starts_with("--");
+        let value = if w == "--split-string" {
+            Some("")
+        } else if let Some(v) = w.strip_prefix("--split-string=") {
+            Some(v)
+        } else if short && !w.starts_with("-u") && !w.starts_with("-C") && w.contains('S') {
+            w.split_once('S').map(|(_, v)| v)
+        } else {
+            None
+        };
+        if let Some(v) = value {
+            let rest = after[k + 1..].join(" ");
+            return Some(if v.is_empty() {
+                rest
+            } else {
+                format!("{v} {rest}")
+            });
+        }
+        k += match w {
+            "-u" | "--unset" | "-C" | "--chdir" => 2,
+            _ if w.starts_with('-') || w.contains('=') => 1,
+            _ => return None,
+        };
+    }
+    None
 }
 
 const SEP: &str = "\u{0}";
@@ -1023,7 +1064,7 @@ fn shell_words(s: &str) -> Vec<String> {
 /// Words that run the next word as a command (`sudo gh ...`) or open a shell group.
 const WRAPPERS: &[&str] = &[
     "env", "command", "sudo", "nohup", "time", "exec", "nice", "{", "!", "then", "do", "else",
-    "if", "while", "until",
+    "if", "while", "until", "builtin",
 ];
 
 /// Commands that run the command after their options: name, options with a separate value,
@@ -1119,8 +1160,12 @@ fn unwrap_runners<'a>(mut cmd: &'a [&'a str]) -> (&'a [&'a str], Vec<&'a str>, b
 const GRAPHQL_WRITES: &[&str] = &[
     "mergePullRequest",
     "enablePullRequestAutoMerge",
+    "disablePullRequestAutoMerge",
+    "enqueuePullRequest",
+    "mergeBranch",
     "createRef",
     "updateRef",
+    "deleteRef",
 ];
 const HTTP_WRITES: &[&str] = &[
     "/merge",
@@ -1242,6 +1287,13 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
     }
     match words.first().copied() {
         Some("gh") => gh_rule(&words[1..], segment),
+        // `GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`: config from the environment.
+        Some("git")
+            if segment.contains("GIT_CONFIG_")
+                && segment.to_ascii_lowercase().contains("alias.") =>
+        {
+            Some(GIT_ALIAS)
+        }
         Some("git") => git_rule(&words[1..], &target),
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
@@ -2082,11 +2134,20 @@ fn http_rule(segment: &str) -> Option<&'static str> {
 fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
     match args {
         ["pr", "merge", ..] => Some("gh pr merge"),
-        ["release", "create", ..] => Some("a release makes a tag"),
+        [
+            "release",
+            "create" | "edit" | "upload" | "delete" | "delete-asset",
+            ..,
+        ] => Some("a release write makes or moves a tag"),
         ["alias", "set" | "import", ..] => Some("a gh alias makes commands the guard cannot see"),
+        ["workflow", "run", ..] => Some("a workflow run can release or deploy"),
+        ["secret" | "variable", "set" | "delete" | "remove", ..] => {
+            Some("secrets and variables are the owner's")
+        }
         ["api", ..] if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) => {
             Some("GraphQL merge or ref mutation")
         }
+        ["api", rest @ ..] if graphql_hidden(rest) => Some("a GraphQL query the guard cannot see"),
         ["api", rest @ ..] if gh_api_read(rest, segment) => None,
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("/merge")) => Some("merge API"),
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("/releases")) => {
@@ -2141,6 +2202,49 @@ fn gh_api_read(args: &[&str], segment: &str) -> bool {
     true
 }
 
+/// A `gh api graphql` call whose query the guard cannot read: `--input`, a `query=@file`, or a
+/// query outside single quotes with `$` or a backtick.
+fn graphql_hidden(args: &[&str]) -> bool {
+    let unq = |a: &str| a.trim_matches(['\'', '"']).to_string();
+    if !args.iter().any(|a| {
+        let a = unq(a);
+        a == "graphql" || a.ends_with("/graphql")
+    }) {
+        return false;
+    }
+    let mut i = 0;
+    while let Some(&a) = args.get(i) {
+        i += 1;
+        if a.starts_with("--input") {
+            return true;
+        }
+        let value = match a {
+            "-f" | "-F" | "--field" | "--raw-field" => args.get(i).copied(),
+            _ if a.starts_with("--") => a
+                .strip_prefix("--field=")
+                .or_else(|| a.strip_prefix("--raw-field=")),
+            _ => a.strip_prefix("-f").or_else(|| a.strip_prefix("-F")),
+        };
+        let Some(q) = value.and_then(|v| v.trim_start_matches(['\'', '"']).strip_prefix("query="))
+        else {
+            continue;
+        };
+        if q.starts_with('@') || (!q.starts_with('\'') && q.contains(['$', '`', '\\'])) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A git config key that defines an alias (`alias.x`, any case, quoted or not).
+fn alias_key(a: &str) -> bool {
+    a.trim_start_matches(['\'', '"'])
+        .to_ascii_lowercase()
+        .starts_with("alias.")
+}
+
+const GIT_ALIAS: &str = "a git alias hides the command it runs";
+
 /// `git merge --ff-only [origin/<default>|@{u}|@{upstream}]`: catches the local branch up
 /// with its remote, never brings in other work.
 fn ff_only(rest: &[&str], default_branch: &str) -> bool {
@@ -2170,12 +2274,19 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     let (mut i, mut opts, mut known) = (0, Vec::new(), true);
     while i < args.len() && args[i].starts_with('-') {
         let (a, next) = (args[i], args.get(i + 1).copied());
+        let config = match a {
+            "-c" | "--config-env" => next,
+            _ => a.strip_prefix("--config-env="),
+        };
+        if config.is_some_and(alias_key) {
+            return Some(GIT_ALIAS);
+        }
         let (flag, value, step) = match a.split_once('=') {
             Some((k @ ("--git-dir" | "--work-tree"), v)) => (Some(format!("{k}=")), Some(v), 1),
             _ => match a {
                 "-C" => (Some("-C".to_string()), next, 2),
                 "--git-dir" | "--work-tree" => (Some(format!("{a}=")), next, 2),
-                "-c" => (None, None, 2),
+                "-c" | "--config-env" => (None, None, 2),
                 _ => (None, None, 1),
             },
         };
@@ -2203,10 +2314,16 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     };
     match sub {
         "push" => {
+            // Quotes do not hide a target; one the shell expands cannot be read: fail closed.
+            if rest.iter().any(|a| a.contains(['$', '`', '\\'])) {
+                return Some("a push target the guard cannot read");
+            }
+            let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
+            let rest: Vec<&str> = unquoted.iter().map(String::as_str).collect();
             if rest.iter().any(|a| {
                 matches!(
                     *a,
-                    "-f" | "--force" | "--tags" | "--mirror" | "--delete" | "-d"
+                    "-f" | "--force" | "--tags" | "--follow-tags" | "--mirror" | "--delete" | "-d"
                 ) || a.starts_with("--force-with-lease")
                     || a.starts_with("--force-if-includes")
             }) {
@@ -2254,6 +2371,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                         || a.starts_with("--points-at")
                 });
             (!lists).then_some("tag")
+        }
+        "config" => {
+            let reads = matches!(rest.first(), Some(&("get" | "list")))
+                || rest.iter().any(|a| {
+                    matches!(*a, "--get" | "--get-all" | "--get-regexp" | "-l" | "--list")
+                });
+            (rest.iter().any(|a| alias_key(a)) && !reads).then_some(GIT_ALIAS)
         }
         "merge" if ff_only(rest, default_branch) => None,
         "merge" | "rebase" | "cherry-pick" | "reset" | "commit" if on_default => {
@@ -2633,6 +2757,185 @@ mod tests {
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
+    }
+
+    /// Refused on `feature`, then allowed on `feature`.
+    fn refused_then_allowed(refused: &[&str], allowed: &[&str]) {
+        for cmd in refused {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+        for cmd in allowed {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    /// Review of #351: quotes do not hide a push target, and a target the guard cannot read
+    /// (`$VAR`, `$( )`, a backslash) is refused.
+    #[test]
+    fn merge_lock_unquotes_push_targets() {
+        refused_then_allowed(
+            &[
+                "git push origin 'main'",
+                "git push origin \"main\"",
+                "git push origin \"HEAD:main\"",
+                "git push origin 'feature:refs/heads/main'",
+                "git push origin \"+refs/heads/x:refs/heads/main\"",
+                "git push origin '+feature'",
+                "git push origin ':feature'",
+                "git push origin 'v1.2.3'",
+                "git push origin \"refs/tags/v1\"",
+                "git push origin $B",
+                "git push origin \"$B\"",
+                "git push origin ${B}:main",
+                "git push origin $(git branch --show-current)",
+                "git push origin `git branch --show-current`",
+                "git push origin ma\\in",
+            ],
+            &[
+                "git push origin 'feature'",
+                "git push -u origin \"claude/fix-1\"",
+                "git push origin 'HEAD:feature'",
+            ],
+        );
+        assert!(bash("git push origin 'HEAD'", "main").is_some());
+    }
+
+    /// Review of #351: every `gh release` write, not only `create`.
+    #[test]
+    fn merge_lock_refuses_every_gh_release_write() {
+        refused_then_allowed(
+            &[
+                "gh release edit v1.0.0 --draft=false",
+                "gh release upload v1.0.0 bosun.tar.gz",
+                "gh release delete v1.0.0 -y",
+                "gh release delete-asset v1.0.0 bosun.tar.gz",
+            ],
+            &[
+                "gh release view v1.0.0",
+                "gh release list",
+                "gh release download v1.0.0",
+            ],
+        );
+    }
+
+    /// Review of #351: GraphQL merge and ref mutations, and a query the guard cannot see.
+    #[test]
+    fn merge_lock_refuses_graphql_writes_and_hidden_queries() {
+        refused_then_allowed(
+            &[
+                "gh api graphql -f query='mutation{mergeBranch(input:{}){clientMutationId}}'",
+                "gh api graphql -f query='mutation{deleteRef(input:{refId:\"x\"}){clientMutationId}}'",
+                "gh api graphql -f query='mutation{createRef(input:{}){ref{name}}}'",
+                "gh api graphql -f query='mutation{mergePullRequest(input:{}){clientMutationId}}'",
+                "gh api graphql -f query='mutation{enablePullRequestAutoMerge(input:{}){clientMutationId}}'",
+                "gh api graphql -f query='mutation{disablePullRequestAutoMerge(input:{}){clientMutationId}}'",
+                "gh api graphql -f query='mutation{enqueuePullRequest(input:{}){clientMutationId}}'",
+                "gh api graphql -F query=@q.graphql",
+                "gh api graphql -f query=@q.graphql",
+                "gh api graphql -Fquery=@q.graphql",
+                "gh api graphql --field query=@q.graphql",
+                "gh api graphql --raw-field=query=@q.graphql",
+                "gh api graphql --input q.json",
+                "gh api graphql -f query=\"$Q\"",
+                "gh api graphql -f query=$(cat q.graphql)",
+            ],
+            &[
+                "gh api graphql -f query='query{viewer{login}}'",
+                "gh api graphql -f query='query($o:String!){repository(owner:$o,name:\"r\"){id}}' -f o=x",
+                "gh api graphql -F number=12 -f query='query{viewer{login}}'",
+            ],
+        );
+    }
+
+    /// Review of #351: pushes that carry tags.
+    #[test]
+    fn merge_lock_refuses_tag_carrying_pushes() {
+        refused_then_allowed(
+            &[
+                "git push --follow-tags",
+                "git push --follow-tags origin feature",
+                "git push --tags origin",
+                "git push origin feature --tags",
+            ],
+            &[
+                "git push origin feature",
+                "git push --no-follow-tags origin feature",
+            ],
+        );
+    }
+
+    /// Review of #351: a git alias hides the command it runs.
+    #[test]
+    fn merge_lock_refuses_git_aliases() {
+        refused_then_allowed(
+            &[
+                "git -c alias.p='push origin main' p",
+                "git -c 'alias.p=!git push --force' p",
+                "git -c Alias.P=push p origin main",
+                "git --config-env=alias.p=P p",
+                "git config alias.p 'push origin main'",
+                "git config --global alias.p '!git push -f'",
+                "git config --add alias.p push",
+                "git config set alias.p push",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
+            ],
+            &[
+                "git -c core.pager=cat log",
+                "git config --get alias.p",
+                "git config --get-regexp alias",
+                "git config get alias.p",
+                "git config --list",
+                "git config user.name x",
+            ],
+        );
+    }
+
+    /// Review of #351: `env -S` splits a string into a command; `builtin` and `command` run
+    /// the command after them.
+    #[test]
+    fn merge_lock_unwraps_env_split_string_builtin_and_command() {
+        refused_then_allowed(
+            &[
+                "env -S 'git push origin main'",
+                "env -S 'git push' origin main",
+                "env -u X -S 'gh pr merge 12'",
+                "env -S'git push --force'",
+                "env --split-string='git push --force'",
+                "/usr/bin/env -S \"gh release create v1\"",
+                "builtin command git push origin main",
+                "builtin exec git push --force",
+                "builtin eval 'git push origin main'",
+                "command git push origin main",
+                "command -p gh pr merge 12",
+            ],
+            &[
+                "env -S 'cargo test'",
+                "env -S 'git push origin feature'",
+                "command -v git",
+                "builtin echo merge",
+            ],
+        );
+    }
+
+    /// Review of #351: workflow runs, secrets and variables.
+    #[test]
+    fn merge_lock_refuses_workflow_runs_secret_and_variable_writes() {
+        refused_then_allowed(
+            &[
+                "gh workflow run release.yml",
+                "gh secret set TOKEN < t",
+                "gh secret delete TOKEN",
+                "gh variable set X --body 1",
+                "gh variable delete X",
+            ],
+            &[
+                "gh workflow list",
+                "gh workflow view ci.yml",
+                "gh secret list",
+                "gh variable list",
+                "gh variable get X",
+            ],
+        );
     }
 
     /// Gaps: release writes through `gh api`, `xargs` around gh or git writes (stdin adds
