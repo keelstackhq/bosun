@@ -1,7 +1,7 @@
 //! Risk rules and their evaluation (spec section 8). Pure: the command reads the rules from the
 //! PR's base branch and passes the texts in. A rule only escalates; nothing de-escalates.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -513,127 +513,251 @@ const NPM_TABLES: [&str; 4] = [
     "peerDependencies",
 ];
 
-/// Whether a Cargo dependency entry adds code from outside the repo. `x.workspace = true` does
-/// not: it inherits a root pin, which counts where it is declared. Nor does a `path` entry
-/// without `git`: that code is in this repo and in the diff.
-fn cargo_outside(v: &toml::Value) -> bool {
-    let Some(t) = v.as_table() else { return true };
+/// Fields of a Cargo dependency that say where its code comes from. `version` is left out: a
+/// version bump of a crate already in the tree is not new code from a new place.
+const CARGO_SOURCE_KEYS: [&str; 7] = [
+    "git",
+    "rev",
+    "tag",
+    "branch",
+    "registry",
+    "registry-index",
+    "package",
+];
+
+/// The source of one Cargo dependency entry (empty: the default registry), or `None` when it
+/// adds no code from outside the repo: `x.workspace = true` inherits a root pin (the pin counts
+/// in the root manifest), and a `path` entry without `git` is code in this repo, in the diff.
+fn cargo_source(v: &toml::Value) -> Option<String> {
+    let Some(t) = v.as_table() else {
+        return Some(String::new());
+    };
     let inherits = t.get("workspace").and_then(toml::Value::as_bool) == Some(true);
-    let local = t.contains_key("path") && !t.contains_key("git");
-    !inherits && !local
+    if inherits || (t.contains_key("path") && !t.contains_key("git")) {
+        return None;
+    }
+    let parts: Vec<String> = CARGO_SOURCE_KEYS
+        .iter()
+        .filter_map(|k| t.get(*k).map(|x| format!("{k}={x}")))
+        .collect();
+    Some(parts.join(" "))
 }
 
-/// Package names in the `catalog:` and `catalogs:` sections of a `pnpm-workspace.yaml`. A small
-/// line reader (bosun has no YAML parser) for block-style `name: spec` lines. A catalog line it
-/// cannot read counts as a dependency named by the line, so a new entry is never missed.
-fn pnpm_catalogs(text: &str, names: &mut BTreeSet<String>) {
-    let unquote = |s: &str| s.trim().trim_matches(['\'', '"']).to_string();
-    // Some(false): entries of `catalog:`; Some(true): named catalogs under `catalogs:`.
-    let mut section = None;
-    let mut named = false;
+/// The source class of an npm version spec: a semver range or tag is the registry (empty);
+/// anything else (git, a URL, `npm:` alias, `file:`, `link:`, `user/repo`) is itself.
+fn npm_source(spec: &str) -> String {
+    let s = spec.trim();
+    let range = s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " .*^~<>=|-+x".contains(c));
+    if range { String::new() } else { s.to_string() }
+}
+
+/// A YAML key with its quotes and spaces removed, and the rest of the line after its colon.
+/// `None` when the line is not `key: rest`.
+fn yaml_pair(body: &str) -> Option<(String, &str)> {
+    let (key, rest) = match body.chars().next()? {
+        q @ ('"' | '\'') => {
+            let end = body[1..].find(q)? + 1;
+            let rest = body[end + 1..].trim_start().strip_prefix(':')?;
+            (body[1..end].to_string(), rest)
+        }
+        _ => {
+            let i = body.find(':')?;
+            (body[..i].trim().to_string(), &body[i + 1..])
+        }
+    };
+    let rest = rest.trim();
+    // A key: value pair needs a space after the colon, or nothing (`a:b` is a plain scalar).
+    if !rest.is_empty() && !body.contains(": ") && !body.contains(":\t") {
+        return None;
+    }
+    Some((key, rest))
+}
+
+/// Top-level `pnpm-workspace.yaml` blocks whose entries are dependencies or redirect them.
+/// `catalogs` holds named catalogs one level deeper.
+const PNPM_BLOCKS: [&str; 4] = ["catalog", "catalogs", "overrides", "patchedDependencies"];
+
+/// The entries of the dependency blocks of a `pnpm-workspace.yaml` (`catalog`, `catalogs`,
+/// `overrides`, `patchedDependencies`): a small line reader for block-style `name: spec` lines
+/// (bosun has no YAML parser). Fails closed: any line in or opening such a block that it cannot
+/// read (flow style, an alias or anchor with content, a merge key, odd nesting) counts as a
+/// dependency named by the line, so a change to it is never missed.
+fn pnpm_workspace(text: &str, specs: &mut BTreeMap<String, String>) {
+    let unread = |specs: &mut BTreeMap<String, String>, line: &str| {
+        specs.insert(
+            format!("pnpm-workspace.yaml: {}", line.trim()),
+            String::new(),
+        );
+    };
+    // The open block, and for `catalogs` the named catalog.
+    let mut block: Option<String> = None;
+    let mut named: Option<String> = None;
+    let mut name_indent: Option<usize> = None;
+    let mut entry_indent: Option<usize> = None;
     for raw in text.lines() {
-        let line = raw.find(" #").map_or(raw, |i| &raw[..i]);
-        let body = line.trim();
-        if body.is_empty() || body.starts_with('#') {
+        let line = raw.find(" #").map_or(raw, |i| &raw[..i]).trim_end();
+        let body = line.trim_start();
+        if body.is_empty() || body.starts_with('#') || body == "---" {
             continue;
         }
-        if !line.starts_with([' ', '\t']) {
-            section = match body {
-                "catalog:" => Some(false),
-                "catalogs:" => Some(true),
-                _ if body.starts_with("catalog") => {
-                    names.insert(body.to_string());
-                    None
-                }
-                _ => None,
+        let indent = line.len() - body.len();
+        if indent == 0 {
+            (block, named, name_indent, entry_indent) = (None, None, None, None);
+            let Some((key, rest)) = yaml_pair(body) else {
+                continue;
             };
-            named = false;
+            if !PNPM_BLOCKS.contains(&key.as_str()) && !key.starts_with("catalog") {
+                continue;
+            }
+            // An anchor alone (`catalog: &c`) still opens the block; any other value is unread.
+            let opens = rest.is_empty() || (rest.starts_with('&') && !rest.contains(' '));
+            if opens && PNPM_BLOCKS.contains(&key.as_str()) {
+                block = Some(key);
+            } else {
+                unread(specs, body);
+            }
             continue;
         }
-        let Some(nested) = section else { continue };
-        let pair = body
-            .rsplit_once(": ")
-            .or_else(|| body.strip_suffix(':').map(|k| (k, "")));
-        match pair {
-            Some((_, "")) if nested => named = true,
-            Some((k, v)) if !v.is_empty() && (!nested || named) => {
-                names.insert(unquote(k));
+        let Some(b) = block.as_deref() else { continue };
+        let Some((key, rest)) = yaml_pair(body) else {
+            unread(specs, body);
+            continue;
+        };
+        let simple = !key.starts_with("<<") && !rest.starts_with(['&', '*', '{', '[', '|', '>']);
+        if b == "catalogs" && *name_indent.get_or_insert(indent) == indent {
+            // A named catalog: `name:` (an anchor may follow); its entries sit deeper.
+            let opens = rest.is_empty() || (rest.starts_with('&') && !rest.contains(' '));
+            if opens && !key.starts_with("<<") {
+                (named, entry_indent) = (Some(key), None);
+            } else {
+                unread(specs, body);
             }
-            _ => {
-                names.insert(body.to_string());
+            continue;
+        }
+        let depth_ok = *entry_indent.get_or_insert(indent) == indent;
+        let in_catalog = b != "catalogs" || named.is_some();
+        if simple && !rest.is_empty() && depth_ok && in_catalog {
+            let value = rest.trim_matches(['\'', '"']);
+            let (name, source) = match b {
+                "patchedDependencies" => (format!("{b}/{key}"), value.to_string()),
+                "overrides" => (format!("{b}/{key}"), npm_source(value)),
+                _ => (key, npm_source(value)),
+            };
+            let spec = specs.entry(name).or_default();
+            if !spec.split('\n').any(|s| s == source) {
+                spec.push_str(&source);
+                spec.push('\n');
             }
+        } else {
+            unread(specs, body);
         }
     }
 }
 
-/// Dependency names a `Cargo.toml`, `package.json` or `pnpm-workspace.yaml` text declares (by
-/// the file name of `path`). Edges that add no outside code are left out: Cargo
-/// `workspace = true` and in-repo `path` entries, and npm `catalog:` and `workspace:`
-/// references (the root pins and the catalogs count where they are declared). Other files and
-/// unparsable texts have none.
-pub fn dependency_names(path: &str, text: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+/// Dependencies a `Cargo.toml`, `package.json` or `pnpm-workspace.yaml` text declares (by the
+/// file name of `path`), each with its source: where its code comes from, not its version.
+/// Included: the dependency tables (and their `target` tables), `[workspace.dependencies]`,
+/// `[patch.*]` (as `patch.<registry>/<name>`) and `[replace]` (as `replace/<spec>`) in Cargo;
+/// the dependency maps, `overrides`, `resolutions`, `pnpm.overrides` and
+/// `pnpm.patchedDependencies` in npm; the catalogs, `overrides` and `patchedDependencies` of a
+/// pnpm workspace. Edges that add no outside code are left out: Cargo `workspace = true` and
+/// in-repo `path` entries, and npm `catalog:` and `workspace:` references (the root pins and the
+/// catalogs count where they are declared). Other files and unparsable texts have none.
+pub fn dependency_specs(path: &str, text: &str) -> BTreeMap<String, String> {
+    let mut specs = BTreeMap::new();
     match path.rsplit('/').next().unwrap_or(path) {
         "Cargo.toml" => {
             let Ok(doc) = toml::from_str::<toml::Table>(text) else {
-                return names;
+                return specs;
             };
-            let mut tables: Vec<&toml::Table> = Vec::new();
-            let mut scopes = vec![&doc];
-            if let Some(t) = doc.get("target").and_then(|t| t.as_table()) {
-                scopes.extend(t.values().filter_map(|v| v.as_table()));
+            fn table(v: Option<&toml::Value>) -> Option<&toml::Table> {
+                v.and_then(toml::Value::as_table)
             }
+            let mut tables: Vec<(String, &toml::Table)> = Vec::new();
+            let mut scopes = vec![&doc];
+            scopes.extend(
+                table(doc.get("target"))
+                    .into_iter()
+                    .flat_map(|t| t.values())
+                    .filter_map(toml::Value::as_table),
+            );
             for scope in scopes {
                 for key in CARGO_TABLES {
-                    tables.extend(scope.get(key).and_then(|v| v.as_table()));
+                    tables.extend(table(scope.get(key)).map(|t| (String::new(), t)));
                 }
             }
-            tables.extend(
-                doc.get("workspace")
-                    .and_then(|w| w.get("dependencies"))
-                    .and_then(|v| v.as_table()),
-            );
-            for t in tables {
-                let outside = t.iter().filter(|(_, v)| cargo_outside(v));
-                names.extend(outside.map(|(k, _)| k.clone()));
+            let ws = table(doc.get("workspace"));
+            tables
+                .extend(table(ws.and_then(|w| w.get("dependencies"))).map(|t| (String::new(), t)));
+            for (registry, t) in table(doc.get("patch")).into_iter().flatten() {
+                tables.extend(t.as_table().map(|t| (format!("patch.{registry}/"), t)));
             }
-        }
-        "package.json" => {
-            let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
-                return names;
-            };
-            for key in NPM_TABLES {
-                for (name, v) in doc
-                    .get(key)
-                    .and_then(|v| v.as_object())
-                    .into_iter()
-                    .flatten()
-                {
-                    let spec = v.as_str().unwrap_or_default();
-                    if !spec.starts_with("catalog:") && !spec.starts_with("workspace:") {
-                        names.insert(name.clone());
+            tables.extend(table(doc.get("replace")).map(|t| ("replace/".to_string(), t)));
+            for (prefix, t) in tables {
+                for (name, v) in t {
+                    if let Some(source) = cargo_source(v) {
+                        specs.insert(format!("{prefix}{name}"), source);
                     }
                 }
             }
         }
-        "pnpm-workspace.yaml" => pnpm_catalogs(text, &mut names),
+        "package.json" => {
+            let Ok(doc) = serde_json::from_str::<serde_json::Value>(text) else {
+                return specs;
+            };
+            let pnpm = doc.get("pnpm");
+            let maps = NPM_TABLES.iter().map(|k| ("", doc.get(*k))).chain([
+                ("overrides/", doc.get("overrides")),
+                ("resolutions/", doc.get("resolutions")),
+                ("overrides/", pnpm.and_then(|p| p.get("overrides"))),
+                (
+                    "patchedDependencies/",
+                    pnpm.and_then(|p| p.get("patchedDependencies")),
+                ),
+            ]);
+            for (prefix, map) in maps {
+                for (name, v) in map.and_then(|m| m.as_object()).into_iter().flatten() {
+                    // npm `overrides` may nest objects: the whole value is the source.
+                    let spec = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                    if spec.starts_with("catalog:") || spec.starts_with("workspace:") {
+                        continue;
+                    }
+                    let source = match prefix {
+                        "patchedDependencies/" => spec,
+                        _ => npm_source(&spec),
+                    };
+                    specs.insert(format!("{prefix}{name}"), source);
+                }
+            }
+        }
+        "pnpm-workspace.yaml" => pnpm_workspace(text, &mut specs),
         _ => {}
     }
-    names
+    specs
 }
 
-/// Names declared at head but not at base, over `(path, base text, head text)` triples.
-/// A manifest missing at base is all new.
+/// Dependencies that add outside code, over `(path, base text, head text)` triples: a name
+/// declared at head but not at base (`x`), or one whose source changed (`x (source changed)`:
+/// registry to git, a `package =` rename, an `npm:` alias...). A version bump is neither. A
+/// manifest missing at base is all new.
 pub fn new_dependencies(manifests: &[(String, Option<String>, Option<String>)]) -> Vec<String> {
     let mut out = BTreeSet::new();
     for (path, base, head) in manifests {
         let old = base
             .as_deref()
-            .map_or_else(BTreeSet::new, |t| dependency_names(path, t));
+            .map_or_else(BTreeMap::new, |t| dependency_specs(path, t));
         let new = head
             .as_deref()
-            .map_or_else(BTreeSet::new, |t| dependency_names(path, t));
-        out.extend(new.difference(&old).cloned());
+            .map_or_else(BTreeMap::new, |t| dependency_specs(path, t));
+        for (name, source) in new {
+            match old.get(&name) {
+                None => out.insert(name),
+                Some(o) if *o != source => out.insert(format!("{name} (source changed)")),
+                Some(_) => false,
+            };
+        }
     }
     out.into_iter().collect()
 }
@@ -841,10 +965,10 @@ toml = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0"
 "#;
-        let n = dependency_names("crates/a/Cargo.toml", text);
-        let got: Vec<&str> = n.iter().map(String::as_str).collect();
+        let n = dependency_specs("crates/a/Cargo.toml", text);
+        let got: Vec<&str> = n.keys().map(String::as_str).collect();
         assert_eq!(got, ["cc", "libc", "serde", "tempfile", "toml"]);
-        assert!(dependency_names("README.md", text).is_empty());
+        assert!(dependency_specs("README.md", text).is_empty());
     }
 
     #[test]
