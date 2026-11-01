@@ -1,1 +1,0 @@
-- F13 follow-up: spawn prompts name `partial`.

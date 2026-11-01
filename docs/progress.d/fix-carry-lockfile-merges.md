@@ -1,1 +1,0 @@
-- 2026-11-01 · F2 · carry rule 6: a lockfile both sides changed carries when its entries all come from H or M (`src/core/lockmerge.rs`, `src/core/carry.rs`, `src/cli/carry_over.rs`, `tests/cli_carry_lockfile.rs`, spec §8)

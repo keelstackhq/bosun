@@ -1,1 +1,0 @@
-- `bosun plan pr <plan> "<why>" --source <s>` opens the intake, claims the plan file and opens the PR of a plan amendment in one step.

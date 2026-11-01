@@ -1,1 +1,0 @@
-- F16: review-pack shows the lease touch list.

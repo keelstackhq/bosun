@@ -1,1 +1,0 @@
-- `bosun result` lists the epic's merged tasks for every outcome, and a new `partial` outcome hands the epic back as ready.

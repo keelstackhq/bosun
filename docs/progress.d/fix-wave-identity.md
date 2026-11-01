@@ -1,1 +1,0 @@
-- F12: wave-agent identity (claim area check for `S/task`, spawn prompt id, join parent/depth).

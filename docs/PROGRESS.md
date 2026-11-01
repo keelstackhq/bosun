@@ -269,6 +269,29 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - 2026-10-28 · setup scripts reject a channel that is not a toolchain name · PR (fix/setup-script-channel-check)
 - 2026-10-28 · Fix setup-script Rust version · `docs/setup-script.sh` (channel and own) reads `rust-toolchain.toml`, no hard-coded `RUST_VERSION`; without it, it warns and skips Rust and the cargo tools (exit 0); `--rust-version` prints it; spec §1 D23, §3 · `tests/channel_render.rs` · PR (fix/setup-script-rust-version)
 - 2026-10-26 · Release v0.2.3 · release PR: `Cargo.toml`, `Cargo.lock`, the six `npm/*/package.json`, `pnpm-lock.yaml`, `## 0.2.3 (2026-10-26)` in CHANGELOG (#240, #243, #244); after it publishes, the pin PR moves `.bosun/version` and the setup script to 0.2.3 · PR (release/0.2.3)
+- 2026-10-29 · Pin v0.3.0 · `.bosun/version` and `docs/setup-script.sh` (version and its three sha512) move to the published 0.3.0; bootstrap mode on (D-012): `bootstrap_until = "2026-11-30"` in `.bosun/bosun.toml` and in the channel while `bosun_version` is empty; 0.3.0 in `KNOWN` · PR (chore/pin-0.3.0)
+- 2026-10-29 · Tool pins · setup scripts: splice 0.3.1 and hoist 0.3.0 with integrity; both splice.yml: splice 0.3.1, action at v0.3.1 (f7ac4ef) · PR (chore/setup-splice-0.3.1-hoist-0.3.0)
+- F14: `bosun plan pr`.
+- 2026-11-01 · F6 approve --list tokenless, answer --chat · `approve --list` reads without a token and reports `data.skipped`, writes nothing; `answer --chat` verifies the orchestrator-relayed answer signed by an enrolled owner key (`bosun-answer v1`, bound to repo, issue, ask and text), records key, issue, ask, sha256 and sig, and moves needs-human to ready (other states recorded only; kill switch or main-red exit 4, nothing written; mainfix exempt from main-red); `--chat --sign-key` signs it; spec §4, §8 and §10 · PR #349 (fix/approve-list-answer-chat)
+- 2026-11-01 · F2 · carry rule 6: a lockfile both sides changed carries when its entries all come from H or M (`src/core/lockmerge.rs`, `src/core/carry.rs`, `src/cli/carry_over.rs`, `tests/cli_carry_lockfile.rs`, spec §8)
+- 2026-11-01 · B4 CI · step `task allow list` in ci.yml and the channel bosun.yml feeds BOSUN_INTEGRITY_ALLOW from the linked task; issues/pull-requests read (`tests/workflows_integrity_allow.rs`, spec §7)
+- 2026-11-01 · fix · doctor: Slack and release optional (skipped), notify skipped without [slack], janitor drops notify, Routines hourly (F10, F11, F17) · `tests/cli_doctor.rs`, `tests/cli_doctor_remote.rs`, `tests/cli_notify.rs` · PR (fix/doctor-notify-optional)
+- F16: review-pack shows the lease touch list.
+- 2026-11-01 · Fix F9 · guard false positives: `gh api` reads naming `auto_merge` pass (writes by method, `-f/-F/--field/--raw-field/--input` stay refused), nesting depth 3 -> 8 with a clear reason, `git merge --ff-only origin/main|@{u}` on main passes (other refs refused) · guard unit tests +4 · PR (fix/guard-false-positives)
+- 2026-11-01 · Fix guard gaps · merge-lock refuses `gh api …/releases` writes, every `gh release` write, `gh workflow run`, `gh secret|variable` writes, GraphQL merge/ref/auto-merge mutations and hidden queries, `xargs` around gh/git/http writes, gh and git aliases, `git push --all|--branches|--mirror|--tags|--follow-tags`, `*` refspecs, quoted or `$` push targets; runners (`timeout`, `nice`, `xargs`, `builtin`, `command`, `env -S`) are unwrapped, a runner `cd` makes the git target unknown · guard unit tests +8 · PR (fix/guard-gaps)
+- 2026-11-01 · B4/F4 · plan `allow:` -> task metadata; `test-integrity --pr` reads body and task allow; snapshot fix text names the PR-body line (`src/core/plan.rs`, `src/cli/test_integrity.rs`, `src/gates/integrity.rs`, docs/plan-format.md, spec §7). CI wiring follows in its own PR
+- Plan allow only from the default branch; plans/** owner-gated anywhere.
+- F5, F15: plan import closes plan tasks of a plan already on main; critical path counts only open tasks.
+- 2026-11-01 · Fix · `bosun pr --auto-merge` enables auto-merge without waiting for green; already-clean PR exits 5 · `tests/cli_pr_auto_merge.rs` · fix/pr-auto-merge-early
+- F13: result tasks_merged for every outcome; `partial` outcome.
+- 2026-11-01 · F1 follow-up · R-deps paths for package-source config (`.cargo/config*`, `.npmrc`, `.yarnrc*`) in the built-in, repo and channel rules (`tests/risk_deps_registry_config.rs`, spec §8)
+- 2026-11-01 · F1 · R-deps counts new outside code only: workspace edges to existing pins, path deps and pnpm catalog/workspace refs are not new; new root pins, catalog entries and source changes (git, renames, patch/replace, overrides) are; pnpm-workspace.yaml read fail-closed (`src/core/risk.rs`, `tests/cli_risk_deps_edges.rs`, `tests/risk_deps_sources.rs`, spec §8)
+- 2026-11-01 · F3 · R-secrets exempts code bindings, test files/fixtures and `bosun:allow-secret <reason>` lines; strong key formats never exempt (`src/core/risk.rs`, `tests/cli_risk_secrets.rs`, spec §8)
+- 2026-11-01 · Setup script: cargo tools and Node 24 · without a toolchain file the script still installs rustup's stable default and cargo-nextest/cargo-deny; Node 24 is linked first (profile.d plus replacing the older `node`), verified, warns on failure; both copies; spec §1 D23, §3 · `tests/channel_render.rs` · PR (fix/setup-script-tools-node)
+- F13 follow-up: spawn prompts name `partial`.
+- F7, F18, F10, F8: wait keeps the caller alive, reaps what expired, newest check run only.
+- F12: wave-agent identity (claim area check for `S/task`, spawn prompt id, join parent/depth).
+- 2026-10-29 · Release · keel-bosun 0.3.0, @keelstackhq/bosun 0.3.0 (release PR; tag and publish by release.yml) · PR (release/0.3.0)
 
 ## Blocked
 

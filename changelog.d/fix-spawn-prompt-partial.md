@@ -1,1 +1,0 @@
-- The spawn prompts list the `partial` outcome of `bosun result`.

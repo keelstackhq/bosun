@@ -1,1 +1,0 @@
-- The review pack shows `task.lease_touch`, the touch globs of the task's leases, so a lease widened with `claim --touch` is visible to the reviewer.

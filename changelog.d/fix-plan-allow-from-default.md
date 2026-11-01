@@ -1,1 +1,0 @@
-- A task's `allow:` reaches its metadata only from the plan on the default branch (owner-approved), never from an unmerged local plan.
