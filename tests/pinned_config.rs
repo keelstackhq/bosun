@@ -9,6 +9,10 @@ const KNOWN: &[(&str, &[&str])] = &[
         "0.3.0",
         &["project", "stack", "review", "slack", "prices", "approvals"],
     ),
+    (
+        "0.4.0",
+        &["project", "stack", "review", "slack", "prices", "approvals"],
+    ),
 ];
 
 /// `path` as committed at HEAD: CI swaps the base branch's `.bosun/` into the checkout.
