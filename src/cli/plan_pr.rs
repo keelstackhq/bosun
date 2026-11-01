@@ -57,7 +57,7 @@ pub fn run(dir: Option<&Path>, a: &PlanPrArgs) -> CmdResult {
         &PrArgs {
             issue: n,
             title: None,
-            auto_merge: false,
+            auto_merge: a.auto_merge,
         },
     )
     .map_err(|e| with_steps(e, &data))?;

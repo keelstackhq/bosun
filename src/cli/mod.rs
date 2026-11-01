@@ -643,6 +643,9 @@ pub struct PlanPrArgs {
     /// Intake title after `intake: ` (default: the first line of the text).
     #[arg(long)]
     pub title: Option<String>,
+    /// Also turn on auto-merge (as `bosun pr --auto-merge`; bosun never merges).
+    #[arg(long)]
+    pub auto_merge: bool,
 }
 
 #[derive(Debug, Args)]

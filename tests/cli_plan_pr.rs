@@ -139,3 +139,13 @@ fn a_missing_plan_is_a_usage_error_and_writes_nothing() {
     assert_eq!(code, 2, "{v}");
     assert!(fake.requests().iter().all(|r| r.method == "GET"));
 }
+
+#[test]
+fn auto_merge_passes_on_to_bosun_pr() {
+    let fake = FakeGithub::start();
+    let dir = repo("claude/plan-am");
+    // The branch requires none of the checks: `bosun pr --auto-merge` refuses (exit 5).
+    let (code, v) = plan_pr(&fake, dir.path(), &["--auto-merge"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["data"]["claim"]["lease"].is_object(), "{v}");
+}
