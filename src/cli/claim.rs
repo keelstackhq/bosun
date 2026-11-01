@@ -12,7 +12,9 @@ use crate::app::{
 use crate::cli::status::process_red;
 use crate::core::budget::{BUDGET_STOP, no_new_work};
 use crate::core::glob::{self, Glob};
-use crate::core::lease::{Lease, TTL_SECS, conflicts, leases_of, members, race_winner};
+use crate::core::lease::{
+    Lease, TTL_SECS, conflicts, leases_of, members, orchestrator_of, race_winner,
+};
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
 use crate::core::state::{State, state_of};
@@ -131,14 +133,16 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     check_overlap(&active, &touch, session, n, now)?;
 
     if let (Some(area), Some((_, reg))) = (area_of(&issue.labels), registry::load(gh)?) {
+        // A per-task id `S/task` is a wave agent of `S` (as for the edit-lock): it claims as `S`.
+        let me = orchestrator_of(session);
         let all = members(&reg);
         let parent = all
             .iter()
-            .find(|m| &m.session == session)
+            .find(|m| m.session == me)
             .and_then(|m| m.parent.clone());
         let owner = all.iter().find(|m| {
             m.area.as_deref() == Some(&area)
-                && &m.session != session
+                && m.session != me
                 && m.expires > now
                 && Some(&m.session) != parent.as_ref()
         });

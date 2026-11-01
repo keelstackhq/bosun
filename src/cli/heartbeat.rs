@@ -3,24 +3,30 @@
 
 use std::path::Path;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use crate::app::{App, active_issues, kill_switch, renew_lease};
+use crate::app::{App, Result, active_issues, kill_switch, renew_lease};
 use crate::core::lease::{TTL_SECS, leases_of, members};
+use crate::github::Github;
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
+use crate::time::Timestamp;
 
 pub fn run(dir: Option<&Path>) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
-    let (session, now) = (&app.ctx.session, app.ctx.now);
-    let expires = now.plus_secs(TTL_SECS);
+    Ok(Outcome::data(beat(gh, &app.ctx.session, app.ctx.now)?))
+}
 
+/// Renew `session`'s live leases and its registry record to `now` + TTL. Returns
+/// `{leases, registry}`. `wait` runs it while it polls.
+pub fn beat(gh: &dyn Github, session: &str, now: Timestamp) -> Result<Value> {
+    let expires = now.plus_secs(TTL_SECS);
     let mut extended = Vec::new();
     for (issue, notes) in active_issues(gh)? {
         for lease in leases_of(issue.number, &notes) {
-            if &lease.session != session || !lease.is_live(now) {
+            if lease.session != session || !lease.is_live(now) {
                 continue;
             }
             renew_lease(gh, &lease, &notes, expires)?;
@@ -30,7 +36,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
 
     let mut registered = false;
     if let Some((_, notes)) = registry::load(gh)?
-        && let Some(mut m) = members(&notes).into_iter().find(|m| &m.session == session)
+        && let Some(mut m) = members(&notes).into_iter().find(|m| m.session == session)
     {
         m.expires = expires;
         let body = notes
@@ -40,7 +46,5 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         registry::rewrite(gh, &m, body)?;
         registered = true;
     }
-    Ok(Outcome::data(
-        json!({"leases": extended, "registry": registered}),
-    ))
+    Ok(json!({"leases": extended, "registry": registered}))
 }

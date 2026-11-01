@@ -21,7 +21,17 @@ fn with_h1(blocks: &str) -> String {
 
 fn import(fake: &FakeGithub, dir: &Path, extra: &[&str]) -> (i32, Value) {
     let d = dir.to_str().unwrap();
-    let mut a = vec!["-C", d, "plan", "import", "plan.md"];
+    // The plan task is closed by hand in these tests (`merged`), so keep it open at import even
+    // though the plan is on the default branch; `default_import_closes_and_still_holds` covers
+    // the default.
+    let mut a = vec![
+        "-C",
+        d,
+        "plan",
+        "import",
+        "plan.md",
+        "--keep-plan-tasks-open",
+    ];
     a.extend(extra);
     common::run(fake, "session_test", T0, &a)
 }
@@ -253,4 +263,24 @@ fn import_refuses_a_plan_that_differs_from_the_default_branch() {
     assert_eq!(checklists(&fake), 0, "nothing was written");
     let (code, v) = import(&fake, tmp.path(), &["--dry-run"]);
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn default_import_closes_and_still_holds() {
+    let (tmp, fake) = setup(&with_h1("M1/T2"));
+    let d = tmp.path().to_str().unwrap();
+    let (code, v) = common::run(
+        &fake,
+        "session_test",
+        T0,
+        &["-C", d, "plan", "import", "plan.md"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["on_default"], json!(["M1/P"]));
+    assert_eq!(v["data"]["promoted"], json!(["M1", "M1/T1"]));
+    assert_eq!(
+        v["data"]["held"],
+        json!([{"task": "M1/T2", "needs": ["H1"]}])
+    );
+    assert_eq!(state(&fake, "M1/T2"), ["bosun:state/planned"]);
 }

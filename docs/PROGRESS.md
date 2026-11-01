@@ -286,8 +286,8 @@ Human-only items, in order. Each has the exact action.
    settings → setup script: paste `docs/setup-script.sh` (again after each pin bump: it now
    installs `@keelstackhq/bosun@0.3.0` from npm), in every environment, the owner's included.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
-   `data.routines`: janitor (every 15 min, Haiku), curator (daily, Sonnet), notify (every
-   15 min, Haiku). Create them in claude.ai → Routines.
+   `data.routines`: janitor (every hour, Haiku), curator (daily, Sonnet), notify (every
+   hour, Haiku; only with `[slack]`). Create them in claude.ai → Routines.
 4. **Workflow secrets into main-only environments (PR fix/secrets-environments).** A same-repo
    PR's own `on: pull_request` workflow can read repository secrets, so each secret moves into
    an environment that only `main` may deploy to. Until then the jobs still read the repository

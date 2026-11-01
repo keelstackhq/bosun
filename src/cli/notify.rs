@@ -452,13 +452,16 @@ fn read_info(from: &str) -> Result<String, String> {
 
 fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) -> CmdResult {
     let app = App::load(dir)?;
-    let channel = app
-        .ctx
-        .config
-        .slack
-        .as_ref()
-        .map(|s| s.channel.trim().to_string())
-        .unwrap_or_default();
+    // Slack is optional: without a [slack] table there is nothing to post, and no error (F17).
+    let Some(slack) = app.ctx.config.slack.as_ref() else {
+        return Ok(Outcome::data(json!({
+            "skipped": true,
+            "reason": "no [slack] table in .bosun/bosun.toml: Slack is not configured, so nothing is posted",
+            "pending": [],
+            "errors": [],
+        })));
+    };
+    let channel = slack.channel.trim().to_string();
     if channel.is_empty() {
         return Err(BosunError::error(
             "[slack] channel is not set",
