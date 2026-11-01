@@ -2087,14 +2087,16 @@ fn gh_api_read(args: &[&str], segment: &str) -> bool {
     true
 }
 
-/// `git merge --ff-only [REF]`: moves only the local branch, never the remote.
-fn ff_only(rest: &[&str]) -> bool {
+/// `git merge --ff-only [origin/<default>|@{u}|@{upstream}]`: catches the local branch up
+/// with its remote, never brings in other work.
+fn ff_only(rest: &[&str], default_branch: &str) -> bool {
     let refs: Vec<&&str> = rest.iter().filter(|a| **a != "--ff-only").collect();
     rest.len() == refs.len() + 1
         && refs.len() <= 1
-        && refs
-            .iter()
-            .all(|r| !r.starts_with('-') && !r.contains(['$', '`', '\'', '"', '\\']))
+        && refs.iter().all(|r| {
+            matches!(**r, "@{u}" | "@{upstream}")
+                || r.strip_prefix("origin/") == Some(default_branch)
+        })
 }
 
 /// `v1.2.3`, `1.2` ...: a ref that looks like a version tag.
@@ -2192,7 +2194,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 });
             (!lists).then_some("tag")
         }
-        "merge" if ff_only(rest) => None,
+        "merge" if ff_only(rest, default_branch) => None,
         "merge" | "rebase" | "cherry-pick" | "reset" | "commit" if on_default => {
             Some("changing the default branch")
         }
@@ -2520,6 +2522,8 @@ mod tests {
             "git merge --ff-only origin/main",
             "git fetch origin && git merge --ff-only origin/main",
             "git merge --ff-only",
+            "git merge --ff-only @{u}",
+            "git merge --ff-only @{upstream}",
         ] {
             assert_eq!(bash(cmd, "main"), None, "{cmd}");
         }
@@ -2529,6 +2533,11 @@ mod tests {
             "git merge --ff-only --no-ff origin/feature",
             "git merge --ff-only origin/a origin/b",
             "git merge --ff-only -m x origin/feature",
+            "git merge --ff-only origin/feature",
+            "git merge --ff-only feature",
+            "git merge --ff-only upstream/main",
+            "git merge --ff-only origin/main~1",
+            "git merge --ff-only FETCH_HEAD",
             "git merge --ff-only origin/main && git push origin main",
             "git merge --ff-only origin/main && git push --force",
             "git push --force origin feature",
