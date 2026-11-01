@@ -74,7 +74,11 @@ The state machine, stop rules and resume.
    more tasks touch, that overlap each other and are not already in one order, is a hotspot: give
    it to one task and chain the others, or split the file. At most 20 overlap warnings are shown;
    the count stops at 1000 ("at least N more overlapping pairs").
-6. The critical path of an item (the longest chain of `depends` inside it) has at most 4 tasks.
+6. The critical path of an item (the longest chain of `depends` inside it) has at most 4 tasks still
+   open. When only this rule fails, `bosun plan check`, `import` and `amend` read the issues on GitHub
+   and do not count tasks that are merged or closed as completed; a good plan is checked without GitHub.
+   Other commands that read a plan (`intake`, `prereqs`, `hold`) still count every task, and a copy
+   that is only compared (the plan on the default branch, at an intake's merge) skips the rule.
 7. `### Done when` lists the UCs, one `- UC-<item>-<n>: <text>` bullet each, numbered from 1 with
    no gaps. Each line must be checkable by a test. Every item has at least one UC.
 8. Any rule broken is a parse error with the file, the line and the fix; `bosun plan import` then
