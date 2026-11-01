@@ -1,1 +1,0 @@
-- 2026-11-01 · B4 CI · step `task allow list` in ci.yml and the channel bosun.yml feeds BOSUN_INTEGRITY_ALLOW from the linked task; issues/pull-requests read (`tests/workflows_integrity_allow.rs`, spec §7)

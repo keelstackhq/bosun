@@ -1,1 +1,0 @@
-- 2026-11-01 · Fix · `bosun pr --auto-merge` enables auto-merge without waiting for green; already-clean PR exits 5 · `tests/cli_pr_auto_merge.rs` · fix/pr-auto-merge-early

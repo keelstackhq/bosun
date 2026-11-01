@@ -1,1 +1,0 @@
-- `bosun pr --auto-merge` now turns on auto-merge at once and lists unfinished checks as `pending_checks`; a PR GitHub reports as already clean exits 5 (`already_clean`) and is left for the owner to merge.

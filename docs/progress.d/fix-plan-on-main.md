@@ -1,1 +1,0 @@
-- F5, F15: plan import closes plan tasks of a plan already on main; critical path counts only open tasks.

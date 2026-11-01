@@ -1,1 +1,0 @@
-- F13: result tasks_merged for every outcome; `partial` outcome.

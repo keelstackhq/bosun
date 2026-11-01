@@ -1,1 +1,0 @@
-- risk-check: an approval or verdict now carries across a merge of main whose only conflict is `Cargo.lock` or `pnpm-lock.yaml`, when every whole entry of the regenerated lockfile is an entry of the approved head's or main's copy (checked from git, entry by entry).

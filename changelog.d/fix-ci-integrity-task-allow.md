@@ -1,1 +1,0 @@
-- CI and the channel's `bosun.yml` read test-integrity's allowed kinds from the PR's linked task (plan `allow:`) in a step before the gates, with a read-only token that never reaches PR code; needs a bosun with `test-integrity --pr`.

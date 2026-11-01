@@ -1,1 +1,0 @@
-- Wave agents with a per-task id `S/task` can claim in their orchestrator's area; the spawn prompt names the child's own id; `join` refuses itself as parent and `--depth` can lower a root's depth.

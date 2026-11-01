@@ -1,1 +1,0 @@
-- 2026-11-01 · B4/F4 · plan `allow:` -> task metadata; `test-integrity --pr` reads body and task allow; snapshot fix text names the PR-body line (`src/core/plan.rs`, `src/cli/test_integrity.rs`, `src/gates/integrity.rs`, docs/plan-format.md, spec §7). CI wiring follows in its own PR
