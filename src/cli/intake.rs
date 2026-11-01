@@ -44,6 +44,7 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
         .plan
         .clone()
         .unwrap_or_else(|| format!("plans/{}.md", app.ctx.config.project));
+    check_plan_path(&file)?;
     let area = plan_area(&app.ctx.dir, &file, a.item.as_deref())?;
     let first = text.lines().next().unwrap_or(text).trim();
     let title_text = a
@@ -99,6 +100,32 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
     let issue = app.gh.create_issue(&title, &body, &refs)?;
     Ok(Outcome::data(data(issue.number, true, a, &file)))
+}
+
+/// The plan path becomes the intake's `touch` verbatim, so it must name one file: a
+/// repo-relative `.md` path with no glob characters, no `.` or `..` part and no backslash.
+pub(crate) fn check_plan_path(file: &str) -> Result<(), BosunError> {
+    let why = if file.chars().any(|c| "*?[]{}!".contains(c)) {
+        Some("has a glob character")
+    } else if file.starts_with('/') || file.contains('\\') || file.contains(':') {
+        Some("is not a repo-relative path")
+    } else if file
+        .split('/')
+        .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        Some("has an empty, `.` or `..` part")
+    } else if !file.ends_with(".md") {
+        Some("is not a .md file")
+    } else {
+        None
+    };
+    match why {
+        None => Ok(()),
+        Some(why) => Err(BosunError::usage(
+            format!("plan path {file:?} {why}"),
+            "pass the repo-relative path of one plan file, for example plans/bosun.md",
+        )),
+    }
 }
 
 fn data(issue: u64, created: bool, a: &IntakeArgs, file: &str) -> serde_json::Value {

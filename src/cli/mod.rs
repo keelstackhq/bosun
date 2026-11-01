@@ -22,6 +22,7 @@ pub mod main_triage;
 pub mod msg;
 pub mod notify;
 pub mod plan;
+pub mod plan_pr;
 pub mod pr;
 pub mod prereqs;
 pub mod prereqs_gate;
@@ -235,6 +236,7 @@ impl Command {
             Command::Plan(PlanCmd::Check(_)) => "plan check",
             Command::Plan(PlanCmd::Import(_)) => "plan import",
             Command::Plan(PlanCmd::Amend(_)) => "plan amend",
+            Command::Plan(PlanCmd::Pr(_)) => "plan pr",
             Command::Fail(_) => "fail",
             Command::Resume => "resume",
             Command::Progress(_) => "progress",
@@ -630,6 +632,28 @@ pub enum PlanCmd {
     Import(PlanImportArgs),
     /// Import, then close what the plan dropped and update changed tasks (after an amendment merged).
     Amend(PlanAmendArgs),
+    /// Open the PR of a plan amendment in one step: intake, claim of the plan file, `bosun pr`.
+    Pr(PlanPrArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PlanPrArgs {
+    /// The plan file, repo-relative, for example plans/bosun.md.
+    pub file: String,
+    /// Why the plan changes (the intake text).
+    pub why: String,
+    /// Where the request came from.
+    #[arg(long, value_parser = ["slack", "lesson", "flake", "human"])]
+    pub source: String,
+    /// The plan item the amendment belongs to (sets the area label).
+    #[arg(long, value_name = "ID")]
+    pub item: Option<String>,
+    /// Intake title after `intake: ` (default: the first line of the text).
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Also turn on auto-merge (as `bosun pr --auto-merge`; bosun never merges).
+    #[arg(long)]
+    pub auto_merge: bool,
 }
 
 #[derive(Debug, Args)]
