@@ -67,6 +67,12 @@ The state machine, stop rules and resume.
      over 100 is a warning.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
+   - `allow:` (optional) comma-separated test-integrity finding kinds the task may raise:
+     `delete-test` (also allows `fewer-tests`), `skip`, `only`, `fewer-asserts`. Any other value
+     is a plan error. Use it for a task that removes code with its tests, for example a seed
+     crate. Import stores it in the task metadata; `bosun test-integrity --pr <n>` reads it from
+     the PR's linked task. A snapshot change is not an `allow:` kind: it needs a
+     `snapshot-change: <reason>` line in the PR body.
    `bosun plan check` gives two warnings from the touch lists (not errors). Two tasks that touch
    overlapping files with no `depends` path between them (across items too; an item `depends:`
    counts for all its tasks) are not parallel: claim and wave keep apart tasks whose raw touch globs overlap
@@ -110,7 +116,7 @@ conflict to resolve. Cut the plan by file ownership:
 | Plan part | GitHub | Labels |
 | --------- | ------ | ------ |
 | item | one epic issue, title `<ID>: <title>` | `bosun:kind/feature`, `bosun:area/<area>`, `bosun:source/plan`, `bosun:state/planned` |
-| task | one issue linked to its epic, title `<item>/<task>: <title>` | as the item, plus its `kind` |
+| task | one issue linked to its epic, title `<item>/<task>: <title>`; the metadata carries `touch`, `depends`, `kind`, `risk` and `allow` | as the item, plus its `kind` |
 | plan task | one issue per item, `<item>/P: plan`; `ready` at once, `kind: plan`, `allow: []`, touches the plan file | `bosun:kind/plan`, area, `bosun:source/plan`, `bosun:state/ready` |
 | UC line | listed in the epic; the UC test lands passing with the task that implements it, no pending tests (spec §7); `bosun plan import` writes no test files; tasks become ready on the import run after the plan task merged | — |
 

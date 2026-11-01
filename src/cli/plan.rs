@@ -398,7 +398,7 @@ fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>) -> TaskMeta {
         depends: t.depends.clone(),
         kind: t.kind.clone(),
         risk: t.risk.clone(),
-        allow: vec![],
+        allow: t.allow.clone(),
         capabilities: vec![],
     }
 }
