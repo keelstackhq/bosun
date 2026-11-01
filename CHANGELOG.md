@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.4.0 (2026-11-01)
+
 - bosun pins 0.3.0 and turns on bootstrap mode (D-012) until 2026-11-30: `[approvals] bootstrap_until` in its own `.bosun/bosun.toml`, and in the channel for repos that pin the channel version. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
 - The setup scripts pin splice 0.3.1 (it strips token-like env vars from what it posts) and hoist 0.3.0, each with its npm integrity; both `splice.yml` move to splice 0.3.1 and pin `keelstackhq/splice/action` at v0.3.1's commit. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
 - `bosun plan pr <plan> "<why>" --source <s>` opens the intake, claims the plan file and opens the PR of a plan amendment in one step.
