@@ -10,6 +10,7 @@
 - R-secrets: "A secret in the repo is a leak." Paths `**/secrets.toml`, `**/access.toml` and `**/*.sops.*` (`.sops.yaml` included); content `(?i)(api[_-]?key|secret|token)\s*=` or `AGE-SECRET-KEY-1` or `SOPS_AGE_KEY\s*[:=]` (a path or the content matches). It is critical, so it never goes to a delegate. Risk paths also match the lowercased path (a case-insensitive filesystem treats `Secrets.toml` and `.CircleCI/` as the same files), so patterns are written in lowercase.
 - R-deps: "A new dependency adds code that nobody reviewed." `new_dependency = true`.
 - R-prod-write: "A write to production cannot be undone by a revert." `capability = "prod-write"`.
+- R-deps also has paths: `**/.cargo/config.toml`, `**/.cargo/config`, `**/.npmrc`, `**/.yarnrc` and `**/.yarnrc.yml` (any directory, any case). They decide where every package comes from (Cargo `[source]` replace-with and `[registries]`; npm, pnpm and yarn registry and `@scope:registry` lines), so any change to them counts, in the built-in rules, this repo's `.bosun/risk.toml` and the channel's (`tests/risk_deps_registry_config.rs`). An edit to another setting in these files needs the approval too.
 
 Rule evaluation:
 - risk-check unions the capabilities of every issue the PR body links (`Closes|Fixes|Resolves #N`, any case, and `<!-- bosun:task-pr N -->`), because the agent writes the body.
