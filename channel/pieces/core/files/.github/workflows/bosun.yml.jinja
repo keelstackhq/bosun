@@ -34,6 +34,9 @@ concurrency:
 permissions:
   contents: read
   checks: read
+  # step `task allow list` reads the PR body and its linked task.
+  issues: read
+  pull-requests: read
 
 # A PR's .cargo/config.toml must not swap the compiler cargo runs (a rustc wrapper or
 # build.rustc would run PR code in rust-cache and the gates before lint): cargo takes these over
@@ -351,7 +354,26 @@ jobs:
           got="$(pnpm --version)"
           echo "pnpm $got"
           test "pnpm@$got" = "$v"
-{% endif %}{% if "ts-pnpm" in pieces %}      # The gates run in order and stop at the first failure: here test-integrity and deps, which
+{% endif %}{% raw %}      # The kinds test-integrity may allow come from the PR's linked task (the plan's `allow:`),
+      # read with this run's read-only token before any PR code runs, and never in the gates
+      # step, where lint and test run PR code. Only known kinds pass; any failure (a pinned
+      # bosun without `--pr`, an API error) allows nothing.
+      - if: steps.plan.outputs.work == 'true' && github.event_name == 'pull_request'
+        id: allow
+        name: task allow list
+        env:
+          BOSUN_SHA256: ${{ steps.bin.outputs.sha256 }}
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          bosun="$RUNNER_TEMP/bin/bosun"
+          echo "$BOSUN_SHA256  $bosun" | sha256sum -c --quiet || { echo "::error::$bosun changed"; exit 1; }
+          kinds="$("$bosun" test-integrity --pr "$PR" 2>/dev/null \
+            | jq -r '[.data.allow // [] | .[] | select(IN("delete-test","skip","only","fewer-asserts"))] | join(",")' 2>/dev/null)" || kinds=""
+          echo "test-integrity allows: ${kinds:-nothing}"
+          echo "kinds=$kinds" >> "$GITHUB_OUTPUT"
+{% endraw %}{% if "ts-pnpm" in pieces %}      # The gates run in order and stop at the first failure: here test-integrity and deps, which
       # run no PR code; the step's output names the rest for the required check's job.
 {% else %}      # The gates run in order and stop at the first failure. The gates that run no PR code come
       # first: lint (build.rs, proc macros) and test run PR code on this runner, and with the
@@ -371,6 +393,8 @@ jobs:
 {% endraw %}{% endif %}{% raw %}          # An edit after a success runs test-integrity only (see the edit step).
           ONLY: ${{ steps.plan.outputs.only }}
           BOSUN_SHA256: ${{ steps.bin.outputs.sha256 }}
+          # The linked task's allowed kinds (step `task allow list`); empty off a pull request.
+          BOSUN_INTEGRITY_ALLOW: ${{ steps.allow.outputs.kinds }}
           # test-integrity reads the snapshot-change line from the PR body.
           BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
           EVENT: ${{ github.event_name }}

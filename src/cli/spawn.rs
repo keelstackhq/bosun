@@ -457,7 +457,7 @@ fn default_prompt(epic: u64, title: &str, area: Option<&str>, me: &str, depth: u
     format!(
         "You orchestrate epic #{epic} ({title}).\n\
          1. Run `bosun join {area_flag}--parent {me} --depth {depth}`.\n\
-         2. Run `bosun wave plan {epic}` and work the tasks it returns as wave agents, each in its own workspace with `BOSUN_SESSION={me}/<task>` set.\n\
+         2. Run `bosun wave plan {epic}` and work the tasks it returns as wave agents, each in its own workspace with `BOSUN_SESSION=<session>/<task>` set, where <session> is your own id, `data.session` of the join in step 1.\n\
          3. When done, run `bosun result {epic} --outcome merged --pr <N>` (outcome is merged, blocked or needs-human; leave out --pr when there is none).\n"
     )
 }
@@ -502,6 +502,14 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             )
         })?;
     let (gh, me, now, n) = (app.gh.as_ref(), &app.ctx.session, app.ctx.now, epic.number);
+    // A child that is the spawner itself would get a `join` naming itself as parent; with a later
+    // `join --depth` that could reset its depth. A spawn always makes a new session.
+    if &child == me {
+        return Err(BosunError::error(
+            format!("the create_session result names this session ({me}) as the child"),
+            "pass the JSON of the create_session call that started the child, not this session's own id",
+        ));
+    }
     // The thread is decided before any write: this spawner's own live lease, and only when
     // the comment's author can write (one permission call, none for a lease without a thread).
     // A failing check gives no thread (a missing reply, never a wrong thread) and a warning.

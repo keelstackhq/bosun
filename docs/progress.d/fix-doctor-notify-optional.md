@@ -1,0 +1,1 @@
+- 2026-11-01 · fix · doctor: Slack and release optional (skipped), notify skipped without [slack], janitor drops notify, Routines hourly (F10, F11, F17) · `tests/cli_doctor.rs`, `tests/cli_doctor_remote.rs`, `tests/cli_notify.rs` · PR (fix/doctor-notify-optional)

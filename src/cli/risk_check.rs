@@ -63,7 +63,10 @@ pub fn owner_slack_ids(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
 }
 
 fn is_manifest(path: &str) -> bool {
-    matches!(path.rsplit('/').next(), Some("Cargo.toml" | "package.json"))
+    matches!(
+        path.rsplit('/').next(),
+        Some("Cargo.toml" | "package.json" | "pnpm-workspace.yaml")
+    )
 }
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {

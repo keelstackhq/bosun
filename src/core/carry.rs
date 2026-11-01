@@ -1,9 +1,12 @@
-//! Approval carry-over across a clean merge of main (design 2026-10-27 §3 C7, rules 1-4).
-//! `H2` must be provably the plain join of the default branch into the approved head `H`; the
+//! Approval carry-over across a clean merge of main (design 2026-10-27 §3 C7, rules 1-4, and 6:
+//! a lockfile both sides changed may differ if its entries all come from `H` or `M`). `H2` must be
+//! provably the plain join of the default branch into the approved head `H`; the
 //! expected tree is recomputed from `M` and `H`, never trusted from `H2`. Every doubt is a `Refusal`.
 //! Rule 5 (withdrawn review, superseded verdict) is not decided here: P9b checks it after `Ok`.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use crate::core::lockmerge::{lockfile_kind, merged_lock_ok};
 
 pub const MAX_HOPS: usize = 5;
 
@@ -61,6 +64,8 @@ pub struct CarryFacts<'a> {
     pub tree_h2: RawTree,
     pub truncated: bool,
     pub trust_files: &'a [&'a str],
+    /// The texts of each lockfile both the PR and main changed, at `H`, `M` and `H2`.
+    pub lock_texts: BTreeMap<String, LockTexts>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +84,7 @@ pub enum Refusal {
     DuplicatePath { path: String },
     Truncated,
     TrustFile { path: String },
+    LockNotMerged { path: String },
 }
 
 fn plain_ascii(c: char) -> bool {
@@ -109,6 +115,7 @@ impl Refusal {
             Self::DirFileClash { path } => ("file on one side, dir on the other:", Some(path)),
             Self::DuplicatePath { path } => ("appears twice in a tree:", Some(path)),
             Self::TrustFile { path } => ("the PR changes the trust file", Some(path)),
+            Self::LockNotMerged { path } => ("has an entry on neither side:", Some(path)),
         };
         path.map_or(text.to_string(), |p| format!("{text} `{}`", esc(p)))
     }
@@ -119,6 +126,29 @@ fn paths(files: &[FileChange]) -> BTreeSet<&str> {
         [Some(f.filename.as_str()), f.previous_filename.as_deref()]
     }
     files.iter().flat_map(names).flatten().collect()
+}
+
+/// One lockfile's text at the approved head, at `M` and at `H2`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockTexts {
+    pub h: String,
+    pub m: String,
+    pub h2: String,
+}
+
+/// Whether both sides modified `path`, a lockfile, in place: no add, delete or rename on
+/// either side (each must list it once, as `modified`, with no old name).
+pub fn lock_in_place(f: &CarryFacts, path: &str) -> bool {
+    let in_place = |files: &[FileChange]| {
+        let mut hits = files
+            .iter()
+            .filter(|c| c.filename == path || c.previous_filename.as_deref() == Some(path));
+        matches!(
+            (hits.next(), hits.next()),
+            (Some(c), None) if c.status == "modified" && c.previous_filename.is_none()
+        )
+    };
+    lockfile_kind(path).is_some() && in_place(&f.pr_files) && in_place(&f.main_files)
 }
 
 /// Files and gitlinks only: directory shas follow from them and are ignored. Refuses duplicates.
@@ -169,10 +199,15 @@ pub fn check(f: &CarryFacts) -> Result<(), Refusal> {
         .iter()
         .all(|h| h.descends_from_previous_second_parent);
     refuse(!f.b_ancestor_of_m || !forward, Refusal::MainWentBack)?;
-    // Rule 2.
+    // Rule 2. A lockfile both sides modified in place is the one overlap allowed; rule 6 checks
+    // its merged text entry by entry.
     let p = paths(&f.pr_files);
-    if let Some(path) = p.intersection(&paths(&f.main_files)).next() {
-        return Err(Refusal::PathsOverlapMain { path: s(path) });
+    let mut locks = BTreeSet::new();
+    for path in p.intersection(&paths(&f.main_files)) {
+        if !lock_in_place(f, path) {
+            return Err(Refusal::PathsOverlapMain { path: s(path) });
+        }
+        locks.insert(*path);
     }
     // Rule 4.
     if let Some(path) = p.iter().find(|x| f.trust_files.contains(x)) {
@@ -188,7 +223,13 @@ pub fn check(f: &CarryFacts) -> Result<(), Refusal> {
     let mut expected = tm.clone();
     for path in &p {
         let chain = with_parents(path);
-        if let Some(q) = chain.iter().find(|q| tm.get(**q) != tb.get(**q)) {
+        // Main changed a merged lockfile itself; its directories must still match.
+        let own = if locks.contains(path) {
+            chain.len() - 1
+        } else {
+            chain.len()
+        };
+        if let Some(q) = chain[..own].iter().find(|q| tm.get(**q) != tb.get(**q)) {
             return Err(Refusal::BaseMismatch { path: s(q) });
         }
         let below = format!("{path}/");
@@ -203,6 +244,18 @@ pub fn check(f: &CarryFacts) -> Result<(), Refusal> {
             Some(e) => expected.insert(s(path), e.clone()),
             None => expected.remove(*path),
         };
+    }
+    // Rule 6: a merged lockfile holds only whole entries of H's or M's copy.
+    for path in locks {
+        let refused = || Refusal::LockNotMerged { path: s(path) };
+        let e = th2.get(path).ok_or_else(refused)?;
+        let texts = f.lock_texts.get(path).ok_or_else(refused)?;
+        let kind = lockfile_kind(path).ok_or_else(refused)?;
+        let plain = e.kind == Kind::Blob && e.mode == "100644";
+        if !plain || !merged_lock_ok(kind, &texts.h, &texts.m, &texts.h2) {
+            return Err(refused());
+        }
+        expected.insert(s(path), e.clone());
     }
     let wrong = expected
         .iter()
@@ -255,8 +308,56 @@ mod tests {
             pr_files: vec![fc("src/pr.rs", None)], main_files: vec![fc("src/main.rs", None)],
             tree_b: t("d0", "m1", "p0"), tree_m: t("d1", "m2", "p0"),
             tree_h: t("d2", "m1", "p1"), tree_h2: t("d3", "m2", "p1"),
-            truncated: false, trust_files: &["CODEOWNERS", ".github/CODEOWNERS"],
+            truncated: false, trust_files: &["CODEOWNERS", ".github/CODEOWNERS"], lock_texts: BTreeMap::new(),
         }
+    }
+    /// `honest()` where the PR and main both changed `Cargo.lock` and H2 holds a regenerated one.
+    fn lock_merge(merged: &str) -> CarryFacts<'static> {
+        let pkg = |n: &str, sum: &str| format!("[[package]]\nname = \"{n}\"\nversion = \"1.0.0\"\nchecksum = \"{sum}\"\n");
+        let mut f = honest();
+        let m = |name: &str| FileChange { filename: name.into(), previous_filename: None, status: "modified".into() };
+        f.pr_files.push(m("Cargo.lock"));
+        f.main_files.push(m("Cargo.lock"));
+        for (t, sha) in [(&mut f.tree_b, "l0"), (&mut f.tree_m, "lm"), (&mut f.tree_h, "lh"), (&mut f.tree_h2, "l2")] {
+            set(t, "Cargo.lock", blob(sha));
+        }
+        let texts = LockTexts {
+            h: format!("version = 4\n\n{}", pkg("anyhow", "bb")),
+            m: format!("version = 4\n\n{}", pkg("tokio", "cc")),
+            h2: merged.replace("ANYHOW", &pkg("anyhow", "bb")).replace("TOKIO", &pkg("tokio", "cc"))
+                .replace("STITCHED", &pkg("anyhow", "cc")),
+        };
+        f.lock_texts.insert("Cargo.lock".into(), texts);
+        f
+    }
+    fn lock_refused() -> Refusal { Refusal::LockNotMerged { path: "Cargo.lock".into() } }
+    #[test] fn a_regenerated_lockfile_of_both_sides_carries() {
+        assert_eq!(check(&lock_merge("version = 4\n\nANYHOW\nTOKIO")), Ok(()));
+    }
+    #[test] fn a_lockfile_with_a_new_or_stitched_entry_is_refused() {
+        assert_eq!(err(&lock_merge("version = 4\n\nSTITCHED\nTOKIO")), lock_refused());
+        let evil = "version = 4\n\nANYHOW\nTOKIO\n[[package]]\nname = \"evil\"\nversion = \"0.1.0\"\n";
+        assert_eq!(err(&lock_merge(evil)), lock_refused());
+        let mut f = lock_merge("version = 4\n\nANYHOW\nTOKIO");
+        f.lock_texts.clear(); // texts not read: fail closed
+        assert_eq!(err(&f), lock_refused());
+        let mut g = lock_merge("version = 4\n\nANYHOW\nTOKIO");
+        set(&mut g.tree_h2, "Cargo.lock", e("100755", Kind::Blob, "l2"));
+        assert_eq!(err(&g), lock_refused());
+    }
+    #[test] fn only_lockfiles_changed_in_place_may_overlap() {
+        let mut f = lock_merge("version = 4\n\nANYHOW\nTOKIO");
+        f.main_files[1].previous_filename = Some("old.lock".into()); // main renamed it in
+        assert_eq!(err(&f), overlap("Cargo.lock"));
+        let mut g = lock_merge("version = 4\n\nANYHOW\nTOKIO");
+        g.pr_files[1].status = "added".into();
+        assert_eq!(err(&g), overlap("Cargo.lock"));
+        let mut h = lock_merge("version = 4\n\nANYHOW\nTOKIO");
+        h.pr_files.push(fc("src/main.rs", None)); // any other overlap still refuses
+        assert_eq!(err(&h), overlap("src/main.rs"));
+        let mut k = lock_merge("version = 4\n\nANYHOW\nTOKIO");
+        set(&mut k.tree_h2, "src/pr.rs", blob("evil")); // the rest of the tree is still exact
+        assert_eq!(err(&k), mismatch("src/pr.rs"));
     }
     #[test] fn honest_nested_merge_carries() { assert_eq!(check(&honest()), Ok(())); }
     #[test] fn take_ours_and_main_moves_are_refused() {

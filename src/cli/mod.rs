@@ -662,6 +662,10 @@ pub struct PlanImportArgs {
     /// Import only this item (repeatable); default all.
     #[arg(long = "item", value_name = "ID")]
     pub item: Vec<String>,
+    /// Keep plan tasks open even when the plan file on the default branch is byte-identical to
+    /// this one (by default they are closed: there is nothing left to commit).
+    #[arg(long)]
+    pub keep_plan_tasks_open: bool,
 }
 
 #[derive(Debug, Args)]

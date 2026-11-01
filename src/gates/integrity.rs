@@ -396,7 +396,13 @@ pub fn run(req: &Request) -> CmdResult {
     findings.retain(|f| seen.insert(f.to_string()));
     let files_checked = checked.len();
 
-    let refused = findings.iter().filter(|f| f["allowed"] == false).count();
+    let refused_of = |snap: bool| {
+        findings
+            .iter()
+            .filter(|f| f["allowed"] == false && (f["kind"] == "snapshot-change") == snap)
+            .count()
+    };
+    let (snapshots, refused) = (refused_of(true), refused_of(false) + refused_of(true));
     let mut data = json!({"base": req.base, "files_checked": files_checked, "findings": findings});
     match reduced_reason(req.root, req.stacks) {
         Some(why) => {
@@ -406,11 +412,18 @@ pub fn run(req: &Request) -> CmdResult {
         None => data["integrity"] = json!("full"),
     }
     if refused > 0 {
-        return Err(BosunError::error(
-            format!("test-integrity: {refused} findings"),
-            "restore the test or assertion, or have the plan task allow it (spec §7)",
-        )
-        .with_data(data));
+        // A snapshot change is cleared by a reason in the PR body; the other kinds by restoring
+        // the test or by the plan task's `allow:` (spec §7).
+        const SNAP: &str = "add a line `snapshot-change: <reason>` to the PR body, saying why the snapshot changed";
+        const TEST: &str = "restore the test or assertion, or list the kind in the plan task's `allow:` (delete-test, skip, only, fewer-asserts; docs/plan-format.md)";
+        let fix = match (snapshots, refused - snapshots) {
+            (_, 0) => SNAP.to_string(),
+            (0, _) => TEST.to_string(),
+            _ => format!("{TEST}; for the snapshots, {SNAP}"),
+        };
+        return Err(
+            BosunError::error(format!("test-integrity: {refused} findings"), fix).with_data(data),
+        );
     }
     Ok(Outcome::data(data))
 }

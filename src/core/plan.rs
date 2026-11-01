@@ -5,6 +5,8 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
+use crate::core::meta::ALLOW_KINDS;
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Plan {
     pub title: String,
@@ -36,6 +38,8 @@ pub struct Task {
     pub size: Option<u32>,
     pub kind: String,
     pub risk: String,
+    /// Test-integrity finding kinds the task may raise (`allow:`), from [`ALLOW_KINDS`].
+    pub allow: Vec<String>,
     pub line: usize,
 }
 
@@ -143,15 +147,19 @@ fn find_cycle(adj: &[Vec<usize>]) -> Option<Vec<usize>> {
 }
 
 /// Longest chain (in nodes) starting at `n` of an acyclic graph.
-fn longest(n: usize, adj: &[Vec<usize>], memo: &mut [usize]) -> usize {
-    if memo[n] == 0 {
-        memo[n] = 1 + adj[n]
+/// The longest chain from task `n` along `adj`, counting `weight[k]` (0 for a merged task).
+fn longest(n: usize, adj: &[Vec<usize>], weight: &[usize], memo: &mut [Option<usize>]) -> usize {
+    if let Some(v) = memo[n] {
+        return v;
+    }
+    let v = weight[n]
+        + adj[n]
             .iter()
-            .map(|&m| longest(m, adj, memo))
+            .map(|&m| longest(m, adj, weight, memo))
             .max()
             .unwrap_or(0);
-    }
-    memo[n]
+    memo[n] = Some(v);
+    v
 }
 
 fn flush(items: &mut [Item], desc: &mut Vec<&str>, open: bool) {
@@ -171,6 +179,32 @@ macro_rules! bad {
 }
 
 pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
+    parse_with_done(text, &HashSet::new())
+}
+
+/// Whether every error is the critical-path rule, which `parse_with_done` may judge differently.
+pub fn only_critical_path(errs: &[PlanError]) -> bool {
+    !errs.is_empty()
+        && errs
+            .iter()
+            .all(|e| e.message.starts_with("critical path of "))
+}
+
+/// `parse`, with the plan ids (`M1/T2`) of tasks already merged in `done`: they do not count
+/// toward the critical path (rule 6 counts only the work still open).
+pub fn parse_with_done(text: &str, done: &HashSet<String>) -> Result<Plan, Vec<PlanError>> {
+    parse_inner(text, Some(done))
+}
+
+/// `parse` without rule 6, for a copy that is only compared with the local plan (on the default
+/// branch, at a merge commit): which of its tasks are merged is not known there, and the local
+/// plan is judged by the rule anyway.
+pub fn parse_to_compare(text: &str) -> Result<Plan, Vec<PlanError>> {
+    parse_inner(text, None)
+}
+
+/// `done`: merged plan ids for rule 6; `None` skips the rule.
+fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<PlanError>> {
     let (mut errs, mut warns): (Vec<PlanError>, Vec<PlanError>) = (vec![], vec![]);
     let (mut title, mut project) = (None, None);
     let mut items: Vec<Item> = Vec::new();
@@ -322,8 +356,18 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
                     "risk" => {
                         bad!(errs, n; "use `risk: high` or leave the line out" => "risk `{v}` is not valid")
                     }
+                    "allow" => {
+                        t.allow = csv(v);
+                        for k in t
+                            .allow
+                            .iter()
+                            .filter(|k| !ALLOW_KINDS.contains(&k.as_str()))
+                        {
+                            bad!(errs, n; "allow only delete-test, skip, only, fewer-asserts" => "allow `{k}` is not a test-integrity kind");
+                        }
+                    }
                     k => {
-                        bad!(errs, n; "use touch, depends, size, kind or risk" => "unknown task key `{k}`")
+                        bad!(errs, n; "use touch, depends, size, kind, risk or allow" => "unknown task key `{k}`")
                     }
                 }
             }
@@ -501,13 +545,22 @@ pub fn parse(text: &str) -> Result<Plan, Vec<PlanError>> {
             .map(|&i| flat[i].0.as_str())
             .collect();
         bad!(errs, flat[c[0]].1; "remove one of these `depends:` links" => "task dependency cycle: {}", names.join(" -> "));
-    } else {
+    } else if let Some(done) = done {
         // The critical path counts same-item chains only.
+        // Merged tasks (`done`) weigh nothing: only open work counts.
         for (it, adj) in items.iter().zip(&adjs) {
-            let mut memo = vec![0; adj.len()];
-            let deepest = (0..adj.len()).max_by_key(|&k| longest(k, adj, &mut memo));
-            if let Some(d) = deepest.filter(|&d| memo[d] > 4) {
-                bad!(errs, it.tasks[d].line; "cut the dependency chain to at most 4 tasks" => "critical path of {} is {} tasks, over 4", it.id, memo[d]);
+            let weight: Vec<usize> = it
+                .tasks
+                .iter()
+                .map(|t| usize::from(!done.contains(&t.plan_id(&it.id))))
+                .collect();
+            let mut memo = vec![None; adj.len()];
+            let deepest = (0..adj.len()).max_by_key(|&k| longest(k, adj, &weight, &mut memo));
+            if let Some((d, len)) = deepest
+                .map(|d| (d, memo[d].unwrap_or(0)))
+                .filter(|&(_, l)| l > 4)
+            {
+                bad!(errs, it.tasks[d].line; "cut the dependency chain to at most 4 tasks" => "critical path of {} is {} tasks, over 4", it.id, len);
             }
         }
     }
@@ -738,6 +791,12 @@ mod tests {
         };
         assert!(parse(&chain(4)).is_ok());
         at(&chain(5), 16, "critical path of M1 is 5");
+        let done: HashSet<String> = ["M1/T1".to_string()].into();
+        assert!(parse_with_done(&chain(5), &done).is_ok(), "a merged task does not count");
+        let errs = parse_with_done(&chain(6), &done).unwrap_err();
+        assert!(only_critical_path(&errs));
+        assert!(errs[0].message.contains("critical path of M1 is 5"), "{}", errs[0].message);
+        assert!(parse_to_compare(&chain(9)).is_ok(), "a compared copy skips rule 6");
     }
 
     #[test]

@@ -41,8 +41,40 @@ fn read_plan_text(dir: Option<&Path>, file: &str) -> Result<(String, Plan)> {
             "pass the path of a plan file, for example plans/bosun.md",
         )
     })?;
-    let plan = plan::parse(&text).map_err(|errs| plan_errors(file, &errs))?;
+    let plan = match plan::parse(&text) {
+        Ok(p) => p,
+        // Rule 6 counts only open tasks: look up the merged ones only when it is all that failed,
+        // so a good plan is still checked without GitHub.
+        Err(errs) if plan::only_critical_path(&errs) => {
+            let done = App::load(dir)
+                .and_then(|app| merged_plan_ids(app.gh.as_ref()))
+                .map_err(|e| {
+                    eprintln!(
+                        "plan: cannot read the merged tasks ({}); rule 6 counts every task",
+                        e.message
+                    );
+                    plan_errors(file, &errs)
+                })?;
+            plan::parse_with_done(&text, &done).map_err(|e| plan_errors(file, &e))?
+        }
+        Err(errs) => return Err(plan_errors(file, &errs)),
+    };
     Ok((text, plan))
+}
+
+/// Plan ids (from the `bosun:plan` marker) of issues that are merged or closed as completed.
+fn merged_plan_ids(gh: &dyn Github) -> Result<HashSet<String>> {
+    Ok(all_issues(gh)?
+        .iter()
+        .filter(|i| {
+            state_of(&i.labels) == Some(State::Merged)
+                || (i.state == "closed" && i.state_reason.as_deref() == Some("completed"))
+        })
+        .filter_map(|i| {
+            let rest = &i.body_text()[i.body_text().find("<!-- bosun:plan ")? + 16..];
+            Some(rest[..rest.find(" -->")?].trim().to_string())
+        })
+        .collect())
 }
 
 pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
@@ -160,6 +192,14 @@ struct Importer<'a> {
     /// Open owner-checklist items of the plan being imported, and what they hold back.
     open_items: Vec<Held>,
     held: Vec<Value>,
+    /// Plan tasks closed because their item is on the default branch already (F5).
+    on_default: Vec<String>,
+    /// Plan tasks left open by `--keep-plan-tasks-open` although the file is on the default branch.
+    on_default_open: Vec<String>,
+    /// The local plan file's text, compared byte for byte with the default branch's (F5).
+    local_text: String,
+    /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
+    amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
     plan_path: String,
     roots: Vec<PathBuf>,
@@ -252,6 +292,8 @@ impl Importer<'_> {
             "tasks": self.tasks.iter().map(|s| s.json(true)).collect::<Vec<_>>(),
             promote: self.promoted,
             "held": self.held,
+            "on_default": self.on_default,
+            "on_default_open": self.on_default_open,
             "warnings": self.warnings,
         })
     }
@@ -398,7 +440,7 @@ fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>) -> TaskMeta {
         depends: t.depends.clone(),
         kind: t.kind.clone(),
         risk: t.risk.clone(),
-        allow: vec![],
+        allow: t.allow.clone(),
         capabilities: vec![],
     }
 }
@@ -409,6 +451,7 @@ fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
         file: a.file.clone(),
         dry_run: a.dry_run,
         item: vec![],
+        keep_plan_tasks_open: false,
     };
     run_import(dir, &args, true)
 }
@@ -461,6 +504,10 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         promoted: vec![],
         open_items: vec![],
         held: vec![],
+        on_default: vec![],
+        on_default_open: vec![],
+        local_text: text.clone(),
+        amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
         now: app.ctx.now,
@@ -862,7 +909,7 @@ fn intake_added(imp: &Importer, wanted: &[&str]) -> Result<HashMap<String, (u64,
         let Some(t) = text else {
             return Some(HashSet::new());
         };
-        plan::parse(&t)
+        plan::parse_to_compare(&t)
             .ok()
             .map(|p| p.items.into_iter().map(|i| i.id).collect())
     };
@@ -933,7 +980,13 @@ fn plan_on_default(imp: &Importer) -> Result<Option<Plan>> {
     Ok(imp
         .gh
         .file_at(&imp.plan_path, &head)?
-        .and_then(|t| plan::parse(&t).ok()))
+        .and_then(|t| plan::parse_to_compare(&t).ok()))
+}
+
+/// Whether the plan file on the default branch is byte-identical to the local one.
+fn same_file_on_default(imp: &Importer) -> Result<bool> {
+    let head = default_branch(imp.gh)?;
+    Ok(imp.gh.file_at(&imp.plan_path, &head)?.as_deref() == Some(imp.local_text.as_str()))
 }
 
 fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
@@ -946,6 +999,8 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
     let mut added: Option<HashMap<String, (u64, u64)>> = None;
     // The plan file on the default branch, read once: an intake vouches only for what merged.
     let mut on_default: Option<Option<Plan>> = None;
+    // F5: whether the plan file on the default branch is this very file, read once when needed.
+    let mut same_file: Option<bool> = None;
     for item in p
         .items
         .iter()
@@ -984,11 +1039,34 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 done_by = None;
             }
         }
+        // F5: when the plan file on the default branch is byte-identical to this one, a plan task
+        // has nothing left to commit: a new one is made merged and closed (like one an intake
+        // vouches for) and an open `ready` one is closed. `--keep-plan-tasks-open` only lists
+        // them in `on_default_open`. Only `plan import`: an amendment's new items need their
+        // intake.
+        let prior = lookup(&imp.issues, &pid, &item.id, Some("P"), &mut vec![]);
+        let ready = prior.as_ref().is_some_and(|(i, adopted)| {
+            !adopted && i.state == "open" && state_of(&i.labels) == Some(State::Ready)
+        });
+        let mut on_main = false;
+        if done_by.is_none() && (prior.is_none() || ready) && !imp.amend {
+            if same_file.is_none() {
+                same_file = Some(same_file_on_default(imp)?);
+            }
+            on_main = same_file == Some(true);
+            if on_main && a.keep_plan_tasks_open {
+                imp.on_default_open.push(pid.clone());
+                on_main = false;
+            }
+        }
         let pslot = imp.slot(&pid, (&item.id, Some("P")), || {
             let by = done_by
                 .map(|(n, pr)| {
                     format!("Done by intake #{n}: this item is on the default branch since its PR #{pr} merged.\n\n")
                 })
+                .or_else(|| on_main.then(|| {
+                    "Done: this item is on the default branch as planned; there is nothing to commit.\n\n".to_string()
+                }))
                 .unwrap_or_default();
             let intro = format!(
                 "{by}Commit the plan file `{file}`. The UCs of {id} below land as passing tests together \
@@ -1010,12 +1088,40 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 labels(
                     "plan",
                     &item.area,
-                    if done_by.is_some() { "merged" } else { "ready" },
+                    if done_by.is_some() || on_main { "merged" } else { "ready" },
                 ),
             )
         })?;
         let mut pslot = pslot;
-        if let (Some(_), "created" | "would-create") = (done_by, pslot.action) {
+        let made = matches!(pslot.action, "created" | "would-create");
+        let close_ready = on_main && ready && !pslot.merged;
+        if close_ready && !imp.dry {
+            let n = pslot.issue.expect("an existing issue has a number");
+            let labels = prior
+                .as_ref()
+                .map(|(i, _)| i.labels.clone())
+                .unwrap_or_default();
+            imp.gh.add_comment(
+                n,
+                &format!(
+                    "Done: {} on the default branch has {} as planned, so there is nothing to \
+                     commit. Closed by `bosun plan import`.",
+                    imp.plan_path, item.id
+                ),
+            )?;
+            // By hand, not `set_state`: ready -> merged is no transition of the state machine;
+            // the plan task is done without a PR, as when an intake vouches for it.
+            imp.gh
+                .ensure_label(&State::Merged.label(), "ededed", "bosun task state")?;
+            for l in labels_to_remove(&labels, State::Merged) {
+                imp.gh.remove_label(n, &l)?;
+            }
+            imp.gh.add_labels(n, &[&State::Merged.label()])?;
+        }
+        if on_main && (made || close_ready) {
+            imp.on_default.push(pid.clone());
+        }
+        if (done_by.is_some() || on_main) && made || close_ready {
             // Made already merged: close it as completed so the tasks promote on this run.
             if let (false, Some(n)) = (imp.dry, pslot.issue) {
                 imp.gh.update_issue(
@@ -1029,9 +1135,13 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             }
             pslot.merged = true;
             pslot.closed = !imp.dry;
+            if close_ready && !imp.dry {
+                pslot.state = Some("merged".into());
+            }
             if let Some(kept) = imp.tasks.iter_mut().rev().find(|t| t.id == pslot.id) {
                 kept.merged = true;
                 kept.closed = pslot.closed;
+                kept.state = pslot.state.clone();
             }
         }
         let mut slots = vec![];
