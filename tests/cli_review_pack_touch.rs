@@ -50,3 +50,50 @@ fn without_a_lease_the_lease_touch_is_empty() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["task"]["lease_touch"], json!([]));
 }
+
+fn grow(fake: &FakeGithub, session: &str, touch: &str) {
+    fake.comment(
+        7,
+        &format!(
+            "Claimed by {session}.\n\n{{\"bosun\":\"lease\",\"session\":\"{session}\",\"origin\":\"local\",\"expires\":\"2026-10-22T10:30:00Z\",\"touch\":[{touch}]}}"
+        ),
+    );
+}
+
+#[test]
+fn touch_added_lists_the_claimants_globs_beyond_the_task() {
+    let fake = setup();
+    fake.comment(7, &lease_note("s/T1", "2026-10-22T10:20:00Z", "src/a.rs"));
+    grow(&fake, "s/T1", r#""src/a.rs","src/b.rs""#);
+    fake.comment(7, r#"{"bosun":"task-pr","session":"s/T1","pr":42}"#);
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["task"]["claimant"], "s/T1");
+    assert_eq!(v["data"]["task"]["touch_added"], json!(["src/b.rs"]));
+    assert!(
+        v["data"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("touch_added")
+    );
+}
+
+#[test]
+fn only_the_claimants_lease_records_from_writers_count() {
+    let fake = setup();
+    fake.comment(7, &lease_note("s/T1", "2026-10-22T10:20:00Z", "src/a.rs"));
+    fake.comment(7, r#"{"bosun":"task-pr","session":"s/T1","pr":42}"#);
+    // Another session's lease record does not widen the claimant's touch.
+    grow(&fake, "other/T9", r#""src/**""#);
+    // Nor does a lease record of the claimant posted by a read-only user.
+    fake.permission("outsider", "read");
+    fake.comment_by(
+        7,
+        "outsider",
+        r#"{"bosun":"lease","session":"s/T1","origin":"local","expires":"2026-10-22T10:30:00Z","touch":["secrets/**"]}"#,
+    );
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["task"]["lease_touch"], json!(["src/a.rs"]));
+    assert_eq!(v["data"]["task"]["touch_added"], json!([]));
+}
