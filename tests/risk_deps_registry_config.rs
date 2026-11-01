@@ -1,10 +1,12 @@
 //! Package-source config redirects where every dependency comes from, so any change to it is
 //! R-deps (spec §8): Cargo's `.cargo/config.toml` (`[source]` replace-with, `[registries]`) and
-//! npm, pnpm and yarn's `.npmrc` and `.yarnrc*` (registry and scope lines).
+//! npm, pnpm and yarn's `.npmrc` and `.yarnrc*` (registry and scope lines), and the hooks and
+//! binaries that rewrite or resolve them: `.pnpmfile.cjs`, `bunfig.toml`, `.yarn/plugins` and
+//! `.yarn/releases`.
 use bosun::core::risk::{ChangedFile, Rules, evaluate};
 use std::path::Path;
 
-const CONFIGS: [&str; 7] = [
+const CONFIGS: [&str; 12] = [
     ".cargo/config.toml",
     ".cargo/config",
     "crates/app/.cargo/config.toml",
@@ -12,6 +14,11 @@ const CONFIGS: [&str; 7] = [
     "web/.npmrc",
     ".yarnrc",
     "web/.yarnrc.yml",
+    ".pnpmfile.cjs",
+    "web/.pnpmfile.cjs",
+    "bunfig.toml",
+    ".yarn/plugins/@yarnpkg/plugin-x.cjs",
+    "web/.yarn/releases/yarn-4.5.0.cjs",
 ];
 
 /// The committed text: CI puts the base's `.bosun/` over the checkout before the gates, so the
@@ -94,7 +101,7 @@ fn other_dot_files_are_not_r_deps() {
     for path in [
         ".cargo/credentials.toml.example",
         "npmrc.md",
-        ".yarn/releases/x.cjs",
+        "pnpmfile.cjs.md",
         "docs/.npmrc.txt",
     ] {
         let f = ChangedFile {

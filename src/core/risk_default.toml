@@ -101,8 +101,10 @@ content = '(?i)(api[_-]?key|secret|token)\s*=|AGE-SECRET-KEY-1|SOPS_AGE_KEY\s*[:
 id = "R-deps"
 why = "A new dependency adds code that nobody reviewed."
 # Package-source config redirects where every dependency comes from: Cargo [source] and
-# [registries], npm, pnpm and yarn registry and scope lines. Any change counts.
-paths = ["**/.cargo/config.toml", "**/.cargo/config", "**/.npmrc", "**/.yarnrc", "**/.yarnrc.yml"]
+# [registries], npm, pnpm and yarn registry and scope lines, and the hooks and binaries that
+# rewrite or resolve every package (.pnpmfile.cjs, bunfig.toml, .yarn plugins and releases).
+# Any change counts.
+paths = ["**/.cargo/config.toml", "**/.cargo/config", "**/.npmrc", "**/.yarnrc", "**/.yarnrc.yml", "**/.pnpmfile.cjs", "**/bunfig.toml", "**/.yarn/plugins/**", "**/.yarn/releases/**"]
 new_dependency = true
 
 [[rule]]
