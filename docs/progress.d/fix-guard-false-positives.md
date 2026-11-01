@@ -1,0 +1,1 @@
+- 2026-11-01 · Fix F9 · guard false positives: `gh api` reads naming `auto_merge` pass (writes by method, `-f/-F/--field/--raw-field/--input` stay refused), nesting depth 3 -> 8 with a clear reason, `git merge --ff-only REF` on main passes · guard unit tests +4 · PR (fix/guard-false-positives)

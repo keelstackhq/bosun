@@ -336,8 +336,18 @@ fn label_reason() -> String {
     )
 }
 
-/// Nested commands are checked first (merge-lock; the label-lock judges them too), to this depth.
-const MAX_DEPTH: usize = 3;
+/// Nested commands are checked first (merge-lock; the label-lock judges them too), to this depth:
+/// each `$( )`, backtick span, `( )` group (jq parens too: quotes are not parsed), `sh -c` and
+/// `eval` is a level. Deeper commands are refused with `too_deep`.
+const MAX_DEPTH: usize = 8;
+
+fn too_deep() -> String {
+    format!(
+        "commands nested deeper than {MAX_DEPTH} levels (`$( )`, backticks, `( )` groups, \
+         `sh -c`, `eval`) are refused, since the guard cannot judge them: run the inner \
+         commands first and pass their results in variables"
+    )
+}
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
     decrypt_rule(command, 0)
@@ -347,9 +357,7 @@ fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Optio
 
 fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
-        return Some(format!(
-            "commands nested deeper than {MAX_DEPTH} levels are refused: {MERGE_FIX}"
-        ));
+        return Some(too_deep());
     }
     for inner in nested(command) {
         if let Some(why) = check(&inner, branch_at, default_branch, depth + 1) {
@@ -1527,7 +1535,7 @@ fn mentions_secrets(text: &str) -> bool {
 /// install-like packager commands); command strings in options are judged.
 fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
-        return Some(decrypt_reason("commands nested too deep"));
+        return Some(too_deep());
     }
     let (text, bodies, targets) = strip_data_heredocs(command);
     let (text, wrote) = (text.as_str(), mentions_secrets(&bodies));
@@ -2028,6 +2036,7 @@ fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
         ["api", ..] if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) => {
             Some("GraphQL merge or ref mutation")
         }
+        ["api", rest @ ..] if gh_api_read(rest, segment) => None,
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("/merge")) => Some("merge API"),
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("auto_merge")) => {
             Some("auto-merge API")
@@ -2041,6 +2050,51 @@ fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+/// A `gh api` read: every method flag says GET and there is no field or input flag (`-f`, `-F`,
+/// `--field`, `--raw-field`, `--input`, which make gh default to POST). Fails closed: a segment
+/// with `$`, a backtick, a backslash or unbalanced quotes (cut at a quoted separator) is not a
+/// read, nor is a short-flag cluster holding `X`, `f` or `F` other than `-X GET`.
+fn gh_api_read(args: &[&str], segment: &str) -> bool {
+    let odd = |q: char| segment.matches(q).count() % 2 == 1;
+    if segment.contains(['$', '`', '\\']) || odd('\'') || odd('"') {
+        return false;
+    }
+    let args: Vec<String> = args.iter().map(|a| a.replace(['\'', '"'], "")).collect();
+    let get = |m: &str| m.eq_ignore_ascii_case("GET");
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if matches!(a, "-X" | "--method") {
+            if !args.get(i + 1).is_some_and(|m| get(m)) {
+                return false;
+            }
+            i += 1;
+        } else if let Some(m) = a.strip_prefix("--method=").or_else(|| a.strip_prefix("-X")) {
+            if !get(m) {
+                return false;
+            }
+        } else if ["--field", "--raw-field", "--input"]
+            .iter()
+            .any(|f| a.starts_with(f))
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains(['X', 'f', 'F']))
+        {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `git merge --ff-only [REF]`: moves only the local branch, never the remote.
+fn ff_only(rest: &[&str]) -> bool {
+    let refs: Vec<&&str> = rest.iter().filter(|a| **a != "--ff-only").collect();
+    rest.len() == refs.len() + 1
+        && refs.len() <= 1
+        && refs
+            .iter()
+            .all(|r| !r.starts_with('-') && !r.contains(['$', '`', '\'', '"', '\\']))
 }
 
 /// `v1.2.3`, `1.2` ...: a ref that looks like a version tag.
@@ -2138,6 +2192,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 });
             (!lists).then_some("tag")
         }
+        "merge" if ff_only(rest) => None,
         "merge" | "rebase" | "cherry-pick" | "reset" | "commit" if on_default => {
             Some("changing the default branch")
         }
@@ -2385,8 +2440,102 @@ mod tests {
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
-        // Past depth 3 the guard refuses rather than guessing.
-        assert!(bash("(((((gh pr view 1)))))", "feature").is_some());
+        // Past the depth limit the guard refuses rather than guessing.
+        assert!(bash("((((((((((gh pr view 1))))))))))", "feature").is_some());
+    }
+
+    /// F9: a `gh api` read (no method but GET, no field or input flag) may name `auto_merge`.
+    #[test]
+    fn merge_lock_allows_gh_api_reads_that_name_auto_merge() {
+        for cmd in [
+            "gh api repos/o/r/pulls/12 --jq '.auto_merge'",
+            "gh api repos/o/r/pulls/12 --jq '{state: .state, am: .auto_merge}'",
+            "gh api -X GET repos/o/r/pulls/12 --jq .auto_merge",
+            "gh api --method get repos/o/r/pulls/12/ccr/auto_merge",
+            "gh api repos/o/r/pulls/12/merge",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    /// F9: a `gh api` write (a write method, or a field or input flag, which default to POST)
+    /// on the merge or auto-merge endpoint stays refused.
+    #[test]
+    fn merge_lock_refuses_gh_api_merge_writes() {
+        for cmd in [
+            "gh api -X PUT repos/o/r/pulls/12/merge",
+            "gh api -XPUT repos/o/r/pulls/12/ccr/auto_merge",
+            "gh api --method=PUT repos/o/r/pulls/12/merge",
+            "gh api -X put repos/o/r/pulls/12/ccr/auto_merge",
+            "gh api -X GET -X PUT repos/o/r/pulls/12/merge",
+            "gh api repos/o/r/pulls/12/merge -f merge_method=squash",
+            "gh api repos/o/r/pulls/12/ccr/auto_merge -F merge_method=squash",
+            "gh api repos/o/r/pulls/12/ccr/auto_merge -fmerge_method=squash",
+            "gh api repos/o/r/pulls/12/ccr/auto_merge --field merge_method=squash",
+            "gh api repos/o/r/pulls/12/ccr/auto_merge --raw-field=merge_method=squash",
+            "gh api repos/o/r/pulls/12/merge --input body.json",
+            "gh api -X GET repos/o/r/pulls/12/merge -f merge_method=squash",
+            "gh api repos/o/r/pulls/12/ccr/auto_merge --jq '.a | .b' -X PUT",
+            "gh api -iX PUT repos/o/r/pulls/12/merge",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+    }
+
+    /// F9: real commands nest `$( )` and jq parens past three levels; each inner command is
+    /// still judged.
+    #[test]
+    fn merge_lock_judges_deep_substitutions() {
+        for cmd in [
+            "echo $(echo $(echo $(echo $(echo hi))))",
+            "bash -c \"echo $(gh pr list --json number --jq 'map(select(.number > 0))')\"",
+            "cd /x && N=$(gh pr list --json number --jq \"[.[] | select(.title | \
+             test(\\\"$(git log -1 --format=%s)\\\"))] | .[0].number\") && echo $N",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+        for cmd in [
+            "echo $(gh pr merge 1 --squash)",
+            "echo $(echo $(git push --force origin x))",
+            "echo $(echo $(echo $(echo $(echo $(gh pr merge 1)))))",
+            "x=$(bash -c \"echo $(gh api -X PUT repos/o/r/pulls/1/merge)\")",
+            "echo \"$(echo `gh release create v1`)\"",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+        let deep = format!(
+            "echo {}gh pr view 1{}",
+            "$(echo ".repeat(12),
+            ")".repeat(12)
+        );
+        let why = bash(&deep, "feature").unwrap_or_default();
+        assert!(why.contains("nested deeper than"), "{why}");
+        assert!(!why.contains("decrypting"), "{why}");
+    }
+
+    /// F9: `git merge --ff-only REF` on the default branch moves only the local branch.
+    #[test]
+    fn merge_lock_allows_a_fast_forward_of_the_local_branch() {
+        for cmd in [
+            "git merge --ff-only origin/main",
+            "git fetch origin && git merge --ff-only origin/main",
+            "git merge --ff-only",
+        ] {
+            assert_eq!(bash(cmd, "main"), None, "{cmd}");
+        }
+        for cmd in [
+            "git merge origin/main",
+            "git merge --no-ff origin/feature",
+            "git merge --ff-only --no-ff origin/feature",
+            "git merge --ff-only origin/a origin/b",
+            "git merge --ff-only -m x origin/feature",
+            "git merge --ff-only origin/main && git push origin main",
+            "git merge --ff-only origin/main && git push --force",
+            "git push --force origin feature",
+            "gh pr merge 12 --squash",
+        ] {
+            assert!(bash(cmd, "main").is_some(), "{cmd}");
+        }
     }
 
     #[test]
