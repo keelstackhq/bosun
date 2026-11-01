@@ -1,0 +1,1 @@
+- risk: changes to `.cargo/config.toml`, `.cargo/config`, `.npmrc`, `.yarnrc` and `.yarnrc.yml` (any directory) count as R-deps: they redirect where every package comes from.

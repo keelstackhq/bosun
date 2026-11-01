@@ -1,0 +1,1 @@
+- 2026-11-01 · F1 follow-up · R-deps paths for package-source config (`.cargo/config*`, `.npmrc`, `.yarnrc*`) in the built-in, repo and channel rules (`tests/risk_deps_registry_config.rs`, spec §8)
