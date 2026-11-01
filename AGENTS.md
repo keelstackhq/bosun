@@ -24,8 +24,10 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    `bosun verdict comment --from -`). Fix request-changes findings, then review again.
 7. `bosun risk-check <pr>` runs in CI. A high-risk PR waits for an owner; ask with
    `bosun ask <issue> "<question>"`.
-8. `bosun wait --pr <n>` until the checks are green, then `bosun pr <issue> --auto-merge`.
-   GitHub merges it. You never merge, tag or force-push (the hooks refuse it).
+8. `bosun pr <issue> --auto-merge` as soon as the PR is in review; do not wait for the checks.
+   GitHub merges it when the required checks are green. If bosun exits 5 with `already_clean`,
+   the PR was already mergeable: the owner merges it. You never merge, tag or force-push (the
+   hooks refuse it).
 9. `bosun release <issue>` if you stop before the task is done.
 
 ## Sessions
