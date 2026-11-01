@@ -10,6 +10,7 @@ use crate::cli::IntegrityArgs;
 use crate::cli::gate::{repo_root, resolve_ci};
 use crate::config::Config;
 use crate::core::meta::{ALLOW_KINDS, linked_issues, parse_task_meta};
+use crate::core::touch::{Changed, outside};
 use crate::gates::integrity::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
@@ -28,9 +29,12 @@ pub fn run(dir: Option<&Path>, args: &IntegrityArgs) -> CmdResult {
     }
 }
 
-/// The PR's body and the `allow` of its first linked issue with task metadata (known kinds only),
-/// in place of `BOSUN_PR_BODY` and `BOSUN_INTEGRITY_ALLOW`. `data.task` and `data.allow` say
-/// which were used; a PR that links no task allows nothing.
+/// The PR's body and an `allow` list (known kinds only), in place of `BOSUN_PR_BODY` and
+/// `BOSUN_INTEGRITY_ALLOW`. The list is the first linked task's (in body order) whose `touch`
+/// covers every file the PR modifies, removes or renames, by the rule `bosun pr` uses: the body
+/// is the agent's, so a task lends its list only to its own work. No such task, or a cut file
+/// list, allows nothing. `data.task` and `data.allow` say what was used, `data.allow_refused` why
+/// nothing was.
 fn from_pr(dir: Option<&Path>, base: Option<&str>, n: u64) -> CmdResult {
     let app = App::load(dir)?;
     let pull = app.gh.get_pull(n)?.ok_or_else(|| {
@@ -39,23 +43,48 @@ fn from_pr(dir: Option<&Path>, base: Option<&str>, n: u64) -> CmdResult {
             "pass the number of an open PR",
         )
     })?;
+    let files = app.gh.pull_files(n)?;
+    let changed: Vec<Changed> = files
+        .iter()
+        .map(|f| Changed {
+            path: f.filename.clone(),
+            status: f.status.clone(),
+            previous: f.previous_filename.clone(),
+        })
+        .collect();
     let mut task = None;
     let mut allow = Vec::new();
-    for i in linked_issues(&pull.body) {
-        let meta = app
-            .gh
-            .get_issue(i)?
-            .and_then(|x| parse_task_meta(x.body_text()));
-        if let Some(m) = meta {
+    let mut refused: Vec<String> = Vec::new();
+    if (files.len() as u64) < pull.changed_files || files.len() >= 3000 {
+        refused.push("GitHub cut the PR's file list".into());
+    } else {
+        for i in linked_issues(&pull.body) {
+            let Some(m) = app
+                .gh
+                .get_issue(i)?
+                .and_then(|x| parse_task_meta(x.body_text()))
+            else {
+                continue;
+            };
+            let out = outside(&changed, &m.touch);
+            if m.touch.is_empty() || !out.is_empty() {
+                let first = out.first().map_or("any file", String::as_str);
+                refused.push(format!("#{i}'s touch does not cover {first}"));
+                continue;
+            }
             task = Some(i);
             allow = m.allow;
             allow.retain(|k| ALLOW_KINDS.contains(&k.as_str()));
             break;
         }
     }
+    let refused = (task.is_none() && !refused.is_empty()).then(|| refused.join("; "));
     let add = |data: &mut serde_json::Value| {
         data["task"] = json!(task);
         data["allow"] = json!(allow);
+        if let Some(why) = &refused {
+            data["allow_refused"] = json!(why);
+        }
     };
     match check_with(dir, base, &pull.body, &allow) {
         Ok(mut out) => {

@@ -39,9 +39,19 @@ fn repo_without_its_test() -> (tempfile::TempDir, PathBuf) {
 }
 
 fn task(allow: &str) -> String {
+    task_touching(r#"["tests/**"]"#, allow)
+}
+
+fn task_touching(touch: &str, allow: &str) -> String {
     format!(
-        "<!-- bosun:plan M1/T1 -->\n<!-- bosun:task {{\"item\":\"M1\",\"task\":\"T1\",\"allow\":{allow}}} -->"
+        "<!-- bosun:plan M1/T1 -->\n<!-- bosun:task {{\"item\":\"M1\",\"task\":\"T1\",\"touch\":{touch},\"allow\":{allow}}} -->"
     )
+}
+
+/// PR 5 with `body` that removed `tests/t.rs`, as GitHub lists it.
+fn pr(fake: &FakeGithub, body: &str) {
+    fake.pull(5, "drop seed", "work", body);
+    fake.pull_file(5, "tests/t.rs", "removed", 0, 4, None);
 }
 
 fn check(fake: &FakeGithub, root: &Path) -> (i32, Value) {
@@ -61,7 +71,7 @@ fn check(fake: &FakeGithub, root: &Path) -> (i32, Value) {
 fn the_linked_task_allows_a_deleted_test() {
     let (_tmp, root) = repo_without_its_test();
     let fake = FakeGithub::start();
-    fake.pull(5, "drop seed", "work", "Drop the seed.\n\nCloses #7");
+    pr(&fake, "Drop the seed.\n\nCloses #7");
     fake.issue(7, "M1/T1: drop", &[], &task(r#"["delete-test","bogus"]"#));
     let (code, v) = check(&fake, &root);
     assert_eq!(code, 0, "{v}");
@@ -74,7 +84,7 @@ fn the_linked_task_allows_a_deleted_test() {
 fn a_task_that_allows_nothing_refuses() {
     let (_tmp, root) = repo_without_its_test();
     let fake = FakeGithub::start();
-    fake.pull(5, "drop seed", "work", "Closes #7");
+    pr(&fake, "Closes #7");
     fake.issue(7, "M1/T1: drop", &[], &task("[]"));
     let (code, v) = check(&fake, &root);
     assert_eq!(code, 1, "{v}");
@@ -87,7 +97,7 @@ fn a_task_that_allows_nothing_refuses() {
 fn a_pr_without_a_task_allows_nothing() {
     let (_tmp, root) = repo_without_its_test();
     let fake = FakeGithub::start();
-    fake.pull(5, "drop seed", "work", "no link");
+    pr(&fake, "no link");
     let (code, v) = check(&fake, &root);
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["data"]["task"], Value::Null);
@@ -116,4 +126,66 @@ fn a_snapshot_change_points_at_the_pr_body() {
     let fix = v["error"]["fix"].as_str().unwrap();
     assert!(fix.contains("snapshot-change: <reason>"), "{fix}");
     assert!(!fix.contains("allow"), "{fix}");
+}
+
+#[test]
+fn a_decoy_task_first_does_not_lend_its_allow() {
+    let (_tmp, root) = repo_without_its_test();
+    let fake = FakeGithub::start();
+    // #99 allows deleting tests but does not touch tests/t.rs; #7, the real task, allows nothing.
+    pr(&fake, "Closes #99\nCloses #7");
+    fake.issue(
+        99,
+        "M2/T1",
+        &[],
+        &task_touching(r#"["src/**"]"#, r#"["delete-test"]"#),
+    );
+    fake.issue(7, "M1/T1", &[], &task("[]"));
+    let (code, v) = check(&fake, &root);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["task"], 7);
+    assert_eq!(v["data"]["allow"], json!([]));
+}
+
+#[test]
+fn no_task_whose_touch_covers_the_pr_allows_nothing() {
+    let (_tmp, root) = repo_without_its_test();
+    let fake = FakeGithub::start();
+    pr(&fake, "Closes #7");
+    fake.issue(
+        7,
+        "M1/T1",
+        &[],
+        &task_touching(r#"["src/**"]"#, r#"["delete-test"]"#),
+    );
+    let (code, v) = check(&fake, &root);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["task"], Value::Null);
+    assert_eq!(v["data"]["allow"], json!([]));
+    let why = v["data"]["allow_refused"].as_str().unwrap();
+    assert!(why.contains("#7") && why.contains("tests/t.rs"), "{why}");
+    // An empty touch covers nothing either.
+    let fake = FakeGithub::start();
+    pr(&fake, "Closes #7");
+    fake.issue(7, "M1/T1", &[], &task_touching("[]", r#"["delete-test"]"#));
+    let (code, v) = check(&fake, &root);
+    assert_eq!((code, &v["data"]["task"]), (1, &Value::Null), "{v}");
+}
+
+#[test]
+fn a_cut_file_list_allows_nothing() {
+    let (_tmp, root) = repo_without_its_test();
+    let fake = FakeGithub::start();
+    pr(&fake, "Closes #7");
+    fake.pull_set(5, "changed_files", json!(3001));
+    fake.issue(7, "M1/T1", &[], &task(r#"["delete-test"]"#));
+    let (code, v) = check(&fake, &root);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["task"], Value::Null);
+    assert!(
+        v["data"]["allow_refused"]
+            .as_str()
+            .unwrap()
+            .contains("file list")
+    );
 }
