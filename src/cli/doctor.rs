@@ -20,6 +20,11 @@ fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &
     json!({"step": step, "name": name, "status": status, "detail": detail, "fix": fix})
 }
 
+/// A step the repo has not opted into (Slack, release): reported, never missing or warn (F11).
+fn skipped(step: u8, name: &str, detail: &str, fix: &str) -> Value {
+    json!({"step": step, "name": name, "status": "skipped", "detail": detail, "fix": fix})
+}
+
 fn join_note(detail: String, note: &Option<String>) -> String {
     match note {
         Some(n) => format!("{detail}; {n}"),
@@ -27,16 +32,51 @@ fn join_note(detail: String, note: &Option<String>) -> String {
     }
 }
 
-/// The Routine prompts the owner creates by hand (step 11).
-fn routines() -> Value {
-    json!([
-        {"name": "janitor", "schedule": "every 15 minutes", "model": "haiku",
-         "prompt": "Run `bosun reap` (it ends expired leases and members and moves merged tasks to merged) and report its data.reaped, data.left and data.merged. Run `bosun budget check`: make only the interrupt_session calls in its `next`, with the claude-code-remote tools (one per live session at 100 % of the daily budget), and report data.level. Then run `bosun notify` if this bosun has it."},
+const JANITOR: &str = "Run `bosun reap` (it ends expired leases and members and moves merged tasks to merged) and report its data.reaped, data.left and data.merged. Run `bosun budget check`: make only the interrupt_session calls in its `next`, with the claude-code-remote tools (one per live session at 100 % of the daily budget), and report data.level.";
+
+/// The Routine prompts the owner creates by hand (step 11). Without a `[slack]` table the
+/// janitor skips notify and there is no notify Routine (F17).
+fn routines(slack: bool) -> Value {
+    let janitor = if slack {
+        format!("{JANITOR} Then run `bosun notify` if this bosun has it.")
+    } else {
+        JANITOR.to_string()
+    };
+    let mut all = json!([
+        {"name": "janitor", "schedule": "every hour", "model": "haiku", "prompt": janitor},
         {"name": "curator", "schedule": "daily", "model": "sonnet",
          "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add`; at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
-        {"name": "notify", "schedule": "every 15 minutes", "model": "haiku",
+        {"name": "notify", "schedule": "every hour", "model": "haiku",
          "prompt": "Run `bosun notify --channel-info -` with the channel facts read by your Slack tool (conversations.info; guests are the members whose users.info has is_restricted or is_ultra_restricted) as JSON on stdin: {\"id\", \"is_ext_shared\", \"is_org_shared\", \"is_shared\", \"guests\"}. Post each `slack_post` in `next` with `args.text` verbatim (into args.thread_ts when it is set), then run `bosun notify --ack <key>` only after that post succeeded. Report data.errors when it is not empty. On exit 5, post nothing and report data.reason."},
-    ])
+    ]);
+    if !slack && let Some(a) = all.as_array_mut() {
+        a.retain(|r| r["name"] != "notify");
+    }
+    all
+}
+
+/// Whether the repo publishes releases: hoist.toml has `[release]` or `[publish]`, a workflow is
+/// `release.yml`/`release.yaml` or names a `release*` environment, or a release exists. Else
+/// release (step 10, hoist's release items) is optional and skipped (F11).
+fn release_configured(root: &Path, hoist: Option<&toml::Table>, released: bool) -> bool {
+    let wf = root.join(".github/workflows");
+    released
+        || hoist.is_some_and(|h| h.contains_key("release") || h.contains_key("publish"))
+        || ["release.yml", "release.yaml"]
+            .iter()
+            .any(|f| wf.join(f).is_file())
+        || workflow_environments(root)
+            .0
+            .iter()
+            .any(|e| e.starts_with("release"))
+}
+
+/// A hoist item about releases: the release, npm and crates areas, a `release*` environment, or
+/// a secret such as HOIST_RELEASE_TOKEN.
+fn release_item(area: &str, kind: &str, key: &str) -> bool {
+    matches!(area, "release" | "npm" | "crates")
+        || (kind == "environment" && key.starts_with("release"))
+        || (kind == "secret" && key.to_ascii_uppercase().contains("RELEASE"))
 }
 
 /// Check contexts of every `.github/workflows/*.yml` and `*.yaml` (see `checks::workflow_checks`).
@@ -348,7 +388,8 @@ struct StepFindings {
 }
 
 /// Run `hoist check --json` and fold its items into steps 3, 5 and 10. Returns `data.hoist`.
-fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
+/// Without a release setup, release items go to `skipped` and fail no step.
+fn apply_hoist(items: &mut [Value], root: &Path, release: bool) -> Value {
     let bin = std::env::var("BOSUN_HOIST")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -386,12 +427,19 @@ fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
         return hoist_failed(items, &detail, HOIST_RERUN_FIX, exit_json);
     }
     let (mut drift, mut unknown, mut notes) = (Vec::new(), Vec::new(), Vec::new());
+    let mut skipped = Vec::new();
     let mut per_step: std::collections::BTreeMap<usize, StepFindings> = [3, 5, 10]
         .into_iter()
         .map(|s| (s, StepFindings::default()))
         .collect();
     for it in report["items"].as_array().into_iter().flatten() {
         let s = |k: &str| it[k].as_str().unwrap_or("").to_string();
+        if !release && release_item(&s("area"), &s("kind"), &s("key")) {
+            if s("action") != "ok" {
+                skipped.push(describe(it));
+            }
+            continue;
+        }
         let (step, area) = hoist_step(&s("area"), &s("kind"));
         let entry = per_step.entry(step).or_default();
         let action = s("action");
@@ -442,7 +490,7 @@ fn apply_hoist(items: &mut [Value], root: &Path) -> Value {
             it["detail"] = json!(format!("{}; {note}", it["detail"].as_str().unwrap_or("")));
         }
     }
-    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes})
+    json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes, "skipped": skipped})
 }
 
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
@@ -618,6 +666,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .as_ref()
         .map(|s| s.channel.trim().to_string())
         .unwrap_or_default();
+    let slack_set = ctx.config.slack.is_some();
     let mut slack_item = item(
         7,
         "Slack channel",
@@ -639,6 +688,14 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         });
         slack_item["fix"] =
             json!("add `slack = \"U…\"` to your [[owner]] table in governance/owners.toml");
+    }
+    if !slack_set {
+        slack_item = skipped(
+            7,
+            "Slack channel",
+            "Slack is optional and not configured (no [slack] table in .bosun/bosun.toml); notify is skipped",
+            "to use Slack: create the channel, connect Claude Tag, and add [slack] channel to .bosun/bosun.toml",
+        );
     }
     items.push(slack_item);
 
@@ -674,7 +731,16 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     let release = gh.latest_release();
-    items.push(item(
+    let release_set = release_configured(root, hoist.as_ref(), matches!(release, Ok(Some(_))));
+    items.push(if !release_set {
+        skipped(
+            10,
+            "release",
+            "release is optional and not configured (no [release] or [publish] in hoist.toml, no release workflow or environment, no release yet)",
+            "to publish: add [release] to hoist.toml, then run `hoist release bootstrap`",
+        )
+    } else {
+        item(
         10,
         "release",
         match &release {
@@ -691,15 +757,20 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .map_or("", |r| &r.tag_name)
         ),
         "run `hoist release bootstrap` (docs/PROGRESS.md Blocked)",
-    ));
+    )
+    });
 
     let routines_ok = std::env::var("BOSUN_ROUTINES_OK").is_ok_and(|v| v.trim() == "1");
     items.push(item(
         11,
         "Routines",
         (!routines_ok).then(|| "bosun cannot see Routines; create them from the prompts in data.routines".into()),
-        "BOSUN_ROUTINES_OK=1: the owner confirmed the three Routines".into(),
-        "create the janitor, curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1",
+        "BOSUN_ROUTINES_OK=1: the owner confirmed the Routines in data.routines".into(),
+        if slack_set {
+            "create the janitor, curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+        } else {
+            "create the janitor and curator Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+        },
     ));
 
     let has_plan = std::fs::read_dir(root.join("plans")).is_ok_and(|d| {
@@ -714,10 +785,13 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
     ));
 
-    let hoist_data = remote.then(|| apply_hoist(&mut items, root));
+    let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
-    let mut data = json!({"items": items, "missing": missing, "routines": routines()});
+    let mut data = json!({"items": items, "missing": missing, "routines": routines(slack_set)});
+    if !slack_set {
+        data["notify"] = json!({"skipped": true, "reason": "no [slack] table in .bosun/bosun.toml: the janitor skips notify and there is no notify Routine"});
+    }
     if let Some(h) = hoist_data {
         data["hoist"] = h;
     }

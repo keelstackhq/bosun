@@ -95,7 +95,11 @@ fn nothing_pending_is_ok_without_channel_info() {
 #[test]
 fn an_empty_channel_is_an_error_with_a_fix() {
     let e = env();
-    std::fs::write(e.dir.path().join(".bosun/bosun.toml"), "").unwrap();
+    std::fs::write(
+        e.dir.path().join(".bosun/bosun.toml"),
+        "[slack]\nchannel = \"\"\n",
+    )
+    .unwrap();
     let (code, v) = e.run(&["notify"], "");
     assert_eq!(code, 1, "{v}");
     assert!(
@@ -575,4 +579,21 @@ fn a_halt_with_no_owners_has_its_own_text() {
     assert_eq!(code, 0, "{v}");
     let text = v["next"][0]["args"]["text"].as_str().unwrap();
     assert!(text.contains("no owners are listed"), "{text}");
+}
+
+#[test]
+fn without_a_slack_section_notify_is_skipped_not_an_error() {
+    let e = env();
+    e.registry();
+    e.halt();
+    std::fs::write(e.dir.path().join(".bosun/bosun.toml"), "").unwrap();
+    let (code, v) = e.run(&["notify"], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert!(
+        v["data"]["reason"].as_str().unwrap().contains("[slack]"),
+        "{v}"
+    );
+    assert_eq!(v["data"]["pending"], json!([]));
+    assert_eq!(v["next"], json!([]));
 }

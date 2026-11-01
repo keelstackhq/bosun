@@ -52,13 +52,25 @@ fn an_empty_repo_reports_all_twelve_steps() {
         assert_eq!(it["step"], i + 1);
         assert!(!it["fix"].as_str().unwrap().is_empty());
     }
-    // Only step 1 (the fake repo is readable) is ok.
+    // Step 1 (the fake repo is readable) is ok; Slack (7) and release (10) are not configured,
+    // so they are skipped, not missing (F11).
     let st = statuses(&v);
     assert_eq!(st[0], "ok");
-    assert!(st[1..].iter().all(|s| s == "missing"), "{st:?}");
-    assert_eq!(v["error"]["message"], "11 checklist steps missing");
-    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 3);
+    assert_eq!((st[6].as_str(), st[9].as_str()), ("skipped", "skipped"));
+    assert!(
+        st.iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(i, _)| *i != 6 && *i != 9)
+            .all(|(_, s)| s == "missing"),
+        "{st:?}"
+    );
+    assert_eq!(v["error"]["message"], "9 checklist steps missing");
+    // Without [slack], the janitor skips notify and there is no notify Routine (F17).
+    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2);
+    assert_eq!(v["data"]["notify"]["skipped"], true, "{v}");
     let janitor = v["data"]["routines"][0]["prompt"].as_str().unwrap();
+    assert!(!janitor.contains("bosun notify"), "{janitor}");
     for part in [
         "bosun reap",
         "bosun budget check",
@@ -531,5 +543,57 @@ mod environments {
         warns(policies, "cannot verify", grant);
         let env500 = |f: &FakeGithub| f.fail_path("/environments/release-pr", 500);
         warns(env500, "cannot verify", "run `bosun doctor --remote` again");
+    }
+}
+
+#[test]
+fn slack_is_skipped_without_a_slack_section_and_missing_with_an_empty_channel() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (_, v) = doctor(&fake, tmp.path(), false);
+    let item = &v["data"]["items"][6];
+    assert_eq!(item["status"], "skipped", "{item}");
+    assert!(
+        item["detail"].as_str().unwrap().contains("optional"),
+        "{item}"
+    );
+    write(tmp.path(), ".bosun/bosun.toml", "[slack]\nchannel = \"\"\n");
+    let (_, v) = doctor(&fake, tmp.path(), false);
+    assert_eq!(v["data"]["items"][6]["status"], "missing", "{v}");
+    assert!(v["data"].get("notify").is_none(), "{v}");
+    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn with_slack_the_janitor_still_runs_notify() {
+    let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+    let (_, v) = doctor(&fake, tmp.path(), true);
+    let janitor = v["data"]["routines"][0]["prompt"].as_str().unwrap();
+    assert!(janitor.contains("bosun notify"), "{janitor}");
+    assert_eq!(v["data"]["routines"][2]["name"], "notify");
+}
+
+#[test]
+fn release_is_missing_only_when_configured() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let d = tmp.path();
+    let (_, v) = doctor(&fake, d, false);
+    let item = &v["data"]["items"][9];
+    assert_eq!(item["status"], "skipped", "{item}");
+    assert!(
+        item["detail"].as_str().unwrap().contains("not configured"),
+        "{item}"
+    );
+    for (rel, text) in [
+        ("hoist.toml", "[release]\n"),
+        ("hoist.toml", "[publish]\ncrates = {}\n"),
+        (
+            ".github/workflows/release.yml",
+            "jobs:\n  publish:\n    runs-on: x\n",
+        ),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), rel, text);
+        let (_, v) = doctor(&fake, tmp.path(), false);
+        assert_eq!(v["data"]["items"][9]["status"], "missing", "{rel}: {v}");
     }
 }

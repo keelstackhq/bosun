@@ -58,8 +58,8 @@ per_task_usd = 25
 With `max_live_sessions = 1` the same code path runs: the root session does all the work in waves.
 
 Janitor, resume, results:
-- Janitor (Routine, every 15 min, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
-  `bosun notify`.
+- Janitor (Routine, every hour, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
+  `bosun notify` (only when `.bosun/bosun.toml` has a `[slack]` table; without one the prompt `bosun doctor` prints leaves it out).
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.
   It renews the join record of the session (joining again if the registry has none) and every

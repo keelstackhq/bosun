@@ -1,0 +1,1 @@
+- `bosun doctor` reports Slack (no `[slack]`) and release (no `[release]`/`[publish]`, release workflow or release) as `skipped`, not missing, and `--remote` lists their hoist items in `data.hoist.skipped`; `bosun notify` without `[slack]` exits 0 with `data.skipped`; the janitor prompt leaves out notify without Slack; Routines run every hour.
