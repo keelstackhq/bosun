@@ -78,7 +78,7 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
-- Results (D14): a child runs `bosun result <epic> --outcome merged|blocked|needs-human [--pr N]`.
+- Results (D14): a child runs `bosun result <epic> --outcome merged|partial|blocked|needs-human [--pr N]`.
   It posts an issue comment on the epic with the record
   `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
   (reason `result`) and leaves the registry (reason `done`). It works when bosun is halted. The
@@ -87,6 +87,13 @@ Janitor, resume, results:
   result ends the lease, so `reap` never sends the epic back to ready and it would stay claimed.
   `merged` leaves the state alone: only the merge itself moves a task (D13), through `bosun pr`
   or `reap`. Closing an orchestrator epic whose tasks all merged is not part of `result`.
+  `partial` (some tasks merged, the rest not) sets the epic back to `ready`, so the parent can
+  spawn again for the rest, but only when the caller holds its own live lease on the epic (a
+  spawned child's lease comes from `spawn --record`), the epic is claimed, building, review or
+  fixing, and bosun is not halted; otherwise the result is recorded with no state change and
+  `data.partial_skipped` says why. `data.tasks_merged` is, for every outcome, the
+  tasks a merged `--pr` moved to merged plus every task in state merged whose `epic` is this
+  epic, sorted.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix
   "From #<issue>:" and refuses text over 500 characters. Without `--issue` the prefix is "From <session>:". Nothing in bosun waits for a reply.
 
