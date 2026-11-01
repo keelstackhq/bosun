@@ -23,10 +23,13 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event.action == 'edited' && !github.event.changes.base) }}
 
-# checks: read lets a body edit read the head's earlier ci-ok.
+# checks: read lets a body edit read the head's earlier ci-ok. issues and pull-requests: read
+# let step `task allow list` read the PR body and its linked task.
 permissions:
   contents: read
   checks: read
+  issues: read
+  pull-requests: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -220,12 +223,33 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
+      # The kinds test-integrity may allow come from the PR's linked task (the plan's `allow:`),
+      # read with this run's read-only token before any PR code runs, and never in the gates
+      # step, where lint and test run PR code. Only known kinds pass; any failure (a base bosun
+      # without `--pr`, an API error) allows nothing.
+      - if: steps.plan.outputs.work == 'true' && github.event_name == 'pull_request'
+        id: allow
+        name: task allow list
+        env:
+          BOSUN: ${{ steps.boot.outputs.dir }}/target/release/bosun
+          BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          echo "$BOSUN_SHA256  $BOSUN" | sha256sum -c --quiet || { echo "::error::$BOSUN changed"; exit 1; }
+          kinds="$("$BOSUN" test-integrity --pr "$PR" 2>/dev/null \
+            | jq -r '[.data.allow // [] | .[] | select(IN("delete-test","skip","only","fewer-asserts"))] | join(",")' 2>/dev/null)" || kinds=""
+          echo "test-integrity allows: ${kinds:-nothing}"
+          echo "kinds=$kinds" >> "$GITHUB_OUTPUT"
       # The gates run in order and stop at the first failure.
       - if: steps.plan.outputs.work == 'true'
         name: bosun gates
         env:
           BOSUN: ${{ steps.boot.outputs.dir }}/target/release/bosun
           BOSUN_SHA256: ${{ steps.binhash.outputs.sha256 }}
+          # The linked task's allowed kinds (step `task allow list`); empty off a pull request.
+          BOSUN_INTEGRITY_ALLOW: ${{ steps.allow.outputs.kinds }}
           # An edit after a success runs test-integrity only (see the edit step).
           ONLY: ${{ steps.plan.outputs.only }}
           # test-integrity reads the snapshot-change line from the PR body.
