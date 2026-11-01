@@ -1,0 +1,1 @@
+- PreToolUse guard: refuses `gh api` release writes, `gh alias set|import`, `git push --all|--branches|--mirror` and glob refspecs, and gh, git or http writes behind `xargs` (stdin adds unseen arguments) or runners such as `timeout` and `nice`.

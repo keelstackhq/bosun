@@ -1,0 +1,1 @@
+- 2026-11-01 · Fix guard gaps · merge-lock refuses `gh api …/releases` writes, `xargs` around gh/git/http writes, `gh alias set|import`, `git push --all|--branches|--mirror` and `*` refspecs; runners (`timeout`, `nice`, `xargs`) are unwrapped, a runner `cd` makes the git target unknown · guard unit tests +1 · PR (fix/guard-gaps)

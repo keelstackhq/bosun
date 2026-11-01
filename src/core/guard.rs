@@ -1133,6 +1133,7 @@ const HTTP_WRITES: &[&str] = &[
 
 /// Where a git command acts: the `-C` options of earlier `cd`s (`None`: unknown), and how to
 /// read the branch there.
+#[derive(Clone, Copy)]
 struct Target<'a> {
     dir: Option<&'a [String]>,
     branch_at: BranchAt<'a>,
@@ -1184,15 +1185,64 @@ fn cd_target(args: &[&str]) -> Option<String> {
     }
 }
 
+/// git subcommands that publish, tag or change a branch: with `xargs` their arguments come
+/// from stdin, so the guard cannot judge them.
+const XARGS_GIT: &[&str] = &[
+    "push",
+    "tag",
+    "merge",
+    "rebase",
+    "reset",
+    "cherry-pick",
+    "commit",
+];
+
 fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static str> {
-    let words: Vec<&str> = words
-        .iter()
-        .copied()
-        .skip_while(|w| (w.contains('=') && !w.starts_with('-')) || WRAPPERS.contains(w))
-        .collect();
+    // Leading assignments and wrappers, then runners (`timeout 5`, `xargs -n1`, `env -C dir`),
+    // until the command itself.
+    let runner = |w: &str| {
+        RUNNERS
+            .iter()
+            .any(|r| r.0 == w.rsplit('/').next().unwrap_or(w))
+    };
+    let (mut words, mut xargs, mut moved) = (words, false, false);
+    loop {
+        let skip = words
+            .iter()
+            .take_while(|w| {
+                (w.contains('=') && !w.starts_with('-')) || (WRAPPERS.contains(w) && !runner(w))
+            })
+            .count();
+        let (cmd, dirs, _) = unwrap_runners(&words[skip..]);
+        let ran = &words[skip..words.len() - cmd.len()];
+        xargs |= ran.iter().any(|w| w.rsplit('/').next() == Some("xargs"));
+        moved |= !dirs.is_empty();
+        if skip == 0 && ran.is_empty() {
+            break;
+        }
+        words = cmd;
+    }
+    // A runner that changes directory moves git to a place the guard cannot read: fail closed.
+    let target = Target {
+        dir: target.dir.filter(|_| !moved),
+        ..*target
+    };
+    if xargs {
+        let blind = match words.first().copied() {
+            Some("gh") => {
+                words.len() < 3 || matches!(words[1], "api" | "release" | "alias" | "repo")
+            }
+            Some("git") => words.len() < 2 || words[1..].iter().any(|w| XARGS_GIT.contains(w)),
+            Some("curl" | "wget" | "http" | "https" | "xh") => true,
+            _ => false,
+        };
+        if blind {
+            return Some("`xargs` adds arguments the guard cannot see");
+        }
+    }
     match words.first().copied() {
         Some("gh") => gh_rule(&words[1..], segment),
-        Some("git") => git_rule(&words[1..], target),
+        Some("git") => git_rule(&words[1..], &target),
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
@@ -2033,11 +2083,15 @@ fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
     match args {
         ["pr", "merge", ..] => Some("gh pr merge"),
         ["release", "create", ..] => Some("a release makes a tag"),
+        ["alias", "set" | "import", ..] => Some("a gh alias makes commands the guard cannot see"),
         ["api", ..] if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) => {
             Some("GraphQL merge or ref mutation")
         }
         ["api", rest @ ..] if gh_api_read(rest, segment) => None,
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("/merge")) => Some("merge API"),
+        ["api", rest @ ..] if rest.iter().any(|a| a.contains("/releases")) => {
+            Some("a release makes a tag")
+        }
         ["api", rest @ ..] if rest.iter().any(|a| a.contains("auto_merge")) => {
             Some("auto-merge API")
         }
@@ -2157,6 +2211,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                     || a.starts_with("--force-if-includes")
             }) {
                 return Some("force, tag or delete push");
+            }
+            // Every branch, or a glob refspec: it can reach the default branch or tags.
+            if rest
+                .iter()
+                .any(|a| matches!(*a, "--all" | "--branches") || a.contains('*'))
+            {
+                return Some("push of every branch or a glob refspec");
             }
             let refs: Vec<&str> = rest
                 .iter()
@@ -2569,6 +2630,56 @@ mod tests {
             "git push origin release/1.2",
             "git push -u origin claude/fix-1",
             "git merge origin/main",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    /// Gaps: release writes through `gh api`, `xargs` around gh or git writes (stdin adds
+    /// arguments the guard cannot see), `gh alias` (new commands that bypass the guard), and
+    /// pushes of every ref or of a glob.
+    #[test]
+    fn merge_lock_refuses_release_xargs_alias_and_bulk_push_gaps() {
+        for cmd in [
+            "gh api repos/o/r/releases -f tag_name=v1.0.0",
+            "gh api -X POST repos/o/r/releases",
+            "gh api --method PATCH repos/o/r/releases/1 -F draft=false",
+            "gh api repos/o/r/releases --input rel.json",
+            "echo 12 | xargs gh api -X PUT repos/o/r/pulls/12/merge",
+            "echo repos/o/r/pulls/12/merge | xargs gh api -X PUT",
+            "echo -X PUT | xargs gh api repos/o/r/pulls/12/merge",
+            "echo main | xargs git push origin",
+            "echo v1 | xargs -I{} git tag {}",
+            "echo 12 | xargs -n1 gh pr merge",
+            "echo x | xargs -0 git merge",
+            "timeout 5 git push origin main",
+            "nice -n 5 gh pr merge 12",
+            "gh alias set pm 'pr merge'",
+            "gh alias set --shell x 'git push origin main'",
+            "gh alias import aliases.yml",
+            "git push origin --all",
+            "git push --all origin",
+            "git push --branches origin",
+            "git push --mirror origin",
+            "git push origin 'refs/heads/*'",
+            "git push origin refs/heads/*:refs/heads/*",
+            "git push origin 'refs/tags/*'",
+            "git push origin '*:*'",
+            "git push origin \"*\"",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+        for cmd in [
+            "gh api repos/o/r/releases",
+            "gh api repos/o/r/releases/latest --jq .tag_name",
+            "gh release view v1.0.0",
+            "gh release list",
+            "gh alias list",
+            "git ls-files | xargs wc -l",
+            "echo 1 | xargs gh pr view",
+            "git branch --all",
+            "git push -u origin feature",
+            "timeout 60 cargo test",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
