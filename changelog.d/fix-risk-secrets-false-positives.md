@@ -1,0 +1,1 @@
+- risk-check: R-secrets no longer flags code bindings (`let x = v`), test files and fixtures, or lines marked `bosun:allow-secret <reason>`; strong secret formats (age, PEM private keys, GitHub, `sk-`, AWS, Slack tokens) are never exempt and now match on any added line.

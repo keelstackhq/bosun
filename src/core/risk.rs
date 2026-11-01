@@ -164,11 +164,16 @@ pub fn evaluate(
             if hit {
                 evidence.push(format!("path {}", f.path));
             }
-            if let Some(re) = &rule.content {
-                for (i, line) in f.added_lines.iter().enumerate() {
-                    if re.is_match(line) {
-                        evidence.push(format!("{}: added line {} matches", f.path, i + 1));
-                    }
+            // R-secrets: exempt code bindings, test files and marked lines, but never a
+            // strong secret format, which matches even where `content` does not.
+            let secrets = rule.id == "R-secrets";
+            for (i, line) in f.added_lines.iter().enumerate() {
+                let hit = match &rule.content {
+                    Some(re) if re.is_match(line) => !(secrets && secret_exempt(&f.path, line)),
+                    _ => secrets && strong_secret(line),
+                };
+                if hit {
+                    evidence.push(format!("{}: added line {} matches", f.path, i + 1));
                 }
             }
         }
@@ -190,6 +195,87 @@ pub fn evaluate(
         }
     }
     out
+}
+
+/// Secret formats that are never exempt (R-secrets): age and PEM private keys, GitHub, Anthropic,
+/// OpenAI, AWS and Slack tokens. They match even where the rule's own `content` does not.
+const STRONG_SECRETS: &str = concat!(
+    r"AGE-SECRET-KEY-[1]|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----",
+    r"|\bgh[pousr]_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{22,}",
+    r"|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b",
+    r"|\bxox[abprs]-[A-Za-z0-9-]{10,}",
+);
+
+/// The per-line marker that exempts a line from R-secrets: `bosun:allow-secret <reason>`.
+pub const ALLOW_SECRET: &str = "bosun:allow-secret";
+
+fn strong_secret(line: &str) -> bool {
+    static RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(STRONG_SECRETS).expect("static regex"));
+    RE.is_match(line)
+}
+
+/// A test file or fixture: a `test`, `tests`, `__tests__`, `spec`, `fixtures`, `testdata`,
+/// `snapshots` or `__snapshots__` directory, a `.snap` file, or a `*_test.*`, `*.test.*`,
+/// `*_spec.*`, `*.spec.*` or `test_*` file name. Any case.
+pub fn test_path(path: &str) -> bool {
+    const DIRS: [&str; 8] = [
+        "test",
+        "tests",
+        "__tests__",
+        "spec",
+        "fixtures",
+        "testdata",
+        "snapshots",
+        "__snapshots__",
+    ];
+    let lower = path.to_ascii_lowercase();
+    let mut parts: Vec<&str> = lower.split('/').collect();
+    let name = parts.pop().unwrap_or_default();
+    if parts.iter().any(|d| DIRS.contains(d)) || name.ends_with(".snap") {
+        return true;
+    }
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    name.starts_with("test_")
+        || [".test", "_test", ".spec", "_spec"]
+            .iter()
+            .any(|s| stem.ends_with(s))
+}
+
+/// A code binding whose value is not a literal, like `let <name> = v` or `const k = cfg.k`. The
+/// value comes from elsewhere, so the line holds no secret. `let <name> = "abc"` is a literal.
+fn code_binding(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(rest) = ["let ", "const ", "var ", "val ", "my "]
+        .iter()
+        .find_map(|k| t.strip_prefix(k))
+    else {
+        return false;
+    };
+    let Some((_, value)) = rest.split_once('=') else {
+        return false;
+    };
+    let v = value.trim_start();
+    let literal = v.starts_with(['"', '\'', '`'])
+        || ["r\"", "r#", "b\"", "br\"", "br#"]
+            .iter()
+            .any(|p| v.starts_with(p));
+    !v.is_empty() && !literal && !v.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// Whether an added line that the R-secrets content matched is exempt: a strong secret never is;
+/// otherwise a `bosun:allow-secret <reason>` marker, a code binding, or any line of a test file
+/// or fixture is.
+pub fn secret_exempt(path: &str, line: &str) -> bool {
+    if strong_secret(line) {
+        return false;
+    }
+    let marked = line.find(ALLOW_SECRET).is_some_and(|i| {
+        line[i + ALLOW_SECRET.len()..]
+            .chars()
+            .any(char::is_alphanumeric)
+    });
+    marked || code_binding(line) || test_path(path)
 }
 
 /// A file as listed by GitHub, for [`unseen_diff`].
