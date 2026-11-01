@@ -81,3 +81,77 @@ fn partial_never_moves_a_merged_epic() {
     assert_eq!(v["data"]["tasks_merged"], json!([]));
     assert_eq!(fake.labels_of(9), ["bosun:state/merged".to_string()]);
 }
+
+fn partial(fake: &FakeGithub, session: &str) -> serde_json::Value {
+    let (code, v) = run(fake, session, NOW, &["result", "9", "--outcome", "partial"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        fake.comments_of(9)
+            .iter()
+            .any(|c| c.body.contains(r#""outcome":"partial""#)),
+        "the result is always recorded"
+    );
+    v
+}
+
+#[test]
+fn partial_without_an_own_live_lease_changes_no_state() {
+    // No lease at all.
+    let fake = FakeGithub::start();
+    fake.issue(9, "Epic", &["bosun:state/claimed"], "");
+    let v = partial(&fake, CHILD);
+    assert_eq!(v["data"]["task_state"], "claimed");
+    assert!(
+        v["data"]["partial_skipped"]
+            .as_str()
+            .unwrap()
+            .contains("no live lease")
+    );
+
+    // Another session's live lease.
+    let fake = FakeGithub::start();
+    fake.issue(9, "Epic", &["bosun:state/claimed"], "");
+    fake.comment(9, &lease_note("session_other", LATER, "src/**"));
+    let v = partial(&fake, CHILD);
+    assert_eq!(v["data"]["task_state"], "claimed");
+    assert_eq!(fake.labels_of(9), ["bosun:state/claimed".to_string()]);
+
+    // Its own lease, expired.
+    let fake = FakeGithub::start();
+    fake.issue(9, "Epic", &["bosun:state/claimed"], "");
+    fake.comment(9, &lease_note(CHILD, "2026-10-23T09:00:00Z", "src/**"));
+    let v = partial(&fake, CHILD);
+    assert_eq!(v["data"]["task_state"], "claimed");
+}
+
+#[test]
+fn partial_never_moves_a_blocked_or_needs_human_epic() {
+    for from in ["blocked", "needs-human"] {
+        let fake = FakeGithub::start();
+        fake.issue(9, "Epic", &[&format!("bosun:state/{from}")], "");
+        fake.comment(9, &lease_note(CHILD, LATER, "src/**"));
+        let v = partial(&fake, CHILD);
+        assert_eq!(v["data"]["task_state"], from);
+        assert!(v["data"]["partial_skipped"].is_string(), "{v}");
+    }
+}
+
+#[test]
+fn partial_while_halted_records_but_changes_no_state() {
+    let fake = FakeGithub::start();
+    fake.issue(9, "Epic", &["bosun:state/building"], "");
+    fake.comment(9, &lease_note(CHILD, LATER, "src/**"));
+    fake.variable("BOSUN_HALT", "1");
+    let v = partial(&fake, CHILD);
+    assert_eq!(v["data"]["task_state"], "building");
+    assert!(
+        v["data"]["partial_skipped"]
+            .as_str()
+            .unwrap()
+            .contains("halted")
+    );
+    assert_eq!(
+        v["data"]["lease_ended"], true,
+        "the hand-back still ends the lease"
+    );
+}

@@ -87,8 +87,11 @@ Janitor, resume, results:
   result ends the lease, so `reap` never sends the epic back to ready and it would stay claimed.
   `merged` leaves the state alone: only the merge itself moves a task (D13), through `bosun pr`
   or `reap`. Closing an orchestrator epic whose tasks all merged is not part of `result`.
-  `partial` (some tasks merged, the rest not) sets the epic back to `ready` (unless it is merged),
-  so the parent can spawn again for the rest. `data.tasks_merged` is, for every outcome, the
+  `partial` (some tasks merged, the rest not) sets the epic back to `ready`, so the parent can
+  spawn again for the rest, but only when the caller holds its own live lease on the epic (a
+  spawned child's lease comes from `spawn --record`), the epic is claimed, building, review or
+  fixing, and bosun is not halted; otherwise the result is recorded with no state change and
+  `data.partial_skipped` says why. `data.tasks_merged` is, for every outcome, the
   tasks a merged `--pr` moved to merged plus every task in state merged whose `epic` is this
   epic, sorted.
 - Steering: `bosun msg <session> <text>` returns a `send_message` call in `next` with the prefix

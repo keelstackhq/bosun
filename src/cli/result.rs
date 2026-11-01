@@ -5,7 +5,9 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ResultArgs;
-use crate::app::{App, default_branch, end_lease, merge_counts, notes, set_state, sync_merged};
+use crate::app::{
+    App, default_branch, end_lease, halt_reason, merge_counts, notes, set_state, sync_merged,
+};
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::{linked_issues, parse_task_meta};
 use crate::core::records::Record;
@@ -42,10 +44,17 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     // their state, as this ends the lease and nothing else would move the epic (spec §5);
     // `partial` hands the epic back as ready, so the parent can spawn again for the rest.
     let mut state = state_of(&epic.labels);
+    let mut partial_skipped = None;
     let to = match args.outcome.as_str() {
         "blocked" => Some(State::Blocked),
         "needs-human" => Some(State::NeedsHuman),
-        "partial" => Some(State::Ready),
+        "partial" => match partial_refusal(&app, n, state)? {
+            None => Some(State::Ready),
+            Some(why) => {
+                partial_skipped = Some(why);
+                None
+            }
+        },
         _ => None,
     };
     if let Some(to) = to
@@ -105,5 +114,32 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         "epic": n, "outcome": args.outcome, "pr": args.pr,
         "comment_id": comment_id, "lease_ended": lease_ended, "left": left,
         "task_state": state.map(State::name), "tasks_merged": tasks_merged,
+        "partial_skipped": partial_skipped,
     })))
+}
+
+/// Why `partial` must not move epic `n` back to ready (the result is still recorded): only the
+/// session working on it may hand it back, so it needs this session's own live lease on the epic
+/// (a spawned child's lease is written by `spawn --record`), a working state, and no halt.
+fn partial_refusal(app: &App, n: u64, state: Option<State>) -> crate::app::Result<Option<String>> {
+    let (gh, me, now) = (app.gh.as_ref(), &app.ctx.session, app.ctx.now);
+    if !matches!(
+        state,
+        Some(State::Claimed | State::Building | State::Review | State::Fixing)
+    ) {
+        let st = state.map_or("not a task".into(), |s| s.to_string());
+        return Ok(Some(format!(
+            "#{n} is {st}; partial moves only claimed, building, review or fixing"
+        )));
+    }
+    if !leases_of(n, &notes(gh, n)?)
+        .iter()
+        .any(|l| &l.session == me && l.is_live(now))
+    {
+        return Ok(Some(format!("{me} holds no live lease on #{n}")));
+    }
+    if let Some((why, _)) = halt_reason(gh)? {
+        return Ok(Some(format!("halted: {why}")));
+    }
+    Ok(None)
 }
