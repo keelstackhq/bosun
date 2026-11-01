@@ -1832,3 +1832,26 @@ fn setup_scripts_make_node_24_the_node_that_resolves() {
         }
     }
 }
+
+/// When the NodeSource `node` is not Node 24 either, the script replaces nothing and links nothing.
+#[test]
+fn setup_scripts_never_replace_node_with_another_old_node() {
+    for (name, script) in setup_scripts() {
+        let sb = SetupSandbox::new();
+        fs::create_dir(sb.path("stale")).unwrap();
+        sb.stub(
+            "stale",
+            "node",
+            "[ \"$1\" = --version ] && echo v20.9.0; exit 0",
+        );
+        let (ok, err) = sb.run(&script, "stale");
+        assert!(ok, "{name}: {err}");
+        assert!(err.contains("not Node 24"), "{name}: {err}");
+        let old = sb.path("node22/node");
+        assert!(!old.is_symlink(), "{name}: {} was replaced", old.display());
+        let out = Command::new(&old).arg("--version").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "v22.3.0\n", "{name}");
+        assert!(!sb.path("link/node").exists(), "{name}");
+        assert!(!sb.path("profile.sh").exists(), "{name}");
+    }
+}

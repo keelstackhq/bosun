@@ -64,7 +64,7 @@ NODE_LINK_DIR="${SETUP_NODE_LINK_DIR:-/usr/local/lib/bosun-node}"
 NODE_PROFILE="${SETUP_NODE_PROFILE:-/etc/profile.d/bosun-node.sh}"
 node_major_ok() { "$1" --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; }
 if ! node_major_ok "$(command -v node || echo node)"; then
-  if [ -x "$NODE_BIN_DIR/node" ]; then
+  if node_major_ok "$NODE_BIN_DIR/node"; then
     first="$(command -v node || true)"
     {
       mkdir -p "$NODE_LINK_DIR"
