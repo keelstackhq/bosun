@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::PrArg;
-use crate::app::{App, notes, task_meta};
+use crate::app::{App, notes, task_meta, trusted_notes};
 use crate::core::lessons;
 use crate::core::records::{Record, parse_record};
 use crate::core::review::use_cases;
@@ -25,7 +25,8 @@ const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions
 \"lessons_hit\":[\"L-NNN\"],\"escalate_risk\":false}. Approve needs confidence >= 0.85 and no blocker. \
 Set `escalate_risk` only when the change touches governance, CI, secrets, dependencies or production writes \
 and the risk rules did not catch it; an escalated verdict never turns green, so do not escalate what \
-risk-check already flags (R-gov, R-ci, ...).";
+risk-check already flags (R-gov, R-ci, ...). If `task.touch_added` is not empty, the claimant widened \
+its lease beyond the task's `touch`: check that the changes to those files belong to the task.";
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let app = App::load(dir)?;
@@ -122,8 +123,29 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
         {
             ucs = use_cases(e.body_text());
         }
+        // A re-claim with `--touch` widens the lease, not the task metadata: show the globs of
+        // the claimant's lease records (ended ones too: the lease may be reaped by now), and
+        // which of them the task's `touch` lacks. Only information: an unreadable comment list
+        // gives `null`, not a failed pack.
+        let (claimant, lease_touch, touch_added) = match trusted_notes(gh, num) {
+            Ok(list) => {
+                let task_touch = meta.as_ref().map(|m| m.touch.clone()).unwrap_or_default();
+                let (who, globs) = claimant_touch(&list, n);
+                let added: Vec<&String> =
+                    globs.iter().filter(|g| !task_touch.contains(g)).collect();
+                (json!(who), json!(globs), json!(added))
+            }
+            Err(e) => {
+                eprintln!(
+                    "bosun: review-pack: cannot read the leases of #{num}: {}",
+                    e.message
+                );
+                (Value::Null, Value::Null, Value::Null)
+            }
+        };
         task = json!({"issue": num, "title": issue.title, "body": issue.body_text(),
-            "meta": meta});
+            "meta": meta, "claimant": claimant, "lease_touch": lease_touch,
+            "touch_added": touch_added});
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
@@ -137,4 +159,37 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
         "instructions": INSTRUCTIONS, "delta_fallback": delta_fallback,
         "changed_files": pull.changed_files,
     }))
+}
+
+/// The claimant of task comments `notes` (written by writers) for PR `pr`, and the touch globs
+/// of its lease records in order. The claimant is the session of the newest `task-pr` record for
+/// the PR, else of the newest lease record; other sessions' leases do not count.
+fn claimant_touch(notes: &[crate::core::records::Note], pr: u64) -> (Option<String>, Vec<String>) {
+    let records: Vec<Record> = notes.iter().filter_map(|n| parse_record(&n.body)).collect();
+    let who = records
+        .iter()
+        .rev()
+        .find_map(|r| match r {
+            Record::TaskPr { session, pr: p } if *p == pr => Some(session.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            records.iter().rev().find_map(|r| match r {
+                Record::Lease { session, .. } => Some(session.clone()),
+                _ => None,
+            })
+        });
+    let mut globs: Vec<String> = Vec::new();
+    for r in &records {
+        if let Record::Lease { session, touch, .. } = r
+            && Some(session) == who.as_ref()
+        {
+            for g in touch {
+                if !globs.contains(g) {
+                    globs.push(g.clone());
+                }
+            }
+        }
+    }
+    (who, globs)
 }

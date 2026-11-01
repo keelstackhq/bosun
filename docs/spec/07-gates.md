@@ -63,6 +63,15 @@ test-integrity:
 - Mutants that survive fail the merge queue.
 - In GitHub CI (`ci.yml` here, `bosun.yml` in the channel), a step `task allow list` runs before the gates on a pull request: it runs the checked base (or pinned) bosun as `bosun test-integrity --pr <n>` with the run's read-only token (`issues: read`, `pull-requests: read`) and passes the linked task's known kinds to the gates step as `BOSUN_INTEGRITY_ALLOW`. The token never reaches the gates step, where lint and test run PR code (`tests/workflows_integrity_allow.rs`). A failure there, or a bosun without `--pr`, allows nothing. CircleCI has no such step and allows nothing.
 
+The task in a review pack (below) also has `claimant`, `lease_touch` and `touch_added`. The
+claimant is the session of the newest `task-pr` record for the PR on the task issue (else of the
+newest lease record); `lease_touch` is every touch glob of the claimant's lease records, in order,
+ended leases included, and `touch_added` the ones the task metadata's `touch` lacks (a lease
+widened by `bosun claim <n> --touch ..`). Only comments by writers count, and only the claimant's
+leases; all three are `null` when the comments cannot be read. The instructions ask the reviewer
+to check the files of `touch_added`. The task metadata is not rewritten: it comes from the plan,
+and `plan amend` reconciles it.
+
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
 REVIEW.md). The reviewer returns:
 
