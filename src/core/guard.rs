@@ -2316,7 +2316,9 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         "push" => {
             // Quotes do not hide a target; one the shell expands cannot be read: fail closed.
             if rest.iter().any(|a| a.contains(['$', '`', '\\'])) {
-                return Some("a push target the guard cannot read");
+                return Some(
+                    "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`",
+                );
             }
             let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
             let rest: Vec<&str> = unquoted.iter().map(String::as_str).collect();
@@ -2798,6 +2800,9 @@ mod tests {
             ],
         );
         assert!(bash("git push origin 'HEAD'", "main").is_some());
+        // The refusal says how to fix it in one step.
+        let why = bash("git push -u origin \"$BRANCH\"", "feature").unwrap_or_default();
+        assert!(why.contains("name the branch literally"), "{why}");
     }
 
     /// Review of #351: every `gh release` write, not only `create`.
