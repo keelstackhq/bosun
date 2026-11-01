@@ -1,0 +1,1 @@
+- `bosun wait` renews the caller's leases and registry record while it polls, reaps expired leases and members, and `--pr` shows only the newest run of each check.

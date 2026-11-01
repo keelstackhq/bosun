@@ -1,0 +1,1 @@
+- F7, F18, F10, F8: wait keeps the caller alive, reaps what expired, newest check run only.
