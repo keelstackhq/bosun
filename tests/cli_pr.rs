@@ -122,6 +122,7 @@ fn auto_merge_is_enabled_while_review_verdict_is_pending() {
         serde_json::json!([{"context": "review-verdict", "state": "pending"}])
     );
     assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+    assert_eq!(v["data"]["task_state"], "queued", "{v}");
     assert!(fake.labels_of(7).contains(&"bosun:state/queued".into()));
 }
 
