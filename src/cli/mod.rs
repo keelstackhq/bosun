@@ -662,6 +662,10 @@ pub struct PlanImportArgs {
     /// Import only this item (repeatable); default all.
     #[arg(long = "item", value_name = "ID")]
     pub item: Vec<String>,
+    /// Close the plan tasks (new or `ready`) whose item is on the default branch unchanged:
+    /// there is nothing left to commit, so their tasks become ready on this run.
+    #[arg(long)]
+    pub close_on_default: bool,
 }
 
 #[derive(Debug, Args)]

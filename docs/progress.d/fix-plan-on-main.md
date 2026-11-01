@@ -1,0 +1,1 @@
+- F5, F15: plan import --close-on-default; critical path counts only open tasks.

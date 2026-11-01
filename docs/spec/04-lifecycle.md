@@ -1,7 +1,8 @@
 ## 4. Work lifecycle and conflict avoidance
 
 Units: a plan has items. Each item becomes one epic issue. An item has tasks. A task is at most
-400 changed lines and has one context pack. The critical path of an item has at most 4 tasks.
+400 changed lines and has one context pack. The critical path of an item has at most 4 open tasks
+(tasks already merged or closed as completed do not count).
 Each item has a "Done when" list; each line becomes one UC (`UC-<item>-<n>`).
 
 Labels:
@@ -127,3 +128,5 @@ ready. After an amendment merges, `bosun plan amend` imports the new work and cl
 amendment of the plan file (default `plans/<project>.md`; a missing file or unknown item is exit 2). An open
 issue of the same source with the same title is returned instead (`created: false`).
 When `plan import` or `plan amend` imports a new item (no `<item>/P` yet), it looks for items that a merged intake added: an intake issue (`kind/plan`, task `intake`, touching this plan file) that is merged or closed as completed, and the merged PR into the default branch that links it (newest intakes first, until every new item has an owner). The plan file is parsed at the merge commit's first parent and at the merge commit (missing at the parent: no ids; present but unparsable at either, or a merge commit GitHub does not know, which it answers with 404 or 422: that intake is skipped with a note on stderr); the item ids only the later one has were added by that PR, and one counts only while the local item (id, title, area, depends, tasks with title, touch, depends, size, kind and risk, UCs) equals the item in the plan file on the default branch (that file missing or unparsable: nothing counts). Their plan task `<item>/P` is made already merged and closed ("Done by intake #N ... PR #M") and the epic and tasks are promoted on the same run, so no second plan PR is needed. Otherwise (intake open, or its PR did not add the item) the plan task is made `ready` as before.
+
+`plan import --close-on-default` also treats the default branch itself as proof: a plan task whose item is on the default branch exactly as in the local file (as compared above), and that is new or open and `ready` (made by bosun, not adopted; one in any other state is left to whoever works on it), is closed as completed with state `merged` (a new one is made so, an existing one gets a comment saying why), so its epic and tasks promote on the same run; `data.on_default` lists them. Without the flag such plan tasks are only listed in `data.on_default_open` (and named on stderr). `plan amend` never does this: a new item of an amendment counts as merged only through its intake.
