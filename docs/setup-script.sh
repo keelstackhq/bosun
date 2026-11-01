@@ -27,7 +27,7 @@ BOSUN_LINUX_X64_SHA512=a+LmXD+fvpcXosaUm0bOnjCqZ4cy0DziAQRtI/havMH/nXNbpzXZPdn5c
 BOSUN_LINUX_ARM64_SHA512=/aQa03VNgR8k1mYoscze8nW62MNuMFJW28ZXwR6ubkpEJRBR5MeUuEU5dNPVsWH/D3AvHIgdiU4GA5dI9Rcqvg==
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
-# Without one the script warns and skips Rust. `bash docs/setup-script.sh --rust-version` prints the version
+# Without one the script warns, skips the pinned toolchain and still installs the cargo tools. `bash docs/setup-script.sh --rust-version` prints the version
 # and installs nothing.
 RUST_VERSION=""
 if [ -f rust-toolchain.toml ]; then
@@ -36,12 +36,12 @@ fi
 # The channel reaches rustup as root: only a toolchain name passes, anything else is skipped like a
 # missing file (printf %q shows the rejected value safely).
 if [ -n "$RUST_VERSION" ] && ! [[ "$RUST_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-  printf 'setup-script: invalid channel %q in rust-toolchain.toml; skipping the Rust toolchain install and the cargo tools\n' "$RUST_VERSION" >&2
+  printf 'setup-script: invalid channel %q in rust-toolchain.toml; skipping the Rust toolchain install (the cargo tools still install with the default toolchain)\n' "$RUST_VERSION" >&2
   RUST_VERSION=""
   if [ "${1:-}" = --rust-version ]; then exit 1; fi
 elif [ -z "$RUST_VERSION" ]; then
   # Never fail here: a failing setup script blocks every session of the environment.
-  echo "setup-script: no rust-toolchain.toml with a channel in $PWD; skipping the Rust toolchain install and the cargo tools, rustup installs the checkout's pinned toolchain on first cargo use" >&2
+  echo "setup-script: no rust-toolchain.toml with a channel in $PWD; skipping the Rust toolchain install (the cargo tools still install with the default toolchain), rustup installs the checkout's pinned toolchain on first cargo use" >&2
   if [ "${1:-}" = --rust-version ]; then exit 1; fi
 fi
 if [ "${1:-}" = --rust-version ]; then echo "$RUST_VERSION"; exit 0; fi
@@ -52,15 +52,53 @@ if ! node --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; then
   apt-get install -y nodejs
 fi
 
+# The image may put an older Node (/opt/node22/bin) before NodeSource's /usr/bin in PATH. Make Node 24 the
+# `node` that resolves first, whatever the PATH order: link it into a directory that later shells put
+# first (/etc/profile.d), and replace the older `node` that resolves today. Never fails: it warns.
+NODE_BIN_DIR="${SETUP_NODE_BIN_DIR:-/usr/bin}"
+NODE_LINK_DIR="${SETUP_NODE_LINK_DIR:-/usr/local/lib/bosun-node}"
+NODE_PROFILE="${SETUP_NODE_PROFILE:-/etc/profile.d/bosun-node.sh}"
+node_major_ok() { "$1" --version 2>/dev/null | grep -q "^v${NODE_MAJOR}\."; }
+if ! node_major_ok "$(command -v node || echo node)"; then
+  if node_major_ok "$NODE_BIN_DIR/node"; then
+    first="$(command -v node || true)"
+    {
+      mkdir -p "$NODE_LINK_DIR"
+      for b in node npm npx; do [ -e "$NODE_BIN_DIR/$b" ] && ln -sf "$NODE_BIN_DIR/$b" "$NODE_LINK_DIR/$b"; done
+      printf 'export PATH=%q:"$PATH"\n' "$NODE_LINK_DIR" >"$NODE_PROFILE"
+    } 2>/dev/null || echo "setup-script: could not link Node ${NODE_MAJOR} into $NODE_LINK_DIR or write $NODE_PROFILE" >&2
+    if [ -n "$first" ] && [ "$first" != "$NODE_BIN_DIR/node" ]; then
+      ln -sf "$NODE_BIN_DIR/node" "$first" 2>/dev/null ||
+        echo "setup-script: could not replace $first with $NODE_BIN_DIR/node" >&2
+    fi
+  fi
+  if ! node_major_ok "$(command -v node || echo node)"; then
+    echo "setup-script: node resolves to $(command -v node || echo none) ($(node --version 2>/dev/null || echo unknown)), not Node ${NODE_MAJOR} at $NODE_BIN_DIR/node" >&2
+  fi
+fi
+
 # pnpm 12 ships a native binary; its install.js puts it in place.
 npm install -g "pnpm@${PNPM_VERSION}"
 (cd "$(npm root -g)/pnpm" && node install.js) || true
 
 # Rust (the version read above) and the cargo tools the gates run.
+# Without a toolchain file (the checkout does not exist yet when this runs) rustup's stable default
+# serves the tools, and rustup installs the checkout's pinned toolchain on first cargo use there.
+# A failed step warns and the script goes on: a failing setup script blocks every session.
 if [ -n "$RUST_VERSION" ]; then
-  rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
-  rustup default "${RUST_VERSION}"
-  cargo install --locked cargo-nextest cargo-deny
+  { rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy &&
+    rustup default "${RUST_VERSION}"; } ||
+    echo "setup-script: installing the Rust toolchain ${RUST_VERSION} failed; continuing" >&2
+elif command -v rustup >/dev/null 2>&1 && ! rustup show active-toolchain >/dev/null 2>&1; then
+  { rustup toolchain install stable --profile minimal --component rustfmt,clippy &&
+    rustup default stable; } ||
+    echo "setup-script: installing the stable Rust toolchain failed; continuing" >&2
+fi
+if command -v cargo >/dev/null 2>&1; then
+  cargo install --locked cargo-nextest cargo-deny ||
+    echo "setup-script: cargo install of cargo-nextest and cargo-deny failed; continuing without them" >&2
+else
+  echo "setup-script: no cargo found; skipping cargo-nextest and cargo-deny" >&2
 fi
 
 # The keelstackhq tools, pinned, install only from npm tarballs that match the pinned sha512:
