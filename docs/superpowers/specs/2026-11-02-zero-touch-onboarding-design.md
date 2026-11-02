@@ -104,6 +104,15 @@ blocker report. `repo.owner` is the org (D-001). The repo name is taken from the
 - Org GitHub App "keelstack provisioner", installed on all repos. Permissions: Administration,
   Contents, Environments, Issues, Pull requests and Workflows (read and write); Members (read).
 - The app's private key goes in one place only: the environment `provision` of the central repo.
+- Install the Claude GitHub App and the provisioner app on "All repositories", so that a repo
+  provision.yml creates is reachable at once.
+- One shared Claude Code cloud environment, "keelstack". Its setup script is bosun's
+  `docs/setup-script.sh` (rendered for consumers from
+  `channel/pieces/core/files/docs/setup-script.sh.jinja`). It installs Node and the pinned splice,
+  bosun and hoist binaries. It holds no secrets and no PATs. `bosun doctor` names the file in its
+  setup-script step (`src/cli/doctor.rs`); add printing its content as part of task B7. Every
+  root and worker session runs in it: `bosun spawn` passes its `environment_id` in the
+  `create_session` call it returns.
 
 ### 3.2 The central repo and its workflow
 
@@ -112,7 +121,10 @@ workflow and its tests. It does not use `keelstackhq/decisions`, which stays tex
 owner-merged (D-008), and it does not use a product repo, which agents edit every day.
 
 `.github/workflows/provision.yml`:
-- Trigger: `workflow_dispatch` with one input, the intake file contents (base64), plus `repository_dispatch` from the orchestrator.
+- Trigger: `workflow_dispatch` with one input, the signed intake file contents (base64). The
+  orchestrator starts it from chat with its GitHub tools (actions_run_trigger). After the setup PR
+  merges, the orchestrator calls `create_session` with `source_url` set to the new repo and the
+  keelstack `environment_id`, to start the root.
 - Environment `provision`: no required reviewer. Its deployment branch is `main` only.
 - The gate is a signature. The intake carries an orchestrator signature in the scheme of
   `bosun approve --sign-key` (key `orchestrator-2026-10`). The workflow verifies it against the
@@ -140,12 +152,12 @@ tasks with `create_trigger`, from the prompts `bosun doctor` prints. It adds not
 | Today (spec §11 / `OWNER_STEPS` in `src/cli/init.rs`) | After |
 | --- | --- |
 | §11.1 create the repo | automated: provision.yml, gated by the orchestrator signature on the intake |
-| §11.2 install the Claude GitHub App | one-time org step (install on all repos) |
+| §11.2 install the Claude GitHub App | one-time org step: Claude App and provisioner app on "All repositories" |
 | §11.3 hoist apply: rules, auto-merge, checks | automated: provision.yml |
 | §11.4 / step 1: fill governance/owners.toml | automated: init seeds it from `repo.owner` and the org owners |
 | §11.5 hoist apply environments and secrets; halt label | automated: provision.yml; secrets are org-level |
 | step 4: splice-bot environment + SPLICE_BOT_TOKEN | automated environment; org secret (one-time) |
-| §11.6 cloud environment + setup script | one-time org step: one shared environment for all repos |
+| §11.6 cloud environment + setup script | one-time org step: the shared "keelstack" environment (§3.1) |
 | §11.7 Slack and Claude Tag | intake answer `notify`; connecting Claude Tag stays a one-time org step |
 | §11.8 start the seed session | automated: the orchestrator spawns the root after the setup PR merges |
 | §11.9 seed PRs merge on green | unchanged (auto-merge, D13) |
