@@ -36,22 +36,22 @@ pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
     open(&app, a)
 }
 
-/// The text and `--source` of the old form are required (clap cannot say so next to the
-/// subcommands).
+/// Required in the old form; clap cannot say so next to the subcommands.
 fn args_ok(a: &IntakeArgs) -> Result<(), BosunError> {
-    if a.text.trim().is_empty() {
-        return Err(BosunError::usage(
+    let (what, fix) = if a.text.trim().is_empty() {
+        (
             "the intake text is empty",
             "pass what is wanted as the first argument: bosun intake \"<text>\" --source human",
-        ));
-    }
-    if a.source.is_empty() {
-        return Err(BosunError::usage(
+        )
+    } else if a.source.is_empty() {
+        (
             "--source is required",
             "pass where the request came from: --source slack|lesson|flake|human",
-        ));
-    }
-    Ok(())
+        )
+    } else {
+        return Ok(());
+    };
+    Err(BosunError::usage(what, fix))
 }
 
 /// Open (or find) the kind/plan issue of a request; the kill switch is the caller's.

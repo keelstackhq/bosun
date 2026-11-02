@@ -1,65 +1,48 @@
-//! `.bosun/intake.toml`: the owner's upfront answers (spec section 3, "The intake file"). Pure
-//! parsing and validation; the command reads the file. A missing answer (absent or empty field)
-//! is told apart from a bad value, because the first needs the owner and the second a fix.
+//! `.bosun/intake.toml`: the owner's upfront answers (spec section 3). Pure parsing; a missing
+//! answer (absent or empty field, exit 5) is told apart from a bad value (exit 2).
 
-use serde::Deserialize;
 use toml::Value;
 
 /// Where the file lives in a working tree.
 pub const INTAKE_PATH: &str = ".bosun/intake.toml";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IntakeError {
-    /// An answer is absent or empty: exit 5.
-    Missing { field: String, fix: String },
-    /// A bad value, unknown key, bad type or broken TOML: exit 2.
-    Bad { field: String, why: String },
-}
-
-impl IntakeError {
-    pub fn field(&self) -> &str {
-        match self {
-            Self::Missing { field, .. } | Self::Bad { field, .. } => field,
-        }
-    }
-    pub fn message(&self) -> String {
-        match self {
-            Self::Missing { field, .. } => format!("intake answer missing: `{field}`"),
-            Self::Bad { field, why } => format!("intake field `{field}`: {why}"),
-        }
-    }
-    pub fn fix(&self) -> String {
-        match self {
-            Self::Missing { fix, .. } => fix.clone(),
-            Self::Bad { field, why } => format!(
-                "correct `{field}` in {INTAKE_PATH} ({why}); the rules are in docs/spec/03-layout.md"
-            ),
-        }
-    }
+/// A refused file: `missing` (an absent or empty answer, exit 5) or a bad value, unknown key,
+/// bad type or broken TOML (exit 2).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct IntakeError {
+    pub missing: bool,
+    pub field: String,
+    pub message: String,
+    pub fix: String,
 }
 
 fn missing(field: &str, ask: &str) -> IntakeError {
-    IntakeError::Missing {
+    IntakeError {
+        missing: true,
         field: field.into(),
+        message: format!("intake answer missing: `{field}`"),
         fix: format!("ask the owner {ask}, then set `{field}` in {INTAKE_PATH}"),
     }
 }
 
 fn bad(field: &str, why: impl Into<String>) -> IntakeError {
-    IntakeError::Bad {
+    let why = why.into();
+    IntakeError {
+        missing: false,
         field: field.into(),
-        why: why.into(),
+        message: format!("intake field `{field}`: {why}"),
+        fix: format!("correct `{field}` in {INTAKE_PATH} ({why}); rules: docs/spec/03-layout.md"),
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Repo {
     pub name: String,
     pub owner: String,
     pub visibility: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Intake {
     pub repo: Repo,
     pub stack: Vec<String>,
@@ -73,33 +56,11 @@ pub struct Intake {
     pub slack_channel: String,
 }
 
-// Fields are `Value`s so that a wrong type names its field instead of failing in serde.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawRepo {
-    name: Option<Value>,
-    owner: Option<Value>,
-    visibility: Option<Value>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Raw {
-    version: Option<Value>,
-    repo: Option<RawRepo>,
-    stack: Option<Value>,
-    pieces: Option<Value>,
-    bosun_pieces: Option<Value>,
-    goal: Option<Value>,
-    plan: Option<Value>,
-    publish: Option<Value>,
-    approvals: Option<Value>,
-    notify: Option<Value>,
-    slack_channel: Option<Value>,
-}
+type V<'a> = Option<&'a Value>;
+type R<T> = Result<T, IntakeError>;
 
 /// A string field: absent or empty is a missing answer, a non-string a bad type.
-fn text(field: &str, v: &Option<Value>, ask: &str) -> Result<String, IntakeError> {
+fn text(field: &str, v: V<'_>, ask: &str) -> R<String> {
     match v {
         None => Err(missing(field, ask)),
         Some(Value::String(s)) if s.trim().is_empty() => Err(missing(field, ask)),
@@ -111,163 +72,142 @@ fn text(field: &str, v: &Option<Value>, ask: &str) -> Result<String, IntakeError
     }
 }
 
-/// A list of distinct non-empty strings; absent is the empty list.
-fn list(field: &str, v: &Option<Value>) -> Result<Vec<String>, IntakeError> {
-    match v {
-        None => Ok(vec![]),
-        Some(Value::Array(a)) => {
-            let mut out: Vec<String> = vec![];
-            for x in a {
-                let Value::String(s) = x else {
-                    return Err(bad(field, "expected a list of strings"));
-                };
-                if s.trim().is_empty() {
-                    return Err(bad(field, "has an empty entry"));
-                }
-                if out.contains(s) {
-                    return Err(bad(field, format!("{s:?} is listed twice")));
-                }
-                out.push(s.clone());
-            }
-            Ok(out)
-        }
-        Some(o) => Err(bad(field, format!("expected a list, got {}", o.type_str()))),
-    }
-}
-
-fn one_of(field: &str, v: &str, allowed: &[&str]) -> Result<(), IntakeError> {
-    if allowed.contains(&v) {
-        Ok(())
-    } else {
-        Err(bad(
+/// One of `allowed` (any string when `allowed` is empty).
+fn choice(field: &str, v: V, ask: &str, allowed: &[&str]) -> R<String> {
+    let s = text(field, v, ask)?;
+    match allowed.is_empty() || allowed.contains(&s.as_str()) {
+        true => Ok(s),
+        false => Err(bad(
             field,
-            format!("{v:?} is not one of {}", allowed.join(", ")),
-        ))
+            format!("{s:?} is not one of {}", allowed.join(", ")),
+        )),
     }
 }
 
-fn name_ok(s: &str) -> bool {
-    !s.starts_with('.')
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+/// A list of distinct strings; with `allowed` each must be one of them, with an `ask` it must
+/// not be empty.
+fn choices(field: &str, v: V, ask: &str, allowed: &[&str]) -> R<Vec<String>> {
+    let items = match v {
+        None => &[][..],
+        Some(Value::Array(a)) => a.as_slice(),
+        Some(o) => return Err(bad(field, format!("expected a list, got {}", o.type_str()))),
+    };
+    let mut out: Vec<String> = vec![];
+    for x in items {
+        let s = choice(field, Some(x), ask, allowed)?;
+        if out.contains(&s) {
+            return Err(bad(field, format!("{s:?} is listed twice")));
+        }
+        out.push(s);
+    }
+    match out.is_empty() && !ask.is_empty() {
+        true => Err(missing(field, ask)),
+        false => Ok(out),
+    }
+}
+
+fn plain(s: &str, extra: &[char]) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
 }
 
 fn plan_ok(p: &str) -> bool {
     p.starts_with("plans/")
         && p.ends_with(".md")
-        && p.split('/').all(|x| {
-            !matches!(x, "" | "." | "..")
-                && x.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        })
+        && p.split('/')
+            .all(|x| !matches!(x, "" | "." | "..") && plain(x, &['.', '_', '-']))
 }
 
-const TOP: [&str; 11] = [
-    "version",
-    "repo",
-    "stack",
-    "pieces",
-    "bosun_pieces",
-    "goal",
-    "plan",
-    "publish",
-    "approvals",
-    "notify",
-    "slack_channel",
-];
-const REPO: [&str; 3] = ["name", "owner", "visibility"];
+const TOP: &str =
+    "version repo stack pieces bosun_pieces goal plan publish approvals notify slack_channel";
+const REPO: &str = "name owner visibility";
 
 /// Read the TOML and check its shape, so that every structural error names its key.
-fn structure(src: &str) -> Result<Raw, IntakeError> {
+fn structure(src: &str) -> Result<toml::Table, IntakeError> {
     let table: toml::Table = src.parse().map_err(|e: toml::de::Error| {
         // A duplicate key has the key as its span; a syntax error has no key to name.
         let key = e.span().map_or("", |r| src[r].trim());
-        let named = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let named = !key.is_empty() && plain(key, &['_']);
         bad(if named { key } else { "(file)" }, e.message().to_string())
     })?;
-    if let Some(k) = table.keys().find(|k| !TOP.contains(&k.as_str())) {
+    if let Some(k) = table.keys().find(|k| !TOP.split(' ').any(|t| t == *k)) {
         return Err(bad(k, "unknown key"));
     }
     match table.get("repo") {
-        Some(Value::Table(t)) => {
-            if let Some(k) = t.keys().find(|k| !REPO.contains(&k.as_str())) {
-                return Err(bad(&format!("repo.{k}"), "unknown key"));
-            }
-        }
-        Some(_) => {
-            return Err(bad(
-                "repo",
-                "expected a table with name, owner and visibility",
-            ));
-        }
-        None => {}
+        Some(Value::Table(t)) => match t.keys().find(|k| !REPO.split(' ').any(|r| r == *k)) {
+            Some(k) => Err(bad(&format!("repo.{k}"), "unknown key")),
+            None => Ok(table),
+        },
+        Some(_) => Err(bad(
+            "repo",
+            "expected a table with name, owner and visibility",
+        )),
+        None => Ok(table),
     }
-    Value::Table(table)
-        .try_into()
-        .map_err(|_| bad("(file)", "the file does not have the shape of an intake"))
 }
 
 /// Parse and validate. Fields are checked in file order, so the first error is the first thing
 /// the owner has to fix.
 pub fn parse(src: &str) -> Result<Intake, IntakeError> {
-    let raw = structure(src)?;
-    match &raw.version {
+    let t = structure(src)?;
+    match t.get("version") {
         None => return Err(missing("version", "nothing: set `version = 1`")),
         Some(Value::Integer(1)) => {}
         Some(_) => return Err(bad("version", "must be the integer 1")),
     }
-    let r = raw
-        .repo
-        .as_ref()
-        .ok_or_else(|| missing("repo.name", "for the repo name"))?;
+    let empty = toml::Table::new();
+    let r = t.get("repo").and_then(Value::as_table).unwrap_or(&empty);
     let repo = Repo {
-        name: text("repo.name", &r.name, "for the repo name")?,
-        owner: text("repo.owner", &r.owner, "for the GitHub org (keelstackhq)")?,
-        visibility: text("repo.visibility", &r.visibility, "private or public")?,
+        name: text("repo.name", r.get("name"), "for the repo name")?,
+        owner: text(
+            "repo.owner",
+            r.get("owner"),
+            "for the GitHub org (keelstackhq)",
+        )?,
+        visibility: choice(
+            "repo.visibility",
+            r.get("visibility"),
+            "private or public",
+            &["private", "public"],
+        )?,
     };
     for (f, v) in [("repo.name", &repo.name), ("repo.owner", &repo.owner)] {
-        if !name_ok(v) {
+        if v.starts_with('.') || !plain(v, &['-', '_', '.']) {
             return Err(bad(f, "use letters, digits, `-`, `_` and `.` only"));
         }
     }
-    one_of("repo.visibility", &repo.visibility, &["private", "public"])?;
-
-    let stack = list("stack", &raw.stack)?;
-    if stack.is_empty() {
-        return Err(missing("stack", "for the stack (rust or ts-pnpm)"));
-    }
-    for s in &stack {
-        one_of("stack", s, &["rust", "ts-pnpm"])?;
-    }
-    let pieces = list("pieces", &raw.pieces)?;
-    if pieces.is_empty() {
-        return Err(missing("pieces", "which hull pieces to use"));
-    }
-    let piece_char = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
-    if let Some(p) = pieces.iter().find(|p| !p.chars().all(piece_char)) {
+    let stack = choices(
+        "stack",
+        t.get("stack"),
+        "for the stack (rust or ts-pnpm)",
+        &["rust", "ts-pnpm"],
+    )?;
+    let pieces = choices("pieces", t.get("pieces"), "which hull pieces to use", &[])?;
+    let piece = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+    if let Some(p) = pieces.iter().find(|p| !p.chars().all(piece)) {
         return Err(bad(
             "pieces",
             format!("{p:?} is not a piece name (lowercase, digits, `-`)"),
         ));
     }
-    let bosun_pieces = list("bosun_pieces", &raw.bosun_pieces)?;
-    for p in &bosun_pieces {
-        one_of(
-            "bosun_pieces",
-            p,
-            &["claude-md", "circleci", "circleci-only"],
-        )?;
-    }
-    for (f, v) in [("goal", &raw.goal), ("plan", &raw.plan)] {
-        if matches!(v, Some(x) if !x.is_str()) {
+    let bosun_pieces = choices(
+        "bosun_pieces",
+        t.get("bosun_pieces"),
+        "",
+        &["claude-md", "circleci", "circleci-only"],
+    )?;
+    for f in ["goal", "plan"] {
+        if matches!(t.get(f), Some(x) if !x.is_str()) {
             return Err(bad(f, "expected a string"));
         }
     }
-    let given = |v: &Option<Value>| match v {
-        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
-        _ => None,
+    let given = |k| {
+        t.get(k)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|s| !s.trim().is_empty())
     };
-    let (goal, plan) = (given(&raw.goal), given(&raw.plan));
+    let (goal, plan) = (given("goal"), given("plan"));
     match (&goal, &plan) {
         (Some(_), Some(_)) => return Err(bad("goal", "set either `goal` or `plan`, not both")),
         (None, None) => {
@@ -278,33 +218,33 @@ pub fn parse(src: &str) -> Result<Intake, IntakeError> {
         }
         _ => {}
     }
-    if let Some(p) = &plan
-        && !plan_ok(p)
-    {
+    if plan.as_deref().is_some_and(|p| !plan_ok(p)) {
         return Err(bad("plan", "must be a path under plans/ that ends in .md"));
     }
-    let publish = list("publish", &raw.publish)?;
-    if publish.is_empty() {
-        return Err(missing(
-            "publish",
-            "where it publishes (npm, crates, cloudflare, none)",
-        ));
-    }
-    for p in &publish {
-        one_of("publish", p, &["npm", "crates", "cloudflare", "none"])?;
-    }
+    let all = ["npm", "crates", "cloudflare", "none"];
+    let publish = choices(
+        "publish",
+        t.get("publish"),
+        "where it publishes (npm, crates, cloudflare, none)",
+        &all,
+    )?;
     if publish.len() > 1 && publish.iter().any(|p| p == "none") {
         return Err(bad("publish", "\"none\" stands alone"));
     }
-    let approvals = text("approvals", &raw.approvals, "who approves gated PRs")?;
-    one_of(
+    let a = ["owner", "owner-gated", "orchestrator"];
+    let approvals = choice(
         "approvals",
-        &approvals,
-        &["owner", "owner-gated", "orchestrator"],
+        t.get("approvals"),
+        "who approves gated PRs",
+        &a,
     )?;
-    let notify = text("notify", &raw.notify, "how agents report (chat or slack)")?;
-    one_of("notify", &notify, &["chat", "slack"])?;
-    let slack_channel = match &raw.slack_channel {
+    let notify = choice(
+        "notify",
+        t.get("notify"),
+        "how agents report (chat or slack)",
+        &["chat", "slack"],
+    )?;
+    let slack_channel = match t.get("slack_channel") {
         None => String::new(),
         Some(Value::String(s)) => s.trim().to_string(),
         Some(_) => return Err(bad("slack_channel", "expected a string")),
@@ -354,22 +294,17 @@ slack_channel = ""
     }
 
     fn assert_missing(src: &str, field: &str) {
-        match parse(src).unwrap_err() {
-            IntakeError::Missing { field: f, fix } => {
-                assert_eq!(f, field);
-                assert!(!fix.trim().is_empty());
-            }
-            e => panic!("want missing {field}, got {e:?}"),
-        }
+        let e = parse(src).unwrap_err();
+        assert!(
+            e.missing && e.field == field && !e.fix.trim().is_empty(),
+            "{e:?}"
+        );
     }
 
     fn assert_bad(src: &str, field: &str) {
         let e = parse(src).unwrap_err();
-        assert!(
-            matches!(&e, IntakeError::Bad { field: f, .. } if f == field),
-            "{e:?}"
-        );
-        assert!(e.fix().contains(field) && e.message().contains(field));
+        assert!(!e.missing && e.field == field, "{e:?}");
+        assert!(e.fix.contains(field) && e.message.contains(field));
     }
 
     #[test]
@@ -504,8 +439,8 @@ slack_channel = ""
         ];
         for (src, field) in cases {
             let e = parse(&src).unwrap_err();
-            assert_eq!(e.field(), field, "{e:?}");
-            let text = format!("{} {}", e.message(), e.fix());
+            assert_eq!(e.field, field, "{e:?}");
+            let text = format!("{} {}", e.message, e.fix);
             for leak in ["Raw", "struct", "expected struct"] {
                 assert!(!text.contains(leak), "{leak}: {text}");
             }

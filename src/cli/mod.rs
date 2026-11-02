@@ -246,11 +246,10 @@ impl Command {
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
             Command::Revert(_) => "revert",
-            Command::Intake(IntakeArgs { cmd: None, .. }) => "intake",
-            Command::Intake(IntakeArgs {
-                cmd: Some(IntakeCmd::Check(_)),
-                ..
-            }) => "intake check",
+            Command::Intake(a) => match a.cmd {
+                None => "intake",
+                Some(IntakeCmd::Check(_)) => "intake check",
+            },
             Command::MainHealth(_) => "main-health",
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
@@ -705,17 +704,16 @@ pub struct PlanImportArgs {
     pub keep_plan_tasks_open: bool,
 }
 
-/// `bosun intake "<text>" --source ...` opens a plan issue; the subcommands work on the intake
-/// file (.bosun/intake.toml). A text of exactly `check`, `sign` or `verify` is the subcommand.
+/// `intake "<text>" --source ...` opens a plan issue; a text of exactly `check` is the subcommand.
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct IntakeArgs {
     #[command(subcommand)]
     pub cmd: Option<IntakeCmd>,
-    /// What is wanted (required without a subcommand; `open` refuses an empty one).
+    /// What is wanted (required without a subcommand).
     #[arg(default_value = "")]
     pub text: String,
-    /// Where the request came from (required without a subcommand; `open` refuses an empty one).
+    /// Where the request came from (required without a subcommand).
     #[arg(long, default_value = "", value_parser = parse_source)]
     pub source: String,
     /// The plan item the request belongs to (sets the area label).
@@ -729,8 +727,7 @@ pub struct IntakeArgs {
     pub plan: Option<String>,
 }
 
-/// clap cannot make `text` and `--source` required only without a subcommand here, so both
-/// default to empty and `intake::open` refuses an empty one.
+/// `text` and `--source` default to empty; `intake::args_ok` refuses an empty one.
 fn parse_source(s: &str) -> Result<String, String> {
     match s {
         "" | "slack" | "lesson" | "flake" | "human" => Ok(s.to_string()),
