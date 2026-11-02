@@ -103,7 +103,8 @@ pub fn run(dir: Option<&Path>, args: &ResumeArgs) -> CmdResult {
 
 /// The newest trusted root handoff on the registry, or null.
 fn handoff_json(trusted: &[Note]) -> Value {
-    match newest_handoff(trusted) {
+    // ZH T2: pass the session named by the newest root spawn record.
+    match newest_handoff(trusted, None) {
         Some((comment, Record::Handoff { session, at, lines })) => {
             json!({"session": session, "at": at, "lines": lines, "comment": comment})
         }

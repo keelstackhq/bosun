@@ -46,6 +46,10 @@ fn handoff_writes_open_prs_leases_and_the_file_lines() {
     fake.issue(10, "the task", &[BUILDING], "");
     fake.comment(10, &lease_note("root_a", LIVE, "src/core/**"));
     fake.pull(20, "feat: the task", "claude/the-task", "Closes #10");
+    fake.issue(12, "other task", &[BUILDING], "");
+    fake.comment(12, &lease_note("other_s", LIVE, "docs/**"));
+    fake.pull(30, "other", "claude/other", "Closes #12");
+    fake.pull(31, "unrelated", "claude/unrelated", "");
     let file = lines_file("ok", "next: finish #10\n\nblocker: none\n");
 
     let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
@@ -162,12 +166,13 @@ fn uc_zh_3_a_handoff_never_creates_or_renews_a_lease() {
 fn a_bad_kind_in_the_file_is_a_usage_error() {
     let fake = FakeGithub::start();
     registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
     let file = lines_file("bad", "next: ok\ntodo: nope\n");
     let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
     assert_eq!(code, 2, "{v}");
     assert!(v["error"]["message"].as_str().unwrap().contains("line 2"));
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
-    assert_eq!(bodies(&fake, 1).len(), 0);
+    assert_eq!(bodies(&fake, 1).len(), 1);
 }
 
 #[test]
@@ -189,6 +194,7 @@ fn issue_count(fake: &FakeGithub) -> usize {
 fn a_forged_handoff_from_a_user_without_write_access_is_ignored() {
     let fake = FakeGithub::start();
     registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
     fake.comment_by(1, "owner", &handoff_note("root_a", "next: real"));
     fake.permission("mallory", "read");
     fake.comment_by(1, "mallory", &handoff_note("root_a", "next: forged"));
@@ -198,6 +204,7 @@ fn a_forged_handoff_from_a_user_without_write_access_is_ignored() {
 
     let fake = FakeGithub::start();
     registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
     fake.permission("mallory", "read");
     fake.comment_by(1, "mallory", &handoff_note("root_a", "next: forged"));
     let (_, v) = run(&fake, "root_b", NOW, &["resume", "--handoff"]);
@@ -208,6 +215,7 @@ fn a_forged_handoff_from_a_user_without_write_access_is_ignored() {
 fn a_malformed_stored_handoff_is_skipped() {
     let fake = FakeGithub::start();
     registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
     fake.comment(1, &handoff_note("root_a", "next: good"));
     fake.comment(1, &handoff_note("root_a", "todo: bad kind"));
     let (_, v) = run(&fake, "root_b", NOW, &["resume", "--handoff"]);
@@ -218,7 +226,8 @@ fn a_malformed_stored_handoff_is_skipped() {
 fn built_lines_are_cleaned_of_hidden_characters() {
     let fake = FakeGithub::start();
     registry(&fake);
-    fake.pull(20, "feat", "claude/a\u{202e}b", "");
+    fake.comment(1, &join_note("root_a", None));
+    fake.pull(20, "feat", "claude/a\u{202e}b", "Closes #10");
     fake.issue(10, "the task", &[BUILDING], "");
     fake.comment(10, &lease_note("root_a", LIVE, "src/**"));
     let (code, v) = run(&fake, "root_a", NOW, &["handoff"]);
@@ -256,54 +265,55 @@ fn a_spawned_origin_cannot_hand_off() {
 }
 
 #[test]
-fn refusals_create_no_registry_issue_and_no_comment() {
+fn refusals_write_no_comment() {
     let fake = FakeGithub::start();
+    registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
     let long: String = (0..41).map(|i| format!("next: s{i}\n")).collect();
-    let (code, _) = run(
-        &fake,
-        "root_a",
-        NOW,
-        &["handoff", "--from", &lines_file("l41", &long)],
-    );
-    assert_eq!(code, 6);
-    let (code, _) = run(
-        &fake,
-        "root_a",
-        NOW,
-        &["handoff", "--from", &lines_file("badk", "oops\n")],
-    );
-    assert_eq!(code, 2);
-    let (code, v) = run(
-        &fake,
-        "root_a",
-        NOW,
-        &["handoff", "--from", "/nonexistent/h.txt"],
-    );
-    assert_eq!(code, 2, "{v}");
-    assert_eq!(issue_count(&fake), 0);
+    let cases = [
+        (lines_file("l41", &long), 6),
+        (lines_file("badk", "oops\n"), 2),
+        ("/nonexistent/h.txt".to_string(), 2),
+    ];
+    for (file, want) in cases {
+        let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
+        assert_eq!(code, want, "{v}");
+    }
+    assert_eq!(bodies(&fake, 1).len(), 1);
+    assert_eq!(issue_count(&fake), 1);
 }
 
 #[test]
-fn open_prs_count_toward_the_limit() {
+fn own_prs_and_leases_count_toward_the_limit() {
     let fake = FakeGithub::start();
     registry(&fake);
-    fake.pull(20, "a", "claude/a", "");
-    fake.pull(21, "b", "claude/b", "");
-    let text: String = (0..39).map(|i| format!("next: s{i}\n")).collect();
+    fake.comment(1, &join_note("root_a", None));
+    for n in [10, 11] {
+        fake.issue(n, "t", &[BUILDING], "");
+        fake.comment(n, &lease_note("root_a", LIVE, "src/**"));
+        fake.pull(
+            n + 10,
+            "t",
+            &format!("claude/t{n}"),
+            &format!("Closes #{n}"),
+        );
+    }
+    let text: String = (0..37).map(|i| format!("next: s{i}\n")).collect();
     let (code, _) = run(
         &fake,
         "root_a",
         NOW,
-        &["handoff", "--from", &lines_file("p39", &text)],
+        &["handoff", "--from", &lines_file("p37", &text)],
     );
     assert_eq!(code, 6);
-    assert_eq!(bodies(&fake, 1).len(), 0);
+    assert_eq!(bodies(&fake, 1).len(), 1);
 }
 
 #[test]
 fn from_dash_reads_stdin() {
     let fake = FakeGithub::start();
     registry(&fake);
+    fake.comment(1, &join_note("session_test", None));
     let out = common::bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .args(["handoff", "--from", "-"])
@@ -313,4 +323,42 @@ fn from_dash_reads_stdin() {
     let v = common::one_object(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{v}");
     assert_eq!(v["data"]["lines"][0], "next: from stdin");
+}
+
+#[test]
+fn a_wave_agent_id_is_refused_and_never_read_back() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.comment(1, &join_note("root_a/T7", None));
+    let (code, v) = run(&fake, "root_a/T7", NOW, &["handoff"]);
+    assert_eq!(code, 1, "{v}");
+    fake.comment(1, &handoff_note("root_a/T7", "next: wave agent"));
+    let (_, v) = run(&fake, "root_b", NOW, &["resume", "--handoff"]);
+    assert!(v["data"]["handoff"].is_null());
+}
+
+#[test]
+fn an_unjoined_session_is_refused_and_never_read_back() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    let (code, v) = run(&fake, "loner", NOW, &["handoff"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("bosun join"));
+    assert_eq!(bodies(&fake, 1).len(), 0);
+    fake.comment(1, &handoff_note("loner", "next: x"));
+    let (_, v) = run(&fake, "root_b", NOW, &["resume", "--handoff"]);
+    assert!(v["data"]["handoff"].is_null());
+}
+
+#[test]
+fn a_joined_root_with_spawned_origin_is_not_read_back() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.comment(
+        1,
+        &join_note("root_a", None).replace("\"local\"", "\"spawned\""),
+    );
+    fake.comment(1, &handoff_note("root_a", "next: x"));
+    let (_, v) = run(&fake, "root_b", NOW, &["resume", "--handoff"]);
+    assert!(v["data"]["handoff"].is_null());
 }

@@ -64,31 +64,47 @@ pub fn parse_lines(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// The newest handoff of the root lineage: the last well-formed `handoff` record whose session
-/// never joined with a parent (a child's handoff is not the root's, also after it left).
-/// Notes are oldest first and must be trusted ones.
-pub fn newest_handoff(notes: &[Note]) -> Option<(u64, Record)> {
-    notes
+/// Whether `session` is a root that may hand off: its id has no `/` (no per-task agent), it
+/// joined with no parent and a non-spawned origin, and it never joined with a parent. Reads the
+/// join records directly, so a root that left is still one. All sessions share one GitHub
+/// writer, so the registry's `join` is the only thing that tells roots from children.
+pub fn is_root(notes: &[Note], session: &str) -> bool {
+    let (mut root, mut child) = (false, false);
+    for n in notes {
+        if let Some(Record::Join {
+            session: s,
+            origin,
+            parent,
+            ..
+        }) = parse_record(&n.body)
+            && s == session
+        {
+            child |= parent.is_some();
+            root |= parent.is_none() && origin != "spawned";
+        }
+    }
+    root && !child && !session.contains('/')
+}
+
+/// The newest well-formed handoff of a root, from trusted notes (oldest first). With `lineage`,
+/// that session's newest handoff wins; without one, or when it has none, the newest root's.
+pub fn newest_handoff(notes: &[Note], lineage: Option<&str>) -> Option<(u64, Record)> {
+    let mut valid = notes
         .iter()
         .rev()
-        .find_map(|n| match parse_record(&n.body) {
+        .filter_map(|n| match parse_record(&n.body) {
             Some(Record::Handoff { session, at, lines })
-                if !is_child(notes, &session)
+                if is_root(notes, &session)
                     && lines.len() <= MAX_LINES
                     && lines.iter().all(|l| check_line(l).is_ok()) =>
             {
                 Some((n.id, Record::Handoff { session, at, lines }))
             }
             _ => None,
-        })
-}
-
-/// Whether `session` ever joined with a parent in these notes.
-pub fn is_child(notes: &[Note], session: &str) -> bool {
-    notes.iter().any(|n| {
-        matches!(parse_record(&n.body),
-            Some(Record::Join { session: s, parent: Some(_), .. }) if s == session)
-    })
+        });
+    let all: Vec<_> = valid.by_ref().collect();
+    let named = lineage.and_then(|l| all.iter().find(|(_, r)| r.session() == l));
+    named.or(all.first()).cloned()
 }
 
 #[cfg(test)]
@@ -104,11 +120,12 @@ mod tests {
         Note::new(id, r.to_line())
     }
 
-    fn join(id: u64, session: &str, parent: &str) -> Note {
+    fn join(id: u64, session: &str, parent: Option<&str>, origin: &str) -> Note {
+        let parent = parent.map_or(String::new(), |p| format!(",\"parent\":\"{p}\""));
         Note::new(
             id,
             format!(
-                "{{\"bosun\":\"join\",\"session\":\"{session}\",\"origin\":\"local\",\"parent\":\"{parent}\",\"depth\":2,\"expires\":\"2026-10-22T11:20:00Z\"}}"
+                "{{\"bosun\":\"join\",\"session\":\"{session}\",\"origin\":\"{origin}\"{parent},\"depth\":1,\"expires\":\"2026-10-22T11:20:00Z\"}}"
             ),
         )
     }
@@ -153,37 +170,45 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_root_handoff_wins_and_a_childs_is_skipped() {
+    fn only_joined_parentless_unspawned_slashless_sessions_are_roots() {
         let notes = vec![
-            note(1, "root", "next: old"),
-            note(2, "root", "next: new"),
-            join(3, "child", "root"),
-            note(4, "child", "next: child"),
+            join(1, "root", None, "local"),
+            join(2, "child", Some("root"), "local"),
+            join(3, "spawn", None, "spawned"),
+            join(4, "root/T7", None, "local"),
+            join(5, "both", None, "local"),
+            join(6, "both", Some("root"), "local"),
         ];
-        let (id, r) = newest_handoff(&notes).unwrap();
-        assert_eq!(id, 2);
-        assert!(matches!(r, Record::Handoff { lines, .. } if lines == ["next: new"]));
-        assert!(newest_handoff(&notes[2..]).is_none());
+        let is = |s| is_root(&notes, s);
+        assert!(is("root"));
+        assert!(!is("child") && !is("spawn") && !is("root/T7") && !is("both") && !is("nobody"));
     }
 
     #[test]
-    fn a_child_who_left_is_still_a_child_and_bad_records_are_skipped() {
-        let mut notes = vec![
-            note(1, "root", "next: ok"),
-            join(2, "child", "root"),
-            note(3, "child", "next: child"),
-            note(4, "root", "todo: bad kind"),
+    fn the_newest_valid_root_handoff_wins_and_a_named_lineage_is_preferred() {
+        let notes = vec![
+            join(1, "root", None, "local"),
+            join(2, "other", None, "local"),
+            join(3, "child", Some("root"), "local"),
+            note(4, "root", "next: old"),
+            note(5, "root", "next: new"),
+            note(6, "other", "next: other"),
+            note(7, "child", "next: child"),
+            note(8, "root", "todo: bad kind"),
+            note(9, "ghost", "next: unjoined"),
         ];
-        let (id, _) = newest_handoff(&notes).unwrap();
-        assert_eq!(id, 1);
-        assert!(is_child(&notes, "child") && !is_child(&notes, "root"));
+        assert_eq!(newest_handoff(&notes, None).unwrap().0, 6);
+        assert_eq!(newest_handoff(&notes, Some("root")).unwrap().0, 5);
+        assert_eq!(newest_handoff(&notes, Some("child")).unwrap().0, 6);
+        assert!(newest_handoff(&notes[2..4], None).is_none());
         let many = Record::Handoff {
             session: "root".into(),
             at: "t".into(),
             lines: vec!["next: a".into(); MAX_LINES + 1],
         };
-        notes.push(Note::new(5, many.to_line()));
-        assert_eq!(newest_handoff(&notes).unwrap().0, 1);
+        let mut n = notes[..4].to_vec();
+        n.push(Note::new(10, many.to_line()));
+        assert_eq!(newest_handoff(&n, None).unwrap().0, 4);
     }
 
     #[test]

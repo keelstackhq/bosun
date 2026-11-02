@@ -9,9 +9,10 @@ use std::path::Path;
 use serde_json::json;
 
 use super::HandoffArgs;
-use crate::app::{App, Result, active_issues, kill_switch};
-use crate::core::handoff::{MAX_LINE, MAX_LINES, clean_line, is_child, parse_lines};
+use crate::app::{App, Result, active_issues, kill_switch, trusted_notes};
+use crate::core::handoff::{MAX_LINE, MAX_LINES, clean_line, is_root, parse_lines};
 use crate::core::lease::leases_of;
+use crate::core::meta::linked_issues;
 use crate::core::records::Record;
 use crate::core::text::inert;
 use crate::ctx::Origin;
@@ -25,35 +26,45 @@ pub fn run(dir: Option<&Path>, args: &HandoffArgs) -> CmdResult {
     kill_switch(gh)?;
     let (session, now) = (&app.ctx.session, app.ctx.now);
 
-    let child = app.ctx.origin == Origin::Spawned
-        || registry::load(gh)?.is_some_and(|(_, notes)| is_child(&notes, session));
-    if child {
+    let root = app.ctx.origin != Origin::Spawned
+        && match registry::load(gh)? {
+            Some((number, _)) => is_root(&trusted_notes(gh, number)?, session),
+            None => false,
+        };
+    if !root {
         return Err(BosunError::error(
-            format!("{session} is a child session; only a root hands off"),
-            "report to your parent with `bosun result` instead",
+            format!("{session} is not a joined root session; only a root hands off"),
+            "run `bosun join` as a root (no --parent, an id without `/`), or report to your parent with `bosun result`",
         ));
     }
 
-    let mut lines: Vec<String> = Vec::new();
-    for p in gh.list_pulls(None, IssueState::Open)? {
-        lines.push(clean_line(&format!(
-            "pr: #{} {} {}",
-            p.number, p.head_ref, p.head_sha
-        )));
-    }
+    // Only this session's own live leases, and the open PRs of those tasks.
+    let mut leases = Vec::new();
     for (issue, notes) in active_issues(gh)? {
         for l in leases_of(issue.number, &notes) {
-            if l.is_live(now) {
-                lines.push(clean_line(&format!(
-                    "lease: #{} {} {} until {}",
+            if &l.session == session && l.is_live(now) {
+                let touch = l.touch.join(" ");
+                leases.push((
                     l.issue,
-                    l.session,
-                    l.touch.join(" "),
-                    l.expires
-                )));
+                    clean_line(&format!(
+                        "lease: #{} {session} {touch} until {}",
+                        l.issue, l.expires
+                    )),
+                ));
             }
         }
     }
+    let mut lines: Vec<String> = Vec::new();
+    for p in gh.list_pulls(None, IssueState::Open)? {
+        if leases
+            .iter()
+            .any(|(i, _)| linked_issues(&p.body).contains(i))
+        {
+            let (n, r, h) = (p.number, &p.head_ref, &p.head_sha);
+            lines.push(clean_line(&format!("pr: #{n} {r} {h}")));
+        }
+    }
+    lines.extend(leases.into_iter().map(|(_, l)| l));
     if let Some(from) = &args.from {
         let text = read_input(from)?;
         lines.extend(parse_lines(&text).map_err(|e| {
