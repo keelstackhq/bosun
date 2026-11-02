@@ -5,16 +5,19 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::app::{App, active_issues, kill_switch, renew_lease};
+use super::ResumeArgs;
+use crate::app::{App, active_issues, kill_switch, renew_lease, trusted_notes};
 use crate::core::glob;
+use crate::core::handoff::newest_handoff;
 use crate::core::lease::{Lease, TTL_SECS, conflicts, leases_of, live_leases, members};
 use crate::core::meta::linked_issues;
+use crate::core::records::{Note, Record};
 use crate::core::state::{State, state_of};
 use crate::github::{IssueState, Pull};
 use crate::output::{CmdResult, Outcome};
 use crate::registry::{self, JoinSpec};
 
-pub fn run(dir: Option<&Path>) -> CmdResult {
+pub fn run(dir: Option<&Path>, args: &ResumeArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
@@ -23,11 +26,17 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
 
     // The join record: renew it, or join again when the registry has no record of us.
     let mut joined = false;
+    let mut handoff = Value::Null;
     let existing = match registry::load(gh)? {
-        Some((_, notes)) => members(&notes)
-            .into_iter()
-            .find(|m| &m.session == session)
-            .map(|m| (m, notes)),
+        Some((number, notes)) => {
+            if args.handoff {
+                handoff = handoff_json(&trusted_notes(gh, number)?);
+            }
+            members(&notes)
+                .into_iter()
+                .find(|m| &m.session == session)
+                .map(|m| (m, notes))
+        }
         None => None,
     };
     match existing {
@@ -82,10 +91,24 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
             tasks.push(task_json(issue.number, &issue.title, state, pull));
         }
     }
-    Ok(Outcome::data(json!({
+    let mut data = json!({
         "session": session, "joined": joined,
         "tasks": tasks, "lost": lost,
-    })))
+    });
+    if args.handoff {
+        data["handoff"] = handoff;
+    }
+    Ok(Outcome::data(data))
+}
+
+/// The newest trusted root handoff on the registry, or null.
+fn handoff_json(trusted: &[Note]) -> Value {
+    match newest_handoff(trusted) {
+        Some((comment, Record::Handoff { session, at, lines })) => {
+            json!({"session": session, "at": at, "lines": lines, "comment": comment})
+        }
+        _ => Value::Null,
+    }
 }
 
 /// Live leases that overlap the touch paths of an expired lease.

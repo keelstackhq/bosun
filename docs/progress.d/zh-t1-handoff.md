@@ -1,0 +1,1 @@
+- 2026-11-02 · ZH-T1 · `bosun handoff` and `bosun resume --handoff` (spec §5.1) · PR (zh-t1-handoff)

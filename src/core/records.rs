@@ -129,6 +129,12 @@ pub enum Record {
         step: String,
         on: String,
     },
+    /// A root's handoff to the next root of its lineage (spec §5.1); never a lease.
+    Handoff {
+        session: String,
+        at: String,
+        lines: Vec<String>,
+    },
 }
 
 /// A PR and the head sha an owner acted on.
@@ -162,6 +168,7 @@ impl Record {
             | Record::LessonSeen { session, .. }
             | Record::Answer { session, .. }
             | Record::Hold { session, .. }
+            | Record::Handoff { session, .. }
             | Record::TaskPr { session, .. } => session,
         }
     }

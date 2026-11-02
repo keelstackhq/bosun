@@ -11,6 +11,7 @@ pub mod carry_over;
 pub mod ci_log;
 pub mod claim;
 pub mod doctor;
+pub mod handoff;
 pub mod heartbeat;
 pub mod hold;
 pub mod init;
@@ -133,7 +134,9 @@ pub enum Command {
     /// Record a failed fix round; 3 equal failures or 0 changed lines block the task and escalate.
     Fail(FailArgs),
     /// After a container restart: renew this session's leases and list the PRs to continue.
-    Resume,
+    Resume(ResumeArgs),
+    /// Write this root's handoff (at most 40 lines) to the registry for the next root.
+    Handoff(HandoffArgs),
     /// Cost per merged task over the last N days (read-only).
     Progress(ProgressArgs),
     /// Post this session's result on its epic, end its lease and leave the registry.
@@ -185,6 +188,7 @@ pub const COMMANDS: &[&str] = &[
     "plan",
     "fail",
     "resume",
+    "handoff",
     "progress",
     "result",
     "main-triage",
@@ -238,7 +242,8 @@ impl Command {
             Command::Plan(PlanCmd::Amend(_)) => "plan amend",
             Command::Plan(PlanCmd::Pr(_)) => "plan pr",
             Command::Fail(_) => "fail",
-            Command::Resume => "resume",
+            Command::Resume(_) => "resume",
+            Command::Handoff(_) => "handoff",
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
             Command::Result(_) => "result",
@@ -252,6 +257,20 @@ impl Command {
             Command::Prereqs(_) => "prereqs",
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct ResumeArgs {
+    /// Also return the newest handoff of this root lineage in `data.handoff`.
+    #[arg(long)]
+    pub handoff: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct HandoffArgs {
+    /// File with the `<kind>: <text>` lines (wave, pr, lease, next, blocker), or `-` for stdin.
+    #[arg(long, value_name = "FILE")]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Args)]

@@ -11,6 +11,7 @@ pub mod checks;
 pub mod cost;
 pub mod glob;
 pub mod guard;
+pub mod handoff;
 pub mod lease;
 pub mod lessons;
 pub mod lockmerge;
