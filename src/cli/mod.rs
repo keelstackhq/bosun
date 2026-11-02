@@ -15,6 +15,7 @@ pub mod heartbeat;
 pub mod hold;
 pub mod init;
 pub mod intake;
+pub mod intake_file;
 pub mod join;
 pub mod lesson;
 pub mod lesson_triage;
@@ -245,7 +246,11 @@ impl Command {
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
             Command::Revert(_) => "revert",
-            Command::Intake(_) => "intake",
+            Command::Intake(IntakeArgs { cmd: None, .. }) => "intake",
+            Command::Intake(IntakeArgs {
+                cmd: Some(IntakeCmd::Check(_)),
+                ..
+            }) => "intake check",
             Command::MainHealth(_) => "main-health",
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
@@ -700,12 +705,18 @@ pub struct PlanImportArgs {
     pub keep_plan_tasks_open: bool,
 }
 
+/// `bosun intake "<text>" --source ...` opens a plan issue; the subcommands work on the intake
+/// file (.bosun/intake.toml). A text of exactly `check`, `sign` or `verify` is the subcommand.
 #[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct IntakeArgs {
-    /// What is wanted.
+    #[command(subcommand)]
+    pub cmd: Option<IntakeCmd>,
+    /// What is wanted (required without a subcommand; `open` refuses an empty one).
+    #[arg(default_value = "")]
     pub text: String,
-    /// Where the request came from.
-    #[arg(long, value_parser = ["slack", "lesson", "flake", "human"])]
+    /// Where the request came from (required without a subcommand; `open` refuses an empty one).
+    #[arg(long, default_value = "", value_parser = parse_source)]
     pub source: String,
     /// The plan item the request belongs to (sets the area label).
     #[arg(long, value_name = "ID")]
@@ -716,6 +727,30 @@ pub struct IntakeArgs {
     /// The plan file to amend (default plans/<project>.md).
     #[arg(long, value_name = "FILE")]
     pub plan: Option<String>,
+}
+
+/// clap cannot make `text` and `--source` required only without a subcommand here, so both
+/// default to empty and `intake::open` refuses an empty one.
+fn parse_source(s: &str) -> Result<String, String> {
+    match s {
+        "" | "slack" | "lesson" | "flake" | "human" => Ok(s.to_string()),
+        _ => Err("expected one of slack, lesson, flake, human".into()),
+    }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IntakeCmd {
+    /// Validate the intake file against the schema (no signature handling).
+    Check(IntakeCheckArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct IntakeCheckArgs {
+    /// The intake file (default .bosun/intake.toml).
+    pub file: Option<PathBuf>,
+    /// Read the file from stdin (`-`) instead.
+    #[arg(long, value_name = "-", value_parser = ["-"])]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Args)]

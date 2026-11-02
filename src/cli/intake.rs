@@ -5,8 +5,8 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::IntakeArgs;
 use super::plan::plan_errors;
+use super::{IntakeArgs, IntakeCmd};
 use crate::app::{App, kill_switch};
 use crate::core::meta::TaskMeta;
 use crate::core::plan;
@@ -26,6 +26,9 @@ pub(crate) fn fence_text(text: &str) -> String {
 }
 
 pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
+    if let Some(IntakeCmd::Check(c)) = &a.cmd {
+        return super::intake_file::check(dir, c);
+    }
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
     open(&app, a)
@@ -38,6 +41,12 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
         return Err(BosunError::usage(
             "the intake text is empty",
             "pass what is wanted as the first argument: bosun intake \"<text>\" --source human",
+        ));
+    }
+    if a.source.is_empty() {
+        return Err(BosunError::usage(
+            "--source is required",
+            "pass where the request came from: --source slack|lesson|flake|human",
         ));
     }
     let file = a

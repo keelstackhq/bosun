@@ -297,6 +297,7 @@ fn thread(app: &App, args: &SpawnArgs) -> CmdResult {
                 item: None,
                 title: None,
                 plan: None,
+                cmd: None,
             };
             let out = intake::open(app, &a)?;
             let n = out.data["issue"].as_u64().ok_or_else(|| {

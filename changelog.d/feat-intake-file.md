@@ -1,0 +1,1 @@
+- `bosun intake check` validates `.bosun/intake.toml` against the intake schema (ZI/T1).
