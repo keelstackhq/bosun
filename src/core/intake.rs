@@ -283,6 +283,7 @@ pub struct SigFile {
     pub repo: String,
     pub mode: String,
     pub nonce: String,
+    pub issued: String,
     pub expires: String,
     pub intake_sha256: String,
     pub sig: String,
@@ -299,8 +300,15 @@ impl SigFile {
 
     pub fn to_toml(&self) -> String {
         format!(
-            "key = {:?}\nrepo = {:?}\nmode = {:?}\nnonce = {:?}\nexpires = {:?}\nintake_sha256 = {:?}\nsig = {:?}\n",
-            self.key, self.repo, self.mode, self.nonce, self.expires, self.intake_sha256, self.sig
+            "key = {:?}\nrepo = {:?}\nmode = {:?}\nnonce = {:?}\nissued = {:?}\nexpires = {:?}\nintake_sha256 = {:?}\nsig = {:?}\n",
+            self.key,
+            self.repo,
+            self.mode,
+            self.nonce,
+            self.issued,
+            self.expires,
+            self.intake_sha256,
+            self.sig
         )
     }
 
@@ -310,6 +318,7 @@ impl SigFile {
             &self.repo,
             &self.mode,
             &self.nonce,
+            &self.issued,
             &self.expires,
             &self.intake_sha256,
         )
@@ -322,12 +331,17 @@ pub fn intake_sha256(bytes: &[u8]) -> String {
     d.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `bosun-intake v1 <owner/name lowercased> <mode> <nonce> <expires> sha256 <hex>`.
-pub fn signed_message(repo: &str, mode: &str, nonce: &str, expires: &str, sha: &str) -> String {
-    format!(
-        "bosun-intake v1 {} {mode} {nonce} {expires} sha256 {sha}",
-        repo.to_ascii_lowercase()
-    )
+/// `bosun-intake v1 <owner/name lowercased> <mode> <nonce> <issued> <expires> sha256 <hex>`.
+pub fn signed_message(
+    repo: &str,
+    mode: &str,
+    nonce: &str,
+    issued: &str,
+    expires: &str,
+    sha: &str,
+) -> String {
+    let repo = repo.to_ascii_lowercase();
+    format!("bosun-intake v1 {repo} {mode} {nonce} {issued} {expires} sha256 {sha}")
 }
 
 #[cfg(test)]
@@ -514,6 +528,7 @@ slack_channel = ""
             repo: "KeelstackHQ/App".into(),
             mode: "new".into(),
             nonce: "ab".repeat(16),
+            issued: "2026-11-02T10:00:00Z".into(),
             expires: "2026-11-02T11:00:00Z".into(),
             intake_sha256: sha.clone(),
             sig: "c2ln".into(),
@@ -527,6 +542,12 @@ slack_channel = ""
             ..f.clone()
         };
         assert_ne!(m, adopt.message());
+        let later = SigFile {
+            issued: "2026-11-02T10:00:01Z".into(),
+            ..f.clone()
+        };
+        assert_ne!(m, later.message());
+        assert!(m.contains(" 2026-11-02T10:00:00Z 2026-11-02T11:00:00Z sha256 "));
         assert!(SigFile::parse(&f.to_toml().replace("\"new\"", "\"x\"")).is_err());
         assert!(SigFile::parse(&format!("{}z = 1\n", f.to_toml())).is_err());
     }

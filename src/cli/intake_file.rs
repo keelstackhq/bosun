@@ -10,13 +10,15 @@ use serde_json::{Value, json};
 use super::{IntakeCheckArgs, IntakeSignArgs, IntakeVerifyArgs};
 use crate::cli::approve::read_key;
 use crate::core::approve::{APPROVERS_PATH, ApproverKey, Role, parse_approvers, verify_ed25519};
-use crate::core::intake::{INTAKE_PATH, Intake, SigFile, intake_sha256, parse, signed_message};
+use crate::core::intake::{INTAKE_PATH, Intake, SigFile, intake_sha256, parse};
 use crate::github::b64;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
 
 /// The longest a signature may live.
 const MAX_EXPIRES_SECS: u64 = 3600;
+/// How far ahead of the verifier's clock an issue time may be.
+const MAX_SKEW_SECS: i64 = 60;
 
 fn at(dir: Option<&Path>, p: &Path) -> PathBuf {
     dir.map_or_else(|| p.to_path_buf(), |d| d.join(p))
@@ -103,7 +105,13 @@ pub fn sign(dir: Option<&Path>, a: &IntakeSignArgs) -> CmdResult {
             "pass at most 3600 seconds; sign again when it runs out",
         ));
     }
-    let pair = read_key(&a.sign_key)?;
+    // read_key names the path in its errors; the envelope never carries it.
+    let pair = read_key(&a.sign_key).map_err(|_| {
+        BosunError::error(
+            "cannot use the signing key",
+            "pass --sign-key with a readable ed25519 PKCS#8 PEM private key",
+        )
+    })?;
     let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
     let key = match &a.key_id {
         Some(id) => id.clone(),
@@ -131,12 +139,14 @@ pub fn sign(dir: Option<&Path>, a: &IntakeSignArgs) -> CmdResult {
     let mut raw = [0u8; 16];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw)
         .map_err(|_| BosunError::error("no random bytes for the nonce", "retry"))?;
-    let expires = Timestamp::now().plus_secs(a.expires_in as i64).to_string();
+    let now = Timestamp::now();
+    let expires = now.plus_secs(a.expires_in as i64).to_string();
     let mut f = SigFile {
         key,
         repo: repo_of(&intake),
         mode: a.mode.clone(),
         nonce: raw.iter().map(|b| format!("{b:02x}")).collect(),
+        issued: now.to_string(),
         expires,
         intake_sha256: intake_sha256(text.as_bytes()),
         sig: String::new(),
@@ -181,11 +191,14 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
             )
         })?;
     let nonce_ok = sf.nonce.len() == 32 && sf.nonce.bytes().all(|b| b.is_ascii_hexdigit());
-    let expires = parse_rfc3339(&sf.expires);
-    let (true, Some(expires)) = (nonce_ok, expires) else {
+    let (true, Some(issued), Some(expires)) = (
+        nonce_ok,
+        parse_rfc3339(&sf.issued),
+        parse_rfc3339(&sf.expires),
+    ) else {
         return Err(refuse(
             "bad_sig_file",
-            "the nonce or the expiry is malformed",
+            "the nonce, the issue time or the expiry is malformed",
             fix,
         ));
     };
@@ -204,6 +217,16 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
         ));
     }
     let now = Timestamp::now();
+    if expires.0 - issued.0 > MAX_EXPIRES_SECS as i64 {
+        return Err(refuse("window_too_long", "its window is over an hour", fix));
+    }
+    if issued > now.plus_secs(MAX_SKEW_SECS) {
+        return Err(refuse(
+            "issued_in_future",
+            "it was issued in the future",
+            fix,
+        ));
+    }
     if now >= expires {
         return Err(refuse("expired", "it has expired", fix));
     }
@@ -237,13 +260,7 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
             "sign with an owner key",
         ));
     }
-    let msg = signed_message(
-        &sf.repo,
-        &sf.mode,
-        &sf.nonce,
-        &sf.expires,
-        &sf.intake_sha256,
-    );
+    let msg = sf.message();
     let ok = match (b64::decode(&key.ed25519), b64::decode(&sf.sig)) {
         (Some(public), Some(raw)) => verify_ed25519(&public, msg.as_bytes(), &raw),
         _ => false,

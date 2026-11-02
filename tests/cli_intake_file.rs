@@ -7,8 +7,6 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 const NOW: &str = "2026-11-02T10:00:00Z";
-/// The RFC 8032 test 1 key.
-const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n";
 const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
 /// Never the signer: the RFC 8032 test 2 key.
 const PUB2: &str = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
@@ -35,7 +33,7 @@ impl Env {
         let e = Env {
             dir: tempfile::tempdir().unwrap(),
         };
-        e.write("key.pem", PEM);
+        e.write("key.pem", common::TEST_ED25519_PEM);
         e.write(".bosun/intake.toml", OK);
         e.write(
             ".bosun/approvers.toml",
@@ -380,6 +378,103 @@ fn verify_refuses_an_expiry_more_than_an_hour_away() {
     // Exactly an hour is still fine.
     let (code, v) = e.verify(ahead);
     assert_eq!(code, 0, "{v}");
+}
+
+/// A signature file for `.bosun/intake.toml` that `sign` could not make: `issued` and `expires`
+/// are chosen freely, signed with the test key.
+fn forged_sig(e: &Env, issued: &str, expires: &str) -> String {
+    use bosun::core::intake::{SigFile, intake_sha256};
+    let text = std::fs::read_to_string(e.p(".bosun/intake.toml")).unwrap();
+    let body: String = common::TEST_ED25519_PEM
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect();
+    let der = bosun::github::b64::decode(&body).unwrap();
+    let pair = ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(&der).unwrap();
+    let mut f = SigFile {
+        key: "orch".into(),
+        repo: "keelstackhq/app".into(),
+        mode: "new".into(),
+        nonce: "ab".repeat(16),
+        issued: issued.into(),
+        expires: expires.into(),
+        intake_sha256: intake_sha256(text.as_bytes()),
+        sig: String::new(),
+    };
+    f.sig = bosun::github::b64::encode(pair.sign(f.message().as_bytes()).as_ref());
+    f.to_toml()
+}
+
+#[test]
+fn verify_refuses_a_window_longer_than_an_hour() {
+    let e = Env::new("owner");
+    // Valid now and not too far ahead, but the window is 3601 s.
+    e.write(
+        ".bosun/intake.sig",
+        &forged_sig(&e, "2026-11-02T09:10:00Z", "2026-11-02T10:10:01Z"),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "window_too_long"), "{v}");
+    // The same window cut to an hour verifies.
+    e.write(
+        ".bosun/intake.sig",
+        &forged_sig(&e, "2026-11-02T09:10:00Z", "2026-11-02T10:10:00Z"),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn verify_refuses_a_window_minted_for_later() {
+    let e = Env::new("owner");
+    let key = e.s("key.pem");
+    // Signed two hours ahead: issued and expires are both in the future, and the window is fine.
+    let later = "2026-11-02T12:00:00Z";
+    let mut a = vec!["sign", ".bosun/intake.toml", "--sign-key", &key];
+    a.extend(sign_args(&["--key-id", "orch"]));
+    let (code, v) = e.run(later, &a, "");
+    assert_eq!(code, 0, "{v}");
+    e.write(".bosun/intake.sig", v["data"]["sig"].as_str().unwrap());
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "issued_in_future"), "{v}");
+    let (code, v) = e.verify(later);
+    assert_eq!(code, 0, "{v}");
+    // Clock skew of up to 60 s is tolerated, 61 s is not.
+    e.write(
+        ".bosun/intake.sig",
+        &forged_sig(&e, "2026-11-02T10:01:00Z", "2026-11-02T10:30:00Z"),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!(code, 0, "{v}");
+    e.write(
+        ".bosun/intake.sig",
+        &forged_sig(&e, "2026-11-02T10:01:01Z", "2026-11-02T10:30:00Z"),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "issued_in_future"), "{v}");
+}
+
+#[test]
+fn the_sign_key_path_never_reaches_the_envelope() {
+    let e = Env::new("owner");
+    let secret = e.s("secret-key-path-xyz.pem");
+    for content in [None, Some("not a pem")] {
+        if let Some(c) = content {
+            std::fs::write(&secret, c).unwrap();
+        }
+        let mut a = vec!["sign", ".bosun/intake.toml", "--sign-key", &secret];
+        a.extend(sign_args(&["--key-id", "orch"]));
+        let out = common::bosun()
+            .current_dir(e.dir.path())
+            .arg("intake")
+            .args(&a)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        let v = common::one_object(&out.stdout);
+        assert!(!v.to_string().contains("secret-key-path-xyz"), "{v}");
+        assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    }
 }
 
 #[test]

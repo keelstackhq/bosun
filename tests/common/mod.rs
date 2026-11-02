@@ -5,6 +5,10 @@ use assert_cmd::Command;
 use fake::FakeGithub;
 use serde_json::Value;
 
+/// The RFC 8032 test 1 key as PKCS#8 PEM, what `openssl pkey` writes for that seed. Its public
+/// key is `11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=`. A test key, never enrolled anywhere.
+pub const TEST_ED25519_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n";
+
 /// A token canary: tests assert it never reaches stdout or stderr.
 pub const TOKEN_CANARY: &str = "fake-token-canary";
 
