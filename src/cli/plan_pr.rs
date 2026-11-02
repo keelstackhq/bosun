@@ -31,6 +31,7 @@ pub fn run(dir: Option<&Path>, a: &PlanPrArgs) -> CmdResult {
             item: a.item.clone(),
             title: a.title.clone(),
             plan: Some(a.file.clone()),
+            cmd: None,
         },
     )?;
     let n = intake.data["issue"].as_u64().ok_or_else(|| {
