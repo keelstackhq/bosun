@@ -341,15 +341,45 @@ fn verify_refuses_an_unknown_key_and_a_role_that_may_not_sign() {
 }
 
 #[test]
-fn verify_checks_the_schema_first() {
+fn verify_refuses_an_unusable_intake_or_approvers_file_as_exit_5() {
     let e = Env::new("owner");
     e.sign(&sign_args(&["--key-id", "orch"]));
+    let ok = std::fs::read_to_string(e.p(".bosun/intake.toml")).unwrap();
     e.write(
         ".bosun/intake.toml",
-        &OK.replace("\"private\"", "\"secret\""),
+        &ok.replace("\"private\"", "\"secret\""),
     );
     let (code, v) = e.verify(NOW);
-    assert_eq!(code, 2, "{v}");
+    assert_eq!((code, reason(&v)), (5, "bad_intake"), "{v}");
+    std::fs::remove_file(e.p(".bosun/intake.toml")).unwrap();
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_intake"), "{v}");
+    e.write(".bosun/intake.toml", &ok);
+    e.write(".bosun/approvers.toml", "[[key]]\nid = \"x\"\nbogus = 1\n");
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_approvers"), "{v}");
+    std::fs::remove_file(e.p(".bosun/approvers.toml")).unwrap();
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_approvers"), "{v}");
+}
+
+#[test]
+fn verify_refuses_an_expiry_more_than_an_hour_away() {
+    let e = Env::new("owner");
+    let key = e.s("key.pem");
+    // Signing takes its clock from BOSUN_NOW, so a signer one second ahead of the verifier
+    // makes a signature that expires 3601 s after the verifier's now.
+    let ahead = "2026-11-02T10:00:01Z";
+    let mut a = vec!["sign", ".bosun/intake.toml", "--sign-key", &key];
+    a.extend(sign_args(&["--key-id", "orch"]));
+    let (code, v) = e.run(ahead, &a, "");
+    assert_eq!(code, 0, "{v}");
+    e.write(".bosun/intake.sig", v["data"]["sig"].as_str().unwrap());
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "expiry_too_far"), "{v}");
+    // Exactly an hour is still fine.
+    let (code, v) = e.verify(ahead);
+    assert_eq!(code, 0, "{v}");
 }
 
 #[test]

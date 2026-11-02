@@ -75,14 +75,10 @@ pub fn check(dir: Option<&Path>, a: &IntakeCheckArgs) -> CmdResult {
     Ok(Outcome::data(view(&schema(&text)?)))
 }
 
-/// The enrolled keys of an approvers file.
-fn keys(dir: Option<&Path>, p: &Path) -> Result<Vec<ApproverKey>, BosunError> {
-    parse_approvers(&read(dir, p, "approvers file")?).map_err(|e| {
-        BosunError::error(
-            format!("{} is malformed: {e}", p.display()),
-            "fix the approvers file on the default branch with a PR the owner approves",
-        )
-    })
+/// The enrolled keys of an approvers file, or why they cannot be read.
+fn keys(dir: Option<&Path>, p: &Path) -> Result<Vec<ApproverKey>, String> {
+    let text = std::fs::read_to_string(at(dir, p)).map_err(|e| e.kind().to_string())?;
+    parse_approvers(&text).map_err(|e| format!("malformed: {e}"))
 }
 
 pub fn sign(dir: Option<&Path>, a: &IntakeSignArgs) -> CmdResult {
@@ -163,9 +159,17 @@ fn may_sign(role: Role) -> bool {
 }
 
 pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
-    let text = read(dir, &a.file, "intake file")?;
-    let intake = schema(&text)?;
     let fix = "ask the orchestrator to sign the intake again (`bosun intake sign`) and start the workflow with the new signature";
+    let bad_intake = |why: String| {
+        refuse(
+            "bad_intake",
+            &format!("the intake is unusable ({why})"),
+            "fix the intake file (`bosun intake check` names the field) and sign it again",
+        )
+    };
+    let text =
+        std::fs::read_to_string(at(dir, &a.file)).map_err(|e| bad_intake(e.kind().to_string()))?;
+    let intake = parse(&text).map_err(|e| bad_intake(e.message))?;
     let sf = std::fs::read_to_string(at(dir, &a.sig))
         .map_err(|e| e.to_string())
         .and_then(|t| SigFile::parse(&t))
@@ -199,10 +203,26 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
             fix,
         ));
     }
-    if Timestamp::now() >= expires {
+    let now = Timestamp::now();
+    if now >= expires {
         return Err(refuse("expired", "it has expired", fix));
     }
-    let ks = keys(dir, &a.approvers)?;
+    // This cap is the real control: sign takes its clock from BOSUN_NOW, so a signer could
+    // write any expiry.
+    if expires > now.plus_secs(MAX_EXPIRES_SECS as i64) {
+        return Err(refuse(
+            "expiry_too_far",
+            "it expires more than an hour from now",
+            fix,
+        ));
+    }
+    let ks = keys(dir, &a.approvers).map_err(|why| {
+        refuse(
+            "bad_approvers",
+            &format!("the approvers file is unusable ({why})"),
+            "fix the approvers file on provision's main",
+        )
+    })?;
     let key = ks.iter().find(|k| k.id == sf.key).ok_or_else(|| {
         refuse(
             "unknown_key",
