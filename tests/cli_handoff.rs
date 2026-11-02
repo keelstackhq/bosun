@@ -50,6 +50,11 @@ fn handoff_writes_open_prs_leases_and_the_file_lines() {
     fake.comment(12, &lease_note("other_s", LIVE, "docs/**"));
     fake.pull(30, "other", "claude/other", "Closes #12");
     fake.pull(31, "unrelated", "claude/unrelated", "");
+    fake.issue(13, "wave task", &[BUILDING], "");
+    fake.comment(13, &lease_note("root_a/T7", LIVE, "tests/**"));
+    fake.pull(32, "wave", "claude/wave", "Closes #13");
+    fake.issue(14, "lookalike", &[BUILDING], "");
+    fake.comment(14, &lease_note("root_ab", LIVE, "x/**"));
     let file = lines_file("ok", "next: finish #10\n\nblocker: none\n");
 
     let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
@@ -61,9 +66,11 @@ fn handoff_writes_open_prs_leases_and_the_file_lines() {
         .map(|l| l.as_str().unwrap())
         .collect();
     assert_eq!(lines[0], "pr: #20 claude/the-task sha20");
-    assert!(lines[1].starts_with("lease: #10 root_a src/core/** until 2026-10-22T11:20:00Z"));
-    assert_eq!(&lines[2..], ["next: finish #10", "blocker: none"]);
-    assert_eq!(v["data"]["count"], 4);
+    assert_eq!(lines[1], "pr: #32 claude/wave sha32");
+    assert!(lines[2].starts_with("lease: #10 root_a src/core/** until 2026-10-22T11:20:00Z"));
+    assert!(lines[3].starts_with("lease: #13 root_a/T7 tests/** until"));
+    assert_eq!(&lines[4..], ["next: finish #10", "blocker: none"]);
+    assert_eq!(v["data"]["count"], 6);
     let all = bodies(&fake, 1);
     assert_eq!(all.len(), 2);
     assert!(

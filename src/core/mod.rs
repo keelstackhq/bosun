@@ -12,6 +12,7 @@ pub mod cost;
 pub mod glob;
 pub mod guard;
 pub mod handoff;
+pub mod intake;
 pub mod lease;
 pub mod lessons;
 pub mod lockmerge;

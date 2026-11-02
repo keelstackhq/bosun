@@ -1,0 +1,1 @@
+- 2026-11-02 · ZI/T1a · intake file parser and `bosun intake check` (core::intake, cli::intake_file) · PR (feat/intake-file)

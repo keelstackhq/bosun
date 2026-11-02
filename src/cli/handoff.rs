@@ -38,17 +38,19 @@ pub fn run(dir: Option<&Path>, args: &HandoffArgs) -> CmdResult {
         ));
     }
 
-    // Only this session's own live leases, and the open PRs of those tasks.
+    // Only the live leases of this session and its wave agents (`<session>/T*`), and the open
+    // PRs of those tasks.
+    let wave = format!("{session}/");
     let mut leases = Vec::new();
     for (issue, notes) in active_issues(gh)? {
         for l in leases_of(issue.number, &notes) {
-            if &l.session == session && l.is_live(now) {
+            if (&l.session == session || l.session.starts_with(&wave)) && l.is_live(now) {
                 let touch = l.touch.join(" ");
                 leases.push((
                     l.issue,
                     clean_line(&format!(
-                        "lease: #{} {session} {touch} until {}",
-                        l.issue, l.expires
+                        "lease: #{} {} {touch} until {}",
+                        l.issue, l.session, l.expires
                     )),
                 ));
             }

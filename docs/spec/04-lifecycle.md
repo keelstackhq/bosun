@@ -131,6 +131,7 @@ ready. After an amendment merges, `bosun plan amend` imports the new work and cl
 `kind/plan` issue (state ready, `bosun:source/<source>`, `bosun:area/<area>` of `--item`) that asks for the
 amendment of the plan file (default `plans/<project>.md`; a missing file or unknown item is exit 2). An open
 issue of the same source with the same title is returned instead (`created: false`).
+`bosun intake check` works on the intake file instead (spec §3, layout); the text form is unchanged.
 `bosun plan pr <plan> "<why>" --source slack|lesson|flake|human [--item ID] [--title T] [--auto-merge]` opens the PR of a
 plan amendment in one step, on the committed and pushed amendment branch: it runs `bosun intake` with
 `--plan <plan>` (finding the open intake of the same title), `bosun claim` of that intake (its touch is the

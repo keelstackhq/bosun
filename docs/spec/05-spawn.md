@@ -79,7 +79,8 @@ Janitor, resume, results:
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
 - Handoff (§5.1): a root runs `bosun handoff [--from FILE]` to leave notes for the next root of
-  its lineage. bosun adds one line per live lease of this session
+  its lineage. bosun adds one line per live lease of this session and its wave agents
+  (`<session>/T*`)
   (`lease: #<issue> <session> <touch> until <expires>`) and per open PR linked to those tasks
   (`pr: #<n> <branch> <head sha>`); the file (`-` is stdin) adds the rest.
   Every line is `<kind>: <text>` with kind `wave`, `pr`, `lease`, `next` or `blocker`, one line
