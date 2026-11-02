@@ -26,8 +26,11 @@ pub(crate) fn fence_text(text: &str) -> String {
 }
 
 pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
-    if let Some(IntakeCmd::Check(c)) = &a.cmd {
-        return super::intake_file::check(dir, c);
+    match &a.cmd {
+        Some(IntakeCmd::Check(c)) => return super::intake_file::check(dir, c),
+        Some(IntakeCmd::Sign(c)) => return super::intake_file::sign(dir, c),
+        Some(IntakeCmd::Verify(c)) => return super::intake_file::verify(dir, c),
+        None => {}
     }
     // Usage errors come before any repo or GitHub access, as they always did.
     args_ok(a)?;

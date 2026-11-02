@@ -1,4 +1,4 @@
-//! `bosun intake check` (the intake file, spec section 3) and the old
+//! `bosun intake check|sign|verify` (the intake file, spec section 3) and the old
 //! `bosun intake <text>` form next to them.
 mod common;
 
@@ -7,6 +7,12 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 const NOW: &str = "2026-11-02T10:00:00Z";
+/// The RFC 8032 test 1 key.
+const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n";
+const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+/// Never the signer: the RFC 8032 test 2 key.
+const PUB2: &str = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
+
 const OK: &str = r#"version = 1
 repo = { name = "app", owner = "keelstackhq", visibility = "private" }
 stack = ["rust"]
@@ -24,11 +30,19 @@ struct Env {
 }
 
 impl Env {
-    fn new() -> Env {
+    /// A working tree whose approvers file enrols key `orch` (the signer) with `role`.
+    fn new(role: &str) -> Env {
         let e = Env {
             dir: tempfile::tempdir().unwrap(),
         };
+        e.write("key.pem", PEM);
         e.write(".bosun/intake.toml", OK);
+        e.write(
+            ".bosun/approvers.toml",
+            &format!(
+                "[[key]]\nid = \"orch\"\ned25519 = \"{PUB}\"\nrole = \"{role}\"\n\n[[key]]\nid = \"other\"\ned25519 = \"{PUB2}\"\n"
+            ),
+        );
         e
     }
     fn p(&self, rel: &str) -> PathBuf {
@@ -38,6 +52,9 @@ impl Env {
         let p = self.p(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, text).unwrap();
+    }
+    fn s(&self, rel: &str) -> String {
+        self.p(rel).to_str().unwrap().to_string()
     }
     /// Run `bosun intake <args>` in the dir at `now`; asserts one object and a fix on errors.
     fn run(&self, now: &str, args: &[&str], stdin: &str) -> (i32, Value) {
@@ -49,6 +66,12 @@ impl Env {
             .write_stdin(stdin.to_string())
             .output()
             .unwrap();
+        let all = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !all.contains("PRIVATE KEY") && !all.contains("MC4CAQAw"),
+            "key leaked"
+        );
         let v = common::one_object(&out.stdout);
         if v["ok"] == false {
             assert!(
@@ -58,11 +81,39 @@ impl Env {
         }
         (out.status.code().unwrap(), v)
     }
+    /// Sign `.bosun/intake.toml`; on success the printed signature goes to `.bosun/intake.sig`.
+    fn sign(&self, extra: &[&str]) -> (i32, Value) {
+        let key = self.s("key.pem");
+        let mut a = vec!["sign", ".bosun/intake.toml", "--sign-key", &key];
+        a.extend_from_slice(extra);
+        let (code, v) = self.run(NOW, &a, "");
+        if code == 0 {
+            self.write(".bosun/intake.sig", v["data"]["sig"].as_str().unwrap());
+        }
+        (code, v)
+    }
+    fn verify(&self, now: &str) -> (i32, Value) {
+        let a = [
+            "verify",
+            ".bosun/intake.toml",
+            "--sig",
+            ".bosun/intake.sig",
+            "--approvers",
+            ".bosun/approvers.toml",
+        ];
+        self.run(now, &a, "")
+    }
+}
+
+const SIGN: [&str; 4] = ["--repo", "KeelstackHQ/App", "--mode", "new"];
+
+fn sign_args<'a>(more: &[&'a str]) -> Vec<&'a str> {
+    [SIGN.as_slice(), more].concat()
 }
 
 #[test]
 fn check_validates_the_schema_and_reports_the_fields() {
-    let e = Env::new();
+    let e = Env::new("owner");
     let (code, v) = e.run(NOW, &["check"], "");
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["command"], "intake check");
@@ -76,7 +127,7 @@ fn check_validates_the_schema_and_reports_the_fields() {
 
 #[test]
 fn check_separates_a_missing_answer_from_a_bad_value() {
-    let e = Env::new();
+    let e = Env::new("owner");
     let cases = [
         ("stack = [\"rust\"]\n", "", 5, "stack"),
         (
@@ -117,7 +168,7 @@ fn check_separates_a_missing_answer_from_a_bad_value() {
 
 #[test]
 fn check_ignores_signatures_and_a_signature_table_is_an_unknown_key() {
-    let e = Env::new();
+    let e = Env::new("owner");
     e.write(".bosun/intake.sig", "garbage");
     let (code, v) = e.run(NOW, &["check"], "");
     assert_eq!(code, 0, "{v}");
@@ -128,8 +179,182 @@ fn check_ignores_signatures_and_a_signature_table_is_an_unknown_key() {
 }
 
 #[test]
+fn a_signed_intake_round_trips_through_sign_and_verify() {
+    let e = Env::new("owner");
+    let (code, v) = e.sign(&sign_args(&["--key-id", "orch"]));
+    assert_eq!(code, 0, "{v}");
+    let sig = v["data"]["sig"].as_str().unwrap();
+    assert!(sig.contains("key = \"orch\"") && sig.contains("mode = \"new\""));
+    assert!(sig.contains("expires = \"2026-11-02T11:00:00Z\""));
+    let (code, v) = e.verify(NOW);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["key"], "orch");
+    assert_eq!(v["data"]["mode"], "new");
+    assert_eq!(v["data"]["repo"], "keelstackhq/app");
+    assert_eq!(v["data"]["nonce"].as_str().unwrap().len(), 32);
+}
+
+#[test]
+fn sign_writes_nothing_and_finds_the_key_id_in_approvers() {
+    let e = Env::new("owner");
+    let key = e.s("key.pem");
+    let a = [
+        "sign",
+        ".bosun/intake.toml",
+        "--sign-key",
+        &key,
+        "--repo",
+        "keelstackhq/app",
+        "--mode",
+        "adopt",
+    ];
+    let (code, v) = e.run(NOW, &a, "");
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["data"]["sig"]
+            .as_str()
+            .unwrap()
+            .contains("key = \"orch\"")
+    );
+    assert!(!e.p(".bosun/intake.sig").exists());
+    // Two signatures differ by their nonce.
+    let (_, w) = e.run(NOW, &a, "");
+    assert_ne!(v["data"]["sig"], w["data"]["sig"]);
+    // A key that is not enrolled, and no --key-id: refused.
+    e.write(".bosun/approvers.toml", "");
+    let (code, v) = e.run(NOW, &a, "");
+    assert_eq!(code, 1, "{v}");
+}
+
+#[test]
+fn sign_refuses_a_wrong_repo_a_long_expiry_and_a_bad_intake() {
+    let e = Env::new("owner");
+    let id = ["--key-id", "orch"];
+    let wrong = ["--repo", "keelstackhq/other", "--mode", "new"];
+    let (code, v) = e.sign(&[wrong.as_slice(), &id].concat());
+    assert_eq!(code, 2, "{v}");
+    for secs in ["3601", "0"] {
+        let (code, v) = e.sign(&sign_args(&["--key-id", "orch", "--expires-in", secs]));
+        assert_eq!(code, 2, "{secs}: {v}");
+    }
+    let (code, v) = e.sign(&sign_args(&["--key-id", "orch", "--expires-in", "600"]));
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["data"]["sig"]
+            .as_str()
+            .unwrap()
+            .contains("2026-11-02T10:10:00Z")
+    );
+    let (code, v) = e.run(
+        NOW,
+        &[
+            "sign",
+            "nope.toml",
+            "--sign-key",
+            &e.s("key.pem"),
+            "--repo",
+            "a/b",
+            "--mode",
+            "new",
+        ],
+        "",
+    );
+    assert_eq!(code, 2, "{v}");
+    e.write(
+        ".bosun/intake.toml",
+        &OK.replace("stack = [\"rust\"]\n", ""),
+    );
+    let (code, v) = e.sign(&sign_args(&["--key-id", "orch"]));
+    assert_eq!(code, 5, "{v}");
+}
+
+fn reason(v: &Value) -> &str {
+    v["data"]["reason"].as_str().unwrap_or("")
+}
+
+#[test]
+fn verify_fails_closed_with_a_named_reason() {
+    let e = Env::new("owner");
+    e.sign(&sign_args(&["--key-id", "orch"]));
+    let sig = std::fs::read_to_string(e.p(".bosun/intake.sig")).unwrap();
+
+    // A tampered intake byte.
+    e.write(".bosun/intake.toml", &OK.replace("A CLI", "A CLJ"));
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "intake_changed"), "{v}");
+    e.write(".bosun/intake.toml", OK);
+
+    // Mode is part of the signed message.
+    e.write(
+        ".bosun/intake.sig",
+        &sig.replace("mode = \"new\"", "mode = \"adopt\""),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_signature"), "{v}");
+
+    // A signature for another repo is not for this intake.
+    e.write(
+        ".bosun/intake.sig",
+        &sig.replace("keelstackhq/app", "keelstackhq/other"),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "repo_mismatch"), "{v}");
+
+    // Expired: the instant of expiry already counts as expired.
+    e.write(".bosun/intake.sig", &sig);
+    let (code, v) = e.verify("2026-11-02T11:00:00Z");
+    assert_eq!((code, reason(&v)), (5, "expired"), "{v}");
+    let (code, _) = e.verify("2026-11-02T10:59:59Z");
+    assert_eq!(code, 0);
+
+    // A tampered signature.
+    e.write(
+        ".bosun/intake.sig",
+        &sig.replace("sig = \"", "sig = \"AAAA"),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_signature"), "{v}");
+
+    // An unreadable signature file.
+    e.write(".bosun/intake.sig", "nonsense");
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_sig_file"), "{v}");
+}
+
+#[test]
+fn verify_refuses_an_unknown_key_and_a_role_that_may_not_sign() {
+    let e = Env::new("owner");
+    e.sign(&sign_args(&["--key-id", "ghost"]));
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "unknown_key"), "{v}");
+
+    let e = Env::new("delegate");
+    e.sign(&sign_args(&["--key-id", "orch"]));
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "role_not_allowed"), "{v}");
+
+    // Signed under the id of a key with another public key: the signature does not verify.
+    let e = Env::new("owner");
+    e.sign(&sign_args(&["--key-id", "other"]));
+    let (code, v) = e.verify(NOW);
+    assert_eq!((code, reason(&v)), (5, "bad_signature"), "{v}");
+}
+
+#[test]
+fn verify_checks_the_schema_first() {
+    let e = Env::new("owner");
+    e.sign(&sign_args(&["--key-id", "orch"]));
+    e.write(
+        ".bosun/intake.toml",
+        &OK.replace("\"private\"", "\"secret\""),
+    );
+    let (code, v) = e.verify(NOW);
+    assert_eq!(code, 2, "{v}");
+}
+
+#[test]
 fn check_refuses_a_file_together_with_from_stdin() {
-    let e = Env::new();
+    let e = Env::new("owner");
     let (code, v) = e.run(NOW, &["check", ".bosun/intake.toml", "--from", "-"], OK);
     assert_eq!(code, 2, "{v}");
     assert_eq!(v["command"], "intake check");
@@ -137,7 +362,7 @@ fn check_refuses_a_file_together_with_from_stdin() {
 
 #[test]
 fn a_missing_default_file_needs_the_owner_but_a_named_one_is_usage() {
-    let e = Env::new();
+    let e = Env::new("owner");
     std::fs::remove_file(e.p(".bosun/intake.toml")).unwrap();
     let (code, v) = e.run(NOW, &["check"], "");
     assert_eq!(code, 5, "{v}");
@@ -153,7 +378,7 @@ fn a_missing_default_file_needs_the_owner_but_a_named_one_is_usage() {
 
 #[test]
 fn structural_errors_name_the_key() {
-    let e = Env::new();
+    let e = Env::new("owner");
     for (src, field) in [
         (format!("{OK}extra = 1\n"), "extra"),
         (OK.replace("repo = {", "repo = 5 #{"), "repo"),

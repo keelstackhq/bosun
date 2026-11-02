@@ -249,6 +249,8 @@ impl Command {
             Command::Intake(a) => match a.cmd {
                 None => "intake",
                 Some(IntakeCmd::Check(_)) => "intake check",
+                Some(IntakeCmd::Sign(_)) => "intake sign",
+                Some(IntakeCmd::Verify(_)) => "intake verify",
             },
             Command::MainHealth(_) => "main-health",
             Command::ReviewCi(_) => "review-ci",
@@ -739,6 +741,10 @@ fn parse_source(s: &str) -> Result<String, String> {
 pub enum IntakeCmd {
     /// Validate the intake file against the schema (no signature handling).
     Check(IntakeCheckArgs),
+    /// Sign an intake file with an ed25519 key; prints the detached .bosun/intake.sig, writes nothing.
+    Sign(IntakeSignArgs),
+    /// For provision.yml only: verify a file against its detached signature and the approvers file.
+    Verify(IntakeVerifyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -748,6 +754,42 @@ pub struct IntakeCheckArgs {
     /// Read the file from stdin (`-`) instead.
     #[arg(long, value_name = "-", value_parser = ["-"], conflicts_with = "file")]
     pub from: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct IntakeSignArgs {
+    /// The intake file to sign.
+    pub file: PathBuf,
+    /// ed25519 PKCS#8 PEM private key (read from this path only).
+    #[arg(long, value_name = "PEM")]
+    pub sign_key: PathBuf,
+    /// The repo being provisioned, owner/name; it must equal repo.owner/repo.name of the file.
+    #[arg(long, value_name = "OWNER/NAME")]
+    pub repo: String,
+    /// new (create the repo) or adopt (prepare an existing one); part of the signed message.
+    #[arg(long, value_parser = ["new", "adopt"])]
+    pub mode: String,
+    /// The key id (default: the id of the key in the approvers file that has this public key).
+    #[arg(long)]
+    pub key_id: Option<String>,
+    /// Seconds until the signature expires (1 to 3600).
+    #[arg(long, default_value_t = 3600)]
+    pub expires_in: u64,
+    /// Approvers file for the key id lookup (default .bosun/approvers.toml).
+    #[arg(long, value_name = "PATH")]
+    pub approvers: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct IntakeVerifyArgs {
+    /// The intake file.
+    pub file: PathBuf,
+    /// The detached signature file.
+    #[arg(long, value_name = "SIGFILE")]
+    pub sig: PathBuf,
+    /// The approvers file to verify against (provision's own checked-out main).
+    #[arg(long, value_name = "PATH")]
+    pub approvers: PathBuf,
 }
 
 #[derive(Debug, Args)]

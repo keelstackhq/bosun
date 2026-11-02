@@ -1,0 +1,1 @@
+- `bosun intake sign` and `verify` sign and check a detached `.bosun/intake.sig` for provision.yml (ZI/T1).
