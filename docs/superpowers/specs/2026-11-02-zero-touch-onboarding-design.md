@@ -95,8 +95,11 @@ blocker report. `repo.owner` is the org (D-001). The repo name is taken from the
 
 ### 3.1 One-time org setup (owner, once)
 
-- Org secrets, shared with the selected repos: `SPLICE_BOT_TOKEN` and `CLOUDFLARE_API_TOKEN`.
-  Each one is used through an environment, never as a repo secret (D17, D-010).
+- Secrets: `SPLICE_BOT_TOKEN` and `CLOUDFLARE_API_TOKEN` are secrets of the environment `provision`
+  in keelstackhq/provision (no org-wide grant). A repo never gets
+  a repo-level grant. provision.yml sets them only as environment secrets: `SPLICE_BOT_TOKEN` on
+  `splice-bot`, and `CLOUDFLARE_API_TOKEN` on `release` only when `publish` has cloudflare. Both
+  environments deploy from `main` only (D17, D-010).
 - npm and crates publish through OIDC trusted publishing, as `hoist release` does. There is no
   `NPM_TOKEN` or `CARGO_REGISTRY_TOKEN`. The first publish of a new package needs no token either:
   `hoist release bootstrap` runs on the owner's computer after `npm login` and `cargo login`, and
@@ -121,22 +124,35 @@ workflow and its tests. It does not use `keelstackhq/decisions`, which stays tex
 owner-merged (D-008), and it does not use a product repo, which agents edit every day.
 
 `.github/workflows/provision.yml`:
-- Trigger: `workflow_dispatch` with one input, the signed intake file contents (base64). The
+- Trigger: `workflow_dispatch` with two inputs, the intake file and its detached signature
+  `.bosun/intake.sig`, both base64. The
   orchestrator starts it from chat with its GitHub tools (actions_run_trigger). After the setup PR
   merges, the orchestrator calls `create_session` with `source_url` set to the new repo and the
   keelstack `environment_id`, to start the root.
 - Environment `provision`: no required reviewer. Its deployment branch is `main` only.
-- The gate is a signature. The intake carries an orchestrator signature in the scheme of
-  `bosun approve --sign-key` (key `orchestrator-2026-10`). The workflow verifies it against the
-  approvers file of `keelstackhq/provision` (`.bosun/approvers.toml`) and refuses without it. The
-  owner's form answer is the approval: zero taps per repo.
-- Steps: verify the signature, then validate the intake with the pinned bosun (`bosun intake check
-  --from -`). Mint an app
+- The gate is a detached signature, `.bosun/intake.sig`, made by `bosun intake sign` with the
+  orchestrator key (`orchestrator-2026-10`, the scheme of `bosun approve --sign-key`). It binds the
+  repo, the mode (`new` or `adopt`), a random nonce, an expiry at most 1 hour away, and the
+  intake's sha256. The orchestrator signs only on an owner form answer that names that exact repo
+  and mode. It never signs on its own, in any approval policy. That answer is the approval: zero
+  taps per repo.
+- Only provision.yml verifies: `bosun intake verify FILE --sig SIG --approvers
+  .bosun/approvers.toml`, against provision's own approvers on `main`. It refuses a used nonce and
+  appends each nonce it accepts to `used-nonces.txt` in keelstackhq/provision. `bosun intake
+  check` stays schema-only.
+- Key custody: the orchestrator's private key lives only in the orchestrator session's own
+  scratchpad. It is never in the keelstack environment, a setup script, any repo, or a worker
+  session. Workers cannot sign.
+- Modes: `new` only creates, and refuses when the repo exists. `adopt` only adds settings: it never
+  removes or loosens a rule, an environment or a check. Both refuse the protected repos (decisions,
+  provision, bosun, hull, splice, hoist, hoard, berth) and any repo that already has `.bosun/`.
+- Steps: verify the signature and the nonce, then validate the intake with the pinned bosun
+  (`bosun intake check --from -`). Mint an app
   token (`actions/create-github-app-token`, pinned by sha). Then:
   1. create the repo and render hull (§1.1), or check that an existing one matches and adopt;
   2. run `hoist apply` (rules, auto-merge, required checks ci-ok, risk-check, review-verdict and main-open, environments `release` and `splice-bot`);
   3. create the label `bosun:halt`;
-  4. grant the org secrets to the repo;
+  4. set the environment secrets the intake needs (above), never repo-level;
   5. push a branch with `.bosun/intake.toml` and run `bosun init --intake .bosun/intake.toml`, which opens the setup PR.
 - No PAT anywhere. The app token lives for one job and is never printed.
 
@@ -155,8 +171,8 @@ tasks with `create_trigger`, from the prompts `bosun doctor` prints. It adds not
 | §11.2 install the Claude GitHub App | one-time org step: Claude App and provisioner app on "All repositories" |
 | §11.3 hoist apply: rules, auto-merge, checks | automated: provision.yml |
 | §11.4 / step 1: fill governance/owners.toml | automated: init seeds it from `repo.owner` and the org owners |
-| §11.5 hoist apply environments and secrets; halt label | automated: provision.yml; secrets are org-level |
-| step 4: splice-bot environment + SPLICE_BOT_TOKEN | automated environment; org secret (one-time) |
+| §11.5 hoist apply environments and secrets; halt label | automated: provision.yml; environment secrets only, per publish target |
+| step 4: splice-bot environment + SPLICE_BOT_TOKEN | automated: environment `splice-bot` (main only) with its secret |
 | §11.6 cloud environment + setup script | one-time org step: the shared "keelstack" environment (§3.1) |
 | §11.7 Slack and Claude Tag | intake answer `notify`; connecting Claude Tag stays a one-time org step |
 | §11.8 start the seed session | automated: the orchestrator spawns the root after the setup PR merges |
@@ -225,22 +241,23 @@ environments or releases. Those PRs are at most 400 lines.
 
 | Id | Repo | Task | Risk |
 | --- | --- | --- | --- |
-| B1 | bosun | `core::intake` parser, `bosun intake check`, `bosun intake sign --sign-key` | gated (approval code) |
+| B1 | bosun | `core::intake` parser, schema-only `bosun intake check`, `bosun intake sign` (detached .sig), `bosun intake verify` | gated (approval code) |
 | B2 | bosun | `init --intake`: derive flags, copy the file, return create_trigger in `next` | gated |
 | B3 | bosun | channel: `.bosun/intake.toml` seed; `intake` key in bosun.toml | gated |
-| B4 | bosun | `Record::Handoff`, `bosun handoff`, `resume --handoff` | low |
+| B4 | bosun | `Record::Handoff`, `bosun handoff`, `resume --handoff` | gated (records are approval code) |
 | B5 | bosun | relay: `relay_waves`, `spawn --root --handoff`, archive in `next` | gated |
 | B6 | bosun | `[approvals] policy` in approve and risk-check | gated |
 | B7 | bosun | spec §4, §5, §11, §14 updates; release 0.5.0; pin | gated |
 | H1 | hull | `ready.mjs --assess --json`: a fixed output schema + tests | low |
-| P1 | provision (new) | repo, `provision.yml` (signature check, hull render or adopt, init), environment `provision` (main only) | gated |
-| P2 | hoist | `hoist apply` with an app token (no PAT), org secret grants | gated |
+| P1 | provision (new) | repo, `provision.yml` (verify, nonce record, mode rules, protected repos, hull, init), environment `provision` (main only) | gated |
+| P2 | hoist | `hoist apply` with an app token (no PAT), environment secrets, additive adopt | gated |
 | D1 | decisions | file D-014 (appendix) | owner-merged |
 
-Order: B1, H1 and B4 in parallel; then B2, B3; P2, P1; B5, B6; B7 last.
+Order: B1 and H1 in parallel; B4 after B1 (both register a command in `src/cli/mod.rs`, which one
+task owns at a time); then B2, B3; P2, P1; B5, B6; B7 last.
 
 ## Appendix: draft D-014
 
 | ID | Date | Scope | Decision |
 | --- | --- | --- | --- |
-| D-014 | 2026-11-?? | all | After bootstrap mode (D-012) each repo's approval policy is an intake answer in `.bosun/intake.toml`: `owner`, `owner-gated` (default: the orchestrator approves low-risk and R-ci PRs after green checks and an independent review of that head; the owner approves R-gov, `.bosun`, approval code, workflows, secrets and releases) or `orchestrator` (the bootstrap rules, without an end date). In every policy, environments, tags, releases, decisions merges, branch rules and secrets need the owner. Repos are created and configured only by the org provisioner app, through a workflow whose environment deploys from main only and that refuses an intake without a valid orchestrator signature; the owner's intake answer is the approval, with no per-repo tap; no PAT is used. npm and crates publish through OIDC trusted publishing. |
+| D-014 | 2026-11-?? | all | After bootstrap mode (D-012) each repo's approval policy is an intake answer in `.bosun/intake.toml`: `owner`, `owner-gated` (default: the orchestrator approves low-risk and R-ci PRs after green checks and an independent review of that head; the owner approves R-gov, `.bosun`, approval code, workflows, secrets and releases) or `orchestrator` (the bootstrap rules, without an end date). In every policy, environments, tags, releases, decisions merges, branch rules and secrets need the owner, and in a repo that holds any environment secret, a PR that changes `.github/workflows/**` is owner-class. Repos are created and configured only by the org provisioner app, through a workflow whose environment deploys from main only and that refuses an intake without a valid, unexpired, unused orchestrator signature bound to repo, mode, nonce and the intake's sha256; the orchestrator signs only on an owner form answer naming that repo and mode, and its key stays in its own session; `new` only creates, `adopt` only adds, and protected repos are refused; secrets are environment secrets on splice-bot and release (main only) per publish target, never repo-level; no PAT is used. npm and crates publish through OIDC trusted publishing. |
