@@ -65,6 +65,13 @@ fn command_from_args(args: &[String]) -> &'static str {
         if arg == "-C" {
             iter.next();
         } else if !arg.starts_with('-') {
+            if arg == "intake"
+                && iter
+                    .find(|a| !a.starts_with('-'))
+                    .is_some_and(|a| a == "check")
+            {
+                return "intake check";
+            }
             return COMMANDS
                 .iter()
                 .copied()

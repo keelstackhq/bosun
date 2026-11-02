@@ -155,14 +155,62 @@ fn name_ok(s: &str) -> bool {
 fn plan_ok(p: &str) -> bool {
     p.starts_with("plans/")
         && p.ends_with(".md")
-        && !p.contains('\\')
-        && p.split('/').all(|x| !x.is_empty() && x != "." && x != "..")
+        && p.split('/').all(|x| {
+            !matches!(x, "" | "." | "..")
+                && x.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        })
+}
+
+const TOP: [&str; 11] = [
+    "version",
+    "repo",
+    "stack",
+    "pieces",
+    "bosun_pieces",
+    "goal",
+    "plan",
+    "publish",
+    "approvals",
+    "notify",
+    "slack_channel",
+];
+const REPO: [&str; 3] = ["name", "owner", "visibility"];
+
+/// Read the TOML and check its shape, so that every structural error names its key.
+fn structure(src: &str) -> Result<Raw, IntakeError> {
+    let table: toml::Table = src.parse().map_err(|e: toml::de::Error| {
+        // A duplicate key has the key as its span; a syntax error has no key to name.
+        let key = e.span().map_or("", |r| src[r].trim());
+        let named = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        bad(if named { key } else { "(file)" }, e.message().to_string())
+    })?;
+    if let Some(k) = table.keys().find(|k| !TOP.contains(&k.as_str())) {
+        return Err(bad(k, "unknown key"));
+    }
+    match table.get("repo") {
+        Some(Value::Table(t)) => {
+            if let Some(k) = t.keys().find(|k| !REPO.contains(&k.as_str())) {
+                return Err(bad(&format!("repo.{k}"), "unknown key"));
+            }
+        }
+        Some(_) => {
+            return Err(bad(
+                "repo",
+                "expected a table with name, owner and visibility",
+            ));
+        }
+        None => {}
+    }
+    Value::Table(table)
+        .try_into()
+        .map_err(|_| bad("(file)", "the file does not have the shape of an intake"))
 }
 
 /// Parse and validate. Fields are checked in file order, so the first error is the first thing
 /// the owner has to fix.
 pub fn parse(src: &str) -> Result<Intake, IntakeError> {
-    let raw: Raw = toml::from_str(src).map_err(|e| bad("(file)", e.message().to_string()))?;
+    let raw = structure(src)?;
     match &raw.version {
         None => return Err(missing("version", "nothing: set `version = 1`")),
         Some(Value::Integer(1)) => {}
@@ -408,15 +456,59 @@ slack_channel = ""
 
     #[test]
     fn unknown_keys_are_bad_at_every_level() {
-        assert_bad(&format!("{OK}extra = 1\n"), "(file)");
+        assert_bad(&format!("{OK}extra = 1\n"), "extra");
         assert_bad(
             &edit(
                 "visibility = \"private\"",
                 "visibility = \"private\", x = 1",
             ),
-            "(file)",
+            "repo.x",
         );
         // The signature is a detached file: a table in the intake is an unknown key.
-        assert_bad(&format!("{OK}[signature]\nkey = \"k\"\n"), "(file)");
+        assert_bad(&format!("{OK}[signature]\nkey = \"k\"\n"), "signature");
+    }
+
+    #[test]
+    fn plan_paths_allow_plain_segments_only() {
+        let g = "goal = \"A CLI that does a thing\"";
+        for p in [
+            "plans/a\nb.md",
+            "plans/ .md",
+            "plans/a b.md",
+            "plans/a\tb.md",
+            "plans/é.md",
+        ] {
+            assert_bad(&edit(g, &format!("plan = {p:?}")), "plan");
+        }
+        let ok = edit(g, "plan = \"plans/sub/App_1.v2-x.md\"");
+        assert!(parse(&ok).is_ok());
+    }
+
+    #[test]
+    fn structural_errors_name_the_key_and_leak_no_serde_text() {
+        let top = format!("{OK}extra = 1\n");
+        let nested = edit(
+            "visibility = \"private\"",
+            "visibility = \"private\", x = 1",
+        );
+        let dup = format!("{OK}stack = [\"rust\"]\n");
+        let wrong = edit(
+            "repo = { name = \"app\", owner = \"keelstackhq\", visibility = \"private\" }",
+            "repo = \"x\"",
+        );
+        let cases = [
+            (top, "extra"),
+            (nested, "repo.x"),
+            (dup, "stack"),
+            (wrong, "repo"),
+        ];
+        for (src, field) in cases {
+            let e = parse(&src).unwrap_err();
+            assert_eq!(e.field(), field, "{e:?}");
+            let text = format!("{} {}", e.message(), e.fix());
+            for leak in ["Raw", "struct", "expected struct"] {
+                assert!(!text.contains(leak), "{leak}: {text}");
+            }
+        }
     }
 }

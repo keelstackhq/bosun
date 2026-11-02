@@ -749,7 +749,7 @@ pub struct IntakeCheckArgs {
     /// The intake file (default .bosun/intake.toml).
     pub file: Option<PathBuf>,
     /// Read the file from stdin (`-`) instead.
-    #[arg(long, value_name = "-", value_parser = ["-"])]
+    #[arg(long, value_name = "-", value_parser = ["-"], conflicts_with = "file")]
     pub from: Option<String>,
 }
 

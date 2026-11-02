@@ -29,15 +29,17 @@ pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
     if let Some(IntakeCmd::Check(c)) = &a.cmd {
         return super::intake_file::check(dir, c);
     }
+    // Usage errors come before any repo or GitHub access, as they always did.
+    args_ok(a)?;
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
     open(&app, a)
 }
 
-/// Open (or find) the kind/plan issue of a request; the kill switch is the caller's.
-pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
-    let text = a.text.trim();
-    if text.is_empty() {
+/// The text and `--source` of the old form are required (clap cannot say so next to the
+/// subcommands).
+fn args_ok(a: &IntakeArgs) -> Result<(), BosunError> {
+    if a.text.trim().is_empty() {
         return Err(BosunError::usage(
             "the intake text is empty",
             "pass what is wanted as the first argument: bosun intake \"<text>\" --source human",
@@ -49,6 +51,13 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
             "pass where the request came from: --source slack|lesson|flake|human",
         ));
     }
+    Ok(())
+}
+
+/// Open (or find) the kind/plan issue of a request; the kill switch is the caller's.
+pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
+    args_ok(a)?;
+    let text = a.text.trim();
     let file = a
         .plan
         .clone()

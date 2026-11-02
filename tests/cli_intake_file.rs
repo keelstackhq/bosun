@@ -89,12 +89,17 @@ fn check_separates_a_missing_answer_from_a_bad_value() {
         ("[\"crates\"]", "[\"crates\", \"none\"]", 2, "publish"),
         ("\"chat\"", "\"slack\"", 5, "slack_channel"),
         ("goal = ", "plan = \"plans/a.md\"\ngoal = ", 2, "goal"),
-        ("version = 1\n", "version = 1\nsurprise = 1\n", 2, "(file)"),
+        (
+            "version = 1\n",
+            "version = 1\nsurprise = 1\n",
+            2,
+            "surprise",
+        ),
         (
             "visibility = \"private\"",
             "visibility = \"private\", x = 1",
             2,
-            "(file)",
+            "repo.x",
         ),
         ("stack = [\"rust\"]", "stack = \"rust\"", 2, "stack"),
     ];
@@ -120,6 +125,69 @@ fn check_ignores_signatures_and_a_signature_table_is_an_unknown_key() {
     let with_table = format!("{OK}\n[signature]\nkey = \"k\"\nsig = \"s\"\n");
     let (code, v) = e.run(NOW, &["check", "--from", "-"], &with_table);
     assert_eq!(code, 2, "{v}");
+}
+
+#[test]
+fn check_refuses_a_file_together_with_from_stdin() {
+    let e = Env::new();
+    let (code, v) = e.run(NOW, &["check", ".bosun/intake.toml", "--from", "-"], OK);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(v["command"], "intake check");
+}
+
+#[test]
+fn a_missing_default_file_needs_the_owner_but_a_named_one_is_usage() {
+    let e = Env::new();
+    std::fs::remove_file(e.p(".bosun/intake.toml")).unwrap();
+    let (code, v) = e.run(NOW, &["check"], "");
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bosun init --intake")
+    );
+    let (code, v) = e.run(NOW, &["check", "other.toml"], "");
+    assert_eq!(code, 2, "{v}");
+}
+
+#[test]
+fn structural_errors_name_the_key() {
+    let e = Env::new();
+    for (src, field) in [
+        (format!("{OK}extra = 1\n"), "extra"),
+        (OK.replace("repo = {", "repo = 5 #{"), "repo"),
+    ] {
+        let (code, v) = e.run(NOW, &["check", "--from", "-"], &src);
+        assert_eq!(code, 2, "{v}");
+        assert_eq!(v["data"]["field"], field, "{v}");
+    }
+}
+
+// UC-ZI-7: the old form fails with exit 2 before it needs any repo context.
+#[test]
+fn the_old_form_checks_its_arguments_before_any_repo_or_github_access() {
+    let d = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        let out = common::bosun()
+            .current_dir(d.path())
+            .env_remove("BOSUN_REPO")
+            .env("BOSUN_HALT", "1")
+            .arg("intake")
+            .args(args)
+            .output()
+            .unwrap();
+        (out.status.code().unwrap(), common::one_object(&out.stdout))
+    };
+    for args in [
+        vec!["x"],
+        vec!["", "--source", "human"],
+        vec!["  ", "--source", "human"],
+    ] {
+        let (code, v) = run(&args);
+        assert_eq!(code, 2, "{args:?}: {v}");
+        assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    }
 }
 
 // UC-ZI-7: the old form keeps working.

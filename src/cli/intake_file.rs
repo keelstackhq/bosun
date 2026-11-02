@@ -25,7 +25,16 @@ pub fn check(dir: Option<&Path>, a: &IntakeCheckArgs) -> CmdResult {
     } else {
         let given = a.file.clone().unwrap_or_else(|| PathBuf::from(INTAKE_PATH));
         let path = dir.map_or(given.clone(), |d| d.join(&given));
-        text = std::fs::read_to_string(path).map_err(|e| usage(&given.display().to_string(), e))?;
+        text = std::fs::read_to_string(path).map_err(|e| {
+            if a.file.is_none() && e.kind() == std::io::ErrorKind::NotFound {
+                BosunError::needs_human(
+                    format!("{INTAKE_PATH} does not exist"),
+                    format!("write {INTAKE_PATH} (`bosun init --intake`)"),
+                )
+            } else {
+                usage(&given.display().to_string(), e)
+            }
+        })?;
     }
     let i = parse(&text).map_err(|e| {
         let data = json!({"field": e.field()});
