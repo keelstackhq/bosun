@@ -1,0 +1,1 @@
+- `bosun doctor` step 6 prints the setup script in `content` and names the shared `keelstack` cloud environment (ZR/T1).
