@@ -172,7 +172,7 @@ High-risk PRs:
   (`BOSUN_NOW`, UTC) is on or before `bootstrap_until` read at the base SHA; the PR's
   requirement is `owner`; and the PR touches no path of `BOOTSTRAP_EXCLUDED` in
   `src/core/risk.rs`: `.bosun/**` (`.bosun/version` pins the gate release),
-  `governance/**`, the `CODEOWNERS` files, the root `hoist.toml`, in bosun (its base has
+  `governance/**`, the `CODEOWNERS` files, every `hoist.toml`, in bosun (its base has
   `src/cli/risk_check.rs`) every `APPROVAL_CODE_PATHS` entry (`src/**`, `Cargo.toml`,
   `Cargo.lock`, `build.rs` in any directory, `.cargo/**`, `npm/**`: the code of the check and of
   signature verification, derived from the same list so the two never drift), the channel's
@@ -188,27 +188,26 @@ High-risk PRs:
   `[approvals]`, since its release may reject the key (`tests/channel_render.rs`). A consumer
   drops the key to opt out.
 - Approval policy (D-014 draft, spec B6). `[approvals] policy = "owner" | "owner-gated" |
-  "orchestrator"` (default `owner-gated`; another value is a parse error) says when an
-  orchestrator approval (the bootstrap-form signature above, format unchanged) counts. Checks, in
-  order, first failure wins (`orchestrator_counts` in `src/core/approve.rs`): the requirement is
-  `owner`; no `BOOTSTRAP_EXCLUDED` hit; if the repo holds an environment secret, no changed
-  `WORKFLOW_PATHS` file (`.github/workflows/**`, `.github/actions/**`, `.circleci/**` and the
-  other CI configs R-ci names, previous names too); then the window, `today <= min(bootstrap_until, BOOTSTRAP_END)` with `BOOTSTRAP_END =
-  2026-11-30` (D-012's last day, so no later date widens it), counts as `bootstrap mode, D-012`;
-  after it `orchestrator` counts (`policy orchestrator, D-014`), `owner` never, `owner-gated` only
-  when every matched rule is `R-ci` and no workflow file changed (`policy owner-gated, D-014`). A
-  refusal names the policy and, where `bootstrap_until` is set or missing, D-012 and its end date.
-  Risk-check looks for environment secrets only on a PR that changes a workflow file:
-  `GET /environments` and each `/environments/{name}/secrets` (a count above 0 is a secret); a 404 on
-  `/environments` is none; 403, more than 100 environments, a list that does not match its count,
-  or a 404 or odd answer on a listed environment is unknown and counts as a secret (fail closed,
-  logged to stderr). `bosun approve --bootstrap` reads the same setting on the default branch: inside
-  the window it signs as before; after it `orchestrator` signs (note line `Signed under approval policy orchestrator (D-014)`),
-  `owner` exits 1, and `owner-gated` signs (`... owner-gated (D-014)`) only when the trusted
+  "orchestrator"` (default `owner`, fail safe: intake writes the policy explicitly for new and
+  adopted repos; another value is a parse error) says when an orchestrator approval (the
+  bootstrap-form signature above, format unchanged) counts. Checks, in order, first failure wins
+  (`orchestrator_counts` in `src/core/approve.rs`): the requirement is `owner`; no
+  `BOOTSTRAP_EXCLUDED` hit; no changed `WORKFLOW_PATHS` file (`.github/workflows/**`,
+  `.github/actions/**`, `.circleci/**` and the other CI configs R-ci names, previous names too),
+  in every policy and in the window too: a workflow's permissions, environments and tag or publish
+  steps cannot be judged reliably from a diff, so every workflow PR is owner-class; then the
+  window, `today <= min(bootstrap_until, BOOTSTRAP_END)` with `BOOTSTRAP_END = 2026-11-30`
+  (D-012's last day, so no later date widens it), counts as `bootstrap mode, D-012`; after it
+  `orchestrator` counts (`policy orchestrator, D-014`), `owner` never, `owner-gated` only when
+  every matched rule is `R-ci` (`policy owner-gated, D-014`). A refusal names the policy and,
+  where `bootstrap_until` is set or missing, D-012 and its end date. `bosun approve --bootstrap`
+  reads the same setting on the default branch: inside the window it signs as before; after it
+  `orchestrator` signs (note line `Signed under approval policy orchestrator (D-014)`), `owner`
+  exits 1, and `owner-gated` signs (`... owner-gated (D-014)`) only when the trusted
   `risk-check` status lists `R-ci` alone and the PR changes no workflow file, else exit 1 (the
   owner approves, asked with a chat form). `data.policy` names the policy of `--print` and posted
-  approvals. Release ordering: the pinned release rejects unknown keys, so set `policy` only after a
-  release that reads it is pinned and `KNOWN_APPROVALS` in `tests/pinned_config.rs` lists it.
+  approvals. Release ordering: the pinned release rejects unknown keys, so set `policy` only after
+  a release that reads it is pinned and `KNOWN_APPROVALS` in `tests/pinned_config.rs` lists it.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

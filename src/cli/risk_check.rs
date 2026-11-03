@@ -881,12 +881,6 @@ fn orchestrator_window(
         .map(|f| (&*f.filename, f.previous_filename.as_deref()))
         .collect();
     let workflows = risk::workflow_files(&paths);
-    // Only a workflow change needs to know; anything unreadable counts as a secret (fail closed).
-    let env_secrets = !workflows.is_empty()
-        && gh.environment_secrets()?.unwrap_or_else(|| {
-            eprintln!("bosun: risk-check: cannot read the environment secrets: treated as present");
-            true
-        });
     let rules: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
     Ok(orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),
@@ -896,7 +890,6 @@ fn orchestrator_window(
         excluded,
         rules: &rules,
         workflows: &workflows,
-        env_secrets,
     }))
 }
 

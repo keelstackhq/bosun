@@ -414,7 +414,7 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
     "CODEOWNERS",
     ".github/CODEOWNERS",
     "docs/CODEOWNERS",
-    "hoist.toml",
+    "**/hoist.toml",
     "channel/pieces/core/files/.bosun/**",
     ".github/workflows/release.yml",
     "**/workflows/splice.yml",

@@ -162,9 +162,6 @@ pub trait Github {
     fn exists(&self, rest: &str) -> Result<Option<bool>>;
     /// Which branches may deploy to the environment `name`.
     fn environment_branches(&self, name: &str) -> Result<EnvBranches>;
-    /// Whether any environment of the repo holds a secret: `None` when the token cannot read the
-    /// environments or their secrets (403), so the caller cannot tell.
-    fn environment_secrets(&self) -> Result<Option<bool>>;
 }
 
 /// An environment's deployment branches as the token sees them.
@@ -816,35 +813,6 @@ impl Github for LiveGithub {
             Ok(found) => Some(found.is_some()),
             Err(()) => None,
         })
-    }
-
-    fn environment_secrets(&self) -> Result<Option<bool>> {
-        let list = match self
-            .http
-            .get_json_or_forbidden(&self.path("/environments?per_page=100"))?
-        {
-            Ok(v) => v.unwrap_or(Value::Null),
-            Err(()) => return Ok(None),
-        };
-        if list["total_count"].as_u64().unwrap_or(0) > 100 {
-            return Ok(None);
-        }
-        let envs = list["environments"].as_array().cloned().unwrap_or_default();
-        // A list that does not match its count cannot be trusted: unknown.
-        if envs.len() as u64 != list["total_count"].as_u64().unwrap_or(0) {
-            return Ok(None);
-        }
-        for env in &envs {
-            let name = env["name"].as_str().unwrap_or_default();
-            let rest = format!("/environments/{}/secrets?per_page=1", enc(name));
-            match self.http.get_json_or_forbidden(&self.path(&rest))? {
-                Ok(Some(v)) if v["total_count"].as_u64() == Some(0) => {}
-                Ok(Some(v)) if v["total_count"].as_u64().is_some() => return Ok(Some(true)),
-                // A 404 on a listed environment or an odd answer: unknown is a secret.
-                _ => return Ok(None),
-            }
-        }
-        Ok(Some(false))
     }
 
     fn environment_branches(&self, name: &str) -> Result<EnvBranches> {

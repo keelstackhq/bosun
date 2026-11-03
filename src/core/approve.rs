@@ -345,10 +345,10 @@ pub fn bootstrap_line(until: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Policy {
-    /// Only the owner approves.
+    /// Only the owner approves; the default, so a repo without the key fails safe.
+    #[default]
     Owner,
     /// The orchestrator approves R-ci changes outside the CI workflows; the owner the rest.
-    #[default]
     OwnerGated,
     /// The orchestrator approves everything the exclusions leave to a signature.
     Orchestrator,
@@ -366,8 +366,8 @@ impl Policy {
 
 /// D-012's last day; no `bootstrap_until` later than this widens the window.
 pub const BOOTSTRAP_END: &str = "2026-11-30";
-/// CI workflow files of every provider R-ci names: owner-class under owner-gated, and in every
-/// policy when the repo holds an environment secret (D-014).
+/// CI workflow files of every provider R-ci names: owner-class in every policy, in the window too.
+/// Their permissions, environments and publish steps cannot be judged reliably from a diff.
 pub const WORKFLOW_PATHS: [&str; 11] = [
     ".github/workflows/**",
     ".github/actions/**",
@@ -397,8 +397,6 @@ pub struct OrchestratorCase<'a> {
     pub rules: &'a [&'a str],
     /// Changed paths (previous names too) in [`WORKFLOW_PATHS`].
     pub workflows: &'a [String],
-    /// The repo holds an environment secret, or bosun cannot tell.
-    pub env_secrets: bool,
 }
 
 /// `Ok(label for the status)` when an orchestrator approval can count, else `Err(why)`.
@@ -415,9 +413,9 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
             c.excluded.join(", ")
         ));
     }
-    if c.env_secrets && !c.workflows.is_empty() {
+    if !c.workflows.is_empty() {
         return Err(format!(
-            "the repo holds an environment secret, so {} needs the owner (D-014)",
+            "the PR changes {}: a CI workflow always needs the owner (D-014)",
             c.workflows.join(", ")
         ));
     }
@@ -436,13 +434,7 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
             "approval policy owner: only the owner approves ({window})"
         )),
         Policy::OwnerGated => {
-            let other = (c
-                .rules
-                .iter()
-                .filter(|r| **r != "R-ci")
-                .map(|r| r.to_string()))
-            .chain(c.workflows.iter().cloned())
-            .collect::<Vec<_>>();
+            let other: Vec<&str> = (c.rules.iter().copied()).filter(|r| *r != "R-ci").collect();
             if other.is_empty() {
                 return label(c.policy);
             }
@@ -520,7 +512,6 @@ mod tests {
             excluded: &[],
             rules: &["R-ci"],
             workflows: &[],
-            env_secrets: false,
         }
     }
 
@@ -554,13 +545,17 @@ mod tests {
         assert!(orchestrator_counts(&c).unwrap_err().contains("ci.yml"));
         let mut c = case(Policy::Orchestrator, None, "2026-12-01");
         c.rules = &["R-gov"];
-        c.workflows = &w;
         assert_eq!(
             orchestrator_counts(&c).unwrap(),
             "policy orchestrator, D-014"
         );
-        c.env_secrets = true;
+        // A workflow always needs the owner, in every policy and in the window.
+        c.workflows = &w;
         assert!(orchestrator_counts(&c).unwrap_err().contains("D-014"));
+        let mut c = case(Policy::Orchestrator, Some("2026-11-30"), "2026-11-10");
+        c.workflows = &w;
+        assert!(orchestrator_counts(&c).unwrap_err().contains("ci.yml"));
+        assert_eq!(Policy::default(), Policy::Owner);
         let c = case(Policy::Owner, None, "2026-12-01");
         assert!(
             orchestrator_counts(&c)

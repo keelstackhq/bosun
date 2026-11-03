@@ -106,7 +106,7 @@ impl Default for Slack {
 
 /// `[approvals]`: `bootstrap_until` (`YYYY-MM-DD`, UTC, inclusive) is the last day of bootstrap
 /// mode (D-012, spec §8); absent means bootstrap mode is off. `policy` says who approves once it
-/// is over (D-014); absent means `owner-gated`.
+/// is over (D-014); absent means `owner` (fail safe).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Approvals {

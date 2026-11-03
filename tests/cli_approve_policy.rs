@@ -105,7 +105,7 @@ fn sign(fake: &FakeGithub, k: &Key, now: &str) -> (i32, Value) {
 
 #[test]
 fn owner_gated_counts_on_r_ci_outside_workflows_only() {
-    for cfg in [config(None, None), config(Some("owner-gated"), None)] {
+    for cfg in [config(Some("owner-gated"), None)] {
         for file in ["deny.toml", "rust-toolchain.toml"] {
             assert!(counts(file, PLAIN, &cfg, AFTER), "{file}");
         }
@@ -153,35 +153,48 @@ fn environment_release_branch_rule_and_secret_paths_always_need_the_owner() {
 }
 
 #[test]
-fn policy_orchestrator_counts_on_gov_and_plain_workflows_without_environment_secrets() {
+fn policy_orchestrator_counts_on_gov_but_never_on_workflows() {
     let cfg = config(Some("orchestrator"), None);
     assert!(counts(".claude/settings.json", PLAIN, &cfg, AFTER));
-    assert!(counts(".github/workflows/ci.yml", PLAIN, &cfg, AFTER));
-    // An environment without a secret does not stop it.
-    let k = key();
-    let fake = pr(&k, ".github/workflows/ci.yml", PLAIN, &cfg);
-    fake.environment("prod", json!({}), json!([]));
-    assert!(counts_on(&fake, &k, AFTER));
-    // A secret in any environment does, in every policy, in the window too.
+    // A workflow PR is owner-class in every policy, in the window too: bosun cannot tell its
+    // permissions, environments or publish steps reliably (fail closed).
     for policy in POLICIES {
-        let cfg = config(Some(policy), Some("2026-11-30"));
-        for now in [IN, AFTER] {
-            let k = key();
-            let fake = pr(&k, ".github/workflows/ci.yml", PLAIN, &cfg);
-            fake.env_secret("prod", 2);
-            assert!(!counts_on(&fake, &k, now), "{policy} {now}");
+        for (cfg, now) in [
+            (config(Some(policy), Some("2026-11-30")), IN),
+            (config(Some(policy), None), AFTER),
+        ] {
+            for file in [
+                ".github/workflows/ci.yml",
+                ".github/actions/setup/action.yml",
+                ".gitlab-ci.yml",
+            ] {
+                assert!(!counts(file, PLAIN, &cfg, now), "{policy} {now} {file}");
+            }
         }
     }
-    // The token cannot read the secrets: fail closed.
-    let k = key();
-    let fake = pr(&k, ".github/workflows/ci.yml", PLAIN, &cfg);
-    fake.env_secret("prod", 0);
-    fake.fail_path_message("/environments/prod/secrets", 403, "Resource not accessible");
-    assert!(!counts_on(&fake, &k, AFTER));
-    let k = key();
-    let fake = pr(&k, ".github/workflows/ci.yml", PLAIN, &cfg);
-    fake.fail_path_message("/environments", 403, "Resource not accessible");
-    assert!(!counts_on(&fake, &k, AFTER));
+}
+
+#[test]
+fn a_missing_policy_means_owner() {
+    // Without `policy`, after the window nothing counts, R-ci-only PRs included.
+    for cfg in [config(None, None), config(None, Some("2026-11-30"))] {
+        assert!(!counts("deny.toml", PLAIN, &cfg, AFTER));
+    }
+    // Inside the window D-012 still holds.
+    assert!(counts(
+        "deny.toml",
+        PLAIN,
+        &config(None, Some("2026-11-30")),
+        IN
+    ));
+}
+
+#[test]
+fn hoist_toml_at_any_depth_needs_the_owner() {
+    for policy in POLICIES {
+        let cfg = config(Some(policy), Some("2026-11-30"));
+        assert!(!counts("infra/hoist.toml", PLAIN, &cfg, IN), "{policy}");
+    }
 }
 
 #[test]
@@ -223,7 +236,7 @@ fn approve_bootstrap_signs_by_policy_after_the_window() {
     assert_eq!(v["data"]["bootstrap_until"], Value::Null);
     // owner-gated: only when the trusted risk-check lists R-ci alone.
     for (ids, code) in [("R-ci", 0), ("R-gov", 1), ("R-ci, R-gov", 1)] {
-        let fake = pr(&k, "deny.toml", PLAIN, &config(None, None));
+        let fake = pr(&k, "deny.toml", PLAIN, &config(Some("owner-gated"), None));
         let text = format!("high risk, owner approval needed: {ids}");
         fake.status(HEAD, "risk-check", "failure", &text);
         let (c, v) = sign(&fake, &k, AFTER);
@@ -236,7 +249,7 @@ fn approve_bootstrap_signs_by_policy_after_the_window() {
         }
     }
     // An untrusted creator's status does not count.
-    let fake = pr(&k, "deny.toml", PLAIN, &config(None, None));
+    let fake = pr(&k, "deny.toml", PLAIN, &config(Some("owner-gated"), None));
     fake.status_by(
         HEAD,
         "risk-check",
@@ -246,13 +259,23 @@ fn approve_bootstrap_signs_by_policy_after_the_window() {
     );
     assert_eq!(sign(&fake, &k, AFTER).0, 1);
     // A workflow PR is refused even when the status says R-ci.
-    let fake = pr(&k, ".github/workflows/ci.yml", PLAIN, &config(None, None));
+    let fake = pr(
+        &k,
+        ".github/workflows/ci.yml",
+        PLAIN,
+        &config(Some("owner-gated"), None),
+    );
     fake.status(
         HEAD,
         "risk-check",
         "failure",
         "high risk, owner approval needed: R-ci",
     );
+    assert_eq!(sign(&fake, &k, AFTER).0, 1);
+    // No policy is `owner`: refused even when the status says R-ci.
+    let fake = pr(&k, "deny.toml", PLAIN, &config(None, None));
+    let text = "high risk, owner approval needed: R-ci";
+    fake.status(HEAD, "risk-check", "failure", text);
     assert_eq!(sign(&fake, &k, AFTER).0, 1);
     // Inside the window nothing changes.
     let fake = pr(
@@ -265,5 +288,5 @@ fn approve_bootstrap_signs_by_policy_after_the_window() {
     assert_eq!(code, 0, "{v}");
     assert!(line(&v).contains("Signed in bootstrap mode (D-012, until 2026-11-30)"));
     assert_eq!(v["data"]["bootstrap_until"], "2026-11-30");
-    assert_eq!(v["data"]["policy"], "owner-gated");
+    assert_eq!(v["data"]["policy"], "owner");
 }
