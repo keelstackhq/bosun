@@ -273,6 +273,31 @@ fn apply_environments(items: &mut [Value], gh: &dyn Github, repo: &str, root: &P
     json!(envs)
 }
 
+const SETUP_SCRIPT_CAP: u64 = 64 * 1024;
+
+/// The setup script's text, or why it cannot be shown: missing, a symlink, over the cap, unreadable.
+fn read_setup_script(root: &Path) -> (Option<String>, Option<String>) {
+    use std::io::Read;
+    let path = root.join("docs/setup-script.sh");
+    let bad = |m: String| (None, Some(format!("docs/setup-script.sh {m}")));
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return bad("is missing".into()),
+        Err(e) => return bad(format!("is not readable: {e}")),
+    };
+    if meta.file_type().is_symlink() {
+        return bad("is a symlink".into());
+    }
+    let mut text = String::new();
+    let read = std::fs::File::open(&path)
+        .and_then(|f| f.take(SETUP_SCRIPT_CAP + 1).read_to_string(&mut text));
+    match read {
+        Err(e) => bad(format!("is not readable: {e}")),
+        Ok(_) if text.len() as u64 > SETUP_SCRIPT_CAP => bad("is over 64 KiB".into()),
+        Ok(_) => (Some(text), None),
+    }
+}
+
 fn read(root: &Path, rel: &str) -> Option<String> {
     std::fs::read_to_string(root.join(rel)).ok()
 }
@@ -710,20 +735,26 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     let version = read(root, ".bosun/version").map(|v| v.trim().to_string());
-    let script = root.join("docs/setup-script.sh").is_file();
-    items.push(item(
+    let (script, script_problem) = read_setup_script(root);
+    let mut setup = item(
         6,
         "setup script and version",
-        if !script {
-            Some("docs/setup-script.sh is missing".into())
+        if script_problem.is_some() {
+            script_problem
         } else if version.is_none() {
             Some(".bosun/version is missing".into())
         } else {
             None
         },
-        format!("docs/setup-script.sh exists; .bosun/version is {}", version.clone().unwrap_or_default()),
-        "paste docs/setup-script.sh into the cloud environment's setup script (claude.ai/code) and keep .bosun/version",
-    ));
+        format!(
+            "docs/setup-script.sh exists (content below) for the shared cloud environment \"keelstack\"; .bosun/version is {}",
+            version.clone().unwrap_or_default()
+        ),
+        "paste docs/setup-script.sh (the content field) as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments), no secrets; keep .bosun/version",
+    );
+    setup["environment"] = json!("keelstack");
+    setup["content"] = json!(script);
+    items.push(setup);
 
     let channel = ctx
         .config

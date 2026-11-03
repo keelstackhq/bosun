@@ -1,0 +1,1 @@
+- 2026-11-03 · ZR/T1 · doctor prints the setup script and names the keelstack environment; spec §4, §11, §14 for intake, handoff and relay · PR (feat-doctor-setup-script)
