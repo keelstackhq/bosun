@@ -4,6 +4,20 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.5.0 (2026-11-03)
+
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.4.0 with its npm sha512 values. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
+- docs: design for zero-touch onboarding (intake file, org provisioner app, handoff and relay), docs only.
+- `bosun doctor` step 6 prints the setup script in `content` and names the shared `keelstack` cloud environment (ZR/T1).
+- `bosun init --intake FILE` checks the intake file first (5 on a missing answer, 2 on a bad value), derives `--stack`, `--owner` and `--plan` from it (a disagreeing flag exits 2), copies it to `.bosun/intake.toml` outside the render, and returns the janitor, curator and (with Slack) notify `create_trigger` calls in `next` (ZI/T3).
+- `bosun intake check` validates `.bosun/intake.toml` against the intake schema (ZI/T1).
+- The channel seeds `.bosun/intake.toml` (a template `bosun intake check` refuses with exit 5) and `bosun.toml` accepts `intake = true|false` (ZI/T2).
+- `bosun intake sign` and `verify` sign and check a detached `.bosun/intake.sig` for provision.yml (ZI/T1).
+- `[approvals] policy = "owner" | "owner-gated" | "orchestrator"` (missing means `owner`) decides when an orchestrator approval counts in `risk-check` and when `bosun approve --bootstrap` signs after bootstrap mode (D-014); a CI workflow change and any `hoist.toml` always need the owner, and `bootstrap_until` is capped at 2026-11-30.
+- A local composite action (`action.yml` or `action.yaml` at any path) is R-ci and a critical path, and counts as a CI workflow file for approval policies: a PR changing one needs the owner, never a delegate or an orchestrator approval.
+- `bosun handoff [--from FILE]` writes a root's handoff (at most 40 lines, else exit 6) to the registry and `bosun resume --handoff` returns the newest one in `data.handoff`; a handoff is never a lease.
+- `bosun spawn --root --handoff` / `--root --record` relay a root to a fresh root (`waves.relay_waves`, default 6; optional `[cloud] environment_id`); `resume --handoff` follows the relay lineage and shows `relay_waves`.
+
 ## 0.4.0 (2026-11-01)
 
 - bosun pins 0.3.0 and turns on bootstrap mode (D-012) until 2026-11-30: `[approvals] bootstrap_until` in its own `.bosun/bosun.toml`, and in the channel for repos that pin the channel version. After it merges, paste `docs/setup-script.sh` into the cloud environments again.

@@ -1,1 +1,0 @@
-- 2026-11-03 · ZI/T2 · channel seed `.bosun/intake.toml`, `intake` key in bosun.toml, `intake` splice var · PR (feat/intake-seed)

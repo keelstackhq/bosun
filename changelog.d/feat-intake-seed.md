@@ -1,1 +1,0 @@
-- The channel seeds `.bosun/intake.toml` (a template `bosun intake check` refuses with exit 5) and `bosun.toml` accepts `intake = true|false` (ZI/T2).

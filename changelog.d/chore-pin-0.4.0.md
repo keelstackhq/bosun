@@ -1,1 +1,0 @@
-- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.4.0 with its npm sha512 values. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
