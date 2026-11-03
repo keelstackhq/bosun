@@ -368,9 +368,12 @@ impl Policy {
 pub const BOOTSTRAP_END: &str = "2026-11-30";
 /// CI workflow files of every provider R-ci names: owner-class in every policy, in the window too.
 /// Their permissions, environments and publish steps cannot be judged reliably from a diff.
-pub const WORKFLOW_PATHS: [&str; 11] = [
+pub const WORKFLOW_PATHS: [&str; 13] = [
     ".github/workflows/**",
     ".github/actions/**",
+    // Local composite actions (`uses: ./path`) run inside a workflow.
+    "**/action.yml",
+    "**/action.yaml",
     ".circleci/**",
     ".gitlab-ci.yml",
     ".gitlab/ci/**",

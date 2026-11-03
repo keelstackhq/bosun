@@ -49,6 +49,24 @@ fn requirement(path: &str, previous: Option<&str>) -> String {
 }
 
 #[test]
+fn a_local_composite_action_needs_the_owner_like_a_workflow() {
+    // The committed rules: CI swaps the base's .bosun/ into the checkout, and this PR adds them.
+    let out = std::process::Command::new("git")
+        .args(["show", "HEAD:.bosun/risk.toml"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    let committed = String::from_utf8(out.stdout).unwrap();
+    for path in ["tools/x/action.yml", "action.yaml"] {
+        let fake = pr_touching(path, None);
+        fake.content(".bosun/risk.toml", BASE, &committed);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{path}: {v}");
+        assert_eq!(v["data"]["requirement"], "owner", "{path}");
+    }
+}
+
+#[test]
 fn channel_needs_two_verdicts() {
     for path in ["channel/x", "channel/pieces/a/b.toml"] {
         assert_eq!(requirement(path, None), "two-verdicts", "{path}");

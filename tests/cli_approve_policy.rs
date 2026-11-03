@@ -290,3 +290,32 @@ fn approve_bootstrap_signs_by_policy_after_the_window() {
     assert_eq!(v["data"]["bootstrap_until"], "2026-11-30");
     assert_eq!(v["data"]["policy"], "owner");
 }
+
+#[test]
+fn a_local_composite_action_is_a_workflow_file() {
+    // `uses: ./tools/x` runs `tools/x/action.yml` inside a workflow: owner-class like one.
+    for action in ["tools/x/action.yml", "action.yaml", "ci/Setup/Action.YML"] {
+        let k = key();
+        let cfg = config(Some("orchestrator"), None);
+        let fake = pr(&k, ".claude/settings.json", PLAIN, &cfg);
+        fake.pull_file(1, action, "modified", 1, 0, Some(PLAIN));
+        assert!(!counts_on(&fake, &k, AFTER), "{action}");
+    }
+    // Without it the same PR counts.
+    let cfg = config(Some("orchestrator"), None);
+    assert!(counts(".claude/settings.json", PLAIN, &cfg, AFTER));
+}
+
+#[test]
+fn a_pr_changing_only_a_composite_action_is_high_risk() {
+    let k = key();
+    let fake = pr(
+        &k,
+        "tools/x/action.yml",
+        PLAIN,
+        &config(Some("orchestrator"), None),
+    );
+    let (code, v) = run(&fake, "session_test", AFTER, &["risk-check", "1"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["level"], "high");
+}

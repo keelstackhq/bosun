@@ -835,6 +835,9 @@ fn risk_rules_cover_agent_rules_hoist_and_the_setup_script() {
         hit("docs/setup-script.sh", "R-gov") && !hit("docs/setup-script.sh", "R-ci"),
         "the pasted setup script runs as root"
     );
+    for p in ["tools/x/action.yml", "action.yaml"] {
+        assert!(hit(p, "R-ci"), "{p}: a local composite action is CI");
+    }
     for p in ["crates/foo/src/lib.rs", "docs/guide.md"] {
         assert!(!hit(p, "R-gov") && !hit(p, "R-ci"), "{p}");
     }

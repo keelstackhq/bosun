@@ -1,0 +1,1 @@
+- A local composite action (`action.yml` or `action.yaml` at any path) is R-ci and a critical path, and counts as a CI workflow file for approval policies: a PR changing one needs the owner, never a delegate or an orchestrator approval.
