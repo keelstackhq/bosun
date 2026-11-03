@@ -20,6 +20,12 @@ pub struct Config {
     pub slack: Option<Slack>,
     pub prices: BTreeMap<String, Price>,
     pub approvals: Approvals,
+    /// Zero-touch onboarding (spec section 3): when true, `.bosun/intake.toml` on the default
+    /// branch must be present and valid before agents are spawned. Release ordering: a pinned
+    /// release rejects unknown keys, so a repo may set this only after its `.bosun/version`
+    /// pins a release that reads it (0.5.0 or later, which is also added to KNOWN in
+    /// tests/pinned_config.rs). Bosun's own `.bosun/bosun.toml` therefore does not set it yet.
+    pub intake: bool,
 }
 
 impl Default for Config {
@@ -31,6 +37,7 @@ impl Default for Config {
             slack: None,
             prices: BTreeMap::new(),
             approvals: Approvals::default(),
+            intake: false,
         }
     }
 }

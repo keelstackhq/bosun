@@ -1,0 +1,21 @@
+# The owner's upfront answers (spec section 3). Seeded once, then yours. Unknown keys are an error.
+# This is a template: an empty value is a missing answer, and `bosun intake check` exits 5 naming
+# the first one. Fill each in (the orchestrator asks the owner), then run `bosun intake check`.
+version = 1
+# visibility: "private" or "public"
+repo = { name = "{{ project }}", owner = "{{ owner }}", visibility = "" }
+# stack: rust or ts-pnpm, from the pieces this channel was added with
+stack = [{% if "rust" in pieces %}"rust", {% endif %}{% if "ts-pnpm" in pieces %}"ts-pnpm", {% endif %}]
+# pieces: hull template pieces, for example ["base", "rust-cli"]
+pieces = []
+# bosun_pieces: optional; claude-md, circleci or circleci-only
+bosun_pieces = []
+# Exactly one of goal (free text) or plan (a plans/*.md path) must be set.
+goal = ""
+# publish: any of npm, crates, cloudflare; or ["none"] alone
+publish = []
+# approvals: owner, owner-gated or orchestrator
+approvals = ""
+# notify: chat or slack (slack also needs slack_channel)
+notify = ""
+slack_channel = ""

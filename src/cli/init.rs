@@ -11,8 +11,9 @@ use crate::core::checks;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// Files the channel seeds (written once, never overwritten); init excludes those that exist.
-const SEEDS: [&str; 9] = [
+const SEEDS: [&str; 10] = [
     ".bosun/limits.toml",
+    ".bosun/intake.toml",
     ".bosun/risk.toml",
     "governance/owners.toml",
     ".github/CODEOWNERS",
