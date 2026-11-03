@@ -6,9 +6,11 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::ResumeArgs;
-use crate::app::{App, active_issues, kill_switch, renew_lease, trusted_notes};
+use crate::app::{
+    App, active_issues, kill_switch, limits_from_default, renew_lease, trusted_notes,
+};
 use crate::core::glob;
-use crate::core::handoff::newest_handoff;
+use crate::core::handoff::{lineage, newest_handoff};
 use crate::core::lease::{Lease, TTL_SECS, conflicts, leases_of, live_leases, members};
 use crate::core::meta::linked_issues;
 use crate::core::records::{Note, Record};
@@ -30,7 +32,7 @@ pub fn run(dir: Option<&Path>, args: &ResumeArgs) -> CmdResult {
     let existing = match registry::load(gh)? {
         Some((number, notes)) => {
             if args.handoff {
-                handoff = handoff_json(&trusted_notes(gh, number)?);
+                handoff = handoff_json(&trusted_notes(gh, number)?, session);
             }
             members(&notes)
                 .into_iter()
@@ -97,14 +99,16 @@ pub fn run(dir: Option<&Path>, args: &ResumeArgs) -> CmdResult {
     });
     if args.handoff {
         data["handoff"] = handoff;
+        data["relay_waves"] = json!(limits_from_default(gh, &app.ctx)?.waves.relay_waves);
     }
     Ok(Outcome::data(data))
 }
 
 /// The newest trusted root handoff on the registry, or null.
-fn handoff_json(trusted: &[Note]) -> Value {
-    // ZH T2: pass the session named by the newest root spawn record.
-    match newest_handoff(trusted, None) {
+/// The root that relayed to `session` has its handoff preferred (spec §5.2).
+fn handoff_json(trusted: &[Note], session: &str) -> Value {
+    let from = lineage(trusted, session);
+    match newest_handoff(trusted, &[session, from.as_deref().unwrap_or(session)]) {
         Some((comment, Record::Handoff { session, at, lines })) => {
             json!({"session": session, "at": at, "lines": lines, "comment": comment})
         }

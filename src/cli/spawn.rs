@@ -29,6 +29,9 @@ use crate::time::Timestamp;
 pub fn run(dir: Option<&Path>, args: &SpawnArgs) -> CmdResult {
     let app = App::load(dir)?;
     kill_switch(app.gh.as_ref())?;
+    if args.root || args.handoff {
+        return super::spawn_relay::run(&app, args);
+    }
     if args.slack_thread.is_some() {
         return thread(&app, args);
     }
@@ -463,14 +466,8 @@ fn default_prompt(epic: u64, title: &str, area: Option<&str>, me: &str, depth: u
     )
 }
 
-/// The session id in a `create_session` result.
-fn child_id(v: &Value) -> Option<String> {
-    [&v["id"], &v["session_id"], &v["session"]["id"]]
-        .into_iter()
-        .find_map(|x| x.as_str().filter(|s| !s.is_empty()).map(String::from))
-}
-
-fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
+/// The session id in the `create_session` result that `--from` names (a file, or `-` for stdin).
+pub(super) fn read_child(args: &SpawnArgs) -> Result<String, BosunError> {
     let read_err = |what: &str, e: std::io::Error| {
         BosunError::error(
             format!("cannot read {what}: {e}"),
@@ -493,7 +490,7 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             ));
         }
     };
-    let child = serde_json::from_str::<Value>(&text)
+    serde_json::from_str::<Value>(&text)
         .ok()
         .and_then(|v| child_id(&v))
         .ok_or_else(|| {
@@ -501,7 +498,18 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
                 "the create_session result has no session id",
                 "pass the JSON the create_session call returned, with an `id` field, on --from -",
             )
-        })?;
+        })
+}
+
+/// The session id in a `create_session` result.
+fn child_id(v: &Value) -> Option<String> {
+    [&v["id"], &v["session_id"], &v["session"]["id"]]
+        .into_iter()
+        .find_map(|x| x.as_str().filter(|s| !s.is_empty()).map(String::from))
+}
+
+fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
+    let child = read_child(args)?;
     let (gh, me, now, n) = (app.gh.as_ref(), &app.ctx.session, app.ctx.now, epic.number);
     // A child that is the spawner itself would get a `join` naming itself as parent; with a later
     // `join --depth` that could reset its depth. A spawn always makes a new session.

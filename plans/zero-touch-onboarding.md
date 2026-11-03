@@ -89,7 +89,7 @@ are gated: records and spawn are approval code (APPROVAL_CODE_PATHS).
   risk: high
   size: 350
 - T2: B5 relay: relay_waves, `bosun spawn --root --handoff`, environment_id and archive in next
-  touch: src/cli/spawn.rs, src/core/spawn.rs, src/config.rs, .bosun/limits.toml, tests/cli_spawn_relay.rs, docs/defaults.md
+  touch: src/cli/spawn.rs, src/cli/spawn_relay.rs, src/cli/mod.rs, src/cli/resume.rs, src/core/handoff.rs, src/core/records.rs, src/config.rs, .bosun/limits.toml, tests/cli_spawn_relay.rs, docs/spec/05-spawn.md, docs/defaults.md
   depends: T1, ZI/T2
   risk: high
   size: 300
@@ -99,7 +99,7 @@ are gated: records and spawn are approval code (APPROVAL_CODE_PATHS).
 - UC-ZH-1: `bosun handoff` with more than 40 lines exits 6 and writes nothing.
 - UC-ZH-2: `bosun resume --handoff` returns the newest handoff of the root lineage in data.handoff.
 - UC-ZH-3: a handoff never creates or renews a lease.
-- UC-ZH-4: `bosun spawn --root --handoff` returns one create_session call with the keelstack environment_id and the prompt `bosun resume --handoff`, plus archive_session for the caller, and calls neither itself.
+- UC-ZH-4: `bosun spawn --root --handoff` returns one create_session call with the keelstack environment_id and the prompt `bosun resume --handoff`; `spawn --root --record` then returns archive_session for the caller; bosun calls neither itself.
 - UC-ZH-5: relay_waves defaults to 6 and is read from `.bosun/limits.toml` on the default branch.
 
 ## ZA: Approval policy
