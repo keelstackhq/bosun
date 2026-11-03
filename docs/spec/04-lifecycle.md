@@ -147,7 +147,8 @@ When `plan import` or `plan amend` imports a new item (no `<item>/P` yet), it lo
 
 Handoff and relay: a root hands off with `bosun handoff` and the next root starts with
 `bosun resume --handoff` (details in §5). A root relays after each merged milestone, or after
-`relay_waves` waves (default 6, in `.bosun/limits.toml`; planned: ZH/T2), whichever comes first.
-The steps are `bosun handoff`, then `bosun spawn --root --handoff` (planned: ZH/T2), which returns
-`create_session` for a fresh root in the `keelstack` environment, then `spawn --record`, then the
-returned `archive_session` for the old root. bosun never calls these tools itself (D29).
+`waves.relay_waves` waves (default 6, in `.bosun/limits.toml`), whichever comes first.
+The steps are `bosun handoff`, then `bosun spawn --root --handoff`, which returns
+`create_session` for a fresh root (`environment_id` from `[cloud]` in `.bosun/bosun.toml`, set to the
+shared `keelstack` environment; else the caller's), then `bosun spawn --root --record --from -`, which returns
+`archive_session` for the old root. bosun never calls these tools itself (D29).
