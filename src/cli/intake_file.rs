@@ -20,11 +20,11 @@ const MAX_EXPIRES_SECS: u64 = 3600;
 /// How far ahead of the verifier's clock an issue time may be.
 const MAX_SKEW_SECS: i64 = 60;
 
-fn at(dir: Option<&Path>, p: &Path) -> PathBuf {
+pub(crate) fn at(dir: Option<&Path>, p: &Path) -> PathBuf {
     dir.map_or_else(|| p.to_path_buf(), |d| d.join(p))
 }
 
-fn read(dir: Option<&Path>, p: &Path, what: &str) -> Result<String, BosunError> {
+pub(crate) fn read(dir: Option<&Path>, p: &Path, what: &str) -> Result<String, BosunError> {
     std::fs::read_to_string(at(dir, p)).map_err(|e| {
         BosunError::usage(
             format!("cannot read the {what} {}: {}", p.display(), e.kind()),
@@ -33,7 +33,7 @@ fn read(dir: Option<&Path>, p: &Path, what: &str) -> Result<String, BosunError> 
     })
 }
 
-fn schema(text: &str) -> Result<Intake, BosunError> {
+pub(crate) fn schema(text: &str) -> Result<Intake, BosunError> {
     parse(text).map_err(|e| {
         let data = json!({"field": e.field});
         let err = if e.missing {
