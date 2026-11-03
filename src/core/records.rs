@@ -135,6 +135,12 @@ pub enum Record {
         at: String,
         lines: Vec<String>,
     },
+    /// A root relays to a fresh root `root` (spec §5.2); never a lease.
+    Relay {
+        session: String,
+        root: String,
+        at: String,
+    },
 }
 
 /// A PR and the head sha an owner acted on.
@@ -169,6 +175,7 @@ impl Record {
             | Record::Answer { session, .. }
             | Record::Hold { session, .. }
             | Record::Handoff { session, .. }
+            | Record::Relay { session, .. }
             | Record::TaskPr { session, .. } => session,
         }
     }
@@ -245,6 +252,21 @@ pub fn spend_total(notes: &[Note], since: Option<crate::time::Timestamp>) -> f64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_line_matches_the_spec_shape() {
+        let r = Record::Relay {
+            session: "old".into(),
+            root: "new".into(),
+            at: "2026-11-03T11:00:00Z".into(),
+        };
+        assert_eq!(
+            r.to_line(),
+            r#"{"bosun":"relay","session":"old","root":"new","at":"2026-11-03T11:00:00Z"}"#
+        );
+        assert_eq!(parse_record(&r.to_line()), Some(r.clone()));
+        assert_eq!(r.session(), "old");
+    }
 
     #[test]
     fn lease_line_matches_the_spec_shape() {

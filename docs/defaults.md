@@ -31,6 +31,7 @@ changes this file in the same PR.
 | `sessions.max_live_sessions` | 4 | Estimate: 3 areas plus the root. Each live session holds a container and a lease set. |
 | `sessions.max_children` | 3 | max_live_sessions minus the root. |
 | `waves.max_parallel` | 6 | Estimate. Each wave agent gets a berth port block of 10 ports and its own database; 6 agents fit the default berth port window and a 4-core container. |
+| `waves.relay_waves` | 6 | Estimate (spec §5.2). About the number of waves after which a root's context nears the point where reports are summarized; the root then relays to a fresh root. Add the key to `.bosun/limits.toml` only once `.bosun/version` pins a bosun that knows it (the pinned bosun refuses unknown keys; the same holds for `[cloud]` in `bosun.toml`); 0 is refused. |
 | `turns.build` / `build_cap` | 100 / 150 | Estimate; no turn counts were recorded yet. The cap gives one extension of 50 %. |
 | `turns.review` / `fix_round` | 40 / 40 | Estimate. A review reads the diff, the task and the UCs once. |
 | `models.*` | read haiku, build sonnet, review sonnet, hard opus | The cheapest model that does the job; opus only for design review and stuck tasks. Same split as the orchestrator brief. |

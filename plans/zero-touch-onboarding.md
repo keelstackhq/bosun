@@ -89,7 +89,7 @@ are gated: records and spawn are approval code (APPROVAL_CODE_PATHS).
   risk: high
   size: 350
 - T2: B5 relay: relay_waves, `bosun spawn --root --handoff`, environment_id and archive in next
-  touch: src/cli/spawn.rs, src/core/spawn.rs, src/config.rs, .bosun/limits.toml, tests/cli_spawn_relay.rs, docs/defaults.md
+  touch: src/cli/spawn.rs, src/cli/spawn_relay.rs, src/cli/mod.rs, src/cli/resume.rs, src/core/handoff.rs, src/core/records.rs, src/config.rs, .bosun/limits.toml, tests/cli_spawn_relay.rs, docs/spec/05-spawn.md, docs/defaults.md
   depends: T1, ZI/T2
   risk: high
   size: 300

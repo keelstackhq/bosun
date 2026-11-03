@@ -37,6 +37,7 @@ pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
+pub mod spawn_relay;
 pub mod status;
 pub mod verdict;
 pub mod wait;
@@ -350,6 +351,12 @@ pub struct SpawnArgs {
     /// With --slack-thread and nothing ready: the request for intake, `-` for stdin, or a file.
     #[arg(long, value_name = "FILE")]
     pub request: Option<String>,
+    /// Relay: a fresh root session that continues this root's lineage (with --handoff, or --record).
+    #[arg(long)]
+    pub root: bool,
+    /// With --root: return the create_session call for the next root (after `bosun handoff`).
+    #[arg(long)]
+    pub handoff: bool,
 }
 
 #[derive(Debug, Subcommand)]

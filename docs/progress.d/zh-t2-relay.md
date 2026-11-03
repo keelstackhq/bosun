@@ -1,0 +1,1 @@
+- 2026-11-03 · ZH-T2 · root relay: `bosun spawn --root` and `waves.relay_waves` (spec §5.2) · PR (zh-t2-relay)

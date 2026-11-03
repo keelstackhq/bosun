@@ -18,6 +18,7 @@ pub struct Config {
     pub stack: Vec<Stack>,
     pub review: Review,
     pub slack: Option<Slack>,
+    pub cloud: Cloud,
     pub prices: BTreeMap<String, Price>,
     pub approvals: Approvals,
 }
@@ -29,6 +30,7 @@ impl Default for Config {
             stack: vec![Stack::default()],
             review: Review::default(),
             slack: None,
+            cloud: Cloud::default(),
             prices: BTreeMap::new(),
             approvals: Approvals::default(),
         }
@@ -103,6 +105,13 @@ impl Default for Slack {
     }
 }
 
+/// `[cloud]`: the environment a relayed root starts in; absent, it inherits the caller's (ZH).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Cloud {
+    pub environment_id: Option<String>,
+}
+
 /// `[approvals]`: `bootstrap_until` (`YYYY-MM-DD`, UTC, inclusive) is the last day of bootstrap
 /// mode (D-012, spec §8); absent means bootstrap mode is off.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
@@ -151,11 +160,16 @@ impl Default for SessionLimits {
 #[serde(deny_unknown_fields, default)]
 pub struct WaveLimits {
     pub max_parallel: u32,
+    /// Waves after which a root relays to a fresh root (spec §5.2).
+    pub relay_waves: u32,
 }
 
 impl Default for WaveLimits {
     fn default() -> Self {
-        WaveLimits { max_parallel: 6 }
+        WaveLimits {
+            max_parallel: 6,
+            relay_waves: 6,
+        }
     }
 }
 
@@ -280,7 +294,14 @@ impl Config {
 impl Limits {
     /// Parse the text of `.bosun/limits.toml`; missing keys take the spec §5 defaults.
     pub fn parse(text: &str, file: &str) -> Result<Limits, BosunError> {
-        parse_toml(text, file)
+        let l: Limits = parse_toml(text, file)?;
+        if l.waves.relay_waves == 0 {
+            return Err(BosunError::error(
+                format!("{file}: waves.relay_waves must be at least 1"),
+                format!("edit {file}: set waves.relay_waves to a positive number, or remove it"),
+            ));
+        }
+        Ok(l)
     }
 
     /// Read `<root>/.bosun/limits.toml`; a missing file gives the defaults.

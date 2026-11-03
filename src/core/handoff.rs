@@ -86,9 +86,23 @@ pub fn is_root(notes: &[Note], session: &str) -> bool {
     root && !child && !session.contains('/')
 }
 
-/// The newest well-formed handoff of a root, from trusted notes (oldest first). With `lineage`,
-/// that session's newest handoff wins; without one, or when it has none, the newest root's.
-pub fn newest_handoff(notes: &[Note], lineage: Option<&str>) -> Option<(u64, Record)> {
+/// The old root of the newest relay that named `me` as the new root, if that root is one.
+pub fn lineage(notes: &[Note], me: &str) -> Option<String> {
+    notes
+        .iter()
+        .rev()
+        .find_map(|n| match parse_record(&n.body) {
+            Some(Record::Relay { session, root, .. }) if root == me && is_root(notes, &session) => {
+                Some(session)
+            }
+            _ => None,
+        })
+}
+
+/// The newest well-formed handoff of a root, from trusted notes (oldest first). Of the `prefer`
+/// sessions (the lineage root and the caller), the newest handoff wins; with none of theirs,
+/// the newest root's.
+pub fn newest_handoff(notes: &[Note], prefer: &[&str]) -> Option<(u64, Record)> {
     let mut valid = notes
         .iter()
         .rev()
@@ -103,7 +117,7 @@ pub fn newest_handoff(notes: &[Note], lineage: Option<&str>) -> Option<(u64, Rec
             _ => None,
         });
     let all: Vec<_> = valid.by_ref().collect();
-    let named = lineage.and_then(|l| all.iter().find(|(_, r)| r.session() == l));
+    let named = all.iter().find(|(_, r)| prefer.contains(&r.session()));
     named.or(all.first()).cloned()
 }
 
@@ -197,10 +211,11 @@ mod tests {
             note(8, "root", "todo: bad kind"),
             note(9, "ghost", "next: unjoined"),
         ];
-        assert_eq!(newest_handoff(&notes, None).unwrap().0, 6);
-        assert_eq!(newest_handoff(&notes, Some("root")).unwrap().0, 5);
-        assert_eq!(newest_handoff(&notes, Some("child")).unwrap().0, 6);
-        assert!(newest_handoff(&notes[2..4], None).is_none());
+        assert_eq!(newest_handoff(&notes, &[]).unwrap().0, 6);
+        assert_eq!(newest_handoff(&notes, &["root"]).unwrap().0, 5);
+        assert_eq!(newest_handoff(&notes, &["child"]).unwrap().0, 6);
+        assert_eq!(newest_handoff(&notes, &["root", "other"]).unwrap().0, 6);
+        assert!(newest_handoff(&notes[2..4], &[]).is_none());
         let many = Record::Handoff {
             session: "root".into(),
             at: "t".into(),
@@ -208,7 +223,34 @@ mod tests {
         };
         let mut n = notes[..4].to_vec();
         n.push(Note::new(10, many.to_line()));
-        assert_eq!(newest_handoff(&n, None).unwrap().0, 4);
+        assert_eq!(newest_handoff(&n, &[]).unwrap().0, 4);
+    }
+
+    #[test]
+    fn lineage_is_the_old_root_of_the_newest_relay_naming_me() {
+        let relay = |id, old: &str, new: &str| {
+            let r = Record::Relay {
+                session: old.into(),
+                root: new.into(),
+                at: "t".into(),
+            };
+            Note::new(id, r.to_line())
+        };
+        let notes = vec![
+            join(1, "a", None, "local"),
+            join(2, "b", None, "relay"),
+            join(3, "c", None, "relay"),
+            relay(4, "a", "b"),
+            relay(5, "b", "c"),
+            relay(6, "ghost", "c"),
+            relay(7, "child", "d"),
+            join(8, "child", Some("a"), "local"),
+        ];
+        assert_eq!(lineage(&notes, "b").as_deref(), Some("a"));
+        assert_eq!(lineage(&notes, "c").as_deref(), Some("b"));
+        assert_eq!(lineage(&notes, "d"), None);
+        assert_eq!(lineage(&notes, "a"), None);
+        assert!(is_root(&notes, "b") && is_root(&notes, "c"));
     }
 
     #[test]
