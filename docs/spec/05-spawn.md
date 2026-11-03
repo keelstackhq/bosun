@@ -78,6 +78,20 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
+- Handoff (§5.1): a root runs `bosun handoff [--from FILE]` to leave notes for the next root of
+  its lineage. bosun adds one line per live lease of this session and its wave agents
+  (`<session>/T*`)
+  (`lease: #<issue> <session> <touch> until <expires>`) and per open PR linked to those tasks
+  (`pr: #<n> <branch> <head sha>`); the file (`-` is stdin) adds the rest.
+  Every line is `<kind>: <text>` with kind `wave`, `pr`, `lease`, `next` or `blocker`, one line
+  per item, at most 300 characters. More than 40 lines in all is exit 6 and nothing is written.
+  One `handoff` record goes to the registry issue. Only a root hands off (exit 1 otherwise): its
+  id has no `/`, and the trusted registry has its `join` with no parent and an origin other than
+  `spawned`, and none with a parent.
+  `bosun resume --handoff` adds `data.handoff` (`session`, `at`, `lines`, `comment`; `null` when
+  there is none): the newest well-formed handoff of such a root, from trusted comments.
+  A handoff is never a lease: `handoff` never creates, renews or edits one, and the new root
+  claims again through `resume`.
 - Results (D14): a child runs `bosun result <epic> --outcome merged|partial|blocked|needs-human [--pr N]`.
   It posts an issue comment on the epic with the record
   `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
