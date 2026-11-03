@@ -135,3 +135,14 @@ fn review_limits_of_zero_are_refused() {
         assert!(!err.fix.is_empty());
     }
 }
+
+#[test]
+fn relay_waves_and_the_cloud_environment_parse() {
+    assert_eq!(Limits::default().waves.relay_waves, 6);
+    let l = Limits::parse("[waves]\nrelay_waves = 4\n", "x").unwrap();
+    assert_eq!((l.waves.relay_waves, l.waves.max_parallel), (4, 6));
+    assert_eq!(Config::default().cloud.environment_id, None);
+    let c = Config::parse("[cloud]\nenvironment_id = \"env_1\"\n", "x").unwrap();
+    assert_eq!(c.cloud.environment_id.as_deref(), Some("env_1"));
+    assert!(Limits::parse("[waves]\nrelay_waves = 0\n", "x").is_err());
+}

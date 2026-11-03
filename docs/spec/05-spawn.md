@@ -92,6 +92,21 @@ Janitor, resume, results:
   there is none): the newest well-formed handoff of such a root, from trusted comments.
   A handoff is never a lease: `handoff` never creates, renews or edits one, and the new root
   claims again through `resume`.
+- Relay (§5.2): after `waves.relay_waves` waves (default 6, `resume --handoff` shows it) a root
+  runs `bosun handoff`, then `bosun spawn --root --handoff`: `next` holds `create_session` (prompt
+  exactly `bosun resume --handoff`, model `models.hard`, `environment_id` from `[cloud]` in
+  `.bosun/bosun.toml` on the default branch, else the caller's environment is inherited), and
+  no `archive_session`: run in order, it would end the root before `--record`. Only a root with its own handoff may relay (exit 1 otherwise;
+  `--root` takes no epic, exit 2). After the call the root runs
+  `bosun spawn --root --record --from -`: it writes the new root's `join` (origin `relay`, no
+  parent, depth 1) and a `relay` record, ends the leases of the root and of its wave agents
+  (`<root>/T*`, which run inside it), leaves the registry, and returns `archive_session`. The new root's
+  `resume --handoff` prefers the handoff of the root that relayed to it. A relay writes no lease.
+  `--record` needs the caller's own handoff, refuses an id that already has a `join` or is a
+  relay's `root` (exit 1), allows one relay per root, ends the caller's leases and posts its
+  `leave` (reason `relayed`).
+  Put `relay_waves` and `[cloud]` into `.bosun` files only once `.bosun/version` pins a bosun
+  that knows them: the pinned bosun refuses unknown keys.
 - Results (D14): a child runs `bosun result <epic> --outcome merged|partial|blocked|needs-human [--pr N]`.
   It posts an issue comment on the epic with the record
   `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic
