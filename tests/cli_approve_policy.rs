@@ -305,3 +305,17 @@ fn a_local_composite_action_is_a_workflow_file() {
     let cfg = config(Some("orchestrator"), None);
     assert!(counts(".claude/settings.json", PLAIN, &cfg, AFTER));
 }
+
+#[test]
+fn a_pr_changing_only_a_composite_action_is_high_risk() {
+    let k = key();
+    let fake = pr(
+        &k,
+        "tools/x/action.yml",
+        PLAIN,
+        &config(Some("orchestrator"), None),
+    );
+    let (code, v) = run(&fake, "session_test", AFTER, &["risk-check", "1"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["level"], "high");
+}

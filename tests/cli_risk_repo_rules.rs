@@ -49,6 +49,13 @@ fn requirement(path: &str, previous: Option<&str>) -> String {
 }
 
 #[test]
+fn a_local_composite_action_needs_the_owner_like_a_workflow() {
+    for path in ["tools/x/action.yml", "action.yaml"] {
+        assert_eq!(requirement(path, None), "owner", "{path}");
+    }
+}
+
+#[test]
 fn channel_needs_two_verdicts() {
     for path in ["channel/x", "channel/pieces/a/b.toml"] {
         assert_eq!(requirement(path, None), "two-verdicts", "{path}");

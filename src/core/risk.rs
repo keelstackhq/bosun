@@ -367,7 +367,7 @@ pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 /// approving such a change: a same-repo PR's own `on: pull_request` copy can post a forged
 /// status on its head before anyone approves, so it is no owner gate (spec §8 residual; B2, a
 /// check run from a dedicated GitHub App pinned in the ruleset, closes it).
-pub const CRITICAL_PATHS: [&str; 17] = [
+pub const CRITICAL_PATHS: [&str; 19] = [
     ".bosun/**",
     "governance/**",
     "CODEOWNERS",
@@ -377,6 +377,9 @@ pub const CRITICAL_PATHS: [&str; 17] = [
     "hoist.toml",
     ".github/workflows/**",
     ".github/actions/**",
+    // Local composite actions (`uses: ./path`) run inside a workflow.
+    "**/action.yml",
+    "**/action.yaml",
     ".circleci/**",
     // Other CI providers: their config runs with the repo's secrets too.
     ".gitlab-ci.yml",
@@ -1033,6 +1036,10 @@ mod tests {
         renamed.previous_path = Some("governance/owners.toml".into());
         assert_eq!(ids(&eval(&[renamed])), ["R-gov"]);
         assert_eq!(ids(&eval(&[file(".github/CODEOWNERS", &[])])), ["R-gov"]);
+        // A local composite action (`uses: ./path`) runs inside a workflow.
+        for p in ["tools/x/action.yml", "action.yaml", "ci/Setup/Action.YML"] {
+            assert_eq!(ids(&eval(&[file(p, &[])])), ["R-ci"], "{p}");
+        }
         assert!(eval(&[file("src/governance.rs", &[])]).is_empty());
     }
 
