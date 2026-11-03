@@ -1,7 +1,8 @@
 # bosun's project config (spec §3). Unknown keys are an error. The bosun channel merges its
 # changes to this file key by key; your own values stay.
 project = "{{ project }}"
-{% if "rust" in pieces %}
+{% if intake %}{% if bosun_version %}{% else %}intake = true
+{% endif %}{% endif %}{% if "rust" in pieces %}
 [[stack]]
 path = "{{ rust_path }}"
 profile = "rust"

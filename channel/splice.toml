@@ -18,3 +18,7 @@ ts_path = { prompt = "directory of the ts-pnpm stack", default = ".", pattern = 
 # Non-empty when the repo already has its own ci.yml with a `ci-ok` job (a hull template, for
 # example): bosun.yml then names its aggregate job `bosun-ok`, a second required check.
 own_ci = { prompt = "the repo has its own ci.yml and ci-ok job (1 or empty)", default = "", pattern = "^1?$" }
+# Non-empty to render `intake = true` in .bosun/bosun.toml (spec section 3), and only while the repo
+# pins the channel's own release (empty bosun_version): a pinned release that predates the key
+# rejects it. Default empty: the render is unchanged.
+intake = { prompt = "require a valid .bosun/intake.toml before spawn (1 or empty)", default = "", pattern = "^1?$" }

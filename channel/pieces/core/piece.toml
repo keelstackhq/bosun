@@ -19,6 +19,7 @@ shared = [".bosun/bosun.toml", ".claude/settings.json"]
 # R-ci paths to .bosun/risk.toml and .github/CODEOWNERS by hand.
 seed = [
   ".bosun/limits.toml",
+  ".bosun/intake.toml",
   ".bosun/risk.toml",
   "governance/owners.toml",
   ".github/CODEOWNERS",
