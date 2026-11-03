@@ -292,6 +292,18 @@ costs one PR listing per `reap`; a PR linked only by the bosun marker (no `Close
 - F7, F18, F10, F8: wait keeps the caller alive, reaps what expired, newest check run only.
 - F12: wave-agent identity (claim area check for `S/task`, spawn prompt id, join parent/depth).
 - 2026-10-29 · Release · keel-bosun 0.3.0, @keelstackhq/bosun 0.3.0 (release PR; tag and publish by release.yml) · PR (release/0.3.0)
+- 2026-11-01 · Release · pin bosun 0.4.0 (.bosun/version, setup-script BOSUN_VERSION and sha512, KNOWN) · PR (chore/pin-0.4.0)
+- 2026-11-02 · Design · zero-touch onboarding spec (docs/superpowers/specs/2026-11-02-zero-touch-onboarding-design.md) · PR (docs/zero-touch-onboarding)
+- 2026-11-03 · ZR/T1 · doctor prints the setup script and names the keelstack environment; spec §4, §11, §14 for intake, handoff and relay · PR (feat-doctor-setup-script)
+- 2026-11-03 · ZI/T3 · `bosun init --intake FILE` derives flags, copies the file, returns create_trigger in next · PR (feat/init-intake)
+- 2026-11-02 · ZI/T1a · intake file parser and `bosun intake check` (core::intake, cli::intake_file) · PR (feat/intake-file)
+- 2026-11-03 · ZI/T2 · channel seed `.bosun/intake.toml`, `intake` key in bosun.toml, `intake` splice var · PR (feat/intake-seed)
+- 2026-11-02 · ZI/T1b · `bosun intake sign|verify` (detached signature, repo/mode/nonce/expiry bound) · PR (feat/intake-sign)
+- 2026-11-01 · Release · keel-bosun 0.4.0, @keelstackhq/bosun 0.4.0 (release PR; tag and publish by release.yml) · PR (release/0.4.0)
+- 2026-11-03 · ZA-T1 · `[approvals] policy` in `bosun approve` and `risk-check` (spec B6, D-014) · PR (za-t1-approvals-policy)
+- 2026-11-03 · ZA-T1 follow-up · local composite actions (`**/action.y*ml`) are workflow files for approval policies · PR (za-t1-composite-actions)
+- 2026-11-02 · ZH-T1 · `bosun handoff` and `bosun resume --handoff` (spec §5.1) · PR (zh-t1-handoff)
+- 2026-11-03 · ZH-T2 · root relay: `bosun spawn --root` and `waves.relay_waves` (spec §5.2) · PR (zh-t2-relay)
 
 ## Blocked
 

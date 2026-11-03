@@ -1,1 +1,0 @@
-- `bosun init --intake FILE` checks the intake file first (5 on a missing answer, 2 on a bad value), derives `--stack`, `--owner` and `--plan` from it (a disagreeing flag exits 2), copies it to `.bosun/intake.toml` outside the render, and returns the janitor, curator and (with Slack) notify `create_trigger` calls in `next` (ZI/T3).

@@ -1,1 +1,0 @@
-- 2026-11-01 · Release · keel-bosun 0.4.0, @keelstackhq/bosun 0.4.0 (release PR; tag and publish by release.yml) · PR (release/0.4.0)

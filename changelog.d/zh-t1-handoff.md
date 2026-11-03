@@ -1,1 +1,0 @@
-- `bosun handoff [--from FILE]` writes a root's handoff (at most 40 lines, else exit 6) to the registry and `bosun resume --handoff` returns the newest one in `data.handoff`; a handoff is never a lease.

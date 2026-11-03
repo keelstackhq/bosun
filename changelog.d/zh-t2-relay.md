@@ -1,1 +1,0 @@
-- `bosun spawn --root --handoff` / `--root --record` relay a root to a fresh root (`waves.relay_waves`, default 6; optional `[cloud] environment_id`); `resume --handoff` follows the relay lineage and shows `relay_waves`.

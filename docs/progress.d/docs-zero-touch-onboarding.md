@@ -1,1 +1,0 @@
-- 2026-11-02 · Design · zero-touch onboarding spec (docs/superpowers/specs/2026-11-02-zero-touch-onboarding-design.md) · PR (docs/zero-touch-onboarding)
