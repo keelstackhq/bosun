@@ -19,11 +19,12 @@ use crate::cli::risk_check::{
 };
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
-    APPROVERS_PATH, Form, Readiness, Role, Run, Stat, api_url_ok, approve_command, batch_message,
-    bootstrap_line, in_cloud, parse_target, readiness, signed_comment, signed_message,
-    signed_message_bootstrap, signed_message_v2,
+    APPROVERS_PATH, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat, api_url_ok,
+    approve_command, batch_message, bootstrap_line, in_cloud, only_r_ci, parse_target, policy_line,
+    readiness, signed_comment, signed_message, signed_message_bootstrap, signed_message_v2,
 };
 use crate::core::records::{PrHead, Record};
+use crate::core::risk;
 use crate::ctx::Ctx;
 use crate::gates::main_open::{is_mainfix, judge};
 use crate::github::{Github, IssueState, LiveGithub, Pull, b64};
@@ -515,21 +516,26 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
         Some("delegate") => Role::Delegate,
         _ => Role::Owner,
     };
-    let until = match args.bootstrap {
+    let boot = match args.bootstrap {
         true if role == Role::Delegate => {
             return Err(BosunError::usage(
                 "--bootstrap signs with an owner key, not --as delegate",
                 "drop --as delegate, or drop --bootstrap",
             ));
         }
-        true => Some(bootstrap_until(gh, &app.ctx.now.to_string()[..10])?),
+        true => Some(bootstrap_mode(
+            gh,
+            &app.ctx.now.to_string()[..10],
+            pr,
+            &head,
+        )?),
         false => None,
     };
     // A request for changes, and any withdrawal for a delegate, cannot be signed away. After a
     // dismissal an owner key signs v2, bound to each dismissed owner review (spec section 8).
     let mut reviews = vec![None];
     match withdrawn(gh, &pull)? {
-        Some((_, true)) if role == Role::Owner && until.is_none() => {
+        Some((_, true)) if role == Role::Owner && boot.is_none() => {
             let all = gh.list_reviews(pr)?;
             reviews = owner_logins(gh, &pull.base_sha)?
                 .iter()
@@ -587,10 +593,12 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     }
     let key_id = key.id;
     let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
+    let policy = boot.as_ref().map(|b| b.2.name());
     let mut signed = Vec::new();
-    let note = until.as_deref().map(bootstrap_line);
+    let note = boot.as_ref().map(|b| b.1.as_str());
+    let until = boot.as_ref().and_then(|b| b.0.clone());
     for after in reviews {
-        let (form, msg) = match (after, &until) {
+        let (form, msg) = match (after, &boot) {
             (Some(r), _) => (Form::V2(r), signed_message_v2(owner, repo, pr, &head, r)),
             (None, Some(_)) => (
                 Form::Bootstrap,
@@ -599,7 +607,7 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             (None, None) => (Form::V1, signed_message(role, owner, repo, pr, &head)),
         };
         let sig = b64::encode(pair.sign(msg.as_bytes()).as_ref());
-        let body = signed_comment(&head, form, note.as_deref(), &key_id, &sig);
+        let body = signed_comment(&head, form, note, &key_id, &sig);
         signed.push((after, body));
     }
     if args.print {
@@ -608,7 +616,7 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             .collect();
         return Ok(Outcome::data(
             json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(),
-                "bootstrap_until": until, "body": signed[0].1, "bodies": all}),
+                "bootstrap_until": until, "policy": policy, "body": signed[0].1, "bodies": all}),
         ));
     }
     let mut approved = Vec::new();
@@ -619,7 +627,7 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             Err(e) => return Err(e.with_data(json!({"approved": approved}))),
         };
         let mut entry = json!({"pr": pr, "head_sha": head, "key_id": key_id,
-            "role": role.name(), "comment_id": id});
+            "role": role.name(), "comment_id": id, "policy": policy});
         if let Some(r) = after {
             entry["after_review"] = json!(r);
         }
@@ -628,28 +636,58 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     Ok(Outcome::data(json!({"approved": approved})))
 }
 
-/// The last day of bootstrap mode (D-012) from `[approvals] bootstrap_until` on the default
-/// branch, which risk-check reads at the PR's base; an error when it is off or ended before `today`.
-fn bootstrap_until(gh: &dyn Github, today: &str) -> Result<String> {
+/// How `--bootstrap` may sign for the PR at `head` today: the last day of the window (D-012)
+/// and its note line, or (after it) the note line of the approval policy (D-014) and no date. The
+/// setting is read on the default branch, which risk-check reads at the PR's base.
+fn bootstrap_mode(
+    gh: &dyn Github,
+    today: &str,
+    pr: u64,
+    head: &str,
+) -> Result<(Option<String>, String, Policy)> {
     let text = gh.file_at(CONFIG_FILE, &default_ref(gh)?)?;
-    let until = match text {
-        Some(t) => Config::parse(&t, CONFIG_FILE)?.approvals.bootstrap_until,
-        None => None,
+    let approvals = match text {
+        Some(t) => Config::parse(&t, CONFIG_FILE)?.approvals,
+        None => Default::default(),
+    };
+    let policy = approvals.policy();
+    let end = approvals
+        .bootstrap_until
+        .map(|u| u.min(BOOTSTRAP_END.to_string()));
+    if let Some(d) = end.as_ref().filter(|d| today <= d.as_str()) {
+        return Ok((Some(d.clone()), bootstrap_line(d), policy));
+    }
+    let window = match &end {
+        Some(d) => format!("bootstrap mode ended on {d} (D-012)"),
+        None => format!(
+            "bootstrap mode is off: `[approvals] bootstrap_until` is not set in {CONFIG_FILE} on the default branch (D-012)"
+        ),
     };
     let fix = "nothing was signed: ask the owner with a form in the Claude Code chat and sign without --bootstrap on their answer (D-012)";
-    match until {
-        None => Err(BosunError::error(
-            format!(
-                "bootstrap mode is off: `[approvals] bootstrap_until` is not set in {CONFIG_FILE} on the default branch"
-            ),
-            fix,
-        )),
-        Some(d) if today > d.as_str() => Err(BosunError::error(
-            format!("bootstrap mode ended on {d} (D-012)"),
-            fix,
-        )),
-        Some(d) => Ok(d),
+    let refuse = |why: String| Err(BosunError::error(format!("{why}; {window}"), fix));
+    let ok = match policy {
+        Policy::Orchestrator => true,
+        Policy::Owner => return refuse("approval policy owner: only the owner approves".into()),
+        Policy::OwnerGated => {
+            let stats: Vec<Stat> = (gh.statuses(head)?.into_iter())
+                .map(|s| Stat {
+                    context: s.context,
+                    state: s.state,
+                    description: s.description,
+                    creator: s.creator,
+                })
+                .collect();
+            let files: Vec<_> = gh.pull_files(pr)?;
+            let paths: Vec<_> = (files.iter())
+                .map(|f| (&*f.filename, f.previous_filename.as_deref()))
+                .collect();
+            only_r_ci(&stats) && risk::workflow_files(&paths).is_empty()
+        }
+    };
+    if !ok {
+        return refuse("approval policy owner-gated: only R-ci changes outside workflows are signed; the owner approves this PR".into());
     }
+    Ok((None, policy_line(policy), policy))
 }
 
 /// An ed25519 key from a PKCS#8 PEM (`openssl genpkey -algorithm ed25519`). Errors name the

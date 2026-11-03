@@ -1,0 +1,1 @@
+- 2026-11-03 · ZA-T1 · `[approvals] policy` in `bosun approve` and `risk-check` (spec B6, D-014) · PR (za-t1-approvals-policy)

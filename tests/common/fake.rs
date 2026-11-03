@@ -68,6 +68,8 @@ pub struct State {
     pub present: Vec<String>,
     /// Environment name -> (`deployment_branch_policy`, its `branch_policies` [{name, type}]).
     pub environments: HashMap<String, (Value, Value)>,
+    /// Environment name -> number of secrets it holds (`GET environments/E/secrets`).
+    pub env_secrets: Vec<(String, u64)>,
     /// Contexts a ruleset on the default branch requires (`GET /rules/branches/<b>`).
     pub ruleset_checks: Vec<String>,
     /// Contexts classic branch protection requires; empty answers 404.
@@ -636,6 +638,15 @@ impl FakeGithub {
     pub fn environment(&self, name: &str, policy: Value, branches: Value) {
         let mut s = self.state.lock().unwrap();
         s.environments.insert(name.into(), (policy, branches));
+    }
+
+    /// An environment that holds `count` secrets.
+    pub fn env_secret(&self, name: &str, count: u64) {
+        self.state
+            .lock()
+            .unwrap()
+            .env_secrets
+            .push((name.into(), count));
     }
 
     pub fn present(&self, path: &str) {
@@ -1426,6 +1437,23 @@ fn route(
         {
             let list = &s.environments[*name].1;
             ok(json!({"total_count": list.as_array().map_or(0, Vec::len), "branch_policies": list}))
+        }
+        ("GET", ["environments"]) if !s.environments.is_empty() || !s.env_secrets.is_empty() => {
+            let mut names: Vec<&str> = s.environments.keys().map(String::as_str).collect();
+            names.extend(s.env_secrets.iter().map(|(n, _)| n.as_str()));
+            names.sort_unstable();
+            names.dedup();
+            let list: Vec<Value> = names.iter().map(|n| json!({"name": n})).collect();
+            ok(json!({"total_count": list.len(), "environments": list}))
+        }
+        ("GET", ["environments", name, "secrets"])
+            if s.environments.contains_key(*name) || s.env_secrets.iter().any(|e| e.0 == *name) =>
+        {
+            let n: u64 = (s.env_secrets.iter())
+                .filter(|e| e.0 == *name)
+                .map(|e| e.1)
+                .sum();
+            ok(json!({"total_count": n, "secrets": []}))
         }
         ("GET", p @ (["environments", ..] | ["actions", "secrets", _])) => {
             if s.present.contains(&p.join("/")) {
