@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.5.0 (2026-11-03)
+
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.4.0 with its npm sha512 values. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
 - docs: design for zero-touch onboarding (intake file, org provisioner app, handoff and relay), docs only.
 - `bosun doctor` step 6 prints the setup script in `content` and names the shared `keelstack` cloud environment (ZR/T1).
