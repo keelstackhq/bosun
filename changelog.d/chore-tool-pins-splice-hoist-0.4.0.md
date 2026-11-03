@@ -1,0 +1,1 @@
+- The setup scripts pin splice 0.4.0 and hoist 0.4.0, each with its npm integrity; both `splice.yml` move to splice 0.4.0 and pin `keelstackhq/splice/action` at v0.4.0's commit. berth stays 0.1.0 (the newest). After it merges, paste `docs/setup-script.sh` into the cloud environments again.
