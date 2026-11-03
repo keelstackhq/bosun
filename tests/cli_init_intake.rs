@@ -96,8 +96,17 @@ impl Env {
     }
 
     fn run_in(&self, cwd: Option<&Path>, args: &[&str]) -> (i32, Value) {
+        self.run_repo(cwd, Some("keelstackhq/app"), args)
+    }
+
+    /// `repo` is BOSUN_REPO (None: unset, so the origin remote decides).
+    fn run_repo(&self, cwd: Option<&Path>, repo: Option<&str>, args: &[&str]) -> (i32, Value) {
         let fake = FakeGithub::start();
         let mut cmd = bosun();
+        match repo {
+            Some(r) => cmd.env("BOSUN_REPO", r),
+            None => cmd.env_remove("BOSUN_REPO"),
+        };
         if let Some(c) = cwd {
             cmd.current_dir(c);
         }
@@ -282,7 +291,7 @@ fn routines_are_create_trigger_calls_in_next() {
     assert_eq!(t[1]["args"]["create_new_session_on_fire"], true);
     for n in &t {
         assert!(n["args"]["prompt"].as_str().unwrap().contains("bosun"));
-        assert!(n["args"]["initiation"].is_string());
+        assert_eq!(n["args"]["initiation"], "human_request");
     }
     // The prompts are the ones `bosun doctor` prints.
     let routines = v["data"]["routines"].as_array().unwrap();
@@ -413,4 +422,41 @@ fn intake_resolves_against_the_working_directory_and_plan_is_compared_canonicall
     assert_eq!(code, 0, "{v}");
     let copied = std::fs::read_to_string(e.repo.path().join(".bosun/intake.toml")).unwrap();
     assert_eq!(copied, text);
+}
+
+#[test]
+fn a_checkout_of_another_repo_exits_2_naming_both_and_writes_nothing() {
+    let e = Env::new();
+    let f = e.intake(INTAKE);
+    let (code, v) = e.run_repo(None, Some("acme/widget"), &["--intake", &f]);
+    assert_eq!(code, 2, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("acme/widget") && msg.contains("keelstackhq/app"),
+        "{msg}"
+    );
+    e.untouched();
+}
+
+#[test]
+fn an_unresolvable_checkout_repo_exits_1_with_the_fix_and_writes_nothing() {
+    // The origin is a local path, which names no GitHub repo, and BOSUN_REPO is unset.
+    let e = Env::new();
+    let f = e.intake(INTAKE);
+    let (code, v) = e.run_repo(None, None, &["--intake", &f]);
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("set BOSUN_REPO=<owner>/<name> or add the origin remote"),
+        "{fix}"
+    );
+    e.untouched();
+}
+
+#[test]
+fn the_checkout_repo_is_compared_case_insensitively() {
+    let e = Env::new();
+    let f = e.intake(INTAKE);
+    let (code, v) = e.run_repo(None, Some("KeelStackHQ/APP"), &["--intake", &f, "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
 }

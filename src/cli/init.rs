@@ -62,7 +62,7 @@ fn trigger_call(r: &Value, repo: &str) -> Value {
         "create_new_session_on_fire": true, "prompt": format!(
             "Work in {repo}: attach it with add_repo and clone it first, then: {}",
             r["prompt"].as_str().unwrap_or_default()
-        ), "initiation": "human_schedule",
+        ), "initiation": "human_request",
     })
 }
 
@@ -130,6 +130,31 @@ fn derive(
     }
     let root =
         crate::cli::gate::repo_root(&dir.map_or_else(|| PathBuf::from("."), Path::to_path_buf))?;
+    // The checkout must be the repo the file describes (BOSUN_REPO, else origin); never the
+    // directory name.
+    let here = crate::ctx::Ctx::load(Some(&root)).map_err(|e| {
+        if e.message.starts_with("cannot tell which GitHub repo") {
+            BosunError::error(
+                e.message.clone(),
+                "set BOSUN_REPO=<owner>/<name> or add the origin remote",
+            )
+        } else {
+            e
+        }
+    })?;
+    let want = format!("{}/{}", i.repo.owner, i.repo.name);
+    if !format!("{}", here.repo).eq_ignore_ascii_case(&want) {
+        return Err(BosunError::usage(
+            format!(
+                "this checkout is {} but {} names repo {want}",
+                here.repo,
+                file.display()
+            ),
+            format!(
+                "run `bosun init --intake` in a checkout of {want}, or fix repo.name and repo.owner in the intake file"
+            ),
+        ));
+    }
     let plan = match (&args.plan, &i.plan) {
         (Some(g), Some(w)) if !same_plan(g, w, &root) => {
             return Err(clash(
