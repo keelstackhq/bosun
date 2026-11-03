@@ -51,22 +51,42 @@ const BOOTSTRAP_STEP: &str = "For each new package that publishes, run `hoist re
 
 /// The `create_trigger` call of one Routine from `doctor::routines`. Each firing starts a fresh
 /// session; the model stays in `data.routines` (create_trigger has no model argument).
-fn trigger_call(r: &Value) -> Value {
+fn trigger_call(r: &Value, repo: &str) -> Value {
     let cron = if r["name"] == "curator" {
         "8 3 * * *"
     } else {
         "0 * * * *"
     };
     json!({
-        "name": r["name"], "prompt": r["prompt"], "cron_expression": cron,
-        "create_new_session_on_fire": true, "initiation": "human_schedule",
+        "name": r["name"], "cron_expression": cron,
+        "create_new_session_on_fire": true, "prompt": format!(
+            "Work in {repo}: attach it with add_repo and clone it first, then: {}",
+            r["prompt"].as_str().unwrap_or_default()
+        ), "initiation": "human_schedule",
     })
 }
 
+/// Both sides canonical: `given` is relative to the working directory, `from_file` to the repo.
 fn same_plan(given: &Path, from_file: &str, root: &Path) -> bool {
     let canon = |p: &Path| std::fs::canonicalize(p).ok();
-    given == Path::new(from_file)
-        || canon(given).is_some_and(|g| Some(g) == canon(&root.join(from_file)))
+    canon(given).is_some_and(|g| Some(g) == canon(&root.join(from_file)))
+}
+
+/// Refuse a destination that would write outside the repo: a symlink at `.bosun` or at
+/// `.bosun/intake.toml`, or a `.bosun` whose real path leaves the repo.
+fn check_intake_dest(root: &Path) -> Result<(), BosunError> {
+    let dir = root.join(".bosun");
+    let link = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    let inside = !dir.exists()
+        || matches!((std::fs::canonicalize(&dir), std::fs::canonicalize(root)),
+            (Ok(d), Ok(r)) if d.starts_with(&r));
+    if link(&dir) || link(&root.join(INTAKE_PATH)) || !inside {
+        return Err(BosunError::error(
+            format!("{INTAKE_PATH} or .bosun is a symlink, or leaves the repo"),
+            "replace the symlink with a plain directory or file, commit that, then rerun `bosun init --intake`",
+        ));
+    }
+    Ok(())
 }
 
 /// The intake file's schema check, then `--stack`, `--owner` and `--plan` from it; a flag that
@@ -76,7 +96,7 @@ fn derive(
     args: &InitArgs,
     file: &Path,
 ) -> Result<(InitArgs, Intake, String), BosunError> {
-    let text = intake_file::read(dir, file, "intake file")?;
+    let text = intake_file::read(None, file, "intake file")?;
     let i = intake_file::schema(&text)?;
     let clash = |flag: &str, given: String, wanted: String| {
         BosunError::usage(
@@ -719,6 +739,9 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         ));
     }
 
+    if intake.is_some() {
+        check_intake_dest(&root)?;
+    }
     let version = env!("CARGO_PKG_VERSION");
     let git_ref = args
         .git_ref
@@ -929,7 +952,10 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     if let Some((i, _)) = &intake {
         let routines = super::doctor::routines(i.notify == "slack");
         for r in routines.as_array().into_iter().flatten() {
-            outcome = outcome.with_next("create_trigger", trigger_call(r));
+            outcome = outcome.with_next(
+                "create_trigger",
+                trigger_call(r, &format!("{}/{}", i.repo.owner, i.repo.name)),
+            );
         }
         outcome.data["routines"] = routines;
         outcome.data["intake"] = json!(INTAKE_PATH);

@@ -171,10 +171,17 @@ pub fn parse(src: &str) -> Result<Intake, IntakeError> {
             &["private", "public"],
         )?,
     };
-    for (f, v) in [("repo.name", &repo.name), ("repo.owner", &repo.owner)] {
-        if v.starts_with('.') || !plain(v, &['-', '_', '.']) {
-            return Err(bad(f, "use letters, digits, `-`, `_` and `.` only"));
-        }
+    if repo.name.starts_with('.') || !plain(&repo.name, &['-', '_', '.']) {
+        return Err(bad(
+            "repo.name",
+            "use letters, digits, `-`, `_` and `.` only",
+        ));
+    }
+    if !plain(&repo.owner, &['-']) {
+        return Err(bad(
+            "repo.owner",
+            "a GitHub login: letters, digits and `-` only",
+        ));
     }
     let stack = choices(
         "stack",

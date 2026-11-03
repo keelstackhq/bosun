@@ -92,8 +92,16 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> (i32, Value) {
+        self.run_in(None, args)
+    }
+
+    fn run_in(&self, cwd: Option<&Path>, args: &[&str]) -> (i32, Value) {
         let fake = FakeGithub::start();
-        let out = bosun()
+        let mut cmd = bosun();
+        if let Some(c) = cwd {
+            cmd.current_dir(c);
+        }
+        let out = cmd
             .env("BOSUN_GITHUB_API", fake.url())
             .env("BOSUN_SPLICE", self.splice())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -280,8 +288,11 @@ fn routines_are_create_trigger_calls_in_next() {
     let routines = v["data"]["routines"].as_array().unwrap();
     assert_eq!(routines[0]["model"], "haiku");
     assert_eq!(routines[1]["model"], "sonnet");
-    assert_eq!(routines[0]["prompt"], t[0]["args"]["prompt"]);
-    assert_eq!(routines[1]["prompt"], t[1]["args"]["prompt"]);
+    for (r, n) in routines.iter().zip(&t) {
+        let sent = n["args"]["prompt"].as_str().unwrap();
+        let head = "Work in keelstackhq/app: attach it with add_repo and clone it first, then: ";
+        assert_eq!(sent.strip_prefix(head), r["prompt"].as_str(), "{sent}");
+    }
 }
 
 #[test]
@@ -340,4 +351,66 @@ fn without_intake_nothing_changes() {
     assert!(v["next"].as_array().unwrap().is_empty());
     assert!(!e.argv().contains("intake"));
     assert!(v["data"]["owner_steps"].as_array().unwrap().len() >= 7);
+}
+
+fn symlink_case(link_dir: bool) {
+    let e = Env::new();
+    let outside = tempfile::tempdir().unwrap();
+    let root = e.repo.path();
+    if link_dir {
+        std::os::unix::fs::symlink(outside.path(), root.join(".bosun")).unwrap();
+    } else {
+        std::fs::create_dir_all(root.join(".bosun")).unwrap();
+        let target = outside.path().join("x");
+        std::os::unix::fs::symlink(&target, root.join(".bosun/intake.toml")).unwrap();
+    }
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-q", "-m", "link"]);
+    let f = e.intake(INTAKE);
+    let (code, v) = e.run(&["--intake", &f, "--no-pr"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("symlink"));
+    assert_eq!(e.branches(), "* main");
+    assert_eq!(e.argv(), "", "splice must not run");
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_symlinked_bosun_dir_is_refused_and_nothing_leaves_the_repo() {
+    symlink_case(true);
+}
+
+#[test]
+fn a_symlinked_intake_file_is_refused_and_nothing_leaves_the_repo() {
+    symlink_case(false);
+}
+
+#[test]
+fn an_owner_with_an_underscore_is_a_bad_value_naming_repo_owner() {
+    let e = Env::new();
+    let f = e.intake(&INTAKE.replace("keelstackhq", "my_org"));
+    let (code, v) = e.run(&["--intake", &f]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("repo.owner"));
+    e.untouched();
+}
+
+#[test]
+fn intake_resolves_against_the_working_directory_and_plan_is_compared_canonically() {
+    let e = Env::new();
+    std::fs::create_dir_all(e.repo.path().join("plans")).unwrap();
+    std::fs::write(e.repo.path().join("plans/app.md"), "# plan\n").unwrap();
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "plan"]);
+    // ./intake.toml sits in the cwd, not in the -C repo (which has none).
+    let cwd = tempfile::tempdir().unwrap();
+    let text = INTAKE.replace(GOAL, "plan = \"plans/app.md\"");
+    std::fs::write(cwd.path().join("intake.toml"), &text).unwrap();
+    // The same plan under another spelling agrees.
+    let alias = format!("{}/plans/../plans/app.md", e.repo.path().display());
+    let args = ["--intake", "./intake.toml", "--plan", &alias, "--no-pr"];
+    let (code, v) = e.run_in(Some(cwd.path()), &args);
+    assert_eq!(code, 0, "{v}");
+    let copied = std::fs::read_to_string(e.repo.path().join(".bosun/intake.toml")).unwrap();
+    assert_eq!(copied, text);
 }
