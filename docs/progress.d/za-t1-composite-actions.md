@@ -1,0 +1,1 @@
+- 2026-11-03 · ZA-T1 follow-up · local composite actions (`**/action.y*ml`) are workflow files for approval policies · PR (za-t1-composite-actions)

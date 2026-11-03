@@ -193,7 +193,8 @@ High-risk PRs:
   bootstrap-form signature above, format unchanged) counts. Checks, in order, first failure wins
   (`orchestrator_counts` in `src/core/approve.rs`): the requirement is `owner`; no
   `BOOTSTRAP_EXCLUDED` hit; no changed `WORKFLOW_PATHS` file (`.github/workflows/**`,
-  `.github/actions/**`, `.circleci/**` and the other CI configs R-ci names, previous names too),
+  `.github/actions/**`, any `action.yml` or `action.yaml` (a local composite action, `uses:
+  ./path`), `.circleci/**` and the other CI configs R-ci names, previous names too),
   in every policy and in the window too: a workflow's permissions, environments and tag or publish
   steps cannot be judged reliably from a diff, so every workflow PR is owner-class; then the
   window, `today <= min(bootstrap_until, BOOTSTRAP_END)` with `BOOTSTRAP_END = 2026-11-30`

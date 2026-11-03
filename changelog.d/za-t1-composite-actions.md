@@ -1,0 +1,1 @@
+- A local composite action (`action.yml` or `action.yaml` at any path) counts as a CI workflow file for approval policies: an orchestrator approval never covers it.
