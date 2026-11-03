@@ -15,6 +15,44 @@ const KNOWN: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The `.bosun/limits.toml` keys (`table.key`) each pinned release accepts.
+const KNOWN_LIMITS: &[(&str, &[&str])] = &[(
+    "0.4.0",
+    &[
+        "sessions.max_depth",
+        "sessions.max_live_sessions",
+        "sessions.max_children",
+        "waves.max_parallel",
+        "turns.build",
+        "turns.build_cap",
+        "turns.review",
+        "turns.fix_round",
+        "models.read",
+        "models.build",
+        "models.review",
+        "models.hard",
+        "budget.daily_usd",
+        "budget.per_task_usd",
+    ],
+)];
+
+/// The `table.key` names of a limits file that `known` does not list.
+fn unknown_limits(text: &str, known: &[&str]) -> Vec<String> {
+    let table: toml::Table = text.parse().expect("limits.toml");
+    let mut out = Vec::new();
+    for (name, value) in &table {
+        match value.as_table() {
+            Some(t) => out.extend(
+                t.keys()
+                    .map(|k| format!("{name}.{k}"))
+                    .filter(|k| !known.contains(&k.as_str())),
+            ),
+            None => out.push(name.clone()),
+        }
+    }
+    out
+}
+
 /// `path` as committed at HEAD: CI swaps the base branch's `.bosun/` into the checkout.
 fn committed(path: &str) -> String {
     let out = std::process::Command::new("git")
@@ -41,4 +79,32 @@ fn bosun_toml_uses_only_keys_the_pinned_release_knows() {
             "`{key}` in .bosun/bosun.toml is unknown to the pinned release {version}: the gates on main would fail; set it in the pin PR of a release that reads it"
         );
     }
+}
+
+#[test]
+fn limits_toml_uses_only_keys_the_pinned_release_knows() {
+    let version = committed(".bosun/version").trim().to_string();
+    let Some((_, keys)) = KNOWN_LIMITS.iter().find(|(v, _)| *v == version) else {
+        panic!(
+            "add the limits keys release {version} accepts to KNOWN_LIMITS in tests/pinned_config.rs"
+        );
+    };
+    let unknown = unknown_limits(&committed(".bosun/limits.toml"), keys);
+    assert!(
+        unknown.is_empty(),
+        "{unknown:?} in .bosun/limits.toml are unknown to the pinned release {version}: the gates on main would fail; set them in the pin PR of a release that reads them"
+    );
+}
+
+#[test]
+fn a_key_newer_than_the_pin_is_caught() {
+    let known = KNOWN_LIMITS[0].1;
+    assert_eq!(
+        unknown_limits(
+            "[waves]\nmax_parallel = 6\nrelay_waves = 6\n[cloud]\nx = 1\n",
+            known
+        ),
+        ["cloud.x", "waves.relay_waves"]
+    );
+    assert!(unknown_limits("[waves]\n# relay_waves = 6\nmax_parallel = 6\n", known).is_empty());
 }

@@ -99,7 +99,7 @@ are gated: records and spawn are approval code (APPROVAL_CODE_PATHS).
 - UC-ZH-1: `bosun handoff` with more than 40 lines exits 6 and writes nothing.
 - UC-ZH-2: `bosun resume --handoff` returns the newest handoff of the root lineage in data.handoff.
 - UC-ZH-3: a handoff never creates or renews a lease.
-- UC-ZH-4: `bosun spawn --root --handoff` returns one create_session call with the keelstack environment_id and the prompt `bosun resume --handoff`, plus archive_session for the caller, and calls neither itself.
+- UC-ZH-4: `bosun spawn --root --handoff` returns one create_session call with the keelstack environment_id and the prompt `bosun resume --handoff`; `spawn --root --record` then returns archive_session for the caller; bosun calls neither itself.
 - UC-ZH-5: relay_waves defaults to 6 and is read from `.bosun/limits.toml` on the default branch.
 
 ## ZA: Approval policy

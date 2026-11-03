@@ -75,9 +75,9 @@ pub fn run(app: &App, args: &SpawnArgs) -> CmdResult {
     }
     Ok(Outcome::data(json!({"from": me, "handoff": comment, "model": model,
         "relay_waves": limits.waves.relay_waves, "environment_id": env,
-        "then": "do not call archive_session until `bosun spawn --root --record --from -` has run with the create_session result"}))
-    .with_next("create_session", call)
-    .with_next("archive_session", json!({"session_id": me})))
+        "then": "run `bosun spawn --root --record --from -` with the create_session result; it returns archive_session"}))
+    // No archive_session here: run in order, it would end this root before `--record`.
+    .with_next("create_session", call))
 }
 
 /// The comment id of the caller's own newest handoff, or the refusal.
@@ -153,12 +153,17 @@ fn record(app: &App, args: &SpawnArgs) -> CmdResult {
         reg,
         &format!("{me} relays to {child}.\n\n{}", relay.to_line()),
     )?;
+    // This root's leases and its wave agents' (`<me>/T*`): they run inside it and end with it.
+    let wave = format!("{me}/");
     for (issue, inotes) in active_issues(gh)? {
-        if leases_of(issue.number, &inotes)
-            .iter()
-            .any(|l| &l.session == me)
-        {
-            end_lease(gh, issue.number, me, "relayed")?;
+        let mut held: Vec<String> = leases_of(issue.number, &inotes)
+            .into_iter()
+            .map(|l| l.session)
+            .filter(|s| s == me || s.starts_with(&wave))
+            .collect();
+        held.dedup();
+        for s in held {
+            end_lease(gh, issue.number, &s, "relayed")?;
         }
     }
     let leave = Record::Leave {

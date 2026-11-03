@@ -2,7 +2,7 @@ mod common;
 
 use common::fake::FakeGithub;
 use common::run;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 const NOW: &str = "2026-11-03T11:00:00Z";
 const LIVE: &str = "2026-11-03T11:20:00Z";
@@ -53,18 +53,20 @@ fn uc_zh_4_a_root_with_a_handoff_gets_the_relay_calls() {
     let (code, v) = run(&fake, "root_a", NOW, &["spawn", "--root", "--handoff"]);
     assert_eq!(code, 0, "{v}");
     let next = v["next"].as_array().unwrap();
-    assert_eq!(next.len(), 2, "{v}");
+    assert_eq!(
+        next.len(),
+        1,
+        "archive_session comes only from --record: {v}"
+    );
     assert_eq!(next[0]["tool"], "create_session");
     let a = &next[0]["args"];
     assert_eq!(a["prompt"], "bosun resume --handoff");
     assert_eq!(a["environment_id"], "env_abc");
     assert_eq!(a["tags"][1], "bosun:relay/root_a");
-    assert_eq!(next[1]["tool"], "archive_session");
-    assert_eq!(next[1]["args"], json!({"session_id": "root_a"}));
     assert_eq!(v["data"]["from"], "root_a");
     assert_eq!(v["data"]["relay_waves"], 6);
     let then = v["data"]["then"].as_str().unwrap();
-    assert!(then.contains("do not call archive_session until") && then.contains("--record"));
+    assert!(then.contains("--record") && then.contains("archive_session"));
     assert_eq!(bodies(&fake, 1), before, "no comment");
     assert_eq!(fake.state.lock().unwrap().issues.len(), 1);
 }
@@ -123,6 +125,11 @@ fn record_joins_the_new_root_and_wires_the_lineage() {
     fake.comment(1, &handoff_note("root_a", "next: old root"));
     fake.issue(10, "t", &["bosun:state/building"], "");
     fake.comment(10, &common::lease_note("root_a", LIVE, "src/**"));
+    // A wave agent of the old root dies with it; a lookalike session keeps its lease.
+    fake.issue(11, "w", &["bosun:state/building"], "");
+    fake.comment(11, &common::lease_note("root_a/T7", LIVE, "docs/**"));
+    fake.issue(12, "x", &["bosun:state/building"], "");
+    fake.comment(12, &common::lease_note("root_ab", LIVE, "x/**"));
     fake.comment(1, &join_note("root_z", None));
     fake.comment(1, &handoff_note("root_z", "next: newer, other lineage"));
     let f = file("rec", r#"{"id":"session_new"}"#);
@@ -161,6 +168,12 @@ fn record_joins_the_new_root_and_wires_the_lineage() {
             .iter()
             .any(|b| b.contains(r#""bosun":"lease-end""#) && b.contains("root_a"))
     );
+    assert!(
+        bodies(&fake, 11)
+            .iter()
+            .any(|b| b.contains(r#""bosun":"lease-end""#) && b.contains("root_a/T7"))
+    );
+    assert!(!bodies(&fake, 12).iter().any(|b| b.contains("lease-end")));
     let (code, v) = run(&fake, "session_new", NOW, &["resume", "--handoff"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["handoff"]["session"], "root_a");
