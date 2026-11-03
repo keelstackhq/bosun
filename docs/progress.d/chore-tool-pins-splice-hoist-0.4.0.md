@@ -1,0 +1,1 @@
+- 2026-11-03 · Tool pins · setup scripts and splice.yml move to splice 0.4.0 and hoist 0.4.0 (sha512 checked against npm pack) · PR (chore-tool-pins-splice-hoist-0.4.0)
