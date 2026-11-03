@@ -196,8 +196,13 @@ policies:
 - `orchestrator`: as in bootstrap mode, without an end date. Environments, tags, releases,
   decisions merges, branch rules and secrets still need the owner.
 
+In every policy, and inside the bootstrap window too, a PR that changes a CI workflow (any path
+R-ci names for a CI provider) is owner-class: bosun cannot reliably judge a workflow's
+permissions, environments and tag or publish steps from its diff.
+
 bosun reads it in `bosun approve` and `risk-check` as `[approvals] policy` (a new key, so it
-follows the release ordering in §2). The appendix holds the decision text.
+follows the release ordering in §2). A missing key means `owner` (fail safe); intake writes the
+policy explicitly for new and adopted repos. The appendix holds the decision text.
 
 ## 5. Lifecycle and relay
 
@@ -260,4 +265,4 @@ task owns at a time); then B2, B3; P2, P1; B5, B6; B7 last.
 
 | ID | Date | Scope | Decision |
 | --- | --- | --- | --- |
-| D-014 | 2026-11-?? | all | After bootstrap mode (D-012) each repo's approval policy is an intake answer in `.bosun/intake.toml`: `owner`, `owner-gated` (default: the orchestrator approves low-risk and R-ci PRs after green checks and an independent review of that head; the owner approves R-gov, `.bosun`, approval code, workflows, secrets and releases) or `orchestrator` (the bootstrap rules, without an end date). In every policy, environments, tags, releases, decisions merges, branch rules and secrets need the owner, and in a repo that holds any environment secret, a PR that changes `.github/workflows/**` is owner-class. Repos are created and configured only by the org provisioner app, through a workflow whose environment deploys from main only and that refuses an intake without a valid, unexpired, unused orchestrator signature bound to repo, mode, nonce and the intake's sha256; the orchestrator signs only on an owner form answer naming that repo and mode, and its key stays in its own session; `new` only creates, `adopt` only adds, and protected repos are refused; secrets are environment secrets on splice-bot and release (main only) per publish target, never repo-level; no PAT is used. npm and crates publish through OIDC trusted publishing. |
+| D-014 | 2026-11-?? | all | After bootstrap mode (D-012) each repo's approval policy is an intake answer in `.bosun/intake.toml`: `owner`, `owner-gated` (the recommended answer: the orchestrator approves low-risk and R-ci PRs after green checks and an independent review of that head; the owner approves R-gov, `.bosun`, approval code, workflows, secrets and releases) or `orchestrator` (the bootstrap rules, without an end date). A repo without the setting is `owner`. In every policy, environments, tags, releases, decisions merges, branch rules and secrets need the owner, and a PR that changes a CI workflow is owner-class. Repos are created and configured only by the org provisioner app, through a workflow whose environment deploys from main only and that refuses an intake without a valid, unexpired, unused orchestrator signature bound to repo, mode, nonce and the intake's sha256; the orchestrator signs only on an owner form answer naming that repo and mode, and its key stays in its own session; `new` only creates, `adopt` only adds, and protected repos are refused; secrets are environment secrets on splice-bot and release (main only) per publish target, never repo-level; no PAT is used. npm and crates publish through OIDC trusted publishing. |

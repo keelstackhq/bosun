@@ -15,6 +15,13 @@ const KNOWN: &[(&str, &[&str])] = &[
     ),
 ];
 
+/// The keys of `[approvals]` each pinned release accepts. ZR/T3 adds 0.5.0 with `policy`; until
+/// then `policy` must not appear in bosun's own `.bosun/bosun.toml` or in the channel templates.
+const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
+    ("0.3.0", &["bootstrap_until"]),
+    ("0.4.0", &["bootstrap_until"]),
+];
+
 /// `path` as committed at HEAD: CI swaps the base branch's `.bosun/` into the checkout.
 fn committed(path: &str) -> String {
     let out = std::process::Command::new("git")
@@ -39,6 +46,26 @@ fn bosun_toml_uses_only_keys_the_pinned_release_knows() {
         assert!(
             keys.contains(&key.as_str()),
             "`{key}` in .bosun/bosun.toml is unknown to the pinned release {version}: the gates on main would fail; set it in the pin PR of a release that reads it"
+        );
+    }
+}
+
+#[test]
+fn approvals_uses_only_keys_the_pinned_release_knows() {
+    let version = committed(".bosun/version").trim().to_string();
+    let config: toml::Table = committed(".bosun/bosun.toml").parse().expect("bosun.toml");
+    let Some(approvals) = config.get("approvals").and_then(|a| a.as_table()) else {
+        return;
+    };
+    let Some((_, keys)) = KNOWN_APPROVALS.iter().find(|(v, _)| *v == version) else {
+        panic!(
+            "add the `[approvals]` keys release {version} accepts to KNOWN_APPROVALS in tests/pinned_config.rs"
+        );
+    };
+    for key in approvals.keys() {
+        assert!(
+            keys.contains(&key.as_str()),
+            "`approvals.{key}` in .bosun/bosun.toml is unknown to the pinned release {version}: the gates on main would fail; set it in the pin PR of a release that reads it"
         );
     }
 }

@@ -414,7 +414,7 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
     "CODEOWNERS",
     ".github/CODEOWNERS",
     "docs/CODEOWNERS",
-    "hoist.toml",
+    "**/hoist.toml",
     "channel/pieces/core/files/.bosun/**",
     ".github/workflows/release.yml",
     "**/workflows/splice.yml",
@@ -461,6 +461,21 @@ pub fn bootstrap_excluded(
         why.push("R-secrets".into());
     }
     why
+}
+
+/// The changed paths among `(path, previous path)` pairs that are CI workflow files
+/// ([`WORKFLOW_PATHS`](super::approve::WORKFLOW_PATHS)); a rename counts on both sides.
+pub fn workflow_files(files: &[(&str, Option<&str>)]) -> Vec<String> {
+    let globs: Vec<Glob> = (super::approve::WORKFLOW_PATHS.iter())
+        .map(|g| Glob::parse(g).expect("built-in workflow glob"))
+        .collect();
+    (files.iter())
+        .filter(|(path, prev)| {
+            (std::iter::once(path).chain(prev.iter()))
+                .any(|p| globs.iter().any(|g| matches_any_case(g, p)))
+        })
+        .map(|(path, _)| path.to_string())
+        .collect()
 }
 
 /// Why a PR is critical: the critical rules it matches and the changed critical paths (a

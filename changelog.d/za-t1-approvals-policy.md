@@ -1,0 +1,1 @@
+- `[approvals] policy = "owner" | "owner-gated" | "orchestrator"` (missing means `owner`) decides when an orchestrator approval counts in `risk-check` and when `bosun approve --bootstrap` signs after bootstrap mode (D-014); a CI workflow change and any `hoist.toml` always need the owner, and `bootstrap_until` is capped at 2026-11-30.
