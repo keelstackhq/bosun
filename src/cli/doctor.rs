@@ -36,7 +36,7 @@ const JANITOR: &str = "Run `bosun reap` (it ends expired leases and members and 
 
 /// The Routine prompts the owner creates by hand (step 11). Without a `[slack]` table the
 /// janitor skips notify and there is no notify Routine (F17).
-fn routines(slack: bool) -> Value {
+pub(crate) fn routines(slack: bool) -> Value {
     let janitor = if slack {
         format!("{JANITOR} Then run `bosun notify` if this bosun has it.")
     } else {
