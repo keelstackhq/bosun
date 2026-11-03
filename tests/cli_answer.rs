@@ -235,7 +235,6 @@ fn an_escalate_record_after_the_ask_closes_it() {
 
 // The chat form (spec section 10): the orchestrator relays the owner's answer, signed with a
 // key enrolled in `.bosun/approvers.toml` on the default branch. The RFC 8032 test 1 key.
-const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n";
 const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
 /// Never enrolled: the RFC 8032 test 2 key.
 const PUB2: &str = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
@@ -404,7 +403,7 @@ fn an_unsigned_or_wrongly_signed_chat_answer_is_refused_and_writes_nothing() {
 fn chat_sign_key_prints_the_signed_form_that_answer_accepts() {
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("key.pem");
-    std::fs::write(&key, PEM).unwrap();
+    std::fs::write(&key, common::TEST_ED25519_PEM).unwrap();
     let key = key.to_str().unwrap();
     let fake = chat_setup(Some(&enrolled("owner")));
     let (code, v) = chat(&fake, &["--sign-key", key], "Yes, drop it.\n");

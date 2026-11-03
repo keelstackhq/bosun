@@ -14,8 +14,6 @@ const OLD: &str = "1111111111111111111111111111111111111111";
 const MAIN: &str = "refs/heads/main";
 const OWNERS: &str = "[[owner]]\ngithub = \"ada\"\n";
 
-// RFC 8032 test 1 key; its PKCS#8 PEM is what `openssl pkey` writes for that seed.
-const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n";
 const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
 // RFC 8032 test 2 key: never enrolled on main.
 const PUB2: &str = "PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
@@ -212,7 +210,7 @@ fn the_owner_comment_path_is_unchanged() {
 fn key_file() -> std::path::PathBuf {
     let dir = tempfile::tempdir().unwrap().keep();
     let path = dir.join("key.pem");
-    std::fs::write(&path, PEM).unwrap();
+    std::fs::write(&path, common::TEST_ED25519_PEM).unwrap();
     path
 }
 

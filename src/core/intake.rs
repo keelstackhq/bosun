@@ -272,6 +272,78 @@ pub fn parse(src: &str) -> Result<Intake, IntakeError> {
     })
 }
 
+/// The detached signature file next to the intake (`.bosun/intake.sig`).
+pub const SIG_PATH: &str = ".bosun/intake.sig";
+
+/// What `bosun intake sign` prints and `bosun intake verify` reads.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SigFile {
+    pub key: String,
+    pub repo: String,
+    pub mode: String,
+    pub nonce: String,
+    pub issued: String,
+    pub expires: String,
+    pub intake_sha256: String,
+    pub sig: String,
+}
+
+impl SigFile {
+    pub fn parse(src: &str) -> Result<SigFile, String> {
+        let f: SigFile = toml::from_str(src).map_err(|e| e.message().to_string())?;
+        if !matches!(f.mode.as_str(), "new" | "adopt") {
+            return Err(format!("mode {:?} is not new or adopt", f.mode));
+        }
+        Ok(f)
+    }
+
+    pub fn to_toml(&self) -> String {
+        format!(
+            "key = {:?}\nrepo = {:?}\nmode = {:?}\nnonce = {:?}\nissued = {:?}\nexpires = {:?}\nintake_sha256 = {:?}\nsig = {:?}\n",
+            self.key,
+            self.repo,
+            self.mode,
+            self.nonce,
+            self.issued,
+            self.expires,
+            self.intake_sha256,
+            self.sig
+        )
+    }
+
+    /// The exact bytes the key signs.
+    pub fn message(&self) -> String {
+        signed_message(
+            &self.repo,
+            &self.mode,
+            &self.nonce,
+            &self.issued,
+            &self.expires,
+            &self.intake_sha256,
+        )
+    }
+}
+
+/// Lowercase hex SHA-256 of the exact intake bytes.
+pub fn intake_sha256(bytes: &[u8]) -> String {
+    let d = ring::digest::digest(&ring::digest::SHA256, bytes);
+    d.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// `bosun-intake v1 <owner/name lowercased> <mode> <nonce> <issued> <expires> sha256 <hex>`.
+pub fn signed_message(
+    repo: &str,
+    mode: &str,
+    nonce: &str,
+    issued: &str,
+    expires: &str,
+    sha: &str,
+) -> String {
+    let repo = repo.to_ascii_lowercase();
+    format!("bosun-intake v1 {repo} {mode} {nonce} {issued} {expires} sha256 {sha}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,5 +517,38 @@ slack_channel = ""
                 assert!(!text.contains(leak), "{leak}: {text}");
             }
         }
+    }
+
+    #[test]
+    fn the_sig_file_round_trips_and_binds_every_field() {
+        let sha = intake_sha256(OK.as_bytes());
+        assert_eq!(sha.len(), 64);
+        let f = SigFile {
+            key: "k1".into(),
+            repo: "KeelstackHQ/App".into(),
+            mode: "new".into(),
+            nonce: "ab".repeat(16),
+            issued: "2026-11-02T10:00:00Z".into(),
+            expires: "2026-11-02T11:00:00Z".into(),
+            intake_sha256: sha.clone(),
+            sig: "c2ln".into(),
+        };
+        assert_eq!(SigFile::parse(&f.to_toml()).unwrap(), f);
+        let m = f.message();
+        assert!(m.starts_with("bosun-intake v1 keelstackhq/app new "));
+        assert!(m.ends_with(&format!("sha256 {sha}")));
+        let adopt = SigFile {
+            mode: "adopt".into(),
+            ..f.clone()
+        };
+        assert_ne!(m, adopt.message());
+        let later = SigFile {
+            issued: "2026-11-02T10:00:01Z".into(),
+            ..f.clone()
+        };
+        assert_ne!(m, later.message());
+        assert!(m.contains(" 2026-11-02T10:00:00Z 2026-11-02T11:00:00Z sha256 "));
+        assert!(SigFile::parse(&f.to_toml().replace("\"new\"", "\"x\"")).is_err());
+        assert!(SigFile::parse(&format!("{}z = 1\n", f.to_toml())).is_err());
     }
 }

@@ -1,0 +1,1 @@
+- 2026-11-02 · ZI/T1b · `bosun intake sign|verify` (detached signature, repo/mode/nonce/expiry bound) · PR (feat/intake-sign)

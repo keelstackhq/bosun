@@ -65,12 +65,13 @@ fn command_from_args(args: &[String]) -> &'static str {
         if arg == "-C" {
             iter.next();
         } else if !arg.starts_with('-') {
-            if arg == "intake"
-                && iter
-                    .find(|a| !a.starts_with('-'))
-                    .is_some_and(|a| a == "check")
-            {
-                return "intake check";
+            if arg == "intake" {
+                match iter.find(|a| !a.starts_with('-')).map(String::as_str) {
+                    Some("check") => return "intake check",
+                    Some("sign") => return "intake sign",
+                    Some("verify") => return "intake verify",
+                    _ => {}
+                }
             }
             return COMMANDS
                 .iter()
