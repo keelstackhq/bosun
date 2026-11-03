@@ -8,7 +8,7 @@ max_children = 3
 
 [waves]
 max_parallel = 6
-# relay_waves = 6  (the default; uncomment once .bosun/version pins a bosun that knows it)
+relay_waves = 6
 
 [turns]
 build = 100

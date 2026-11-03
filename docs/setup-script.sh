@@ -21,10 +21,10 @@ BERTH_SHA512=4V71F1YqcduupUm/yqc3HaK5/VMH6bD1PZa6xskA+84UiSs1UZRnkX7W+zoLPNizoT2
 BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+J+jEvUBHKxS3xfQMT7HqCO35TUysw==
 BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
 # The bosun release this repo pins in .bosun/version.
-BOSUN_VERSION=0.4.0
-BOSUN_SHA512=PgbHQLJg9P14b8zsl1nY3dF8RvY1VT/2YB3TtJr8XfECFhtxRk5ouJitH3LwUClAAMVbVG16laD+3lIb0sD71w==
-BOSUN_LINUX_X64_SHA512=heHB2hOzfMu1jlelVPOiG6dTzrN/ep3jIEC2JcxhS/vX/C0FefwGrVUzxGzoEb27g1Ay817XqRsRGp8fnVHpGg==
-BOSUN_LINUX_ARM64_SHA512=NiPlqlENitXHnrOZ01Nv5F/xGLiv5CfFWC+lkfAY7hpmwSfm33NaNAav3i1Xj6E30l+jQAwfGasw/wrnyg7GDw==
+BOSUN_VERSION=0.5.0
+BOSUN_SHA512=cp09oCjY7BVH/S3ZEwXqN0zAKEvIHBaWfqSyxR257aqfTHLEtxUAtblL88WVkaYZ9ffg84wk0sWY4aud+RXiaA==
+BOSUN_LINUX_X64_SHA512=yUFq/5cuFXETTh8NZts1I8K7EalJJ3eS+nM+qowB5BLpGzjAzjXWqVpnUHvLYskEuOZFjYD7yDIH25LuDeKKgw==
+BOSUN_LINUX_ARM64_SHA512=D8MqWPMENnk+gkvbHP0wC2uH+h6XEqFOjzs00t+FQkxxbOHUiYQZWiOQ4Fl9i7NUlOT7U4qsmoAdFva16cOyLw==
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
 # Without one the script warns, skips the pinned toolchain and still installs the cargo tools. `bash docs/setup-script.sh --rust-version` prints the version

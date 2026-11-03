@@ -1,0 +1,1 @@
+- 2026-11-03 · ZR/T3 · pin bosun 0.5.0 (.bosun/version, setup-script sha512, KNOWN), relay_waves, [cloud], [approvals] policy · PR (chore-pin-0.5.0)

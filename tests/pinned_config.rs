@@ -13,28 +13,63 @@ const KNOWN: &[(&str, &[&str])] = &[
         "0.4.0",
         &["project", "stack", "review", "slack", "prices", "approvals"],
     ),
+    (
+        "0.5.0",
+        &[
+            "project",
+            "stack",
+            "review",
+            "slack",
+            "cloud",
+            "prices",
+            "approvals",
+            "intake",
+        ],
+    ),
 ];
 
 /// The `.bosun/limits.toml` keys (`table.key`) each pinned release accepts.
-const KNOWN_LIMITS: &[(&str, &[&str])] = &[(
-    "0.4.0",
-    &[
-        "sessions.max_depth",
-        "sessions.max_live_sessions",
-        "sessions.max_children",
-        "waves.max_parallel",
-        "turns.build",
-        "turns.build_cap",
-        "turns.review",
-        "turns.fix_round",
-        "models.read",
-        "models.build",
-        "models.review",
-        "models.hard",
-        "budget.daily_usd",
-        "budget.per_task_usd",
-    ],
-)];
+const KNOWN_LIMITS: &[(&str, &[&str])] = &[
+    (
+        "0.4.0",
+        &[
+            "sessions.max_depth",
+            "sessions.max_live_sessions",
+            "sessions.max_children",
+            "waves.max_parallel",
+            "turns.build",
+            "turns.build_cap",
+            "turns.review",
+            "turns.fix_round",
+            "models.read",
+            "models.build",
+            "models.review",
+            "models.hard",
+            "budget.daily_usd",
+            "budget.per_task_usd",
+        ],
+    ),
+    (
+        "0.5.0",
+        &[
+            "sessions.max_depth",
+            "sessions.max_live_sessions",
+            "sessions.max_children",
+            "waves.max_parallel",
+            "waves.relay_waves",
+            "turns.build",
+            "turns.build_cap",
+            "turns.review",
+            "turns.fix_round",
+            "models.read",
+            "models.build",
+            "models.review",
+            "models.hard",
+            "budget.daily_usd",
+            "budget.per_task_usd",
+        ],
+    ),
+];
 
 /// The `table.key` names of a limits file that `known` does not list.
 fn unknown_limits(text: &str, known: &[&str]) -> Vec<String> {
@@ -53,11 +88,11 @@ fn unknown_limits(text: &str, known: &[&str]) -> Vec<String> {
     out
 }
 
-/// The keys of `[approvals]` each pinned release accepts. ZR/T3 adds 0.5.0 with `policy`; until
-/// then `policy` must not appear in bosun's own `.bosun/bosun.toml` or in the channel templates.
+/// The keys of `[approvals]` each pinned release accepts (`policy` from 0.5.0).
 const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
     ("0.3.0", &["bootstrap_until"]),
     ("0.4.0", &["bootstrap_until"]),
+    ("0.5.0", &["bootstrap_until", "policy"]),
 ];
 
 /// `path` as committed at HEAD: CI swaps the base branch's `.bosun/` into the checkout.
