@@ -6,13 +6,16 @@ use std::process::{Command, Stdio};
 use serde_json::{Value, json};
 
 use super::InitArgs;
+use super::intake_file;
 use crate::app::{App, default_branch};
 use crate::core::checks;
+use crate::core::intake::{INTAKE_PATH, Intake};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// Files the channel seeds (written once, never overwritten); init excludes those that exist.
-const SEEDS: [&str; 9] = [
+const SEEDS: [&str; 10] = [
     ".bosun/limits.toml",
+    ".bosun/intake.toml",
     ".bosun/risk.toml",
     "governance/owners.toml",
     ".github/CODEOWNERS",
@@ -40,6 +43,143 @@ const OWNER_STEPS: [&str; 7] = [
     "Create the Routines (janitor and curator, every hour and daily; notify too once [slack] is set); `bosun doctor` prints their prompts.",
     "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA when the session asks with a form in the Claude Code chat; the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself).",
 ];
+
+/// What stays human with `--intake` (design section 3.4): the approvals of the setup PR and of
+/// each splice update. The rest of `OWNER_STEPS` is provision.yml's, or a Routine in `next`.
+const INTAKE_KEEPS: [usize; 2] = [4, 6];
+const BOOTSTRAP_STEP: &str = "For each new package that publishes, run `hoist release bootstrap` once on a computer after `npm login` and `cargo login`, then set up the crates.io trusted publisher; every release then needs a tap on the `release` environment.";
+
+/// The `create_trigger` call of one Routine from `doctor::routines`. Each firing starts a fresh
+/// session; the model stays in `data.routines` (create_trigger has no model argument).
+fn trigger_call(r: &Value, repo: &str) -> Value {
+    let cron = if r["name"] == "curator" {
+        "8 3 * * *"
+    } else {
+        "0 * * * *"
+    };
+    json!({
+        "name": r["name"], "cron_expression": cron,
+        "create_new_session_on_fire": true, "prompt": format!(
+            "Work in {repo}: attach it with add_repo and clone it first, then: {}",
+            r["prompt"].as_str().unwrap_or_default()
+        ), "initiation": "human_request",
+    })
+}
+
+/// Both sides canonical: `given` is relative to the working directory, `from_file` to the repo.
+fn same_plan(given: &Path, from_file: &str, root: &Path) -> bool {
+    let canon = |p: &Path| std::fs::canonicalize(p).ok();
+    canon(given).is_some_and(|g| Some(g) == canon(&root.join(from_file)))
+}
+
+/// Refuse a destination that would write outside the repo: a symlink at `.bosun` or at
+/// `.bosun/intake.toml`, or a `.bosun` whose real path leaves the repo.
+fn check_intake_dest(root: &Path) -> Result<(), BosunError> {
+    let dir = root.join(".bosun");
+    let link = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    let inside = !dir.exists()
+        || matches!((std::fs::canonicalize(&dir), std::fs::canonicalize(root)),
+            (Ok(d), Ok(r)) if d.starts_with(&r));
+    if link(&dir) || link(&root.join(INTAKE_PATH)) || !inside {
+        return Err(BosunError::error(
+            format!("{INTAKE_PATH} or .bosun is a symlink, or leaves the repo"),
+            "replace the symlink with a plain directory or file, commit that, then rerun `bosun init --intake`",
+        ));
+    }
+    Ok(())
+}
+
+/// The intake file's schema check, then `--stack`, `--owner` and `--plan` from it; a flag that
+/// disagrees is a usage error. Nothing is written. Returns the args to run with.
+fn derive(
+    dir: Option<&Path>,
+    args: &InitArgs,
+    file: &Path,
+) -> Result<(InitArgs, Intake, String), BosunError> {
+    let text = intake_file::read(None, file, "intake file")?;
+    let i = intake_file::schema(&text)?;
+    let clash = |flag: &str, given: String, wanted: String| {
+        BosunError::usage(
+            format!(
+                "{flag} {given} disagrees with {wanted} in {}",
+                file.display()
+            ),
+            format!("drop {flag}, or change the intake file, so that they agree"),
+        )
+    };
+    let (mut a, mut b) = (args.stack.clone(), i.stack.clone());
+    a.sort();
+    b.sort();
+    if !args.stack.is_empty() && a != b {
+        return Err(clash(
+            "--stack",
+            args.stack.join(","),
+            format!("stack = {:?}", i.stack),
+        ));
+    }
+    if let Some(o) = args
+        .owner
+        .as_deref()
+        .filter(|o| !o.eq_ignore_ascii_case(&i.repo.owner))
+    {
+        return Err(clash(
+            "--owner",
+            o.into(),
+            format!("repo.owner = {}", i.repo.owner),
+        ));
+    }
+    let root =
+        crate::cli::gate::repo_root(&dir.map_or_else(|| PathBuf::from("."), Path::to_path_buf))?;
+    // The checkout must be the repo the file describes (BOSUN_REPO, else origin); never the
+    // directory name.
+    let here = crate::ctx::Ctx::load(Some(&root)).map_err(|e| {
+        if e.message.starts_with("cannot tell which GitHub repo") {
+            BosunError::error(
+                e.message.clone(),
+                "set BOSUN_REPO=<owner>/<name> or add the origin remote",
+            )
+        } else {
+            e
+        }
+    })?;
+    let want = format!("{}/{}", i.repo.owner, i.repo.name);
+    if !format!("{}", here.repo).eq_ignore_ascii_case(&want) {
+        return Err(BosunError::usage(
+            format!(
+                "this checkout is {} but {} names repo {want}",
+                here.repo,
+                file.display()
+            ),
+            format!(
+                "run `bosun init --intake` in a checkout of {want}, or fix repo.name and repo.owner in the intake file"
+            ),
+        ));
+    }
+    let plan = match (&args.plan, &i.plan) {
+        (Some(g), Some(w)) if !same_plan(g, w, &root) => {
+            return Err(clash(
+                "--plan",
+                g.display().to_string(),
+                format!("plan = {w}"),
+            ));
+        }
+        (Some(g), None) => {
+            return Err(clash(
+                "--plan",
+                g.display().to_string(),
+                "goal (no plan)".into(),
+            ));
+        }
+        (g, w) => w.as_ref().map(|w| root.join(w)).or_else(|| g.clone()),
+    };
+    let derived = InitArgs {
+        stack: i.stack.clone(),
+        owner: Some(i.repo.owner.clone()),
+        plan,
+        ..args.clone()
+    };
+    Ok((derived, i, text))
+}
 
 /// A name `git check-ref-format --branch` accepts (git is the judge; it needs no repo).
 fn valid_branch(name: &str) -> bool {
@@ -451,8 +591,19 @@ fn setup(
     args: &InitArgs,
     argv: &[String],
     hoist: &Option<(String, Vec<String>, MergeQueue)>,
+    intake: Option<&str>,
 ) -> Result<(Value, Option<String>, Vec<String>), BosunError> {
     let splice = run_splice(argv)?;
+    if let Some(text) = intake {
+        std::fs::create_dir_all(root.join(".bosun"))
+            .and_then(|()| std::fs::write(root.join(INTAKE_PATH), text))
+            .map_err(|e| {
+                BosunError::error(
+                    format!("cannot write {INTAKE_PATH}: {e}"),
+                    "check that .bosun/ is writable",
+                )
+            })?;
+    }
     let mut added = Vec::new();
     if let Some((text, new, mq)) = hoist {
         if !new.is_empty() || *mq == MergeQueue::Added {
@@ -520,6 +671,18 @@ fn rollback(root: &Path, start: &str, detached: bool, branch: &str) -> bool {
 }
 
 pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
+    // The schema check and the flags it derives come first: nothing is written before they pass.
+    let mut intake = None;
+    let derived;
+    let args = match &args.intake {
+        Some(f) => {
+            let (a, i, text) = derive(dir, args, f)?;
+            derived = a;
+            intake = Some((i, text));
+            &derived
+        }
+        None => args,
+    };
     let branch = args.branch.clone().unwrap_or_else(|| {
         let cloud = std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
             .is_ok_and(|v| v.starts_with("cloud"));
@@ -601,24 +764,37 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         ));
     }
 
+    if intake.is_some() {
+        check_intake_dest(&root)?;
+    }
     let version = env!("CARGO_PKG_VERSION");
     let git_ref = args
         .git_ref
         .clone()
         .unwrap_or_else(|| format!("v{version}"));
     // The repo name needs no token: BOSUN_REPO or the origin remote, else the directory name.
-    let project = crate::ctx::Ctx::load(Some(&root))
-        .map(|c| c.repo.name)
-        .unwrap_or_else(|_| {
-            root.file_name()
-                .map_or("project".into(), |n| n.to_string_lossy().into_owned())
+    let project = intake
+        .as_ref()
+        .map(|(i, _)| i.repo.name.clone())
+        .unwrap_or_else(|| {
+            crate::ctx::Ctx::load(Some(&root))
+                .map(|c| c.repo.name)
+                .unwrap_or_else(|_| {
+                    root.file_name()
+                        .map_or("project".into(), |n| n.to_string_lossy().into_owned())
+                })
         });
+    // With --intake the file is always excluded: bosun copies it, and the seed must not win.
     let kept: Vec<String> = SEEDS
         .into_iter()
         .chain([SETTINGS])
-        .filter(|p| root.join(p).exists())
+        .filter(|p| root.join(p).exists() && !(intake.is_some() && *p == INTAKE_PATH))
         .map(String::from)
         .collect();
+    let mut excludes = kept.clone();
+    if intake.is_some() {
+        excludes.push(INTAKE_PATH.into());
+    }
     let own_ci = has_ci_ok_job(&root);
     let claude_md = !main_owns_claude_md(&root);
     let mut checks = HOIST_CHECKS.to_vec();
@@ -659,8 +835,24 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     if claude_md {
         pieces.push("claude-md".into());
     }
-    let mut steps: Vec<String> = OWNER_STEPS.iter().map(|s| (*s).to_string()).collect();
-    if own_ci {
+    if let Some((i, _)) = &intake {
+        for p in &i.bosun_pieces {
+            if !pieces.contains(p) && (claude_md || p != "claude-md") {
+                pieces.push(p.clone());
+            }
+        }
+    }
+    let mut steps: Vec<String> = match &intake {
+        Some((i, _)) => {
+            let mut keep: Vec<String> = INTAKE_KEEPS.map(|n| OWNER_STEPS[n].to_string()).into();
+            if i.publish.iter().any(|p| p == "npm" || p == "crates") {
+                keep.push(BOOTSTRAP_STEP.into());
+            }
+            keep
+        }
+        None => OWNER_STEPS.iter().map(|s| (*s).to_string()).collect(),
+    };
+    if own_ci && intake.is_none() {
         steps[1] = steps[1].replace("main-open (hoist.toml)", "main-open, bosun-ok (hoist.toml)");
     }
     let hooks_present = std::fs::read_to_string(root.join(SETTINGS)).is_ok_and(|t| {
@@ -693,10 +885,13 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             args.bosun_version.as_deref().unwrap_or(version)
         ));
     }
+    if intake.is_some() {
+        data.push("intake=1".into());
+    }
     for d in data {
         argv.extend(["--data".into(), d]);
     }
-    for p in &kept {
+    for p in &excludes {
         argv.extend(["--exclude".into(), p.clone()]);
     }
     argv.extend(["--yes", "--json", "-C"].map(String::from));
@@ -720,7 +915,14 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     };
 
     git(&root, &["switch", "-q", "-c", branch])?;
-    let local = setup(&root, args, &argv, &hoist).and_then(|(changes, plan, added)| {
+    let local = setup(
+        &root,
+        args,
+        &argv,
+        &hoist,
+        intake.as_ref().map(|(_, t)| t.as_str()),
+    )
+    .and_then(|(changes, plan, added)| {
         if github.is_some() {
             git(&root, &["push", "-q", "-u", "origin", branch])?;
         }
@@ -761,7 +963,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
 
     let mut out = json!({
         "channel": "bosun", "source": args.source, "ref": git_ref, "pieces": pieces,
-        "changes": changes, "excluded": kept, "plan": plan, "branch": branch,
+        "changes": changes, "excluded": excludes, "plan": plan, "branch": branch,
         "commit": commit, "pr": pr, "risk": "high", "owner_steps": steps,
         "own_ci": own_ci, "claude_md": claude_md, "hoist_checks_added": added,
         "hoist_merge_queue": hoist.as_ref().map(|(_, _, mq)| mq.label()),
@@ -771,7 +973,19 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         out["pr_title"] = json!(PR_TITLE);
         out["pr_body"] = json!(body);
     }
-    Ok(Outcome::data(out))
+    let mut outcome = Outcome::data(out);
+    if let Some((i, _)) = &intake {
+        let routines = super::doctor::routines(i.notify == "slack");
+        for r in routines.as_array().into_iter().flatten() {
+            outcome = outcome.with_next(
+                "create_trigger",
+                trigger_call(r, &format!("{}/{}", i.repo.owner, i.repo.name)),
+            );
+        }
+        outcome.data["routines"] = routines;
+        outcome.data["intake"] = json!(INTAKE_PATH);
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]

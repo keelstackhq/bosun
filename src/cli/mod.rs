@@ -846,11 +846,14 @@ pub struct MainTriageArgs {
     pub run: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct InitArgs {
-    /// A stack to set up (repeatable for a mixed repo).
-    #[arg(long = "stack", required = true, value_parser = ["rust", "ts-pnpm"])]
+    /// A stack to set up (repeatable for a mixed repo); with --intake it comes from the file.
+    #[arg(long = "stack", required_unless_present = "intake", value_parser = ["rust", "ts-pnpm"])]
     pub stack: Vec<String>,
+    /// The owner's intake file: derives --stack, --owner and --plan, becomes .bosun/intake.toml.
+    #[arg(long, value_name = "FILE")]
+    pub intake: Option<PathBuf>,
     /// A plan file to copy to plans/.
     #[arg(long, value_name = "FILE")]
     pub plan: Option<PathBuf>,

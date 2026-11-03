@@ -11,8 +11,9 @@ use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
-    APPROVERS_PATH, ApproverKey, Form, Role, parse_approvers, signature_lines, signed_message,
-    signed_message_bootstrap, signed_message_v2, trust_files_changed, verify_ed25519,
+    APPROVERS_PATH, ApproverKey, Form, OrchestratorCase, Role, orchestrator_counts,
+    parse_approvers, signature_lines, signed_message, signed_message_bootstrap, signed_message_v2,
+    trust_files_changed, verify_ed25519,
 };
 use crate::core::lease::leases_of;
 use crate::core::meta::linked_issues;
@@ -226,7 +227,9 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     let bootstrap = if high && signed_ok {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
-        bootstrap_window(gh, base, app.ctx.now, requirement, &excluded)?
+        let today = app.ctx.now.to_string();
+        let pr = (&pr_files[..], &matches[..], requirement);
+        orchestrator_window(gh, base, &today[..10], pr, &excluded)?
     } else {
         Err("signed approvals do not count on this PR".into())
     };
@@ -240,7 +243,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         base_ref: &pull.base_ref,
         owners: &owners,
         signed_ok,
-        bootstrap: bootstrap.is_ok(),
+        bootstrap: bootstrap.as_deref().ok(),
         requirement,
         linked: &linked,
         unlinked,
@@ -386,8 +389,9 @@ struct Need<'a> {
     base_ref: &'a str,
     owners: &'a [String],
     signed_ok: bool,
-    /// A bootstrap-mode signature counts as the owner (D-012): see `bootstrap_window`.
-    bootstrap: bool,
+    /// The label under which an orchestrator signature counts as the owner (D-012, D-014): see
+    /// `orchestrator_window`.
+    bootstrap: Option<&'a str>,
     requirement: Approval,
     linked: &'a [u64],
     unlinked: bool,
@@ -620,7 +624,7 @@ fn approver(
     head: &str,
     owners: &[String],
     signed_ok: bool,
-    bootstrap: bool,
+    bootstrap: Option<&str>,
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let state = |o: &str| decisive_review(&reviews, o, head);
@@ -667,12 +671,11 @@ fn approver(
         if let Some(id) = sign(&|f| f != Form::Bootstrap)? {
             return Ok(Some(format!("key {id}")));
         }
-        let boot = if bootstrap {
-            sign(&|f| f == Form::Bootstrap)?
-        } else {
-            None
+        let Some(label) = bootstrap else {
+            return Ok(None);
         };
-        return Ok(boot.map(|id| format!("key {id} (bootstrap mode, D-012)")));
+        let boot = sign(&|f| f == Form::Bootstrap)?;
+        return Ok(boot.map(|id| format!("key {id} ({label})")));
     }
     let mut by = None;
     for id in ids {
@@ -856,44 +859,38 @@ fn signed_approver(
     Ok(None)
 }
 
-/// The last day of bootstrap mode (D-012) when a bootstrap-mode approval can count on this PR,
-/// else why not: `[approvals] bootstrap_until` at base, read like the rules, is set and valid
-/// and today (UTC, from `BOSUN_NOW`) is not after it, the class is owner and `excluded` is empty.
-fn bootstrap_window(
+/// The label of an orchestrator approval (a bootstrap-form signature) when it can count on this
+/// PR, else why not: `[approvals]` at base, read like the rules, decides with the window (D-012),
+/// `policy` (D-014) and the PR's rules, exclusions and workflow files.
+fn orchestrator_window(
     gh: &dyn Github,
     base: &str,
-    now: Timestamp,
-    requirement: Approval,
+    today: &str,
+    pr: (&[PrFile], &[risk::Match], Approval),
     excluded: &[String],
 ) -> Result<std::result::Result<String, String>> {
-    let config = gh
-        .file_at(CONFIG_FILE, base)?
-        .map(|t| Config::parse(&t, CONFIG_FILE));
-    let until = match config {
-        Some(Err(e)) => return Ok(Err(format!("bootstrap mode is off: {}", e.message))),
-        Some(Ok(c)) => c.approvals.bootstrap_until,
-        None => None,
+    let (files, matches, requirement) = pr;
+    let approvals = match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => match Config::parse(&t, CONFIG_FILE) {
+            Ok(c) => c.approvals,
+            Err(e) => return Ok(Err(format!("bootstrap mode is off: {}", e.message))),
+        },
+        None => Default::default(),
     };
-    let Some(until) = until else {
-        return Ok(Err(format!(
-            "bootstrap mode is off: `[approvals] bootstrap_until` is not set in {CONFIG_FILE} at base"
-        )));
-    };
-    Ok(if now.to_string()[..10] > *until {
-        Err(format!("bootstrap mode ended on {until}"))
-    } else if requirement != Approval::Owner {
-        Err(format!(
-            "the PR needs {}, not the owner class (bootstrap mode until {until})",
-            requirement.name()
-        ))
-    } else if !excluded.is_empty() {
-        Err(format!(
-            "the PR touches {}, which always needs the owner (bootstrap mode until {until})",
-            excluded.join(", ")
-        ))
-    } else {
-        Ok(until)
-    })
+    let paths: Vec<_> = (files.iter())
+        .map(|f| (&*f.filename, f.previous_filename.as_deref()))
+        .collect();
+    let workflows = risk::workflow_files(&paths);
+    let rules: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
+    Ok(orchestrator_counts(&OrchestratorCase {
+        policy: approvals.policy(),
+        bootstrap_until: approvals.bootstrap_until.as_deref(),
+        today,
+        requirement: requirement.name(),
+        excluded,
+        rules: &rules,
+        workflows: &workflows,
+    }))
 }
 
 /// The paths and rules of the PR that a bootstrap-mode approval never covers.

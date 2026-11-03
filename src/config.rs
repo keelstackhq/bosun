@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::approve::Policy;
 use crate::output::BosunError;
 
 pub const CONFIG_FILE: &str = ".bosun/bosun.toml";
@@ -21,6 +22,12 @@ pub struct Config {
     pub cloud: Cloud,
     pub prices: BTreeMap<String, Price>,
     pub approvals: Approvals,
+    /// Zero-touch onboarding (spec section 3): when true, `.bosun/intake.toml` on the default
+    /// branch must be present and valid before agents are spawned. Release ordering: a pinned
+    /// release rejects unknown keys, so a repo may set this only after its `.bosun/version`
+    /// pins a release that reads it (0.5.0 or later, which is also added to KNOWN in
+    /// tests/pinned_config.rs). Bosun's own `.bosun/bosun.toml` therefore does not set it yet.
+    pub intake: bool,
 }
 
 impl Default for Config {
@@ -33,6 +40,7 @@ impl Default for Config {
             cloud: Cloud::default(),
             prices: BTreeMap::new(),
             approvals: Approvals::default(),
+            intake: false,
         }
     }
 }
@@ -113,11 +121,20 @@ pub struct Cloud {
 }
 
 /// `[approvals]`: `bootstrap_until` (`YYYY-MM-DD`, UTC, inclusive) is the last day of bootstrap
-/// mode (D-012, spec §8); absent means bootstrap mode is off.
+/// mode (D-012, spec §8); absent means bootstrap mode is off. `policy` says who approves once it
+/// is over (D-014); absent means `owner` (fail safe).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Approvals {
     pub bootstrap_until: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy: Option<Policy>,
+}
+
+impl Approvals {
+    pub fn policy(&self) -> Policy {
+        self.policy.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

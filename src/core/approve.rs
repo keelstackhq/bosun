@@ -341,6 +341,123 @@ pub fn bootstrap_line(until: &str) -> String {
     format!("Signed in bootstrap mode (D-012, until {until})")
 }
 
+/// `[approvals] policy`: who may approve gated PRs once bootstrap mode (D-012) is over (D-014).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Policy {
+    /// Only the owner approves; the default, so a repo without the key fails safe.
+    #[default]
+    Owner,
+    /// The orchestrator approves R-ci changes outside the CI workflows; the owner the rest.
+    OwnerGated,
+    /// The orchestrator approves everything the exclusions leave to a signature.
+    Orchestrator,
+}
+
+impl Policy {
+    pub fn name(self) -> &'static str {
+        match self {
+            Policy::Owner => "owner",
+            Policy::OwnerGated => "owner-gated",
+            Policy::Orchestrator => "orchestrator",
+        }
+    }
+}
+
+/// D-012's last day; no `bootstrap_until` later than this widens the window.
+pub const BOOTSTRAP_END: &str = "2026-11-30";
+/// CI workflow files of every provider R-ci names: owner-class in every policy, in the window too.
+/// Their permissions, environments and publish steps cannot be judged reliably from a diff.
+pub const WORKFLOW_PATHS: [&str; 11] = [
+    ".github/workflows/**",
+    ".github/actions/**",
+    ".circleci/**",
+    ".gitlab-ci.yml",
+    ".gitlab/ci/**",
+    ".buildkite/**",
+    "**/jenkinsfile",
+    "azure-pipelines.y*ml",
+    "bitbucket-pipelines.yml",
+    ".travis.yml",
+    ".drone.yml",
+];
+
+/// What decides whether an orchestrator approval (the bootstrap-form signature) counts on a PR.
+pub struct OrchestratorCase<'a> {
+    pub policy: Policy,
+    /// `[approvals] bootstrap_until` at base, already validated.
+    pub bootstrap_until: Option<&'a str>,
+    /// `YYYY-MM-DD`, UTC.
+    pub today: &'a str,
+    /// The name of the PR's approval requirement.
+    pub requirement: &'a str,
+    /// `risk::bootstrap_excluded` output: always the owner.
+    pub excluded: &'a [String],
+    /// The ids of every matched rule.
+    pub rules: &'a [&'a str],
+    /// Changed paths (previous names too) in [`WORKFLOW_PATHS`].
+    pub workflows: &'a [String],
+}
+
+/// `Ok(label for the status)` when an orchestrator approval can count, else `Err(why)`.
+pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
+    if c.requirement != "owner" {
+        return Err(format!(
+            "the PR needs {}, not the owner class",
+            c.requirement
+        ));
+    }
+    if !c.excluded.is_empty() {
+        return Err(format!(
+            "the PR touches {}, which always needs the owner",
+            c.excluded.join(", ")
+        ));
+    }
+    if !c.workflows.is_empty() {
+        return Err(format!(
+            "the PR changes {}: a CI workflow always needs the owner (D-014)",
+            c.workflows.join(", ")
+        ));
+    }
+    let end = c.bootstrap_until.map(|u| u.min(BOOTSTRAP_END));
+    if end.is_some_and(|e| c.today <= e) {
+        return Ok("bootstrap mode, D-012".into());
+    }
+    let window = match end {
+        Some(e) => format!("bootstrap mode ended on {e}, D-012"),
+        None => "bootstrap mode is off: `[approvals] bootstrap_until` is not set, D-012".into(),
+    };
+    let label = |p: Policy| Ok(format!("policy {}, D-014", p.name()));
+    match c.policy {
+        Policy::Orchestrator => label(c.policy),
+        Policy::Owner => Err(format!(
+            "approval policy owner: only the owner approves ({window})"
+        )),
+        Policy::OwnerGated => {
+            let other: Vec<&str> = (c.rules.iter().copied()).filter(|r| *r != "R-ci").collect();
+            if other.is_empty() {
+                return label(c.policy);
+            }
+            Err(format!(
+                "approval policy owner-gated: only R-ci changes outside workflows; {} need the owner ({window})",
+                other.join(", ")
+            ))
+        }
+    }
+}
+
+/// The line a comment signed under an approval policy (not the bootstrap window) carries.
+pub fn policy_line(p: Policy) -> String {
+    format!("Signed under approval policy {} (D-014)", p.name())
+}
+
+/// The trusted `risk-check` status waits for an owner and lists R-ci alone.
+pub fn only_r_ci(statuses: &[Stat]) -> bool {
+    let waiting = status(statuses, "risk-check")
+        .filter(|s| s.state == "failure" && s.description.starts_with(WAITING_PREFIX));
+    waiting.is_some_and(|s| risk_ids(&s.description) == ["R-ci"])
+}
+
 /// Files that decide who approves: a PR that changes one (or renames one away) never passes on a
 /// signed approval, owner or delegate key, so a compromised key cannot enroll keys or owners.
 pub const TRUST_FILES: [&str; 5] = [
@@ -385,6 +502,84 @@ pub fn signed_comment(
 
 #[cfg(test)]
 mod tests {
+
+    fn case<'a>(policy: Policy, until: Option<&'a str>, today: &'a str) -> OrchestratorCase<'a> {
+        OrchestratorCase {
+            policy,
+            bootstrap_until: until,
+            today,
+            requirement: "owner",
+            excluded: &[],
+            rules: &["R-ci"],
+            workflows: &[],
+        }
+    }
+
+    #[test]
+    fn the_window_counts_through_its_last_day_and_is_capped() {
+        let ok = |c: &OrchestratorCase| orchestrator_counts(c).unwrap();
+        let c = case(Policy::Owner, Some("2026-11-30"), "2026-11-30");
+        assert_eq!(ok(&c), "bootstrap mode, D-012");
+        let c = case(Policy::Owner, Some("2027-06-30"), "2026-11-30");
+        assert_eq!(ok(&c), "bootstrap mode, D-012");
+        let c = case(Policy::Owner, Some("2027-06-30"), "2026-12-01");
+        let why = orchestrator_counts(&c).unwrap_err();
+        assert!(why.contains("2026-11-30") && why.contains("D-012"), "{why}");
+        let c = case(Policy::Owner, None, "2026-11-10");
+        assert!(orchestrator_counts(&c).unwrap_err().contains("is off"));
+    }
+
+    #[test]
+    fn after_the_window_the_policy_decides() {
+        let c = case(Policy::OwnerGated, None, "2026-12-01");
+        assert_eq!(
+            orchestrator_counts(&c).unwrap(),
+            "policy owner-gated, D-014"
+        );
+        let mut c = case(Policy::OwnerGated, None, "2026-12-01");
+        c.rules = &["R-ci", "R-gov"];
+        assert!(orchestrator_counts(&c).unwrap_err().contains("R-gov"));
+        let w = vec![".github/workflows/ci.yml".to_string()];
+        let mut c = case(Policy::OwnerGated, None, "2026-12-01");
+        c.workflows = &w;
+        assert!(orchestrator_counts(&c).unwrap_err().contains("ci.yml"));
+        let mut c = case(Policy::Orchestrator, None, "2026-12-01");
+        c.rules = &["R-gov"];
+        assert_eq!(
+            orchestrator_counts(&c).unwrap(),
+            "policy orchestrator, D-014"
+        );
+        // A workflow always needs the owner, in every policy and in the window.
+        c.workflows = &w;
+        assert!(orchestrator_counts(&c).unwrap_err().contains("D-014"));
+        let mut c = case(Policy::Orchestrator, Some("2026-11-30"), "2026-11-10");
+        c.workflows = &w;
+        assert!(orchestrator_counts(&c).unwrap_err().contains("ci.yml"));
+        assert_eq!(Policy::default(), Policy::Owner);
+        let c = case(Policy::Owner, None, "2026-12-01");
+        assert!(
+            orchestrator_counts(&c)
+                .unwrap_err()
+                .contains("only the owner")
+        );
+    }
+
+    #[test]
+    fn excluded_paths_and_other_classes_never_count() {
+        let ex = vec!["hoist.toml".to_string()];
+        for p in [Policy::Owner, Policy::OwnerGated, Policy::Orchestrator] {
+            let mut c = case(p, Some("2026-11-30"), "2026-11-10");
+            c.excluded = &ex;
+            assert!(orchestrator_counts(&c).unwrap_err().contains("hoist.toml"));
+            let mut c = case(p, Some("2026-11-30"), "2026-11-10");
+            c.requirement = "two-verdicts";
+            assert!(
+                orchestrator_counts(&c)
+                    .unwrap_err()
+                    .contains("two-verdicts")
+            );
+        }
+    }
     use super::*;
 
     fn st(context: &str, state: &str, description: &str) -> Stat {

@@ -1,0 +1,1 @@
+- 2026-11-03 · ZI/T3 · `bosun init --intake FILE` derives flags, copies the file, returns create_trigger in next · PR (feat/init-intake)
