@@ -252,20 +252,22 @@ pub fn child_task_create(tool: &str, input: &Value) -> Result<ChildTask, String>
                 return Err("a child may not write the marker through a nested shell".into());
             }
             let words = shell_words(command);
-            let writes: Vec<&[String]> = words
-                .split(|w| w == SEP)
-                .filter(|seg| writes_issue_text(seg))
-                .collect();
-            let [seg] = writes.as_slice() else {
-                return Err("a child may run exactly one issue write".into());
+            // The whole command is the one `gh issue create`: no `cd dir &&` or other segment
+            // that could change which repo `gh` acts on, and no `$` or backtick that expands to
+            // text the checks below never see (`$'\x3c'`, `$VAR`).
+            let segs: Vec<&[String]> = words.split(|w| w == SEP).collect();
+            let [seg] = segs.as_slice() else {
+                return Err("a child's command is the single `gh issue create`".into());
             };
-            let name = |w: &String| w.rsplit('/').next().unwrap_or(w).to_string();
-            // `gh` must open the command: a variable prefix (`GH_REPO=evil/x gh ...`, `GH_HOST=`)
-            // or a wrapper can redirect it to another repo or host.
-            let at = seg
-                .iter()
-                .position(|w| name(w) == "gh")
-                .filter(|at| *at == 0);
+            if !writes_issue_text(seg) {
+                return Err("a child may only run `gh issue create` with the marker".into());
+            }
+            if seg.iter().any(|w| w.contains('$') || w.contains('`')) {
+                return Err("a child's `gh issue create` may not use `$` or backticks".into());
+            }
+            // `gh` itself must open the command: not `./gh` or a path, and no variable prefix
+            // (`GH_REPO=evil/x gh ...`, `GH_HOST=`) or wrapper that redirects it.
+            let at = seg.first().filter(|w| w.as_str() == "gh").map(|_| 0);
             let ok = at.is_some_and(|at| {
                 seg.get(at + 1).map(String::as_str) == Some("issue")
                     && seg.get(at + 2).map(String::as_str) == Some("create")
@@ -304,6 +306,14 @@ pub fn child_task_create(tool: &str, input: &Value) -> Result<ChildTask, String>
     if let Some(k) = obj.keys().find(|k| !CHILD_KEYS.contains(&k.as_str())) {
         return Err(format!(
             "a child may not set `{k}` in the task marker (allow and capabilities come from a plan PR)"
+        ));
+    }
+    // Kinds with a lighter gate path (a main fix, a process fix) are for a plan PR to grant.
+    if let Some(kind) = obj.get("kind").and_then(Value::as_str)
+        && !["feature", "bookkeeping", "flake"].contains(&kind)
+    {
+        return Err(format!(
+            "a child may not set kind `{kind}` (only feature, bookkeeping or flake)"
         ));
     }
     let epic = obj
@@ -2564,6 +2574,27 @@ mod tests {
         assert!(sh(&create(decoy)).is_err());
         let decoy2 = r#"x bosun:task {"epic":5,"allow":[]} --> <!-- bosun:task {"epic":5,"capabilities":[]} -->"#;
         assert!(sh(&create(decoy2)).is_err());
+        // `$` and backticks can hide a marker; `./gh` and a `cd` prefix change what runs.
+        for cmd in [
+            create(task).replace("<!--", "$'\\x3c'!--"),
+            create(task).replace("src/a.rs", "$HOME/a.rs"),
+            create(task).replace("--title t", "--title `id`"),
+            create(task).replacen("gh issue", "./gh issue", 1),
+            create(task).replacen("gh issue", "/tmp/gh issue", 1),
+            format!("cd /tmp/other && {}", create(task)),
+            format!("{}; echo hi", create(task)),
+        ] {
+            assert!(sh(&cmd).is_err(), "{cmd}");
+        }
+        // Kinds with a lighter gate path are not for a child.
+        for kind in ["mainfix", "process-fix", "plan", "nonsense"] {
+            let meta = format!(r#"<!-- bosun:task {{"epic":5,"kind":"{kind}"}} -->"#);
+            assert!(sh(&create(&meta)).is_err(), "{kind}");
+        }
+        for kind in ["feature", "bookkeeping", "flake"] {
+            let meta = format!(r#"<!-- bosun:task {{"epic":5,"kind":"{kind}"}} -->"#);
+            assert!(sh(&create(&meta)).is_ok(), "{kind}");
+        }
         for cmd in [
             create(task).replacen("gh issue", "GH_REPO=evil/x gh issue", 1),
             create(task).replacen("gh issue", "GH_HOST=evil.example gh issue", 1),
