@@ -1,0 +1,1 @@
+- 2026-11-04 · FU1b · `bosun handoff-pr <pr>`: send_message to the parent with PR, head SHA, risk paths and review minors · PR (feat-handoff-pr)
