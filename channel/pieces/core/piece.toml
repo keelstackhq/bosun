@@ -21,7 +21,6 @@ seed = [
   ".bosun/limits.toml",
   ".bosun/intake.toml",
   ".bosun/risk.toml",
-  ".bosun/session-rules.toml",
   "governance/owners.toml",
   ".github/CODEOWNERS",
   ".github/workflows/splice.yml",
