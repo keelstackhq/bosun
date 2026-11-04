@@ -19,9 +19,9 @@ The state machine.
 ### Tasks
 
 - T1: State machine
-  touch: src/core/state.rs
+  touch: src/core/state.rs, tests/state.rs
 - T2: Stop rules
-  touch: src/core/stop.rs
+  touch: src/core/stop.rs, tests/stop.rs
   depends: T1
   risk: high
 
@@ -37,7 +37,7 @@ depends: M1
 ### Tasks
 
 - T1: Import
-  touch: src/cli/plan.rs
+  touch: src/cli/plan.rs, tests/plan.rs
   depends: M1/T2
   kind: bookkeeping
 

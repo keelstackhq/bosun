@@ -493,6 +493,10 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                     bad!(errs, l; "use repo-relative globs with * ? ** only, such as src/core/**" => "{me} {m}");
                 }
             }
+            for root in super::touch::src_without_tests(&t.touch) {
+                bad!(warns, l; format!("add the tests to `touch:` (a new `{root}tests/<command>_<topic>.rs`), or ignore this if the task adds no behaviour")
+                    => "{me} touches {root}src/ but none of {root}tests/");
+            }
             if let (true, Some(s @ 101..)) = (t.risk == "high", t.size) {
                 bad!(warns, l; "split the task or expect an owner review" => "{me} is risk high with size {s}, over 100");
             }
@@ -682,6 +686,25 @@ mod tests {
         "- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n\n",
         "### Done when\n\n- UC-M1-1: it works.\n"
     );
+    #[test]
+    fn a_task_touching_src_without_tests_warns() {
+        let hit = |t: &str| parse(&w("touch: src/b.rs", t)).unwrap().warnings;
+        let msgs = |t: &str| hit(t).iter().map(|x| x.message.clone()).collect::<Vec<_>>();
+        // OK has T2 touching src/b.rs alone: one warning, naming the task, with a fix.
+        let base = parse(OK).unwrap().warnings;
+        assert_eq!(base.len(), 1, "{base:?}");
+        assert!(base[0].message.contains("M1/T2") && base[0].message.contains("tests/"), "{base:?}");
+        assert!(!base[0].fix.is_empty());
+        // Tests listed (root, glob, other crate's tests do not count): no warning.
+        assert!(hit("touch: src/b.rs, tests/b.rs").is_empty());
+        assert!(hit("touch: src/b.rs, tests/**").is_empty());
+        assert!(hit("touch: docs/x.md").is_empty());
+        // A crate in a subdirectory needs its own tests.
+        assert_eq!(msgs("touch: crates/x/src/b.rs").len(), 1);
+        assert!(hit("touch: crates/x/src/b.rs, crates/x/tests/b.rs").is_empty());
+        assert_eq!(msgs("touch: crates/x/src/b.rs, tests/b.rs").len(), 1);
+    }
+
     #[test]
     fn uc_stub_text_and_whole_id_matching() {
         assert_eq!(uc_stub("UC-M2-3", "t."), "\n/// UC-M2-3: t.\n#[test]\n#[ignore = \"UC-M2-3\"]\nfn uc_m2_3() {\n    todo!(\"UC-M2-3\")\n}\n");
