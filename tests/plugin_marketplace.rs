@@ -29,3 +29,34 @@ fn marketplace_pins_superpowers_and_caveman_to_commits() {
         assert!(src.get("ref").is_none(), "a ref would float: {}", p["name"]);
     }
 }
+
+fn script_pin(script: &str, name: &str) -> String {
+    script
+        .lines()
+        .find_map(|l| l.strip_prefix(&format!("{name}=")))
+        .unwrap_or_else(|| panic!("docs/setup-script.sh lacks {name}="))
+        .to_string()
+}
+
+/// The setup script prewarms the same plugin commits the marketplace pins, and only warns.
+#[test]
+fn setup_script_pins_match_the_marketplace() {
+    let script = std::fs::read_to_string("docs/setup-script.sh").unwrap();
+    let m: Value =
+        serde_json::from_str(&std::fs::read_to_string(".claude-plugin/marketplace.json").unwrap())
+            .unwrap();
+    for p in m["plugins"].as_array().unwrap() {
+        let var = format!("{}_SHA", p["name"].as_str().unwrap().to_uppercase());
+        assert_eq!(
+            script_pin(&script, &var),
+            p["source"]["sha"].as_str().unwrap(),
+            "{var}"
+        );
+    }
+    // A marketplace ref is a branch or tag: Claude Code clones it with `--branch`, so a sha fails.
+    assert_eq!(script_pin(&script, "KEELSTACK_MARKETPLACE_REF"), "main");
+    assert!(script.contains("https://github.com/keelstackhq/bosun.git#$KEELSTACK_MARKETPLACE_REF"));
+    for p in ["superpowers@keelstack", "caveman@keelstack"] {
+        assert!(script.contains(p), "{p}");
+    }
+}
