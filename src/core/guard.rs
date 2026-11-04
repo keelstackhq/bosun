@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::core::glob;
 use crate::core::lease::{Conflict, Lease};
+use crate::core::meta::OPEN;
 
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates";
@@ -259,7 +260,12 @@ pub fn child_task_create(tool: &str, input: &Value) -> Result<ChildTask, String>
                 return Err("a child may run exactly one issue write".into());
             };
             let name = |w: &String| w.rsplit('/').next().unwrap_or(w).to_string();
-            let at = seg.iter().position(|w| name(w) == "gh");
+            // `gh` must open the command: a variable prefix (`GH_REPO=evil/x gh ...`, `GH_HOST=`)
+            // or a wrapper can redirect it to another repo or host.
+            let at = seg
+                .iter()
+                .position(|w| name(w) == "gh")
+                .filter(|at| *at == 0);
             let ok = at.is_some_and(|at| {
                 seg.get(at + 1).map(String::as_str) == Some("issue")
                     && seg.get(at + 2).map(String::as_str) == Some("create")
@@ -280,11 +286,16 @@ pub fn child_task_create(tool: &str, input: &Value) -> Result<ChildTask, String>
     if MARKER_NOT_TASK.is_match(&text) || MARKER.find_iter(&text).count() != 1 {
         return Err("a child may write exactly one task marker and no other".into());
     }
+    // The marker bosun itself reads (`core::meta::parse_task_meta`): the last `OPEN`, up to the
+    // next `-->`. Prose that merely names `bosun:task` cannot stand in for it, and a second
+    // `OPEN` is refused, so the JSON checked here is the JSON bosun parses.
+    if text.matches(OPEN).count() != 1 {
+        return Err("a child may write exactly one `<!-- bosun:task {...} -->` marker".into());
+    }
     let after = text
-        .split_once("bosun:task")
-        .map(|(_, r)| r)
-        .and_then(|r| r.split_once("-->"))
-        .map(|(json, _)| json.trim())
+        .rfind(OPEN)
+        .map(|i| &text[i + OPEN.len()..])
+        .and_then(|r| r.find("-->").map(|e| r[..e].trim()))
         .ok_or("the task marker has no closing -->")?;
     let meta: Value = serde_json::from_str(after).map_err(|e| format!("task marker JSON: {e}"))?;
     let obj = meta
@@ -2546,6 +2557,20 @@ mod tests {
         assert!(
             child_task_create("mcp__github__add_issue_comment", &json!({"body": task})).is_err()
         );
+        // Prose that names the marker is no decoy for the real one bosun reads, and a variable
+        // prefix cannot redirect `gh`.
+        let decoy =
+            r#"see bosun:task {"epic":5} --> then <!-- bosun:task {"epic":5,"allow":["skip"]} -->"#;
+        assert!(sh(&create(decoy)).is_err());
+        let decoy2 = r#"x bosun:task {"epic":5,"allow":[]} --> <!-- bosun:task {"epic":5,"capabilities":[]} -->"#;
+        assert!(sh(&create(decoy2)).is_err());
+        for cmd in [
+            create(task).replacen("gh issue", "GH_REPO=evil/x gh issue", 1),
+            create(task).replacen("gh issue", "GH_HOST=evil.example gh issue", 1),
+            create(task).replacen("gh issue", "command gh issue", 1),
+        ] {
+            assert!(sh(&cmd).is_err(), "{cmd}");
+        }
         // The marker: no allow or capabilities, an epic, one marker, nothing else, valid JSON.
         for body in [
             r#"<!-- bosun:task {"epic":5,"allow":["skip"]} -->"#,
