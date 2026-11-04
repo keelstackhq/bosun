@@ -69,7 +69,29 @@ pub fn next_id(store: &Store) -> String {
     format!("L-{:03}", max + 1)
 }
 
-/// Add a lesson and return its id; refuse at a cap.
+/// Why an add was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddError {
+    /// The rule is longer than [`MAX_RULE`] characters (usage, exit 2).
+    TooLong,
+    /// A cap stopped it (exit 6).
+    Cap(CapError),
+}
+
+/// What [`add`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Added {
+    /// The new entry, or the existing one a duplicate hit.
+    pub id: String,
+    /// True when the rule equalled an existing one: a hit was recorded and scope and
+    /// evidence merged, nothing was added.
+    pub dup: bool,
+}
+
+/// Add a lesson; refuse a rule over [`MAX_RULE`] or a store at a cap. A rule equal to an
+/// existing one (see [`normalise`]) records a hit on it instead, even at a cap, and merges the
+/// new scope globs and evidence into it. A global entry stays global: merging a scope into it
+/// would narrow it.
 pub fn add(
     store: &mut Store,
     text: &str,
@@ -77,12 +99,28 @@ pub fn add(
     why: &str,
     evidence: Vec<String>,
     today: &str,
-) -> Result<String, CapError> {
+) -> Result<Added, AddError> {
+    if text.chars().count() > MAX_RULE {
+        return Err(AddError::TooLong);
+    }
+    if let Some(dup) = find_dup(store, text).map(str::to_string) {
+        hit(store, &dup, today);
+        let l = store
+            .lesson
+            .iter_mut()
+            .find(|l| l.id == dup)
+            .expect("dup exists");
+        if !l.scope.is_empty() {
+            merge(&mut l.scope, scope);
+        }
+        merge(&mut l.evidence, evidence);
+        return Ok(Added { id: dup, dup: true });
+    }
     if store.lesson.len() >= MAX {
-        return Err(CapError { global: false });
+        return Err(AddError::Cap(CapError { global: false }));
     }
     if scope.is_empty() && store.global_count() >= MAX_GLOBAL {
-        return Err(CapError { global: true });
+        return Err(AddError::Cap(CapError { global: true }));
     }
     let id = next_id(store);
     store.lesson.push(Lesson {
@@ -95,7 +133,15 @@ pub fn add(
         last_hit: None,
         hits: 0,
     });
-    Ok(id)
+    Ok(Added { id, dup: false })
+}
+
+fn merge(into: &mut Vec<String>, more: Vec<String>) {
+    for x in more {
+        if !into.contains(&x) {
+            into.push(x);
+        }
+    }
 }
 
 /// Record a hit; false when the id is unknown.
@@ -125,14 +171,23 @@ pub fn matching<'a>(store: &'a Store, paths: &[String]) -> Vec<&'a Lesson> {
         .collect()
 }
 
-/// Compact form for a pack or claim: `L-012 src/gates/** Run cargo metadata once.`
+/// Compact form for a pack or claim (control characters dropped, whitespace collapsed, the
+/// rule cut to [`MAX_RULE`] with a trailing `…`): `L-012 src/gates/** Run cargo metadata once.`
 pub fn line(l: &Lesson) -> String {
     let scope = if l.scope.is_empty() {
         "*".to_string()
     } else {
         l.scope.join(",")
     };
-    let rule = l.rule.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clean: String = l
+        .rule
+        .chars()
+        .filter(|c| !c.is_control() || c.is_whitespace())
+        .collect();
+    let mut rule = clean.split_whitespace().collect::<Vec<_>>().join(" ");
+    if rule.chars().count() > MAX_RULE {
+        rule = rule.chars().take(MAX_RULE - 1).collect::<String>() + "…";
+    }
     format!("{} {} {}", l.id, scope, rule)
 }
 
@@ -239,15 +294,86 @@ mod tests {
         assert_eq!(w[3].0, day(7));
     }
 
-    fn add_n(s: &mut Store, scope: &[&str]) -> Result<String, CapError> {
+    fn add_n(s: &mut Store, scope: &[&str]) -> Result<String, AddError> {
+        let n = s.lesson.len();
+        add_rule(s, &format!("rule {n}"), scope, &[]).map(|a| a.id)
+    }
+
+    fn add_rule(
+        s: &mut Store,
+        rule: &str,
+        scope: &[&str],
+        evidence: &[&str],
+    ) -> Result<Added, AddError> {
         add(
             s,
-            "rule",
+            rule,
             scope.iter().map(|x| x.to_string()).collect(),
             "why",
-            vec![],
+            evidence.iter().map(|x| x.to_string()).collect(),
             "2026-10-22",
         )
+    }
+
+    #[test]
+    fn add_refuses_an_over_long_rule() {
+        let mut s = Store::default();
+        let ok = "x".repeat(MAX_RULE);
+        assert!(add_rule(&mut s, &ok, &[], &[]).is_ok());
+        let long = "y".repeat(MAX_RULE + 1);
+        assert_eq!(add_rule(&mut s, &long, &[], &[]), Err(AddError::TooLong));
+        assert_eq!(s.lesson.len(), 1);
+    }
+
+    #[test]
+    fn a_duplicate_hits_and_merges_scope_and_evidence() {
+        let mut s = Store::default();
+        add_rule(&mut s, "Run it once", &["a/**"], &["#1"]).unwrap();
+        let a = add_rule(&mut s, "run it ONCE.", &["a/**", "b/**"], &["#1", "#2"]).unwrap();
+        assert_eq!((a.id.as_str(), a.dup), ("L-001", true));
+        assert_eq!(s.lesson.len(), 1);
+        assert_eq!(s.lesson[0].hits, 1);
+        assert_eq!(s.lesson[0].scope, ["a/**", "b/**"]);
+        assert_eq!(s.lesson[0].evidence, ["#1", "#2"]);
+    }
+
+    #[test]
+    fn a_duplicate_keeps_a_global_entry_global() {
+        let mut s = Store::default();
+        add_rule(&mut s, "Run it once", &[], &[]).unwrap();
+        add_rule(&mut s, "Run it once", &["a/**"], &["#3"]).unwrap();
+        assert!(s.lesson[0].scope.is_empty());
+        assert_eq!(s.lesson[0].evidence, ["#3"]);
+    }
+
+    #[test]
+    fn a_duplicate_is_taken_even_at_a_cap() {
+        let mut s = Store::default();
+        for _ in 0..8 {
+            add_n(&mut s, &[]).unwrap();
+        }
+        let a = add_rule(&mut s, "rule 3", &[], &[]).unwrap();
+        assert!(a.dup);
+    }
+
+    #[test]
+    fn line_strips_controls_collapses_space_and_shortens() {
+        let mut l = Lesson {
+            id: "L-001".into(),
+            rule: "a\u{1b}[31m  b\n\tc\u{7}".into(),
+            why: String::new(),
+            scope: vec![],
+            evidence: vec![],
+            added: String::new(),
+            last_hit: None,
+            hits: 0,
+        };
+        assert_eq!(line(&l), "L-001 * a[31m b c");
+        l.rule = "z".repeat(300);
+        let out = line(&l);
+        let rule = out.strip_prefix("L-001 * ").unwrap();
+        assert_eq!(rule.chars().count(), MAX_RULE);
+        assert!(rule.ends_with('…'));
     }
 
     #[test]
@@ -273,11 +399,17 @@ mod tests {
         for _ in 0..8 {
             add_n(&mut s, &[]).unwrap();
         }
-        assert_eq!(add_n(&mut s, &[]), Err(CapError { global: true }));
+        assert_eq!(
+            add_n(&mut s, &[]),
+            Err(AddError::Cap(CapError { global: true }))
+        );
         for _ in 0..32 {
             add_n(&mut s, &["x/**"]).unwrap();
         }
-        assert_eq!(add_n(&mut s, &["x/**"]), Err(CapError { global: false }));
+        assert_eq!(
+            add_n(&mut s, &["x/**"]),
+            Err(AddError::Cap(CapError { global: false }))
+        );
     }
 
     #[test]

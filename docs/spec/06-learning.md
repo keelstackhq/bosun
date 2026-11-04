@@ -7,10 +7,17 @@ Capture:
 - Automatic: bosun opens a lesson issue on a stop rule, a blocked task, a flake, a review ask that
   repeats, or a task over its budget.
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
-- `lesson add` needs `--evidence #N` (the PR or issue that proved it; exit 2 without) and a rule of
-  at most 160 characters (exit 2 above). A rule equal to an existing one (lowercase, whitespace
-  collapsed, trailing `.` ignored) records a hit on that entry instead: exit 0, `data.dup` is its
-  id and `data.id` too. `--upstream` is unchanged.
+- `lesson add` needs `--evidence #N` (the PR or issue that proved it; exit 2 without). The core
+  `lessons::add` enforces the rest for every caller (`lesson add`, `lesson triage --as advice
+  --rule`, `hold`): a rule of at most 160 characters (exit 2 above, nothing written) and no
+  duplicate. A rule equal to an existing one (lowercase, whitespace collapsed, trailing `.`
+  ignored) records a hit on that entry instead, also at a cap: exit 0, `data.dup` and `data.id`
+  are its id. The new scope globs and evidence refs are merged into the existing entry without
+  repeats; a global entry (no scope) stays global, because adding a scope would narrow it.
+  `--upstream` is unchanged.
+- The compact lesson line (pack, claim, session start) drops control characters, collapses
+  whitespace and cuts the rule to 160 characters, ending with `…`, so hand-written entries
+  cannot swell the output.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
 - Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
