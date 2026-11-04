@@ -2,14 +2,44 @@
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [{ "type": "command", "command": "bosun hook session-start" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bosun hook session-start"
+          }
+        ]
       }
     ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__github__.*",
-        "hooks": [{ "type": "command", "command": "bosun hook pre-tool-use" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bosun hook pre-tool-use"
+          }
+        ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "superpowers-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "obra/superpowers-marketplace",
+        "ref": "5c9072877417873fee42be1805aa776a453ec394"
+      }
+    },
+    "akramsystems-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "akramsystems/caveman",
+        "ref": "a9cc1f7b82598852e8c6b8e599dde6ac2491b26e"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "superpowers@superpowers-marketplace": true,
+    "caveman@akramsystems-plugins": true
   }
 }

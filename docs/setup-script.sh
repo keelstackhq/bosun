@@ -20,6 +20,11 @@ BERTH_VERSION=0.1.0
 BERTH_SHA512=4V71F1YqcduupUm/yqc3HaK5/VMH6bD1PZa6xskA+84UiSs1UZRnkX7W+zoLPNizoT2CM1bVGmEtk2cjjYg3Eg==
 BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+J+jEvUBHKxS3xfQMT7HqCO35TUysw==
 BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
+# Claude Code plugins (superpowers, caveman). The marketplaces are pinned in .claude/settings.json
+# (`ref`); the plugin sources float, so their commits are pinned and checked here and by `bosun doctor`.
+SUPERPOWERS_MARKETPLACE_SHA=5c9072877417873fee42be1805aa776a453ec394
+SUPERPOWERS_SHA=22f0b463e7a5e579904dd6211a520321035526f7
+CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION=0.5.0
 BOSUN_SHA512=cp09oCjY7BVH/S3ZEwXqN0zAKEvIHBaWfqSyxR257aqfTHLEtxUAtblL88WVkaYZ9ffg84wk0sWY4aud+RXiaA==
@@ -126,3 +131,30 @@ install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$
 install_tool bosun "$BOSUN_VERSION" "$BOSUN_SHA512" "$BOSUN_LINUX_X64_SHA512" "$BOSUN_LINUX_ARM64_SHA512"
 
 bosun --version || echo "setup-script: bosun is not installed" >&2
+
+# Prewarm the Claude Code plugins (user scope) so the first session does not clone them. Every
+# failure warns and the script goes on. The installed commit is compared with its pin; no token.
+if command -v claude >/dev/null 2>&1; then
+  # plugin_prewarm <marketplace repo> <plugin@marketplace>
+  plugin_prewarm() {
+    claude plugin marketplace add "$1" >/dev/null ||
+      echo "setup-script: claude plugin marketplace add $1 failed; continuing" >&2
+    claude plugin install "$2" --scope user >/dev/null ||
+      echo "setup-script: claude plugin install $2 failed; continuing" >&2
+  }
+  plugin_prewarm obra/superpowers-marketplace superpowers@superpowers-marketplace
+  plugin_prewarm akramsystems/caveman caveman@akramsystems-plugins
+  # plugin_check <plugin@marketplace> <pinned sha>
+  plugin_check() {
+    got="$(node -e 'try{const p=require(process.argv[1]).plugins[process.argv[2]]||[];process.stdout.write(String((p[0]||{}).gitCommitSha||""))}catch(e){}' "$HOME/.claude/plugins/installed_plugins.json" "$1" 2>/dev/null || true)"
+    if [ -z "$got" ]; then
+      echo "setup-script: $1 is not installed; cannot check its pin" >&2
+    elif [ "$got" != "$2" ]; then
+      echo "setup-script: $1 is at $got, not its pinned $2" >&2
+    fi
+  }
+  plugin_check superpowers@superpowers-marketplace "$SUPERPOWERS_SHA"
+  plugin_check caveman@akramsystems-plugins "$CAVEMAN_SHA"
+else
+  echo "setup-script: claude is not on PATH; skipping the plugin prewarm" >&2
+fi
