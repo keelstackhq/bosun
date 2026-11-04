@@ -78,6 +78,12 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
+- PR handoff: a child runs `bosun handoff-pr <pr> [--to SESSION]` when its PR is ready. It
+  returns a `send_message` call (D29: bosun sends nothing) to the parent with the PR, the head
+  SHA, the risk paths (the evidence files of the PR's Risk note) and the minor findings of the
+  newest verdict on that head. The parent is `--to`, else the `parent` of the child's `join`
+  record, else the orchestrator part of a `<id>/T*` session id; with none it exits 2. It writes
+  nothing. Not `bosun handoff` (below), which a root writes for the next root.
 - Handoff (§5.1): a root runs `bosun handoff [--from FILE]` to leave notes for the next root of
   its lineage. bosun adds one line per live lease of this session and its wave agents
   (`<session>/T*`)
