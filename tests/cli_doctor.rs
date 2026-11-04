@@ -161,12 +161,12 @@ fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
         "jobs:\n  ci-ok:\n    runs-on: x\n",
     );
     write(d, "governance/owners.toml", owners);
-    let (m, sp, cv) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+    let (m, sp, cv) = ("main".to_string(), "b".repeat(40), "c".repeat(40));
     write(
         d,
         "docs/setup-script.sh",
         &format!(
-            "#!/bin/sh\nKEELSTACK_MARKETPLACE_SHA={m}\nSUPERPOWERS_SHA={sp}\nCAVEMAN_SHA={cv}\n"
+            "#!/bin/sh\nKEELSTACK_MARKETPLACE_REF={m}\nSUPERPOWERS_SHA={sp}\nCAVEMAN_SHA={cv}\n"
         ),
     );
     write(

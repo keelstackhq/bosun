@@ -5,7 +5,7 @@ use common::{bosun, one_object};
 use serde_json::Value;
 use std::path::Path;
 
-const M: &str = "5c9072877417873fee42be1805aa776a453ec394";
+const M: &str = "main";
 const P: &str = "22f0b463e7a5e579904dd6211a520321035526f7";
 const C: &str = "a9cc1f7b82598852e8c6b8e599dde6ac2491b26e";
 
@@ -35,7 +35,7 @@ fn repo(settings_ref: &str, caveman_on: bool) -> tempfile::TempDir {
     write(
         tmp.path(),
         "docs/setup-script.sh",
-        &format!("KEELSTACK_MARKETPLACE_SHA={M}\nSUPERPOWERS_SHA={P}\nCAVEMAN_SHA={C}\n"),
+        &format!("KEELSTACK_MARKETPLACE_REF={M}\nSUPERPOWERS_SHA={P}\nCAVEMAN_SHA={C}\n"),
     );
     write(
         tmp.path(),
@@ -103,9 +103,9 @@ fn a_missing_install_is_missing_and_exits_5() {
 
 #[test]
 fn a_moved_settings_ref_is_missing_with_a_fix() {
-    let other = "d".repeat(40);
+    let other = "release";
     let (r, cfg, home) = (
-        repo(&other, true),
+        repo(other, true),
         tempfile::tempdir().unwrap(),
         tempfile::tempdir().unwrap(),
     );
@@ -116,7 +116,7 @@ fn a_moved_settings_ref_is_missing_with_a_fix() {
         it["detail"]
             .as_str()
             .unwrap()
-            .contains("KEELSTACK_MARKETPLACE_SHA")
+            .contains("KEELSTACK_MARKETPLACE_REF")
     );
     assert!(
         it["fix"]

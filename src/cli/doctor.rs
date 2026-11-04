@@ -590,7 +590,7 @@ const PLUGINS: [(&str, &str); 2] = [
     ("caveman", "CAVEMAN_SHA"),
 ];
 const MARKET: &str = "keelstack";
-const MARKET_PIN: &str = "KEELSTACK_MARKETPLACE_SHA";
+const MARKET_PIN: &str = "KEELSTACK_MARKETPLACE_REF";
 const SWITCH: &str = "switch to the keelstack marketplace (`@keelstack`; hull repos render it)";
 
 fn script_pin(script: &str, name: &str) -> Option<String> {
@@ -652,10 +652,11 @@ fn plugin_findings(
                     format!(".claude/settings.json has no {MARKET} marketplace ref"),
                     settings_fix.clone(),
                 ),
-                Some(r) if !is_sha(r) => add(
-                    format!("marketplace {MARKET} ref {r} is not 40 lowercase hex"),
+                // Claude Code clones a marketplace with `--branch`: a sha (or nothing) fails.
+                Some(r) if r.is_empty() || is_sha(r) => add(
+                    format!("marketplace {MARKET} ref {r:?} is not a branch or tag"),
                     format!(
-                        ".claude/settings.json: set extraKnownMarketplaces.{MARKET}.source.ref to {MARKET_PIN} of docs/setup-script.sh"
+                        ".claude/settings.json: set extraKnownMarketplaces.{MARKET}.source.ref to {MARKET_PIN} of docs/setup-script.sh (a branch or tag, e.g. main)"
                     ),
                 ),
                 Some(r) => mref = Some(r),
@@ -674,9 +675,14 @@ fn plugin_findings(
     }
     for pin in [MARKET_PIN, PLUGINS[0].1, PLUGINS[1].1] {
         if pin_of(pin).is_none() {
+            let value = if pin == MARKET_PIN {
+                "<branch, e.g. main>"
+            } else {
+                "<40 hex commit>"
+            };
             add(
                 format!("docs/setup-script.sh has no {pin}"),
-                format!("docs/setup-script.sh: add a line {pin}=<40 hex commit>"),
+                format!("docs/setup-script.sh: add a line {pin}={value}"),
             );
         }
     }
@@ -1125,12 +1131,12 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
 mod tests {
     use super::*;
 
-    const M1: &str = "5c9072877417873fee42be1805aa776a453ec394";
+    const M1: &str = "main";
     const P1: &str = "22f0b463e7a5e579904dd6211a520321035526f7";
     const C: &str = "a9cc1f7b82598852e8c6b8e599dde6ac2491b26e";
 
     fn script() -> String {
-        format!("KEELSTACK_MARKETPLACE_SHA={M1}\nSUPERPOWERS_SHA={P1}\nCAVEMAN_SHA={C}\n")
+        format!("KEELSTACK_MARKETPLACE_REF={M1}\nSUPERPOWERS_SHA={P1}\nCAVEMAN_SHA={C}\n")
     }
 
     fn settings(r: &str, caveman_on: bool) -> Value {
@@ -1220,14 +1226,14 @@ mod tests {
             None,
         );
         assert!(out.contains("no keelstack marketplace ref"), "{out}");
-        for bad in ["deadbeef", &M1.to_uppercase()] {
+        for bad in ["5c9072877417873fee42be1805aa776a453ec394", ""] {
             let out = run(
                 Some(&settings(bad, true)),
                 Some(&script()),
                 Some(&installed(P1, C)),
                 None,
             );
-            assert!(out.contains("not 40 lowercase hex"), "{out}");
+            assert!(out.contains("branch or tag"), "{out}");
         }
         let out = run(None, Some(&script()), Some(&installed(P1, C)), None);
         assert!(out.contains("settings.json is missing"), "{out}");
@@ -1235,14 +1241,14 @@ mod tests {
 
     #[test]
     fn a_ref_off_the_script_pin_is_a_problem() {
-        let other = "b".repeat(40);
+        let other = "release";
         let out = run(
-            Some(&settings(&other, true)),
+            Some(&settings(other, true)),
             Some(&script()),
             Some(&installed(P1, C)),
             None,
         );
-        assert!(out.contains("KEELSTACK_MARKETPLACE_SHA"), "{out}");
+        assert!(out.contains("KEELSTACK_MARKETPLACE_REF"), "{out}");
         assert!(out.contains(M1), "{out}");
     }
 
@@ -1279,7 +1285,7 @@ mod tests {
 
     #[test]
     fn a_missing_script_pin_is_a_problem() {
-        let sc = format!("KEELSTACK_MARKETPLACE_SHA={M1}\nSUPERPOWERS_SHA={P1}\n");
+        let sc = format!("KEELSTACK_MARKETPLACE_REF={M1}\nSUPERPOWERS_SHA={P1}\n");
         let out = run(
             Some(&settings(M1, true)),
             Some(&sc),
