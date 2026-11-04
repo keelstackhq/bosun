@@ -1,0 +1,1 @@
+- `.bosun/session-rules.toml` seed (role rules text for SessionStart) in bosun and the channel core; R-gov covers `src/core/session_rules*`, `src/hooks/session_rules*` and `.claude-plugin/**`.
