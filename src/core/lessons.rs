@@ -9,6 +9,8 @@ use crate::time::Timestamp;
 pub const MAX: usize = 40;
 /// At most this many entries without a scope.
 pub const MAX_GLOBAL: usize = 8;
+/// A rule is at most this many characters.
+pub const MAX_RULE: usize = 160;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Lesson {
@@ -119,6 +121,56 @@ pub fn matching<'a>(store: &'a Store, paths: &[String]) -> Vec<&'a Lesson> {
                     .iter()
                     .filter_map(|g| Glob::parse(g).ok())
                     .any(|g| paths.iter().any(|p| g.matches(p)))
+        })
+        .collect()
+}
+
+/// Compact form for a pack or claim: `L-012 src/gates/** Run cargo metadata once.`
+pub fn line(l: &Lesson) -> String {
+    let scope = if l.scope.is_empty() {
+        "*".to_string()
+    } else {
+        l.scope.join(",")
+    };
+    format!("{} {} {}", l.id, scope, l.rule)
+}
+
+/// A rule for comparing: lowercase, whitespace collapsed, no trailing dots.
+pub fn normalise(rule: &str) -> String {
+    let words = rule.split_whitespace().collect::<Vec<_>>().join(" ");
+    words
+        .to_lowercase()
+        .trim_end_matches('.')
+        .trim_end()
+        .to_string()
+}
+
+/// The id of the entry whose rule equals `rule` after normalising.
+pub fn find_dup<'a>(store: &'a Store, rule: &str) -> Option<&'a str> {
+    let n = normalise(rule);
+    store
+        .lesson
+        .iter()
+        .find(|l| normalise(&l.rule) == n)
+        .map(|l| l.id.as_str())
+}
+
+/// Lessons without a scope.
+pub fn globals(store: &Store) -> Vec<&Lesson> {
+    store.lesson.iter().filter(|l| l.scope.is_empty()).collect()
+}
+
+/// Global lessons plus those whose scope overlaps any touch glob.
+pub fn relevant<'a>(store: &'a Store, touch: &[Glob]) -> Vec<&'a Lesson> {
+    store
+        .lesson
+        .iter()
+        .filter(|l| {
+            l.scope.is_empty()
+                || l.scope
+                    .iter()
+                    .filter_map(|g| Glob::parse(g).ok())
+                    .any(|g| touch.iter().any(|t| g.overlaps(t)))
         })
         .collect()
 }
@@ -248,5 +300,42 @@ mod tests {
             .map(|l| l.id.clone())
             .collect();
         assert_eq!(ids, ["L-001", "L-002"]);
+    }
+
+    #[test]
+    fn line_normalise_dup_and_relevant() {
+        let mut s = Store::default();
+        add(
+            &mut s,
+            "Run  metadata once.",
+            vec!["src/gates/**".into(), "a/**".into()],
+            "w",
+            vec![],
+            "d",
+        )
+        .unwrap();
+        add(&mut s, "Global rule", vec![], "w", vec![], "d").unwrap();
+        add(
+            &mut s,
+            "Docs rule",
+            vec!["docs/**".into()],
+            "w",
+            vec![],
+            "d",
+        )
+        .unwrap();
+        assert_eq!(
+            line(&s.lesson[0]),
+            "L-001 src/gates/**,a/** Run  metadata once."
+        );
+        assert_eq!(line(&s.lesson[1]), "L-002 * Global rule");
+        assert_eq!(normalise("  Run   Metadata ONCE. "), "run metadata once");
+        assert_eq!(find_dup(&s, "run metadata once"), Some("L-001"));
+        assert_eq!(find_dup(&s, "other"), None);
+        assert_eq!(globals(&s).len(), 1);
+        let t = Glob::parse("src/gates/runner.rs").unwrap();
+        let ids: Vec<_> = relevant(&s, &[t]).iter().map(|l| l.id.clone()).collect();
+        assert_eq!(ids, ["L-001", "L-002"]);
+        assert_eq!(MAX_RULE, 160);
     }
 }

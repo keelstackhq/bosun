@@ -7,6 +7,10 @@ Capture:
 - Automatic: bosun opens a lesson issue on a stop rule, a blocked task, a flake, a review ask that
   repeats, or a task over its budget.
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
+- `lesson add` needs `--evidence #N` (the PR or issue that proved it; exit 2 without) and a rule of
+  at most 160 characters (exit 2 above). A rule equal to an existing one (lowercase, whitespace
+  collapsed, trailing `.` ignored) records a hit on that entry instead: exit 0, `data.dup` is its
+  id and `data.id` too. `--upstream` is unchanged.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
 - Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
@@ -43,6 +47,9 @@ last_hit = "2026-11-10"
 hits = 3
 ```
 
+- A rule is at most 160 characters. A pack or claim shows a lesson as one line
+  `L-012 src/gates/** Run cargo metadata once per gate run.` (id, scopes joined by `,` or `*`
+  when global, rule; no why or evidence). `review-pack` `lessons` is an array of these lines.
 - Caps: at most 40 entries, at most 8 global (no scope).
 - A context pack includes only the lessons whose scope matches the paths of the task, plus the
   global ones. AGENTS.md has no lessons.

@@ -38,6 +38,8 @@ fn add_creates_the_file_with_a_header_and_next_ids() {
         "src/gates/**",
         "--why",
         "slow",
+        "--evidence",
+        "#9",
     ];
     let (code, v) = lesson(tmp.path(), &fake, &args);
     assert_eq!(code, 0, "{v}");
@@ -66,19 +68,35 @@ fn add_creates_the_file_with_a_header_and_next_ids() {
 fn caps_exit_6_with_the_fix() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     for i in 0..8 {
-        let (code, _) = lesson(tmp.path(), &fake, &["add", &format!("g{i}")]);
+        let (code, _) = lesson(
+            tmp.path(),
+            &fake,
+            &["add", &format!("g{i}"), "--evidence", "#1"],
+        );
         assert_eq!(code, 0);
     }
-    let (code, v) = lesson(tmp.path(), &fake, &["add", "one global too many"]);
+    let (code, v) = lesson(
+        tmp.path(),
+        &fake,
+        &["add", "one global too many", "--evidence", "#1"],
+    );
     assert_eq!(code, 6, "{v}");
     let fix = v["error"]["fix"].as_str().unwrap();
     assert!(fix.contains("mechanize, merge or retire"));
     for i in 0..32 {
         let name = format!("s{i}");
-        let (code, _) = lesson(tmp.path(), &fake, &["add", &name, "--scope", "a/**"]);
+        let (code, _) = lesson(
+            tmp.path(),
+            &fake,
+            &["add", &name, "--scope", "a/**", "--evidence", "#1"],
+        );
         assert_eq!(code, 0);
     }
-    let (code, _) = lesson(tmp.path(), &fake, &["add", "x", "--scope", "a/**"]);
+    let (code, _) = lesson(
+        tmp.path(),
+        &fake,
+        &["add", "x", "--scope", "a/**", "--evidence", "#1"],
+    );
     assert_eq!(code, 6);
     assert_eq!(file(tmp.path())["lesson"].as_array().unwrap().len(), 40);
 }
@@ -87,7 +105,7 @@ fn caps_exit_6_with_the_fix() {
 fn hit_counts_and_posts_a_record_with_issue() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     fake.issue(7, "task", &[], "");
-    lesson(tmp.path(), &fake, &["add", "r"]);
+    lesson(tmp.path(), &fake, &["add", "r", "--evidence", "#1"]);
     let (code, v) = lesson(tmp.path(), &fake, &["hit", "L-001"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["hits"], 1);
@@ -114,8 +132,51 @@ fn hit_with_issue_obeys_the_kill_switch() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     fake.issue(7, "task", &[], "");
     fake.variable("BOSUN_HALT", "1");
-    lesson(tmp.path(), &fake, &["add", "r"]);
+    lesson(tmp.path(), &fake, &["add", "r", "--evidence", "#1"]);
     let (code, _) = lesson(tmp.path(), &fake, &["hit", "L-001", "--issue", "7"]);
     assert_eq!(code, 4);
     assert_eq!(file(tmp.path())["lesson"][0]["hits"].as_integer(), Some(0));
+}
+
+#[test]
+fn add_needs_evidence_and_a_short_rule() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (code, v) = lesson(tmp.path(), &fake, &["add", "no proof"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("--evidence #N")
+    );
+    let long = "x".repeat(161);
+    let (code, v) = lesson(tmp.path(), &fake, &["add", &long, "--evidence", "#1"]);
+    assert_eq!(code, 2, "{v}");
+    let ok = "x".repeat(160);
+    let (code, _) = lesson(tmp.path(), &fake, &["add", &ok, "--evidence", "#1"]);
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn add_of_a_duplicate_rule_records_a_hit() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    lesson(
+        tmp.path(),
+        &fake,
+        &["add", "Run metadata once.", "--evidence", "#1"],
+    );
+    let (code, v) = lesson(
+        tmp.path(),
+        &fake,
+        &["add", "  run METADATA   once", "--evidence", "#2"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"],
+        json!({"id": "L-001", "dup": "L-001", "count": 1, "global_count": 1})
+    );
+    let t = file(tmp.path());
+    assert_eq!(t["lesson"].as_array().unwrap().len(), 1);
+    assert_eq!(t["lesson"][0]["hits"].as_integer(), Some(1));
+    assert_eq!(t["lesson"][0]["last_hit"].as_str(), Some("2026-10-22"));
 }

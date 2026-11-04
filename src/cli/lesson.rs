@@ -71,8 +71,30 @@ fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
     if a.upstream {
         return upstream(dir, a);
     }
+    if a.text.chars().count() > lessons::MAX_RULE {
+        return Err(BosunError::usage(
+            format!("the rule is longer than {} characters", lessons::MAX_RULE),
+            format!(
+                "shorten the rule to at most {} characters; put detail in --why",
+                lessons::MAX_RULE
+            ),
+        ));
+    }
+    if a.evidence.is_empty() {
+        return Err(BosunError::usage(
+            "a lesson needs evidence",
+            "pass --evidence #N, the PR or issue that proved it",
+        ));
+    }
     let ctx = Ctx::load(dir)?;
     let mut store = load(&ctx.dir)?;
+    if let Some(dup) = lessons::find_dup(&store, &a.text).map(str::to_string) {
+        lessons::hit(&mut store, &dup, &today(&ctx));
+        save(&ctx.dir, &store)?;
+        return Ok(Outcome::data(json!({
+            "id": dup, "dup": dup, "count": store.lesson.len(), "global_count": store.global_count()
+        })));
+    }
     let id = lessons::add(
         &mut store,
         &a.text,

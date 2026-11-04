@@ -77,7 +77,7 @@ fn uc_m5_3() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|l| l["id"].as_str().unwrap())
+        .map(|l| l.as_str().unwrap().split(' ').next().unwrap())
         .collect();
     assert_eq!(ids, ["L-001", "L-002"]);
 }
@@ -98,7 +98,7 @@ fn uc_m5_4() {
     let out = bosun()
         .arg("-C")
         .arg(tmp.path())
-        .args(["lesson", "add", "x", "--scope", "a/**"])
+        .args(["lesson", "add", "x", "--scope", "a/**", "--evidence", "#1"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(6));
