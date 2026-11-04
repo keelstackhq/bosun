@@ -410,9 +410,17 @@ impl Http {
             403 | 429 => "the token lacks permission or hit a rate limit",
             404 if method != "GET" => "check BOSUN_REPO and the issue/PR number",
             422 if auto_merge_off(&api) => AUTO_MERGE_OFF_FIX,
+            500.. => {
+                "GitHub failed (5xx); retry the same command in a minute, and check https://www.githubstatus.com if it persists"
+            }
             _ => "retry; if it persists check https://www.githubstatus.com",
         };
-        BosunError::error(message.trim_end(), fix)
+        let e = BosunError::error(message.trim_end(), fix);
+        if r.status >= 500 {
+            e.with_kind("upstream")
+        } else {
+            e
+        }
     }
 }
 

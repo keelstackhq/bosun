@@ -943,6 +943,25 @@ pub fn risk_note(matches: &[Match], head_sha: &str) -> String {
     s
 }
 
+/// The files the Risk note of a PR body names as evidence, in order, without repeats.
+pub fn note_paths(body: &str) -> Vec<String> {
+    let (Some(a), Some(b)) = (body.find(NOTE_OPEN), body.find(NOTE_CLOSE)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for line in body.get(a..b).unwrap_or_default().lines() {
+        if let Some(path) = line
+            .strip_prefix("  - `")
+            .and_then(|r| r.strip_suffix('`'))
+            .filter(|p| !p.is_empty())
+            && !out.iter().any(|o| o == path)
+        {
+            out.push(path.to_string());
+        }
+    }
+    out
+}
+
 /// `body` with the Risk note replaced by `note` (or appended); `None` removes it.
 pub fn replace_note(body: &str, note: Option<&str>) -> String {
     let (before, after) = match (body.find(NOTE_OPEN), body.find(NOTE_CLOSE)) {

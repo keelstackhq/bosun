@@ -1,0 +1,1 @@
+- `bosun verdict comment` fences the verdict with more backticks than any run in the payload, and `verdict apply` reads any fence of three or more, so backticks in evidence no longer break the block.
