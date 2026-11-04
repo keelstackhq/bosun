@@ -136,3 +136,13 @@ fn the_target_is_required_and_unique() {
     let (code, _) = wait(&fake, &["--pr", "1", "--issue", "2"]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn a_pr_with_no_checks_yet_says_so() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "Work", "claude/work", "");
+    let (code, v) = wait(&fake, &["--pr", "5", "--timeout", "0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["before"]["checks"], "no checks yet", "{v}");
+    assert_eq!(v["data"]["after"]["checks"], "no checks yet", "{v}");
+}

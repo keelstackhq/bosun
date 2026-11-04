@@ -9,7 +9,7 @@ A task counts as merged when its state is `merged` or its issue is closed; tasks
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
-and never uses send_later or send_message.
+and never uses send_later or send_message. For a PR whose head has no check run and no status yet, `checks` in the snapshots is the string `"no checks yet"`, not an empty map.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 A wait keeps its caller alive: after the first snapshot and then every 10 min it runs a heartbeat
 (the caller's live leases and its registry record to now + TTL, `now` moving on with the wall
