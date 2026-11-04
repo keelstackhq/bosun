@@ -1,1 +1,1 @@
-- docs: session-defaults design and task plan R1-R6 (`docs/superpowers/specs/2026-11-04-session-defaults-design.md`).
+- 2026-11-04 · R1-R5 · session rules in session-start, archive_session next, plugin pins + prewarm, doctor plugins step · bosun#386

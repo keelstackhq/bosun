@@ -1,6 +1,6 @@
 # Session defaults: tools and standing rules in every cloud session
 
-Status: designed, not built. Answers two owner questions (2026-11-04).
+Status: R1-R5 built in bosun#386; R6 (release) and H follow. Answers two owner questions (2026-11-04).
 
 ## Design
 
@@ -41,7 +41,10 @@ rule. R5 settles it.
 hull AGENTS.md (hull repos only); the channel's `agents.md` (no roles); an output style (per
 user, replaces part of the system prompt); a new piece (the core piece ships the hook).
 
-**Open.** Should the orchestrator's chat with the owner also be in caveman? Proposal: no.
+**Settled (owner, 2026-11-04).** Caveman applies everywhere, the orchestrator's chat with the owner
+included. Long context: the agent picks /compact or a fresh start and tells the owner which; hull's
+"start fresh rather than compacting" changes to match. Plugin sources float in their marketplaces,
+so settings pin each marketplace `ref`; the setup script pins plugin commits and `bosun doctor` flags drift.
 
 ## Tasks
 

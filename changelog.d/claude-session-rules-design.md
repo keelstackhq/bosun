@@ -1,1 +1,1 @@
-- docs: design (not built) for session defaults: plugin pins and role rules in the SessionStart hook (`docs/superpowers/specs/2026-11-04-session-defaults-design.md`).
+- `bosun hook session-start` adds role rules (worker if spawned, else orchestrator) from `.bosun/session-rules.toml`, also without GitHub; `status`/`reap` return `archive_session` for children with a `result`; superpowers and caveman pinned in `.claude/settings.json` and prewarmed by the setup script; `bosun doctor` step 13 checks the plugin pins (R1-R5).
