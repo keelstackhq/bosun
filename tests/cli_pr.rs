@@ -555,6 +555,43 @@ fn an_unreadable_branch_check_does_not_block_the_pr() {
 }
 
 #[test]
+fn auto_merge_names_the_gates_it_relies_on() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    fake.status("sha20", "review-verdict", "pending", "");
+    let dir = repo("claude/t7");
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(dir.path())
+        .args(["pr", "7", "--auto-merge"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(
+        v["data"]["gates"],
+        serde_json::json!([
+            {"context": "risk-check", "state": "success"},
+            {"context": "review-verdict", "state": "pending"},
+        ])
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("risk-check=success, review-verdict=pending"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_plain_pr_lists_no_gates() {
+    let fake = FakeGithub::start();
+    green_pr(&fake);
+    let dir = repo("claude/t7");
+    let (_, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(v["data"]["gates"], serde_json::json!([]));
+}
+
+#[test]
 fn a_repo_that_forbids_auto_merge_says_how_to_allow_it() {
     let fake = FakeGithub::start();
     green_pr(&fake);
