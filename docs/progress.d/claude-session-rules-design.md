@@ -1,1 +1,1 @@
-- 2026-11-04 · R1-R5 · session rules in session-start, archive_session next, plugin pins + prewarm, doctor plugins step · bosun#386
+- 2026-11-04 · R1 R2 R4 · session rules in session-start, archive_session next, doctor plugin drift · bosun#386
