@@ -136,13 +136,14 @@ pub fn parent_of(notes: &[Note], session: &str) -> Option<String> {
         .flatten()
 }
 
-/// `file:line claim` of every minor finding in the newest verdict on `head` among the PR
-/// comment bodies (oldest first). Several verdicts: the last one wins.
-pub fn minors<'a>(bodies: impl IntoIterator<Item = &'a str>, head: &str) -> Vec<String> {
+/// `file:line claim` of every minor finding in the newest verdict for PR `pr` on `head` among
+/// the comment bodies (oldest first; the caller passes only trusted ones). Several verdicts: the
+/// last one wins.
+pub fn minors<'a>(bodies: impl IntoIterator<Item = &'a str>, pr: u64, head: &str) -> Vec<String> {
     let verdict = bodies
         .into_iter()
         .filter_map(|b| comment_json(b).and_then(|j| Verdict::parse(j).ok()))
-        .filter(|v| v.head_sha == head)
+        .filter(|v| v.pr == pr && v.head_sha == head)
         .last();
     verdict
         .map(|v| {

@@ -2,6 +2,7 @@
 //! a `send_message` call with the PR, head SHA, risk paths and review minors; sends nothing and
 //! changes nothing (spec D29). Not `bosun handoff`, which is a root's lineage handoff.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde_json::json;
@@ -11,6 +12,7 @@ use crate::app::{App, trusted_notes};
 use crate::core::handoff::{minors, parent_of, pr_message};
 use crate::core::lease::orchestrator_of;
 use crate::core::risk::note_paths;
+use crate::core::text::inert;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -26,6 +28,16 @@ pub fn run(dir: Option<&Path>, args: &HandoffPrArgs) -> CmdResult {
     })?;
     let parent = match &args.to {
         Some(to) => to.clone(),
+        // A wave agent runs inside its orchestrator's session: a message there reaches itself.
+        None if session.contains('/') => {
+            return Err(BosunError::usage(
+                format!(
+                    "{session} is a wave agent; it runs inside {}",
+                    orchestrator_of(session)
+                ),
+                "return the result in-process, or pass another session with --to <session_id>",
+            ));
+        }
         None => {
             let joined = match registry::load(gh)? {
                 Some((number, _)) => parent_of(&trusted_notes(gh, number)?, session),
@@ -45,10 +57,26 @@ pub fn run(dir: Option<&Path>, args: &HandoffPrArgs) -> CmdResult {
                 })?
         }
     };
+    // Only a verdict comment a writer posted and never edited counts, as in `bosun verdict`.
     let mut comments = gh.list_comments(n)?;
     comments.sort_by_key(|c| c.id);
-    let minors = minors(comments.iter().map(|c| c.body.as_str()), &pull.head_sha);
-    let risk = note_paths(&pull.body);
+    let mut writers: HashMap<String, bool> = HashMap::new();
+    let mut bodies: Vec<&str> = Vec::new();
+    for c in comments.iter().filter(|c| c.unedited()) {
+        if !writers.contains_key(&c.user) {
+            let perm = gh.permission(&c.user)?.unwrap_or_default();
+            writers.insert(c.user.clone(), matches!(perm.as_str(), "admin" | "write"));
+        }
+        if writers[&c.user] {
+            bodies.push(&c.body);
+        }
+    }
+    let minors = minors(bodies, n, &pull.head_sha);
+    // The PR body is the author's: its paths reach the parent only made inert.
+    let risk: Vec<String> = note_paths(&pull.body)
+        .iter()
+        .map(|p| inert(p, 120))
+        .collect();
     let message = pr_message(session, n, &pull.head_sha, &risk, &minors);
     Ok(Outcome::data(json!({
         "pr": n, "head_sha": pull.head_sha, "parent": parent,

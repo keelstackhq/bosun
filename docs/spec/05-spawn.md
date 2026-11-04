@@ -81,8 +81,10 @@ Janitor, resume, results:
 - PR handoff: a child runs `bosun handoff-pr <pr> [--to SESSION]` when its PR is ready. It
   returns a `send_message` call (D29: bosun sends nothing) to the parent with the PR, the head
   SHA, the risk paths (the evidence files of the PR's Risk note) and the minor findings of the
-  newest verdict on that head. The parent is `--to`, else the `parent` of the child's `join`
-  record, else the orchestrator part of a `<id>/T*` session id; with none it exits 2. It writes
+  newest verdict for that PR and head. Only a verdict comment a repo writer posted and never
+  edited counts, as in `bosun verdict`; the paths and claims reach the parent made inert (inline
+  code). The parent is `--to`, else the `parent` of the child's `join` record; with none it exits
+  2, and a wave agent (`<id>/T*`, which runs inside its orchestrator) must pass `--to`. It writes
   nothing. Not `bosun handoff` (below), which a root writes for the next root.
 - Handoff (§5.1): a root runs `bosun handoff [--from FILE]` to leave notes for the next root of
   its lineage. bosun adds one line per live lease of this session and its wave agents
