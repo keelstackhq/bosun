@@ -12,6 +12,7 @@ pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod handoff;
+pub mod handoff_pr;
 pub mod heartbeat;
 pub mod hold;
 pub mod init;
@@ -139,6 +140,9 @@ pub enum Command {
     Resume(ResumeArgs),
     /// Write this root's handoff (at most 40 lines) to the registry for the next root.
     Handoff(HandoffArgs),
+    /// Return a send_message call telling your parent that PR N is ready (head SHA, risk paths, review minors).
+    #[command(name = "handoff-pr")]
+    HandoffPr(HandoffPrArgs),
     /// Cost per merged task over the last N days (read-only).
     Progress(ProgressArgs),
     /// Post this session's result on its epic, end its lease and leave the registry.
@@ -191,6 +195,7 @@ pub const COMMANDS: &[&str] = &[
     "fail",
     "resume",
     "handoff",
+    "handoff-pr",
     "progress",
     "result",
     "main-triage",
@@ -246,6 +251,7 @@ impl Command {
             Command::Fail(_) => "fail",
             Command::Resume(_) => "resume",
             Command::Handoff(_) => "handoff",
+            Command::HandoffPr(_) => "handoff-pr",
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
             Command::Result(_) => "result",
@@ -278,6 +284,15 @@ pub struct HandoffArgs {
     /// File with the `<kind>: <text>` lines (wave, pr, lease, next, blocker), or `-` for stdin.
     #[arg(long, value_name = "FILE")]
     pub from: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct HandoffPrArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// The parent session; default: the parent of your `bosun join` record, else the orchestrator of a `<id>/T*` id.
+    #[arg(long, value_name = "SESSION")]
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Args)]

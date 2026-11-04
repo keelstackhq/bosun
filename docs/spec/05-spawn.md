@@ -9,7 +9,7 @@ A task counts as merged when its state is `merged` or its issue is closed; tasks
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
-and never uses send_later or send_message.
+and never uses send_later or send_message. `--timeout` and the harness both default to 30 min for a background wait, so a child that waits longer, or finishes, also messages its parent (`bosun msg`). The default spawn prompt says so, advises one `CARGO_TARGET_DIR` per worktree (share dependencies with sccache or one `CARGO_HOME`, not one target dir: parallel builds lock and overwrite each other), and deleting only build caches when the disk is full.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 A wait keeps its caller alive: after the first snapshot and then every 10 min it runs a heartbeat
 (the caller's live leases and its registry record to now + TTL, `now` moving on with the wall
@@ -78,6 +78,14 @@ Janitor, resume, results:
   lease of the session in place. An expired lease is renewed only when no live lease overlaps
   its touch paths, else it is listed under `lost`. For each held task it returns the state,
   the linked open PR, its branch and a short `action`.
+- PR handoff: a child runs `bosun handoff-pr <pr> [--to SESSION]` when its PR is ready. It
+  returns a `send_message` call (D29: bosun sends nothing) to the parent with the PR, the head
+  SHA, the risk paths (the evidence files of the PR's Risk note) and the minor findings of the
+  newest verdict for that PR and head. Only a verdict comment a repo writer posted and never
+  edited counts, as in `bosun verdict`; the paths and claims reach the parent made inert (inline
+  code). The parent is `--to`, else the `parent` of the child's `join` record; with none it exits
+  2, and a wave agent (`<id>/T*`, which runs inside its orchestrator) must pass `--to`. It writes
+  nothing. Not `bosun handoff` (below), which a root writes for the next root.
 - Handoff (§5.1): a root runs `bosun handoff [--from FILE]` to leave notes for the next root of
   its lineage. bosun adds one line per live lease of this session and its wave agents
   (`<session>/T*`)
