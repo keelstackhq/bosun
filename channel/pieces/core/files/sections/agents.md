@@ -41,7 +41,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 ### Rules
 
 - Change `bosun:state/*` labels only through bosun commands.
-- Never append to CHANGELOG.md or the Done history (docs/progress-done.md, never read by agents) in a PR: add a one-line
+- Never append to CHANGELOG.md or the Done list of docs/PROGRESS.md in a PR: add a one-line
   fragment `changelog.d/<name>.md` or `docs/progress.d/<name>.md` instead (name: the branch with
   `/` as `-`), so merging main never conflicts. Before a release, a docs PR to main runs
   `bash .bosun/fold-fragments.sh`; the release PR then moves Unreleased under the version.

@@ -187,10 +187,6 @@ liveness limit above).
   read by App id. The bot App that opens update PRs must never be the gate App that judges
   them (§15 keeps them separate): a leaked bot key must never post `risk-check` or
   `template-render`.
-- **Fragment folding.** The channel ships the script as `bash .bosun/fold-fragments.sh`, byte-identical to
-  `bash scripts/fold-fragments.sh`. It folds `changelog.d/*.md` into `## Unreleased` of CHANGELOG.md and
-  `docs/progress.d/*.md` into `## Done` of `docs/progress-done.md` (created with a header when
-  missing; agents never read it). `docs/PROGRESS.md` holds only Status and Blocked.
 - **Two verdicts and delegates.** The template class never counts as a verdict or a delegate
   approval, and no signature is involved.
 
