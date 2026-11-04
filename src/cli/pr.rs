@@ -160,14 +160,15 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     })?;
     let branch = current_branch(&app.ctx.dir)?;
     let base = default_branch(gh)?;
-    if branch == base || ["main", "master", "HEAD"].contains(&branch.as_str()) {
-        return Err(BosunError::usage(
-            format!("the current branch is {branch}; a PR needs a task branch"),
-            "check out your task branch (for example `git switch -c claude/<task>`) and push it",
-        ));
-    }
+    // On the default branch or a detached HEAD there is no task branch: the PR is found by its
+    // marker (below), so a session can queue its PR from any checkout.
+    let on_base = branch == base || ["main", "master", "HEAD"].contains(&branch.as_str());
     let head = format!("{}:{branch}", app.ctx.repo.owner);
-    let mut found = gh.list_pulls(Some(&head), IssueState::All)?;
+    let mut found = if on_base {
+        Vec::new()
+    } else {
+        gh.list_pulls(Some(&head), IssueState::All)?
+    };
     found.sort_by_key(|p| p.state != "open");
     let open = found.iter().position(|p| p.state == "open");
     if open.is_none() {
@@ -193,9 +194,28 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
         }
     }
+    // No open PR on this branch: the open PR that carries this task's `bosun:task-pr` marker
+    // is the task's PR, whatever branch it is on.
+    let marker = format!("<!-- bosun:task-pr {n} -->");
+    let by_marker = if open.is_none() {
+        gh.list_pulls(None, IssueState::Open)?
+            .into_iter()
+            .find(|p| p.body.contains(&marker))
+    } else {
+        None
+    };
+    if open.is_none() && by_marker.is_none() && on_base {
+        return Err(BosunError::usage(
+            format!(
+                "the current branch is {branch} and no open PR carries the marker of task #{n}"
+            ),
+            "check out your task branch (for example `git switch -c claude/<task>`) and push it, or run `bosun pr` from the branch of the task's PR",
+        ));
+    }
+    let branch = by_marker.as_ref().map_or(branch, |p| p.head_ref.clone());
     let touch;
-    let (pull, created) = match open.map(|i| found.swap_remove(i)) {
-        Some(p) if !linked_issues(&p.body).contains(&n) => {
+    let (pull, created) = match open.map(|i| found.swap_remove(i)).or(by_marker) {
+        Some(p) if !linked_issues(&p.body).contains(&n) && !p.body.contains(&marker) => {
             // Before any state change, record or auto-merge: this PR belongs to something else.
             return Err(BosunError::conflict(
                 format!(

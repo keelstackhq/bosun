@@ -555,6 +555,72 @@ fn an_unreadable_branch_check_does_not_block_the_pr() {
 }
 
 #[test]
+fn auto_merge_finds_the_pr_by_its_marker_from_the_default_branch() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/review");
+    fake.pull(
+        20,
+        "t",
+        "claude/t7",
+        "Closes #7\n\n<!-- bosun:task-pr 7 -->",
+    );
+    fake.pull(
+        21,
+        "other",
+        "claude/other",
+        "Closes #8\n\n<!-- bosun:task-pr 8 -->",
+    );
+    fake.status("sha20", "risk-check", "success", "");
+    let dir = repo("main");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pr"], 20);
+    assert_eq!(v["data"]["created"], false);
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+    assert_eq!(fake.auto_merge_enabled(21), None);
+}
+
+#[test]
+fn a_branch_without_a_pr_uses_the_marker_pr_and_opens_no_second_one() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/review");
+    fake.pull(
+        20,
+        "t",
+        "claude/t7",
+        "Closes #7\n\n<!-- bosun:task-pr 7 -->",
+    );
+    let dir = repo("claude/scratch");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pr"], 20);
+    assert_eq!(v["data"]["created"], false);
+    assert!(
+        !fake
+            .requests()
+            .iter()
+            .any(|r| r.method == "POST" && r.path.ends_with("/pulls")),
+        "no PR may be created"
+    );
+}
+
+#[test]
+fn the_default_branch_without_a_marker_pr_is_still_a_usage_error() {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/review");
+    fake.pull(
+        21,
+        "other",
+        "claude/other",
+        "Closes #8\n\n<!-- bosun:task-pr 8 -->",
+    );
+    let dir = repo("main");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("marker"));
+}
+
+#[test]
 fn a_repo_that_forbids_auto_merge_says_how_to_allow_it() {
     let fake = FakeGithub::start();
     green_pr(&fake);
