@@ -142,11 +142,11 @@ if command -v claude >/dev/null 2>&1; then
     claude plugin install "$2" --scope user >/dev/null ||
       echo "setup-script: claude plugin install $2 failed; continuing" >&2
   }
-  plugin_prewarm obra/superpowers-marketplace superpowers@superpowers-marketplace
-  plugin_prewarm akramsystems/caveman caveman@akramsystems-plugins
+  plugin_prewarm "https://github.com/obra/superpowers-marketplace.git#$SUPERPOWERS_MARKETPLACE_SHA" superpowers@superpowers-marketplace
+  plugin_prewarm "https://github.com/akramsystems/caveman.git#$CAVEMAN_SHA" caveman@akramsystems-plugins
   # plugin_check <plugin@marketplace> <pinned sha>
   plugin_check() {
-    got="$(node -e 'try{const p=require(process.argv[1]).plugins[process.argv[2]]||[];process.stdout.write(String((p[0]||{}).gitCommitSha||""))}catch(e){}' "$HOME/.claude/plugins/installed_plugins.json" "$1" 2>/dev/null || true)"
+    got="$(node -e 'try{const p=require(process.argv[1]).plugins[process.argv[2]]||[];process.stdout.write(String((p[0]||{}).gitCommitSha||""))}catch(e){}' "${HOME:-/root}/.claude/plugins/installed_plugins.json" "$1" 2>/dev/null || true)"
     if [ -z "$got" ]; then
       echo "setup-script: $1 is not installed; cannot check its pin" >&2
     elif [ "$got" != "$2" ]; then
