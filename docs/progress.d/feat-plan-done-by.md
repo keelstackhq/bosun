@@ -1,0 +1,1 @@
+- 2026-11-04 · FU4 · plan task field `done-by: #N` imports the task as merged when PR N is merged · PR (feat-plan-done-by)

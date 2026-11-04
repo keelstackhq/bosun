@@ -154,7 +154,7 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,
             "deletions": f.deletions, "patch": f.patch})).collect::<Vec<_>>(),
-        "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names),
+        "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names).into_iter().map(lessons::line).collect::<Vec<_>>(),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
         "instructions": INSTRUCTIONS, "delta_fallback": delta_fallback,
         "changed_files": pull.changed_files,

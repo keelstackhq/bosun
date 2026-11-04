@@ -227,6 +227,14 @@ fn review_inputs_and_legacy_toolchain_name_are_covered() {
             .map(|r| r.id.clone())
     };
     assert_eq!(id_of("docs/lessons.toml").as_deref(), Some("R-gov"));
+    for f in [
+        "src/core/session_rules.rs",
+        "src/hooks/session_rules.rs",
+        ".bosun/session-rules.toml",
+        ".claude-plugin/marketplace.json",
+    ] {
+        assert_eq!(id_of(f).as_deref(), Some("R-gov"), "{f}");
+    }
     assert_eq!(id_of("rust-toolchain").as_deref(), Some("R-ci"));
     assert_eq!(id_of("rust-toolchain.toml").as_deref(), Some("R-ci"));
     assert_eq!(id_of("Cargo.toml").as_deref(), Some("R-gate"));

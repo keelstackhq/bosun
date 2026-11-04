@@ -171,7 +171,13 @@ fn snapshot(gh: &dyn Github, target: &Target) -> Result<Value, BosunError> {
                 .into_iter()
                 .map(|s| (s.context, s.state))
                 .collect();
-            let checks = newest_checks(gh.check_runs(&pr.head_sha)?);
+            let runs = newest_checks(gh.check_runs(&pr.head_sha)?);
+            // Nothing has reported for this head yet: say so, not an empty map.
+            let checks = if runs.is_empty() && statuses.is_empty() {
+                json!("no checks yet")
+            } else {
+                json!(runs)
+            };
             Ok(
                 json!({"state": pr.state, "merged": pr.merged, "head_sha": pr.head_sha,
                 "statuses": statuses, "checks": checks}),

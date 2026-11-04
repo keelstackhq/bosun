@@ -63,6 +63,8 @@ fn uc_zh_4_a_root_with_a_handoff_gets_the_relay_calls() {
     assert_eq!(a["prompt"], "bosun resume --handoff");
     assert_eq!(a["environment_id"], "env_abc");
     assert_eq!(a["tags"][1], "bosun:relay/root_a");
+    assert_eq!(a["source_url"], "https://github.com/acme/widget");
+    assert_eq!(a["source_revision"], "main");
     assert_eq!(v["data"]["from"], "root_a");
     assert_eq!(v["data"]["relay_waves"], 6);
     let then = v["data"]["then"].as_str().unwrap();

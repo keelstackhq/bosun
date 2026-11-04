@@ -76,6 +76,7 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | ----- | ------- | -------- |
 | Store cap | 40 entries | Each context pack carries the matching lessons. 40 short entries stay under about 4k tokens even when all match. |
 | Global cap | 8 entries | A global lesson goes into every pack; 8 keeps the fixed cost small. |
+| Rule cap | 160 characters | A lesson shows as one line in every claim and pack; 160 characters is about 40 tokens, so 40 entries stay near 1.6k. |
 | Retire after | 30 days without a hit | A lesson that never fires costs tokens and gives nothing. |
 
 ## Slack

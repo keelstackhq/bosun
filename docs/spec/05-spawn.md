@@ -9,7 +9,7 @@ A task counts as merged when its state is `merged` or its issue is closed; tasks
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
-and never uses send_later or send_message. `--timeout` and the harness both default to 30 min for a background wait, so a child that waits longer, or finishes, also messages its parent (`bosun msg`). The default spawn prompt says so, advises one `CARGO_TARGET_DIR` per worktree (share dependencies with sccache or one `CARGO_HOME`, not one target dir: parallel builds lock and overwrite each other), and deleting only build caches when the disk is full.
+and never uses send_later or send_message. For a PR whose head has no check run and no status yet, `checks` in the snapshots is the string `"no checks yet"`, not an empty map. `--timeout` and the harness both default to 30 min for a background wait, so a child that waits longer, or finishes, also messages its parent (`bosun msg`). The default spawn prompt says so, advises one `CARGO_TARGET_DIR` per worktree (share dependencies with sccache or one `CARGO_HOME`, not one target dir: parallel builds lock and overwrite each other), and deleting only build caches when the disk is full.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 A wait keeps its caller alive: after the first snapshot and then every 10 min it runs a heartbeat
 (the caller's live leases and its registry record to now + TTL, `now` moving on with the wall
@@ -31,7 +31,7 @@ hides the older failed run.
 4. The live sessions (all origins) are fewer than max_live_sessions.
 5. The children of the parent are fewer than max_children.
 6. There is no conflict with a live lease or area owner.
-7. Claim the epic, then return the `create_session` call in `next` (D29).
+7. Claim the epic, then return the `create_session` call in `next` (D29) with `source_url` (`https://github.com/<owner>/<repo>`) and `source_revision` (the default branch), so the child clones this repo and not the caller's checkout; the root relay's call has both too.
 
 `bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
@@ -136,3 +136,7 @@ Janitor, resume, results:
 
 Bootstrap order: the root session runs `bosun plan import`, then the wave of plan tasks, then
 spawns one session per area, then coordinates with `bosun wait` and `bosun status`.
+
+The SessionStart context ends with the global lessons of `docs/lessons.toml` (at most 8, as `id *
+rule` lines under `Lessons:`), in the unreachable-GitHub text too; a missing or unparseable file
+adds nothing (spec §6).
