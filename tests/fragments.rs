@@ -19,7 +19,7 @@ fn repo(frags: &[(&str, &str)]) -> tempfile::TempDir {
     fs::create_dir_all(dir.path().join("changelog.d")).unwrap();
     fs::create_dir_all(dir.path().join("docs/progress.d")).unwrap();
     fs::write(dir.path().join("CHANGELOG.md"), CHANGELOG).unwrap();
-    fs::write(dir.path().join("docs/PROGRESS.md"), PROGRESS).unwrap();
+    fs::write(dir.path().join("docs/progress-done.md"), PROGRESS).unwrap();
     fs::write(
         dir.path().join("changelog.d/README.md"),
         "# not a fragment\n\nmore\n",
@@ -58,7 +58,7 @@ fn fragments_fold_in_name_order_at_the_end_of_their_section() {
         "# Changelog\n\nIntro.\n\n## Unreleased\n\n- one\n- two\n\n## 0.2.1 (2026-10-26)\n\n- old\n"
     );
     assert_eq!(
-        read(dir.path(), "docs/PROGRESS.md"),
+        read(dir.path(), "docs/progress-done.md"),
         "# Progress\n\n## Status\n\nok\n\n## Done\n\n- d1\n- d2\n- 2026-10-26 · T · done · PR #1\n\n## Blocked\n\n1. b\n"
     );
     // Folded fragments are gone; the README stays.
@@ -98,7 +98,7 @@ fn without_fragments_nothing_changes() {
     let dir = repo(&[]);
     assert!(fold(dir.path()));
     assert_eq!(read(dir.path(), "CHANGELOG.md"), CHANGELOG);
-    assert_eq!(read(dir.path(), "docs/PROGRESS.md"), PROGRESS);
+    assert_eq!(read(dir.path(), "docs/progress-done.md"), PROGRESS);
 }
 
 #[test]
@@ -122,6 +122,34 @@ fn a_bad_fragment_stops_the_fold_before_it_writes() {
     }
 }
 
+/// The Done history is its own file; a repo without it gets it, with a header, on the first fold.
+#[test]
+fn a_missing_done_file_is_created() {
+    let dir = repo(&[("docs/progress.d/x.md", "- one\n")]);
+    fs::remove_file(dir.path().join("docs/progress-done.md")).unwrap();
+    assert!(fold(dir.path()));
+    let done = read(dir.path(), "docs/progress-done.md");
+    assert!(done.starts_with("# "), "{done:?}");
+    assert!(done.ends_with("\n## Done\n\n- one\n"), "{done:?}");
+    assert_eq!(read(dir.path(), "CHANGELOG.md"), CHANGELOG);
+}
+
+/// Before the one-time move, Done still lives in PROGRESS.md: creating a second history would
+/// fork it, so the fold stops and writes neither file.
+#[test]
+fn a_missing_done_file_with_done_in_progress_md_is_refused() {
+    let dir = repo(&[
+        ("changelog.d/a.md", "- good\n"),
+        ("docs/progress.d/x.md", "- one\n"),
+    ]);
+    fs::remove_file(dir.path().join("docs/progress-done.md")).unwrap();
+    fs::write(dir.path().join("docs/PROGRESS.md"), PROGRESS).unwrap();
+    assert!(!fold(dir.path()));
+    assert!(!dir.path().join("docs/progress-done.md").exists());
+    assert_eq!(read(dir.path(), "CHANGELOG.md"), CHANGELOG);
+    assert!(dir.path().join("docs/progress.d/x.md").exists());
+}
+
 /// Both files or neither: a problem with the second target leaves the first unchanged.
 #[test]
 fn a_bad_target_writes_neither_file() {
@@ -131,12 +159,9 @@ fn a_bad_target_writes_neither_file() {
     ];
     let no_done = "# Progress\n\n## Status\n\nok\n";
     let twice = "## Done\n\n- a\n\n## Done\n\n- b\n";
-    for progress in [Some(no_done), Some(twice), None] {
+    for progress in [no_done, twice] {
         let dir = repo(&frags);
-        match progress {
-            Some(t) => fs::write(dir.path().join("docs/PROGRESS.md"), t).unwrap(),
-            None => fs::remove_file(dir.path().join("docs/PROGRESS.md")).unwrap(),
-        }
+        fs::write(dir.path().join("docs/progress-done.md"), progress).unwrap();
         assert!(!fold(dir.path()), "{progress:?}");
         assert_eq!(read(dir.path(), "CHANGELOG.md"), CHANGELOG, "{progress:?}");
         assert!(dir.path().join("changelog.d/a.md").exists());
@@ -210,8 +235,8 @@ fn symlinks_are_refused() {
             symlink(&victim, d.join("CHANGELOG.md")).unwrap();
         },
         &|d| {
-            fs::remove_file(d.join("docs/PROGRESS.md")).unwrap();
-            symlink(&victim, d.join("docs/PROGRESS.md")).unwrap();
+            fs::remove_file(d.join("docs/progress-done.md")).unwrap();
+            symlink(&victim, d.join("docs/progress-done.md")).unwrap();
             fs::write(d.join("docs/progress.d/p.md"), "- p\n").unwrap();
         },
         &|d| {
@@ -239,7 +264,11 @@ fn a_readme_that_is_not_a_readme_fails() {
     for text in ["- an entry\n", "", "#no space\n"] {
         let dir = repo(&[("docs/progress.d/README.md", text)]);
         assert!(!fold(dir.path()), "{text:?} was skipped");
-        assert_eq!(read(dir.path(), "docs/PROGRESS.md"), PROGRESS, "{text:?}");
+        assert_eq!(
+            read(dir.path(), "docs/progress-done.md"),
+            PROGRESS,
+            "{text:?}"
+        );
     }
     let dir = repo(&[("docs/progress.d/README.md", "# progress.d\n\nrules\n")]);
     assert!(fold(dir.path()));
@@ -267,10 +296,14 @@ fn the_fold_keeps_layout_mode_and_finds_the_repo_root() {
     assert_eq!(mode, 0o644, "the target keeps its mode");
     // A section at the end of the file.
     let dir = repo(&[("docs/progress.d/a.md", "- new\n")]);
-    fs::write(dir.path().join("docs/PROGRESS.md"), "## Done\n\n- old\n").unwrap();
+    fs::write(
+        dir.path().join("docs/progress-done.md"),
+        "## Done\n\n- old\n",
+    )
+    .unwrap();
     assert!(fold(dir.path()));
     assert_eq!(
-        read(dir.path(), "docs/PROGRESS.md"),
+        read(dir.path(), "docs/progress-done.md"),
         "## Done\n\n- old\n- new\n"
     );
     // Run from a subdirectory without an argument: it folds at the git top level.

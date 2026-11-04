@@ -1,0 +1,3 @@
+# Tests need a writable TMPDIR that is not inside the repo (bosun would find the repo's own config).
+[env]
+TMPDIR = { value = "/tmp", force = true }
