@@ -1,0 +1,1 @@
+- docs: session-defaults design and task plan R1-R6 (`docs/superpowers/specs/2026-11-04-session-defaults-design.md`).

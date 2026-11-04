@@ -1,0 +1,1 @@
+- docs: design (not built) for session defaults: plugin pins and role rules in the SessionStart hook (`docs/superpowers/specs/2026-11-04-session-defaults-design.md`).
