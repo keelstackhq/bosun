@@ -30,7 +30,7 @@ fn marketplace_pins_superpowers_and_caveman_to_commits() {
     }
 }
 
-/// Both settings files enable the plugins from the `keelstack` marketplace, pinned to a bosun commit.
+/// Both settings files enable the plugins from the `keelstack` marketplace, from bosun's main branch.
 #[test]
 fn settings_pin_the_keelstack_marketplace() {
     let root = std::fs::read_to_string(".claude/settings.json").unwrap();
@@ -42,13 +42,10 @@ fn settings_pin_the_keelstack_marketplace() {
         let src = &s["extraKnownMarketplaces"]["keelstack"]["source"];
         assert_eq!(src["source"], "github");
         assert_eq!(src["repo"], "keelstackhq/bosun");
+        // A branch or tag: Claude Code clones a marketplace with `--branch`, so a sha fails.
+        // The plugin commits are pinned by sha inside .claude-plugin/marketplace.json.
         let r = src["ref"].as_str().unwrap_or_default();
-        assert!(
-            r.len() == 40
-                && r.bytes()
-                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
-            "ref must be a full commit sha, got {r:?}"
-        );
+        assert_eq!(r, "main");
         refs.push(r.to_string());
         for p in ["superpowers@keelstack", "caveman@keelstack"] {
             assert_eq!(s["enabledPlugins"][p], true, "{p}");
