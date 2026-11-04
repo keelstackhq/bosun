@@ -155,6 +155,9 @@ fn add_needs_evidence_and_a_short_rule() {
     let ok = "x".repeat(160);
     let (code, _) = lesson(tmp.path(), &fake, &["add", &ok, "--evidence", "#1"]);
     assert_eq!(code, 0);
+    let wide = "é".repeat(160);
+    let (code, v) = lesson(tmp.path(), &fake, &["add", &wide, "--evidence", "#1"]);
+    assert_eq!(code, 0, "{v}");
 }
 
 #[test]

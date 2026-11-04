@@ -132,7 +132,8 @@ pub fn line(l: &Lesson) -> String {
     } else {
         l.scope.join(",")
     };
-    format!("{} {} {}", l.id, scope, l.rule)
+    let rule = l.rule.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{} {} {}", l.id, scope, rule)
 }
 
 /// A rule for comparing: lowercase, whitespace collapsed, no trailing dots.
@@ -326,9 +327,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             line(&s.lesson[0]),
-            "L-001 src/gates/**,a/** Run  metadata once."
+            "L-001 src/gates/**,a/** Run metadata once."
         );
         assert_eq!(line(&s.lesson[1]), "L-002 * Global rule");
+        let mut multi = s.lesson[1].clone();
+        multi.rule = "Two\nlines\t here\r\n".into();
+        assert_eq!(line(&multi), "L-002 * Two lines here");
         assert_eq!(normalise("  Run   Metadata ONCE. "), "run metadata once");
         assert_eq!(find_dup(&s, "run metadata once"), Some("L-001"));
         assert_eq!(find_dup(&s, "other"), None);

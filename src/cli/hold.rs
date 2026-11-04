@@ -12,6 +12,7 @@ use super::prereqs_gate::plan_of_task;
 use super::release::{release_to, require_lease};
 use super::{HoldArgs, LessonAddArgs, LessonCmd};
 use crate::app::{App, Result, default_branch, kill_switch, notes, task_meta};
+use crate::core::lessons;
 use crate::core::plan;
 use crate::core::prereqs::{self as pq, HoldBox};
 use crate::core::records::{Record, parse_record};
@@ -170,10 +171,12 @@ fn plan_of(app: &App, plan_path: &str) -> Result<(String, Vec<u64>)> {
 
 /// A lesson that the plan missed a step; best effort, the error text on failure.
 fn lesson(dir: Option<&Path>, issue: u64, item: &str, task: &str, step: &str) -> Option<String> {
-    let text = format!(
-        "{item}/{task} missed an owner step; declare it in Prerequisites: {}",
-        inert(step, 90)
-    );
+    let head = format!("{item}/{task} missed an owner step; declare it in Prerequisites: ");
+    // The step is a code span: two backticks more than its text.
+    let budget = lessons::MAX_RULE
+        .saturating_sub(head.chars().count())
+        .saturating_sub(2);
+    let text = format!("{head}{}", inert(step, budget));
     let args = LessonAddArgs {
         text,
         scope: vec![],
