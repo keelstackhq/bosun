@@ -217,6 +217,8 @@ fn success_claims_the_epic_and_returns_one_create_session() {
         ])
     );
     assert_eq!(args["title"], "widget: #10 Lifecycle epic");
+    assert_eq!(args["source_url"], "https://github.com/acme/widget");
+    assert_eq!(args["source_revision"], "main");
     assert_eq!(args["model"], "sonnet");
     assert!(!args["model"].as_str().unwrap().contains("[1m]"));
     let prompt = args["prompt"].as_str().unwrap();

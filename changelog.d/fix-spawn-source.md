@@ -1,0 +1,1 @@
+- `spawn` (and the root relay) `create_session` call in `next` includes `source_url` and `source_revision` (the default branch).

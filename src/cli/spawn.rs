@@ -198,9 +198,13 @@ fn spawn_on(app: &App, n: u64, args: &SpawnArgs, thread: Option<&str>) -> CmdRes
     if let Some(ts) = thread {
         data["thread_ts"] = json!(ts);
     }
+    // The new session clones this repo at the default branch, whatever the caller's checkout.
+    let source_url = format!("https://github.com/{}", app.ctx.repo);
+    let source_revision = default_branch(app.gh.as_ref())?;
     Ok(Outcome::data(data).with_next(
         "create_session",
-        json!({"title": title, "prompt": prompt, "model": model, "tags": tags}),
+        json!({"title": title, "prompt": prompt, "model": model, "tags": tags,
+            "source_url": source_url, "source_revision": source_revision}),
     ))
 }
 

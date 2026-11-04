@@ -68,7 +68,8 @@ pub fn run(app: &App, args: &SpawnArgs) -> CmdResult {
     };
     let project = &app.ctx.config.project;
     let mut call = json!({"title": format!("{project}: root relay"), "prompt": "bosun resume --handoff",
-        "model": model, "tags": [format!("bosun:{project}"), format!("bosun:relay/{me}")]});
+        "model": model, "tags": [format!("bosun:{project}"), format!("bosun:relay/{me}")],
+        "source_url": format!("https://github.com/{}", app.ctx.repo), "source_revision": branch});
     // Without `[cloud] environment_id` the new session inherits the caller's environment.
     if let Some(id) = &env {
         call["environment_id"] = json!(id);
