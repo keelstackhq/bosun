@@ -1,7 +1,7 @@
 //! `bosun hook session-start`: join the registry, warm the lease cache and tell the session
 //! where it stands (spec §4).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
@@ -37,7 +37,11 @@ pub fn run(cwd: Option<&Path>) -> String {
 /// The repo's global lessons (at most 8) as a block to append; empty when there are none or
 /// `docs/lessons.toml` is missing or unreadable. Read before any GitHub call.
 fn lessons_block(dir: Option<&Path>) -> String {
-    let Some(store) = dir.and_then(|d| lesson::load(d).ok()) else {
+    let root = dir.map(|d| {
+        crate::ctx::git_out(d, &["rev-parse", "--show-toplevel"])
+            .map_or_else(|| d.to_path_buf(), PathBuf::from)
+    });
+    let Some(store) = root.and_then(|d| lesson::load(&d).ok()) else {
         return String::new();
     };
     let lines: Vec<String> = lessons::globals(&store)

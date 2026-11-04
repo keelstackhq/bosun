@@ -129,4 +129,6 @@ Janitor, resume, results:
 Bootstrap order: the root session runs `bosun plan import`, then the wave of plan tasks, then
 spawns one session per area, then coordinates with `bosun wait` and `bosun status`.
 
-The SessionStart context ends with the global lessons of `docs/lessons.toml` (at most 8, as `id * rule` lines under `Lessons:`), in the unreachable-GitHub text too; a missing or unparseable file adds nothing (spec §6).
+The SessionStart context ends with the global lessons of `docs/lessons.toml` (at most 8, as `id *
+rule` lines under `Lessons:`), in the unreachable-GitHub text too; a missing or unparseable file
+adds nothing (spec §6).

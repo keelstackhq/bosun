@@ -370,3 +370,27 @@ fn session_start_without_usable_lessons_prints_no_block() {
     std::fs::write(tmp.path().join("docs/lessons.toml"), "[[lesson\n").unwrap();
     assert!(!start_text(None, tmp.path()).contains("Lessons:"));
 }
+
+#[test]
+fn session_start_prints_at_most_eight_lessons() {
+    let tmp = repo();
+    let many: String = (1..=10)
+        .map(|i| format!("[[lesson]]\nid = \"L{i}\"\nrule = \"rule {i}\"\nevidence = [\"e\"]\n\n"))
+        .collect();
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), many).unwrap();
+    let text = start_text(None, tmp.path());
+    let after = text.split("Lessons:\n").nth(1).expect("a block");
+    assert_eq!(after.lines().count(), 8, "{text}");
+}
+
+#[test]
+fn session_start_from_a_subdirectory_reads_the_repo_root_lessons() {
+    let tmp = repo();
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), LESSONS).unwrap();
+    let sub = tmp.path().join("src/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+    let text = start_text(None, &sub);
+    assert!(text.contains("\nLessons:\nL1 * keep it small"), "{text}");
+}
