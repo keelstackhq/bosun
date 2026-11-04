@@ -1,0 +1,7 @@
+# Tests need a writable TMPDIR outside the repo: inside it, bosun finds the repo's own .bosun
+# config and 210 tests fail. `force` is needed because some agent sandboxes export TMPDIR=/,
+# which is not writable, and a plain [env] entry never overrides an existing variable.
+# Scope: only processes cargo starts (tests, `cargo run`); the built binary and consumer repos
+# (the channel does not ship this file) are unaffected.
+[env]
+TMPDIR = { value = "/tmp", force = true }
