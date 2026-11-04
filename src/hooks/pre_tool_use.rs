@@ -5,10 +5,12 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{cache, git_out};
-use crate::app::App;
+use crate::app::{App, trusted_notes};
 use crate::core::guard::{
-    edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for, tool_rules,
+    ChildTask, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
+    prereqs_lock_for, tool_rules,
 };
+use crate::core::lease::leases_of;
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -67,9 +69,12 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         return Some(deny(&why));
     }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
-        // A registered child session may write the task marker (and only that).
-        let child_ok =
-            prereqs_lock_for(tool, &tool_input, true).is_none() && registered_child(&dir);
+        // A registered child may create a new issue with a task marker for its own epic, and
+        // nothing else: not edits, comments, other markers, other repos or the allow and
+        // capabilities keys.
+        let child_ok = prereqs_lock_for(tool, &tool_input, true).is_none()
+            && child_task_create(tool, &tool_input)
+                .is_ok_and(|write| registered_child(&dir, &write));
         if !child_ok {
             return Some(deny(&why));
         }
@@ -84,17 +89,28 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     }
 }
 
-/// Whether this session is a registered child: it holds a live lease whose origin is `spawned`
-/// (`bosun spawn --record` writes it). Any doubt (no repo, no GitHub) is no.
-fn registered_child(dir: &Path) -> bool {
+/// Whether this session is a registered child for `write.epic`: the epic carries a live lease
+/// for this session with origin `spawned` and an empty touch, which only `bosun spawn --record`
+/// writes (a claim has touch paths), in a comment of a repo writer (`trusted_notes`, not any
+/// comment). An MCP call must also target this repo. Any doubt (no repo, no GitHub) is no.
+fn registered_child(dir: &Path, write: &ChildTask) -> bool {
     let Ok(app) = App::load(Some(dir)) else {
         return false;
     };
-    let file = cache::path(dir);
-    cache::leases(&app, file.as_deref()).is_ok_and(|leases| {
-        leases.iter().any(|l| {
-            l.session == app.ctx.session && l.origin == "spawned" && l.is_live(app.ctx.now)
-        })
+    if let Some((owner, name)) = &write.repo
+        && !(owner.eq_ignore_ascii_case(&app.ctx.repo.owner)
+            && name.eq_ignore_ascii_case(&app.ctx.repo.name))
+    {
+        return false;
+    }
+    let Ok(notes) = trusted_notes(app.gh.as_ref(), write.epic) else {
+        return false;
+    };
+    leases_of(write.epic, &notes).iter().any(|l| {
+        l.session == app.ctx.session
+            && l.origin == "spawned"
+            && l.touch.is_empty()
+            && l.is_live(app.ctx.now)
     })
 }
 

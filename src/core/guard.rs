@@ -186,9 +186,15 @@ pub fn tool_rules(
 /// The marker syntax bosun's parsers read (owner checklist `bosun:prereq|prereqs`, task and epic
 /// metadata): an HTML comment opener, then the name, then a space, `{` or the comment end.
 /// Prose that only mentions `bosun:task`, and `bosun:task-pr`, are not markers.
-static MARKER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*bosun:(?:prereqs?|task|epic)(?:[\s{]|-->|$)").expect("marker regex")
-});
+static MARKER: LazyLock<Regex> = LazyLock::new(|| marker_re(&format!("{NOT_TASK}|task")));
+
+/// The marker names a registered child may not write; [`MARKER`] is these plus `task`, so the
+/// two cannot drift.
+const NOT_TASK: &str = "prereqs?|epic";
+
+fn marker_re(names: &str) -> Regex {
+    Regex::new(&format!(r"<!--\s*bosun:(?:{names})(?:[\s{{]|-->|$)")).expect("marker regex")
+}
 
 /// MCP tools that write an issue body or comment, and the input fields that hold the text.
 const ISSUE_TEXT_TOOLS: [&str; 4] = [
@@ -198,14 +204,102 @@ const ISSUE_TEXT_TOOLS: [&str; 4] = [
     "update_issue_comment",
 ];
 
-/// The same without `task`: what a registered child session may not write either.
-static MARKER_NOT_TASK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*bosun:(?:prereqs?|epic)(?:[\s{]|-->|$)").expect("marker regex")
-});
+/// The same without `task`: what a registered child may not write either.
+static MARKER_NOT_TASK: LazyLock<Regex> = LazyLock::new(|| marker_re(NOT_TASK));
 
 /// `task_ok`: the `task` marker does not count (a registered child may write it).
 fn has_marker(text: &str, task_ok: bool) -> bool {
     if task_ok { &MARKER_NOT_TASK } else { &MARKER }.is_match(text)
+}
+
+/// What a registered child may write: one new issue carrying one `task` marker.
+#[derive(Debug, PartialEq)]
+pub struct ChildTask {
+    /// The epic the marker names; the child must hold its spawn lease.
+    pub epic: u64,
+    /// The `(owner, repo)` an MCP call targets; `None` for `gh issue create` (this repo).
+    pub repo: Option<(String, String)>,
+}
+
+/// Metadata keys a child may set. `allow` and `capabilities` widen what the gates let the task
+/// do (test-integrity grants, the prod-write floor), so only a plan PR may set them.
+const CHILD_KEYS: [&str; 7] = ["item", "task", "epic", "touch", "depends", "kind", "risk"];
+
+/// Is `write` a registered child's creation of ONE new issue with ONE well-formed `task`
+/// marker? Only `gh issue create` without `-R/--repo` (no nested shell, no other issue write in
+/// the command) and the MCP `issue_write` with method `create` qualify; edits, comments, API
+/// calls and other repos never do. The marker must be JSON with only [`CHILD_KEYS`] and an
+/// `epic`; the caller checks that the child's spawn lease is on that epic.
+pub fn child_task_create(tool: &str, input: &Value) -> Result<ChildTask, String> {
+    let (text, repo) = match tool {
+        "mcp__github__issue_write" => {
+            let create = input.get("method").and_then(Value::as_str) == Some("create")
+                && input.get("issue_number").is_none();
+            if !create {
+                return Err("a child may only create a new issue with the task marker".into());
+            }
+            let field = |k: &str| input.get(k).and_then(Value::as_str).map(String::from);
+            let repo = field("owner").zip(field("repo"));
+            (
+                field("body").unwrap_or_default(),
+                Some(repo.ok_or("the call names no owner/repo")?),
+            )
+        }
+        "Bash" => {
+            let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+            if !nested(command).is_empty() {
+                return Err("a child may not write the marker through a nested shell".into());
+            }
+            let words = shell_words(command);
+            let writes: Vec<&[String]> = words
+                .split(|w| w == SEP)
+                .filter(|seg| writes_issue_text(seg))
+                .collect();
+            let [seg] = writes.as_slice() else {
+                return Err("a child may run exactly one issue write".into());
+            };
+            let name = |w: &String| w.rsplit('/').next().unwrap_or(w).to_string();
+            let at = seg.iter().position(|w| name(w) == "gh");
+            let ok = at.is_some_and(|at| {
+                seg.get(at + 1).map(String::as_str) == Some("issue")
+                    && seg.get(at + 2).map(String::as_str) == Some("create")
+            });
+            if !ok {
+                return Err("a child may only run `gh issue create` with the marker".into());
+            }
+            if seg
+                .iter()
+                .any(|a| a == "-R" || a.starts_with("-R") || a.starts_with("--repo"))
+            {
+                return Err("a child may only create issues in this repo (no -R/--repo)".into());
+            }
+            (seg.join(" "), None)
+        }
+        _ => return Err("a child may only create an issue with the task marker".into()),
+    };
+    if MARKER_NOT_TASK.is_match(&text) || MARKER.find_iter(&text).count() != 1 {
+        return Err("a child may write exactly one task marker and no other".into());
+    }
+    let after = text
+        .split_once("bosun:task")
+        .map(|(_, r)| r)
+        .and_then(|r| r.split_once("-->"))
+        .map(|(json, _)| json.trim())
+        .ok_or("the task marker has no closing -->")?;
+    let meta: Value = serde_json::from_str(after).map_err(|e| format!("task marker JSON: {e}"))?;
+    let obj = meta
+        .as_object()
+        .ok_or("the task marker is not a JSON object")?;
+    if let Some(k) = obj.keys().find(|k| !CHILD_KEYS.contains(&k.as_str())) {
+        return Err(format!(
+            "a child may not set `{k}` in the task marker (allow and capabilities come from a plan PR)"
+        ));
+    }
+    let epic = obj
+        .get("epic")
+        .and_then(Value::as_u64)
+        .ok_or("the task marker needs the `epic` you were spawned for")?;
+    Ok(ChildTask { epic, repo })
 }
 
 /// Does one simple command (words, quotes removed) write an issue body or comment through
@@ -2421,30 +2515,49 @@ mod tests {
     }
 
     #[test]
-    fn a_registered_child_may_write_the_task_marker_only() {
-        let ok = |tool: &str, input: Value| prereqs_lock_for(tool, &input, true).is_none();
-        let task = "<!-- bosun:task {\"n\":1} -->";
-        assert!(ok("mcp__github__issue_write", json!({ "body": task })));
-        assert!(ok(
-            "Bash",
-            json!({ "command": format!("gh issue create --body '{task}'") })
-        ));
-        // Epic, checklist and mixed text stay refused, and so does everyone else.
-        for body in [
-            "<!-- bosun:epic 3 -->",
-            "<!-- bosun:prereq H1 -->",
-            "<!-- bosun:prereqs -->",
-            "<!-- bosun:task {} --> <!-- bosun:epic 3 -->",
+    fn a_registered_child_may_only_create_one_task_issue() {
+        let task = r#"<!-- bosun:task {"item":"M1","task":"T9","epic":5,"touch":["src/a.rs"]} -->"#;
+        let sh = |cmd: &str| child_task_create("Bash", &json!({ "command": cmd }));
+        let create = |body: &str| format!("gh issue create --title t --body '{body}'");
+        assert_eq!(sh(&create(task)).unwrap().epic, 5);
+        let mcp = |m: Value| child_task_create("mcp__github__issue_write", &m);
+        let ok = mcp(json!({"method":"create","owner":"o","repo":"r","body":task})).unwrap();
+        assert_eq!(ok.repo, Some(("o".into(), "r".into())));
+        // Not a creation, or not this repo, or not one plain command.
+        for cmd in [
+            format!("gh issue edit 5 --body '{task}'"),
+            format!("gh issue comment 5 --body '{task}'"),
+            format!("gh api -X PATCH repos/o/r/issues/5 -f body='{task}'"),
+            format!("gh issue create -R evil/other --title t --body '{task}'"),
+            format!("gh issue create --repo=evil/other --title t --body '{task}'"),
+            format!("bash -c \"{}\"", create(task)),
+            format!("{} && {}", create(task), create(task)),
         ] {
-            assert!(!ok("mcp__github__issue_write", json!({ "body": body })));
-            assert!(!ok(
-                "Bash",
-                json!({ "command": format!("gh issue edit 5 --body '{body}'") })
-            ));
+            assert!(sh(&cmd).is_err(), "{cmd}");
         }
         assert!(
-            prereqs_lock_for("mcp__github__issue_write", &json!({ "body": task }), false).is_some()
+            mcp(json!({"method":"update","issue_number":5,"owner":"o","repo":"r","body":task}))
+                .is_err()
         );
+        assert!(
+            mcp(json!({"method":"create","issue_number":5,"owner":"o","repo":"r","body":task}))
+                .is_err()
+        );
+        assert!(
+            child_task_create("mcp__github__add_issue_comment", &json!({"body": task})).is_err()
+        );
+        // The marker: no allow or capabilities, an epic, one marker, nothing else, valid JSON.
+        for body in [
+            r#"<!-- bosun:task {"epic":5,"allow":["skip"]} -->"#,
+            r#"<!-- bosun:task {"epic":5,"capabilities":[]} -->"#,
+            r#"<!-- bosun:task {"item":"M1"} -->"#,
+            r#"<!-- bosun:task {"epic":5} --> <!-- bosun:task {"epic":6} -->"#,
+            r#"<!-- bosun:task {"epic":5} --> <!-- bosun:epic 3 -->"#,
+            "<!-- bosun:task not json -->",
+            "<!-- bosun:task {\"epic\":5}",
+        ] {
+            assert!(sh(&create(body)).is_err(), "{body}");
+        }
     }
 
     #[test]
