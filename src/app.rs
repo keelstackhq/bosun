@@ -211,63 +211,6 @@ pub fn task_meta(issue: &Issue) -> Option<TaskMeta> {
     parse_task_meta(issue.body_text())
 }
 
-/// Adds `archive_session` to `next` for each child of the caller's orchestrator session that has
-/// reported a `result` (on an open issue): its work is over, so its session can be archived.
-/// Relay roots are never children (spec §5). bosun only returns the call (D29).
-pub fn with_archive_children(
-    gh: &dyn Github,
-    me: &str,
-    extra_issues: &[u64],
-    mut out: crate::output::Outcome,
-) -> Result<crate::output::Outcome> {
-    // A failure here must not fail the command: report it and add no entries.
-    match archive_children(gh, me, extra_issues) {
-        Ok(children) => {
-            for c in children {
-                out = out.with_next("archive_session", json!({"session_id": c}));
-            }
-        }
-        Err(e) => {
-            eprintln!("bosun: archive check failed: {e}");
-            out.data["archive_error"] = json!(e.to_string());
-        }
-    }
-    Ok(out)
-}
-
-/// Children of the orchestrator `me` that reported a trusted `result` on an open issue or on one
-/// of `extra_issues` (epics closed in this run).
-fn archive_children(gh: &dyn Github, me: &str, extra_issues: &[u64]) -> Result<Vec<String>> {
-    let Some((_, reg)) = crate::registry::load(gh)? else {
-        return Ok(Vec::new());
-    };
-    let mut children =
-        crate::core::handoff::children_of(&reg, crate::core::lease::orchestrator_of(me));
-    if children.is_empty() {
-        return Ok(children);
-    }
-    let mut numbers: Vec<u64> = gh
-        .list_issues(&[], IssueState::Open)?
-        .iter()
-        .map(|i| i.number)
-        .collect();
-    for n in extra_issues {
-        if !numbers.contains(n) {
-            numbers.push(*n);
-        }
-    }
-    let mut done: Vec<String> = Vec::new();
-    for number in numbers {
-        for n in trusted_notes(gh, number)? {
-            if let Some(Record::Result { session, .. }) = parse_record(&n.body) {
-                done.push(session);
-            }
-        }
-    }
-    children.retain(|c| done.contains(c));
-    Ok(children)
-}
-
 /// Open issues in a state that holds a lease, with their comments, by issue number.
 pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
     let mut found: Vec<Issue> = Vec::new();

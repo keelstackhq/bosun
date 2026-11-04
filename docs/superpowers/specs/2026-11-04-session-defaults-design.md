@@ -1,6 +1,6 @@
 # Session defaults: tools and standing rules in every cloud session
 
-Status: R1-R5 built in bosun#386; R6 (release) and H follow. Answers two owner questions (2026-11-04).
+Status: split into PRs: R1 in bosun#386, seed in #387, marketplace in #388, R2 and R4 in their own PRs; R6 (release) and H follow. Answers two owner questions (2026-11-04).
 
 ## Design
 

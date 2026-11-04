@@ -1,7 +1,8 @@
 //! A root's handoff (spec §5.1): the lines it leaves for the next root. Pure.
 
 use crate::core::records::{Note, Record, parse_record};
-use crate::core::text::has_hidden;
+use crate::core::text::{has_hidden, inert};
+use crate::core::verdict::{Verdict, comment_json};
 
 /// At most this many lines in one handoff.
 pub const MAX_LINES: usize = 40;
@@ -86,27 +87,6 @@ pub fn is_root(notes: &[Note], session: &str) -> bool {
     root && !child && !session.contains('/')
 }
 
-/// The sessions that joined with `parent` as their parent, once each, in join order. A child
-/// that left the registry (`result` leaves it) still counts. Relay roots never have a parent.
-pub fn children_of(notes: &[Note], parent: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for n in notes {
-        if let Some(Record::Join {
-            session,
-            parent: Some(p),
-            ..
-        }) = parse_record(&n.body)
-            && p == parent
-            && session != parent
-            && !out.contains(&session)
-            && !is_root(notes, &session)
-        {
-            out.push(session);
-        }
-    }
-    out
-}
-
 /// The old root of the newest relay that named `me` as the new root, if that root is one.
 pub fn lineage(notes: &[Note], me: &str) -> Option<String> {
     notes
@@ -140,6 +120,67 @@ pub fn newest_handoff(notes: &[Note], prefer: &[&str]) -> Option<(u64, Record)> 
     let all: Vec<_> = valid.by_ref().collect();
     let named = all.iter().find(|(_, r)| prefer.contains(&r.session()));
     named.or(all.first()).cloned()
+}
+
+/// The parent a join record names for `session`, newest record last.
+pub fn parent_of(notes: &[Note], session: &str) -> Option<String> {
+    notes
+        .iter()
+        .filter_map(|n| match parse_record(&n.body) {
+            Some(Record::Join {
+                session: s, parent, ..
+            }) if s == session => Some(parent),
+            _ => None,
+        })
+        .next_back()
+        .flatten()
+}
+
+/// `file:line claim` of every minor finding in the newest verdict for PR `pr` on `head` among
+/// the comment bodies (oldest first; the caller passes only trusted ones). Several verdicts: the
+/// last one wins.
+pub fn minors<'a>(bodies: impl IntoIterator<Item = &'a str>, pr: u64, head: &str) -> Vec<String> {
+    let verdict = bodies
+        .into_iter()
+        .filter_map(|b| comment_json(b).and_then(|j| Verdict::parse(j).ok()))
+        .filter(|v| v.pr == pr && v.head_sha == head)
+        .last();
+    verdict
+        .map(|v| {
+            v.findings
+                .iter()
+                .filter(|f| f.severity == "minor")
+                .map(|f| {
+                    let at = f.line.map_or(f.file.clone(), |l| format!("{}:{l}", f.file));
+                    format!("{at} {}", inert(&f.claim, 120))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The message a child sends its parent when its PR is ready (at most about 1,200 characters).
+pub fn pr_message(from: &str, pr: u64, head: &str, risk: &[String], minors: &[String]) -> String {
+    fn list(items: &[String], keep: usize) -> String {
+        if items.is_empty() {
+            return "none".into();
+        }
+        let shown = items
+            .iter()
+            .take(keep)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        match items.len().saturating_sub(keep) {
+            0 => shown,
+            more => format!("{shown}; +{more} more"),
+        }
+    }
+    format!(
+        "From {from}: PR #{pr} is ready for review. head {head}. risk paths: {}. review minors: {}.",
+        list(risk, 8),
+        list(minors, 5)
+    )
 }
 
 #[cfg(test)]

@@ -1,1 +1,1 @@
-- `bosun hook session-start` adds role rules (worker if spawned, else orchestrator; built-in text, `.bosun/session-rules.toml` overrides), also without GitHub; `status`/`reap` return `archive_session` for children with a `result`; `bosun doctor` step 13 fails on plugin drift against the `keelstack` marketplace pins (R1, R2, R4).
+- `bosun hook session-start` adds role rules (worker if spawned, else orchestrator; built-in text, `.bosun/session-rules.toml` overrides), also without GitHub (R1).

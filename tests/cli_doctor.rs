@@ -11,7 +11,6 @@ fn doctor(fake: &FakeGithub, dir: &Path, routines_ok: bool) -> (i32, Value) {
     let mut cmd = bosun();
     cmd.env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_NOW", T0)
-        .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
         .arg("-C")
         .arg(dir)
         .arg("doctor");
@@ -42,32 +41,31 @@ fn statuses(v: &Value) -> Vec<String> {
 }
 
 #[test]
-fn an_empty_repo_reports_all_thirteen_steps() {
+fn an_empty_repo_reports_all_twelve_steps() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let (code, v) = doctor(&fake, tmp.path(), false);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["error"]["kind"], "needs-human");
     let items = v["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 13);
+    assert_eq!(items.len(), 12);
     for (i, it) in items.iter().enumerate() {
         assert_eq!(it["step"], i + 1);
         assert!(!it["fix"].as_str().unwrap().is_empty());
     }
     // Step 1 (the fake repo is readable) is ok; Slack (7) and release (10) are not configured,
-    // so they are skipped, not missing (F11). Step 13 (plugins) is missing without the keelstack pins.
+    // so they are skipped, not missing (F11).
     let st = statuses(&v);
     assert_eq!(st[0], "ok");
     assert_eq!((st[6].as_str(), st[9].as_str()), ("skipped", "skipped"));
-    assert_eq!(st[12], "missing");
     assert!(
         st.iter()
             .enumerate()
             .skip(1)
-            .filter(|(i, _)| ![6, 9, 12].contains(i))
+            .filter(|(i, _)| *i != 6 && *i != 9)
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
-    assert_eq!(v["error"]["message"], "10 checklist steps missing");
+    assert_eq!(v["error"]["message"], "9 checklist steps missing");
     // Without [slack], the janitor skips notify and there is no notify Routine (F17).
     assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2);
     assert_eq!(v["data"]["notify"]["skipped"], true, "{v}");
@@ -161,29 +159,7 @@ fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
         "jobs:\n  ci-ok:\n    runs-on: x\n",
     );
     write(d, "governance/owners.toml", owners);
-    let (m, sp, cv) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
-    write(
-        d,
-        "docs/setup-script.sh",
-        &format!(
-            "#!/bin/sh\nKEELSTACK_MARKETPLACE_SHA={m}\nSUPERPOWERS_SHA={sp}\nCAVEMAN_SHA={cv}\n"
-        ),
-    );
-    write(
-        d,
-        ".claude/settings.json",
-        &format!(
-            r#"{{"extraKnownMarketplaces":{{"keelstack":{{"source":{{"source":"github","repo":"keelstackhq/bosun","ref":"{m}"}}}}}},
-"enabledPlugins":{{"superpowers@keelstack":true,"caveman@keelstack":true}}}}"#
-        ),
-    );
-    write(
-        d,
-        ".test-claude/plugins/installed_plugins.json",
-        &format!(
-            r#"{{"version":2,"plugins":{{"superpowers@keelstack":[{{"gitCommitSha":"{sp}"}}],"caveman@keelstack":[{{"gitCommitSha":"{cv}"}}]}}}}"#
-        ),
-    );
+    write(d, "docs/setup-script.sh", "#!/bin/sh\n");
     write(d, ".bosun/version", "unreleased\n");
     write(d, ".bosun/bosun.toml", "[slack]\nchannel = \"#bosun\"\n");
     write(d, "plans/bosun.md", "# plan\n");
@@ -435,7 +411,6 @@ mod environments {
             .env("BOSUN_GITHUB_API", fake.url())
             .env("BOSUN_HOIST", dir.join("fake-hoist"))
             .env("BOSUN_ROUTINES_OK", "1")
-            .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
             .arg("-C")
             .arg(dir)
             .args(["doctor", "--remote"])
