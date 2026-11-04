@@ -26,11 +26,13 @@ fn the_spawn_prompt_carries_the_working_advice() {
     assert_eq!(code, 0, "{v}");
     let prompt = v["next"][0]["args"]["prompt"].as_str().unwrap();
     for needle in [
-        "one shared CARGO_TARGET_DIR",
+        "its own CARGO_TARGET_DIR",
+        "sccache",
         "delete only build caches",
-        "stop at 30 minutes",
-        "bosun msg",
+        "by default",
+        "bosun msg session_test",
     ] {
         assert!(prompt.contains(needle), "{needle}: {prompt}");
     }
+    assert!(!prompt.contains("one shared CARGO_TARGET_DIR"), "{prompt}");
 }

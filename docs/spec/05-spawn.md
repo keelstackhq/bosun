@@ -9,7 +9,7 @@ A task counts as merged when its state is `merged` or its issue is closed; tasks
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
-and never uses send_later or send_message. A background wait (this command or any background command) stops at 30 minutes, so a child that waits longer, or finishes, also messages its parent (`bosun msg`); the default spawn prompt says so, and advises one shared `CARGO_TARGET_DIR` across worktrees and deleting only build caches when the disk is full.
+and never uses send_later or send_message. `--timeout` and the harness both default to 30 min for a background wait, so a child that waits longer, or finishes, also messages its parent (`bosun msg`). The default spawn prompt says so, advises one `CARGO_TARGET_DIR` per worktree (share dependencies with sccache or one `CARGO_HOME`, not one target dir: parallel builds lock and overwrite each other), and deleting only build caches when the disk is full.
 `polls` counts snapshots, the first included. A child's result is the newest `result` record of that session in the comments of open issues.
 A wait keeps its caller alive: after the first snapshot and then every 10 min it runs a heartbeat
 (the caller's live leases and its registry record to now + TTL, `now` moving on with the wall
