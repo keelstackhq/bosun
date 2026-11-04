@@ -53,3 +53,59 @@ fn a_lapsed_own_lease_is_not_renewed_over_another_live_lease() {
     assert_eq!(code, 3, "{v}");
     assert_eq!(v["data"]["conflicts"][0]["issue"], 11);
 }
+
+#[test]
+fn a_lapsed_own_lease_is_not_renewed_next_to_another_sessions_live_lease_on_the_issue() {
+    let fake = FakeGithub::start();
+    let id = lapsed_queued(&fake, "session_a");
+    // B claimed the task after it went back to ready and before any reap; no path overlap.
+    fake.comment(
+        10,
+        &lease_note("session_b", "2026-10-22T11:20:00Z", "src/b/**"),
+    );
+    let (code, v) = run(&fake, "session_a", LATER, &["claim", "10"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("session_b"),
+        "{v}"
+    );
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    let body = fake
+        .comments_of(10)
+        .into_iter()
+        .find(|c| c.id == id)
+        .unwrap()
+        .body;
+    assert!(
+        body.contains(LAPSED),
+        "the lapsed lease is left as it was: {body}"
+    );
+}
+
+#[test]
+fn a_reap_between_the_read_and_the_renewal_is_exit_3() {
+    let fake = FakeGithub::start();
+    lapsed_queued(&fake, "session_a");
+    // Reap ends the lease after the first read of the issue; the read-back must see it.
+    fake.after_requests("/issues/10", 1, move |s| {
+        let end = r#"{"bosun":"lease-end","session":"session_a","reason":"reaped"}"#;
+        common::fake::add_comment(s, 10, end);
+    });
+    let (code, v) = run(&fake, "session_a", LATER, &["claim", "10"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn own_means_the_exact_session_id() {
+    // D31: S cannot renew the lapsed lease of S/x, nor S/x that of S.
+    for (holder, caller) in [("session_a/x", "session_a"), ("session_a", "session_a/x")] {
+        let fake = FakeGithub::start();
+        lapsed_queued(&fake, holder);
+        let (code, v) = run(&fake, caller, LATER, &["claim", "10"]);
+        assert_eq!(code, 3, "{holder} vs {caller}: {v}");
+    }
+}

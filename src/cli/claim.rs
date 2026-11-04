@@ -210,15 +210,37 @@ fn renew_lapsed(
     session: &str,
     now: Timestamp,
 ) -> Result<Lease, BosunError> {
+    // Another session took the task while this lease lapsed: it is theirs now.
+    if let Some(o) = leases_of(n, cur)
+        .into_iter()
+        .find(|o| o.session != session && o.is_live(now))
+    {
+        return Err(BosunError::conflict(
+            format!("#{n} is held by {} until {}", o.session, o.expires),
+            format!("ask {} to release #{n}, or claim another task", o.session),
+        ));
+    }
     let globs = glob::parse_all(&l.touch)
         .map_err(|m| BosunError::usage(m, "release the task and claim it again"))?;
     check_overlap(&active_issues(gh)?, &globs, session, n, now)?;
     let expires = now.plus_secs(TTL_SECS);
     renew_lease(gh, l, cur, expires)?;
-    Ok(Lease {
-        expires,
-        ..l.clone()
-    })
+    // The write is in place, so a reap that ended the lease meanwhile is not undone by it: read
+    // the task back and answer exit 3 unless this session still holds it live in an active state.
+    let lost = || {
+        BosunError::conflict(
+            format!("#{n} was released while its lease was renewed"),
+            format!("run `bosun claim {n}` again"),
+        )
+    };
+    let fresh = gh.get_issue(n)?.ok_or_else(lost)?;
+    let held = leases_of(n, &notes(gh, n)?)
+        .into_iter()
+        .find(|o| o.session == session && o.is_live(now));
+    match (state_of(&fresh.labels), held) {
+        (Some(st), Some(h)) if st.is_active() => Ok(h),
+        _ => Err(lost()),
+    }
 }
 
 /// After a lost race: the task was ready before this claim, so put it back, but only while it is

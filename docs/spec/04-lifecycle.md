@@ -99,7 +99,7 @@ Conflict avoidance (three layers):
 
 Leases conflict per issue, not per session: wave agents run inside their orchestrator's session, so a
 lease on another issue conflicts even when it has the same session id; only a lease of the same session
-on the issue being claimed is the same claim (a re-claim is idempotent). A re-claim of an own task in an active state (claimed, building, review, fixing, queued) whose own lease lapsed and was not reaped yet renews that lease in place, after the overlap check on its full touch; another session is still refused. Give each wave agent
+on the issue being claimed is the same claim (a re-claim is idempotent). A re-claim of an own task in an active state (claimed, building, review, fixing, queued) whose own lease lapsed and was not reaped yet renews that lease in place, after the overlap check on its full touch. It is refused (exit 3) when another session holds a live lease on the same issue. After the write it reads the task and its leases back and exits 3 unless this session's lease is still the live one and the state is still active (a reap that ended the lease in between is not undone). "Own" is the exact session id: `S` cannot renew the lease of `S/x`, nor `S/x` that of `S`. Give each wave agent
 `BOSUN_SESSION=<session>/<task>` in its berth workspace; `S/x` conflicts with `S/y`, not with `S/x`.
 `wave plan` counts the epic's active tasks that hold a live lease against `waves.max_parallel` and
 blocks picks that overlap their touch paths. The edit hook keeps the session rule (an agent may edit
