@@ -7,6 +7,8 @@ use serde_json::json;
 
 use super::cache;
 use crate::app::{App, halt_reason, main_red};
+use crate::cli::lesson;
+use crate::core::lessons;
 use crate::registry::{self, JoinSpec};
 
 fn output(text: &str) -> String {
@@ -18,16 +20,35 @@ pub fn run(cwd: Option<&Path>) -> String {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
+    let lessons = lessons_block(dir.as_deref());
     match context(dir.as_deref()) {
-        Ok(text) => output(&text),
+        Ok(text) => output(&format!("{text}{lessons}")),
         Err(why) => {
             eprintln!("bosun: warning: session start: {why}");
             output(&format!(
                 "bosun could not reach GitHub ({why}), so this session is not registered and \
                  edit locks may be stale. Set GH_TOKEN (or GITHUB_TOKEN) and BOSUN_REPO=owner/name, \
-                 then run `bosun join`."
+                 then run `bosun join`.{lessons}"
             ))
         }
+    }
+}
+
+/// The repo's global lessons (at most 8) as a block to append; empty when there are none or
+/// `docs/lessons.toml` is missing or unreadable. Read before any GitHub call.
+fn lessons_block(dir: Option<&Path>) -> String {
+    let Some(store) = dir.and_then(|d| lesson::load(d).ok()) else {
+        return String::new();
+    };
+    let lines: Vec<String> = lessons::globals(&store)
+        .into_iter()
+        .take(lessons::MAX_GLOBAL)
+        .map(lessons::line)
+        .collect();
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("\nLessons:\n{}", lines.join("\n"))
     }
 }
 
