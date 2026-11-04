@@ -1,0 +1,1 @@
+- A GitHub 5xx now ends any command with exit 1 and `error.kind` `upstream` (retry hint), so `bosun wait` never returns 0 without data.
