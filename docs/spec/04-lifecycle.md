@@ -49,6 +49,8 @@ Stop rules:
 - Each stop rule opens or hits a lesson.
 - When main is red, feature work pauses; only mainfix tasks continue.
 
+`bosun claim` (fresh, idempotent and grow) returns `data.lessons`: one compact line (`id scope rule`) for each lesson in the local `docs/lessons.toml` that is global or whose scope overlaps the touch (spec §6). It is advice: a missing or unparseable file gives `[]` and never fails the claim.
+
 Leases: a claim is an issue comment with one JSON line:
 
 ```json
