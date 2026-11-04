@@ -67,6 +67,10 @@ The state machine, stop rules and resume.
      over 100 is a warning.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
+   - `done-by:` (optional) `#N` (or `N`): PR N already did this task. `bosun plan import` and
+     `plan amend` make the task merged (comment `Done by PR #N`, issue closed as completed) when
+     PR N is merged into the default branch, for a new task and for an open planned or ready one;
+     with PR N not merged the field changes nothing (a note goes to stderr). Any other value is a plan error.
    - `allow:` (optional) comma-separated test-integrity finding kinds the task may raise:
      `delete-test` (also allows `fewer-tests`), `skip`, `only`, `fewer-asserts`. Any other value
      is a plan error. Use it for a task that removes code with its tests, for example a seed

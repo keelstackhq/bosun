@@ -1058,6 +1058,73 @@ fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
     issues.iter().any(|i| i.body_text().contains(&m))
 }
 
+/// Whether PR `pr` is merged into the default branch.
+fn merged_pr(imp: &Importer, pr: u64) -> Result<bool> {
+    let base = default_branch(imp.gh)?;
+    Ok(imp
+        .gh
+        .get_pull(pr)?
+        .is_some_and(|p| p.merged && p.base_ref == base))
+}
+
+/// A task whose `done-by` PR merged: one just made (already labelled merged) or an open
+/// planned/ready one is closed as completed with a note; anything else is left alone.
+fn finish_done_by(imp: &mut Importer, slot: &mut Slot, pr: u64) -> Result<()> {
+    let made = matches!(slot.action, "created" | "would-create");
+    let open_early = !made
+        && slot.issue.is_some_and(|n| {
+            imp.issues.iter().any(|i| {
+                i.number == n
+                    && i.state == "open"
+                    && matches!(state_of(&i.labels), Some(State::Planned | State::Ready))
+            })
+        });
+    if !made && !open_early {
+        return Ok(());
+    }
+    if let (false, Some(n)) = (imp.dry, slot.issue) {
+        imp.gh.add_comment(
+            n,
+            &format!(
+                "Done by PR #{pr}, merged into the default branch. Closed by `bosun plan import`."
+            ),
+        )?;
+        if open_early {
+            // By hand, not `set_state`: planned or ready -> merged is no transition of the state
+            // machine; the work landed outside bosun.
+            let labels = imp
+                .issues
+                .iter()
+                .find(|i| i.number == n)
+                .map(|i| i.labels.clone())
+                .unwrap_or_default();
+            imp.gh
+                .ensure_label(&State::Merged.label(), "ededed", "bosun task state")?;
+            for l in labels_to_remove(&labels, State::Merged) {
+                imp.gh.remove_label(n, &l)?;
+            }
+            imp.gh.add_labels(n, &[&State::Merged.label()])?;
+        }
+        imp.gh.update_issue(
+            n,
+            IssuePatch {
+                state: Some(PatchState::Closed),
+                state_reason: Some("completed".into()),
+                ..IssuePatch::default()
+            },
+        )?;
+    }
+    slot.merged = true;
+    slot.closed = !imp.dry;
+    slot.state = Some("merged".into());
+    if let Some(kept) = imp.tasks.iter_mut().rev().find(|t| t.id == slot.id) {
+        kept.merged = true;
+        kept.closed = slot.closed;
+        kept.state = slot.state.clone();
+    }
+    Ok(())
+}
+
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     let plan_path = imp.plan_path.clone();
     let mut added: Option<HashMap<String, (u64, u64)>> = None;
@@ -1214,13 +1281,27 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             // Vetted only for a task that does not exist yet (the slot makes it).
             let known = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]).is_some();
             let allow = if known { vec![] } else { imp.allowed(&tid, t) };
-            slots.push(imp.slot(&tid, (&item.id, Some(&t.id)), || {
+            // `done-by: #N`: PR N merged into the default branch already did this task.
+            let done = match t.done_by {
+                Some(pr) if merged_pr(imp, pr)? => Some(pr),
+                Some(pr) => {
+                    eprintln!("plan: {tid} says done-by #{pr}, which is not merged; it stays open");
+                    None
+                }
+                None => None,
+            };
+            let state = if done.is_some() { "merged" } else { "planned" };
+            let mut slot = imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),
                     task_body(&tid, "", &task_meta_of(item, t, epic.issue, allow)),
-                    labels(&t.kind, &item.area, "planned"),
+                    labels(&t.kind, &item.area, state),
                 )
-            })?);
+            })?;
+            if let Some(pr) = done {
+                finish_done_by(imp, &mut slot, pr)?;
+            }
+            slots.push(slot);
         }
         imp.promote(&epic, &pslot, &slots)?;
     }
