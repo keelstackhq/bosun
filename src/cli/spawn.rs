@@ -462,7 +462,11 @@ fn default_prompt(epic: u64, title: &str, area: Option<&str>, me: &str, depth: u
         "You orchestrate epic #{epic} ({title}).\n\
          1. Run `bosun join {area_flag}--parent {me} --depth {depth}`.\n\
          2. Run `bosun wave plan {epic}` and work the tasks it returns as wave agents, each in its own workspace with `BOSUN_SESSION=<session>/<task>` set, where <session> is your own id, `data.session` of the join in step 1.\n\
-         3. When done, run `bosun result {epic} --outcome merged --pr <N>` (outcome is merged, partial, blocked or needs-human: `partial` when some tasks merged and the rest goes back to the parent; leave out --pr when there is none).\n"
+         3. When done, run `bosun result {epic} --outcome merged --pr <N>` (outcome is merged, partial, blocked or needs-human: `partial` when some tasks merged and the rest goes back to the parent; leave out --pr when there is none).\n\
+         Working notes:\n\
+         - Rust repos: give all worktrees one shared CARGO_TARGET_DIR (outside the repo) so they build once.\n\
+         - When the disk is full, delete only build caches (target dirs, package caches), never worktrees, branches or uncommitted work.\n\
+         - Background waits (`bosun wait`, a background command) stop at 30 minutes: when you are blocked longer, or done, also tell your parent with `bosun msg {me} <text>` and send what `next` returns.\n"
     )
 }
 

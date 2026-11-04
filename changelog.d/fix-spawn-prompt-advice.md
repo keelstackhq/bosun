@@ -1,0 +1,1 @@
+- The default spawn prompt gains working notes: one shared CARGO_TARGET_DIR across worktrees, delete only build caches when the disk is full, and background waits stop at 30 minutes so children also message the parent.
