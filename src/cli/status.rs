@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::app::{
     App, Result, active_issues, halt_reason, limits_from_default, main_red, trusted_notes,
 };
-use crate::core::handoff::finished_children;
+use crate::core::handoff::{children_of, finished_children};
 use crate::core::lease::{live_leases, members, orchestrator_of};
 use crate::core::records::{Note, spend_total};
 use crate::core::state::State;
@@ -128,12 +128,18 @@ fn archive_children(
     extra_issues: &[u64],
     now: Timestamp,
 ) -> Result<Vec<String>> {
-    let Some((_, reg)) = registry::load(gh)? else {
+    let Some((reg_issue, reg)) = registry::load(gh)? else {
         return Ok(Vec::new());
     };
+    // No child, no GitHub reads: the common case costs only the registry.
+    let parent = orchestrator_of(me);
+    if children_of(&reg, parent).is_empty() {
+        return Ok(Vec::new());
+    }
     let mut numbers: Vec<u64> = gh
         .list_issues(&[], IssueState::Open)?
         .iter()
+        .filter(|i| i.number != reg_issue)
         .map(|i| i.number)
         .collect();
     for n in extra_issues {
@@ -145,13 +151,17 @@ fn archive_children(
     for number in numbers {
         results.extend(trusted_notes(gh, number)?);
     }
+    // Leases are read only when some child has finished.
+    if finished_children(&reg, parent, &results, &[]).is_empty() {
+        return Ok(Vec::new());
+    }
     let held: Vec<_> = active_issues(gh)?
         .into_iter()
         .map(|(i, notes)| (i.number, notes))
         .collect();
     Ok(finished_children(
         &reg,
-        orchestrator_of(me),
+        parent,
         &results,
         &live_leases(&held, now),
     ))

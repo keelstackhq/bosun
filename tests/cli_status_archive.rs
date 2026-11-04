@@ -19,7 +19,10 @@ fn join(session: &str, origin: &str, parent: &str) -> String {
 }
 
 fn result(session: &str, outcome: &str) -> String {
-    format!("{{\"bosun\":\"result\",\"session\":\"{session}\",\"outcome\":\"{outcome}\"}}")
+    // The shape `bosun result` writes; a bare or quoted record line does not count.
+    format!(
+        "Result of {session}: {outcome}\n\n{{\"bosun\":\"result\",\"session\":\"{session}\",\"outcome\":\"{outcome}\"}}"
+    )
 }
 
 fn lease(session: &str, expires: &str) -> String {
@@ -112,11 +115,22 @@ fn a_live_lease_after_the_result_means_it_works_again() {
 }
 
 #[test]
-fn a_lease_older_than_the_result_does_not_block() {
+fn any_live_lease_of_the_child_or_its_tasks_blocks() {
+    // Written before the result, by the child or as one of its tasks: still working.
+    for holder in ["child", "child/t1"] {
+        let fake = FakeGithub::start();
+        registry(&fake);
+        fake.issue(5, "Task", &[BUILDING], "");
+        fake.comment(5, &lease(holder, "2026-10-22T11:00:00Z"));
+        fake.issue(9, "Epic", &[], "");
+        fake.comment(9, &result("child", "blocked"));
+        assert_eq!(archived(&fake, "status"), json!([]), "{holder}");
+    }
+    // An expired lease does not block.
     let fake = FakeGithub::start();
     registry(&fake);
     fake.issue(5, "Task", &[BUILDING], "");
-    fake.comment(5, &lease("child", "2026-10-22T11:00:00Z"));
+    fake.comment(5, &lease("child/t1", "2026-01-01T00:00:00Z"));
     fake.issue(9, "Epic", &[], "");
     fake.comment(9, &result("child", "blocked"));
     assert_eq!(archived(&fake, "status"), archive_child());

@@ -135,7 +135,7 @@ fn reap_archives_a_child_whose_result_is_on_the_epic_it_just_closed() {
     task(&fake, 2, 1, "merged");
     fake.comment(
         1,
-        r#"{"bosun":"result","session":"kid","outcome":"merged"}"#,
+        "Result of kid: merged\n\n{\"bosun\":\"result\",\"session\":\"kid\",\"outcome\":\"merged\"}",
     );
     let v = reap(&fake);
     assert_eq!(v["data"]["epics_closed"], json!([1]));
