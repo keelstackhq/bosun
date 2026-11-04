@@ -31,7 +31,7 @@ hides the older failed run.
 4. The live sessions (all origins) are fewer than max_live_sessions.
 5. The children of the parent are fewer than max_children.
 6. There is no conflict with a live lease or area owner.
-7. Claim the epic, then return the `create_session` call in `next` (D29).
+7. Claim the epic, then return the `create_session` call in `next` (D29) with `source_url` (`https://github.com/<owner>/<repo>`) and `source_revision` (the default branch), so the child clones this repo and not the caller's checkout; the root relay's call has both too.
 
 `bosun wave plan` returns exit 4 while main is red (a mainfix epic is exempt) or while process is red (mainfix and process-fix epics are exempt). Under a feature epic with process-fix tasks, process-red plans only those tasks; the others wait.
 
