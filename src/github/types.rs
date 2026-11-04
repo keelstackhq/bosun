@@ -112,6 +112,15 @@ pub struct Pull {
     /// GitHub's lazily computed `mergeable_state` (`dirty`, `clean`, ...); `None` for `null`,
     /// and always `None` in lists (only the pull detail has it).
     pub mergeable_state: Option<String>,
+    /// `owner/name` of the repo the head branch lives in; `""` when GitHub did not say (a
+    /// deleted fork). A PR from a fork differs from the base repo.
+    pub head_repo: String,
+}
+
+#[derive(Deserialize)]
+struct RawRepo {
+    #[serde(default)]
+    full_name: String,
 }
 
 #[derive(Deserialize)]
@@ -119,6 +128,8 @@ struct RawRef {
     sha: String,
     #[serde(rename = "ref")]
     name: String,
+    #[serde(default)]
+    repo: Option<RawRepo>,
 }
 
 #[derive(Deserialize)]
@@ -159,6 +170,7 @@ impl From<RawPull> for Pull {
             title: r.title,
             head_sha: r.head.sha,
             head_ref: r.head.name,
+            head_repo: r.head.repo.map(|x| x.full_name).unwrap_or_default(),
             base_sha: r.base.sha,
             base_ref: r.base.name,
             body: r.body,

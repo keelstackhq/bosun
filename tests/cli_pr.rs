@@ -604,6 +604,68 @@ fn a_branch_without_a_pr_uses_the_marker_pr_and_opens_no_second_one() {
     );
 }
 
+/// `pr 7 --auto-merge` from main with PR 20 the only candidate, changed by `tweak`.
+fn marker_probe(tweak: impl FnOnce(&FakeGithub)) -> (i32, Value, FakeGithub) {
+    let fake = FakeGithub::start();
+    task(&fake, "bosun:state/review");
+    fake.pull(
+        20,
+        "t",
+        "claude/t7",
+        "Closes #7\n\n<!-- bosun:task-pr 7 -->",
+    );
+    tweak(&fake);
+    let dir = repo("main");
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
+    (code, v, fake)
+}
+
+#[test]
+fn a_marker_pr_is_refused_unless_it_is_trusted() {
+    let refused = |name: &str, tweak: &dyn Fn(&FakeGithub)| {
+        let (code, v, fake) = marker_probe(|f| tweak(f));
+        assert_eq!(code, 2, "{name}: {v}");
+        assert_eq!(fake.auto_merge_enabled(20), None, "{name}");
+    };
+    refused("author without write access", &|f| {
+        f.pull_set(20, "user", serde_json::json!({"login": "mallory"}));
+        f.permission("mallory", "read");
+    });
+    refused("fork", &|f| {
+        f.pull_set(
+            20,
+            "head",
+            serde_json::json!({"sha": "sha20", "ref": "claude/t7", "repo": {"full_name": "mallory/widget"}}),
+        );
+    });
+    refused("another base", &|f| {
+        f.pull_set(
+            20,
+            "base",
+            serde_json::json!({"sha": "base0000", "ref": "release"}),
+        );
+    });
+    refused("marker without Closes", &|f| {
+        f.pull_set(20, "body", serde_json::json!("<!-- bosun:task-pr 7 -->"));
+    });
+}
+
+#[test]
+fn two_marker_prs_are_ambiguous_and_nothing_is_turned_on() {
+    let (code, v, fake) = marker_probe(|f| {
+        f.pull(
+            19,
+            "t",
+            "claude/other",
+            "Closes #7\n\n<!-- bosun:task-pr 7 -->",
+        );
+    });
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(fake.auto_merge_enabled(19), None);
+    assert_eq!(fake.auto_merge_enabled(20), None);
+    assert!(v["data"]["prs"].as_array().unwrap().len() == 2, "{v}");
+}
+
 #[test]
 fn the_default_branch_without_a_marker_pr_is_still_a_usage_error() {
     let fake = FakeGithub::start();

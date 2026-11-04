@@ -770,7 +770,8 @@ fn pull_json(number: u64, title: &str, head_ref: &str, base_ref: &str, body: &st
     json!({"number": number, "node_id": format!("PR_node{number}"), "title": title,
         "body": body, "state": "open", "merged": false, "draft": false, "labels": [],
         "user": {"login": "octocat"},
-        "head": {"sha": format!("sha{number}"), "ref": head_ref, "label": format!("acme:{head_ref}")},
+        "head": {"sha": format!("sha{number}"), "ref": head_ref, "label": format!("acme:{head_ref}"),
+            "repo": {"full_name": "acme/widget"}},
         "base": {"sha": "base0000", "ref": base_ref}})
 }
 

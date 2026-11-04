@@ -11,13 +11,13 @@ use super::PrArgs;
 use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged};
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
-use crate::core::meta::linked_issues;
+use crate::core::meta::{closing_issues, linked_issues};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
 use crate::core::touch::{Changed, outside};
 use crate::github::{
-    Github, IssueState, Live, PrFile, enable_auto_merge_any, is_already_clean, is_unstable,
+    Github, IssueState, Live, PrFile, Pull, enable_auto_merge_any, is_already_clean, is_unstable,
 };
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -32,6 +32,14 @@ fn required(gh: &dyn Github, base: &str) -> Result<Vec<String>, BosunError> {
     Ok(checks::required_checks(
         std::env::var("BOSUN_REQUIRED_CHECKS").ok().as_deref(),
         hoist.as_deref(),
+    ))
+}
+
+/// Whether `user` has write or admin permission on the repo.
+fn is_writer(gh: &dyn Github, user: &str) -> Result<bool, BosunError> {
+    Ok(matches!(
+        gh.permission(user)?.unwrap_or_default().as_str(),
+        "admin" | "write"
     ))
 }
 
@@ -196,18 +204,41 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     }
     // No open PR on this branch: the open PR that carries this task's `bosun:task-pr` marker
     // is the task's PR, whatever branch it is on.
+    // The marker is text the PR author controls, so it names a PR only together with a
+    // `Closes #N`, a PR into the default branch from this repo (not a fork), and a writer as
+    // author. Two such PRs are ambiguous: refuse.
     let marker = format!("<!-- bosun:task-pr {n} -->");
-    let by_marker = if open.is_none() {
-        gh.list_pulls(None, IssueState::Open)?
-            .into_iter()
-            .find(|p| p.body.contains(&marker))
-    } else {
-        None
-    };
+    let repo = app.ctx.repo.to_string();
+    let mut by_marker = None;
+    if open.is_none() {
+        let mut ours: Vec<Pull> = Vec::new();
+        for p in gh.list_pulls(None, IssueState::Open)? {
+            if p.body.contains(&marker)
+                && closing_issues(&p.body).contains(&n)
+                && p.base_ref == base
+                && p.head_repo.eq_ignore_ascii_case(&repo)
+                && is_writer(gh, &p.user)?
+            {
+                ours.push(p);
+            }
+        }
+        if ours.len() > 1 {
+            let prs: Vec<u64> = ours.iter().map(|p| p.number).collect();
+            return Err(BosunError::conflict(
+                format!(
+                    "{} open PRs carry the marker of task #{n}: {prs:?}",
+                    prs.len()
+                ),
+                "close the extra PRs, or run `bosun pr` from the branch of the right one",
+            )
+            .with_data(json!({"prs": prs})));
+        }
+        by_marker = ours.pop();
+    }
     if open.is_none() && by_marker.is_none() && on_base {
         return Err(BosunError::usage(
             format!(
-                "the current branch is {branch} and no open PR carries the marker of task #{n}"
+                "the current branch is {branch} and no open PR of a writer into {base} carries the marker and `Closes #{n}`"
             ),
             "check out your task branch (for example `git switch -c claude/<task>`) and push it, or run `bosun pr` from the branch of the task's PR",
         ));
@@ -215,7 +246,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let branch = by_marker.as_ref().map_or(branch, |p| p.head_ref.clone());
     let touch;
     let (pull, created) = match open.map(|i| found.swap_remove(i)).or(by_marker) {
-        Some(p) if !linked_issues(&p.body).contains(&n) && !p.body.contains(&marker) => {
+        Some(p) if !linked_issues(&p.body).contains(&n) => {
             // Before any state change, record or auto-merge: this PR belongs to something else.
             return Err(BosunError::conflict(
                 format!(
