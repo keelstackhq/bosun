@@ -60,6 +60,9 @@ pub struct BosunError {
     pub fix: String,
     /// Extra facts for the session (for example the failed spawn check).
     pub data: Option<Value>,
+    /// Overrides `error.kind` (the exit-code name) when a failure has a more specific one, for
+    /// example `upstream` for a GitHub 5xx.
+    pub kind: Option<&'static str>,
 }
 
 impl std::fmt::Display for BosunError {
@@ -79,6 +82,7 @@ impl BosunError {
             message: message.into(),
             fix,
             data: None,
+            kind: None,
         }
     }
 
@@ -104,6 +108,11 @@ impl BosunError {
 
     pub fn limit(message: impl Into<String>, fix: impl Into<String>) -> Self {
         Self::new(Exit::Limit, message, fix)
+    }
+
+    pub fn with_kind(mut self, kind: &'static str) -> Self {
+        self.kind = Some(kind);
+        self
     }
 
     pub fn with_data(mut self, data: Value) -> Self {
@@ -167,7 +176,7 @@ pub fn envelope(command: &str, result: &CmdResult) -> Value {
                 .clone()
                 .map(|d| normalize(&d))
                 .unwrap_or_else(|| json!({})),
-            json!({"kind": e.exit.name(), "message": e.message, "fix": e.fix}),
+            json!({"kind": e.kind.unwrap_or(e.exit.name()), "message": e.message, "fix": e.fix}),
             json!([]),
         ),
     };
