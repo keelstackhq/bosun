@@ -211,6 +211,37 @@ pub fn task_meta(issue: &Issue) -> Option<TaskMeta> {
     parse_task_meta(issue.body_text())
 }
 
+/// Adds `archive_session` to `next` for each child of the caller's orchestrator session that has
+/// reported a `result` (on an open issue): its work is over, so its session can be archived.
+/// Relay roots are never children (spec §5). bosun only returns the call (D29).
+pub fn with_archive_children(
+    gh: &dyn Github,
+    me: &str,
+    mut out: crate::output::Outcome,
+) -> Result<crate::output::Outcome> {
+    let Some((_, reg)) = crate::registry::load(gh)? else {
+        return Ok(out);
+    };
+    let mut children =
+        crate::core::handoff::children_of(&reg, crate::core::lease::orchestrator_of(me));
+    if children.is_empty() {
+        return Ok(out);
+    }
+    let mut done: Vec<String> = Vec::new();
+    for issue in gh.list_issues(&[], IssueState::Open)? {
+        for n in notes(gh, issue.number)? {
+            if let Some(Record::Result { session, .. }) = parse_record(&n.body) {
+                done.push(session);
+            }
+        }
+    }
+    children.retain(|c| done.contains(c));
+    for c in children {
+        out = out.with_next("archive_session", json!({"session_id": c}));
+    }
+    Ok(out)
+}
+
 /// Open issues in a state that holds a lease, with their comments, by issue number.
 pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
     let mut found: Vec<Issue> = Vec::new();

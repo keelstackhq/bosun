@@ -104,7 +104,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         eprintln!("reap: closing finished epics failed: {e}");
         data["epics_error"] = json!(e.to_string());
     }
-    Ok(Outcome::data(data))
+    crate::app::with_archive_children(gh, &app.ctx.session, Outcome::data(data))
 }
 
 const QUIET_SECS: i64 = 600;

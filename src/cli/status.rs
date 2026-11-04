@@ -5,7 +5,9 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, Result, active_issues, halt_reason, limits_from_default, main_red};
+use crate::app::{
+    App, Result, active_issues, halt_reason, limits_from_default, main_red, with_archive_children,
+};
 use crate::core::lease::{live_leases, members};
 use crate::core::records::spend_total;
 use crate::core::state::State;
@@ -90,5 +92,5 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     if let Some(why) = reduced {
         data["integrity_reason"] = json!(why);
     }
-    Ok(Outcome::data(data))
+    with_archive_children(gh, &ctx.session, Outcome::data(data))
 }

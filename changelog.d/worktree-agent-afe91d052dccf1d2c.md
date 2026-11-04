@@ -1,0 +1,1 @@
+- `bosun status` and `bosun reap` return `archive_session` in `next` for each child of the caller that has reported a `result` (R2).

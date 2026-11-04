@@ -86,6 +86,27 @@ pub fn is_root(notes: &[Note], session: &str) -> bool {
     root && !child && !session.contains('/')
 }
 
+/// The sessions that joined with `parent` as their parent, once each, in join order. A child
+/// that left the registry (`result` leaves it) still counts. Relay roots never have a parent.
+pub fn children_of(notes: &[Note], parent: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in notes {
+        if let Some(Record::Join {
+            session,
+            parent: Some(p),
+            ..
+        }) = parse_record(&n.body)
+            && p == parent
+            && session != parent
+            && !out.contains(&session)
+            && !is_root(notes, &session)
+        {
+            out.push(session);
+        }
+    }
+    out
+}
+
 /// The old root of the newest relay that named `me` as the new root, if that root is one.
 pub fn lineage(notes: &[Note], me: &str) -> Option<String> {
     notes
