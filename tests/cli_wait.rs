@@ -138,6 +138,16 @@ fn the_target_is_required_and_unique() {
 }
 
 #[test]
+fn a_pr_with_no_checks_yet_says_so() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "Work", "claude/work", "");
+    let (code, v) = wait(&fake, &["--pr", "5", "--timeout", "0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["before"]["checks"], "no checks yet", "{v}");
+    assert_eq!(v["data"]["after"]["checks"], "no checks yet", "{v}");
+}
+
+#[test]
 fn a_github_5xx_exits_1_with_kind_upstream_and_a_retry_hint() {
     let fake = FakeGithub::start();
     fake.pull(5, "Work", "claude/work", "");

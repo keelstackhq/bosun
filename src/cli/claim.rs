@@ -9,12 +9,14 @@ use crate::app::{
     App, active_issues, kill_switch, limits_from_default, main_red, notes, set_state, settle_race,
     task_meta,
 };
+use crate::cli::lesson;
 use crate::cli::status::process_red;
 use crate::core::budget::{BUDGET_STOP, no_new_work};
 use crate::core::glob::{self, Glob};
 use crate::core::lease::{
     Lease, TTL_SECS, conflicts, leases_of, members, orchestrator_of, race_winner,
 };
+use crate::core::lessons;
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
 use crate::core::state::{State, state_of};
@@ -77,6 +79,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
             }
             let exp = l.expires.to_string();
             let mut data = lease_data(n, session, &exp, &l.touch, l.comment_id);
+            add_lessons(&mut data, &app.ctx.dir, &l.touch);
             if !args.touch.is_empty() {
                 data["added"] = json!([]);
             }
@@ -191,9 +194,9 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         }
         return Err(e);
     }
-    Ok(Outcome::data(lease_data(
-        n, session, &expires, &touch_raw, comment.id,
-    )))
+    let mut data = lease_data(n, session, &expires, &touch_raw, comment.id);
+    add_lessons(&mut data, &app.ctx.dir, &touch_raw);
+    Ok(Outcome::data(data))
 }
 
 /// After a lost race: the task was ready before this claim, so put it back, but only while it is
@@ -230,6 +233,19 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
 fn lease_data(issue: u64, session: &str, expires: &str, touch: &[String], id: u64) -> Value {
     json!({"issue": issue, "comment_id": id,
         "lease": {"session": session, "expires": expires, "touch": touch}})
+}
+
+/// `data.lessons`: the repo's global lessons and those scoped to `touch`, as one line each. Advice
+/// only: a missing or unreadable `docs/lessons.toml` gives an empty list and never fails the claim.
+fn add_lessons(data: &mut Value, root: &Path, touch: &[String]) {
+    let lines: Vec<String> = match (lesson::load(root), glob::parse_all(touch)) {
+        (Ok(store), Ok(globs)) => lessons::relevant(&store, &globs)
+            .into_iter()
+            .map(lessons::line)
+            .collect(),
+        _ => Vec::new(),
+    };
+    data["lessons"] = json!(lines);
 }
 
 /// Refuse (exit 3, naming the holder) when `touch` overlaps a live lease of another issue.
@@ -351,5 +367,6 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
     }
     let mut data = lease_data(n, session, &expires, &touch, comment.id);
     data["added"] = json!(added);
+    add_lessons(&mut data, &app.ctx.dir, &touch);
     Ok(Outcome::data(data))
 }

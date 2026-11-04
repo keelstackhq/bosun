@@ -1,13 +1,15 @@
 //! `bosun hook session-start`: join the registry, warm the lease cache and tell the session
 //! where it stands (spec §4).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
 use super::cache;
 use super::session_rules::rules_context;
 use crate::app::{App, halt_reason, main_red};
+use crate::cli::lesson;
+use crate::core::lessons;
 use crate::registry::{self, JoinSpec};
 
 fn output(text: &str) -> String {
@@ -19,17 +21,43 @@ pub fn run(cwd: Option<&Path>) -> String {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
+    let lessons = lessons_block(dir.as_deref());
     match context(dir.as_deref()) {
-        Ok(text) => output(&format!("{text}\n{}", rules_context(dir.as_deref()))),
+        Ok(text) => output(&format!(
+            "{text}{lessons}\n{}",
+            rules_context(dir.as_deref())
+        )),
         Err(why) => {
             eprintln!("bosun: warning: session start: {why}");
             output(&format!(
                 "bosun could not reach GitHub ({why}), so this session is not registered and \
                  edit locks may be stale. Set GH_TOKEN (or GITHUB_TOKEN) and BOSUN_REPO=owner/name, \
-                 then run `bosun join`.\n{}",
+                 then run `bosun join`.{lessons}\n{}",
                 rules_context(dir.as_deref())
             ))
         }
+    }
+}
+
+/// The repo's global lessons (at most 8) as a block to append; empty when there are none or
+/// `docs/lessons.toml` is missing or unreadable. Read before any GitHub call.
+fn lessons_block(dir: Option<&Path>) -> String {
+    let root = dir.map(|d| {
+        crate::ctx::git_out(d, &["rev-parse", "--show-toplevel"])
+            .map_or_else(|| d.to_path_buf(), PathBuf::from)
+    });
+    let Some(store) = root.and_then(|d| lesson::load(&d).ok()) else {
+        return String::new();
+    };
+    let lines: Vec<String> = lessons::globals(&store)
+        .into_iter()
+        .take(lessons::MAX_GLOBAL)
+        .map(lessons::line)
+        .collect();
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("\nLessons:\n{}", lines.join("\n"))
     }
 }
 

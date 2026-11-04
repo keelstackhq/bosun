@@ -40,6 +40,9 @@ pub struct Task {
     pub risk: String,
     /// Test-integrity finding kinds the task may raise (`allow:`), from [`ALLOW_KINDS`].
     pub allow: Vec<String>,
+    /// The PR whose merge already did this task (`done-by: #N`): import makes the task merged
+    /// when that PR is merged.
+    pub done_by: Option<u64>,
     pub line: usize,
 }
 
@@ -366,8 +369,14 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                             bad!(errs, n; "allow only delete-test, skip, only, fewer-asserts" => "allow `{k}` is not a test-integrity kind");
                         }
                     }
+                    "done-by" => match v.strip_prefix('#').unwrap_or(v).parse::<u64>() {
+                        Ok(pr) if pr > 0 => t.done_by = Some(pr),
+                        _ => {
+                            bad!(errs, n; "write the PR number, e.g. `done-by: #123`" => "done-by `{v}` is not a PR number")
+                        }
+                    },
                     k => {
-                        bad!(errs, n; "use touch, depends, size, kind, risk or allow" => "unknown task key `{k}`")
+                        bad!(errs, n; "use touch, depends, size, kind, risk, allow or done-by" => "unknown task key `{k}`")
                     }
                 }
             }

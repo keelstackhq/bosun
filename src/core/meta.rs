@@ -73,6 +73,25 @@ pub fn linked_issues(body: &str) -> Vec<u64> {
     out
 }
 
+/// The issues a PR body closes with `Closes|Fixes|Resolves #N` (any case, also the past tenses),
+/// without repeats. Unlike [`linked_issues`], the bosun marker does not count: it is text the PR
+/// author controls.
+pub fn closing_issues(body: &str) -> Vec<u64> {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+#(\d+)")
+            .expect("static regex")
+    });
+    let mut out: Vec<u64> = Vec::new();
+    for c in RE.captures_iter(body) {
+        if let Some(n) = c.get(1).and_then(|m| m.as_str().parse().ok())
+            && !out.contains(&n)
+        {
+            out.push(n);
+        }
+    }
+    out
+}
+
 /// The area named by a `bosun:area/<a>` label.
 pub fn area_of<S: AsRef<str>>(labels: &[S]) -> Option<String> {
     labels

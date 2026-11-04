@@ -337,7 +337,11 @@ fn commit_in_a_feature_worktree_is_allowed_from_a_main_checkout() {
     denied(&bash("cd $WT && git commit -m x"));
 }
 
-fn start_text(fake: Option<&FakeGithub>, repo: &Path, env: &[(&str, &str)]) -> (String, String) {
+fn rules_start_text(
+    fake: Option<&FakeGithub>,
+    repo: &Path,
+    env: &[(&str, &str)],
+) -> (String, String) {
     let mut cmd = bosun();
     cmd.current_dir(repo)
         .env("BOSUN_SESSION", "session_me")
@@ -363,13 +367,13 @@ fn start_text(fake: Option<&FakeGithub>, repo: &Path, env: &[(&str, &str)]) -> (
 #[test]
 fn session_start_rules_follow_the_origin() {
     let (fake, tmp) = (FakeGithub::start(), repo());
-    let (local, _) = start_text(Some(&fake), tmp.path(), &[]);
+    let (local, _) = rules_start_text(Some(&fake), tmp.path(), &[]);
     assert!(
         local.contains("Session rules (orchestrator): Split work"),
         "{local}"
     );
     assert!(local.contains("Caveman style everywhere"), "{local}");
-    let (spawned, _) = start_text(
+    let (spawned, _) = rules_start_text(
         Some(&fake),
         tmp.path(),
         &[("CLAUDE_CODE_CHILD_SESSION", "1")],
@@ -378,9 +382,9 @@ fn session_start_rules_follow_the_origin() {
         spawned.contains("Session rules (worker): Use superpowers"),
         "{spawned}"
     );
-    let (bad, _) = start_text(Some(&fake), tmp.path(), &[("BOSUN_ORIGIN", "bogus")]);
+    let (bad, _) = rules_start_text(Some(&fake), tmp.path(), &[("BOSUN_ORIGIN", "bogus")]);
     assert!(bad.contains("Session rules (orchestrator)"), "{bad}");
-    let (bad_child, _) = start_text(
+    let (bad_child, _) = rules_start_text(
         Some(&fake),
         tmp.path(),
         &[
@@ -401,15 +405,77 @@ fn session_start_rules_come_from_the_file_and_survive_no_github() {
     )
     .unwrap();
     let env = [("BOSUN_ORIGIN", "spawned")];
-    let (text, _) = start_text(None, tmp.path(), &env);
+    let (text, _) = rules_start_text(None, tmp.path(), &env);
     assert!(text.contains("could not reach GitHub"), "{text}");
     assert!(
         text.contains("Session rules (worker): custom worker rule Caveman"),
         "{text}"
     );
     std::fs::write(tmp.path().join(".bosun/session-rules.toml"), "bogus = 1\n").unwrap();
-    let (text, err) = start_text(None, tmp.path(), &env);
+    let (text, err) = rules_start_text(None, tmp.path(), &env);
     assert!(text.contains("Use superpowers"), "{text}");
     assert!(text.contains(".bosun/session-rules.toml ignored"), "{text}");
     assert!(err.contains("session-rules.toml"), "{err}");
+}
+
+const LESSONS: &str = "[[lesson]]\nid = \"L1\"\nrule = \"keep it small\"\nevidence = [\"e\"]\n\n\
+    [[lesson]]\nid = \"L2\"\nrule = \"scoped rule\"\nscope = [\"src/**\"]\nevidence = [\"e\"]\n";
+
+fn start_text(fake: Option<&FakeGithub>, tmp: &Path) -> String {
+    let input = json!({"cwd": tmp.to_str().unwrap()});
+    let o = hook(fake, tmp, T0, "session-start", &input);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn session_start_prints_the_global_lessons_in_both_texts() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), LESSONS).unwrap();
+    for fake in [None, Some(&fake)] {
+        let text = start_text(fake, tmp.path());
+        assert!(text.contains("\nLessons:\nL1 * keep it small"), "{text}");
+        assert!(!text.contains("scoped rule"), "{text}");
+    }
+}
+
+#[test]
+fn session_start_without_usable_lessons_prints_no_block() {
+    let tmp = repo();
+    assert!(!start_text(None, tmp.path()).contains("Lessons:"));
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), "[[lesson\n").unwrap();
+    assert!(!start_text(None, tmp.path()).contains("Lessons:"));
+}
+
+#[test]
+fn session_start_prints_at_most_eight_lessons() {
+    let tmp = repo();
+    let many: String = (1..=10)
+        .map(|i| format!("[[lesson]]\nid = \"L{i}\"\nrule = \"rule {i}\"\nevidence = [\"e\"]\n\n"))
+        .collect();
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), many).unwrap();
+    let text = start_text(None, tmp.path());
+    let after = text.split("Lessons:\n").nth(1).expect("a block");
+    // The session rules follow the lessons block on their own line.
+    let lessons = after
+        .lines()
+        .take_while(|l| !l.starts_with("Session rules"));
+    assert_eq!(lessons.count(), 8, "{text}");
+}
+
+#[test]
+fn session_start_from_a_subdirectory_reads_the_repo_root_lessons() {
+    let tmp = repo();
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), LESSONS).unwrap();
+    let sub = tmp.path().join("src/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+    let text = start_text(None, &sub);
+    assert!(text.contains("\nLessons:\nL1 * keep it small"), "{text}");
 }

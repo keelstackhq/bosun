@@ -1,0 +1,1 @@
+- `.claude-plugin/marketplace.json`: the `keelstack` plugin marketplace, superpowers and caveman pinned to commits (Claude Code verifies the sha on install).
