@@ -19,8 +19,9 @@ rule. R5 settles it.
 **Q2. Mechanism: two layers, with no paste and no PAT.**
 1. *Tools.* hull keeps its plugin block. For repos that hull did not create, the channel core
    adds the same block. If hull already wrote one, splice leaves it alone, so `.claude/settings.json`
-   has a single writer. The block is pinned: the marketplace commit plus each plugin's source
-   commit. Plugins run their own hooks in every session, so `.claude/**` stays owner class. The
+   has a single writer. The plugins come from a bosun-hosted, sha-pinned marketplace `keelstack`
+   (`.claude-plugin/marketplace.json`; each plugin's source commit is pinned there). Settings and
+   the setup script pin that marketplace to a bosun commit; drift fails `bosun doctor` and the setup script. Plugins run their own hooks in every session, so `.claude/**` stays owner class. The
    setup script prewarms the same pins with `claude plugin install --scope user`, using its own
    copy of the pins, because no checkout exists yet. On failure it warns and does not fail.
    One install fits every repo in the environment. `bosun doctor` (R4) catches drift between
@@ -43,8 +44,9 @@ user, replaces part of the system prompt); a new piece (the core piece ships the
 
 **Settled (owner, 2026-11-04).** Caveman applies everywhere, the orchestrator's chat with the owner
 included. Long context: the agent picks /compact or a fresh start and tells the owner which; hull's
-"start fresh rather than compacting" changes to match. Plugin sources float in their marketplaces,
-so settings pin each marketplace `ref`; the setup script pins plugin commits and `bosun doctor` flags drift.
+"start fresh rather than compacting" changes to match. Plugin sources come from the bosun-hosted
+`keelstack` marketplace, which pins each plugin commit; settings and the setup script pin the marketplace
+to a bosun commit, and drift fails `bosun doctor` and the setup script.
 
 ## Tasks
 
