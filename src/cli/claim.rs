@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::ClaimArgs;
 use crate::app::{
-    App, active_issues, kill_switch, limits_from_default, main_red, notes, set_state, settle_race,
-    task_meta,
+    App, active_issues, kill_switch, limits_from_default, main_red, notes, renew_lease, set_state,
+    settle_race, task_meta,
 };
 use crate::cli::status::process_red;
 use crate::core::budget::{BUDGET_STOP, no_new_work};
@@ -62,10 +62,14 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     let state = state_of(&issue.labels);
     if state != Some(State::Ready) {
         let cur = notes(gh, n)?;
+        // The caller's own lease, live or lapsed (not yet reaped): a long wait can outlive it.
         let mine = leases_of(n, &cur)
             .into_iter()
-            .find(|l| &l.session == session && l.is_live(now));
-        if let Some(l) = mine.filter(|_| state.is_some_and(State::is_active)) {
+            .find(|l| &l.session == session);
+        if let Some(mut l) = mine.filter(|_| state.is_some_and(State::is_active)) {
+            if !l.is_live(now) {
+                l = renew_lapsed(gh, &l, &cur, n, session, now)?;
+            }
             let mut added: Vec<String> = Vec::new();
             for g in &args.touch {
                 if !l.touch.contains(g) && !added.contains(g) {
@@ -194,6 +198,27 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     Ok(Outcome::data(lease_data(
         n, session, &expires, &touch_raw, comment.id,
     )))
+}
+
+/// Bring the caller's own lapsed lease back: the same overlap check as a new claim on its full
+/// touch (another session may hold those paths now), then the record is renewed in place.
+fn renew_lapsed(
+    gh: &dyn Github,
+    l: &Lease,
+    cur: &[Note],
+    n: u64,
+    session: &str,
+    now: Timestamp,
+) -> Result<Lease, BosunError> {
+    let globs = glob::parse_all(&l.touch)
+        .map_err(|m| BosunError::usage(m, "release the task and claim it again"))?;
+    check_overlap(&active_issues(gh)?, &globs, session, n, now)?;
+    let expires = now.plus_secs(TTL_SECS);
+    renew_lease(gh, l, cur, expires)?;
+    Ok(Lease {
+        expires,
+        ..l.clone()
+    })
 }
 
 /// After a lost race: the task was ready before this claim, so put it back, but only while it is
