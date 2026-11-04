@@ -1,0 +1,1 @@
+- 2026-11-04 · FU3 · `bosun result`/`reap` reconcile epic tasks from their PR merge state (record, marker) · PR (fix-result-reconcile)
