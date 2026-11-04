@@ -8,7 +8,7 @@ use crate::cli::risk_check::owner_logins;
 use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
 use crate::core::lease::{Lease, leases_of, race_winner};
-use crate::core::meta::{TaskMeta, parse_task_meta};
+use crate::core::meta::{TaskMeta, closing_issues, parse_task_meta};
 use crate::core::records::{Note, Record, parse_record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
@@ -307,11 +307,19 @@ pub fn merge_counts(issue: &Issue) -> bool {
     state_of(&issue.labels) == Some(State::Queued) || issue.state == "closed"
 }
 
-/// Whether the PR a task names as its own merged into `base`: the newest `task-pr` record, else
-/// (with `scan`) a PR carrying the task's `<!-- bosun:task-pr N -->` marker, found in `pulls`
-/// (listed once, on first use). An open PR means not merged. The record and the marker are bosun's
-/// own link, so this holds whatever the issue state. Without a record and without `scan`, no PR
-/// list is read.
+/// Whether `user` has write or admin permission on the repo.
+pub fn is_writer(gh: &dyn Github, user: &str) -> Result<bool> {
+    Ok(matches!(
+        gh.permission(user)?.unwrap_or_default().as_str(),
+        "admin" | "write"
+    ))
+}
+
+/// Whether the PR a task names as its own merged into `base`. The PR must close the task
+/// (`Closes #N` in its body), whoever names it: the newest `task-pr` record of a trusted writer
+/// (`trusted_notes`), else (with `scan`) a PR found in `pulls` (listed once, on first use) that
+/// closes the task and was opened by a writer. An open such PR means not merged. Without a
+/// usable record and without `scan`, no PR list is read.
 pub fn task_pr_merged(
     gh: &dyn Github,
     base: &str,
@@ -319,15 +327,17 @@ pub fn task_pr_merged(
     pulls: &mut Option<Vec<Pull>>,
     scan: bool,
 ) -> Result<bool> {
-    let recorded = notes(gh, number)?
-        .iter()
-        .rev()
-        .find_map(|n| match parse_record(&n.body) {
-            Some(Record::TaskPr { pr, .. }) => Some(pr),
-            _ => None,
-        });
+    let recorded =
+        trusted_notes(gh, number)?
+            .iter()
+            .rev()
+            .find_map(|n| match parse_record(&n.body) {
+                Some(Record::TaskPr { pr, .. }) => Some(pr),
+                _ => None,
+            });
     if let Some(pr) = recorded
         && let Some(p) = gh.get_pull(pr)?
+        && closing_issues(&p.body).contains(&number)
     {
         match (p.state.as_str(), p.merged && p.base_ref == base) {
             ("open", _) => return Ok(false),
@@ -338,12 +348,19 @@ pub fn task_pr_merged(
     if !scan {
         return Ok(false);
     }
-    let marker = format!("<!-- bosun:task-pr {number} -->");
     let all = match pulls {
         Some(p) => p,
         None => pulls.insert(gh.list_pulls(None, IssueState::All)?),
     };
-    let ours: Vec<&Pull> = all.iter().filter(|p| p.body.contains(&marker)).collect();
+    let mut ours: Vec<&Pull> = Vec::new();
+    for p in all
+        .iter()
+        .filter(|p| closing_issues(&p.body).contains(&number))
+    {
+        if is_writer(gh, &p.user)? {
+            ours.push(p);
+        }
+    }
     if ours.iter().any(|p| p.state == "open") {
         return Ok(false);
     }
