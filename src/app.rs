@@ -12,7 +12,7 @@ use crate::core::meta::{TaskMeta, parse_task_meta};
 use crate::core::records::{Note, Record, parse_record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
-use crate::github::{Github, Issue, IssueState, LiveGithub, Variable};
+use crate::github::{Github, Issue, IssueState, LiveGithub, Pull, Variable};
 use crate::output::BosunError;
 use crate::time::{Timestamp, parse_rfc3339};
 use serde_json::json;
@@ -305,6 +305,55 @@ pub fn renew_lease(
 /// PR merges into the default branch; an open issue means the work is not done).
 pub fn merge_counts(issue: &Issue) -> bool {
     state_of(&issue.labels) == Some(State::Queued) || issue.state == "closed"
+}
+
+/// Whether the PR a task names as its own merged into `base`: the newest `task-pr` record, else
+/// (with `scan`) a PR carrying the task's `<!-- bosun:task-pr N -->` marker, found in `pulls`
+/// (listed once, on first use). An open PR means not merged. The record and the marker are bosun's
+/// own link, so this holds whatever the issue state. Without a record and without `scan`, no PR
+/// list is read.
+pub fn task_pr_merged(
+    gh: &dyn Github,
+    base: &str,
+    number: u64,
+    pulls: &mut Option<Vec<Pull>>,
+    scan: bool,
+) -> Result<bool> {
+    let recorded = notes(gh, number)?
+        .iter()
+        .rev()
+        .find_map(|n| match parse_record(&n.body) {
+            Some(Record::TaskPr { pr, .. }) => Some(pr),
+            _ => None,
+        });
+    if let Some(pr) = recorded
+        && let Some(p) = gh.get_pull(pr)?
+    {
+        match (p.state.as_str(), p.merged && p.base_ref == base) {
+            ("open", _) => return Ok(false),
+            (_, true) => return Ok(true),
+            _ => {}
+        }
+    }
+    if !scan {
+        return Ok(false);
+    }
+    let marker = format!("<!-- bosun:task-pr {number} -->");
+    let all = match pulls {
+        Some(p) => p,
+        None => pulls.insert(gh.list_pulls(None, IssueState::All)?),
+    };
+    let ours: Vec<&Pull> = all.iter().filter(|p| p.body.contains(&marker)).collect();
+    if ours.iter().any(|p| p.state == "open") {
+        return Ok(false);
+    }
+    for p in ours.iter().filter(|p| p.base_ref == base) {
+        // Lists do not say `merged`; read the closed PR.
+        if gh.get_pull(p.number)?.is_some_and(|f| f.merged) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The PR of `number` merged (auto-merge, or a human): move a `building`, `review`, `fixing` or
