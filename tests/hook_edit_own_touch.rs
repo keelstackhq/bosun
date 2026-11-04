@@ -188,3 +188,41 @@ fn a_root_file_named_dot_dot_x_is_inside_the_repo() {
     // A real parent directory is outside the repo: not claimable, allowed.
     assert_eq!(edit(&fake, tmp.path(), "../x"), None);
 }
+
+/// The hook for a Bash command as `session_me`; `true` when it denies.
+fn bash_denied(fake: &FakeGithub, repo: &Path, command: &str) -> bool {
+    let input = json!({"session_id": "s", "tool_name": "Bash", "cwd": repo.to_str().unwrap(),
+        "tool_input": {"command": command}});
+    let out = bosun()
+        .current_dir(repo)
+        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["hook", "pre-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    String::from_utf8_lossy(&out.stdout).contains("\"deny\"")
+}
+
+#[test]
+fn a_spawned_child_with_a_lease_may_write_the_task_marker_and_no_other() {
+    let task = r#"gh issue create --title t --body '<!-- bosun:task {"item":"M1"} -->'"#;
+    let epic = "gh issue create --title t --body '<!-- bosun:epic 3 -->'";
+    // A spawned child (origin `spawned` on its live lease).
+    let (fake, tmp) = setup("session_me", "src/core/**");
+    fake.comment(
+        5,
+        &format!(
+            "Claimed.\n\n{{\"bosun\":\"lease\",\"session\":\"session_me\",\"origin\":\"spawned\",\"expires\":\"{LIVE}\",\"touch\":[\"src/core/**\"]}}"
+        ),
+    );
+    assert!(!bash_denied(&fake, tmp.path(), task));
+    assert!(bash_denied(&fake, tmp.path(), epic));
+    // A local session with a lease, or the same child with no live lease: refused.
+    let (fake, tmp) = setup("session_me", "src/core/**");
+    assert!(bash_denied(&fake, tmp.path(), task));
+    let (fake, tmp) = setup("session_other", "src/core/**");
+    assert!(bash_denied(&fake, tmp.path(), task));
+}

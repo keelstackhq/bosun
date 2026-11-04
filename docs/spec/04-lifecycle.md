@@ -131,6 +131,7 @@ ready. After an amendment merges, `bosun plan amend` imports the new work and cl
 `kind/plan` issue (state ready, `bosun:source/<source>`, `bosun:area/<area>` of `--item`) that asks for the
 amendment of the plan file (default `plans/<project>.md`; a missing file or unknown item is exit 2). An open
 issue of the same source with the same title is returned instead (`created: false`).
+Who may run it: any session, orchestrator or child (it checks only the kill switch and writes one issue, and nothing it opens becomes ready before its plan PR merges), so a child that finds work outside its epic runs `bosun intake` itself and names the issue in its `bosun result`; it does not write the issue by hand. The markers lock of the edit hook (`bosun:prereq|prereqs|epic|task` in an issue body or comment, §4 layer 3) refuses agents the checklist and epic markers always; it lets a registered child, a session whose live lease has origin `spawned` (written by `spawn --record`), write the `task` marker through `gh`, `hub`, `curl` or the GitHub MCP tools. This is a convenience for hand-made task issues, not trust: bosun reads task metadata from the issue as any other metadata, and the claim, risk and approval checks apply to the work.
 `bosun intake check` works on the intake file instead (spec §3, layout); the text form is unchanged.
 The intake file `.bosun/intake.toml` and `bosun init --intake` start a repo (spec §3 and §11).
 `bosun plan pr <plan> "<why>" --source slack|lesson|flake|human [--item ID] [--title T] [--auto-merge]` opens the PR of a

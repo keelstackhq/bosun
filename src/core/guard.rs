@@ -198,8 +198,14 @@ const ISSUE_TEXT_TOOLS: [&str; 4] = [
     "update_issue_comment",
 ];
 
-fn has_marker(text: &str) -> bool {
-    MARKER.is_match(text)
+/// The same without `task`: what a registered child session may not write either.
+static MARKER_NOT_TASK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!--\s*bosun:(?:prereqs?|epic)(?:[\s{]|-->|$)").expect("marker regex")
+});
+
+/// `task_ok`: the `task` marker does not count (a registered child may write it).
+fn has_marker(text: &str, task_ok: bool) -> bool {
+    if task_ok { &MARKER_NOT_TASK } else { &MARKER }.is_match(text)
 }
 
 /// Does one simple command (words, quotes removed) write an issue body or comment through
@@ -263,12 +269,14 @@ fn writes_issue_text(words: &[String]) -> bool {
 
 /// Does `command`, or a command nested in it (`bash -c`, `eval`, `$( )`, groups), write issue
 /// text that carries a marker?
-fn writes_marker(command: &str, depth: usize) -> bool {
+fn writes_marker(command: &str, depth: usize, task_ok: bool) -> bool {
     depth <= MAX_DEPTH
         && (shell_words(command)
             .split(|w| w == SEP)
-            .any(|seg| writes_issue_text(seg) && has_marker(&seg.join(" ")))
-            || nested(command).iter().any(|n| writes_marker(n, depth + 1)))
+            .any(|seg| writes_issue_text(seg) && has_marker(&seg.join(" "), task_ok))
+            || nested(command)
+                .iter()
+                .any(|n| writes_marker(n, depth + 1, task_ok)))
 }
 
 /// Markers-lock (design F4): refuses a write of an issue body or comment that carries a bosun
@@ -285,17 +293,25 @@ fn writes_marker(command: &str, depth: usize) -> bool {
 /// httpie and python urllib. The real guarantees are elsewhere: bosun re-reads the checklist and
 /// trusts only its own writes.
 pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
+    prereqs_lock_for(tool, input, false)
+}
+
+/// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
+/// session, spec §4): the checklist and epic markers stay refused.
+pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<String> {
     let hit = match tool.strip_prefix("mcp__github__") {
         Some(name) => {
             ISSUE_TEXT_TOOLS.contains(&name)
                 && ["body", "comment"]
                     .iter()
                     .filter_map(|k| input.get(k).and_then(Value::as_str))
-                    .any(has_marker)
+                    .any(|t| has_marker(t, task_ok))
         }
         None if tool == "Bash" => {
             let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-            has_marker(command) && !read_only(command, 0) && writes_marker(command, 0)
+            has_marker(command, task_ok)
+                && !read_only(command, 0)
+                && writes_marker(command, 0, task_ok)
         }
         None => false,
     };
@@ -2402,6 +2418,33 @@ mod tests {
             &|_| Some(branch.into()),
             "main",
         )
+    }
+
+    #[test]
+    fn a_registered_child_may_write_the_task_marker_only() {
+        let ok = |tool: &str, input: Value| prereqs_lock_for(tool, &input, true).is_none();
+        let task = "<!-- bosun:task {\"n\":1} -->";
+        assert!(ok("mcp__github__issue_write", json!({ "body": task })));
+        assert!(ok(
+            "Bash",
+            json!({ "command": format!("gh issue create --body '{task}'") })
+        ));
+        // Epic, checklist and mixed text stay refused, and so does everyone else.
+        for body in [
+            "<!-- bosun:epic 3 -->",
+            "<!-- bosun:prereq H1 -->",
+            "<!-- bosun:prereqs -->",
+            "<!-- bosun:task {} --> <!-- bosun:epic 3 -->",
+        ] {
+            assert!(!ok("mcp__github__issue_write", json!({ "body": body })));
+            assert!(!ok(
+                "Bash",
+                json!({ "command": format!("gh issue edit 5 --body '{body}'") })
+            ));
+        }
+        assert!(
+            prereqs_lock_for("mcp__github__issue_write", &json!({ "body": task }), false).is_some()
+        );
     }
 
     #[test]

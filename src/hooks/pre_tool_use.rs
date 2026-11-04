@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 
 use super::{cache, git_out};
 use crate::app::App;
-use crate::core::guard::{edit_lock, edited_path, foreign_lock, prereqs_lock, tool_rules};
+use crate::core::guard::{
+    edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for, tool_rules,
+};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -65,7 +67,12 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         return Some(deny(&why));
     }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
-        return Some(deny(&why));
+        // A registered child session may write the task marker (and only that).
+        let child_ok =
+            prereqs_lock_for(tool, &tool_input, true).is_none() && registered_child(&dir);
+        if !child_ok {
+            return Some(deny(&why));
+        }
     }
     let path = edited_path(tool, &tool_input)?;
     match edit_reason(&dir, &path) {
@@ -75,6 +82,20 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             None
         }
     }
+}
+
+/// Whether this session is a registered child: it holds a live lease whose origin is `spawned`
+/// (`bosun spawn --record` writes it). Any doubt (no repo, no GitHub) is no.
+fn registered_child(dir: &Path) -> bool {
+    let Ok(app) = App::load(Some(dir)) else {
+        return false;
+    };
+    let file = cache::path(dir);
+    cache::leases(&app, file.as_deref()).is_ok_and(|leases| {
+        leases.iter().any(|l| {
+            l.session == app.ctx.session && l.origin == "spawned" && l.is_live(app.ctx.now)
+        })
+    })
 }
 
 fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
