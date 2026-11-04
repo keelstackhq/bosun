@@ -64,21 +64,22 @@ fn matching_pins_without_an_install_are_ok_with_a_note() {
 }
 
 #[test]
-fn a_disabled_plugin_and_a_moved_ref_are_missing_with_a_fix() {
-    let (r, home) = (repo("deadbeef", false), tempfile::tempdir().unwrap());
+fn a_moved_marketplace_ref_is_missing_with_a_fix() {
+    let (r, home) = (repo("deadbeef", true), tempfile::tempdir().unwrap());
     let it = step13(r.path(), home.path());
     assert_eq!(it["status"], "missing", "{it}");
-    let d = it["detail"].as_str().unwrap();
     assert!(
-        d.contains("caveman@akramsystems-plugins") && d.contains("SUPERPOWERS_MARKETPLACE_SHA"),
-        "{d}"
+        it["detail"]
+            .as_str()
+            .unwrap()
+            .contains("SUPERPOWERS_MARKETPLACE_SHA")
     );
     assert!(!it["fix"].as_str().unwrap().is_empty());
 }
 
 #[test]
-fn an_installed_plugin_off_its_pin_is_missing() {
-    let (r, home) = (repo(M1, true), tempfile::tempdir().unwrap());
+fn a_disabled_plugin_and_an_installed_plugin_off_its_pin_are_notes() {
+    let (r, home) = (repo(M1, false), tempfile::tempdir().unwrap());
     write(
         home.path(),
         ".claude/plugins/installed_plugins.json",
@@ -87,6 +88,17 @@ fn an_installed_plugin_off_its_pin_is_missing() {
         ),
     );
     let it = step13(r.path(), home.path());
-    assert_eq!(it["status"], "missing", "{it}");
-    assert!(it["detail"].as_str().unwrap().contains("SUPERPOWERS_SHA"));
+    assert_eq!(it["status"], "ok", "{it}");
+    let d = it["detail"].as_str().unwrap();
+    assert!(
+        d.contains("SUPERPOWERS_SHA") && d.contains("caveman@akramsystems-plugins"),
+        "{d}"
+    );
+}
+
+#[test]
+fn a_repo_without_a_plugin_block_is_ok() {
+    let (tmp, home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let it = step13(tmp.path(), home.path());
+    assert_eq!(it["status"], "ok", "{it}");
 }

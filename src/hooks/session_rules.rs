@@ -12,7 +12,14 @@ pub fn rules_context(dir: Option<&Path>) -> String {
         std::env::var("BOSUN_ORIGIN").ok().as_deref(),
         std::env::var("CLAUDE_CODE_CHILD_SESSION").ok().as_deref(),
     )
-    .unwrap_or(Origin::Local);
+    .unwrap_or_else(|_| {
+        // An invalid BOSUN_ORIGIN falls back to the child-session marker alone.
+        Origin::resolve(
+            None,
+            std::env::var("CLAUDE_CODE_CHILD_SESSION").ok().as_deref(),
+        )
+        .unwrap_or(Origin::Local)
+    });
     let role = session_rules::role(origin.as_str());
     let dir = dir
         .map(Path::to_path_buf)

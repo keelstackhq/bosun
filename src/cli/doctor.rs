@@ -610,8 +610,10 @@ fn script_pin(script: &str, name: &str) -> Option<String> {
 }
 
 /// Compare the plugin settings with the setup script's pins and the installed plugins.
-/// Pure: returns (problems, notes). `settings` is `.claude/settings.json`, `script` the setup
-/// script text, `installed` `~/.claude/plugins/installed_plugins.json` (None = not installed here).
+/// Pure: returns (problems, notes). Only a marketplace `ref` that differs from its pin is a
+/// problem; a missing plugin block, a block without `ref` (hull repos), a disabled plugin and an
+/// installed commit off its pin are notes. `settings` is `.claude/settings.json`, `script` the
+/// setup script text, `installed` `~/.claude/plugins/installed_plugins.json` (None = absent).
 fn plugin_findings(
     settings: Option<&Value>,
     script: Option<&str>,
@@ -619,22 +621,21 @@ fn plugin_findings(
 ) -> (Vec<String>, Vec<String>) {
     let (mut problems, mut notes) = (Vec::new(), Vec::new());
     let Some(settings) = settings else {
-        problems.push(".claude/settings.json is missing or not JSON".to_string());
+        notes.push(".claude/settings.json is missing or not JSON".to_string());
         return (problems, notes);
     };
     for (id, market, mpin, ppin) in PLUGINS {
         if settings["enabledPlugins"][id] != true {
-            problems.push(format!("enabledPlugins lacks \"{id}\": true"));
+            notes.push(format!("{id} is not enabled in .claude/settings.json"));
         }
         let pin_of = |name: &str| script.and_then(|s| script_pin(s, name));
-        if let Some(pin) = pin_of(mpin) {
-            let r = settings["extraKnownMarketplaces"][market]["source"]["ref"].as_str();
-            if r != Some(pin.as_str()) {
-                problems.push(format!(
-                    "marketplace {market} ref is {} but {mpin} is {pin}",
-                    r.unwrap_or("unset")
-                ));
-            }
+        if let Some(pin) = pin_of(mpin)
+            && let Some(r) = settings["extraKnownMarketplaces"][market]["source"]["ref"].as_str()
+            && r != pin
+        {
+            problems.push(format!(
+                "marketplace {market} ref is {r} but {mpin} is {pin}"
+            ));
         }
         if let (Some(pin), Some(inst)) = (pin_of(ppin), installed) {
             let entry = &inst["plugins"][id];
@@ -642,7 +643,7 @@ fn plugin_findings(
                 .as_str()
                 .or_else(|| entry["gitCommitSha"].as_str());
             if let Some(sha) = sha.filter(|s| *s != pin) {
-                problems.push(format!("installed {id} is at {sha} but {ppin} is {pin}"));
+                notes.push(format!("installed {id} is at {sha} but {ppin} is {pin}"));
             }
         }
     }
@@ -664,8 +665,7 @@ fn plugins_item(root: &Path, script: Option<&str>) -> Value {
         })
         .and_then(|t| serde_json::from_str::<Value>(&t).ok());
     let (problems, notes) = plugin_findings(settings.as_ref(), script, installed.as_ref());
-    let mut ok =
-        "superpowers and caveman are enabled and match the setup script's pins".to_string();
+    let mut ok = "no plugin marketplace ref differs from the setup script's pins".to_string();
     if !notes.is_empty() {
         ok = format!("{ok} ({})", notes.join("; "));
     }
@@ -674,7 +674,7 @@ fn plugins_item(root: &Path, script: Option<&str>) -> Value {
         "plugins",
         (!problems.is_empty()).then(|| problems.join("; ")),
         ok,
-        "in .claude/settings.json enable superpowers@superpowers-marketplace and caveman@akramsystems-plugins and set each marketplace source `ref` to SUPERPOWERS_MARKETPLACE_SHA / CAVEMAN_SHA of docs/setup-script.sh; for an installed plugin at another commit run `claude plugin update <plugin>` or move the pin in a PR",
+        "in .claude/settings.json enable superpowers@superpowers-marketplace and caveman@akramsystems-plugins and set each marketplace source `ref` to SUPERPOWERS_MARKETPLACE_SHA / CAVEMAN_SHA of docs/setup-script.sh; set the ref to the pin or move the pin in a PR (an installed plugin at another commit is only a note: run `claude plugin update <plugin>`)",
     )
 }
 
@@ -1049,10 +1049,10 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_plugin_is_a_problem() {
-        let (p, _) = plugin_findings(Some(&settings(M1, C, false)), Some(&script()), None);
-        assert_eq!(p.len(), 1);
-        assert!(p[0].contains("caveman@akramsystems-plugins"), "{p:?}");
+    fn a_disabled_plugin_is_a_note() {
+        let (p, n) = plugin_findings(Some(&settings(M1, C, false)), Some(&script()), None);
+        assert!(p.is_empty(), "{p:?}");
+        assert!(n[0].contains("caveman@akramsystems-plugins"), "{n:?}");
     }
 
     #[test]
@@ -1063,19 +1063,21 @@ mod tests {
     }
 
     #[test]
-    fn an_installed_commit_off_its_pin_is_a_problem() {
-        let (p, _) = plugin_findings(
+    fn an_installed_commit_off_its_pin_is_a_note() {
+        let (p, n) = plugin_findings(
             Some(&settings(M1, C, true)),
             Some(&script()),
             Some(&installed("abc", C)),
         );
-        assert_eq!(p.len(), 1);
-        assert!(p[0].contains("SUPERPOWERS_SHA"), "{p:?}");
+        assert!(p.is_empty(), "{p:?}");
+        assert!(n[0].contains("SUPERPOWERS_SHA"), "{n:?}");
     }
 
     #[test]
-    fn missing_settings_is_a_problem() {
-        let (p, _) = plugin_findings(None, Some(&script()), None);
-        assert_eq!(p.len(), 1);
+    fn missing_settings_or_a_block_without_ref_is_a_note() {
+        let (p, n) = plugin_findings(None, Some(&script()), None);
+        assert!(p.is_empty() && n.len() == 1, "{p:?} {n:?}");
+        let (p, n) = plugin_findings(Some(&json!({})), Some(&script()), None);
+        assert!(p.is_empty() && !n.is_empty(), "{p:?} {n:?}");
     }
 }

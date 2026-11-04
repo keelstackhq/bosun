@@ -92,5 +92,5 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     if let Some(why) = reduced {
         data["integrity_reason"] = json!(why);
     }
-    with_archive_children(gh, &ctx.session, Outcome::data(data))
+    with_archive_children(gh, &ctx.session, &[], Outcome::data(data))
 }

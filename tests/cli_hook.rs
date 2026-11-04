@@ -380,6 +380,15 @@ fn session_start_rules_follow_the_origin() {
     );
     let (bad, _) = start_text(Some(&fake), tmp.path(), &[("BOSUN_ORIGIN", "bogus")]);
     assert!(bad.contains("Session rules (orchestrator)"), "{bad}");
+    let (bad_child, _) = start_text(
+        Some(&fake),
+        tmp.path(),
+        &[
+            ("BOSUN_ORIGIN", "bogus"),
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ],
+    );
+    assert!(bad_child.contains("Session rules (worker)"), "{bad_child}");
 }
 
 #[test]

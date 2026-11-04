@@ -53,19 +53,20 @@ fn an_empty_repo_reports_all_thirteen_steps() {
         assert!(!it["fix"].as_str().unwrap().is_empty());
     }
     // Step 1 (the fake repo is readable) is ok; Slack (7) and release (10) are not configured,
-    // so they are skipped, not missing (F11).
+    // so they are skipped, not missing (F11). Step 13 (plugins) is ok without a plugin block.
     let st = statuses(&v);
     assert_eq!(st[0], "ok");
     assert_eq!((st[6].as_str(), st[9].as_str()), ("skipped", "skipped"));
+    assert_eq!(st[12], "ok");
     assert!(
         st.iter()
             .enumerate()
             .skip(1)
-            .filter(|(i, _)| *i != 6 && *i != 9)
+            .filter(|(i, _)| ![6, 9, 12].contains(i))
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
-    assert_eq!(v["error"]["message"], "10 checklist steps missing");
+    assert_eq!(v["error"]["message"], "9 checklist steps missing");
     // Without [slack], the janitor skips notify and there is no notify Routine (F17).
     assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2);
     assert_eq!(v["data"]["notify"]["skipped"], true, "{v}");
@@ -163,11 +164,6 @@ fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
     write(d, ".bosun/version", "unreleased\n");
     write(d, ".bosun/bosun.toml", "[slack]\nchannel = \"#bosun\"\n");
     write(d, "plans/bosun.md", "# plan\n");
-    write(
-        d,
-        ".claude/settings.json",
-        "{\"enabledPlugins\":{\"superpowers@superpowers-marketplace\":true,\"caveman@akramsystems-plugins\":true}}",
-    );
     (tmp, fake)
 }
 

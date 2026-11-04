@@ -217,29 +217,55 @@ pub fn task_meta(issue: &Issue) -> Option<TaskMeta> {
 pub fn with_archive_children(
     gh: &dyn Github,
     me: &str,
+    extra_issues: &[u64],
     mut out: crate::output::Outcome,
 ) -> Result<crate::output::Outcome> {
+    // A failure here must not fail the command: report it and add no entries.
+    match archive_children(gh, me, extra_issues) {
+        Ok(children) => {
+            for c in children {
+                out = out.with_next("archive_session", json!({"session_id": c}));
+            }
+        }
+        Err(e) => {
+            eprintln!("bosun: archive check failed: {e}");
+            out.data["archive_error"] = json!(e.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// Children of the orchestrator `me` that reported a trusted `result` on an open issue or on one
+/// of `extra_issues` (epics closed in this run).
+fn archive_children(gh: &dyn Github, me: &str, extra_issues: &[u64]) -> Result<Vec<String>> {
     let Some((_, reg)) = crate::registry::load(gh)? else {
-        return Ok(out);
+        return Ok(Vec::new());
     };
     let mut children =
         crate::core::handoff::children_of(&reg, crate::core::lease::orchestrator_of(me));
     if children.is_empty() {
-        return Ok(out);
+        return Ok(children);
+    }
+    let mut numbers: Vec<u64> = gh
+        .list_issues(&[], IssueState::Open)?
+        .iter()
+        .map(|i| i.number)
+        .collect();
+    for n in extra_issues {
+        if !numbers.contains(n) {
+            numbers.push(*n);
+        }
     }
     let mut done: Vec<String> = Vec::new();
-    for issue in gh.list_issues(&[], IssueState::Open)? {
-        for n in notes(gh, issue.number)? {
+    for number in numbers {
+        for n in trusted_notes(gh, number)? {
             if let Some(Record::Result { session, .. }) = parse_record(&n.body) {
                 done.push(session);
             }
         }
     }
     children.retain(|c| done.contains(c));
-    for c in children {
-        out = out.with_next("archive_session", json!({"session_id": c}));
-    }
-    Ok(out)
+    Ok(children)
 }
 
 /// Open issues in a state that holds a lease, with their comments, by issue number.
