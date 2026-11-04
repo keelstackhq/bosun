@@ -554,11 +554,16 @@ fn an_unreadable_branch_check_does_not_block_the_pr() {
     );
 }
 
-#[test]
-fn auto_merge_names_the_gates_it_relies_on() {
-    let fake = FakeGithub::start();
-    green_pr(&fake);
-    fake.status("sha20", "review-verdict", "pending", "");
+const BOT: &str = "github-actions[bot]";
+
+/// A task in review with its PR and no statuses at all.
+fn bare_pr(fake: &FakeGithub) {
+    task(fake, "bosun:state/review");
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+}
+
+/// `pr 7 --auto-merge`: the parsed output and stderr.
+fn auto_merge_out(fake: &FakeGithub) -> (Value, String) {
     let dir = repo("claude/t7");
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
@@ -567,7 +572,19 @@ fn auto_merge_names_the_gates_it_relies_on() {
         .args(["pr", "7", "--auto-merge"])
         .output()
         .unwrap();
-    let v = one_object(&out.stdout);
+    (
+        one_object(&out.stdout),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn auto_merge_names_the_gates_it_relies_on() {
+    let fake = FakeGithub::start();
+    bare_pr(&fake);
+    fake.status_by("sha20", "risk-check", "success", "", BOT);
+    fake.status_by("sha20", "review-verdict", "pending", "", BOT);
+    let (v, err) = auto_merge_out(&fake);
     assert_eq!(
         v["data"]["gates"],
         serde_json::json!([
@@ -575,11 +592,46 @@ fn auto_merge_names_the_gates_it_relies_on() {
             {"context": "review-verdict", "state": "pending"},
         ])
     );
-    let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains("risk-check=success, review-verdict=pending"),
+        err.contains("risk-check=success, review-verdict=pending")
+            && err.contains("the branch requires them, so it merges only when both are success"),
         "{err}"
     );
+}
+
+#[test]
+fn gates_ignore_check_runs_and_statuses_from_others() {
+    let fake = FakeGithub::start();
+    bare_pr(&fake);
+    fake.status_by("sha20", "risk-check", "success", "", "someone");
+    fake.check_run("sha20", "review-verdict", "completed", Some("success"));
+    let (v, _) = auto_merge_out(&fake);
+    assert_eq!(
+        v["data"]["gates"],
+        serde_json::json!([
+            {"context": "risk-check", "state": "missing"},
+            {"context": "review-verdict", "state": "missing"},
+        ])
+    );
+}
+
+#[test]
+fn the_gates_line_follows_the_enforcement_check() {
+    // Not enforced (exit 5): nothing is said about relying on the gates.
+    let fake = FakeGithub::start();
+    bare_pr(&fake);
+    fake.enforce_checks(&["ci-ok"]);
+    let (v, err) = auto_merge_out(&fake);
+    assert_eq!(v["exit_code"], 5, "{v}");
+    assert!(!err.contains("relies on the gates"), "{err}");
+    // Unreadable (403): said, but not as verified.
+    let fake = FakeGithub::start();
+    bare_pr(&fake);
+    fake.fail_path("/rules/branches/main", 403);
+    fake.fail_path("/branches/main/protection", 403);
+    let (_, err) = auto_merge_out(&fake);
+    assert!(err.contains("could not verify"), "{err}");
+    assert!(!err.contains("merges only when both"), "{err}");
 }
 
 #[test]

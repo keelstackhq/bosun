@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::PrArgs;
 use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged};
+use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
 use crate::core::meta::linked_issues;
@@ -95,13 +96,19 @@ fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, Stri
 }
 
 /// The gates a merge relies on: `(context, state)` of `risk-check` and `review-verdict` on `sha`.
-/// A child session that turns on auto-merge states them first, so the merge is visibly gated.
+/// Only a commit status posted by `github-actions[bot]` counts; a check run or a status from
+/// anyone else with the same name is ignored (`missing`), as in `risk-check` itself.
 fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
-    let runs = gh.check_runs(sha)?;
     Ok(["risk-check", "review-verdict"]
         .into_iter()
-        .map(|ctx| (ctx.to_string(), check_state(&statuses, &runs, ctx)))
+        .map(|ctx| {
+            let state = statuses
+                .iter()
+                .find(|s| s.context == ctx && s.creator == TRUSTED_CREATOR)
+                .map_or("missing", |s| s.state.as_str());
+            (ctx.to_string(), state.to_string())
+        })
         .collect())
 }
 
@@ -286,15 +293,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             ));
         }
         pending = not_green(gh, &base, &pull.head_sha)?;
-        // Say which gates the merge waits for before anything is turned on (the sandbox's
-        // classifier reads this as "merge with review": auto-merge cannot pass them by itself).
         gates = merge_gates(gh, &pull.head_sha)?;
-        let line: Vec<String> = gates.iter().map(|(c, s)| format!("{c}={s}")).collect();
-        eprintln!(
-            "bosun: auto-merge on PR #{} waits for the gates {}; it merges only when both are success and the other required checks pass",
-            pull.number,
-            line.join(", ")
-        );
         // Auto-merge waits only for what the branch enforces: never turn it on for a branch
         // that would merge without the gates. A 403 proves nothing, so it does not block.
         enforced = Some(match gh.required_status_checks(&base)? {
@@ -321,6 +320,18 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
             Live::Partial(..) | Live::Forbidden => "unknown",
         });
+        // Said before anything is turned on, and only once enforcement is known.
+        let line: Vec<String> = gates.iter().map(|(c, s)| format!("{c}={s}")).collect();
+        let why = if enforced == Some("verified") {
+            "the branch requires them, so it merges only when both are success"
+        } else {
+            "could not verify that the branch requires them"
+        };
+        eprintln!(
+            "bosun: auto-merge on PR #{} relies on the gates {}; {why}",
+            pull.number,
+            line.join(", ")
+        );
         // Before auto-merge: a failed write leaves nothing turned on, so a rerun is clean.
         let record = Record::TaskPr {
             session: app.ctx.session.clone(),
