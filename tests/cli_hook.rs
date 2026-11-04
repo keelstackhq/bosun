@@ -336,3 +336,71 @@ fn commit_in_a_feature_worktree_is_allowed_from_a_main_checkout() {
     denied(&bash("git commit -m x"));
     denied(&bash("cd $WT && git commit -m x"));
 }
+
+fn start_text(fake: Option<&FakeGithub>, repo: &Path, env: &[(&str, &str)]) -> (String, String) {
+    let mut cmd = bosun();
+    cmd.current_dir(repo)
+        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_NOW", T0)
+        .args(["hook", "session-start"])
+        .write_stdin(json!({"cwd": repo.to_str().unwrap()}).to_string());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    if let Some(f) = fake {
+        cmd.env("BOSUN_GITHUB_API", f.url());
+    }
+    let out = cmd.output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"].as_str();
+    (
+        text.unwrap().to_string(),
+        String::from_utf8_lossy(&out.stderr).into(),
+    )
+}
+
+#[test]
+fn session_start_rules_follow_the_origin() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let (local, _) = start_text(Some(&fake), tmp.path(), &[]);
+    assert!(
+        local.contains("Session rules (orchestrator): Split work"),
+        "{local}"
+    );
+    assert!(local.contains("Caveman style everywhere"), "{local}");
+    let (spawned, _) = start_text(
+        Some(&fake),
+        tmp.path(),
+        &[("CLAUDE_CODE_CHILD_SESSION", "1")],
+    );
+    assert!(
+        spawned.contains("Session rules (worker): Use superpowers"),
+        "{spawned}"
+    );
+    let (bad, _) = start_text(Some(&fake), tmp.path(), &[("BOSUN_ORIGIN", "bogus")]);
+    assert!(bad.contains("Session rules (orchestrator)"), "{bad}");
+}
+
+#[test]
+fn session_start_rules_come_from_the_file_and_survive_no_github() {
+    let tmp = repo();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/session-rules.toml"),
+        "worker = \"custom worker rule\"\n",
+    )
+    .unwrap();
+    let env = [("BOSUN_ORIGIN", "spawned")];
+    let (text, _) = start_text(None, tmp.path(), &env);
+    assert!(text.contains("could not reach GitHub"), "{text}");
+    assert!(
+        text.contains("Session rules (worker): custom worker rule Caveman"),
+        "{text}"
+    );
+    std::fs::write(tmp.path().join(".bosun/session-rules.toml"), "bogus = 1\n").unwrap();
+    let (text, err) = start_text(None, tmp.path(), &env);
+    assert!(text.contains("Use superpowers"), "{text}");
+    assert!(text.contains(".bosun/session-rules.toml ignored"), "{text}");
+    assert!(err.contains("session-rules.toml"), "{err}");
+}

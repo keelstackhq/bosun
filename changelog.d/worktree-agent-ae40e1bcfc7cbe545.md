@@ -1,0 +1,1 @@
+- `bosun hook session-start` appends role-based session rules (worker for spawned origin, else orchestrator) from `.bosun/session-rules.toml`, also when GitHub is unreachable; `init` and the channel seed the file.

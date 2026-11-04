@@ -13,6 +13,7 @@ use crate::output::{CmdResult, Outcome};
 
 pub mod cache;
 pub mod pre_tool_use;
+pub mod session_rules;
 pub mod session_start;
 
 /// Run a hook with the process stdin; returns the text for stdout, if any.

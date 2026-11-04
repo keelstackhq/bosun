@@ -1,0 +1,1 @@
+- 2026-11-04 · R1+R5 · session rules in session-start, seeded .bosun/session-rules.toml · PR #?

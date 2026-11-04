@@ -6,6 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::cache;
+use super::session_rules::rules_context;
 use crate::app::{App, halt_reason, main_red};
 use crate::registry::{self, JoinSpec};
 
@@ -19,13 +20,14 @@ pub fn run(cwd: Option<&Path>) -> String {
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
     match context(dir.as_deref()) {
-        Ok(text) => output(&text),
+        Ok(text) => output(&format!("{text}\n{}", rules_context(dir.as_deref()))),
         Err(why) => {
             eprintln!("bosun: warning: session start: {why}");
             output(&format!(
                 "bosun could not reach GitHub ({why}), so this session is not registered and \
                  edit locks may be stale. Set GH_TOKEN (or GITHUB_TOKEN) and BOSUN_REPO=owner/name, \
-                 then run `bosun join`."
+                 then run `bosun join`.\n{}",
+                rules_context(dir.as_deref())
             ))
         }
     }
