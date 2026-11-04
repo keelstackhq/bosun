@@ -12,6 +12,7 @@ use super::prereqs_gate::plan_of_task;
 use super::release::{release_to, require_lease};
 use super::{HoldArgs, LessonAddArgs, LessonCmd};
 use crate::app::{App, Result, default_branch, kill_switch, notes, task_meta};
+use crate::core::lessons;
 use crate::core::plan;
 use crate::core::prereqs::{self as pq, HoldBox};
 use crate::core::records::{Record, parse_record};
@@ -122,7 +123,7 @@ pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
     let url = format!("https://github.com/{}/issues/{number}", app.ctx.repo);
 
     release_to(gh, n, &issue, session, &comments, State::Ready)?;
-    let lesson_error = lesson(dir, &meta.item, &meta.task, step);
+    let lesson_error = lesson(dir, n, &meta.item, &meta.task, step);
     Ok(Outcome::data(json!({"issue": n, "id": id,
         "checklist": {"number": number, "url": url},
         "released": true, "lesson_error": lesson_error, "warnings": warnings})))
@@ -169,16 +170,18 @@ fn plan_of(app: &App, plan_path: &str) -> Result<(String, Vec<u64>)> {
 }
 
 /// A lesson that the plan missed a step; best effort, the error text on failure.
-fn lesson(dir: Option<&Path>, item: &str, task: &str, step: &str) -> Option<String> {
-    let text = format!(
-        "Task {item}/{task} needed an owner step the plan did not list; declare such steps in `## Prerequisites`: {}",
-        inert(step, 160)
-    );
+fn lesson(dir: Option<&Path>, issue: u64, item: &str, task: &str, step: &str) -> Option<String> {
+    let head = format!("{item}/{task} missed an owner step; declare it in Prerequisites: ");
+    // The step is a code span: two backticks more than its text.
+    let budget = lessons::MAX_RULE
+        .saturating_sub(head.chars().count())
+        .saturating_sub(2);
+    let text = format!("{head}{}", inert(step, budget));
     let args = LessonAddArgs {
         text,
         scope: vec![],
         why: Some("an agent met the step mid-run and had to hold the task".into()),
-        evidence: vec![],
+        evidence: vec![format!("#{issue}")],
         upstream: false,
     };
     super::lesson::run(dir, &LessonCmd::Add(args))

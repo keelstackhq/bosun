@@ -110,10 +110,25 @@ fn hold_posts_the_record_adds_the_box_and_readies_the_task() {
         .iter()
         .any(|c| c.body.contains("lease-end"));
     assert!(ended, "the lease ended");
-    assert!(
-        tmp.path().join("docs/lessons.toml").is_file(),
-        "a lesson was recorded"
-    );
+    let raw = std::fs::read_to_string(tmp.path().join("docs/lessons.toml")).unwrap();
+    let t: toml::Table = raw.parse().unwrap();
+    let l = &t["lesson"].as_array().unwrap()[0];
+    assert_eq!(l["evidence"].as_array().unwrap()[0].as_str(), Some("#11"));
+    assert!(l["rule"].as_str().unwrap().chars().count() <= 160, "{raw}");
+}
+
+#[test]
+fn a_long_step_still_gives_a_lesson_within_the_cap() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), setup());
+    claimed(&fake, tmp.path(), "11");
+    let long = "é`".repeat(120);
+    let (code, v) = bosun(&fake, tmp.path(), &["hold", "11", &long]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["lesson_error"].is_null(), "{v}");
+    let raw = std::fs::read_to_string(tmp.path().join("docs/lessons.toml")).unwrap();
+    let t: toml::Table = raw.parse().unwrap();
+    let rule = t["lesson"].as_array().unwrap()[0]["rule"].as_str().unwrap();
+    assert!(rule.chars().count() <= 160, "{rule}");
 }
 
 #[test]

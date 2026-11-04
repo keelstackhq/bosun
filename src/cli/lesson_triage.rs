@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::LessonTriageArgs;
-use super::lesson::{FILE, LESSON_LABEL, cap_error, load, save, today};
+use super::lesson::{FILE, LESSON_LABEL, add_error, load, save, today};
 use super::status::PROCESS_RED_LABEL;
 use crate::app::{App, kill_switch};
 use crate::core::lessons;
@@ -127,7 +127,8 @@ pub fn run(dir: Option<&Path>, a: &LessonTriageArgs) -> CmdResult {
                 vec![format!("#{n}")],
                 &today(&app.ctx),
             )
-            .map_err(cap_error)?;
+            .map_err(add_error)?
+            .id;
             comment = format!(
                 "Triaged as advice: {id} in {FILE}; the store PR closes this issue (`Closes #{n}`)."
             );

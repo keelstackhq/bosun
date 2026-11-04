@@ -212,7 +212,7 @@ fn review_pack_lists_matching_lessons_and_the_base_review_md() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|l| l["id"].as_str().unwrap())
+        .map(|l| l.as_str().unwrap().split(' ').next().unwrap())
         .collect();
     assert_eq!(ids, ["L-001", "L-002"]);
     assert_eq!(d["review_md"], "Review rules");
@@ -279,13 +279,12 @@ fn a_forged_verdict_record_without_a_success_status_gives_a_full_review() {
 }
 
 #[test]
-fn review_pack_shares_the_lessons_store_format() {
+fn review_pack_lessons_are_compact_lines() {
     let fake = pack_setup();
     let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
     assert_eq!(code, 0, "{v}");
-    let first = &v["data"]["lessons"][0];
-    assert_eq!(first["added"], "");
-    assert!(first.get("last_hit").is_none(), "{first}");
+    let first = v["data"]["lessons"][0].as_str().unwrap();
+    assert!(first.starts_with("L-"), "{first}");
 }
 
 fn verdict_cmd(fake: &FakeGithub, sub: &str, input: &str) -> (i32, Value) {

@@ -184,3 +184,36 @@ fn advice_at_the_cap_is_exit_6_and_writes_nothing_to_github() {
         text
     );
 }
+
+#[test]
+fn advice_with_an_over_long_rule_is_usage_and_writes_nothing() {
+    let (tmp, fake) = setup();
+    let long = "x".repeat(161);
+    let (code, v) = triage(tmp.path(), &fake, &["5", "--as", "advice", "--rule", &long]);
+    assert_eq!(code, 2, "{v}");
+    assert_eq!(writes(&fake), 0);
+    assert!(!tmp.path().join("docs/lessons.toml").exists());
+}
+
+#[test]
+fn advice_that_duplicates_a_rule_records_a_hit() {
+    let (tmp, fake) = setup();
+    std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+    std::fs::write(
+        tmp.path().join("docs/lessons.toml"),
+        "[[lesson]]\nid = \"L-007\"\nrule = \"Run it once\"\n",
+    )
+    .unwrap();
+    let (code, v) = triage(
+        tmp.path(),
+        &fake,
+        &["5", "--as", "advice", "--rule", "run it once."],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["lesson"], "L-007");
+    let text = std::fs::read_to_string(tmp.path().join("docs/lessons.toml")).unwrap();
+    let t: toml::Table = text.parse().unwrap();
+    assert_eq!(t["lesson"].as_array().unwrap().len(), 1);
+    assert_eq!(t["lesson"][0]["hits"].as_integer(), Some(1));
+    assert_eq!(t["lesson"][0]["evidence"][0].as_str(), Some("#5"));
+}

@@ -576,11 +576,13 @@ pub enum LessonCmd {
 
 #[derive(Debug, Args)]
 pub struct LessonAddArgs {
+    /// The rule, at most 160 characters; the same rule as an entry records a hit on it.
     pub text: String,
     #[arg(long = "scope", value_name = "GLOB")]
     pub scope: Vec<String>,
     #[arg(long)]
     pub why: Option<String>,
+    /// The PR or issue that proved it (`#N`); required unless --upstream.
     #[arg(long = "evidence", value_name = "REF")]
     pub evidence: Vec<String>,
     /// File the lesson on keelstackhq/bosun (it is about bosun itself); no local change.
