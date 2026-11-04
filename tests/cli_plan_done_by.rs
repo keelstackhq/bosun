@@ -1,4 +1,5 @@
-//! Plan task field `done-by: #N`: import and amend make the task merged when PR N is merged.
+//! Plan task field `done-by: #N`: import and amend make the task merged when PR N is merged and
+//! links the task; a refused field is a warning in the data and exit 1.
 
 mod common;
 
@@ -29,6 +30,7 @@ area: lifecycle
 ";
 
 const T2: &str = "- T2: Stop rules\n  touch: src/core/stop.rs\n";
+const MERGED: &str = "bosun:state/merged";
 
 fn with_done_by(by: &str) -> String {
     PLAN.replace(T2, &format!("{T2}  done-by: {by}\n"))
@@ -52,21 +54,38 @@ fn find(fake: &FakeGithub, marker: &str) -> u64 {
         .number
 }
 
+/// A merged PR that names the task by its plan id.
 fn merged_pr(fake: &FakeGithub, n: u64) {
-    fake.pull(n, "feat: done", "claude/done", "");
+    fake.pull(n, "feat: M1/T2 stop rules", "claude/done", "");
     fake.pull_merged(n, "abc");
 }
 
 fn is_merged(fake: &FakeGithub, n: u64) -> bool {
     let i = fake.issue_state(n);
-    fake.labels_of(n)
-        .contains(&"bosun:state/merged".to_string())
+    fake.labels_of(n).contains(&MERGED.to_string())
         && i.state == "closed"
         && i.state_reason.as_deref() == Some("completed")
 }
 
+fn t2_stays_open(fake: &FakeGithub) {
+    let t2 = find(fake, "<!-- bosun:plan M1/T2 -->");
+    assert_eq!(fake.issue_state(t2).state, "open");
+    assert!(!fake.labels_of(t2).contains(&MERGED.to_string()));
+}
+
+/// Import with `done-by: #5` must exit 1, say why in `data.warnings` and leave T2 open.
+fn refused(fake: &FakeGithub, why: &str) {
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, v) = plan(fake, tmp.path(), &with_done_by("#5"), &["import"]);
+    assert_eq!(code, 1, "{v}");
+    let w = v["data"]["warnings"].to_string();
+    assert!(w.contains("done-by #5 refused") && w.contains(why), "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    t2_stays_open(fake);
+}
+
 #[test]
-fn import_makes_a_done_by_task_merged_when_the_pr_merged() {
+fn import_makes_a_done_by_task_merged_when_the_pr_merged_and_names_it() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     merged_pr(&fake, 5);
     let (code, v) = plan(&fake, tmp.path(), &with_done_by("#5"), &["import"]);
@@ -80,26 +99,37 @@ fn import_makes_a_done_by_task_merged_when_the_pr_merged() {
     );
     let t1 = find(&fake, "<!-- bosun:plan M1/T1 -->");
     assert_eq!(fake.issue_state(t1).state, "open");
-    assert!(
-        !fake
-            .labels_of(t1)
-            .contains(&"bosun:state/merged".to_string())
-    );
+    assert!(!fake.labels_of(t1).contains(&MERGED.to_string()));
 }
 
 #[test]
-fn an_unmerged_done_by_pr_leaves_the_task_open() {
-    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
-    fake.pull(5, "feat: wip", "claude/wip", "");
-    let (code, v) = plan(&fake, tmp.path(), &with_done_by("#5"), &["import"]);
-    assert_eq!(code, 0, "{v}");
-    let t2 = find(&fake, "<!-- bosun:plan M1/T2 -->");
-    assert_eq!(fake.issue_state(t2).state, "open");
-    assert!(
-        !fake
-            .labels_of(t2)
-            .contains(&"bosun:state/merged".to_string())
-    );
+fn an_unmerged_done_by_pr_is_refused() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "feat: M1/T2 wip", "claude/wip", "");
+    refused(&fake, "is not merged");
+}
+
+#[test]
+fn a_merged_pr_that_does_not_link_the_task_is_refused() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "feat: something else", "claude/else", "Closes #99");
+    fake.pull_merged(5, "abc");
+    refused(&fake, "does not close M1/T2 or name it");
+}
+
+#[test]
+fn a_pr_merged_into_another_base_is_refused() {
+    let fake = FakeGithub::start();
+    merged_pr(&fake, 5);
+    fake.pull_set(5, "base", serde_json::json!({"sha": "b", "ref": "release"}));
+    refused(&fake, "is not merged into main");
+}
+
+#[test]
+fn a_number_that_is_an_issue_is_refused() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "just an issue", &[], "M1/T2");
+    refused(&fake, "not a pull request");
 }
 
 #[test]
@@ -111,6 +141,24 @@ fn amend_merges_an_existing_open_task_that_gains_done_by() {
     assert_eq!(fake.issue_state(t2).state, "open");
     merged_pr(&fake, 5);
     let (code, v) = plan(&fake, tmp.path(), &with_done_by("5"), &["amend"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(is_merged(&fake, t2));
+}
+
+#[test]
+fn a_pr_that_closes_the_existing_task_issue_vouches_for_it() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (code, v) = plan(&fake, tmp.path(), PLAN, &["import"]);
+    assert_eq!(code, 0, "{v}");
+    let t2 = find(&fake, "<!-- bosun:plan M1/T2 -->");
+    fake.pull(
+        5,
+        "feat: stop rules",
+        "claude/done",
+        &format!("Closes #{t2}"),
+    );
+    fake.pull_merged(5, "abc");
+    let (code, v) = plan(&fake, tmp.path(), &with_done_by("#5"), &["amend"]);
     assert_eq!(code, 0, "{v}");
     assert!(is_merged(&fake, t2));
 }

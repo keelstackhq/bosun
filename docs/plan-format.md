@@ -68,9 +68,13 @@ The state machine, stop rules and resume.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
    - `done-by:` (optional) `#N` (or `N`): PR N already did this task. `bosun plan import` and
-     `plan amend` make the task merged (comment `Done by PR #N`, issue closed as completed) when
-     PR N is merged into the default branch, for a new task and for an open planned or ready one;
-     with PR N not merged the field changes nothing (a note goes to stderr). Any other value is a plan error.
+     `plan amend` make a new task, or an open planned or ready one, merged (comment `Done by PR #N`,
+     issue closed as completed) only when PR N is merged into the default branch and links the
+     task: `Closes #<task issue>` in its body (an existing task), or the plan id (`M1/T2`) in its
+     title or body. A refused field (not a PR, not merged, another base, not linked) leaves the
+     task as it was, goes to `data.warnings` and makes the command exit 1 after the rest of the
+     import is done; the fix is to merge the PR and name the task in it, or to remove `done-by:`.
+     Any other value is a plan error.
    - `allow:` (optional) comma-separated test-integrity finding kinds the task may raise:
      `delete-test` (also allows `fewer-tests`), `skip`, `only`, `fewer-asserts`. Any other value
      is a plan error. Use it for a task that removes code with its tests, for example a seed

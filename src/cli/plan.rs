@@ -12,7 +12,7 @@ use super::prereqs_gate::{Held, blockers};
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
 use crate::core::lease::leases_of;
-use crate::core::meta::{TaskMeta, linked_issues, parse_task_meta};
+use crate::core::meta::{TaskMeta, closing_issues, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::prereqs as pq;
 use crate::core::state::{State, labels_to_remove, state_of};
@@ -188,6 +188,8 @@ struct Importer<'a> {
     epics: Vec<Slot>,
     tasks: Vec<Slot>,
     warnings: Vec<String>,
+    /// `done-by` fields that were refused: the import still runs, then it exits 1.
+    refused: Vec<String>,
     dir: PathBuf,
     promoted: Vec<String>,
     /// Open owner-checklist items of the plan being imported, and what they hold back.
@@ -552,6 +554,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         epics: vec![],
         tasks: vec![],
         warnings: vec![],
+        refused: vec![],
         dir: app.ctx.dir.clone(),
         promoted: vec![],
         open_items: vec![],
@@ -614,6 +617,14 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         let mut all = data[key].as_array().cloned().unwrap_or_default();
         all.extend(epics.iter().map(|id| json!(id)));
         data[key] = Value::Array(all);
+    }
+    data["warnings"] = json!(imp.warnings);
+    if !imp.refused.is_empty() {
+        return Err(BosunError::error(
+            imp.refused.join("; "),
+            "merge the PR and name the task in it (`Closes #<issue>` or its plan id), or remove `done-by:` from the plan; the rest of the import was done",
+        )
+        .with_data(data));
     }
     Ok(Outcome::data(data))
 }
@@ -1058,13 +1069,31 @@ fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
     issues.iter().any(|i| i.body_text().contains(&m))
 }
 
-/// Whether PR `pr` is merged into the default branch.
-fn merged_pr(imp: &Importer, pr: u64) -> Result<bool> {
+/// Why PR `pr` cannot vouch for task `tid` (`number`: its issue when it exists), or `None` when
+/// it can: it must be merged into the default branch and link the task, by `Closes #<issue>` or by
+/// naming the plan id (`M1/T2`) in its title or body. A PR the author merged for other work does
+/// not close a task.
+fn done_by_refusal(
+    imp: &Importer,
+    tid: &str,
+    number: Option<u64>,
+    pr: u64,
+) -> Result<Option<String>> {
     let base = default_branch(imp.gh)?;
-    Ok(imp
-        .gh
-        .get_pull(pr)?
-        .is_some_and(|p| p.merged && p.base_ref == base))
+    let Some(p) = imp.gh.get_pull(pr)? else {
+        return Ok(Some(format!("#{pr} is not a pull request")));
+    };
+    if !p.merged || p.base_ref != base {
+        return Ok(Some(format!("PR #{pr} is not merged into {base}")));
+    }
+    let text = format!("{}\n{}", p.title, p.body);
+    let named = regex::Regex::new(&format!(
+        r"(?:^|[^A-Za-z0-9/]){}(?:[^A-Za-z0-9/]|$)",
+        regex::escape(tid)
+    ))
+    .is_ok_and(|re| re.is_match(&text));
+    let closes = number.is_some_and(|n| closing_issues(&p.body).contains(&n));
+    Ok((!named && !closes).then(|| format!("PR #{pr} does not close {tid} or name it")))
 }
 
 /// A task whose `done-by` PR merged: one just made (already labelled merged) or an open
@@ -1279,16 +1308,31 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);
             // Vetted only for a task that does not exist yet (the slot makes it).
-            let known = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]).is_some();
+            let existing = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]);
+            let known = existing.is_some();
             let allow = if known { vec![] } else { imp.allowed(&tid, t) };
-            // `done-by: #N`: PR N merged into the default branch already did this task.
+            // `done-by: #N`: PR N, merged and linking the task, already did it. Only a new task
+            // or an open planned or ready one can be finished this way.
+            let open_early = existing.as_ref().is_some_and(|(i, _)| {
+                i.state == "open"
+                    && matches!(state_of(&i.labels), Some(State::Planned | State::Ready))
+            });
             let done = match t.done_by {
-                Some(pr) if merged_pr(imp, pr)? => Some(pr),
-                Some(pr) => {
-                    eprintln!("plan: {tid} says done-by #{pr}, which is not merged; it stays open");
-                    None
+                Some(pr) if !known || open_early => {
+                    let number = existing.as_ref().map(|(i, _)| i.number);
+                    match done_by_refusal(imp, &tid, number, pr)? {
+                        None => Some(pr),
+                        Some(why) => {
+                            let msg = format!(
+                                "{tid}: done-by #{pr} refused: {why}; merge the PR and link {tid} in it, or remove done-by"
+                            );
+                            imp.warnings.push(msg.clone());
+                            imp.refused.push(msg);
+                            None
+                        }
+                    }
                 }
-                None => None,
+                _ => None,
             };
             let state = if done.is_some() { "merged" } else { "planned" };
             let mut slot = imp.slot(&tid, (&item.id, Some(&t.id)), || {
