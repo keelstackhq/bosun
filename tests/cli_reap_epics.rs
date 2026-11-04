@@ -122,3 +122,25 @@ fn a_failure_closing_an_epic_keeps_the_rest_of_the_reap() {
     assert_eq!(v["data"]["reaped"][0]["issue"], 5, "{v}");
     assert!(fake.labels_of(5).contains(&"bosun:state/ready".to_string()));
 }
+
+#[test]
+fn reap_archives_a_child_whose_result_is_on_the_epic_it_just_closed() {
+    let fake = FakeGithub::start();
+    fake.issue(50, "bosun registry", &["bosun:registry"], "");
+    fake.comment(
+        50,
+        r#"{"bosun":"join","session":"kid","origin":"spawned","parent":"janitor","depth":2,"expires":"2026-10-27T10:20:00Z"}"#,
+    );
+    epic(&fake, 1, "ready");
+    task(&fake, 2, 1, "merged");
+    fake.comment(
+        1,
+        r#"{"bosun":"result","session":"kid","outcome":"merged"}"#,
+    );
+    let v = reap(&fake);
+    assert_eq!(v["data"]["epics_closed"], json!([1]));
+    assert_eq!(
+        v["next"],
+        json!([{"tool": "archive_session", "args": {"session_id": "kid"}}])
+    );
+}

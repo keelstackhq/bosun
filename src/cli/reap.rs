@@ -99,12 +99,18 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let epics_error = close_done_epics(gh, now, &mut epics_closed).err();
     epics_closed.sort_unstable();
     let mut data =
-        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": epics_closed});
+        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": &epics_closed});
     if let Some(e) = epics_error {
         eprintln!("reap: closing finished epics failed: {e}");
         data["epics_error"] = json!(e.to_string());
     }
-    Ok(Outcome::data(data))
+    super::status::with_archive_children(
+        gh,
+        &app.ctx.session,
+        &epics_closed,
+        now,
+        Outcome::data(data),
+    )
 }
 
 const QUIET_SECS: i64 = 600;

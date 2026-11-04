@@ -5,14 +5,18 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::app::{App, Result, active_issues, halt_reason, limits_from_default, main_red};
-use crate::core::lease::{live_leases, members};
-use crate::core::records::spend_total;
+use crate::app::{
+    App, Result, active_issues, halt_reason, limits_from_default, main_red, trusted_notes,
+};
+use crate::core::handoff::finished_children;
+use crate::core::lease::{live_leases, members, orchestrator_of};
+use crate::core::records::{Note, spend_total};
 use crate::core::state::State;
 use crate::gates::integrity::reduced_reason;
 use crate::github::{Github, IssueState};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
+use crate::time::Timestamp;
 
 pub const PROCESS_RED_LABEL: &str = "bosun:process-red";
 
@@ -90,5 +94,65 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     if let Some(why) = reduced {
         data["integrity_reason"] = json!(why);
     }
-    Ok(Outcome::data(data))
+    with_archive_children(gh, &ctx.session, &[], now, Outcome::data(data))
+}
+
+/// Adds `archive_session` to `next` for each child of the caller's orchestrator whose newest
+/// result is final and that is not working again (spec §5). `extra_issues` are epics closed in
+/// this run. A failure is reported as `data.archive_error`, never as an error. bosun only
+/// returns the call (D29).
+pub fn with_archive_children(
+    gh: &dyn Github,
+    me: &str,
+    extra_issues: &[u64],
+    now: Timestamp,
+    mut out: Outcome,
+) -> CmdResult {
+    match archive_children(gh, me, extra_issues, now) {
+        Ok(children) => {
+            for c in children {
+                out = out.with_next("archive_session", json!({"session_id": c}));
+            }
+        }
+        Err(e) => {
+            eprintln!("bosun: archive check failed: {e}");
+            out.data["archive_error"] = json!(e.to_string());
+        }
+    }
+    Ok(out)
+}
+
+fn archive_children(
+    gh: &dyn Github,
+    me: &str,
+    extra_issues: &[u64],
+    now: Timestamp,
+) -> Result<Vec<String>> {
+    let Some((_, reg)) = registry::load(gh)? else {
+        return Ok(Vec::new());
+    };
+    let mut numbers: Vec<u64> = gh
+        .list_issues(&[], IssueState::Open)?
+        .iter()
+        .map(|i| i.number)
+        .collect();
+    for n in extra_issues {
+        if !numbers.contains(n) {
+            numbers.push(*n);
+        }
+    }
+    let mut results: Vec<Note> = Vec::new();
+    for number in numbers {
+        results.extend(trusted_notes(gh, number)?);
+    }
+    let held: Vec<_> = active_issues(gh)?
+        .into_iter()
+        .map(|(i, notes)| (i.number, notes))
+        .collect();
+    Ok(finished_children(
+        &reg,
+        orchestrator_of(me),
+        &results,
+        &live_leases(&held, now),
+    ))
 }

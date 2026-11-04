@@ -115,6 +115,13 @@ Janitor, resume, results:
   `leave` (reason `relayed`).
   Put `relay_waves` and `[cloud]` into `.bosun` files only once `.bosun/version` pins a bosun
   that knows them: the pinned bosun refuses unknown keys.
+- Archiving finished children: `status` and `reap` add `archive_session` (`{"session_id": <child>}`)
+  to `next` for each child of the caller's orchestrator (a session whose `join` names it as
+  parent, or its `<session>` part when the caller is `<session>/<task>`; it may have left already)
+  whose newest `result` record (trusted, on an open issue or an epic `reap` just closed) is
+  `merged`, `blocked` or `needs-human`, with no later `join` and no live lease written after it
+  (`partial` and a restarted child are working). Relay roots have no parent and are never listed.
+  A failed check adds `data.archive_error`, not an error.
 - Results (D14): a child runs `bosun result <epic> --outcome merged|partial|blocked|needs-human [--pr N]`.
   It posts an issue comment on the epic with the record
   `{"bosun":"result","session":..,"outcome":..,"pr":..}`, ends the lease of the child on the epic

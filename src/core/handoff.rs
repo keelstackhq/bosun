@@ -1,5 +1,6 @@
 //! A root's handoff (spec §5.1): the lines it leaves for the next root. Pure.
 
+use crate::core::lease::Lease;
 use crate::core::records::{Note, Record, parse_record};
 use crate::core::text::{has_hidden, inert};
 use crate::core::verdict::{Verdict, comment_json};
@@ -120,6 +121,65 @@ pub fn newest_handoff(notes: &[Note], prefer: &[&str]) -> Option<(u64, Record)> 
     let all: Vec<_> = valid.by_ref().collect();
     let named = all.iter().find(|(_, r)| prefer.contains(&r.session()));
     named.or(all.first()).cloned()
+}
+
+/// The sessions that joined with `parent` as their parent, once each, in join order. A child
+/// that left the registry (`result` leaves it) still counts. Relay roots never have a parent.
+pub fn children_of(notes: &[Note], parent: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in notes {
+        if let Some(Record::Join {
+            session,
+            parent: Some(p),
+            ..
+        }) = parse_record(&n.body)
+            && p == parent
+            && session != parent
+            && !out.contains(&session)
+            && !is_root(notes, &session)
+        {
+            out.push(session);
+        }
+    }
+    out
+}
+
+/// The children of `parent` whose newest `result` (among `results`, comments of any issue) has a
+/// final outcome (`merged`, `blocked`, `needs-human`; `partial` hands work back) and that did not
+/// start again after it: no later `join` in `reg` and no live lease written after it.
+pub fn finished_children(
+    reg: &[Note],
+    parent: &str,
+    results: &[Note],
+    live: &[Lease],
+) -> Vec<String> {
+    let mut last: Vec<(String, u64, String)> = Vec::new();
+    for n in results {
+        if let Some(Record::Result {
+            session, outcome, ..
+        }) = parse_record(&n.body)
+        {
+            match last.iter_mut().find(|l| l.0 == session) {
+                Some(l) if l.1 < n.id => *l = (session, n.id, outcome),
+                Some(_) => {}
+                None => last.push((session, n.id, outcome)),
+            }
+        }
+    }
+    children_of(reg, parent)
+        .into_iter()
+        .filter(|c| {
+            let Some((_, at, outcome)) = last.iter().find(|l| &l.0 == c) else {
+                return false;
+            };
+            let rejoined = reg.iter().any(|n| {
+                n.id > *at
+                    && matches!(parse_record(&n.body), Some(Record::Join { session, .. }) if &session == c)
+            });
+            let leased = live.iter().any(|l| &l.session == c && l.comment_id > *at);
+            matches!(outcome.as_str(), "merged" | "blocked" | "needs-human") && !rejoined && !leased
+        })
+        .collect()
 }
 
 /// The parent a join record names for `session`, newest record last.
