@@ -1,0 +1,1 @@
+- 2026-11-04 · R4 · doctor step 13 plugins (settings, pins, installed commits) · PR (worktree-agent-aa076f2887127afe2)

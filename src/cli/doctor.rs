@@ -583,6 +583,101 @@ fn apply_hoist(items: &mut [Value], root: &Path, release: bool, release_step: Va
     json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes, "skipped": skipped, "release_inferred": inferred})
 }
 
+/// The plugins bosun's repos enable: (plugin id, marketplace name, marketplace pin name,
+/// plugin pin name). Caveman's marketplace and plugin are one repo, so one pin serves both.
+const PLUGINS: [(&str, &str, &str, &str); 2] = [
+    (
+        "superpowers@superpowers-marketplace",
+        "superpowers-marketplace",
+        "SUPERPOWERS_MARKETPLACE_SHA",
+        "SUPERPOWERS_SHA",
+    ),
+    (
+        "caveman@akramsystems-plugins",
+        "akramsystems-plugins",
+        "CAVEMAN_SHA",
+        "CAVEMAN_SHA",
+    ),
+];
+
+fn script_pin(script: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    script
+        .lines()
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .map(|v| v.trim().trim_matches(['"', '\'']).to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Compare the plugin settings with the setup script's pins and the installed plugins.
+/// Pure: returns (problems, notes). `settings` is `.claude/settings.json`, `script` the setup
+/// script text, `installed` `~/.claude/plugins/installed_plugins.json` (None = not installed here).
+fn plugin_findings(
+    settings: Option<&Value>,
+    script: Option<&str>,
+    installed: Option<&Value>,
+) -> (Vec<String>, Vec<String>) {
+    let (mut problems, mut notes) = (Vec::new(), Vec::new());
+    let Some(settings) = settings else {
+        problems.push(".claude/settings.json is missing or not JSON".to_string());
+        return (problems, notes);
+    };
+    for (id, market, mpin, ppin) in PLUGINS {
+        if settings["enabledPlugins"][id] != true {
+            problems.push(format!("enabledPlugins lacks \"{id}\": true"));
+        }
+        let pin_of = |name: &str| script.and_then(|s| script_pin(s, name));
+        if let Some(pin) = pin_of(mpin) {
+            let r = settings["extraKnownMarketplaces"][market]["source"]["ref"].as_str();
+            if r != Some(pin.as_str()) {
+                problems.push(format!(
+                    "marketplace {market} ref is {} but {mpin} is {pin}",
+                    r.unwrap_or("unset")
+                ));
+            }
+        }
+        if let (Some(pin), Some(inst)) = (pin_of(ppin), installed) {
+            let entry = &inst["plugins"][id];
+            let sha = entry[0]["gitCommitSha"]
+                .as_str()
+                .or_else(|| entry["gitCommitSha"].as_str());
+            if let Some(sha) = sha.filter(|s| *s != pin) {
+                problems.push(format!("installed {id} is at {sha} but {ppin} is {pin}"));
+            }
+        }
+    }
+    if installed.is_none() {
+        notes.push("not installed in this container".to_string());
+    }
+    (problems, notes)
+}
+
+/// Step 13: the plugin settings, the setup script's pins and the installed plugins agree.
+/// Local only: no network.
+fn plugins_item(root: &Path, script: Option<&str>) -> Value {
+    let settings =
+        read(root, ".claude/settings.json").and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    let installed = std::env::var_os("HOME")
+        .and_then(|h| {
+            std::fs::read_to_string(Path::new(&h).join(".claude/plugins/installed_plugins.json"))
+                .ok()
+        })
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    let (problems, notes) = plugin_findings(settings.as_ref(), script, installed.as_ref());
+    let mut ok =
+        "superpowers and caveman are enabled and match the setup script's pins".to_string();
+    if !notes.is_empty() {
+        ok = format!("{ok} ({})", notes.join("; "));
+    }
+    item(
+        13,
+        "plugins",
+        (!problems.is_empty()).then(|| problems.join("; ")),
+        ok,
+        "in .claude/settings.json enable superpowers@superpowers-marketplace and caveman@akramsystems-plugins and set each marketplace source `ref` to SUPERPOWERS_MARKETPLACE_SHA / CAVEMAN_SHA of docs/setup-script.sh; for an installed plugin at another commit run `claude plugin update <plugin>` or move the pin in a PR",
+    )
+}
+
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
@@ -882,6 +977,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
     ));
 
+    items.push(plugins_item(root, script.as_deref()));
+
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
@@ -903,4 +1000,82 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .with_data(data));
     }
     Ok(Outcome::data(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const M1: &str = "5c9072877417873fee42be1805aa776a453ec394";
+    const P1: &str = "22f0b463e7a5e579904dd6211a520321035526f7";
+    const C: &str = "a9cc1f7b82598852e8c6b8e599dde6ac2491b26e";
+
+    fn script() -> String {
+        format!("SUPERPOWERS_MARKETPLACE_SHA={M1}\nSUPERPOWERS_SHA={P1}\nCAVEMAN_SHA={C}\n")
+    }
+
+    fn settings(m1: &str, c: &str, caveman_on: bool) -> Value {
+        json!({
+            "extraKnownMarketplaces": {
+                "superpowers-marketplace": {"source": {"source": "github", "repo": "x", "ref": m1}},
+                "akramsystems-plugins": {"source": {"source": "github", "repo": "y", "ref": c}}
+            },
+            "enabledPlugins": {"superpowers@superpowers-marketplace": true, "caveman@akramsystems-plugins": caveman_on}
+        })
+    }
+
+    fn installed(sp: &str, cv: &str) -> Value {
+        json!({"plugins": {
+            "superpowers@superpowers-marketplace": [{"gitCommitSha": sp}],
+            "caveman@akramsystems-plugins": [{"gitCommitSha": cv}]
+        }})
+    }
+
+    #[test]
+    fn matching_settings_script_and_install_have_no_problem() {
+        let (p, n) = plugin_findings(
+            Some(&settings(M1, C, true)),
+            Some(&script()),
+            Some(&installed(P1, C)),
+        );
+        assert!(p.is_empty() && n.is_empty(), "{p:?} {n:?}");
+    }
+
+    #[test]
+    fn a_missing_install_is_a_note_not_a_problem() {
+        let (p, n) = plugin_findings(Some(&settings(M1, C, true)), Some(&script()), None);
+        assert!(p.is_empty());
+        assert_eq!(n, ["not installed in this container"]);
+    }
+
+    #[test]
+    fn a_disabled_plugin_is_a_problem() {
+        let (p, _) = plugin_findings(Some(&settings(M1, C, false)), Some(&script()), None);
+        assert_eq!(p.len(), 1);
+        assert!(p[0].contains("caveman@akramsystems-plugins"), "{p:?}");
+    }
+
+    #[test]
+    fn a_marketplace_ref_off_its_pin_is_a_problem() {
+        let (p, _) = plugin_findings(Some(&settings("deadbeef", C, true)), Some(&script()), None);
+        assert_eq!(p.len(), 1);
+        assert!(p[0].contains("SUPERPOWERS_MARKETPLACE_SHA"), "{p:?}");
+    }
+
+    #[test]
+    fn an_installed_commit_off_its_pin_is_a_problem() {
+        let (p, _) = plugin_findings(
+            Some(&settings(M1, C, true)),
+            Some(&script()),
+            Some(&installed("abc", C)),
+        );
+        assert_eq!(p.len(), 1);
+        assert!(p[0].contains("SUPERPOWERS_SHA"), "{p:?}");
+    }
+
+    #[test]
+    fn missing_settings_is_a_problem() {
+        let (p, _) = plugin_findings(None, Some(&script()), None);
+        assert_eq!(p.len(), 1);
+    }
 }

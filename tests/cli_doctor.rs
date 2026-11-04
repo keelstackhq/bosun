@@ -41,13 +41,13 @@ fn statuses(v: &Value) -> Vec<String> {
 }
 
 #[test]
-fn an_empty_repo_reports_all_twelve_steps() {
+fn an_empty_repo_reports_all_thirteen_steps() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let (code, v) = doctor(&fake, tmp.path(), false);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["error"]["kind"], "needs-human");
     let items = v["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 12);
+    assert_eq!(items.len(), 13);
     for (i, it) in items.iter().enumerate() {
         assert_eq!(it["step"], i + 1);
         assert!(!it["fix"].as_str().unwrap().is_empty());
@@ -65,7 +65,7 @@ fn an_empty_repo_reports_all_twelve_steps() {
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
-    assert_eq!(v["error"]["message"], "9 checklist steps missing");
+    assert_eq!(v["error"]["message"], "10 checklist steps missing");
     // Without [slack], the janitor skips notify and there is no notify Routine (F17).
     assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2);
     assert_eq!(v["data"]["notify"]["skipped"], true, "{v}");
@@ -163,6 +163,11 @@ fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
     write(d, ".bosun/version", "unreleased\n");
     write(d, ".bosun/bosun.toml", "[slack]\nchannel = \"#bosun\"\n");
     write(d, "plans/bosun.md", "# plan\n");
+    write(
+        d,
+        ".claude/settings.json",
+        "{\"enabledPlugins\":{\"superpowers@superpowers-marketplace\":true,\"caveman@akramsystems-plugins\":true}}",
+    );
     (tmp, fake)
 }
 

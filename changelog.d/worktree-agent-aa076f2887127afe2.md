@@ -1,0 +1,1 @@
+- `bosun doctor` step 13 `plugins` checks that `.claude/settings.json` enables superpowers and caveman, that the marketplace `ref` values match the setup script pins, and that installed plugins match their pinned commits.
