@@ -2,14 +2,37 @@
   "hooks": {
     "SessionStart": [
       {
-        "hooks": [{ "type": "command", "command": "bosun hook session-start" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bosun hook session-start"
+          }
+        ]
       }
     ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__github__.*",
-        "hooks": [{ "type": "command", "command": "bosun hook pre-tool-use" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bosun hook pre-tool-use"
+          }
+        ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "keelstack": {
+      "source": {
+        "source": "github",
+        "repo": "keelstackhq/bosun",
+        "ref": "03528a94ddf1aac325a73bcf5ee2e1e4b5040e4c"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "superpowers@keelstack": true,
+    "caveman@keelstack": true
   }
 }

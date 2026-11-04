@@ -1,0 +1,1 @@
+- 2026-11-04 · R3b · settings enable keelstack plugins, marketplace pinned to 03528a9

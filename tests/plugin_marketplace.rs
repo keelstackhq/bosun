@@ -29,3 +29,33 @@ fn marketplace_pins_superpowers_and_caveman_to_commits() {
         assert!(src.get("ref").is_none(), "a ref would float: {}", p["name"]);
     }
 }
+
+/// Both settings files enable the plugins from the `keelstack` marketplace, pinned to a bosun commit.
+#[test]
+fn settings_pin_the_keelstack_marketplace() {
+    let root = std::fs::read_to_string(".claude/settings.json").unwrap();
+    let channel =
+        std::fs::read_to_string("channel/pieces/core/files/.claude/settings.json").unwrap();
+    let mut refs = Vec::new();
+    for text in [&root, &channel] {
+        let s: Value = serde_json::from_str(text).unwrap();
+        let src = &s["extraKnownMarketplaces"]["keelstack"]["source"];
+        assert_eq!(src["source"], "github");
+        assert_eq!(src["repo"], "keelstackhq/bosun");
+        let r = src["ref"].as_str().unwrap_or_default();
+        assert!(
+            r.len() == 40
+                && r.bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            "ref must be a full commit sha, got {r:?}"
+        );
+        refs.push(r.to_string());
+        for p in ["superpowers@keelstack", "caveman@keelstack"] {
+            assert_eq!(s["enabledPlugins"][p], true, "{p}");
+        }
+    }
+    assert_eq!(
+        refs[0], refs[1],
+        "root and channel settings pin the same commit"
+    );
+}
