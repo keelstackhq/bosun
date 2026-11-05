@@ -184,7 +184,7 @@ fn is_digest_word(w: &str) -> bool {
 fn is_digest_value(name: &str, v: &str) -> bool {
     let n = name.to_ascii_uppercase();
     let segs: Vec<&str> = n.split(['_', '-', '.']).collect();
-    const BAD: [&str; 10] = [
+    const BAD: [&str; 21] = [
         "SECRET",
         "TOKEN",
         "KEY",
@@ -195,6 +195,17 @@ fn is_digest_value(name: &str, v: &str) -> bool {
         "CRED",
         "CREDENTIAL",
         "CREDENTIALS",
+        "JWT",
+        "SIGNING",
+        "SIGN",
+        "PRIVATE",
+        "OAUTH",
+        "BEARER",
+        "SESSION",
+        "API",
+        "SALT",
+        "HMAC",
+        "CLIENT",
     ];
     if segs.iter().any(|s| BAD.contains(s)) {
         return false;
@@ -369,6 +380,17 @@ mod tests {
             format!("API_KEY_HASH={}", b64(64)),
             format!("BOSUN_SHA512={d44}"),
             format!("BOSUN_SHA256={}==", b64(86)),
+            format!("JWT_SHA256={d44}"),
+            format!("SIGNING_SHA256={d44}"),
+            format!("SIGN_SHA256={d44}"),
+            format!("PRIVATE_SHA256={d44}"),
+            format!("OAUTH_SHA256={d44}"),
+            format!("BEARER_SHA256={d44}"),
+            format!("SESSION_SHA256={d44}"),
+            format!("API_SHA256={d44}"),
+            format!("SALT_SHA256={d44}"),
+            format!("HMAC_SHA256={d44}"),
+            format!("CLIENT_SHA256={d44}"),
         ] {
             assert!(secret_kind(&bad).is_some(), "{bad}");
         }

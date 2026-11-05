@@ -71,7 +71,8 @@ hits = 3
   text voids it), the same digest after `NAME=` when NAME, split on `_`/`-`/`.`, has a whole segment
   SHA1/SHA256/SHA384/SHA512 and the value has that algorithm's exact length (base64 or hex), or a
   segment HASH/DIGEST/CHECKSUM/INTEGRITY and the value is a `shaN-` integrity value; any segment
-  SECRET, TOKEN, KEY, PASS, PASSWORD, PWD, AUTH, CRED or CREDENTIAL(S) voids it (prefix rules
+  SECRET, TOKEN, KEY, PASS, PASSWORD, PWD, AUTH, CRED, CREDENTIAL(S), JWT, SIGN, SIGNING,
+  PRIVATE, OAUTH, BEARER, SESSION, API, SALT, HMAC or CLIENT voids it (prefix rules
   still win), snake or kebab phrases of 3+ lowercase words, and slash paths that are not mixed case.
   `sk-` needs a digit or at most 2 hyphens; `Bearer` needs a digit and a letter.
   Covered inputs: `lesson add` (text, `--why`, `--scope`, `--evidence`), `lesson capture`
