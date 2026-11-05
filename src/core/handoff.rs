@@ -1,5 +1,6 @@
 //! A root's handoff (spec §5.1): the lines it leaves for the next root. Pure.
 
+use crate::core::lease::Lease;
 use crate::core::records::{Note, Record, parse_record};
 use crate::core::text::{has_hidden, inert};
 use crate::core::verdict::{Verdict, comment_json};
@@ -120,6 +121,91 @@ pub fn newest_handoff(notes: &[Note], prefer: &[&str]) -> Option<(u64, Record)> 
     let all: Vec<_> = valid.by_ref().collect();
     let named = all.iter().find(|(_, r)| prefer.contains(&r.session()));
     named.or(all.first()).cloned()
+}
+
+/// The sessions that joined with `parent` as their parent, once each, in join order. A child
+/// that left the registry (`result` leaves it) still counts. Relay roots never have a parent.
+pub fn children_of(notes: &[Note], parent: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in notes {
+        if let Some(Record::Join {
+            session,
+            parent: Some(p),
+            ..
+        }) = parse_record(&n.body)
+            && p == parent
+            && session != parent
+            && !out.contains(&session)
+            && !is_root(notes, &session)
+        {
+            out.push(session);
+        }
+    }
+    out
+}
+
+/// The children of `parent` whose newest `result` (among `results`, comments of any issue) has a
+/// final outcome (`merged`, `blocked`, `needs-human`; `partial` hands work back) and that did not
+/// start again after it: no later `join` in `reg` and no live lease of the child or of its
+/// tasks (`<child>/<task>`).
+pub fn finished_children(
+    reg: &[Note],
+    parent: &str,
+    results: &[Note],
+    live: &[Lease],
+) -> Vec<String> {
+    let mut last: Vec<(String, u64, String)> = Vec::new();
+    for n in results {
+        if let Some(Record::Result {
+            session, outcome, ..
+        }) = result_comment(&n.body)
+        {
+            match last.iter_mut().find(|l| l.0 == session) {
+                Some(l) if l.1 < n.id => *l = (session, n.id, outcome),
+                Some(_) => {}
+                None => last.push((session, n.id, outcome)),
+            }
+        }
+    }
+    children_of(reg, parent)
+        .into_iter()
+        .filter(|c| {
+            let Some((_, at, outcome)) = last.iter().find(|l| &l.0 == c) else {
+                return false;
+            };
+            let rejoined = reg.iter().any(|n| {
+                n.id > *at
+                    && matches!(parse_record(&n.body), Some(Record::Join { session, .. }) if &session == c)
+            });
+            // Any live lease of the child or of its tasks (`c/<task>`), whenever it was written.
+            let leased = live.iter().any(|l| {
+                l.session == *c
+                    || l.session
+                        .strip_prefix(c.as_str())
+                        .is_some_and(|r| r.starts_with('/'))
+            });
+            matches!(outcome.as_str(), "merged" | "blocked" | "needs-human") && !rejoined && !leased
+        })
+        .collect()
+}
+
+/// The result record of a comment exactly as `bosun result` writes it: a first line
+/// `Result of <session>: <outcome>...`, a blank line, and the record as the last line, unindented.
+/// A record quoted, indented or inside other text does not count.
+fn result_comment(body: &str) -> Option<Record> {
+    let lines: Vec<&str> = body.lines().collect();
+    let [head, "", .., line] = lines.as_slice() else {
+        return None;
+    };
+    let rec: Record = serde_json::from_str(line).ok()?;
+    match &rec {
+        Record::Result {
+            session, outcome, ..
+        } if lines.len() == 3 && head.starts_with(&format!("Result of {session}: {outcome}")) => {
+            Some(rec)
+        }
+        _ => None,
+    }
 }
 
 /// The parent a join record names for `session`, newest record last.
@@ -322,5 +408,60 @@ mod tests {
             "lease: #1 s a until x"
         );
         assert_eq!(clean_line(&"x".repeat(500)).chars().count(), MAX_LINE);
+    }
+
+    fn result(id: u64, session: &str, outcome: &str) -> Note {
+        let r = Record::Result {
+            session: session.into(),
+            outcome: outcome.into(),
+            pr: None,
+        };
+        Note::new(
+            id,
+            format!("Result of {session}: {outcome}\n\n{}", r.to_line()),
+        )
+    }
+
+    fn lease(session: &str, comment_id: u64) -> Lease {
+        Lease {
+            issue: 9,
+            session: session.into(),
+            origin: "spawned".into(),
+            expires: crate::time::parse_rfc3339("2026-10-22T11:20:00Z").unwrap(),
+            touch: vec![],
+            comment_id,
+        }
+    }
+
+    #[test]
+    fn a_sub_lease_or_an_earlier_live_lease_keeps_the_child() {
+        let reg = [join(1, "c", Some("p"), "spawned")];
+        let res = [result(5, "c", "merged")];
+        assert_eq!(finished_children(&reg, "p", &res, &[]), ["c"]);
+        for l in [lease("c/t1", 9), lease("c", 3), lease("c/t1", 3)] {
+            assert!(finished_children(&reg, "p", &res, &[l]).is_empty());
+        }
+        // Another session whose name only starts with the child's is not the child.
+        assert_eq!(finished_children(&reg, "p", &res, &[lease("cx", 9)]), ["c"]);
+    }
+
+    #[test]
+    fn only_a_result_comment_as_bosun_writes_it_counts() {
+        let reg = [join(1, "c", Some("p"), "spawned")];
+        let line = Record::Result {
+            session: "c".into(),
+            outcome: "merged".into(),
+            pr: None,
+        }
+        .to_line();
+        for body in [
+            format!("> {line}"),
+            format!("Quoting it:\n\n    {line}"),
+            format!("I saw\n{line}\nyesterday"),
+            line.clone(),
+        ] {
+            let res = [Note::new(5, body.clone())];
+            assert!(finished_children(&reg, "p", &res, &[]).is_empty(), "{body}");
+        }
     }
 }
