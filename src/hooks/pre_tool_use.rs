@@ -11,9 +11,7 @@ use crate::core::guard::{
     prereqs_lock_for, tool_rules,
 };
 use crate::core::lease::leases_of;
-use crate::core::repeat::{
-    Verdict, deny_text, is_poll, repeat_key, repeat_step, repeat_verdict, warn_text,
-};
+use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -82,14 +80,10 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             return Some(deny(&why));
         }
     }
-    if tool == "Bash"
-        && let Some(out) = repeat_lock(&dir, input, &tool_input)
-    {
-        return Some(out);
+    if tool == "Bash" {
+        return repeat_lock(&dir, input, &tool_input);
     }
-    if tool != "Bash"
-        && let Some(file) = repeat_file(&dir, input)
-    {
+    if let Some(file) = repeat_file(&dir, input) {
         // Another tool call (an edit between test runs) ends the run of repeats.
         let _ = std::fs::remove_file(file);
     }
@@ -103,37 +97,40 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     }
 }
 
-/// The counter file per session, agent and directory; `None` without a session or a git repo.
+/// `<git common dir>/bosun/repeat/<key>.json` of the session, agent and directory; `None`
+/// without a session or a git repo.
 fn repeat_file(dir: &Path, input: &Value) -> Option<std::path::PathBuf> {
     let text = |k: &str| input.get(k).and_then(Value::as_str).map(String::from);
-    let session = text("session_id")
-        .or_else(|| std::env::var("BOSUN_SESSION").ok())
-        .filter(|s| !s.trim().is_empty())?;
+    let session = text("session_id").or_else(|| std::env::var("BOSUN_SESSION").ok());
+    let session = session.filter(|s| !s.trim().is_empty())?;
     let agent = text("agent_id").unwrap_or_default();
     let key = repeat_key(&session, &agent, &dir.to_string_lossy());
-    cache::repeat_path(dir, &key)
+    let common = git_out(dir, &["rev-parse", "--git-common-dir"])?;
+    Some(dir.join(common).join(format!("bosun/repeat/{key}.json")))
 }
 
-/// repeat-lock: count a Bash call; a warning at the third run in a row, a deny from the fifth.
-/// Any I/O failure skips the lock.
+/// repeat-lock: count a Bash call that is not a poll (written atomically); a warning at the
+/// third run in a row, a deny from the fifth. Any I/O failure skips the lock.
 fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> {
     let command = tool_input.get("command").and_then(Value::as_str)?;
-    if is_poll(command) {
-        return None;
-    }
-    let file = repeat_file(dir, input)?;
-    let session = file.file_stem()?.to_string_lossy().into_owned();
-    let step = repeat_step(cache::read_repeat(&file).as_ref(), &session, command);
-    if let Err(e) = cache::write_repeat(&file, &step) {
+    let file = (!is_poll(command))
+        .then(|| repeat_file(dir, input))
+        .flatten()?;
+    let prev = serde_json::from_slice(&std::fs::read(&file).unwrap_or_default()).ok();
+    let step = repeat_step(prev, command);
+    let tmp = file.with_extension(format!("json.tmp{}", std::process::id()));
+    let wrote = (file.parent().map_or(Ok(()), std::fs::create_dir_all))
+        .and_then(|()| std::fs::write(&tmp, serde_json::to_vec(&step)?))
+        .and_then(|()| std::fs::rename(&tmp, &file));
+    if let Err(e) = wrote {
         eprintln!("bosun: warning: repeat-lock skipped: {e}");
         return None;
     }
     match repeat_verdict(step.count)? {
-        Verdict::Deny => Some(deny(&deny_text(step.count))),
-        Verdict::Warn => Some(
-            json!({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                "additionalContext": warn_text(step.count)}})
-            .to_string(),
+        Verdict::Deny(why) => Some(deny(&why)),
+        Verdict::Warn(why) => Some(
+            json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": why}})
+                .to_string(),
         ),
     }
 }

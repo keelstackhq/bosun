@@ -1,63 +1,67 @@
 //! repeat-lock: the same Bash command run again and again by one session (spec §4). Pure.
 
-/// Calls in a row at which the hook warns.
+use serde::{Deserialize, Serialize};
+
+/// Runs in a row at which the hook warns, and from which it denies.
 pub const WARN_AT: u64 = 3;
-/// Calls in a row from which the hook denies.
 pub const DENY_AT: u64 = 5;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The counter of one session, agent and directory: its last command and the runs in a row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repeat {
-    pub session: String,
     pub command: String,
     pub count: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
-    Warn,
-    Deny,
+    Warn(String),
+    Deny(String),
 }
 
-/// The counter after one more call: the same session and trimmed command add one, anything
-/// else restarts at one.
-pub fn repeat_step(prev: Option<&Repeat>, session: &str, command: &str) -> Repeat {
-    let command = command.trim();
-    let count = match prev {
-        Some(p) if p.session == session && p.command == command => p.count.saturating_add(1),
-        _ => 1,
-    };
-    Repeat {
-        session: session.into(),
-        command: command.into(),
-        count,
-    }
+/// The counter after one more call: the same trimmed command adds one, another restarts at one.
+pub fn repeat_step(prev: Option<Repeat>, command: &str) -> Repeat {
+    let command = command.trim().to_string();
+    let prev = prev.filter(|p| p.command == command);
+    let count = prev.map_or(1, |p| p.count.saturating_add(1));
+    Repeat { command, count }
 }
 
-/// Read-only commands (name, leading arguments) that orchestrators re-run on purpose.
-#[rustfmt::skip]
-const POLLS: &[(&str, &[&str])] = &[
-    ("bosun", &["wait", "status", "heartbeat", "inbox", "doctor", "ci-log", "risk-check", "review-pack"]),
-    ("sleep", &[]), ("git", &["status", "log", "fetch", "diff"]),
-    ("gh", &["pr checks", "pr view", "pr status", "run view", "run watch", "run list"]),
+/// Read-only polls that orchestrators re-run on purpose (the Bash cap is 600 s).
+const POLLS: &[&str] = &[
+    "bosun wait",
+    "bosun status",
+    "bosun heartbeat",
+    "bosun doctor",
+    "bosun ci-log",
+    "bosun review-pack",
+    "sleep",
+    "gh pr checks",
+    "gh pr view",
+    "gh pr status",
+    "gh run view",
+    "gh run watch",
+    "gh run list",
+    "git status",
+    "git log",
+    "git fetch",
+    "git diff",
 ];
 
-/// Read-only polls that orchestrators re-run on purpose (the Bash cap is 600 s): a plain
-/// command, no operators or substitutions. The repeat-lock ignores them.
+/// A poll alone (`2>&1` at most): no operators, substitutions or `--output`. The repeat-lock
+/// ignores it.
 pub fn is_poll(command: &str) -> bool {
     let command = command.trim().trim_end_matches("2>&1");
-    if command.contains([';', '&', '|', '<', '>', '`', '$', '(', '\n', '\\']) {
+    let mut w: Vec<&str> = command.split_whitespace().collect();
+    let ops = command.contains([';', '&', '|', '<', '>', '`', '$', '(', '\n', '\\']);
+    if ops || command.contains("--output") || w.is_empty() {
         return false;
     }
-    let w: Vec<&str> = command.split_whitespace().collect();
-    let name = w.first().map_or("", |n| n.rsplit('/').next().unwrap_or(n));
-    let args = w.iter().skip(1).copied().collect::<Vec<_>>().join(" ");
-    POLLS.iter().any(|(n, subs)| {
-        *n == name
-            && (subs.is_empty() && !args.is_empty()
-                || subs
-                    .iter()
-                    .any(|s| args == *s || args.starts_with(&format!("{s} "))))
-    })
+    w[0] = w[0].rsplit('/').next().unwrap_or(w[0]);
+    let line = w.join(" ");
+    POLLS
+        .iter()
+        .any(|p| line == *p || line.starts_with(&format!("{p} ")))
 }
 
 /// The counter key of a session, agent and directory: 16 hex digits (FNV-1a), a safe file name.
@@ -69,23 +73,19 @@ pub fn repeat_key(session: &str, agent: &str, dir: &str) -> String {
     format!("{h:016x}")
 }
 
-/// Warn at the third call in a row, deny from the fifth.
+/// The hook's answer after `count` runs in a row: a warning at the third, a deny from the fifth.
 pub fn repeat_verdict(count: u64) -> Option<Verdict> {
+    let ran = format!("repeat-lock: this exact command ran {count} times in a row;");
     match count {
-        DENY_AT.. => Some(Verdict::Deny),
-        WARN_AT => Some(Verdict::Warn),
+        DENY_AT.. => Some(Verdict::Deny(format!(
+            "{ran} retrying does not help, change the approach (read the error, try another \
+             command) or ask the owner"
+        ))),
+        WARN_AT => Some(Verdict::Warn(format!(
+            "{ran} change the approach instead of retrying (the {DENY_AT}th run is refused)"
+        ))),
         _ => None,
     }
-}
-
-#[rustfmt::skip]
-pub fn warn_text(count: u64) -> String {
-    format!("repeat-lock: this exact command ran {count} times in a row; change the approach instead of retrying (the {DENY_AT}th run is refused)")
-}
-
-#[rustfmt::skip]
-pub fn deny_text(count: u64) -> String {
-    format!("repeat-lock: this exact command ran {count} times in a row; retrying does not help, change the approach (read the error, try another command) or ask the owner")
 }
 
 #[cfg(test)]
@@ -94,12 +94,11 @@ mod tests {
 
     #[test]
     fn counts_same_command_and_resets_on_change() {
-        let a = repeat_step(None, "s", " ls ");
+        let a = repeat_step(None, " ls ");
         assert_eq!(a.count, 1);
-        let b = repeat_step(Some(&a), "s", "ls");
+        let b = repeat_step(Some(a), "ls");
         assert_eq!(b.count, 2);
-        assert_eq!(repeat_step(Some(&b), "s", "pwd").count, 1);
-        assert_eq!(repeat_step(Some(&b), "t", "ls").count, 1);
+        assert_eq!(repeat_step(Some(b), "pwd").count, 1);
     }
 
     #[test]
@@ -119,7 +118,6 @@ mod tests {
             "bosun wait --child S",
             " bosun status ",
             "/usr/bin/bosun heartbeat",
-            "bosun inbox",
             "bosun doctor",
             "sleep 60",
             "gh pr checks 5",
@@ -138,6 +136,9 @@ mod tests {
             "cargo test",
             "bosun claim T1",
             "bosun release T1",
+            "bosun risk-check 5",
+            "bosun inbox",
+            "git diff --output=x",
             "gh pr merge 5",
             "git push",
             "bosun wait; rm x",
@@ -155,8 +156,17 @@ mod tests {
 
     #[test]
     fn verdicts() {
-        let v: Vec<_> = (1..=6).map(repeat_verdict).collect();
-        use Verdict::*;
-        assert_eq!(v, [None, None, Some(Warn), None, Some(Deny), Some(Deny)]);
+        let kind = |n| match repeat_verdict(n) {
+            Some(Verdict::Warn(t)) => format!("warn {t}"),
+            Some(Verdict::Deny(t)) => format!("deny {t}"),
+            None => String::new(),
+        };
+        let v: Vec<_> = (1..=6).map(kind).collect();
+        assert!(
+            v[0].is_empty() && v[1].is_empty() && v[3].is_empty(),
+            "{v:?}"
+        );
+        assert!(v[2].starts_with("warn repeat-lock: this exact command ran 3 times"));
+        assert!(v[4].starts_with("deny repeat-lock") && v[5].starts_with("deny repeat-lock"));
     }
 }
