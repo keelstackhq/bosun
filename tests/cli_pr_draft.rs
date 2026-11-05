@@ -273,3 +273,18 @@ fn hold_puts_the_task_pr_back_to_draft() {
     assert_eq!(v["data"]["drafted"], serde_json::json!([30]));
     assert!(fake.pull_is_draft(30));
 }
+
+#[test]
+fn a_refusal_after_marking_ready_says_the_pr_is_ready_and_to_rerun() {
+    let fake = setup();
+    fake.already_clean();
+    let dir = repo("claude/t7");
+    stamps::ready(&fake, dir.path(), 20);
+    let (code, v) = bosun_in(&fake, dir.path(), &["pr", "7", "--ready"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(!fake.pull_is_draft(20), "the PR was marked ready: {v}");
+    assert_eq!(v["data"]["ready"], true, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("now ready"), "{fix}");
+    assert!(fix.contains("bosun pr 7 --ready"), "{fix}");
+}

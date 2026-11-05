@@ -72,9 +72,11 @@ and needs no GitHub) reads `.github/workflows/*.yml` and `*.yaml` with a small l
 (no YAML crate; it understands the subset these workflows use and is conservative) and fails
 (exit 1, `data.findings` = `{file, job, rule, fix}`, `error.fix` the first fix) on:
 - `draft`: a `pull_request(_target)` workflow with a job whose job-level `if:` lacks
-  `pull_request.draft == false` (or `!github.event.pull_request.draft`); the aggregate jobs
-  `ci-ok` and `bosun-ok` are exempt;
-- `aggregate`: `ci-ok` or `bosun-ok` whose `if:` skips drafts (it must run and fail on a draft);
+  `pull_request.draft == false` (or `!github.event.pull_request.draft`) as a term of a conjunction
+  (`always() || ...draft == false` never skips; under `pull_request_target` only the plain test
+  counts, the event-name form never skips); the aggregate jobs `ci-ok` and `bosun-ok` are exempt;
+- `aggregate`: `ci-ok` or `bosun-ok` whose `if:` skips drafts (it must run and fail on a draft), or
+  that has `needs:` and an `if:` without `always()` (a skipped need skips it);
 - `ready_for_review`: such a trigger whose `types:` lacks `ready_for_review` (no `types:` is the
   default set, which lacks it);
 - `concurrency`: a `pull_request`, `pull_request_target` or `push` workflow without a top-level

@@ -99,7 +99,12 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     // Built in, not in the profile: the same code as `bosun test-integrity`.
     if args.name == "test-integrity" {
         let out = crate::cli::test_integrity::check(dir, args.base.as_deref())?;
-        return Ok(stamped(dir.unwrap_or(Path::new(".")), &args.name, out));
+        return Ok(stamped(
+            dir.unwrap_or(Path::new(".")),
+            &args.name,
+            args.base.is_some(),
+            out,
+        ));
     }
     // Built in: the CI-minute rules over .github/workflows (docs/ci-minutes.md).
     if args.name == "ci-minutes" {
@@ -124,14 +129,29 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
         let (p, e) = (ci.provider.name(), ci.event.name());
         out.data["ci"] = serde_json::json!({"provider": p, "event": e, "base": base});
     }
-    Ok(stamped(&root, &args.name, out))
+    Ok(stamped(&root, &args.name, args.base.is_some(), out))
+}
+
+/// Whether the gate did nothing: every run it made was a skip (empty diff, missing manifest).
+fn all_skipped(data: &serde_json::Value) -> bool {
+    let skipped = |v: &serde_json::Value| v["skipped"] == true;
+    match data["runs"].as_array() {
+        Some(runs) => runs.iter().all(skipped),
+        None => skipped(data),
+    }
 }
 
 /// Outside CI, leave the stamp `bosun pr --ready` looks for and report it as `data.stamp`.
+/// Only a real run on the default base stamps: a skip proves nothing about the tree, and an
+/// explicit `--base` checks a different range than the PR's (`data.stamp` is null then).
 /// A failure to stamp goes to stderr and never fails the gate.
-fn stamped(dir: &Path, gate: &str, mut out: Outcome) -> Outcome {
+fn stamped(dir: &Path, gate: &str, explicit_base: bool, mut out: Outcome) -> Outcome {
     let env = |k: &str| std::env::var(k).ok();
     if ci_env::detect(&env, "main").provider != Provider::Local {
+        return out;
+    }
+    out.data["stamp"] = serde_json::Value::Null;
+    if explicit_base || all_skipped(&out.data) {
         return out;
     }
     match stamps::write(dir, gate) {
@@ -144,6 +164,15 @@ fn stamped(dir: &Path, gate: &str, mut out: Outcome) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gate_is_skipped_only_when_every_run_is() {
+        use serde_json::json;
+        assert!(all_skipped(&json!({"skipped": true})));
+        assert!(!all_skipped(&json!({"exit_status": 0})));
+        let mixed = json!({"skipped": true, "runs": [{"skipped": false}, {"skipped": true}]});
+        assert!(!all_skipped(&mixed));
+    }
 
     #[test]
     fn base_resolution_order() {

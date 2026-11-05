@@ -5,8 +5,9 @@
 //! Rules:
 //! - `draft`: a `pull_request(_target)` workflow whose job has no draft skip in its job-level `if:`
 //!   (the aggregate `ci-ok` / `bosun-ok` is exempt: see `aggregate`).
-//! - `aggregate`: the required aggregate job `ci-ok` or `bosun-ok` skips drafts. A skipped
-//!   required check counts as passed (a stale green), so it must run and fail on a draft.
+//! - `aggregate`: the required aggregate job `ci-ok` or `bosun-ok` skips drafts, or has `needs:`
+//!   and an `if:` without `always()`. A skipped required check counts as passed (a stale green),
+//!   so it must run and fail on a draft.
 //! - `ready_for_review`: such a workflow whose `types:` omits `ready_for_review` (no `types:` is
 //!   the default set, which lacks it).
 //! - `concurrency`: a `pull_request(_target)` or `push` workflow without a top-level
@@ -30,6 +31,95 @@ pub struct Finding {
 /// The `if:` that skips drafts and keeps every other event running.
 pub const DRAFT_SKIP: &str =
     "github.event_name != 'pull_request' || github.event.pull_request.draft == false";
+
+/// The `if:` that skips drafts in a `pull_request_target` workflow, where the event name is
+/// never `pull_request`.
+pub const DRAFT_SKIP_TARGET: &str = "github.event.pull_request.draft == false";
+
+/// `expr` without whitespace and without a `${{ }}` wrapper.
+fn squeeze(expr: &str) -> String {
+    let flat: String = expr.chars().filter(|c| !c.is_whitespace()).collect();
+    match flat.strip_prefix("${{").and_then(|f| f.strip_suffix("}}")) {
+        Some(inner) => inner.to_string(),
+        None => flat,
+    }
+}
+
+/// `expr` without the parentheses that wrap all of it.
+fn unwrap_parens(mut expr: &str) -> &str {
+    while let Some(inner) = expr.strip_prefix('(').and_then(|e| e.strip_suffix(')')) {
+        let mut depth = 0i32;
+        // Only when the first `(` closes at the very end: `(a)&&(b)` is not wrapped.
+        for c in inner.chars() {
+            depth += match c {
+                '(' => 1,
+                ')' => -1,
+                _ => 0,
+            };
+            if depth < 0 {
+                return expr;
+            }
+        }
+        expr = inner;
+    }
+    expr
+}
+
+/// Split `expr` at the top-level (outside parentheses and quotes) occurrences of `op`.
+fn split_top<'a>(expr: &'a str, op: &str) -> Vec<&'a str> {
+    let (mut depth, mut quote, mut start) = (0i32, false, 0);
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < expr.len() {
+        let rest = &expr[i..];
+        let c = rest.chars().next().unwrap_or(' ');
+        match c {
+            '\'' => quote = !quote,
+            '(' if !quote => depth += 1,
+            ')' if !quote => depth -= 1,
+            _ if !quote && depth == 0 && rest.starts_with(op) => {
+                parts.push(&expr[start..i]);
+                i += op.len();
+                start = i;
+                continue;
+            }
+            _ => {}
+        }
+        i += c.len_utf8();
+    }
+    parts.push(&expr[start..]);
+    parts
+}
+
+/// Whether a job `if:` skips drafts: it is a conjunction with the draft test as one term. A
+/// top-level `||` breaks it (`always() || ...draft == false` never skips), except the guard's
+/// own `event_name != 'pull_request' || ...draft == false` form, which only skips outside
+/// `pull_request_target` (there the event name is never `pull_request`).
+fn skips_draft(cond: &str, target: bool) -> bool {
+    let plain = squeeze(DRAFT_SKIP_TARGET);
+    let event = squeeze(DRAFT_SKIP);
+    let expr = squeeze(cond);
+    let expr = unwrap_parens(&expr);
+    let guard = |term: &str| {
+        let term = unwrap_parens(term);
+        term == plain || term == "!github.event.pull_request.draft" || (!target && term == event)
+    };
+    // A term that confines the job to an event other than a pull request.
+    let other_event = |term: &str| {
+        let term = unwrap_parens(term);
+        term.strip_prefix("github.event_name==")
+            .is_some_and(|e| !matches!(e, "'pull_request'" | "'pull_request_target'"))
+    };
+    let conj = |part: &str, f: &dyn Fn(&str) -> bool| {
+        split_top(unwrap_parens(part), "&&").into_iter().any(f)
+    };
+    let ors = split_top(expr, "||");
+    if ors.len() > 1 {
+        // The guard's own form, or every branch skips drafts or is another event's.
+        return guard(expr) || ors.iter().all(|p| conj(p, &guard) || conj(p, &other_event));
+    }
+    conj(expr, &guard)
+}
 
 /// Entry of the reader: a line (comments and blanks dropped) and, for a block scalar
 /// (`key: |` or `key: >-`), its body joined by spaces.
@@ -248,7 +338,9 @@ fn cancels(lines: &[Line]) -> bool {
 
 struct Job {
     id: String,
-    skips_drafts: bool,
+    /// The job-level `if:`, if any.
+    cond: Option<String>,
+    needs: bool,
     heavy: bool,
 }
 
@@ -277,17 +369,17 @@ fn jobs(lines: &[Line]) -> Vec<Job> {
             .collect();
         let mut job = Job {
             id: id.to_string(),
-            skips_drafts: false,
+            cond: None,
+            needs: false,
             heavy: false,
         };
         for &j in &props {
             let value = body[j].value();
             match body[j].key() {
                 Some("if") => {
-                    let flat: String = value.chars().filter(|c| !c.is_whitespace()).collect();
-                    job.skips_drafts = flat.contains("pull_request.draft==false")
-                        || flat.contains("!github.event.pull_request.draft");
+                    job.cond = Some(value);
                 }
+                Some("needs") => job.needs = true,
                 Some("runs-on") => {
                     let mut all = value;
                     for c in children(body, j) {
@@ -335,25 +427,44 @@ pub fn check(file: &str, text: &str) -> Vec<Finding> {
     };
     let jobs = jobs(&lines);
     if !prs.is_empty() {
-        for j in jobs.iter().filter(|j| !j.skips_drafts && !j.aggregate()) {
+        let target = prs.iter().any(|t| t.name == "pull_request_target");
+        let skip = if target {
+            DRAFT_SKIP_TARGET
+        } else {
+            DRAFT_SKIP
+        };
+        let skips = |j: &Job| j.cond.as_deref().is_some_and(|c| skips_draft(c, target));
+        for j in jobs.iter().filter(|j| !skips(j) && !j.aggregate()) {
             add(
                 Some(&j.id),
                 "draft",
                 format!(
-                    "add `if: {DRAFT_SKIP}` to job `{}` (with `&&` to its other conditions) so a draft PR starts no runner",
+                    "add `if: {skip}` to job `{}` (with `&&` to its other conditions) so a draft PR starts no runner; never on a required check: a skipped required check counts as passed; make it fail fast on a draft instead",
                     j.id
                 ),
             );
         }
-        for j in jobs.iter().filter(|j| j.skips_drafts && j.aggregate()) {
-            add(
-                Some(&j.id),
-                "aggregate",
-                format!(
-                    "job `{}` is a required check: remove the draft skip from its `if:` (keep `always()`) and make its first step fail on a draft, because a skipped required check counts as passed",
-                    j.id
-                ),
-            );
+        for j in jobs.iter().filter(|j| j.aggregate()) {
+            let cond = j.cond.as_deref().unwrap_or_default();
+            if skips_draft(cond, false) {
+                add(
+                    Some(&j.id),
+                    "aggregate",
+                    format!(
+                        "job `{}` is a required check: remove the draft skip from its `if:` (keep `always()`) and make its first step fail on a draft, because a skipped required check counts as passed",
+                        j.id
+                    ),
+                );
+            } else if j.needs && !cond.contains("always()") {
+                add(
+                    Some(&j.id),
+                    "aggregate",
+                    format!(
+                        "job `{}` is a required check with `needs:`: set `if: always()`, because it is skipped when a needed job is skipped and a skipped required check counts as passed",
+                        j.id
+                    ),
+                );
+            }
         }
         for t in &prs {
             if !t
@@ -468,11 +579,85 @@ jobs:
         );
         assert_eq!(rules(&ok), vec![], "no draft skip needed, none allowed");
         let bare = format!("{CLEAN}  bosun-ok:\n    needs: [ci]\n    runs-on: ubuntu-latest\n");
-        assert_eq!(rules(&bare), vec![], "no if at all runs on a draft");
+        assert_eq!(
+            rules(&bare),
+            vec![(Some("bosun-ok".into()), "aggregate")],
+            "a skipped need skips a job whose if lacks always()"
+        );
+        let alone = format!("{CLEAN}  ci-ok:\n    runs-on: ubuntu-latest\n");
+        assert_eq!(rules(&alone), vec![], "no needs, nothing to skip it");
+        let other = format!(
+            "{CLEAN}  ci-ok:\n    needs: [ci]\n    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n"
+        );
+        assert_eq!(rules(&other), vec![(Some("ci-ok".into()), "aggregate")]);
         let skipped = format!(
             "{CLEAN}  ci-ok:\n    needs: [ci]\n    if: ${{{{ always() && github.event.pull_request.draft == false }}}}\n    runs-on: ubuntu-latest\n"
         );
         assert_eq!(rules(&skipped), vec![(Some("ci-ok".into()), "aggregate")]);
+    }
+
+    fn with_if(cond: &str) -> String {
+        CLEAN.replace(
+            "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+            cond,
+        )
+    }
+
+    #[test]
+    fn an_or_with_always_is_not_a_draft_skip() {
+        for bad in [
+            "always() || github.event.pull_request.draft == false",
+            "${{ always() || github.event.pull_request.draft == false }}",
+            "github.event.pull_request.draft == false || github.actor == 'bot'",
+            "(always() || github.event.pull_request.draft == false) && true",
+        ] {
+            assert_eq!(
+                rules(&with_if(bad)),
+                vec![(Some("ci".into()), "draft")],
+                "{bad}"
+            );
+        }
+        for good in [
+            "github.event.pull_request.draft == false",
+            "needs.x.result == 'success' && github.event.pull_request.draft == false",
+            "always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false)",
+            "${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}",
+            "!github.event.pull_request.draft && github.actor != 'bot'",
+        ] {
+            assert_eq!(rules(&with_if(good)), vec![], "{good}");
+        }
+    }
+
+    #[test]
+    fn pull_request_target_needs_the_plain_draft_test() {
+        let t = CLEAN.replace("  pull_request:", "  pull_request_target:");
+        let f = check("w.yml", &t);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!((f[0].job.as_deref(), f[0].rule), (Some("ci"), "draft"));
+        assert!(
+            f[0].fix
+                .contains("`if: github.event.pull_request.draft == false`"),
+            "{}",
+            f[0].fix
+        );
+        let plain = t.replace(
+            "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+            "github.event.pull_request.draft == false",
+        );
+        assert_eq!(rules(&plain), vec![]);
+    }
+
+    #[test]
+    fn the_draft_fix_warns_about_required_checks() {
+        let t = CLEAN.replace(
+            "    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false\n",
+            "",
+        );
+        let fix = &check("w.yml", &t)[0].fix;
+        assert!(
+            fix.contains("never on a required check: a skipped required check counts as passed; make it fail fast on a draft instead"),
+            "{fix}"
+        );
     }
 
     #[test]
@@ -498,7 +683,9 @@ jobs:
 
     #[test]
     fn pull_request_target_is_checked_the_same() {
-        let t = CLEAN.replace("  pull_request:", "  pull_request_target:");
+        let t = CLEAN
+            .replace("  pull_request:", "  pull_request_target:")
+            .replace(DRAFT_SKIP, DRAFT_SKIP_TARGET);
         assert_eq!(rules(&t), vec![]);
         let bad = t.replace(", ready_for_review", "");
         assert_eq!(rules(&bad), vec![(None, "ready_for_review")]);

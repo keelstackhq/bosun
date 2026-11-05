@@ -1887,7 +1887,7 @@ fn drafts_skip_the_heavy_jobs_and_fail_the_required_check() {
             assert!(
                 wf.contains("types: [opened, synchronize, reopened, edited, ready_for_review]")
             );
-            let Some(j) = yaml_json(wf) else { return };
+            let Some(j) = yaml_json(wf) else { continue };
             let jobs = j["jobs"].as_object().unwrap();
             let check = check_name(own_ci);
             for (id, job) in jobs {

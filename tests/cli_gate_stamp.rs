@@ -40,11 +40,20 @@ fn repo() -> (tempfile::TempDir, PathBuf) {
     put(&root, "src/lib.rs", "pub fn f() {}\n");
     git(&root, &["add", "."]);
     git(&root, &["commit", "-q", "-m", "base"]);
+    git(&root, &["update-ref", "refs/remotes/origin/main", "main"]);
     git(&root, &["checkout", "-q", "-b", "work"]);
     (tmp, root)
 }
 
 fn gate(root: &Path, env: &[(&str, &str)]) -> (i32, Value) {
+    gate_args(root, env, &[])
+}
+
+fn gate_args(root: &Path, env: &[(&str, &str)], extra: &[&str]) -> (i32, Value) {
+    gate_named(root, "test-integrity", env, extra)
+}
+
+fn gate_named(root: &Path, name: &str, env: &[(&str, &str)], extra: &[&str]) -> (i32, Value) {
     let mut cmd = bosun();
     cmd.env_remove("GITHUB_BASE_REF")
         .env_remove("BOSUN_PR_BODY")
@@ -55,7 +64,8 @@ fn gate(root: &Path, env: &[(&str, &str)]) -> (i32, Value) {
     let out = cmd
         .arg("-C")
         .arg(root)
-        .args(["gate", "test-integrity", "--base", "main"])
+        .args(["gate", name])
+        .args(extra)
         .output()
         .unwrap();
     (out.status.code().unwrap(), one_object(&out.stdout))
@@ -123,4 +133,64 @@ fn ci_runs_do_not_stamp() {
     assert!(v["data"].get("stamp").is_none_or(Value::is_null), "{v}");
     let tree = git(&root, &["rev-parse", "HEAD^{tree}"]);
     assert!(!stamp_path(&root, &tree).exists());
+}
+
+fn stamps_dir(root: &Path) -> PathBuf {
+    let common = git(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    );
+    Path::new(&common).join("bosun/gates")
+}
+
+#[test]
+fn an_explicit_base_does_not_stamp() {
+    let (_tmp, root) = repo();
+    put(&root, "src/lib.rs", "pub fn f() { let _ = 1; }\n");
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "change"]);
+    let (code, v) = gate_args(&root, &[], &["--base", "main"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["stamp"].is_null(), "{v}");
+    assert!(!stamps_dir(&root).exists());
+}
+
+#[test]
+fn a_skipped_gate_does_not_stamp() {
+    // No change against the base: a green skip proves nothing about the tree.
+    let (_tmp, root) = repo();
+    let (code, v) = gate_named(&root, "fmt", &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert!(v["data"]["stamp"].is_null(), "{v}");
+    assert!(!stamps_dir(&root).exists());
+}
+
+#[test]
+fn the_stamp_tree_includes_untracked_files() {
+    let (_tmp, root) = repo();
+    put(&root, "src/lib.rs", "pub fn f() { let _ = 3; }\n");
+    put(&root, "src/new.rs", "pub fn g() {}\n");
+    let (code, v) = gate(&root, &[]);
+    assert_eq!(code, 0, "{v}");
+    let stamp = PathBuf::from(v["data"]["stamp"].as_str().unwrap());
+    let tree = stamp
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    // The stamp is not the tree of the tracked changes alone ...
+    git(&root, &["commit", "-q", "-a", "-m", "tracked only"]);
+    assert_ne!(git(&root, &["rev-parse", "HEAD^{tree}"]), tree);
+    // ... but of everything git add -A takes in.
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "--amend", "--no-edit"]);
+    assert_eq!(git(&root, &["rev-parse", "HEAD^{tree}"]), tree);
+    assert!(
+        git(&root, &["status", "--porcelain"]).is_empty(),
+        "stamping must not touch the index or tree"
+    );
 }

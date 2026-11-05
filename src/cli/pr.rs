@@ -542,10 +542,15 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             pull.number,
             line.join(", ")
         );
-        // GitHub cannot auto-merge a draft: mark it ready only now that nothing else can refuse.
+        // GitHub cannot auto-merge a draft, so it is marked ready first. Later steps can still
+        // refuse; their errors carry `ready: true` so the session knows the PR is already ready.
+        let mut marked_ready = false;
         if pull.draft {
             match gh.set_draft(&pull.node_id, false) {
-                Ok(()) => pull.draft = false,
+                Ok(()) => {
+                    pull.draft = false;
+                    marked_ready = true;
+                }
                 Err(e) if is_ccr_refusal(&e) => {
                     let note = format!(
                         "this session cannot call GraphQL: mark PR #{} ready with the tool call in `next`, then rerun `bosun pr {n} --ready`",
@@ -577,12 +582,13 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 pull.number,
                 record.to_line()
             ),
-        )?;
+        )
+        .map_err(|e| after_ready(e, marked_ready, pull.number, n))?;
         route = match enable_auto_merge_any(gh, &pull) {
             Ok(r) => Some(r),
             // Already mergeable: bosun never merges (D13), the task stays in review.
             Err(e) if is_already_clean(&e) => {
-                return Err(BosunError::needs_human(
+                return Err(after_ready(BosunError::needs_human(
                     format!(
                         "PR #{} is already mergeable with every required check green, so GitHub cannot turn on auto-merge",
                         pull.number
@@ -594,19 +600,19 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 )
                 .with_data(json!({
                     "pr": pull.number, "head_sha": pull.head_sha, "already_clean": true,
-                })));
+                })), marked_ready, pull.number, n));
             }
             Err(e) if is_unstable(&e) => {
-                return Err(BosunError::error(
+                return Err(after_ready(BosunError::error(
                     format!("PR #{} has a failing check, so GitHub cannot turn on auto-merge", pull.number),
                     format!(
                         "`bosun wait --pr {0}` names the failing checks: fix them, push, then rerun `bosun pr {n} --ready`",
                         pull.number
                     ),
                 )
-                .with_data(json!({"pr": pull.number, "head_sha": pull.head_sha, "unstable": true})));
+                .with_data(json!({"pr": pull.number, "head_sha": pull.head_sha, "unstable": true})), marked_ready, pull.number, n));
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(after_ready(e, marked_ready, pull.number, n)),
         };
         let fresh = gh.get_issue(n)?.unwrap_or(issue);
         set_state(gh, n, &fresh, State::Queued)?;
@@ -621,4 +627,24 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         "pending_checks": pending.iter().map(|(c, s)| json!({"context": c, "state": s}))
             .collect::<Vec<_>>(),
     })))
+}
+
+/// An error after this run marked the PR ready: say so (`data.ready`) and how to carry on.
+fn after_ready(mut e: BosunError, marked_ready: bool, pr: u64, task: u64) -> BosunError {
+    if !marked_ready {
+        return e;
+    }
+    let mut data = e.data.take().unwrap_or_else(|| json!({}));
+    data["ready"] = json!(true);
+    e.data = Some(data);
+    let rerun = format!("bosun pr {task} --ready");
+    e.fix = if e.fix.contains(&rerun) {
+        format!("PR #{pr} is now ready (it was a draft); {}", e.fix)
+    } else {
+        format!(
+            "PR #{pr} is now ready (it was a draft); {}, then rerun `{rerun}`",
+            e.fix.trim_end_matches('.')
+        )
+    };
+    e
 }

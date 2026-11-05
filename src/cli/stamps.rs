@@ -1,6 +1,5 @@
 //! Reading and writing local gate stamps: `<git common dir>/bosun/gates/<tree>/<gate>`, where
-//! `<tree>` is the tree of the tracked working state (`git stash create`, which prints nothing
-//! on a clean tree) or `HEAD^{tree}`. The pure naming is in `core::stamps`.
+//! `<tree>` is the tree of the working state (HEAD plus `git add -A`, built in a temporary index). The pure naming is in `core::stamps`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -32,22 +31,38 @@ pub fn head_sha(dir: &Path) -> Option<String> {
     git_out(dir, &["rev-parse", "HEAD"])
 }
 
-/// The tree of what the gates just ran on: tracked working state, else `HEAD^{tree}`.
+/// The tree of what the gates just ran on: `HEAD` plus every change in the working tree,
+/// untracked non-ignored files included (what `git add -A` would commit). It is built in a
+/// temporary index, so the real index and tree stay untouched.
 pub fn working_tree(dir: &Path) -> Option<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["stash", "create"])
-        .output()
-        .ok()?;
-    // A failure (no identity to commit with) must not fall back to HEAD: the tree may be dirty.
-    if !out.status.success() {
-        return None;
-    }
-    match String::from_utf8_lossy(&out.stdout).trim() {
-        "" => head_tree(dir),
-        commit => git_out(dir, &["rev-parse", &format!("{commit}^{{tree}}")]),
-    }
+    let git_dir = PathBuf::from(git_out(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-dir"],
+    )?);
+    let index = git_dir.join(format!("bosun-stamp-index-{}", std::process::id()));
+    let run = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .env("GIT_INDEX_FILE", &index)
+            .args(args)
+            .output()
+            .ok()
+    };
+    // Any failure yields None, never a fallback to HEAD: the tree may be dirty.
+    let tree = (|| {
+        if !run(&["read-tree", "HEAD"])?.status.success() {
+            return None;
+        }
+        if !run(&["add", "-A"])?.status.success() {
+            return None;
+        }
+        let out = run(&["write-tree"])?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (out.status.success() && !text.is_empty()).then_some(text)
+    })();
+    let _ = std::fs::remove_file(&index);
+    tree
 }
 
 /// The directory that holds `bosun/gates`: the git common dir, shared by all worktrees.
