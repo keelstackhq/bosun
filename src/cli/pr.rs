@@ -8,11 +8,12 @@ use std::process::Command;
 use serde_json::json;
 
 use super::PrArgs;
+use super::reap::{EpicScope, close_done_epics};
 use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged};
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
-use crate::core::meta::{closing_issues, linked_issues};
+use crate::core::meta::{closing_issues, linked_issues, parse_task_meta};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
@@ -222,10 +223,29 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 } else {
                     state_of(&issue.labels)
                 };
-                return Ok(Outcome::data(json!({
+                let mut data = json!({
                     "pr": p.number, "head_sha": p.head_sha, "created": false,
                     "auto_merge": false, "merged": true, "task_state": task_state.map(State::name),
-                })));
+                });
+                // The last merged task closes its epic (a root session working it directly never
+                // runs `result`); housekeeping after the move: a failure is reported, not fatal.
+                if moved && let Some(epic) = parse_task_meta(issue.body_text()).and_then(|m| m.epic)
+                {
+                    let mut closed = Vec::new();
+                    let scope = EpicScope {
+                        only: Some(epic),
+                        quiet: false,
+                        own_session: Some(&app.ctx.session),
+                        done: &[n],
+                    };
+                    let err = close_done_epics(gh, app.ctx.now, scope, &mut closed).err();
+                    data["epic_closed"] = json!(!closed.is_empty());
+                    if let Some(e) = err {
+                        eprintln!("pr: closing the epic failed: {e}");
+                        data["epic_error"] = json!(e.to_string());
+                    }
+                }
+                return Ok(Outcome::data(data));
             }
         }
     }

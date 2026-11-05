@@ -5,6 +5,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ResultArgs;
+use super::reap::{EpicScope, close_done_epics};
 use crate::app::{
     App, default_branch, end_lease, halt_reason, merge_counts, notes, set_state, sync_merged,
     task_pr_merged,
@@ -131,12 +132,28 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         gh.add_comment(number, &leave.to_line())?;
         left = true;
     }
-    Ok(Outcome::data(json!({
+
+    // Closing the epic is housekeeping after the comment: a failure is reported, never fatal.
+    let mut closed = Vec::new();
+    let scope = EpicScope {
+        only: Some(n),
+        quiet: false,
+        own_session: Some(session),
+        done: &tasks_merged,
+    };
+    let epic_error = close_done_epics(gh, app.ctx.now, scope, &mut closed).err();
+    let mut data = json!({
         "epic": n, "outcome": args.outcome, "pr": args.pr,
         "comment_id": comment_id, "lease_ended": lease_ended, "left": left,
         "task_state": state.map(State::name), "tasks_merged": tasks_merged,
         "partial_skipped": partial_skipped,
-    })))
+        "epic_closed": !closed.is_empty(),
+    });
+    if let Some(e) = epic_error {
+        eprintln!("result: closing the epic failed: {e}");
+        data["epic_error"] = json!(e.to_string());
+    }
+    Ok(Outcome::data(data))
 }
 
 /// Why `partial` must not move epic `n` back to ready (the result is still recorded): only the
