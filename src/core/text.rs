@@ -52,6 +52,42 @@ pub fn inert(t: &str, max: usize) -> String {
     format!("`{t}`")
 }
 
+/// Whether a log line looks like a failure (case-insensitive `error`, `fail`, `panic`, or `✗`).
+fn is_error_line(line: &str) -> bool {
+    let l = line.to_lowercase();
+    ["error", "fail", "panic", "✗"]
+        .iter()
+        .any(|k| l.contains(k))
+}
+
+/// Shrink a CI log: keep the first `head` and last `tail` lines plus up to `max_err` error lines
+/// from the middle (the first ones), in original order. A `… N lines cut …` line stands for every
+/// gap between kept groups. A log of at most `head + tail` lines is returned whole.
+pub fn squash_log(text: &str, head: usize, tail: usize, max_err: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let n = lines.len();
+    let tail_start = n.saturating_sub(tail).max(head.min(n));
+    let mut keep: Vec<usize> = (0..head.min(n)).collect();
+    keep.extend(
+        (head.min(n)..tail_start)
+            .filter(|&i| is_error_line(lines[i]))
+            .take(max_err),
+    );
+    keep.extend(tail_start..n);
+    let mut out: Vec<String> = Vec::new();
+    let mut prev: Option<usize> = None;
+    for i in keep {
+        if let Some(p) = prev
+            && i > p + 1
+        {
+            out.push(format!("… {} lines cut …", i - p - 1));
+        }
+        out.push(lines[i].to_string());
+        prev = Some(i);
+    }
+    out.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +129,47 @@ mod tests {
         assert_eq!(inert(&"x".repeat(10), 5), "`xxxx…`");
         assert_eq!(inert(" \u{200b} ", 5), "");
         assert_eq!(inert("ok", 5), "`ok`");
+    }
+
+    fn numbered(n: usize) -> String {
+        (1..=n)
+            .map(|i| format!("l{i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn short_log_is_whole() {
+        let t = numbered(6);
+        assert_eq!(squash_log(&t, 3, 3, 20), t);
+        assert_eq!(squash_log("", 3, 3, 20), "");
+    }
+
+    #[test]
+    fn head_tail_and_middle_errors_are_kept_with_markers() {
+        let mut v: Vec<String> = (1..=30).map(|i| format!("l{i}")).collect();
+        v[14] = "thing FAILED here".into();
+        let out = squash_log(&v.join("\n"), 2, 2, 20);
+        assert_eq!(
+            out,
+            "l1\nl2\n… 12 lines cut …\nthing FAILED here\n… 13 lines cut …\nl29\nl30"
+        );
+    }
+
+    #[test]
+    fn adjacent_groups_have_no_marker_and_errors_are_capped() {
+        let v: Vec<String> = (1..=12).map(|i| format!("error {i}")).collect();
+        let out = squash_log(&v.join("\n"), 1, 1, 2);
+        assert_eq!(out, "error 1\nerror 2\nerror 3\n… 8 lines cut …\nerror 12");
+        assert_eq!(squash_log(&numbered(10), 0, 3, 5), "l8\nl9\nl10");
+        assert_eq!(squash_log(&numbered(10), 0, 0, 5), "");
+    }
+
+    #[test]
+    fn error_words_match_case_insensitively() {
+        for l in ["an Error", "FAIL", "thread panicked", "✗ gate"] {
+            assert!(is_error_line(l), "{l}");
+        }
+        assert!(!is_error_line("all fine"));
     }
 }

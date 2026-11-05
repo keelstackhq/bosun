@@ -1,4 +1,5 @@
-//! `bosun ci-log <pr>`: the failed jobs of the PR head with the tail of each log.
+//! `bosun ci-log <pr>`: the failed jobs of the PR head with each log squashed:
+//! head, tail and up to 20 error lines from the middle.
 
 use std::path::Path;
 
@@ -22,7 +23,7 @@ pub fn run(dir: Option<&Path>, args: &CiLogArgs) -> CmdResult {
     for job in gh.failed_jobs(&pull.head_sha)? {
         jobs.push(json!({
             "name": job.name, "conclusion": job.conclusion, "url": job.html_url,
-            "log": gh.job_log(job.id, args.tail)?,
+            "log": gh.job_log(job.id, args.head, args.tail)?,
         }));
     }
     Ok(Outcome::data(
