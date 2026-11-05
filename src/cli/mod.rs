@@ -242,6 +242,7 @@ impl Command {
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
+            Command::Hook(HookCmd::Stop) => "hook stop",
             Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
@@ -640,6 +641,8 @@ pub enum HookCmd {
     PreToolUse,
     /// SessionStart: join and print the session context.
     SessionStart,
+    /// Stop: block once while the lease has no result or handoff; warn on a stale gate.
+    Stop,
 }
 
 #[derive(Debug, Subcommand)]

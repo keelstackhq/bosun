@@ -111,3 +111,11 @@ REVIEW.md). The reviewer returns:
 
 Flakes: a test that fails and then passes on the same commit is a flake. bosun opens a kind/flake
 task and a lesson. A test is never skipped to get green.
+
+Gate record: a local `bosun gate` run that passed (not under `CI` or `GITHUB_ACTIONS`) writes
+`<git dir>/bosun/gate.json` `{head, fingerprint}` (the worktree's own git dir, so parallel
+worktrees keep their own), the fingerprint being the sha256 of `git status --porcelain=v1` plus
+`git diff --no-ext-diff HEAD`. A failed run removes the record, so an earlier gate that passed on
+the same tree no longer vouches for it. The Stop hook adds a `systemMessage` (never a block) when
+the tree is not what that record saw: another head or fingerprint, or no record and uncommitted
+changes. A clean tree with no record, or a tree equal to the record, is silent.

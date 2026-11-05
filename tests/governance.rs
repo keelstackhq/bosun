@@ -163,7 +163,7 @@ fn owners_name_the_repo_owner() {
 fn settings_hooks_run_bosun_hook_commands() {
     let settings: Value = serde_json::from_str(&read(".claude/settings.json")).unwrap();
     let mut commands = Vec::new();
-    for event in ["SessionStart", "PreToolUse"] {
+    for event in ["SessionStart", "Stop", "PreToolUse"] {
         for group in settings["hooks"][event].as_array().unwrap() {
             for h in group["hooks"].as_array().unwrap() {
                 commands.push(h["command"].as_str().unwrap().to_string());
@@ -172,12 +172,16 @@ fn settings_hooks_run_bosun_hook_commands() {
     }
     assert_eq!(
         commands,
-        vec!["bosun hook session-start", "bosun hook pre-tool-use"]
+        vec![
+            "bosun hook session-start",
+            "bosun hook stop",
+            "bosun hook pre-tool-use"
+        ]
     );
     // A merge through Bash is refused by the configured PreToolUse command.
     let input = json!({"session_id": "x", "tool_name": "Bash",
         "tool_input": {"command": "gh pr merge 3"}, "cwd": "/"});
-    let args: Vec<&str> = commands[1].split_whitespace().skip(1).collect();
+    let args: Vec<&str> = commands[2].split_whitespace().skip(1).collect();
     let out = bosun()
         .current_dir(std::env::temp_dir())
         .args(&args)

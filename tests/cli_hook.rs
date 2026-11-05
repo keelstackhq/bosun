@@ -56,9 +56,22 @@ fn hook_as(
     sub: &str,
     input: &Value,
 ) -> Out {
+    hook_with(session, "local", fake, repo, now, sub, input)
+}
+
+fn hook_with(
+    session: &str,
+    origin: &str,
+    fake: Option<&FakeGithub>,
+    repo: &Path,
+    now: &str,
+    sub: &str,
+    input: &Value,
+) -> Out {
     let mut cmd = bosun();
     cmd.current_dir(repo)
         .env("BOSUN_SESSION", session)
+        .env("BOSUN_ORIGIN", origin)
         .env("BOSUN_NOW", now)
         .args(["hook", sub])
         .write_stdin(input.to_string());
@@ -478,4 +491,211 @@ fn session_start_from_a_subdirectory_reads_the_repo_root_lessons() {
     std::fs::create_dir_all(&sub).unwrap();
     let text = start_text(None, &sub);
     assert!(text.contains("\nLessons:\nL1 * keep it small"), "{text}");
+}
+
+/// The Stop hook as a spawned child (the session it blocks).
+fn stop(fake: Option<&FakeGithub>, repo: &Path, input: Value) -> Out {
+    stop_as("spawned", fake, repo, input)
+}
+
+fn stop_as(origin: &str, fake: Option<&FakeGithub>, repo: &Path, input: Value) -> Out {
+    hook_with("session_me", origin, fake, repo, T1, "stop", &input)
+}
+
+fn blocked(o: &Out) -> String {
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).expect("one JSON object");
+    assert_eq!(v["decision"], "block", "{v}");
+    v["reason"].as_str().unwrap().to_string()
+}
+
+fn stop_in(repo: &Path) -> Value {
+    json!({"session_id": "s", "cwd": repo.to_str().unwrap(), "stop_hook_active": false})
+}
+
+fn git_text(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+fn silent(o: &Out) {
+    assert_eq!((o.code, o.stdout.as_str()), (0, ""), "{}", o.stderr);
+}
+
+#[test]
+fn stop_hook_active_allows_without_looking() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let mut input = stop_in(tmp.path());
+    input["stop_hook_active"] = json!(true);
+    silent(&stop(Some(&fake), tmp.path(), input));
+}
+
+#[test]
+fn stop_blocks_a_live_lease_without_result_or_handoff() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let o = stop(Some(&fake), tmp.path(), stop_in(tmp.path()));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(v["decision"], "block");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("#5") && reason.contains("bosun result"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn stop_allows_after_a_handoff_note() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let note =
+        r#"{"bosun":"handoff","session":"session_me","at":"2026-10-22T10:01:00Z","lines":["x"]}"#;
+    fake.comment(5, note);
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_allows_after_a_result_note() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let note = r#"{"bosun":"result","session":"session_me","outcome":"merged"}"#;
+    fake.comment(5, note);
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_allows_without_an_own_lease() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    fake.issue(4, "other", &["bosun:state/claimed"], "x");
+    fake.comment(4, &lease_note("session_other", LIVE, "src/core/**"));
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_warns_when_the_gate_record_is_stale_and_stays_silent_when_it_matches() {
+    let tmp = repo();
+    let dir = tmp.path();
+    let fake = FakeGithub::start();
+    std::fs::write(dir.join("a.txt"), "1").unwrap();
+    git(dir, &["add", "-A"]);
+    let who = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    let mut commit = who.to_vec();
+    commit.extend(["commit", "-qm", "c"]);
+    git(dir, &commit);
+    // No record, clean tree: silent.
+    silent(&stop(Some(&fake), dir, stop_in(dir)));
+    // No record, dirty tree: warn, never block.
+    std::fs::write(dir.join("a.txt"), "2").unwrap();
+    let o = stop(Some(&fake), dir, stop_in(dir));
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert!(v["systemMessage"].as_str().unwrap().contains("bosun gate"));
+    assert!(v.get("decision").is_none());
+    // A record of this very tree: silent.
+    let head = git_text(dir, &["rev-parse", "HEAD"]);
+    let fp = bosun::core::gate_record::fingerprint(
+        &git_text(dir, &["status", "--porcelain=v1"]),
+        &git_text(dir, &["diff", "HEAD"]),
+    );
+    let file = dir.join(".git/bosun/gate.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        json!({"head": head.trim(), "fingerprint": fp}).to_string(),
+    )
+    .unwrap();
+    silent(&stop(Some(&fake), dir, stop_in(dir)));
+    // The tree moves on: warn again.
+    std::fs::write(dir.join("a.txt"), "3").unwrap();
+    let o = stop(Some(&fake), dir, stop_in(dir));
+    assert!(o.stdout.contains("systemMessage"), "{}", o.stdout);
+}
+
+#[test]
+fn stop_never_blocks_a_session_a_human_answers() {
+    for origin in ["local", "slack"] {
+        let tmp = repo();
+        let fake = FakeGithub::start();
+        leased(&fake);
+        silent(&stop_as(
+            origin,
+            Some(&fake),
+            tmp.path(),
+            stop_in(tmp.path()),
+        ));
+        // Not even a GitHub read: a turn end of an interactive session costs nothing.
+        assert!(
+            fake.requests().is_empty(),
+            "{origin}: {:?}",
+            fake.requests()
+        );
+    }
+}
+
+#[test]
+fn stop_blocks_a_routine_root_without_result_or_handoff() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let reason = blocked(&stop_as(
+        "routine",
+        Some(&fake),
+        tmp.path(),
+        stop_in(tmp.path()),
+    ));
+    assert!(
+        reason.contains("#5") && reason.contains("bosun handoff"),
+        "{reason}"
+    );
+}
+
+const HANDOFF: &str =
+    r#"{"bosun":"handoff","session":"session_me","at":"2026-10-22T10:01:00Z","lines":["x"]}"#;
+
+#[test]
+fn stop_allows_a_root_after_its_handoff_on_the_registry() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    leased(&fake);
+    fake.comment(1, HANDOFF);
+    silent(&stop_as(
+        "routine",
+        Some(&fake),
+        tmp.path(),
+        stop_in(tmp.path()),
+    ));
+}
+
+#[test]
+fn stop_ignores_a_registry_handoff_older_than_the_lease_or_by_another_session() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.comment(1, HANDOFF);
+    leased(&fake);
+    fake.comment(1, &HANDOFF.replace("session_me", "session_other"));
+    blocked(&stop_as(
+        "routine",
+        Some(&fake),
+        tmp.path(),
+        stop_in(tmp.path()),
+    ));
+}
+
+#[test]
+fn stop_allows_when_github_is_down() {
+    let tmp = repo();
+    silent(&stop(None, tmp.path(), stop_in(tmp.path())));
 }

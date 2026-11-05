@@ -27,6 +27,7 @@ const CALLS: &[&[&str]] = &[
     &["lesson", "hit", "L-001"],
     &["hook", "pre-tool-use"],
     &["hook", "session-start"],
+    &["hook", "stop"],
     &["doctor"],
     &["budget", "record", "4", "--provider", "generic"],
     &["fail", "4", "--signature", "E0308"],

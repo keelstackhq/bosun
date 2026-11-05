@@ -108,13 +108,21 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     let root = repo_root(&dir)?;
     let config = Config::load(&root)?;
     let (base, ci) = resolve_ci(&root, args.base.as_deref())?;
-    let mut out = gates::run(&Request {
+    let run = gates::run(&Request {
         root: &root,
         stacks: &config.stack,
         gate: &args.name,
         base: &base,
         all: args.all || ci.all,
-    })?;
+    });
+    // A local run records the tree for the Stop hook when it passes, else forgets it (spec §7).
+    if std::env::var_os("CI").is_none() && std::env::var_os("GITHUB_ACTIONS").is_none() {
+        match &run {
+            Ok(_) => crate::hooks::stop::write_record(&root),
+            Err(_) => crate::hooks::stop::clear_record(&root),
+        }
+    }
+    let mut out = run?;
     if ci.provider == Provider::CircleCi {
         let (p, e) = (ci.provider.name(), ci.event.name());
         out.data["ci"] = serde_json::json!({"provider": p, "event": e, "base": base});
