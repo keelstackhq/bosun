@@ -18,17 +18,19 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    CI minutes are scarce: push once per PR, when it is done and green locally; do review
    rounds locally (step 6) and push their fixes together. Do not edit the PR body or title
    just to retry CI.
-5. `bosun pr <issue>` — opens or reuses the PR and moves the task to review.
+5. `bosun pr <issue> --auto-merge` as soon as the work is pushed: it opens or reuses the PR, moves
+   the task to review and turns auto-merge on right away, before the review of step 6; the
+   required checks (`ci-ok`, `risk-check`, `review-verdict`, `main-open`) still gate the merge,
+   and GitHub merges when they are green. If bosun exits 5 with `already_clean`, the PR is
+   already mergeable: hand it to the orchestrator, which merges it (D-008). You never merge, tag
+   or force-push (the hooks refuse it).
 6. Review: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON; post it
    with `bosun verdict post --from -` (in a cloud session, which cannot write statuses:
-   `bosun verdict comment --from -`). Fix request-changes findings, then review again.
+   `bosun verdict comment --from -`). Fix request-changes findings, then review again; auto-merge
+   stays on after a fix push, so do not rerun `--auto-merge`.
 7. `bosun risk-check <pr>` runs in CI. A high-risk PR waits for an owner; ask with
    `bosun ask <issue> "<question>"`.
-8. `bosun pr <issue> --auto-merge` as soon as the PR is in review; do not wait for the checks.
-   GitHub merges it when the required checks are green. If bosun exits 5 with `already_clean`,
-   the PR was already mergeable: the owner merges it. You never merge, tag or force-push (the
-   hooks refuse it).
-9. `bosun release <issue>` if you stop before the task is done.
+8. `bosun release <issue>` if you stop before the task is done.
 
 ### Sessions
 

@@ -1,0 +1,1 @@
+- The task loop turns auto-merge on when the PR opens (`bosun pr <issue> --auto-merge`, before the review verdict); on `already_clean` the orchestrator merges the PR (D-008).

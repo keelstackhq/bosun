@@ -406,7 +406,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                         pull.number
                     ),
                     format!(
-                        "the owner merges PR #{0}, or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --auto-merge`",
+                        "the orchestrator merges PR #{0} (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --auto-merge`",
                         pull.number
                     ),
                 )
