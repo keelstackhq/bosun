@@ -123,29 +123,50 @@ pub fn secret_kind(t: &str) -> Option<&'static str> {
         .then_some("high-entropy token")
 }
 
-/// A bare base64 hash digest: exactly 28, 44, 64 or 88 characters (sha1, sha256, sha384,
-/// sha512) with the padding that length needs and nothing else.
-fn is_b64_digest(v: &str) -> bool {
+/// Base64 length (with padding) and hex length of each digest algorithm.
+fn digest_lens(alg: &str) -> Option<(usize, usize)> {
+    match alg {
+        "SHA1" => Some((28, 40)),
+        "SHA256" => Some((44, 64)),
+        "SHA384" => Some((64, 96)),
+        "SHA512" => Some((88, 128)),
+        _ => None,
+    }
+}
+
+/// A bare base64 digest of exactly `len` characters with the padding that length needs.
+fn is_b64_digest(v: &str, len: usize) -> bool {
     let body = v.trim_end_matches('=');
     let pad = v.len() - body.len();
-    let want = match v.len() {
+    let want = match len {
         28 | 44 => 1,
         64 => 0,
         88 => 2,
         _ => return false,
     };
-    pad == want
+    v.len() == len
+        && pad == want
         && body
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
 }
 
+/// The algorithm lengths of a `shaN-<digest>` integrity value, or `None` if `w` is not one.
+fn integrity_alg(w: &str) -> Option<(usize, usize)> {
+    let (p, d) = w.split_once('-')?;
+    if !p
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return None;
+    }
+    let lens = digest_lens(&p.to_ascii_uppercase())?;
+    is_b64_digest(d, lens.0).then_some(lens)
+}
+
 /// A public integrity value `sha1|sha256|sha384|sha512-<digest>` and nothing more.
 fn is_integrity(w: &str) -> bool {
-    ["sha1-", "sha256-", "sha384-", "sha512-"]
-        .iter()
-        .find_map(|p| w.strip_prefix(p))
-        .is_some_and(is_b64_digest)
+    integrity_alg(w).is_some()
 }
 
 /// An integrity value, or a `NAME=value` word whose name says it holds a digest.
@@ -155,13 +176,36 @@ fn is_digest_word(w: &str) -> bool {
             .is_some_and(|(n, v)| is_digest_value(n, v))
 }
 
-/// `v` is a digest (or integrity value) held by a variable named `name` that mentions a hash.
+/// `v` is a digest held by a variable `name`. The name is split on `_`, `-` and `.` and only
+/// whole segments count. Any credential segment (SECRET, TOKEN, KEY, PASS, ...) voids the
+/// exemption. A SHA1/256/384/512 segment needs a bare digest (base64 or hex) of that exact
+/// length or a matching `shaN-` value; HASH, DIGEST, CHECKSUM or INTEGRITY alone need the
+/// `shaN-` form.
 fn is_digest_value(name: &str, v: &str) -> bool {
     let n = name.to_ascii_uppercase();
-    ["SHA", "HASH", "INTEGRITY", "DIGEST", "CHECKSUM"]
-        .iter()
-        .any(|k| n.contains(k))
-        && (is_b64_digest(v) || is_integrity(v))
+    let segs: Vec<&str> = n.split(['_', '-', '.']).collect();
+    const BAD: [&str; 10] = [
+        "SECRET",
+        "TOKEN",
+        "KEY",
+        "PASS",
+        "PASSWORD",
+        "PWD",
+        "AUTH",
+        "CRED",
+        "CREDENTIAL",
+        "CREDENTIALS",
+    ];
+    if segs.iter().any(|s| BAD.contains(s)) {
+        return false;
+    }
+    if let Some(lens) = segs.iter().find_map(|s| digest_lens(s)) {
+        let hex = v.len() == lens.1 && v.chars().all(|c| c.is_ascii_hexdigit());
+        return is_b64_digest(v, lens.0) || hex || integrity_alg(v) == Some(lens);
+    }
+    segs.iter()
+        .any(|s| ["HASH", "DIGEST", "CHECKSUM", "INTEGRITY"].contains(s))
+        && is_integrity(v)
 }
 
 /// A 32+ character word of base64/URL-safe characters that looks random: hex of a length other
@@ -296,10 +340,11 @@ mod tests {
             format!("sha1-{d28}"),
             format!("BOSUN_SHA512={d88}"),
             format!("bosun_sha256={d44}"),
-            format!("FILE_INTEGRITY={d88}"),
-            format!("RELEASE_CHECKSUM={d64}"),
-            format!("PKG_DIGEST={d28}"),
-            format!("MY_HASH={d44}"),
+            format!("FILE_INTEGRITY=sha512-{d88}"),
+            format!("RELEASE_CHECKSUM=sha384-{d64}"),
+            format!("PKG_DIGEST=sha1-{d28}"),
+            format!("MY_HASH=sha256-{d44}"),
+            format!("pkg.sha256={d44}"),
         ] {
             assert_eq!(secret_kind(&ok), None, "{ok}");
         }
@@ -316,6 +361,14 @@ mod tests {
             format!("sha512-{}extra", b64(86)),
             format!("HASH_TOKEN_KEY={}", b64(40)),
             format!("MY_HASH={}", b64(45)),
+            format!("MY_HASH={d44}"),
+            format!("SHARED_SECRET={d44}"),
+            format!("WEBHOOK_SHARED_SECRET={}", b64(64)),
+            format!("SHADOW_TOKEN={}", b64(88)),
+            format!("TOKEN_SHA512={}==", b64(86)),
+            format!("API_KEY_HASH={}", b64(64)),
+            format!("BOSUN_SHA512={d44}"),
+            format!("BOSUN_SHA256={}==", b64(86)),
         ] {
             assert!(secret_kind(&bad).is_some(), "{bad}");
         }
