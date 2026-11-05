@@ -23,6 +23,7 @@ use crate::output::{BosunError, CmdResult, Outcome};
 const MAX_TEXT: usize = 300;
 
 pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
+    super::refuse_secret("the hold text", &args.text)?;
     let app = App::load(dir)?;
     let (gh, n, session) = (app.gh.as_ref(), args.issue, &app.ctx.session);
     kill_switch(gh)?;

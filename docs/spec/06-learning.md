@@ -64,12 +64,17 @@ hits = 3
   The error names the kind and the field, never the matched text; nothing is written. Fix: replace
   the secret with `<redacted>` and run again. Words are split on characters outside
   `A-Za-z0-9+/_=-`. A high-entropy word has 32+ characters, letters and digits, and Shannon
-  entropy of at least 4.0 bits per character; hex words of 32+ characters are refused unless
-  they are exactly 40 or 64 long (git shas), and JWTs (`eyJ` with three dot parts) are refused.
+  entropy of at least 4.0 bits per character; hex words of 32+ characters need entropy of at
+  least 3.0 and are exempt when exactly 40 or 64 long (git shas), and JWTs (`eyJ` with three dot parts) are refused.
   Exempt: ids starting `session_` or `cse_`, `sha1-`/`sha256-`/`sha384-`/`sha512-` integrity
   hashes, snake or kebab phrases of 3+ lowercase words, and slash paths that are not mixed case.
   `sk-` needs a digit or at most 2 hyphens; `Bearer` needs a digit and a letter.
-  Not covered yet (deferred): `lesson add --scope` and `--evidence`, `lesson capture`, `result`.
+  Covered inputs: `lesson add` (text, `--why`, `--scope`, `--evidence`), `lesson capture`
+  (failure text, `--title`), `lesson triage` (`--rule`, `--scope`, `--touch`, `--area`),
+  `handoff`, `msg`, `fail --signature`, `ask`, `hold`, `answer` (plain text; a relayed `--chat`
+  form carries a signature and is verified instead), `intake` and `plan-pr` and `spawn --request`
+  (text, `--title`), and `claim --touch`. Not covered: identifiers, enums and numbers (issue
+  numbers, session ids, Slack ids, refs, URLs, `--outcome`) and the `bosun pr` title.
 - Caps: at most 40 entries, at most 8 global (no scope).
 - A context pack includes only the lessons whose scope matches the paths of the task, plus the
   global ones. AGENTS.md has no lessons.

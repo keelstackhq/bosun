@@ -70,6 +70,8 @@ pub(super) fn today(ctx: &Ctx) -> String {
 fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
     super::refuse_secret("the lesson text", &a.text)?;
     super::refuse_secret("--why", a.why.as_deref().unwrap_or(""))?;
+    super::refuse_secrets("--scope", &a.scope)?;
+    super::refuse_secrets("--evidence", &a.evidence)?;
     if a.upstream {
         return upstream(dir, a);
     }
@@ -201,6 +203,8 @@ fn capture(dir: Option<&Path>, a: &LessonCaptureArgs) -> CmdResult {
             "pass the failure text on stdin or with --from FILE",
         )
     })?;
+    super::refuse_secret("the failure text", &text)?;
+    super::refuse_secret("--title", a.title.as_deref().unwrap_or(""))?;
     let Some(first) = text.lines().map(str::trim).find(|l| !l.is_empty()) else {
         return Err(BosunError::usage(
             "the failure text is empty",

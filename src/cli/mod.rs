@@ -784,6 +784,14 @@ pub(crate) fn refuse_secret(field: &str, text: &str) -> Result<(), crate::output
     }
 }
 
+/// [`refuse_secret`] for every value of a repeatable option.
+pub(crate) fn refuse_secrets(
+    field: &str,
+    items: &[String],
+) -> Result<(), crate::output::BosunError> {
+    items.iter().try_for_each(|t| refuse_secret(field, t))
+}
+
 /// `text` and `--source` default to empty; `intake::args_ok` refuses an empty one.
 fn parse_source(s: &str) -> Result<String, String> {
     match s {

@@ -129,8 +129,9 @@ fn high_entropy(w: &str) -> bool {
     {
         return false;
     }
-    if w.chars().all(|c| c.is_ascii_hexdigit()) {
-        return !matches!(w.len(), 40 | 64);
+    let hex = w.chars().all(|c| c.is_ascii_hexdigit());
+    if hex && matches!(w.len(), 40 | 64) {
+        return false;
     }
     let has = |f: fn(&char) -> bool| w.chars().any(|c| f(&c));
     let (upper, lower) = (has(char::is_ascii_uppercase), has(char::is_ascii_lowercase));
@@ -156,7 +157,8 @@ fn high_entropy(w: &str) -> bool {
             -p * p.log2()
         })
         .sum();
-    entropy >= 4.0
+    // Hex has at most 4 bits per character, so its bar is lower.
+    entropy >= if hex { 3.0 } else { 4.0 }
 }
 
 #[cfg(test)]
@@ -224,6 +226,7 @@ mod tests {
         );
         for ok in [
             "session_01SsFUkfeX2mg29KV4Lhoi5P",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "cse_01SsFUkfeX2mg29KV4Lhoi5P",
             "E0308_mismatched_types_in_src_cli_handoff_rs_line_72",
             "sk-fix-the-flaky-integration-test",

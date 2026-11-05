@@ -41,6 +41,8 @@ pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
 
 /// Required in the old form; clap cannot say so next to the subcommands.
 fn args_ok(a: &IntakeArgs) -> Result<(), BosunError> {
+    super::refuse_secret("the intake text", &a.text)?;
+    super::refuse_secret("--title", a.title.as_deref().unwrap_or(""))?;
     let (what, fix) = if a.text.trim().is_empty() {
         (
             "the intake text is empty",
