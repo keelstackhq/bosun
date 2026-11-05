@@ -39,6 +39,13 @@ pub struct TaskMeta {
     /// Capabilities the task may use, for example `prod-write` (spec section 8).
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Gated by the plan (D-016): `risk: high` or a touch path under a risk rule. The task gets
+    /// its own single-task PR and never joins a bundle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gated: bool,
+    /// Planned changed lines (`size:`), compared with the PR at review (drift).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u32>,
 }
 
 /// The task metadata of an issue body, if it has a valid marker. The LAST marker counts, so text

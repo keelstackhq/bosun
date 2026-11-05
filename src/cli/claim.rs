@@ -114,6 +114,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     }
 
     super::prereqs_gate::refuse_if_held(gh, n, &meta)?;
+    refuse_if_bundled(gh, n, &meta)?;
     let touch_raw = if args.touch.is_empty() {
         meta.map(|m| m.touch).unwrap_or_default()
     } else {
@@ -369,4 +370,41 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
     data["added"] = json!(added);
     add_lessons(&mut data, &app.ctx.dir, &touch);
     Ok(Outcome::data(data))
+}
+
+/// D-016: in a single-shape epic the lead's PR closes the bundled issues, so while another
+/// non-gated task of the epic is active, a non-gated `n` is not claimable.
+fn refuse_if_bundled(
+    gh: &dyn Github,
+    n: u64,
+    meta: &Option<crate::core::meta::TaskMeta>,
+) -> Result<(), BosunError> {
+    let Some(epic) = meta
+        .as_ref()
+        .filter(|m| !m.gated && m.risk != "high")
+        .and_then(|m| m.epic)
+    else {
+        return Ok(());
+    };
+    let shape = gh
+        .get_issue(epic)?
+        .and_then(|e| super::plan::epic_shape(e.body_text()));
+    if shape.as_deref() != Some("single") {
+        return Ok(());
+    }
+    let lead = active_issues(gh)?
+        .into_iter()
+        .filter(|(i, _)| i.number != n)
+        .filter(|(i, _)| {
+            task_meta(i).is_some_and(|m| m.epic == Some(epic) && !m.gated && m.risk != "high")
+        })
+        .map(|(i, _)| i.number)
+        .min();
+    match lead {
+        Some(lead) => Err(BosunError::conflict(
+            format!("#{n} is bundled into #{lead}'s PR"),
+            format!("work in #{lead}'s bundle: its PR closes #{n}"),
+        )),
+        None => Ok(()),
+    }
 }

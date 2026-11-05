@@ -41,7 +41,6 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     let mut fix_tasks: Vec<u64> = Vec::new();
     let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
     let mut merged: Vec<String> = Vec::new();
-    let mut high_risk = false;
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
         let Some(meta) = task_meta(&issue) else {
@@ -58,10 +57,10 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         if issue.state == "closed" || state == Some(State::Merged) {
             merged.push(plan_id);
         } else if meta.epic == Some(*epic) {
-            high_risk |= meta.risk == "high";
             if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
+            let gated = meta.gated || meta.risk == "high";
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {
@@ -70,6 +69,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
                     state,
                     depends: meta.depends,
                     touch: meta.touch,
+                    gated,
                 },
                 issue.title.clone(),
                 workspace,
@@ -118,13 +118,16 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             }
         }
     }
-    // The epic records its shape at import; a risk: high task (added by an amend) still gets its
-    // own PR, so such an epic plans split.
-    let single = epic_shape(epic_issue.body_text()).as_deref() == Some("single") && !high_risk;
-    // One PR closes the whole item: while a prerequisite holds one ready task, the others wait.
+    // The epic records its shape at import. Gated tasks never join the bundle (D-016).
+    let single = epic_shape(epic_issue.body_text()).as_deref() == Some("single");
+    // One PR closes the whole bundle: while a prerequisite holds one ready bundled task, the
+    // others wait.
     let mut bundle_held = Vec::new();
-    if single && !left_out.is_empty() {
-        bundle_held = (ready.iter().map(|i| i.issue))
+    let bundled_out = ready
+        .iter()
+        .any(|i| !i.gated && left_out.contains(&i.issue));
+    if single && bundled_out {
+        bundle_held = (ready.iter().filter(|i| !i.gated).map(|i| i.issue))
             .filter(|n| !left_out.contains(n))
             .collect();
         left_out.extend(bundle_held.iter().copied());
@@ -142,7 +145,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     let leases = live_leases(&leased, now);
     let max = limits_from_default(gh, &app.ctx)?.waves.max_parallel as usize;
     let wave = if single {
-        plan_single(&infos, &merged, &leases, &app.ctx.session)
+        plan_single(&infos, &merged, &leases, &app.ctx.session, max)
     } else {
         plan(&infos, &merged, &leases, &app.ctx.session, max)
     };
@@ -154,8 +157,8 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             let (info, title, workspace) = find(n);
             let mut entry = json!({"issue": n, "title": title, "plan_id": info.plan_id,
                 "touch": info.touch, "workspace": workspace});
-            if single {
-                // One PR for the whole item: the lead carries the union of the touch paths.
+            if single && !info.gated {
+                // One PR for the whole bundle: the lead carries the union of the touch paths.
                 let mut touch = info.touch.clone();
                 for b in &wave.bundle {
                     for g in &find(*b).0.touch {

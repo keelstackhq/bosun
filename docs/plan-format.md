@@ -65,8 +65,9 @@ The state machine, stop rules and resume.
      it and at the root, and a `package.json` counts `pnpm-lock.yaml` the same way. Claim, the
      edit hook and `bosun pr` will adopt this in later tasks.
    - `depends:` (optional) task IDs of the same item, or `<item>/<task>` for another item.
-   - `size:` (optional) the planned changed lines. More than 400 is an error in a split item; a single item's
-     tasks have no per-task cap; over 1500 in all is a warning. A `risk: high` task over 100 is a warning.
+   - `size:` (optional) the planned changed lines. There is no cap (D-016); `size:` is only the
+     plan the review compares the PR with: a PR over twice the planned lines of the tasks it
+     closes gets a drift note in `bosun review-pack`. A `risk: high` task over 100 is a warning.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
    - `done-by:` (optional) `#N` (or `N`): PR N already did this task. `bosun plan import` and
@@ -106,20 +107,24 @@ The state machine, stop rules and resume.
 
 ## Choosing the PR shape
 
-Small capped PRs cost review cycles, so the default is one PR for the whole item. `shape: auto`
-(the default) lets `bosun plan check` decide, in this order:
+The shape follows the goal, not a line count (D-016): there is no cap on task or PR size.
 
-1. A `risk: high` task: `split`, forced. It needs its own small PR (D-013), at most 400 lines.
-2. One task: `single`.
-3. More than 1500 lines in all (a task without `size:` counts 200): `split`. The cap is soft:
-   `shape: single` keeps the item whole with a warning, and the review pack scales by chunks.
-4. `split` only when at least 2 tasks run side by side (tasks divided by the longest `depends`
-   chain), the item is over 600 lines, and no two tasks touch overlapping paths.
-5. Otherwise `single`.
+A task is gated when it is `risk: high`, or when one of its `touch` globs (with the lockfile
+companions) overlaps a path glob of any risk rule (`.bosun/risk.toml`, else the built-in rules).
+A gated task always gets its own single-task PR and is never bundled. `bosun plan check` lists
+them as `gated`.
 
-`bosun plan check` prints `shape` and `shape_reasons` for each item. `shape: single` on an item
-that has a `risk: high` task is an error. Set `shape: split` when parallel PRs clearly win, for
-example `shape: split` for an item of three independent 350-line tasks.
+`shape: auto` (the default) decides on the other tasks, in this order:
+
+1. At most one task is not gated: `single` ("one task", or "N gated tasks run alone").
+2. `split` only when the tasks are independent: at least 2 run side by side (tasks divided by
+   the longest `depends` chain), no two touch overlapping paths, and the item has more than one
+   UC.
+3. Otherwise `single`, with every reason that applies: shared files, a chain with no parallel
+   gain, one UC (the goal is testable only whole).
+
+`bosun plan check` prints `shape`, `shape_reasons` and `gated` for each item. An explicit
+`shape: single` or `shape: split` is honoured; gated tasks are split out of a `single` item.
 
 A single item is one wave entry: `bosun wave plan` returns the lowest ready issue with a
 `bundle` of the others, and one PR closes every bundled task (`Closes #N` per issue).

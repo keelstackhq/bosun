@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::core::meta::ALLOW_KINDS;
-use crate::core::shape::{self, MAX_SINGLE, MAX_TASK, Shape};
+use crate::core::shape::Shape;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Plan {
@@ -583,7 +583,6 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             }
         }
     }
-    shape_errors(&items, &mut errs, &mut warns);
     errs.sort_by_key(|e| e.line);
     if errs.is_empty() {
         touch_warnings(&items, &mut warns);
@@ -603,29 +602,6 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             warnings: warns,
         }),
         _ => Err(errs),
-    }
-}
-
-/// Size rules by the effective shape: a split item's tasks are at most 400 lines each, a single
-/// item over 1500 in all is a warning (the cap is soft: review chunks scale), and `shape: single`
-/// is refused where the shape is forced to split.
-fn shape_errors(items: &[Item], errs: &mut Vec<PlanError>, warns: &mut Vec<PlanError>) {
-    for it in items.iter().filter(|i| !i.tasks.is_empty()) {
-        match shape::effective(it) {
-            Err(why) => {
-                bad!(errs, it.line; "remove the risk: high task to its own item, or use shape: split" => "`shape: single` is not allowed: {why}")
-            }
-            Ok(d) if d.shape == Shape::Split => {
-                for t in it.tasks.iter().filter(|t| t.size > Some(MAX_TASK)) {
-                    let s = t.size.unwrap_or(0);
-                    bad!(errs, t.size_line; "split the task so each PR is at most 400 lines, or set `shape: single` (no risk: high task)" => "size {s} is over 400 changed lines");
-                }
-            }
-            Ok(d) if d.total > MAX_SINGLE => {
-                bad!(warns, it.line; "keep it whole only if one review of the goal beats parallel PRs; else use shape: split" => "{} is {} lines, over the {MAX_SINGLE}-line single-PR cap", it.id, d.total);
-            }
-            Ok(_) => {}
-        }
     }
 }
 
@@ -806,15 +782,6 @@ mod tests {
     }
 
     #[test]
-    fn single_is_refused_for_a_risk_high_task() {
-        let t = w("kind: flake", "risk: high").replace("depends: seed", "depends: seed\nshape: single");
-        at(&t, 5, "`shape: single` is not allowed: M1/T2 is risk: high");
-        let e = parse(&t).unwrap_err();
-        assert_eq!(e[0].fix, "remove the risk: high task to its own item, or use shape: split");
-        assert!(parse(&t.replace("shape: single", "shape: split")).is_ok());
-    }
-
-    #[test]
     fn rule5_tasks() {
         for b in ["* T2: x", "+ T2: x", "1. T2: x", "plain text"] {
             chk("- T2: Second", b, 17, "expected a `- T<n>: title` bullet");
@@ -822,16 +789,11 @@ mod tests {
         chk("- T2:", "- T1:", 17, "used twice");
         chk("- T2:", "- X2:", 17, "task bullet");
         chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
-        at(&w("size: 100", "size: 401").replace("depends: seed", "depends: seed\nshape: split"), 17, "over 400");
-        assert!(parse(&w("size: 100", "size: 401")).is_ok()); // single: 601 lines in all
-        // Over the cap the auto shape is split, so the task is over 400 too.
-        chk("size: 100", "size: 1501", 16, "over 400");
-        let one = w("size: 100", "size: 1501").replace("- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n", "");
-        let warn = &parse(&one).expect("the single cap is soft").warnings;
-        assert!(warn.iter().any(|x| x.line == 5 && x.message.contains("M1 is 1501 lines, over the 1500-line single-PR cap")), "{warn:?}");
-        // An explicit single keeps a big multi-task item whole, with the same warning.
-        let big = w("size: 100", "size: 1501").replace("depends: seed", "depends: seed\nshape: single");
-        assert!(parse(&big).expect("soft cap").warnings.iter().any(|x| x.message.contains("single-PR cap")));
+        // D-016: no line cap, no size warning.
+        for size in ["size: 401", "size: 1501", "size: 90000"] {
+            let p = parse(&w("size: 100", size)).expect("no cap");
+            assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+        }
         chk("size: 100", "size: ten", 16, "not an integer");
         chk("kind: flake", "kind: odd", 20, "kind");
         chk("kind: flake", "risk: low", 20, "risk");

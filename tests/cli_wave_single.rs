@@ -133,13 +133,38 @@ fn an_epic_without_a_shape_plans_as_before() {
 }
 
 #[test]
-fn a_risk_high_task_makes_a_single_epic_plan_split() {
-    // An amend can add a risk: high task after import: it still gets its own small PR.
+fn a_gated_task_runs_alone_beside_the_bundle() {
+    // risk: high (old metadata) and gated: true both keep the task out of the bundle.
     let fake = single();
     three(&fake);
-    let body = r#"<!-- bosun:task {"item":"M1","task":"T4","epic":10,"depends":[],"touch":["zz/**"],"risk":"high"} -->"#;
-    fake.issue(14, "Task M1/T4", &["bosun:state/ready"], body);
+    gated_task(&fake, 14, "M1/T4", r#""zz/**""#, r#","risk":"high""#);
+    gated_task(&fake, 15, "M1/T5", r#""yy/**""#, r#","gated":true"#);
     let d = plan(&fake)["data"].clone();
-    assert_eq!(d["shape"], "split");
-    assert!(d["run"][0].get("bundle").is_none(), "{d}");
+    assert_eq!(d["shape"], "single");
+    let run = d["run"].as_array().unwrap();
+    assert_eq!(run.len(), 3, "{d}");
+    assert_eq!(run[0]["issue"], 11);
+    assert_eq!(nums(&run[0]["closes"]), [11, 12, 13]);
+    for (k, n) in [(1, 14), (2, 15)] {
+        assert_eq!(run[k]["issue"], n);
+        assert!(run[k].get("bundle").is_none(), "{d}");
+    }
+}
+
+#[test]
+fn a_gated_task_overlapping_the_bundle_waits() {
+    let fake = single();
+    three(&fake);
+    gated_task(&fake, 14, "M1/T4", r#""src/b/x.rs""#, r#","gated":true"#);
+    let d = plan(&fake)["data"].clone();
+    assert_eq!(d["run"].as_array().unwrap().len(), 1, "{d}");
+    assert_eq!(d["waiting"][0]["reason"], "overlaps the bundle of #11");
+}
+
+fn gated_task(fake: &FakeGithub, n: u64, id: &str, touch: &str, extra: &str) {
+    let (item, t) = id.split_once('/').unwrap();
+    let body = format!(
+        r#"<!-- bosun:task {{"item":"{item}","task":"{t}","epic":10,"depends":[],"touch":[{touch}]{extra}}} -->"#
+    );
+    fake.issue(n, &format!("Task {id}"), &["bosun:state/ready"], &body);
 }

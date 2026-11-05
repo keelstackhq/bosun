@@ -309,8 +309,8 @@ fn check_summarises_a_good_plan_without_github() {
     assert_eq!(v["data"]["project"], "widget");
     assert_eq!(
         v["data"]["items"][0],
-        json!({"id":"M1","title":"Lifecycle","area":"lifecycle","tasks":2,"ucs":1,"shape":"split","size":400,
-            "shape_reasons":["M1/T2 is risk: high: it needs its own small PR (D-013)"]})
+        json!({"id":"M1","title":"Lifecycle","area":"lifecycle","tasks":2,"ucs":1,"shape":"single","size":400,
+            "gated":["M1/T1","M1/T2"],"shape_reasons":["2 gated tasks run alone"]})
     );
     assert_eq!(v["data"]["warnings"], json!([]));
 }

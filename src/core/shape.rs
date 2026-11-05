@@ -1,22 +1,18 @@
 //! PR shape of a plan item (docs/plan-format.md, "Choosing the PR shape"): one PR for the whole
-//! item (`single`) or one small PR per task (`split`).
+//! item (`single`) or one PR per task (`split`). D-016: the shape follows the goal, never a line
+//! cap; gated tasks always get their own single-task PR.
 
 use serde::Serialize;
 use std::fmt;
 
-use crate::core::glob;
-use crate::core::plan::Item;
+use crate::core::glob::{self, Glob};
+use crate::core::plan::{Item, Task};
+use crate::core::risk::Rules;
 use crate::core::touch::companions;
 
-/// Largest task of a split item.
-pub const MAX_TASK: u32 = 400;
-/// Largest single-PR item (D-013 bootstrap cap for low-risk PRs).
-pub const MAX_SINGLE: u32 = 1500;
 /// Planned size of a task without `size:`.
 pub const DEFAULT_TASK_SIZE: u32 = 200;
-/// A split pays off only above this many lines.
-const SPLIT_ABOVE: u32 = 600;
-/// ... and only when this many tasks can run side by side.
+/// Tasks side by side (tasks per task of the longest chain) needed for a split to pay off.
 const SPLIT_WIDTH: f64 = 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -48,13 +44,31 @@ impl Shape {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Decision {
     pub shape: Shape,
-    /// The shape cannot be `single` whatever the planner writes.
-    pub forced: bool,
-    /// Planned changed lines of the item.
+    /// Planned changed lines of the item (drift signal only).
     pub total: u32,
-    /// Tasks per task of the longest depends chain.
+    /// Tasks per task of the longest depends chain, over the non-gated tasks.
     pub width: f64,
+    /// Plan ids of the gated tasks: each gets its own single-task PR.
+    pub gated: Vec<String>,
     pub reasons: Vec<String>,
+}
+
+/// Every path glob of every risk rule: a task touching one is gated.
+pub fn gated_globs(rules: &Rules) -> Vec<Glob> {
+    rules.rules.iter().flat_map(|r| r.paths.clone()).collect()
+}
+
+/// A task is gated when it is `risk: high` or its touch list (with companions) overlaps a risk path.
+pub fn is_gated(t: &Task, gated: &[Glob]) -> bool {
+    if t.risk == "high" {
+        return true;
+    }
+    // As risk-check, a path also matches in lower case (`AGENTS.md` ~ `**/agents.md`).
+    let raw = companions(&t.touch);
+    let lower: Vec<String> = raw.iter().map(|g| g.to_lowercase()).collect();
+    let touch = glob::parse_all(&raw).unwrap_or_default();
+    let low = glob::parse_all(&lower).unwrap_or_default();
+    (touch.iter().chain(&low)).any(|a| gated.iter().any(|b| a.overlaps(b)))
 }
 
 pub fn total(item: &Item) -> u32 {
@@ -64,27 +78,26 @@ pub fn total(item: &Item) -> u32 {
         .sum()
 }
 
-/// Tasks in the longest depends chain inside the item (other items' tasks are ignored; a cycle
-/// is reported elsewhere and only bounds the loop here).
-fn chain(item: &Item) -> usize {
+/// Tasks in the longest depends chain among `open` (other tasks are ignored; a cycle is reported
+/// elsewhere and only bounds the loop here).
+fn chain(item: &Item, open: &[&Task]) -> usize {
     let own = |d: &str| {
         let d = d.strip_prefix(&format!("{}/", item.id)).unwrap_or(d);
-        item.tasks.iter().position(|t| t.id == d)
+        open.iter().position(|t| t.id == d)
     };
-    let mut len = vec![1usize; item.tasks.len()];
-    for _ in 0..item.tasks.len() {
-        for (k, t) in item.tasks.iter().enumerate() {
+    let mut len = vec![1usize; open.len()];
+    for _ in 0..open.len() {
+        for (k, t) in open.iter().enumerate() {
             let best = t.depends.iter().filter_map(|d| own(d)).map(|j| len[j]);
-            len[k] = 1 + best.max().unwrap_or(0).min(item.tasks.len());
+            len[k] = 1 + best.max().unwrap_or(0).min(open.len());
         }
     }
-    len.into_iter().max().unwrap_or(1).min(item.tasks.len())
+    len.into_iter().max().unwrap_or(1).min(open.len())
 }
 
-/// The first two tasks whose touch lists overlap, as `("M1/T1", "M1/T2")` globs.
-fn coupled(item: &Item) -> Option<(String, String)> {
-    let parsed: Vec<_> = item
-        .tasks
+/// The first two tasks whose touch lists overlap, as globs.
+fn coupled(open: &[&Task]) -> Option<(String, String)> {
+    let parsed: Vec<_> = open
         .iter()
         .map(|t| glob::parse_all(&companions(&t.touch)).unwrap_or_default())
         .collect();
@@ -93,76 +106,60 @@ fn coupled(item: &Item) -> Option<(String, String)> {
     })
 }
 
-/// The automatic recommendation for `item`.
-pub fn decide(item: &Item) -> Decision {
+/// The automatic recommendation for `item`. `gated` are the risk-rule path globs.
+pub fn decide(item: &Item, gated: &[Glob]) -> Decision {
     let total = total(item);
-    let width = item.tasks.len() as f64 / chain(item) as f64;
-    let mk = |shape, forced, reasons: Vec<String>| Decision {
+    let (held, open): (Vec<&Task>, Vec<&Task>) =
+        item.tasks.iter().partition(|t| is_gated(t, gated));
+    let gated_ids: Vec<String> = held.iter().map(|t| t.plan_id(&item.id)).collect();
+    let longest = chain(item, &open);
+    let width = open.len() as f64 / longest.max(1) as f64;
+    let mk = |shape, reasons: Vec<String>| Decision {
         shape,
-        forced,
         total,
         width,
+        gated: gated_ids.clone(),
         reasons,
     };
-    if let Some(t) = item.tasks.iter().find(|t| t.risk == "high") {
+    if open.len() <= 1 {
+        let why = if held.is_empty() {
+            "one task".to_string()
+        } else {
+            format!("{} gated tasks run alone", held.len())
+        };
+        return mk(Shape::Single, vec![why]);
+    }
+    let shared = coupled(&open);
+    if width >= SPLIT_WIDTH && shared.is_none() && item.ucs.len() > 1 {
         let why = format!(
-            "{} is risk: high: it needs its own small PR (D-013)",
-            t.plan_id(&item.id)
+            "{} tasks run {width:.1} wide with no shared files",
+            open.len()
         );
-        return mk(Shape::Split, true, vec![why]);
-    }
-    if item.tasks.len() <= 1 {
-        return mk(Shape::Single, false, vec!["one task".into()]);
-    }
-    if total > MAX_SINGLE {
-        // A soft cap: `shape: single` may still keep the item whole (plan check warns).
-        let why = format!("total {total} lines is over the {MAX_SINGLE}-line single-PR cap");
-        return mk(Shape::Split, false, vec![why]);
-    }
-    let shared = coupled(item);
-    if width >= SPLIT_WIDTH && total > SPLIT_ABOVE && shared.is_none() {
-        let why = format!(
-            "{} tasks run {width:.1} wide with no shared files and {total} lines",
-            item.tasks.len()
-        );
-        return mk(Shape::Split, false, vec![why]);
+        return mk(Shape::Split, vec![why]);
     }
     let mut why = Vec::new();
     if let Some((a, b)) = shared {
         why.push(format!("tasks share files ({a} ~ {b})"));
     }
     if width < SPLIT_WIDTH {
-        why.push(format!(
-            "tasks form a chain of {}: no parallel gain",
-            chain(item)
-        ));
-    }
-    if total <= SPLIT_ABOVE {
-        why.push(format!("{total} lines fit one review"));
+        why.push(format!("tasks form a chain of {longest}: no parallel gain"));
     }
     if item.ucs.len() == 1 {
         why.push("one UC: the goal is testable only whole".into());
     }
-    mk(Shape::Single, false, why)
+    mk(Shape::Single, why)
 }
 
-/// The shape in force: the planner's choice, else the recommendation. `Err` carries the reason
-/// when `single` is not allowed.
-pub fn effective(item: &Item) -> Result<Decision, String> {
-    let auto = decide(item);
+/// The shape in force: the planner's choice, else the recommendation.
+pub fn effective(item: &Item, gated: &[Glob]) -> Decision {
+    let auto = decide(item, gated);
     match item.shape {
-        None => Ok(auto),
-        Some(Shape::Split) => Ok(Decision {
-            shape: Shape::Split,
-            reasons: vec!["planner chose split".into()],
+        None => auto,
+        Some(shape) => Decision {
+            shape,
+            reasons: vec![format!("planner chose {shape}")],
             ..auto
-        }),
-        Some(Shape::Single) if auto.forced => Err(auto.reasons.join("; ")),
-        Some(Shape::Single) => Ok(Decision {
-            shape: Shape::Single,
-            reasons: vec!["planner chose single".into()],
-            ..auto
-        }),
+        },
     }
 }
 
@@ -205,67 +202,93 @@ mod tests {
             2,
         )
     }
-
-    #[test]
-    fn one_task_is_single() {
-        let d = decide(&item(vec![task("T1", "a", &[], 900, "normal")], 2));
-        assert_eq!((d.shape, d.forced), (Shape::Single, false));
-        assert_eq!(d.reasons, ["one task"]);
+    fn globs(g: &[&str]) -> Vec<Glob> {
+        g.iter().map(|g| Glob::parse(g).unwrap()).collect()
     }
 
     #[test]
-    fn risk_high_forces_split() {
-        let d = decide(&item(
+    fn one_task_is_single_whatever_its_size() {
+        let d = decide(&item(vec![task("T1", "a", &[], 9000, "normal")], 2), &[]);
+        assert_eq!(d.shape, Shape::Single);
+        assert_eq!(d.reasons, ["one task"]);
+        assert!(d.gated.is_empty());
+    }
+
+    #[test]
+    fn risk_high_tasks_are_gated_and_never_bundled() {
+        let i = item(
             vec![
                 task("T1", "a", &[], 50, "high"),
                 task("T2", "b", &[], 50, "normal"),
             ],
             2,
-        ));
-        assert_eq!((d.shape, d.forced), (Shape::Split, true));
-        assert_eq!(
-            d.reasons[0],
-            "M1/T1 is risk: high: it needs its own small PR (D-013)"
         );
-        // One risk: high task is split too, so its 400-line cap holds.
-        let one = decide(&item(vec![task("T1", "a", &[], 900, "high")], 1));
-        assert_eq!((one.shape, one.forced), (Shape::Split, true));
-    }
-
-    #[test]
-    fn over_the_cap_recommends_split() {
-        let d = decide(&wide(800));
-        assert_eq!((d.shape, d.forced, d.total), (Shape::Split, false, 1600));
-        assert!(d.reasons[0].contains("total 1600 lines is over the 1500-line"));
-    }
-
-    #[test]
-    fn wide_and_big_without_shared_files_splits() {
-        let d = decide(&wide(400));
-        assert_eq!((d.shape, d.forced), (Shape::Split, false));
-        assert_eq!(d.width, 2.0);
-        assert_eq!(
-            d.reasons,
-            ["2 tasks run 2.0 wide with no shared files and 800 lines"]
-        );
-    }
-
-    #[test]
-    fn small_item_fits_one_review() {
-        let d = decide(&wide(100));
+        let d = decide(&i, &[]);
+        assert_eq!(d.gated, ["M1/T1"]);
         assert_eq!(d.shape, Shape::Single);
-        assert_eq!(d.reasons, ["200 lines fit one review"]);
+        assert_eq!(d.reasons, ["1 gated tasks run alone"]);
+        let one = decide(&item(vec![task("T1", "a", &[], 900, "high")], 1), &[]);
+        assert_eq!(
+            (one.shape, one.gated),
+            (Shape::Single, vec!["M1/T1".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_risk_path_matches_in_lower_case_too() {
+        let g = globs(&["**/agents.md"]);
+        assert!(is_gated(&task("T1", "AGENTS.md", &[], 5, "normal"), &g));
+        assert!(!is_gated(&task("T1", "src/a.rs", &[], 5, "normal"), &g));
+    }
+
+    #[test]
+    fn a_touch_overlapping_a_risk_path_is_gated() {
+        let g = globs(&[".github/workflows/**"]);
+        let i = item(
+            vec![
+                task("T1", ".github/workflows/ci.yml", &[], 50, "normal"),
+                task("T2", "a/**", &[], 50, "normal"),
+                task("T3", "b/**", &[], 50, "normal"),
+            ],
+            2,
+        );
+        let d = decide(&i, &g);
+        assert_eq!(d.gated, ["M1/T1"]);
+        // The other two are independent and the item has two UCs: they split.
+        assert_eq!(d.shape, Shape::Split);
+        assert_eq!(d.reasons, ["2 tasks run 2.0 wide with no shared files"]);
+    }
+
+    #[test]
+    fn size_never_decides() {
+        let d = decide(&wide(5000), &[]);
+        assert_eq!((d.shape, d.total), (Shape::Split, 10000));
+        let d = decide(&wide(10), &[]);
+        assert_eq!(d.shape, Shape::Split);
+        assert_eq!(d.reasons, ["2 tasks run 2.0 wide with no shared files"]);
+    }
+
+    #[test]
+    fn independent_tasks_of_a_one_uc_item_stay_single() {
+        let mut i = wide(100);
+        i.ucs.truncate(1);
+        let d = decide(&i, &[]);
+        assert_eq!(d.shape, Shape::Single);
+        assert_eq!(d.reasons, ["one UC: the goal is testable only whole"]);
     }
 
     #[test]
     fn shared_files_stay_single() {
-        let d = decide(&item(
-            vec![
-                task("T1", "src/core/**", &[], 400, "normal"),
-                task("T2", "src/core/x.rs", &[], 400, "normal"),
-            ],
-            2,
-        ));
+        let d = decide(
+            &item(
+                vec![
+                    task("T1", "src/core/**", &[], 400, "normal"),
+                    task("T2", "src/core/x.rs", &[], 400, "normal"),
+                ],
+                2,
+            ),
+            &[],
+        );
         assert_eq!(d.shape, Shape::Single);
         assert_eq!(
             d.reasons,
@@ -275,14 +298,17 @@ mod tests {
 
     #[test]
     fn chain_stays_single_and_one_uc_is_named() {
-        let d = decide(&item(
-            vec![
-                task("T1", "a/**", &[], 400, "normal"),
-                task("T2", "b/**", &["T1"], 400, "normal"),
-                task("T3", "c/**", &["M1/T2", "X1/T1"], 400, "normal"),
-            ],
-            1,
-        ));
+        let d = decide(
+            &item(
+                vec![
+                    task("T1", "a/**", &[], 400, "normal"),
+                    task("T2", "b/**", &["T1"], 400, "normal"),
+                    task("T3", "c/**", &["M1/T2", "X1/T1"], 400, "normal"),
+                ],
+                1,
+            ),
+            &[],
+        );
         assert_eq!(d.shape, Shape::Single);
         assert_eq!(
             d.reasons,
@@ -294,20 +320,24 @@ mod tests {
     }
 
     #[test]
-    fn effective_honours_the_planner() {
+    fn effective_honours_the_planner_and_single_is_never_an_error() {
         let mut i = wide(400);
         i.shape = Some(Shape::Single);
-        let d = effective(&i).unwrap();
+        let d = effective(&i, &[]);
         assert_eq!(
             (d.shape, d.reasons[0].as_str()),
             (Shape::Single, "planner chose single")
         );
         i.shape = Some(Shape::Split);
-        assert_eq!(effective(&i).unwrap().reasons, ["planner chose split"]);
+        assert_eq!(effective(&i, &[]).reasons, ["planner chose split"]);
         i.tasks[0].risk = "high".into();
         i.shape = Some(Shape::Single);
-        assert!(effective(&i).unwrap_err().contains("risk: high"));
+        let d = effective(&i, &[]);
+        assert_eq!(
+            (d.shape, d.gated),
+            (Shape::Single, vec!["M1/T1".to_string()])
+        );
         i.shape = None;
-        assert_eq!(effective(&i).unwrap().shape, Shape::Split);
+        assert_eq!(effective(&i, &[]).shape, Shape::Single);
     }
 }

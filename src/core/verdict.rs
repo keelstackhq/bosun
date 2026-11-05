@@ -32,6 +32,9 @@ pub struct Verdict {
     pub lessons_hit: Vec<String>,
     #[serde(default)]
     pub escalate_risk: bool,
+    /// The 1-based review chunks (`bosun review-pack` `chunks`) the reviewers covered.
+    #[serde(default)]
+    pub chunks_reviewed: Vec<u32>,
 }
 
 /// What the verdict amounts to once the rules are applied.
@@ -196,6 +199,7 @@ mod tests {
                 .collect(),
             lessons_hit: vec![],
             escalate_risk: false,
+            chunks_reviewed: vec![],
         }
     }
 

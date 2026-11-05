@@ -14,7 +14,9 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    `bosun claim <lead>` and one `--touch <glob>` per glob of the entry's `touch`, do every task
    of the bundle, and open the PR yourself with a body that has one `Closes #N` line per issue
    in `closes` and `<!-- bosun:task-pr <lead> -->`. Then `bosun pr <lead> --auto-merge` reuses
-   that PR (from its branch, or by the marker with `Closes #<lead>`).
+   that PR (from its branch, or by the marker with `Closes #<lead>`). Gated tasks (`risk: high`
+   or touching a risk path) run alone in their own entry and are never bundled; a bundled
+   issue is not claimable while the lead holds the bundle.
 3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.
@@ -29,7 +31,8 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    and GitHub merges when they are green. If bosun exits 5 with `already_clean`, the PR is
    already mergeable: hand it to the orchestrator, which merges it (D-008). You never merge, tag
    or force-push (the hooks refuse it).
-6. Review: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON; post it
+6. Review: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON, listing
+   every chunk number of the pack in `chunks_reviewed` (a missing one is refused); post it
    with `bosun verdict post --from -` (in a cloud session, which cannot write statuses:
    `bosun verdict comment --from -`). Fix request-changes findings, then review again; auto-merge
    stays on after a fix push, so do not rerun `--auto-merge`.

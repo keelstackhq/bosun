@@ -1,1 +1,1 @@
-- 2026-11-05 · pr-shape · item `shape:` (single/split/auto), single-PR wave bundle, review-pack chunks · PR (claude/pr-shape)
+- 2026-11-05 · pr-shape · item `shape:`, gated tasks, single-PR wave bundle, bundled-claim refusal, review chunks and drift (D-016) · PR (claude/pr-shape)
