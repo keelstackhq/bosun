@@ -11,7 +11,9 @@ use crate::core::guard::{
     prereqs_lock_for, tool_rules,
 };
 use crate::core::lease::leases_of;
-use crate::core::repeat::{Verdict, deny_text, repeat_key, repeat_step, repeat_verdict, warn_text};
+use crate::core::repeat::{
+    Verdict, deny_text, is_poll, repeat_key, repeat_step, repeat_verdict, warn_text,
+};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -116,6 +118,9 @@ fn repeat_file(dir: &Path, input: &Value) -> Option<std::path::PathBuf> {
 /// Any I/O failure skips the lock.
 fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> {
     let command = tool_input.get("command").and_then(Value::as_str)?;
+    if is_poll(command) {
+        return None;
+    }
     let file = repeat_file(dir, input)?;
     let session = file.file_stem()?.to_string_lossy().into_owned();
     let step = repeat_step(cache::read_repeat(&file).as_ref(), &session, command);

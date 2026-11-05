@@ -17,5 +17,6 @@ One task, one PR, at most 400 changed lines (tests do not count). Spec §4.
   - Repeat-lock: the same Bash command (trimmed) N times in a row in one session: N=3 adds
     `additionalContext` (warning), N≥5 denies. Counter in `<git common dir>/bosun/repeat/<key>.json`
     `{session, command, count}` per session, agent and directory; a different command or an
-    edit resets it. Pure counter in `src/core`.
+    edit resets it. Read-only polls (`bosun wait|status|...`, `sleep`, `gh pr checks`,
+    `git status|log|fetch|diff`) are skipped (`is_poll`). Pure counter in `src/core`.
   - AGENTS.md and `sections/agents.md` gain one line each about both locks.

@@ -507,6 +507,21 @@ fn repeat_lock_warns_at_three_and_denies_at_five() {
 }
 
 #[test]
+fn repeat_lock_skips_read_only_polls_and_keeps_the_count() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..6 {
+        let out = bash_in(r, "s1", "bosun wait --child S");
+        assert_eq!(out.stdout.trim(), "", "{}", out.stdout);
+    }
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s1", "bosun wait --child S"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    let third = bash_in(r, "s1", "cargo test");
+    assert!(third.stdout.contains("repeat-lock"), "{}", third.stdout);
+}
+
+#[test]
 fn repeat_lock_resets_on_another_command_or_session() {
     let tmp = repo();
     let r = tmp.path();

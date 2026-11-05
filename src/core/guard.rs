@@ -1447,8 +1447,9 @@ fn destructive(what: &str) -> String {
 }
 
 #[rustfmt::skip]
-const WIPE_TARGETS: &[&str] = &["/", "/*", "/.", "~", "~/", "~/*", "$HOME", "$HOME/", "$HOME/*",
-    "${HOME}", "${HOME}/", "${HOME}/*"];
+const WIPE_TARGETS: &[&str] = &["/", "/*", "/.", "~", "~/", "~/*", "~/.", "$HOME", "$HOME/",
+    "$HOME/*", "$HOME/.", "${HOME}", "${HOME}/", "${HOME}/*", "${HOME}/.", "${HOME:?}",
+    "${HOME:?}/", "${HOME:?}/*", "${HOME:?}/."];
 
 /// Destructive-lock (spec §4): the command word of every segment, after wrappers and runners,
 /// and of every nested command; quoted text, other arguments and heredoc bodies are data.
@@ -1463,17 +1464,18 @@ fn destructive_rule(command: &str, depth: usize) -> Option<String> {
             return Some(why);
         }
     }
-    let squeezed: Vec<&str> = code.split_whitespace().collect();
-    if squeezed.concat().contains(":(){:|:&};:") {
+    let bare: String = unquoted(&code).split_whitespace().collect();
+    if bare.contains(":(){:|:&};:") {
         return Some(destructive("fork bomb"));
     }
     let words = shell_words(&code);
     let base = |w: &str| w.rsplit('/').next().unwrap_or(w).to_string();
-    let mut client = false;
-    for segment in words.split(|w| w == SEP) {
-        client |= segment
-            .iter()
-            .any(|w| SQL_CLIENTS.contains(&base(w).as_str()));
+    let segments: Vec<&[String]> = words.split(|w| w == SEP).collect();
+    // SQL is what a client reads: its arguments, a pipe into it, its heredoc.
+    let first_client = segments
+        .iter()
+        .position(|s| s.iter().any(|w| SQL_CLIENTS.contains(&base(w).as_str())));
+    for segment in &segments {
         if disk_redirect(segment) {
             return Some(destructive("redirect into a disk device"));
         }
@@ -1502,11 +1504,33 @@ fn destructive_rule(command: &str, depth: usize) -> Option<String> {
             return Some(destructive(&segment.join(" ")));
         }
     }
-    let squeezed = squeezed.join(" ").to_ascii_lowercase();
+    let tail = segments[first_client?.saturating_sub(1)..]
+        .iter()
+        .flat_map(|s| s.iter());
+    let sql = tail.map(String::as_str).collect::<Vec<_>>().join(" ");
+    let sql = sql
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
     ["drop database", "drop schema"]
         .into_iter()
-        .find(|d| client && squeezed.contains(d))
+        .find(|d| sql.contains(d))
         .map(destructive)
+}
+
+/// The text outside quotes.
+fn unquoted(s: &str) -> String {
+    let (mut q, mut out) = (None, String::new());
+    for c in s.chars() {
+        match q {
+            Some(x) if x == c => q = None,
+            Some(_) => {}
+            None if c == '\'' || c == '"' => q = Some(c),
+            None => out.push(c),
+        }
+    }
+    out
 }
 
 /// Clients whose arguments, stdin or heredoc are SQL.
@@ -1553,7 +1577,8 @@ fn wipes(name: &str, args: &[&str]) -> bool {
         n if n.starts_with("mkfs") => true,
         "dd" => args
             .iter()
-            .any(|a| a.starts_with("of=/dev/") && *a != "of=/dev/null"),
+            .filter_map(|a| a.strip_prefix("of=/dev/"))
+            .any(|t| !["null", "stdout", "stderr", "tty"].contains(&t) && !t.starts_with("fd/")),
         "shred" | "wipefs" => args.iter().any(|a| a.starts_with("/dev/")),
         "terraform" | "tofu" => match args.iter().find(|a| !a.starts_with('-')) {
             Some(&"destroy") => true,
@@ -2805,6 +2830,14 @@ mod tests {
             "docker exec db psql -c 'drop database x'",
             "psql <<'EOF'\nDROP DATABASE prod;\nEOF",
             "echo x &>/dev/sda",
+            "echo hi; :(){ :|:& };:",
+            "psql -c \"DROP DATABASE x\"",
+            "rm -rf ~/.",
+            "rm -rf ${HOME:?}",
+            "rm -rf ${HOME:?}/",
+            "rm -rf \"${HOME}\"/",
+            "rm -rf $HOME/.",
+            "rm -rf \"$HOME/\"",
         ] {
             let why = bash(cmd, "feat").unwrap_or_else(|| panic!("allowed: {cmd}"));
             assert!(why.starts_with("destructive-lock"), "{cmd}: {why}");
@@ -2840,6 +2873,12 @@ mod tests {
             "bosun lessons add \"never rm -rf ~\"",
             "git log --grep 'rm -rf /'",
             "psql -c 'select 1'",
+            "git commit -m ':(){ :|:& };:'",
+            "echo \"DROP DATABASE x\"",
+            "dd if=x of=/dev/stdout",
+            "dd if=x of=/dev/stderr",
+            "dd if=x of=/dev/fd/3",
+            "dd if=x of=/dev/tty",
         ] {
             assert_eq!(bash(cmd, "feat"), None, "{cmd}");
         }
