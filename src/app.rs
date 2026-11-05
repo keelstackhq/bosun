@@ -188,7 +188,12 @@ pub fn gated_from_default(gh: &dyn Github) -> Result<Vec<Glob>> {
 pub fn base_files(gh: &dyn Github) -> Result<Option<Vec<String>>> {
     let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
     // GitHub's tree endpoint takes a branch name as well as a tree sha.
-    Ok(gh.tree(&branch)?.filter(|t| !t.truncated).map(|t| {
+    // Any read error is "not available" (fail closed in the callers), not a failed command.
+    let tree = gh.tree(&branch).unwrap_or_else(|e| {
+        eprintln!("bosun: cannot read the tree of {branch}: {}", e.message);
+        None
+    });
+    Ok(tree.filter(|t| !t.truncated).map(|t| {
         (t.entries.into_iter())
             .filter(|e| e.kind == "blob")
             .map(|e| e.path)

@@ -11,7 +11,8 @@ use crate::app::{App, kill_switch, set_state};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
-    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_json, comment_session, effective,
+    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
+    comment_session, effective,
 };
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -114,7 +115,10 @@ fn apply(app: &App, id: u64) -> CmdResult {
             c.user
         )));
     }
-    let verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
+    let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
+    if verdict.chunks_reviewed.is_empty() {
+        verdict.chunks_reviewed = comment_chunks(&c.body);
+    }
     if !c.issue_url.ends_with(&format!("/issues/{}", verdict.pr)) {
         return Err(refuse(format!("it is not on PR #{}", verdict.pr)));
     }

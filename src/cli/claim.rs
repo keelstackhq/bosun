@@ -19,7 +19,7 @@ use crate::core::lease::{
 use crate::core::lessons;
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
-use crate::core::shape::{touch_gated, touch_gated_in};
+use crate::core::shape::{meta_gated, touch_gated, touch_gated_in};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -382,11 +382,7 @@ fn refuse_if_bundled(
     n: u64,
     meta: &Option<crate::core::meta::TaskMeta>,
 ) -> Result<(), BosunError> {
-    let Some(epic) = meta
-        .as_ref()
-        .filter(|m| !m.gated && m.risk != "high")
-        .and_then(|m| m.epic)
-    else {
+    let Some((m, epic)) = meta.as_ref().and_then(|m| m.epic.map(|e| (m, e))) else {
         return Ok(());
     };
     let shape = gh
@@ -395,12 +391,17 @@ fn refuse_if_bundled(
     if shape.as_deref() != Some("single") {
         return Ok(());
     }
+    // Judge gated as `wave plan` does (default-branch rules and tree), not by the stored flag.
+    let globs = crate::app::gated_from_default(gh)?;
+    let base = crate::app::base_files(gh)?;
+    let gated = |m: &crate::core::meta::TaskMeta| meta_gated(m, &globs, base.as_deref());
+    if gated(m) {
+        return Ok(());
+    }
     let lead = active_issues(gh)?
         .into_iter()
         .filter(|(i, _)| i.number != n)
-        .filter(|(i, _)| {
-            task_meta(i).is_some_and(|m| m.epic == Some(epic) && !m.gated && m.risk != "high")
-        })
+        .filter(|(i, _)| task_meta(i).is_some_and(|t| t.epic == Some(epic) && !gated(&t)))
         .map(|(i, _)| i.number)
         .min();
     match lead {

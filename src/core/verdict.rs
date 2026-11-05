@@ -32,8 +32,10 @@ pub struct Verdict {
     pub lessons_hit: Vec<String>,
     #[serde(default)]
     pub escalate_risk: bool,
-    /// The 1-based review chunks (`bosun review-pack` `chunks`) the reviewers covered.
-    #[serde(default)]
+    /// The 1-based review chunks (`bosun review-pack` `chunks`) the reviewers covered. A verdict
+    /// comment carries them in its own marker line ([`comment_chunks`]), not in the JSON: the
+    /// pinned applier of an older release refuses unknown fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chunks_reviewed: Vec<u32>,
 }
 
@@ -133,14 +135,40 @@ const SESSION_TAG: &str = "<!-- bosun:reviewer ";
 /// The PR comment `bosun verdict comment` posts: a summary, the reviewer session (for the
 /// record; the session writes it, so it is not proof), the marker, the JSON.
 pub fn comment_body(v: &Verdict, session: &str) -> String {
-    let json = serde_json::to_string(v).unwrap_or_default();
+    let mut plain = v.clone();
+    let chunks = std::mem::take(&mut plain.chunks_reviewed);
+    let json = serde_json::to_string(&plain).unwrap_or_default();
     // A fence longer than any backtick run in the payload, so evidence cannot close it.
     let fence = "`".repeat(longest_backtick_run(&json).max(2) + 1);
     format!(
-        "Review verdict for {}: {}.\n\n{SESSION_TAG}{session} -->\n{COMMENT_MARKER}\n{fence}json\n{json}\n{fence}",
+        "Review verdict for {}: {}.\n\n{SESSION_TAG}{session} -->\n{chunk_line}{COMMENT_MARKER}\n{fence}json\n{json}\n{fence}",
         v.head_sha,
-        v.summary()
+        v.summary(),
+        chunk_line = if chunks.is_empty() {
+            String::new()
+        } else {
+            let list: Vec<String> = chunks.iter().map(u32::to_string).collect();
+            format!("{CHUNKS_TAG}{} -->\n", list.join(","))
+        }
     )
+}
+
+const CHUNKS_TAG: &str = "<!-- bosun:chunks ";
+
+/// The review chunks a verdict comment lists in its `<!-- bosun:chunks 1,2 -->` line (before the
+/// verdict marker); empty when there is none or it is malformed.
+pub fn comment_chunks(body: &str) -> Vec<u32> {
+    let head = body.split_once(COMMENT_MARKER).map_or(body, |(h, _)| h);
+    let Some((_, rest)) = head.split_once(CHUNKS_TAG) else {
+        return vec![];
+    };
+    let Some((list, _)) = rest.split_once(" -->") else {
+        return vec![];
+    };
+    list.split(',')
+        .map(|s| s.trim().parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default()
 }
 
 /// The reviewer session a verdict comment names, if any.

@@ -51,3 +51,19 @@ fn an_unresolvable_subtree_touch_is_refused() {
         assert_eq!(v["error"]["fix"], "narrow --touch to explicit paths", "{v}");
     }
 }
+
+#[test]
+fn claim_judges_gated_as_wave_does_not_by_the_stored_flag() {
+    // Imported before packages/a/hoist.toml existed: stored gated is false, but the default
+    // branch's tree makes the task gated now. Wave runs it alone, so claim must not refuse it
+    // as bundled into the active #12. (#11 of `world` is a plain bundled task.)
+    let fake = world(Some(("packages/a/hoist.toml", false)));
+    let body = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["packages/**"]} -->"#;
+    fake.issue(13, "Task 13", &["bosun:state/ready"], body);
+    let lead = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/b.rs"]} -->"#;
+    fake.issue(12, "Task 12", &["bosun:state/claimed"], lead);
+    let (code, v) = run(&fake, "session_b", NOW, &["claim", "13"]);
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = run(&fake, "session_c", NOW, &["claim", "11"]);
+    assert_eq!(code, 3, "the plain task is still bundled: {v}");
+}

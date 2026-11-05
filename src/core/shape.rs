@@ -295,6 +295,17 @@ pub fn effective_by(item: &Item, gated: GatedBy) -> Decision {
     }
 }
 
+/// Whether a task is gated now (D-016), as `wave plan` judges it: the stored flag, `risk: high`,
+/// or its touch reaching a gated path of the default branch's rules and tree. A touch that
+/// cannot be resolved counts as gated (fail closed: the task runs alone).
+pub fn meta_gated(
+    m: &crate::core::meta::TaskMeta,
+    gated: &[Glob],
+    files: Option<&[String]>,
+) -> bool {
+    m.gated || m.risk == "high" || touch_gated_in(&m.touch, gated, files).unwrap_or(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -92,3 +92,52 @@ fn one_chunk_needs_no_list() {
     );
     assert_eq!(code, 0, "{v}");
 }
+
+#[test]
+fn a_comment_keeps_chunks_out_of_the_json_and_apply_reads_them() {
+    // The pinned applier (0.6.0) refuses unknown fields: the JSON must not carry
+    // `chunks_reviewed`; the chunk list rides in its own marker line.
+    let fake = setup(3);
+    let (code, v) = call(&fake, "comment", &verdict("[1,2,3]"));
+    assert_eq!(code, 0, "{v}");
+    let body = fake.comments_of(42)[0].body.clone();
+    assert!(!body.contains("chunks_reviewed"), "{body}");
+    assert!(body.contains("<!-- bosun:chunks 1,2,3 -->"), "{body}");
+    let id = fake.comments_of(42)[0].id;
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = run(
+        &fake,
+        "session_ci",
+        T0,
+        &["verdict", "apply", &id.to_string()],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.statuses_of("sha42")[0]["state"], "success");
+}
+
+#[test]
+fn apply_refuses_a_comment_without_every_chunk() {
+    // A comment posted by an older bosun (no chunk check, no marker) on a 3-chunk PR.
+    let fake = setup(3);
+    let one = setup(1);
+    let (code, v) = call(&one, "comment", &verdict("[]"));
+    assert_eq!(code, 0, "{v}");
+    let body = one.comments_of(42)[0].body.clone();
+    let id = fake.comment(42, &body);
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = run(
+        &fake,
+        "session_ci",
+        T0,
+        &["verdict", "apply", &id.to_string()],
+    );
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing [1, 2, 3]"),
+        "{v}"
+    );
+    assert!(fake.statuses_of("sha42").is_empty());
+}
