@@ -1,0 +1,1 @@
+- 2026-11-05 · R6 · pin bosun 0.6.0 (.bosun/version, setup script, KNOWN lists)
