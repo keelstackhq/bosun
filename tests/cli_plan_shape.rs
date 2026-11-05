@@ -113,9 +113,16 @@ fn a_task_touching_a_risk_path_is_gated_and_size_caps_nothing() {
         "[[rule]]\nid = \"src-a\"\nwhy = \"x\"\npaths = [\"src/a.rs\"]\n",
     )
     .unwrap();
+    // src/a.rs (size 5000) is now gated: D-016 caps it at 400.
     let (code, v) = plan(&fake, tmp.path(), &["check", "plan.md"]);
-    assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["items"][0]["gated"][0], "M3/T2");
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(v["data"]["errors"][0]["line"], 15, "{v}");
+    assert!(
+        v["data"]["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("size 5000")
+    );
     std::fs::write(tmp.path().join(".bosun/risk.toml"), "not toml [").unwrap();
     let (code, v) = plan(&fake, tmp.path(), &["check", "plan.md"]);
     assert_eq!(code, 1, "{v}");
@@ -162,4 +169,45 @@ fn import_writes_the_shape_into_the_epic() {
     };
     assert!(shape(0).contains(r#""shape":"single""#), "{}", shape(0));
     assert!(shape(1).contains(r#""shape":"single""#), "{}", shape(1));
+}
+
+const BIG_GATED: &str = "# Plan: widget
+
+project: widget
+
+## M4: Big gate
+area: core
+
+### Tasks
+
+- T1: ci
+  touch: .github/workflows/ci.yml
+  size: 401
+
+### Done when
+
+- UC-M4-1: ok.
+";
+
+fn assert_gated_size_error(v: &Value) {
+    let e = &v["data"]["errors"][0];
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains("size 401 is over 400 changed lines for a gated task"),
+        "{v}"
+    );
+    assert!(e["fix"].as_str().unwrap().contains("D-016"), "{v}");
+}
+
+#[test]
+fn a_gated_task_over_400_lines_is_a_plan_error() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    std::fs::write(tmp.path().join("plan.md"), BIG_GATED).unwrap();
+    for cmd in ["check", "import", "amend"] {
+        let (code, v) = plan(&fake, tmp.path(), &[cmd, "plan.md"]);
+        assert_eq!(code, 1, "{cmd}: {v}");
+        assert_gated_size_error(&v);
+    }
 }

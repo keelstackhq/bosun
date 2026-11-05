@@ -110,8 +110,11 @@ The state machine, stop rules and resume.
 The shape follows the goal, not a line count (D-016): there is no cap on task or PR size.
 
 A task is gated when it is `risk: high`, or when one of its `touch` globs (with the lockfile
-companions) overlaps a path glob of any risk rule (`.bosun/risk.toml`, else the built-in rules).
-A gated task always gets its own single-task PR and is never bundled. `bosun plan check` lists
+companions) reaches a risk path (`.bosun/risk.toml`, else the built-in rules): a rule glob matches
+the touch entry itself (any case), or the entry overlaps a rule glob that does not start with `**`
+(`.github/**` reaches `.github/workflows/**`). A wide touch such as `src/**` is not gated by a
+match-anywhere rule like `**/agents.md`; risk-check still judges each real file of the PR.
+A gated task always gets its own single-task PR and is never bundled, and it is at most 400 changed lines (D-016): a gated task with `size:` over 400 is a plan error at its `size:` line (`plan check`, `import` and `amend` all refuse it; `import` and `amend` judge the risk paths by `.bosun/risk.toml` on the default branch, `plan check` by the working tree). `bosun plan check` lists
 them as `gated`.
 
 `shape: auto` (the default) decides on the other tasks, in this order:

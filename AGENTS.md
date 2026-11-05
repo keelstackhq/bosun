@@ -16,7 +16,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    in `closes` and `<!-- bosun:task-pr <lead> -->`. Then `bosun pr <lead> --auto-merge` reuses
    that PR (from its branch, or by the marker with `Closes #<lead>`). Gated tasks (`risk: high`
    or touching a risk path) run alone in their own entry and are never bundled; a bundled
-   issue is not claimable while the lead holds the bundle.
+   issue is not claimable while the lead holds the bundle, and `--touch` never adds a risk path to it.
 3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.

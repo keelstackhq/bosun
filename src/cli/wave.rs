@@ -7,9 +7,12 @@ use serde_json::json;
 use super::plan::{epic_plan, epic_shape};
 use super::prereqs_gate::{blockers, open_items, plan_ids};
 use super::{EpicArg, WaveCmd};
-use crate::app::{App, active_issues, limits_from_default, main_red, task_meta};
+use crate::app::{
+    App, active_issues, gated_from_default, limits_from_default, main_red, task_meta,
+};
 use crate::cli::status::process_red;
 use crate::core::lease::live_leases;
+use crate::core::shape::touch_gated;
 use crate::core::state::{State, state_of};
 use crate::core::wave::{TaskInfo, plan, plan_single};
 use crate::github::IssueState;
@@ -40,6 +43,8 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     // Ready process-fix tasks; active tasks stay in the plan so they count against the cap.
     let mut fix_tasks: Vec<u64> = Vec::new();
     let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
+    // Gated is recomputed here from the default branch's rules, never trusted from the task meta.
+    let gated_globs = gated_from_default(gh)?;
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -60,7 +65,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
-            let gated = meta.gated || meta.risk == "high";
+            let gated = meta.gated || meta.risk == "high" || touch_gated(&meta.touch, &gated_globs);
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {

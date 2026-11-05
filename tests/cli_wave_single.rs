@@ -27,8 +27,13 @@ fn epic(meta: &str) -> FakeGithub {
     fake
 }
 
+/// A narrow rule set on the default branch: the wildcard touches of these tests (`src/a/**`)
+/// would overlap the built-in `**/...` risk globs and count as gated.
 fn single() -> FakeGithub {
-    epic(r#"{"item":"M1","shape":"single"}"#)
+    let fake = epic(r#"{"item":"M1","shape":"single"}"#);
+    let rule = "[[rule]]\nid = \"ci\"\nwhy = \"x\"\npaths = [\".github/workflows/**\"]\n";
+    fake.content(".bosun/risk.toml", "main", rule);
+    fake
 }
 
 fn plan(fake: &FakeGithub) -> Value {
@@ -167,4 +172,26 @@ fn gated_task(fake: &FakeGithub, n: u64, id: &str, touch: &str, extra: &str) {
         r#"<!-- bosun:task {{"item":"{item}","task":"{t}","epic":10,"depends":[],"touch":[{touch}]{extra}}} -->"#
     );
     fake.issue(n, &format!("Task {id}"), &["bosun:state/ready"], &body);
+}
+
+#[test]
+fn wave_recomputes_gated_from_the_default_branch_rules() {
+    // The task meta says nothing about gated, but the touch is a built-in risk path.
+    let fake = epic(r#"{"item":"M1","shape":"single"}"#);
+    task(&fake, 11, "M1/T1", "ready", "", r#""src/a.rs""#);
+    task(
+        &fake,
+        12,
+        "M1/T2",
+        "ready",
+        "",
+        r#"".github/workflows/x.yml""#,
+    );
+    let d = plan(&fake)["data"].clone();
+    for r in d["run"].as_array().unwrap() {
+        if r["issue"] == 11 {
+            assert!(!nums(&r["bundle"]).contains(&12), "{d}");
+            assert!(!nums(&r["closes"]).contains(&12), "{d}");
+        }
+    }
 }

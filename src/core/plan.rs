@@ -515,6 +515,10 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             if let (true, Some(s @ 101..)) = (t.risk == "high", t.size) {
                 bad!(warns, l; "split the task or expect an owner review" => "{me} is risk high with size {s}, over 100");
             }
+            // Only `risk: high` is known here; the CLI re-checks with the risk-rule globs.
+            if let Some(e) = crate::core::shape::gated_size_error(t, &[]) {
+                errs.push(e);
+            }
             for d in std::mem::take(&mut t.depends) {
                 let full = if d.contains('/') {
                     d.clone()
@@ -807,6 +811,17 @@ mod tests {
         let hi = parse(&w("size: 100", "size: 101\n  risk: high")).unwrap();
         assert!(hi.warnings[0].message.contains("risk high") && !hi.warnings[0].fix.is_empty());
         assert_eq!(hi.items[0].tasks[0].risk, "high");
+    }
+
+    #[test]
+    fn gated_task_over_400_is_an_error() {
+        // D-016: a risk: high task is gated; over 400 lines it is a plan error at its size line.
+        let t = w("size: 100", "size: 401\n  risk: high");
+        at(&t, 16, "size 401 is over 400 changed lines for a gated task");
+        let e = parse(&t).unwrap_err();
+        assert!(e.iter().any(|e| e.fix.contains("D-016")));
+        assert!(parse(&w("size: 100", "size: 400\n  risk: high")).is_ok());
+        assert!(parse(&w("size: 100", "size: 900")).is_ok());
     }
 
     #[test]

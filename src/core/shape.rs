@@ -6,12 +6,14 @@ use serde::Serialize;
 use std::fmt;
 
 use crate::core::glob::{self, Glob};
-use crate::core::plan::{Item, Task};
+use crate::core::plan::{Item, PlanError, Task};
 use crate::core::risk::Rules;
 use crate::core::touch::companions;
 
 /// Planned size of a task without `size:`.
 pub const DEFAULT_TASK_SIZE: u32 = 200;
+/// D-016: a gated task is at most this many changed lines.
+pub const MAX_GATED: u32 = 400;
 /// Tasks side by side (tasks per task of the longest chain) needed for a split to pay off.
 const SPLIT_WIDTH: f64 = 2.0;
 
@@ -58,17 +60,45 @@ pub fn gated_globs(rules: &Rules) -> Vec<Glob> {
     rules.rules.iter().flat_map(|r| r.paths.clone()).collect()
 }
 
+/// Whether a touch list (with companions) reaches a gated path: a gated glob matches the touch
+/// entry itself (`AGENTS.md`, `.bosun/limits.toml`, `.github/workflows/**`), or the entry overlaps
+/// an anchored gated glob (`.github/**` ~ `.github/workflows/**`). A glob that matches anywhere
+/// (`**/agents.md`) counts only by the first test, else every wide touch (`src/**`) would be
+/// gated; risk-check on the PR still sees each real file.
+pub fn touch_gated(touch: &[String], gated: &[Glob]) -> bool {
+    let raw = companions(touch);
+    raw.iter().any(|t| {
+        // As risk-check, a path also matches in lower case (`AGENTS.md` ~ `**/agents.md`).
+        let low = t.to_lowercase();
+        let parsed = glob::Glob::parse(t).ok();
+        gated.iter().any(|g| {
+            g.matches(t)
+                || g.matches(&low)
+                || (!g.as_str().starts_with("**") && parsed.as_ref().is_some_and(|p| p.overlaps(g)))
+        })
+    })
+}
+
 /// A task is gated when it is `risk: high` or its touch list (with companions) overlaps a risk path.
 pub fn is_gated(t: &Task, gated: &[Glob]) -> bool {
-    if t.risk == "high" {
-        return true;
-    }
-    // As risk-check, a path also matches in lower case (`AGENTS.md` ~ `**/agents.md`).
-    let raw = companions(&t.touch);
-    let lower: Vec<String> = raw.iter().map(|g| g.to_lowercase()).collect();
-    let touch = glob::parse_all(&raw).unwrap_or_default();
-    let low = glob::parse_all(&lower).unwrap_or_default();
-    (touch.iter().chain(&low)).any(|a| gated.iter().any(|b| a.overlaps(b)))
+    t.risk == "high" || touch_gated(&t.touch, gated)
+}
+
+/// The plan error for a gated task planned over [`MAX_GATED`] lines (at its `size:` line).
+pub fn gated_size_error(t: &Task, gated: &[Glob]) -> Option<PlanError> {
+    let size = t.size.filter(|&s| s > MAX_GATED && is_gated(t, gated))?;
+    Some(PlanError {
+        line: t.size_line,
+        message: format!("size {size} is over {MAX_GATED} changed lines for a gated task"),
+        fix: format!("split the gated work so each PR is at most {MAX_GATED} lines (D-016)"),
+    })
+}
+
+/// [`gated_size_error`] for every task of `items`.
+pub fn gated_size_errors(items: &[Item], gated: &[Glob]) -> Vec<PlanError> {
+    (items.iter().flat_map(|i| &i.tasks))
+        .filter_map(|t| gated_size_error(t, gated))
+        .collect()
 }
 
 pub fn total(item: &Item) -> u32 {
@@ -239,6 +269,16 @@ mod tests {
         let g = globs(&["**/agents.md"]);
         assert!(is_gated(&task("T1", "AGENTS.md", &[], 5, "normal"), &g));
         assert!(!is_gated(&task("T1", "src/a.rs", &[], 5, "normal"), &g));
+    }
+
+    #[test]
+    fn a_wide_touch_is_gated_only_by_an_anchored_risk_path() {
+        let g = globs(&["**/agents.md", ".github/workflows/**"]);
+        // `src/**` could hold an agents.md, but that is risk-check's job on the real files.
+        assert!(!touch_gated(&["src/**".into()], &g));
+        assert!(touch_gated(&[".github/**".into()], &g));
+        assert!(touch_gated(&[".github/workflows/ci.yml".into()], &g));
+        assert!(touch_gated(&["docs/AGENTS.md".into()], &g));
     }
 
     #[test]

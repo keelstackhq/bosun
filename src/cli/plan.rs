@@ -33,7 +33,8 @@ pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
 }
 
 /// The risk-rule path globs of `.bosun/risk.toml` under `root` (else the built-in rules): a task
-/// touching one is gated.
+/// touching one is gated. Advisory: `plan check` works without GitHub, so it reads the working
+/// tree; import and amend use the default branch (`app::gated_from_default`).
 fn gated_rules(root: &Path) -> Result<Vec<Glob>> {
     let rules = match std::fs::read_to_string(root.join(".bosun/risk.toml")) {
         Ok(t) => Rules::parse(&t).map_err(|e| {
@@ -114,6 +115,10 @@ pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
 fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
     let p = read_plan(dir, &a.file)?;
     let gated = gated_rules(dir.unwrap_or_else(|| Path::new(".")))?;
+    let errs = shape::gated_size_errors(&p.items, &gated);
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
     let items: Vec<Value> = p
         .items
         .iter()
@@ -584,6 +589,11 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     }
     let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
         .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
+    let gated = crate::app::gated_from_default(app.gh.as_ref())?;
+    let errs = shape::gated_size_errors(&p.items, &gated);
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
     let mut roots = vec![app.ctx.dir.clone()];
     roots.extend(std::fs::canonicalize(&app.ctx.dir).ok());
     let mut imp = Importer {
@@ -603,7 +613,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         on_default_open: vec![],
         local_text: text.clone(),
         main_tasks: None,
-        gated: gated_rules(&app.ctx.dir)?,
+        gated,
         amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
