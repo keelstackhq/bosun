@@ -26,6 +26,7 @@ use crate::registry;
 use crate::time::Timestamp;
 
 pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
+    super::refuse_secrets("--touch", &args.touch)?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let (n, session, now) = (args.issue, &app.ctx.session, app.ctx.now);

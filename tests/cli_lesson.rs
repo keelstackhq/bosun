@@ -183,3 +183,22 @@ fn add_of_a_duplicate_rule_records_a_hit() {
     assert_eq!(t["lesson"][0]["hits"].as_integer(), Some(1));
     assert_eq!(t["lesson"][0]["last_hit"].as_str(), Some("2026-10-22"));
 }
+
+#[test]
+fn a_secret_in_the_text_or_why_is_refused_and_writes_nothing() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let secret = format!("ghp_{}", "a1B2".repeat(9));
+    let text = format!("never use {secret}");
+    for args in [
+        vec!["add", &text, "--evidence", "#1"],
+        vec!["add", "fine rule", "--why", &text, "--evidence", "#1"],
+    ] {
+        let (code, v) = lesson(tmp.path(), &fake, &args);
+        assert_eq!(code, 2, "{v}");
+        assert!(v["error"]["fix"].as_str().unwrap().contains("redact"));
+        let message = v["error"]["message"].as_str().unwrap();
+        assert!(message.contains("GitHub token"), "{message}");
+        assert!(!v.to_string().contains(&secret));
+        assert!(!tmp.path().join("docs/lessons.toml").exists());
+    }
+}

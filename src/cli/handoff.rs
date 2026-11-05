@@ -69,6 +69,9 @@ pub fn run(dir: Option<&Path>, args: &HandoffArgs) -> CmdResult {
     lines.extend(leases.into_iter().map(|(_, l)| l));
     if let Some(from) = &args.from {
         let text = read_input(from)?;
+        for (i, line) in text.lines().enumerate() {
+            super::refuse_secret(&format!("{from} line {}", i + 1), line)?;
+        }
         lines.extend(parse_lines(&text).map_err(|e| {
             BosunError::usage(
                 format!("{from}: {e}"),

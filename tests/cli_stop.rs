@@ -223,3 +223,26 @@ fn a_long_signature_gives_a_short_lesson_title() {
     assert_eq!(titles.len(), 1);
     assert!(titles[0].chars().count() <= 200, "{}", titles[0].len());
 }
+
+#[test]
+fn a_secret_in_the_signature_is_refused_and_records_nothing() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    let secret = format!("AKIA{}", "Q7ZX".repeat(4));
+    let (code, v) = fail(&fake, 5, &format!("auth failed with {secret}"), &[]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("redact"));
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("AWS access key"), "{message}");
+    assert!(!v.to_string().contains(&secret));
+    assert!(fake.comments_of(5).is_empty());
+}
+
+#[test]
+fn a_snake_case_signature_is_not_a_secret() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    let sig = "E0308_mismatched_types_in_src_cli_handoff_rs_line_72";
+    let (code, v) = fail(&fake, 5, sig, &[]);
+    assert_eq!(code, 0, "{v}");
+}

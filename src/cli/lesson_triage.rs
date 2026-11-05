@@ -20,6 +20,10 @@ fn label(kind: &str) -> String {
 }
 
 pub fn run(dir: Option<&Path>, a: &LessonTriageArgs) -> CmdResult {
+    super::refuse_secret("--rule", a.rule.as_deref().unwrap_or(""))?;
+    super::refuse_secrets("--scope", &a.scope)?;
+    super::refuse_secrets("--touch", &a.touch)?;
+    super::refuse_secret("--area", a.area.as_deref().unwrap_or(""))?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
