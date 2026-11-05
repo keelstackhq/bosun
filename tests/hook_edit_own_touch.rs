@@ -188,3 +188,110 @@ fn a_root_file_named_dot_dot_x_is_inside_the_repo() {
     // A real parent directory is outside the repo: not claimable, allowed.
     assert_eq!(edit(&fake, tmp.path(), "../x"), None);
 }
+
+/// The hook for a tool call as `session_me`; `true` when it denies.
+fn denied(fake: &FakeGithub, repo: &Path, tool: &str, tool_input: Value) -> bool {
+    let input = json!({"session_id": "s", "tool_name": tool, "cwd": repo.to_str().unwrap(),
+        "tool_input": tool_input});
+    let out = bosun()
+        .current_dir(repo)
+        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["hook", "pre-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    String::from_utf8_lossy(&out.stdout).contains("\"deny\"")
+}
+
+fn bash_denied(fake: &FakeGithub, repo: &Path, command: &str) -> bool {
+    denied(fake, repo, "Bash", json!({ "command": command }))
+}
+
+/// The spawn lease `bosun spawn --record` writes for a child: origin spawned, no touch.
+fn spawn_lease(session: &str) -> String {
+    format!(
+        "Handed to {session}.\n\n{{\"bosun\":\"lease\",\"session\":\"{session}\",\"origin\":\"spawned\",\"expires\":\"{LIVE}\",\"touch\":[]}}"
+    )
+}
+
+const META: &str = r#"{"item":"M1","task":"T9","epic":5,"touch":["src/a.rs"]}"#;
+
+fn create(meta: &str) -> String {
+    format!("gh issue create --title t --body '<!-- bosun:task {meta} -->'")
+}
+
+#[test]
+fn a_spawned_child_may_create_a_task_issue_for_its_epic_and_nothing_else() {
+    let (fake, tmp) = setup("session_other", "docs/**");
+    fake.comment(5, &spawn_lease("session_me"));
+    let r = tmp.path();
+    assert!(!bash_denied(&fake, r, &create(META)));
+    assert!(!denied(
+        &fake,
+        r,
+        "mcp__github__issue_write",
+        json!({"method":"create","owner":"acme","repo":"widget",
+            "body": format!("<!-- bosun:task {META} -->")})
+    ));
+    // Edits, comments, API writes, other repos, nested shells: refused.
+    for cmd in [
+        format!("gh issue edit 5 --body '<!-- bosun:task {META} -->'"),
+        format!("gh issue comment 5 --body '<!-- bosun:task {META} -->'"),
+        format!("gh api -X PATCH repos/acme/widget/issues/5 -f body='<!-- bosun:task {META} -->'"),
+        format!("gh issue create -R evil/other --title t --body '<!-- bosun:task {META} -->'"),
+        format!("bash -c \"{}\"", create(META)),
+    ] {
+        assert!(bash_denied(&fake, r, &cmd), "{cmd}");
+    }
+    assert!(denied(
+        &fake,
+        r,
+        "mcp__github__issue_write",
+        json!({"method":"create","owner":"evil","repo":"other",
+            "body": format!("<!-- bosun:task {META} -->")})
+    ));
+    // The allow and capabilities keys, another epic, and the epic marker: refused.
+    for meta in [
+        r#"{"epic":5,"allow":["delete-test"]}"#,
+        r#"{"epic":5,"capabilities":[]}"#,
+        r#"{"epic":6,"touch":["src/a.rs"]}"#,
+    ] {
+        assert!(bash_denied(&fake, r, &create(meta)), "{meta}");
+    }
+    assert!(bash_denied(
+        &fake,
+        r,
+        "gh issue create --title t --body '<!-- bosun:epic 3 -->'"
+    ));
+}
+
+#[test]
+fn the_child_check_reads_the_lease_record_and_its_author() {
+    // A claim (it has touch paths) is not a spawn lease, whatever its origin says.
+    let (fake, tmp) = setup("session_me", "src/core/**");
+    fake.comment(
+        5,
+        &format!(
+            "Claimed.\n\n{{\"bosun\":\"lease\",\"session\":\"session_me\",\"origin\":\"spawned\",\"expires\":\"{LIVE}\",\"touch\":[\"src/core/**\"]}}"
+        ),
+    );
+    assert!(bash_denied(&fake, tmp.path(), &create(META)));
+    // A spawn lease written by someone without write access is not a record.
+    let (fake, tmp) = setup("session_other", "docs/**");
+    fake.comment_by(5, "mallory", &spawn_lease("session_me"));
+    fake.permission("mallory", "read");
+    assert!(bash_denied(&fake, tmp.path(), &create(META)));
+    // Another session's spawn lease, an expired one, and a lease on another epic.
+    let (fake, tmp) = setup("session_other", "docs/**");
+    fake.comment(5, &spawn_lease("session_third"));
+    assert!(bash_denied(&fake, tmp.path(), &create(META)));
+    let (fake, tmp) = setup("session_other", "docs/**");
+    fake.comment(
+        5,
+        &spawn_lease("session_me").replace(LIVE, "2026-10-22T09:00:00Z"),
+    );
+    assert!(bash_denied(&fake, tmp.path(), &create(META)));
+}

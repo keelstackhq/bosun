@@ -29,7 +29,7 @@ So a merge to `main` never tags, releases or publishes until the owner sets the 
 
 0. Fold the fragments first, in a docs PR to `main`: `bash scripts/fold-fragments.sh` moves the
    one-line files of `changelog.d/` and `docs/progress.d/` to the end of `## Unreleased` in
-   CHANGELOG.md and `## Done` in PROGRESS.md. Merge it before the release PR is made or updated,
+   CHANGELOG.md and `## Done` in `docs/progress-done.md`. Merge it before the release PR is made or updated,
    so step 1 moves those entries under the new version (folding after it would leave them under
    an empty Unreleased).
 1. Change the version in `Cargo.toml` and in all six `npm/*/package.json` files (including the

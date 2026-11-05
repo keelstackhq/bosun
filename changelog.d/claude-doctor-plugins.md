@@ -1,0 +1,1 @@
+- `bosun doctor` step 13 `plugins` fails on drift from the keelstack marketplace pins (settings source and ref, setup-script pins, installed plugins) (R4).

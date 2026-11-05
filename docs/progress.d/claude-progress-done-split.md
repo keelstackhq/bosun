@@ -1,0 +1,1 @@
+- 2026-11-04 · T4 · Done history moves to `docs/progress-done.md`; fold-fragments targets it; tests set TMPDIR · PR (claude-progress-done-split)

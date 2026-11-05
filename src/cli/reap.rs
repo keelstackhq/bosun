@@ -7,6 +7,7 @@ use serde_json::json;
 
 use crate::app::{
     App, active_issues, default_branch, end_lease, merge_counts, notes, set_state, sync_merged,
+    task_pr_merged,
 };
 use crate::cli::plan::epic_item;
 use crate::core::lease::{leases_of, members};
@@ -26,9 +27,12 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     // loop: a merged task ends its leases as `merged` and is never reaped back to `ready`.
     let mut merged = Vec::new();
     let mut open_work: Vec<Issue> = Vec::new();
+    // Open issues in building, review or fixing: only their own `task-pr` record can say merged.
+    let mut unsettled: Vec<Issue> = Vec::new();
     for st in [State::Building, State::Review, State::Fixing, State::Queued] {
         for issue in gh.list_issues(&[&st.label()], IssueState::All)? {
             if !merge_counts(&issue) {
+                unsettled.push(issue);
                 continue;
             }
             if !open_work.iter().any(|i| i.number == issue.number) {
@@ -93,18 +97,37 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         }
     }
 
+    if !unsettled.is_empty() {
+        let base = default_branch(gh)?;
+        let mut none = None;
+        for issue in unsettled {
+            if !merged.contains(&issue.number)
+                && task_pr_merged(gh, &base, issue.number, &mut none, false)?
+                && sync_merged(gh, issue.number, &issue, None)?
+            {
+                merged.push(issue.number);
+            }
+        }
+    }
+
     let (reaped, left) = expire(gh, now)?;
     // Closing epics is housekeeping: a failure there must not undo or hide the work above.
     let mut epics_closed = Vec::new();
     let epics_error = close_done_epics(gh, now, &mut epics_closed).err();
     epics_closed.sort_unstable();
     let mut data =
-        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": epics_closed});
+        json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": &epics_closed});
     if let Some(e) = epics_error {
         eprintln!("reap: closing finished epics failed: {e}");
         data["epics_error"] = json!(e.to_string());
     }
-    Ok(Outcome::data(data))
+    super::status::with_archive_children(
+        gh,
+        &app.ctx.session,
+        &epics_closed,
+        now,
+        Outcome::data(data),
+    )
 }
 
 const QUIET_SECS: i64 = 600;

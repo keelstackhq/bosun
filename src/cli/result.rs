@@ -7,6 +7,7 @@ use serde_json::json;
 use super::ResultArgs;
 use crate::app::{
     App, default_branch, end_lease, halt_reason, merge_counts, notes, set_state, sync_merged,
+    task_pr_merged,
 };
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::{linked_issues, parse_task_meta};
@@ -78,6 +79,26 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
                 && sync_merged(gh, task, &issue, Some(session))?
             {
                 tasks_merged.push(task);
+            }
+        }
+    }
+    // Every unfinished task of the epic whose own PR (task-pr record, else bosun marker) merged
+    // moves to merged, so the parent sees the merge without waiting for `reap`.
+    let base = default_branch(gh)?;
+    let mut pulls = None;
+    for st in [State::Building, State::Review, State::Fixing, State::Queued] {
+        for task in gh.list_issues(&[&st.label()], IssueState::All)? {
+            if task.pull_request
+                || task.number == n
+                || !parse_task_meta(task.body_text()).is_some_and(|m| m.epic == Some(n))
+                || tasks_merged.contains(&task.number)
+            {
+                continue;
+            }
+            if task_pr_merged(gh, &base, task.number, &mut pulls, true)?
+                && sync_merged(gh, task.number, &task, None)?
+            {
+                tasks_merged.push(task.number);
             }
         }
     }
