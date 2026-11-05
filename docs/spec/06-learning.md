@@ -40,7 +40,8 @@ Triage (curator Routine, daily, Sonnet):
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
 
-Store `docs/lessons.toml`:
+Store `docs/lessons.toml`. The first `lesson add` creates the file; a missing file is an empty
+store (the file is absent until then, so there is nothing to add by hand):
 
 ```toml
 [[lesson]]
@@ -57,6 +58,11 @@ hits = 3
 - A rule is at most 160 characters. A pack or claim shows a lesson as one line
   `L-012 src/gates/** Run cargo metadata once per gate run.` (id, scopes joined by `,` or `*`
   when global, rule; no why or evidence). `review-pack` `lessons` is an array of these lines.
+- Secrets: `lesson add` (the rule and `--why`), `handoff` (each line of the `--from` input), `msg`
+  (the text) and `fail` (`--signature`) refuse text that looks like a secret (GitHub, `sk-`, AWS
+  and Slack tokens, `Bearer` values, PEM headers, or a 32+ character high-entropy word) with exit 2.
+  The error names the kind and the field, never the matched text; nothing is written. Fix: replace
+  the secret with `<redacted>` and run again.
 - Caps: at most 40 entries, at most 8 global (no scope).
 - A context pack includes only the lessons whose scope matches the paths of the task, plus the
   global ones. AGENTS.md has no lessons.

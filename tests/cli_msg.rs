@@ -43,3 +43,17 @@ fn the_limit_is_500_characters() {
     let (code, _) = run(&fake, "session_test", NOW, &["msg", "s", "  "]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn a_secret_in_the_text_is_refused_without_echo() {
+    let fake = FakeGithub::start();
+    let secret = format!("ghp_{}", "a1B2".repeat(9));
+    let text = format!("use {secret} to push");
+    let (code, v) = run(&fake, "session_test", NOW, &["msg", "s", &text]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("redact"));
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("GitHub token"), "{message}");
+    assert!(!v.to_string().contains(&secret));
+    assert!(v["next"].as_array().unwrap().is_empty());
+}

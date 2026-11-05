@@ -68,6 +68,8 @@ pub(super) fn today(ctx: &Ctx) -> String {
 }
 
 fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
+    super::refuse_secret("the lesson text", &a.text)?;
+    super::refuse_secret("--why", a.why.as_deref().unwrap_or(""))?;
     if a.upstream {
         return upstream(dir, a);
     }

@@ -1,6 +1,10 @@
 //! Text that bosun shows a person (an issue body, a chat message) when an agent or a plan wrote
 //! it: made inert so it cannot hide, reorder or fake lines, links or mentions. Pure.
 
+use std::sync::OnceLock;
+
+use regex::Regex;
+
 /// Control, format and separator characters (Unicode Cc, Cf, Zl, Zp; Cf as of Unicode 15.1):
 /// they break lines in a chat (U+2028), hide text (U+200B, U+FEFF) or reorder it (U+202E).
 fn hidden(c: char) -> bool {
@@ -52,9 +56,124 @@ pub fn inert(t: &str, max: usize) -> String {
     format!("`{t}`")
 }
 
+/// Name of the secret `t` looks like, or `None`. Used to refuse tokens, keys and PEM blocks in
+/// text bosun posts or stores (lessons, handoffs, messages, signatures). Never returns the
+/// matched text. Pure.
+pub fn secret_kind(t: &str) -> Option<&'static str> {
+    if t.contains("-----BEGIN ") {
+        return Some(if t.contains("PRIVATE KEY-----") {
+            "private key"
+        } else {
+            "PEM block"
+        });
+    }
+    static KINDS: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+    let kinds = KINDS.get_or_init(|| {
+        [
+            (
+                "GitHub token",
+                r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})",
+            ),
+            ("API key", r"\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}"),
+            ("AWS access key", r"\bAKIA[0-9A-Z]{16}\b"),
+            ("Slack token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+            ("bearer token", r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}"),
+        ]
+        .into_iter()
+        .map(|(k, re)| (k, Regex::new(re).expect("secret regex")))
+        .collect()
+    });
+    if let Some((k, _)) = kinds.iter().find(|(_, re)| re.is_match(t)) {
+        return Some(k);
+    }
+    t.split_whitespace()
+        .any(high_entropy)
+        .then_some("high-entropy token")
+}
+
+/// A 32+ character word of base64/URL-safe characters with letters, digits and Shannon entropy
+/// of at least 4.0 bits per character; not a git sha and not a path.
+fn high_entropy(w: &str) -> bool {
+    let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    if w.len() < 32
+        || !w
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+/_=-".contains(c))
+        || !w.chars().any(|c| c.is_ascii_alphabetic())
+        || !w.chars().any(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    if matches!(w.len(), 40 | 64) && w.chars().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    // A path: short segments between slashes.
+    if w.matches('/').count() >= 2 && w.split('/').all(|s| s.len() <= 24) {
+        return false;
+    }
+    let mut counts = std::collections::HashMap::new();
+    for c in w.chars() {
+        *counts.entry(c).or_insert(0usize) += 1;
+    }
+    let n = w.len() as f64;
+    let entropy: f64 = counts
+        .values()
+        .map(|&c| {
+            let p = c as f64 / n;
+            -p * p.log2()
+        })
+        .sum();
+    entropy >= 4.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_kind_names_each_kind() {
+        let body = "a1B2".repeat(9);
+        let cases = [
+            (format!("token ghp_{body}"), "GitHub token"),
+            (format!("x gho_{body}"), "GitHub token"),
+            (format!("x ghs_{body}"), "GitHub token"),
+            (format!("x ghu_{body}"), "GitHub token"),
+            (format!("x github_pat_{body}"), "GitHub token"),
+            (format!("key sk-{body}"), "API key"),
+            (format!("key sk-ant-{body}"), "API key"),
+            (format!("id AKIA{}", "Q7ZX".repeat(4)), "AWS access key"),
+            ("x xoxb-1234567890-abcdefghij".to_string(), "Slack token"),
+            (
+                format!("-----BEGIN RSA PRIV{}", "ATE KEY-----"),
+                "private key",
+            ),
+            (format!("-----BEGIN CERTIFI{}", "CATE-----"), "PEM block"),
+            (format!("Authorization: Bearer {body}"), "bearer token"),
+            (
+                "q8Zr3KxP0vLm5NwT2bYc7HdJ4sFg9AeU".to_string(),
+                "high-entropy token",
+            ),
+        ];
+        for (text, kind) in cases {
+            assert_eq!(secret_kind(&text), Some(kind), "{kind}");
+        }
+    }
+
+    #[test]
+    fn secret_kind_passes_ordinary_text() {
+        let sha64 = "0123456789abcdef".repeat(4);
+        for ok in [
+            "Run cargo metadata once per gate run, not once per package.",
+            "see src/core/some_long_directory/another_long_directory/file_name_v2.rs",
+            "https://github.com/keelstackhq/bosun/pull/1234567890123456789012345",
+            "risk-assessment-for-the-task-at-hand-and-more",
+            "fixed in 807da0cf2fdc26ac6bcdfd3ad9f862942c2fa55e",
+            sha64.as_str(),
+            "",
+        ] {
+            assert_eq!(secret_kind(ok), None, "{ok}");
+        }
+    }
 
     #[test]
     fn hidden_characters_become_spaces_and_markup_is_code() {

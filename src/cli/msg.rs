@@ -26,6 +26,7 @@ pub fn run(dir: Option<&Path>, args: &MsgArgs) -> CmdResult {
             "shorten it, and put the details in a comment on the issue",
         ));
     }
+    super::refuse_secret("the message text", &args.text)?;
     let from = match args.issue {
         Some(n) => format!("#{n}"),
         None => Ctx::load(dir)?.session,
