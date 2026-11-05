@@ -1,1 +1,0 @@
-- 2026-11-05 · draft-skip CI · heavy workflow jobs skip drafts, `bosun gate ci-minutes` and doctor step 14
