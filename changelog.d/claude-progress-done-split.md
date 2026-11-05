@@ -1,0 +1,1 @@
+- Fragment fold writes Done to `docs/progress-done.md` (refuses while `docs/PROGRESS.md` still has `## Done`: move it once); tests set their own TMPDIR.
