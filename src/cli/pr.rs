@@ -228,14 +228,15 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     "auto_merge": false, "merged": true, "task_state": task_state.map(State::name),
                 });
                 // The last merged task closes its epic (a root session working it directly never
-                // runs `result`); housekeeping after the move: a failure is reported, not fatal.
+                // runs `result`; a spawned child's lease leaves it to its `result`); housekeeping after the move: a failure is reported, not fatal.
                 if moved && let Some(epic) = parse_task_meta(issue.body_text()).and_then(|m| m.epic)
                 {
                     let mut closed = Vec::new();
                     let scope = EpicScope {
                         only: Some(epic),
                         quiet: false,
-                        own_session: Some(&app.ctx.session),
+                        // A child's own epic lease blocks: its `result` closes the epic.
+                        own_session: None,
                         done: &[n],
                     };
                     let err = close_done_epics(gh, app.ctx.now, scope, &mut closed).err();

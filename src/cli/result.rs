@@ -59,13 +59,23 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         },
         _ => None,
     };
+    // A late outcome on an epic that already closed (or any refused move) is never dropped
+    // silently: the comment above records it and `data.state_skipped` says why it did not apply.
+    let mut state_skipped = None;
     if let Some(to) = to
         && state != Some(to)
-        && state.is_none_or(|from| transition_allowed(from, to))
     {
-        set_state(gh, n, &epic, to)?;
-        state = Some(to);
+        if state.is_none_or(|from| transition_allowed(from, to)) {
+            set_state(gh, n, &epic, to)?;
+            state = Some(to);
+        } else {
+            let from = state.map_or("none".into(), |s| s.to_string());
+            let why = format!("#{n} is {from}; {} cannot move it to {to}", args.outcome);
+            eprintln!("result: {why}");
+            state_skipped = Some(why);
+        }
     }
+    let epic_already_closed = epic.state == "closed";
 
     // A merged PR moves the tasks it closes (the merge moves state, D13); an unmerged one is a report.
     let mut tasks_merged = Vec::new();
@@ -146,7 +156,8 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         "epic": n, "outcome": args.outcome, "pr": args.pr,
         "comment_id": comment_id, "lease_ended": lease_ended, "left": left,
         "task_state": state.map(State::name), "tasks_merged": tasks_merged,
-        "partial_skipped": partial_skipped,
+        "partial_skipped": partial_skipped, "state_skipped": state_skipped,
+        "epic_already_closed": epic_already_closed,
         "epic_closed": !closed.is_empty(),
     });
     if let Some(e) = epic_error {

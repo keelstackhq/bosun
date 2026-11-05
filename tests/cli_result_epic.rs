@@ -95,3 +95,30 @@ fn a_blocked_outcome_keeps_the_epic_open() {
     assert_eq!(v["data"]["epic_closed"], json!(false), "{v}");
     assert_eq!(fake.issue_state(9).state, "open");
 }
+
+#[test]
+fn a_late_blocked_result_on_a_closed_epic_is_reported() {
+    let fake = FakeGithub::start();
+    epic(&fake, "merged");
+    fake.close_issue_as(9, NOW, "completed");
+    task(&fake, 10, "merged");
+    let v = result(&fake, "blocked");
+    assert_eq!(v["data"]["epic_already_closed"], json!(true), "{v}");
+    let why = v["data"]["state_skipped"].as_str().unwrap_or_default();
+    assert!(why.contains("merged"), "{v}");
+    assert_eq!(v["data"]["task_state"], json!("merged"), "{v}");
+}
+
+#[test]
+fn another_childs_expired_lease_without_a_result_keeps_the_epic_open() {
+    let fake = FakeGithub::start();
+    epic(&fake, "claimed");
+    fake.comment(
+        9,
+        r#"{"bosun":"lease","session":"session_other","origin":"spawned","expires":"2026-11-05T09:00:00Z","touch":[]}"#,
+    );
+    task(&fake, 10, "merged");
+    let v = result(&fake, "merged");
+    assert_eq!(v["data"]["epic_closed"], json!(false), "{v}");
+    assert_eq!(fake.issue_state(9).state, "open");
+}
