@@ -166,6 +166,41 @@ pub fn limits_from_default(gh: &dyn Github, ctx: &Ctx) -> Result<Limits> {
     Ok(limits)
 }
 
+/// The gated path globs (risk-rule paths) of `.bosun/risk.toml` on the default branch, or of the
+/// built-in rules when it is absent there. The working tree copy is not trusted.
+pub fn gated_from_default(gh: &dyn Github) -> Result<Vec<Glob>> {
+    let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
+    let rules = match gh.file_at(".bosun/risk.toml", &branch)? {
+        Some(text) => crate::core::risk::Rules::parse(&text).map_err(|e| {
+            BosunError::error(
+                format!(".bosun/risk.toml on {branch}: {e}"),
+                "fix .bosun/risk.toml on the default branch, or remove it to use the built-in rules",
+            )
+        })?,
+        None => crate::core::risk::Rules::defaults(),
+    };
+    Ok(crate::core::shape::gated_globs(&rules))
+}
+
+/// The blob paths of the default branch's tree, for resolving wildcard touches against gated
+/// paths. `None` when the tree is unreadable or GitHub cut it short (`truncated`). One read; the
+/// caller keeps the answer for the whole command.
+pub fn base_files(gh: &dyn Github) -> Result<Option<Vec<String>>> {
+    let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
+    // GitHub's tree endpoint takes a branch name as well as a tree sha.
+    // Any read error is "not available" (fail closed in the callers), not a failed command.
+    let tree = gh.tree(&branch).unwrap_or_else(|e| {
+        eprintln!("bosun: cannot read the tree of {branch}: {}", e.message);
+        None
+    });
+    Ok(tree.filter(|t| !t.truncated).map(|t| {
+        (t.entries.into_iter())
+            .filter(|e| e.kind == "blob")
+            .map(|e| e.path)
+            .collect()
+    }))
+}
+
 /// The comments of an issue, oldest first.
 pub fn notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
     Ok(gh

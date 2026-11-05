@@ -85,6 +85,8 @@ pub fn run(dir: Option<&Path>, a: &LessonTriageArgs) -> CmdResult {
                 risk: "normal".into(),
                 allow: vec![],
                 capabilities: vec![],
+                gated: false,
+                size: None,
             };
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
             let json = serde_json::to_string(&meta).expect("meta serializes");

@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::core::meta::ALLOW_KINDS;
+use crate::core::shape::Shape;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Plan {
@@ -22,6 +23,9 @@ pub struct Item {
     pub area: String,
     /// Item ids or "seed".
     pub depends: Vec<String>,
+    /// `shape:`; `None` is auto (`core::shape::decide`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<Shape>,
     pub description: String,
     pub tasks: Vec<Task>,
     pub ucs: Vec<Uc>,
@@ -36,6 +40,8 @@ pub struct Task {
     /// Normalised to `<item>/<task>`.
     pub depends: Vec<String>,
     pub size: Option<u32>,
+    #[serde(skip)]
+    pub size_line: usize,
     pub kind: String,
     pub risk: String,
     /// Test-integrity finding kinds the task may raise (`allow:`), from [`ALLOW_KINDS`].
@@ -306,7 +312,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             Sec::Fields | Sec::Desc => {
                 let key = KEY.captures(line).filter(|_| sec == Sec::Fields);
                 let known = key.as_ref().map(|c| c[1].to_string());
-                if let Some(k) = known.filter(|k| k == "area" || k == "depends") {
+                if let Some(k) = known.filter(|k| k == "area" || k == "depends" || k == "shape") {
                     if ifields.contains(&k) {
                         bad!(errs, n; "keep one line per field" => "`{k}:` is given twice");
                         continue;
@@ -319,6 +325,13 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                         bad!(errs, n; "use lowercase letters, digits and `-`" => "area `{v}` does not match ^[a-z0-9-]+$")
                     }
                     Some(("depends", v)) => it.depends = csv(v),
+                    Some(("shape", "auto")) => it.shape = None,
+                    Some(("shape", v)) => match Shape::parse(v) {
+                        Some(s) => it.shape = Some(s),
+                        None => {
+                            bad!(errs, n; "use shape: single, split or auto" => "shape `{v}` is not valid")
+                        }
+                    },
                     _ => {
                         sec = Sec::Desc;
                         desc.push(line);
@@ -343,10 +356,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                     "touch" => t.touch = csv(v),
                     "depends" => t.depends = csv(v),
                     "size" => match v.parse::<u32>() {
-                        Ok(s) if s > 400 => {
-                            bad!(errs, n; "split the task so each PR is at most 400 lines" => "size {s} is over 400 changed lines")
-                        }
-                        Ok(s) => t.size = Some(s),
+                        Ok(s) => (t.size, t.size_line) = (Some(s), n),
                         Err(_) => {
                             bad!(errs, n; "write the planned changed lines, e.g. `size: 250`" => "size `{v}` is not an integer")
                         }
@@ -504,6 +514,10 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             }
             if let (true, Some(s @ 101..)) = (t.risk == "high", t.size) {
                 bad!(warns, l; "split the task or expect an owner review" => "{me} is risk high with size {s}, over 100");
+            }
+            // Only `risk: high` is known here; the CLI re-checks with the risk-rule globs.
+            if let Some(e) = crate::core::shape::gated_size_error(t, &[]) {
+                errs.push(e);
             }
             for d in std::mem::take(&mut t.depends) {
                 let full = if d.contains('/') {
@@ -758,6 +772,20 @@ mod tests {
     }
 
     #[test]
+    fn shape_field() {
+        let sh = |v: &str| w("depends: seed", &format!("depends: seed\nshape: {v}"));
+        assert_eq!(parse(&sh("split")).unwrap().items[0].shape, Some(Shape::Split));
+        assert_eq!(parse(&sh("single")).unwrap().items[0].shape, Some(Shape::Single));
+        assert_eq!(parse(&sh("auto")).unwrap().items[0].shape, None);
+        at(&sh("big"), 9, "shape `big` is not valid");
+        let e = parse(&sh("big")).unwrap_err();
+        assert_eq!(e[0].fix, "use shape: single, split or auto");
+        at(&w("depends: seed", "depends: seed\nshape: split\nshape: single"), 10, "`shape:` is given twice");
+        // Unknown item fields stay description.
+        assert_eq!(parse(&w("Words here.", "foo: bar")).unwrap().items[0].description, "foo: bar");
+    }
+
+    #[test]
     fn rule5_tasks() {
         for b in ["* T2: x", "+ T2: x", "1. T2: x", "plain text"] {
             chk("- T2: Second", b, 17, "expected a `- T<n>: title` bullet");
@@ -765,7 +793,11 @@ mod tests {
         chk("- T2:", "- T1:", 17, "used twice");
         chk("- T2:", "- X2:", 17, "task bullet");
         chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
-        chk("size: 100", "size: 401", 16, "over 400");
+        // D-016: no line cap, no size warning.
+        for size in ["size: 401", "size: 1501", "size: 90000"] {
+            let p = parse(&w("size: 100", size)).expect("no cap");
+            assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+        }
         chk("size: 100", "size: ten", 16, "not an integer");
         chk("kind: flake", "kind: odd", 20, "kind");
         chk("kind: flake", "risk: low", 20, "risk");
@@ -779,6 +811,17 @@ mod tests {
         let hi = parse(&w("size: 100", "size: 101\n  risk: high")).unwrap();
         assert!(hi.warnings[0].message.contains("risk high") && !hi.warnings[0].fix.is_empty());
         assert_eq!(hi.items[0].tasks[0].risk, "high");
+    }
+
+    #[test]
+    fn gated_task_over_400_is_an_error() {
+        // D-016: a risk: high task is gated; over 400 lines it is a plan error at its size line.
+        let t = w("size: 100", "size: 401\n  risk: high");
+        at(&t, 16, "size 401 is over 400 changed lines for a gated task");
+        let e = parse(&t).unwrap_err();
+        assert!(e.iter().any(|e| e.fix.contains("D-016")));
+        assert!(parse(&w("size: 100", "size: 400\n  risk: high")).is_ok());
+        assert!(parse(&w("size: 100", "size: 900")).is_ok());
     }
 
     #[test]

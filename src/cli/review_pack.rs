@@ -8,10 +8,12 @@ use serde_json::{Value, json};
 use super::PrArg;
 use crate::app::{App, notes, task_meta, trusted_notes};
 use crate::core::lessons;
+use crate::core::meta::linked_issues;
 use crate::core::records::{Record, parse_record};
-use crate::core::review::use_cases;
+use crate::core::review::{chunks, use_cases};
+use crate::core::risk::test_path;
 use crate::core::verdict::closes_issue;
-use crate::github::Github;
+use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// Distinct older heads the delta scan asks about before it gives up.
@@ -19,18 +21,72 @@ const MAX_SCAN: usize = 20;
 /// GitHub lists at most this many commits of a PR.
 const MAX_PR_COMMITS: usize = 250;
 
+/// Patch bytes per reviewer subagent chunk (docs/defaults.md).
+const CHUNK_BYTES: usize = 40_000;
+
 const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
 \"verdict\":\"approve\"|\"request-changes\",\"confidence\":0..1,\"findings\":[{\"severity\":\
 \"blocker\"|\"major\"|\"minor\"|\"nit\",\"file\":\"\",\"line\":N,\"claim\":\"\",\"evidence\":\"\"}],\
-\"lessons_hit\":[\"L-NNN\"],\"escalate_risk\":false}. Approve needs confidence >= 0.85 and no blocker. \
+\"lessons_hit\":[\"L-NNN\"],\"escalate_risk\":false,\"chunks_reviewed\":[1,2]}. Approve needs confidence >= 0.85 and no blocker. \
 Set `escalate_risk` only when the change touches governance, CI, secrets, dependencies or production writes \
 and the risk rules did not catch it; an escalated verdict never turns green, so do not escalate what \
 risk-check already flags (R-gov, R-ci, ...). If `task.touch_added` is not empty, the claimant widened \
-its lease beyond the task's `touch`: check that the changes to those files belong to the task.";
+its lease beyond the task's `touch`: check that the changes to those files belong to the task; a PR that closes several tasks of one \
+item (a single-shape bundle) widens it to their paths by design, so check the files against those tasks. \
+When `chunks` has more than one entry and you can start subagents, give each chunk to its own reviewer \
+subagent (with the task, UCs, lessons and REVIEW.md), then check how the chunks fit together yourself and \
+return one verdict for the whole head; findings keep their file and line. When `chunks` has more than one \
+entry, list every chunk number (1-based) in `chunks_reviewed`: a verdict that misses one is refused.";
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let app = App::load(dir)?;
-    Ok(Outcome::data(build(app.gh.as_ref(), args.pr, false)?))
+    let mut pack = build(app.gh.as_ref(), args.pr, false)?;
+    // Size is a drift signal only (D-016): a note for the reviewer, never an error.
+    if let Some(d) = pack["drift"].as_object() {
+        let (planned, actual) = (d["planned"].as_u64(), d["actual"].as_u64());
+        pack["note"] = json!(format!(
+            "re-plan? PR #{} is {} changed lines, planned {}",
+            args.pr,
+            actual.unwrap_or(0),
+            planned.unwrap_or(0)
+        ));
+    }
+    Ok(Outcome::data(pack))
+}
+
+/// `{"planned":P,"actual":A}` when the PR changes more than twice the planned `size:` of the tasks
+/// its body links; else null. Tests and lockfiles do not count.
+fn drift(gh: &dyn Github, pull: &Pull) -> Result<Value, BosunError> {
+    let mut planned = 0u64;
+    for n in linked_issues(&pull.body) {
+        if let Some(issue) = gh.get_issue(n)? {
+            // A linked task without `size:` has no plan to drift from: no signal at all.
+            match task_meta(&issue).map(|m| m.size) {
+                Some(Some(s)) => planned += u64::from(s),
+                Some(None) => return Ok(Value::Null),
+                None => {}
+            }
+        }
+    }
+    if planned == 0 {
+        return Ok(Value::Null);
+    }
+    let actual: u64 = gh
+        .pull_files(pull.number)?
+        .iter()
+        .filter(|f| !test_path(&f.filename) && !is_lockfile(&f.filename))
+        .map(|f| f.additions + f.deletions)
+        .sum();
+    Ok(if actual > 2 * planned {
+        json!({"planned": planned, "actual": actual})
+    } else {
+        Value::Null
+    })
+}
+
+fn is_lockfile(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name == "Cargo.lock" || name == "pnpm-lock.yaml"
 }
 
 /// The pack of PR `n` (also the input of `bosun review-ci`). With `full` there is no delta
@@ -149,7 +205,26 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
+    let sizes: Vec<(String, usize)> = files
+        .iter()
+        .map(|f| {
+            (
+                f.filename.clone(),
+                f.patch.as_ref().map_or(
+                    // No patch (binary or too large to show): its own chunk.
+                    if f.additions + f.deletions > 0 {
+                        CHUNK_BYTES
+                    } else {
+                        0
+                    },
+                    String::len,
+                ),
+            )
+        })
+        .collect();
     Ok(json!({
+        "chunks": chunks(&sizes, CHUNK_BYTES),
+        "drift": drift(gh, &pull)?,
         "pr": n, "title": pull.title, "head_sha": pull.head_sha, "base_sha": pull.base_sha,
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,

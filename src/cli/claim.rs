@@ -19,6 +19,7 @@ use crate::core::lease::{
 use crate::core::lessons;
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::shape::{meta_gated, touch_gated, touch_gated_in};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -76,6 +77,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
                 }
             }
             if !added.is_empty() {
+                refuse_gated_touch(gh, &meta, &added)?;
                 return grow(&app, n, &l, &added, &cur);
             }
             let exp = l.expires.to_string();
@@ -115,6 +117,8 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     }
 
     super::prereqs_gate::refuse_if_held(gh, n, &meta)?;
+    refuse_if_bundled(gh, n, &meta)?;
+    refuse_gated_touch(gh, &meta, &args.touch)?;
     let touch_raw = if args.touch.is_empty() {
         meta.map(|m| m.touch).unwrap_or_default()
     } else {
@@ -370,4 +374,93 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
     data["added"] = json!(added);
     add_lessons(&mut data, &app.ctx.dir, &touch);
     Ok(Outcome::data(data))
+}
+
+/// D-016: in a single-shape epic the lead's PR closes the bundled issues, so while another
+/// non-gated task of the epic is active, a non-gated `n` is not claimable.
+fn refuse_if_bundled(
+    gh: &dyn Github,
+    n: u64,
+    meta: &Option<crate::core::meta::TaskMeta>,
+) -> Result<(), BosunError> {
+    let Some((m, epic)) = meta.as_ref().and_then(|m| m.epic.map(|e| (m, e))) else {
+        return Ok(());
+    };
+    let shape = gh
+        .get_issue(epic)?
+        .and_then(|e| super::plan::epic_shape(e.body_text()));
+    if shape.as_deref() != Some("single") {
+        return Ok(());
+    }
+    // Judge gated as `wave plan` does (default-branch rules and tree), not by the stored flag.
+    let globs = crate::app::gated_from_default(gh)?;
+    let base = crate::app::base_files(gh)?;
+    let gated = |m: &crate::core::meta::TaskMeta| meta_gated(m, &globs, base.as_deref());
+    if gated(m) {
+        return Ok(());
+    }
+    let lead = active_issues(gh)?
+        .into_iter()
+        .filter(|(i, _)| i.number != n)
+        .filter(|(i, _)| task_meta(i).is_some_and(|t| t.epic == Some(epic) && !gated(&t)))
+        .map(|(i, _)| i.number)
+        .min();
+    match lead {
+        Some(lead) => Err(BosunError::conflict(
+            format!("#{n} is bundled into #{lead}'s PR"),
+            format!("work in #{lead}'s bundle: its PR closes #{n}"),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// D-016: a non-gated task of a single-shape epic runs inside the bundle, so a `--touch` glob on a
+/// gated path (default-branch rules) that its own touch does not already cover is refused.
+fn refuse_gated_touch(
+    gh: &dyn Github,
+    meta: &Option<crate::core::meta::TaskMeta>,
+    touch: &[String],
+) -> Result<(), BosunError> {
+    let Some(m) = meta
+        .as_ref()
+        .filter(|m| !m.gated && m.risk != "high" && !touch.is_empty())
+    else {
+        return Ok(());
+    };
+    let single = m
+        .epic
+        .and_then(|e| gh.get_issue(e).transpose())
+        .transpose()?
+        .and_then(|e| super::plan::epic_shape(e.body_text()))
+        .as_deref()
+        == Some("single");
+    if !single {
+        return Ok(());
+    }
+    let globs = crate::app::gated_from_default(gh)?;
+    if touch_gated(&m.touch, &globs) {
+        return Ok(());
+    }
+    // Wildcards resolve against the default branch's tree (read once, only when one is given).
+    let wild = touch.iter().any(|g| g.contains('*') || g.contains('?'));
+    let files = if wild {
+        crate::app::base_files(gh)?
+    } else {
+        None
+    };
+    for g in touch {
+        match touch_gated_in(std::slice::from_ref(g), &globs, files.as_deref()) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(BosunError::conflict(
+                    format!(
+                        "--touch {g} is a gated path: gated work runs as its own task, not inside the bundle"
+                    ),
+                    "drop the gated path and plan it as its own task (plan amend)",
+                ));
+            }
+            Err(e) => return Err(BosunError::conflict(e, "narrow --touch to explicit paths")),
+        }
+    }
+    Ok(())
 }

@@ -104,6 +104,8 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
         risk: "normal".into(),
         allow: vec!["skip".into()],
         capabilities: vec![],
+        gated: false,
+        size: None,
     };
     // The metadata marker comes first and the request text cannot carry a marker or close its
     // fence; readers also take the last marker (core::meta).

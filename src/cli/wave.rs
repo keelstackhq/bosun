@@ -4,14 +4,17 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::plan::epic_plan;
+use super::plan::{epic_plan, epic_shape};
 use super::prereqs_gate::{blockers, open_items, plan_ids};
 use super::{EpicArg, WaveCmd};
-use crate::app::{App, active_issues, limits_from_default, main_red, task_meta};
+use crate::app::{
+    App, active_issues, gated_from_default, limits_from_default, main_red, task_meta,
+};
 use crate::cli::status::process_red;
 use crate::core::lease::live_leases;
+use crate::core::shape::touch_gated_in;
 use crate::core::state::{State, state_of};
-use crate::core::wave::{TaskInfo, plan};
+use crate::core::wave::{TaskInfo, plan, plan_single};
 use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -40,6 +43,10 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     // Ready process-fix tasks; active tasks stay in the plan so they count against the cap.
     let mut fix_tasks: Vec<u64> = Vec::new();
     let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
+    // Gated is recomputed here from the default branch's rules, never trusted from the task meta.
+    let gated_globs = gated_from_default(gh)?;
+    let base = crate::app::base_files(gh)?;
+    let mut gate_warnings: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -60,6 +67,14 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
+            // A wildcard touch is resolved against the default branch's tree; when that cannot
+            // be done the task is treated as gated (fail closed) and runs alone.
+            let gated = meta.gated
+                || meta.risk == "high"
+                || touch_gated_in(&meta.touch, &gated_globs, base.as_deref()).unwrap_or_else(|e| {
+                    gate_warnings.push(format!("{plan_id}: {e}"));
+                    true
+                });
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {
@@ -68,6 +83,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
                     state,
                     depends: meta.depends,
                     touch: meta.touch,
+                    gated,
                 },
                 issue.title.clone(),
                 workspace,
@@ -84,7 +100,8 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     }
     // Owner prerequisites (design F5): the epic's plan checklist is read once; ready tasks that
     // an open item blocks are left out. A gate error leaves out every ready task of the plan.
-    let (mut held, mut warnings, mut left_out) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut held, mut left_out) = (Vec::new(), Vec::new());
+    let mut warnings = gate_warnings;
     let ready: Vec<&TaskInfo> = (tasks.iter().map(|t| &t.0))
         .filter(|i| i.state == Some(State::Ready))
         .collect();
@@ -93,7 +110,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             Ok(Some((_, ticks))) => {
                 // open_items just read the plan; if it cannot be read again, all are held.
                 let known = plan_ids(gh, &path).unwrap_or_default();
-                for i in ready {
+                for &i in &ready {
                     // As claim: a task the plan does not have, or a plan id without `/`, is
                     // held (fail closed).
                     let needs = match i.plan_id.split_once('/') {
@@ -116,6 +133,20 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             }
         }
     }
+    // The epic records its shape at import. Gated tasks never join the bundle (D-016).
+    let single = epic_shape(epic_issue.body_text()).as_deref() == Some("single");
+    // One PR closes the whole bundle: while a prerequisite holds one ready bundled task, the
+    // others wait.
+    let mut bundle_held = Vec::new();
+    let bundled_out = ready
+        .iter()
+        .any(|i| !i.gated && left_out.contains(&i.issue));
+    if single && bundled_out {
+        bundle_held = (ready.iter().filter(|i| !i.gated).map(|i| i.issue))
+            .filter(|n| !left_out.contains(n))
+            .collect();
+        left_out.extend(bundle_held.iter().copied());
+    }
     let infos: Vec<TaskInfo> = tasks
         .iter()
         .filter(|t| only_fix.is_none() || fix_tasks.contains(&t.0.issue) || active(t))
@@ -128,15 +159,35 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     }
     let leases = live_leases(&leased, now);
     let max = limits_from_default(gh, &app.ctx)?.waves.max_parallel as usize;
-    let wave = plan(&infos, &merged, &leases, &app.ctx.session, max);
+    let wave = if single {
+        plan_single(&infos, &merged, &leases, &app.ctx.session, max)
+    } else {
+        plan(&infos, &merged, &leases, &app.ctx.session, max)
+    };
     let find = |n: u64| tasks.iter().find(|t| t.0.issue == n).expect("planned task");
     let run: Vec<_> = wave
         .run
         .iter()
         .map(|&n| {
             let (info, title, workspace) = find(n);
-            json!({"issue": n, "title": title, "plan_id": info.plan_id,
-                "touch": info.touch, "workspace": workspace})
+            let mut entry = json!({"issue": n, "title": title, "plan_id": info.plan_id,
+                "touch": info.touch, "workspace": workspace});
+            if single && !info.gated {
+                // One PR for the whole bundle: the lead carries the union of the touch paths.
+                let mut touch = info.touch.clone();
+                for b in &wave.bundle {
+                    for g in &find(*b).0.touch {
+                        if !touch.contains(g) {
+                            touch.push(g.clone());
+                        }
+                    }
+                }
+                let closes: Vec<u64> = std::iter::once(n).chain(wave.bundle.clone()).collect();
+                entry["touch"] = json!(touch);
+                entry["bundle"] = json!(wave.bundle);
+                entry["closes"] = json!(closes);
+            }
+            entry
         })
         .collect();
     let mut waiting: Vec<_> = wave
@@ -144,6 +195,10 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         .iter()
         .map(|(n, reason)| json!({"issue": n, "reason": reason}))
         .collect();
+    for n in bundle_held {
+        let reason = "bundled: waits until no prerequisite holds a task of the item";
+        waiting.push(json!({"issue": n, "reason": reason}));
+    }
     if let Some(red) = only_fix {
         for (info, _, _) in tasks
             .iter()
@@ -154,6 +209,6 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         }
     }
     Ok(Outcome::data(
-        json!({"epic": epic, "run": run, "waiting": waiting, "held": held, "warnings": warnings}),
+        json!({"epic": epic, "shape": if single { "single" } else { "split" }, "run": run, "waiting": waiting, "held": held, "warnings": warnings}),
     ))
 }

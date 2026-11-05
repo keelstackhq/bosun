@@ -309,6 +309,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             .with_data(json!({"pr": p.number})));
         }
         Some(p) => {
+            super::pr_bundle::refuse_gated_bundle(gh, &p)?;
             touch = touch_check(&app, n, || {
                 let total = gh
                     .get_pull(p.number)?

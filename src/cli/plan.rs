@@ -11,10 +11,13 @@ use super::prereqs::Env;
 use super::prereqs_gate::{Held, blockers};
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
+use crate::core::glob::Glob;
 use crate::core::lease::leases_of;
 use crate::core::meta::{TaskMeta, closing_issues, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::prereqs as pq;
+use crate::core::risk::Rules;
+use crate::core::shape;
 use crate::core::state::{State, labels_to_remove, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -27,6 +30,28 @@ pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
         PlanCmd::Amend(a) => amend(dir, a),
         PlanCmd::Pr(a) => super::plan_pr::run(dir, a),
     }
+}
+
+/// The risk-rule path globs of `.bosun/risk.toml` under `root` (else the built-in rules): a task
+/// touching one is gated. Advisory: `plan check` works without GitHub, so it reads the working
+/// tree; import and amend use the default branch (`app::gated_from_default`).
+fn gated_rules(root: &Path) -> Result<Vec<Glob>> {
+    let rules = match std::fs::read_to_string(root.join(".bosun/risk.toml")) {
+        Ok(t) => Rules::parse(&t).map_err(|e| {
+            BosunError::error(
+                format!(".bosun/risk.toml: {e}"),
+                "fix .bosun/risk.toml, or remove it to use the built-in rules",
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Rules::defaults(),
+        Err(e) => {
+            return Err(BosunError::error(
+                format!("cannot read .bosun/risk.toml: {e}"),
+                "make .bosun/risk.toml readable, or remove it to use the built-in rules",
+            ));
+        }
+    };
+    Ok(shape::gated_globs(&rules))
 }
 
 fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
@@ -89,12 +114,19 @@ pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
 
 fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
     let p = read_plan(dir, &a.file)?;
+    let gated = gated_rules(dir.unwrap_or_else(|| Path::new(".")))?;
+    let errs = shape::gated_size_errors(&p.items, &gated);
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
     let items: Vec<Value> = p
         .items
         .iter()
         .map(|i| {
+            let d = shape::effective(i, &gated);
             json!({"id": i.id, "title": i.title, "area": i.area,
-                "tasks": i.tasks.len(), "ucs": i.ucs.len()})
+                "tasks": i.tasks.len(), "ucs": i.ucs.len(), "shape": d.shape,
+                "shape_reasons": d.reasons, "gated": d.gated, "size": d.total})
         })
         .collect();
     Ok(Outcome::data(json!({"file": a.file, "title": p.title,
@@ -203,6 +235,8 @@ struct Importer<'a> {
     local_text: String,
     /// `allow:` per task id of the plan file on the default branch, read once when a task has one.
     main_tasks: Option<HashMap<String, Task>>,
+    /// Path globs of the risk rules: a task touching one is gated (D-016).
+    gated: shape::Gated,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
@@ -445,7 +479,7 @@ fn labels(kind: &str, area: &str, state: &str) -> Vec<String> {
     ]
 }
 
-fn epic_body(item: &Item, file: &str) -> String {
+fn epic_body(item: &Item, file: &str, gated: &shape::Gated) -> String {
     let tasks: String = item
         .tasks
         .iter()
@@ -458,7 +492,8 @@ fn epic_body(item: &Item, file: &str) -> String {
         .collect();
     let ids: Vec<&str> = item.ucs.iter().map(|u| u.id.as_str()).collect();
     let meta = json!({"item": item.id, "area": item.area, "plan": file,
-        "depends": item.depends, "ucs": ids});
+        "depends": item.depends, "ucs": ids,
+        "shape": shape::effective_by(item, &|i, t| gated.is(i, t)).shape});
     format!(
         "{}\n{}\n\n{tasks}\n{ucs}\n<!-- bosun:epic {meta} -->",
         marker(&item.id),
@@ -482,10 +517,18 @@ fn plan_task_meta(item: &Item, plan_path: &str, epic: Option<u64>) -> TaskMeta {
         risk: "normal".into(),
         allow: vec![],
         capabilities: vec![],
+        gated: false,
+        size: None,
     }
 }
 
-fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>, allow: Vec<String>) -> TaskMeta {
+fn task_meta_of(
+    item: &Item,
+    t: &Task,
+    epic: Option<u64>,
+    allow: Vec<String>,
+    gated: &shape::Gated,
+) -> TaskMeta {
     TaskMeta {
         item: item.id.clone(),
         task: t.id.clone(),
@@ -496,6 +539,8 @@ fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>, allow: Vec<String>) ->
         risk: t.risk.clone(),
         allow,
         capabilities: vec![],
+        gated: gated.is(&item.id, t),
+        size: t.size,
     }
 }
 
@@ -544,6 +589,17 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     }
     let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
         .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
+    let globs = crate::app::gated_from_default(app.gh.as_ref())?;
+    // Wildcard touches are resolved against the default branch's tree (one read).
+    let files = crate::app::base_files(app.gh.as_ref())?;
+    let (resolved, mut errs) = shape::resolve_gated(&p.items, &globs, files.as_deref());
+    let gated = shape::Gated { globs, resolved };
+    errs.extend(shape::gated_size_errors_by(&p.items, &|i, t| {
+        gated.is(i, t)
+    }));
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
     let mut roots = vec![app.ctx.dir.clone()];
     roots.extend(std::fs::canonicalize(&app.ctx.dir).ok());
     let mut imp = Importer {
@@ -563,6 +619,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         on_default_open: vec![],
         local_text: text.clone(),
         main_tasks: None,
+        gated,
         amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
@@ -656,6 +713,13 @@ pub(crate) fn epic_plan(body: &str) -> Option<String> {
     let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
     let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
     v["plan"].as_str().map(str::to_string)
+}
+
+/// The `shape` (`single` or `split`) named in the metadata of an epic body.
+pub(crate) fn epic_shape(body: &str) -> Option<String> {
+    let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
+    let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
+    v["shape"].as_str().map(str::to_string)
 }
 
 /// Replace the task metadata comment of `body`, keeping every other byte.
@@ -888,6 +952,7 @@ fn reconcile(imp: &mut Importer, p: &Plan) -> Result<Changes> {
         (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
         (new.kind, new.risk) = (t.kind.clone(), t.risk.clone());
         new.allow = imp.allowed(&id, t);
+        (new.gated, new.size) = (imp.gated.is(&meta.item, t), t.size);
         if new == meta && title == i.title {
             continue;
         }
@@ -1166,10 +1231,11 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         .iter()
         .filter(|i| a.item.is_empty() || a.item.contains(&i.id))
     {
+        let gated = imp.gated.clone();
         let epic = imp.slot(&item.id, (&item.id, None), || {
             (
                 format!("{}: {}", item.id, item.title),
-                epic_body(item, &plan_path),
+                epic_body(item, &plan_path, &gated),
                 labels("feature", &item.area, "planned"),
             )
         })?;
@@ -1334,11 +1400,12 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 }
                 _ => None,
             };
+            let gated = imp.gated.clone();
             let state = if done.is_some() { "merged" } else { "planned" };
             let mut slot = imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),
-                    task_body(&tid, "", &task_meta_of(item, t, epic.issue, allow)),
+                    task_body(&tid, "", &task_meta_of(item, t, epic.issue, allow, &gated)),
                     labels(&t.kind, &item.area, state),
                 )
             })?;
