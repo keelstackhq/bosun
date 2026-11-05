@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.6.0 (2026-11-05)
+
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.5.0 with its npm sha512 values; bosun's own config sets `waves.relay_waves`, `[cloud] environment_id` (the shared keelstack environment) and `[approvals] policy = "owner-gated"`. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
 - The setup scripts pin splice 0.4.0 and hoist 0.4.0, each with its npm integrity; both `splice.yml` move to splice 0.4.0 and pin `keelstackhq/splice/action` at v0.4.0's commit. berth stays 0.1.0 (the newest). After it merges, paste `docs/setup-script.sh` into the cloud environments again.
 - Breaking: `review-pack` `lessons` is now an array of strings `"<id> <scope> <rule>"` (was objects; read the string); `lesson add` needs `--evidence #N` and a rule of at most 160 characters (also `lesson triage --as advice --rule`; a duplicate rule records a hit and merges scope and evidence, so shorten long rules and pass evidence); `claim` returns `data.lessons`; session start prints global lessons.
