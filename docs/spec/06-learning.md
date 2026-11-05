@@ -67,12 +67,18 @@ hits = 3
   entropy of at least 4.0 bits per character; hex words of 32+ characters need entropy of at
   least 3.0 and are exempt when exactly 40 or 64 long (git shas), and JWTs (`eyJ` with three dot parts) are refused.
   Exempt: ids starting `session_` or `cse_`, `sha1-`/`sha256-`/`sha384-`/`sha512-` integrity
-  hashes, snake or kebab phrases of 3+ lowercase words, and slash paths that are not mixed case.
+  values (the whole word is the prefix plus a base64 digest of 28, 44, 64 or 88 characters; extra
+  text voids it), the same digest after `NAME=` when NAME, split on `_`/`-`/`.`, has a whole segment
+  SHA1/SHA256/SHA384/SHA512 and the value has that algorithm's exact length (base64 or hex), or a
+  segment HASH/DIGEST/CHECKSUM/INTEGRITY and the value is a `shaN-` integrity value; any segment
+  SECRET, TOKEN, KEY, PASS, PASSWORD, PWD, AUTH, CRED, CREDENTIAL(S), JWT, SIGN, SIGNING,
+  PRIVATE, OAUTH, BEARER, SESSION, API, SALT, HMAC or CLIENT voids it (prefix rules
+  still win), snake or kebab phrases of 3+ lowercase words, and slash paths that are not mixed case.
   `sk-` needs a digit or at most 2 hyphens; `Bearer` needs a digit and a letter.
   Covered inputs: `lesson add` (text, `--why`, `--scope`, `--evidence`), `lesson capture`
   (failure text, `--title`), `lesson triage` (`--rule`, `--scope`, `--touch`, `--area`),
   `handoff`, `msg`, `fail --signature`, `ask`, `hold`, `answer` (plain text; a relayed `--chat`
-  form carries a signature and is verified instead), `intake` and `plan-pr` and `spawn --request`
+  form carries a signature and is verified instead), `intake`, `bosun pr` (the PR title) and `plan-pr` and `spawn --request`
   (text, `--title`), and `claim --touch`. Not covered: identifiers, enums and numbers (issue
   numbers, session ids, Slack ids, refs, URLs, `--outcome`) and the `bosun pr` title.
 - Caps: at most 40 entries, at most 8 global (no scope).

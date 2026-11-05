@@ -109,3 +109,38 @@ fn claim_touch() {
     let s = secret();
     refused(&["claim", "5", "--touch", &s], "", "--touch");
 }
+
+#[test]
+fn pr_title() {
+    let s = secret();
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let st = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    };
+    git(&["init", "-q", "-b", "claude/t7"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "x"]);
+    let fake = FakeGithub::start();
+    let label = format!("bosun:state/{}", "building");
+    fake.issue(7, "the task", &[label.as_str()], "Do it.");
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(dir.path())
+        .args(["pr", "7", "--title", &s])
+        .output()
+        .unwrap();
+    let all =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(2), "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("title"));
+    assert!(!all.contains(&s), "echoed the secret");
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
+}

@@ -112,21 +112,120 @@ pub fn secret_kind(t: &str) -> Option<&'static str> {
         }
     }
     t.split(|c: char| !(c.is_ascii_alphanumeric() || "+/_=-".contains(c)))
-        .any(|w| high_entropy(w) || w.split_once('=').is_some_and(|(_, v)| high_entropy(v)))
+        .any(|w| {
+            if is_digest_word(w) {
+                return false;
+            }
+            high_entropy(w)
+                || w.split_once('=')
+                    .is_some_and(|(_, v)| !is_digest_value(w, v) && high_entropy(v))
+        })
         .then_some("high-entropy token")
+}
+
+/// Base64 length (with padding) and hex length of each digest algorithm.
+fn digest_lens(alg: &str) -> Option<(usize, usize)> {
+    match alg {
+        "SHA1" => Some((28, 40)),
+        "SHA256" => Some((44, 64)),
+        "SHA384" => Some((64, 96)),
+        "SHA512" => Some((88, 128)),
+        _ => None,
+    }
+}
+
+/// A bare base64 digest of exactly `len` characters with the padding that length needs.
+fn is_b64_digest(v: &str, len: usize) -> bool {
+    let body = v.trim_end_matches('=');
+    let pad = v.len() - body.len();
+    let want = match len {
+        28 | 44 => 1,
+        64 => 0,
+        88 => 2,
+        _ => return false,
+    };
+    v.len() == len
+        && pad == want
+        && body
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
+}
+
+/// The algorithm lengths of a `shaN-<digest>` integrity value, or `None` if `w` is not one.
+fn integrity_alg(w: &str) -> Option<(usize, usize)> {
+    let (p, d) = w.split_once('-')?;
+    if !p
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    {
+        return None;
+    }
+    let lens = digest_lens(&p.to_ascii_uppercase())?;
+    is_b64_digest(d, lens.0).then_some(lens)
+}
+
+/// A public integrity value `sha1|sha256|sha384|sha512-<digest>` and nothing more.
+fn is_integrity(w: &str) -> bool {
+    integrity_alg(w).is_some()
+}
+
+/// An integrity value, or a `NAME=value` word whose name says it holds a digest.
+fn is_digest_word(w: &str) -> bool {
+    is_integrity(w)
+        || w.split_once('=')
+            .is_some_and(|(n, v)| is_digest_value(n, v))
+}
+
+/// `v` is a digest held by a variable `name`. The name is split on `_`, `-` and `.` and only
+/// whole segments count. Any credential segment (SECRET, TOKEN, KEY, PASS, ...) voids the
+/// exemption. A SHA1/256/384/512 segment needs a bare digest (base64 or hex) of that exact
+/// length or a matching `shaN-` value; HASH, DIGEST, CHECKSUM or INTEGRITY alone need the
+/// `shaN-` form.
+fn is_digest_value(name: &str, v: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    let segs: Vec<&str> = n.split(['_', '-', '.']).collect();
+    const BAD: [&str; 21] = [
+        "SECRET",
+        "TOKEN",
+        "KEY",
+        "PASS",
+        "PASSWORD",
+        "PWD",
+        "AUTH",
+        "CRED",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "JWT",
+        "SIGNING",
+        "SIGN",
+        "PRIVATE",
+        "OAUTH",
+        "BEARER",
+        "SESSION",
+        "API",
+        "SALT",
+        "HMAC",
+        "CLIENT",
+    ];
+    if segs.iter().any(|s| BAD.contains(s)) {
+        return false;
+    }
+    if let Some(lens) = segs.iter().find_map(|s| digest_lens(s)) {
+        let hex = v.len() == lens.1 && v.chars().all(|c| c.is_ascii_hexdigit());
+        return is_b64_digest(v, lens.0) || hex || integrity_alg(v) == Some(lens);
+    }
+    segs.iter()
+        .any(|s| ["HASH", "DIGEST", "CHECKSUM", "INTEGRITY"].contains(s))
+        && is_integrity(v)
 }
 
 /// A 32+ character word of base64/URL-safe characters that looks random: hex of a length other
 /// than a git sha's (40, 64), or letters and digits with Shannon entropy of at least 4.0 bits
-/// per character. Not a session id (`session_`, `cse_`), an integrity hash (`sha512-`), a
+/// per character. Not a session id (`session_`, `cse_`), an integrity hash (see `is_integrity`), a
 /// snake or kebab case phrase (3+ lowercase words) or a lowercase path.
 fn high_entropy(w: &str) -> bool {
     let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    if w.len() < 32
-        || ["session_", "cse_", "sha1-", "sha256-", "sha384-", "sha512-"]
-            .iter()
-            .any(|p| w.starts_with(p))
-    {
+    if w.len() < 32 || ["session_", "cse_"].iter().any(|p| w.starts_with(p)) {
         return false;
     }
     let hex = w.chars().all(|c| c.is_ascii_hexdigit());
@@ -220,10 +319,7 @@ mod tests {
 
     #[test]
     fn secret_kind_passes_known_lookalikes() {
-        let integrity = format!(
-            "sha512-{}==",
-            "q8Zr3KxP0vLm5NwT2bYc7HdJ4sFg9AeUq8Zr3KxP0vLm5NwT2bYc"
-        );
+        let integrity = format!("sha512-{}==", b64(86));
         for ok in [
             "session_01SsFUkfeX2mg29KV4Lhoi5P",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -234,6 +330,69 @@ mod tests {
             integrity.as_str(),
         ] {
             assert_eq!(secret_kind(ok), None, "{ok}");
+        }
+    }
+
+    fn b64(n: usize) -> String {
+        let a = "q8Zr3KxP0vLm5NwT2bYc7HdJ4sFg9AeUZ1Xo6RiEt/+";
+        a.chars().cycle().take(n).collect()
+    }
+
+    #[test]
+    fn secret_kind_passes_integrity_values_and_digest_variables() {
+        let d88 = format!("{}==", b64(86));
+        let d44 = format!("{}=", b64(43));
+        let d64 = b64(64);
+        let d28 = format!("{}=", b64(27));
+        for ok in [
+            format!("sha512-{d88}"),
+            format!("sha256-{d44}"),
+            format!("sha384-{}", b64(64)),
+            format!("sha1-{d28}"),
+            format!("BOSUN_SHA512={d88}"),
+            format!("bosun_sha256={d44}"),
+            format!("FILE_INTEGRITY=sha512-{d88}"),
+            format!("RELEASE_CHECKSUM=sha384-{d64}"),
+            format!("PKG_DIGEST=sha1-{d28}"),
+            format!("MY_HASH=sha256-{d44}"),
+            format!("pkg.sha256={d44}"),
+        ] {
+            assert_eq!(secret_kind(&ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn secret_kind_still_refuses_near_integrity_shapes() {
+        let d44 = format!("{}=", b64(43));
+        for bad in [
+            format!("API_KEY={d44}"),
+            format!("API_KEY={}", b64(40)),
+            format!("SECRET={}==", b64(86)),
+            format!("sha512-{}x!extra", b64(86)),
+            format!("sha512-{}extra", b64(86)),
+            format!("HASH_TOKEN_KEY={}", b64(40)),
+            format!("MY_HASH={}", b64(45)),
+            format!("MY_HASH={d44}"),
+            format!("SHARED_SECRET={d44}"),
+            format!("WEBHOOK_SHARED_SECRET={}", b64(64)),
+            format!("SHADOW_TOKEN={}", b64(88)),
+            format!("TOKEN_SHA512={}==", b64(86)),
+            format!("API_KEY_HASH={}", b64(64)),
+            format!("BOSUN_SHA512={d44}"),
+            format!("BOSUN_SHA256={}==", b64(86)),
+            format!("JWT_SHA256={d44}"),
+            format!("SIGNING_SHA256={d44}"),
+            format!("SIGN_SHA256={d44}"),
+            format!("PRIVATE_SHA256={d44}"),
+            format!("OAUTH_SHA256={d44}"),
+            format!("BEARER_SHA256={d44}"),
+            format!("SESSION_SHA256={d44}"),
+            format!("API_SHA256={d44}"),
+            format!("SALT_SHA256={d44}"),
+            format!("HMAC_SHA256={d44}"),
+            format!("CLIENT_SHA256={d44}"),
+        ] {
+            assert!(secret_kind(&bad).is_some(), "{bad}");
         }
     }
 
