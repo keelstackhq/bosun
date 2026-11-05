@@ -28,10 +28,10 @@ KEELSTACK_MARKETPLACE_REF=main
 SUPERPOWERS_SHA=22f0b463e7a5e579904dd6211a520321035526f7
 CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
-BOSUN_VERSION=0.5.0
-BOSUN_SHA512=cp09oCjY7BVH/S3ZEwXqN0zAKEvIHBaWfqSyxR257aqfTHLEtxUAtblL88WVkaYZ9ffg84wk0sWY4aud+RXiaA==
-BOSUN_LINUX_X64_SHA512=yUFq/5cuFXETTh8NZts1I8K7EalJJ3eS+nM+qowB5BLpGzjAzjXWqVpnUHvLYskEuOZFjYD7yDIH25LuDeKKgw==
-BOSUN_LINUX_ARM64_SHA512=D8MqWPMENnk+gkvbHP0wC2uH+h6XEqFOjzs00t+FQkxxbOHUiYQZWiOQ4Fl9i7NUlOT7U4qsmoAdFva16cOyLw==
+BOSUN_VERSION=0.6.0
+BOSUN_SHA512=H3XBylyH1INJgvg5RuSAsYJ4knNtH3mOagiDr+0qDxgfUZOVChV8bJEYCH+uXF+WYJDiBPiAfeTBTZLkyflkJQ==
+BOSUN_LINUX_X64_SHA512=CgPRKY4r2bCXtIVwvISyAMBUr6xGGBwXVy42nNHsydP+V7IwFhWYwPLIKlkYpzv9maogVffZX81tyASoJvgWtA==
+BOSUN_LINUX_ARM64_SHA512=UIiO210KYO7n1RKZK2MYghckepseecfAnQinK4mR5z1pQTJYSR5IcLfJGv1xqT9rsJrgdtCgjPm4Dk/WboA2Yw==
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
 # Without one the script warns, skips the pinned toolchain and still installs the cargo tools. `bash docs/setup-script.sh --rust-version` prints the version
