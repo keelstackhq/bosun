@@ -182,6 +182,20 @@ pub fn gated_from_default(gh: &dyn Github) -> Result<Vec<Glob>> {
     Ok(crate::core::shape::gated_globs(&rules))
 }
 
+/// The blob paths of the default branch's tree, for resolving wildcard touches against gated
+/// paths. `None` when the tree is unreadable or GitHub cut it short (`truncated`). One read; the
+/// caller keeps the answer for the whole command.
+pub fn base_files(gh: &dyn Github) -> Result<Option<Vec<String>>> {
+    let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
+    // GitHub's tree endpoint takes a branch name as well as a tree sha.
+    Ok(gh.tree(&branch)?.filter(|t| !t.truncated).map(|t| {
+        (t.entries.into_iter())
+            .filter(|e| e.kind == "blob")
+            .map(|e| e.path)
+            .collect()
+    }))
+}
+
 /// The comments of an issue, oldest first.
 pub fn notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
     Ok(gh

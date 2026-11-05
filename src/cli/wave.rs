@@ -12,7 +12,7 @@ use crate::app::{
 };
 use crate::cli::status::process_red;
 use crate::core::lease::live_leases;
-use crate::core::shape::touch_gated;
+use crate::core::shape::touch_gated_in;
 use crate::core::state::{State, state_of};
 use crate::core::wave::{TaskInfo, plan, plan_single};
 use crate::github::IssueState;
@@ -45,6 +45,8 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     let active = |t: &&(TaskInfo, String, String)| t.0.state.is_some_and(State::is_active);
     // Gated is recomputed here from the default branch's rules, never trusted from the task meta.
     let gated_globs = gated_from_default(gh)?;
+    let base = crate::app::base_files(gh)?;
+    let mut gate_warnings: Vec<String> = Vec::new();
     let mut merged: Vec<String> = Vec::new();
     let mut tasks: Vec<(TaskInfo, String, String)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
@@ -65,7 +67,14 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
             if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
-            let gated = meta.gated || meta.risk == "high" || touch_gated(&meta.touch, &gated_globs);
+            // A wildcard touch is resolved against the default branch's tree; when that cannot
+            // be done the task is treated as gated (fail closed) and runs alone.
+            let gated = meta.gated
+                || meta.risk == "high"
+                || touch_gated_in(&meta.touch, &gated_globs, base.as_deref()).unwrap_or_else(|e| {
+                    gate_warnings.push(format!("{plan_id}: {e}"));
+                    true
+                });
             let workspace = format!("berth up {}-{}", meta.item, meta.task).to_lowercase();
             tasks.push((
                 TaskInfo {
@@ -91,7 +100,8 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
     }
     // Owner prerequisites (design F5): the epic's plan checklist is read once; ready tasks that
     // an open item blocks are left out. A gate error leaves out every ready task of the plan.
-    let (mut held, mut warnings, mut left_out) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut held, mut left_out) = (Vec::new(), Vec::new());
+    let mut warnings = gate_warnings;
     let ready: Vec<&TaskInfo> = (tasks.iter().map(|t| &t.0))
         .filter(|i| i.state == Some(State::Ready))
         .collect();

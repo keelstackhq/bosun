@@ -236,7 +236,7 @@ struct Importer<'a> {
     /// `allow:` per task id of the plan file on the default branch, read once when a task has one.
     main_tasks: Option<HashMap<String, Task>>,
     /// Path globs of the risk rules: a task touching one is gated (D-016).
-    gated: Vec<Glob>,
+    gated: shape::Gated,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
@@ -479,7 +479,7 @@ fn labels(kind: &str, area: &str, state: &str) -> Vec<String> {
     ]
 }
 
-fn epic_body(item: &Item, file: &str, gated: &[Glob]) -> String {
+fn epic_body(item: &Item, file: &str, gated: &shape::Gated) -> String {
     let tasks: String = item
         .tasks
         .iter()
@@ -493,7 +493,7 @@ fn epic_body(item: &Item, file: &str, gated: &[Glob]) -> String {
     let ids: Vec<&str> = item.ucs.iter().map(|u| u.id.as_str()).collect();
     let meta = json!({"item": item.id, "area": item.area, "plan": file,
         "depends": item.depends, "ucs": ids,
-        "shape": shape::effective(item, gated).shape});
+        "shape": shape::effective_by(item, &|i, t| gated.is(i, t)).shape});
     format!(
         "{}\n{}\n\n{tasks}\n{ucs}\n<!-- bosun:epic {meta} -->",
         marker(&item.id),
@@ -527,7 +527,7 @@ fn task_meta_of(
     t: &Task,
     epic: Option<u64>,
     allow: Vec<String>,
-    gated: &[Glob],
+    gated: &shape::Gated,
 ) -> TaskMeta {
     TaskMeta {
         item: item.id.clone(),
@@ -539,7 +539,7 @@ fn task_meta_of(
         risk: t.risk.clone(),
         allow,
         capabilities: vec![],
-        gated: shape::is_gated(t, gated),
+        gated: gated.is(&item.id, t),
         size: t.size,
     }
 }
@@ -589,8 +589,14 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     }
     let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
         .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
-    let gated = crate::app::gated_from_default(app.gh.as_ref())?;
-    let errs = shape::gated_size_errors(&p.items, &gated);
+    let globs = crate::app::gated_from_default(app.gh.as_ref())?;
+    // Wildcard touches are resolved against the default branch's tree (one read).
+    let files = crate::app::base_files(app.gh.as_ref())?;
+    let (resolved, mut errs) = shape::resolve_gated(&p.items, &globs, files.as_deref());
+    let gated = shape::Gated { globs, resolved };
+    errs.extend(shape::gated_size_errors_by(&p.items, &|i, t| {
+        gated.is(i, t)
+    }));
     if !errs.is_empty() {
         return Err(plan_errors(&a.file, &errs));
     }
@@ -946,7 +952,7 @@ fn reconcile(imp: &mut Importer, p: &Plan) -> Result<Changes> {
         (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
         (new.kind, new.risk) = (t.kind.clone(), t.risk.clone());
         new.allow = imp.allowed(&id, t);
-        (new.gated, new.size) = (shape::is_gated(t, &imp.gated), t.size);
+        (new.gated, new.size) = (imp.gated.is(&meta.item, t), t.size);
         if new == meta && title == i.title {
             continue;
         }

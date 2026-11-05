@@ -3,6 +3,7 @@
 //! cap; gated tasks always get their own single-task PR.
 
 use serde::Serialize;
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::core::glob::{self, Glob};
@@ -79,6 +80,86 @@ pub fn touch_gated(touch: &[String], gated: &[Glob]) -> bool {
     })
 }
 
+/// [`touch_gated`], and every wildcard touch entry (`*`, `?`; companions included) is resolved
+/// against `files`, the default branch's file list: gated when a file it matches is matched by a
+/// gated glob too (raw or lower-case). A wildcard with no file list (`None`: unreadable or
+/// truncated) cannot be decided and is an error, so callers fail closed.
+pub fn touch_gated_in(
+    touch: &[String],
+    gated: &[Glob],
+    files: Option<&[String]>,
+) -> Result<bool, String> {
+    if touch_gated(touch, gated) {
+        return Ok(true);
+    }
+    for t in companions(touch)
+        .iter()
+        .filter(|t| t.contains('*') || t.contains('?'))
+    {
+        let Ok(parsed) = Glob::parse(t) else { continue };
+        let Some(files) = files else {
+            return Err(format!(
+                "touch `{t}` cannot be checked for gated paths: the default branch's file list is not available (or truncated)"
+            ));
+        };
+        let hit = files.iter().any(|f| {
+            parsed.matches(f) && {
+                let low = f.to_lowercase();
+                gated.iter().any(|g| g.matches(f) || g.matches(&low))
+            }
+        });
+        if hit {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Plan ids (`<item>/<task>`) of the tasks gated only by resolving a wildcard touch against
+/// `files` ([`touch_gated_in`]), and a plan error (at the task line) for each touch that cannot be
+/// resolved. Tasks gated by [`is_gated`] are not listed: callers combine both.
+pub fn resolve_gated(
+    items: &[Item],
+    gated: &[Glob],
+    files: Option<&[String]>,
+) -> (HashSet<String>, Vec<PlanError>) {
+    let (mut set, mut errs) = (HashSet::new(), vec![]);
+    for item in items {
+        for t in item.tasks.iter().filter(|t| !is_gated(t, gated)) {
+            match touch_gated_in(&t.touch, gated, files) {
+                Ok(true) => {
+                    set.insert(t.plan_id(&item.id));
+                }
+                Ok(false) => {}
+                Err(message) => errs.push(PlanError {
+                    line: t.line,
+                    message,
+                    fix: "narrow the touch to the paths the task edits, or mark it `risk: high`"
+                        .into(),
+                }),
+            }
+        }
+    }
+    (set, errs)
+}
+
+/// The gated rules of a plan import: risk-rule globs plus the tasks whose wildcard touch holds a
+/// gated file ([`resolve_gated`]).
+#[derive(Debug, Clone, Default)]
+pub struct Gated {
+    pub globs: Vec<Glob>,
+    pub resolved: HashSet<String>,
+}
+
+impl Gated {
+    pub fn is(&self, item_id: &str, t: &Task) -> bool {
+        is_gated(t, &self.globs) || self.resolved.contains(&t.plan_id(item_id))
+    }
+}
+
+/// Whether a task is gated, decided by the caller (item id, task).
+pub type GatedBy<'a> = &'a dyn Fn(&str, &Task) -> bool;
+
 /// A task is gated when it is `risk: high` or its touch list (with companions) overlaps a risk path.
 pub fn is_gated(t: &Task, gated: &[Glob]) -> bool {
     t.risk == "high" || touch_gated(&t.touch, gated)
@@ -86,7 +167,11 @@ pub fn is_gated(t: &Task, gated: &[Glob]) -> bool {
 
 /// The plan error for a gated task planned over [`MAX_GATED`] lines (at its `size:` line).
 pub fn gated_size_error(t: &Task, gated: &[Glob]) -> Option<PlanError> {
-    let size = t.size.filter(|&s| s > MAX_GATED && is_gated(t, gated))?;
+    gated_size_error_by(t, is_gated(t, gated))
+}
+
+fn gated_size_error_by(t: &Task, gated: bool) -> Option<PlanError> {
+    let size = t.size.filter(|&s| s > MAX_GATED && gated)?;
     Some(PlanError {
         line: t.size_line,
         message: format!("size {size} is over {MAX_GATED} changed lines for a gated task"),
@@ -96,9 +181,16 @@ pub fn gated_size_error(t: &Task, gated: &[Glob]) -> Option<PlanError> {
 
 /// [`gated_size_error`] for every task of `items`.
 pub fn gated_size_errors(items: &[Item], gated: &[Glob]) -> Vec<PlanError> {
-    (items.iter().flat_map(|i| &i.tasks))
-        .filter_map(|t| gated_size_error(t, gated))
-        .collect()
+    gated_size_errors_by(items, &|_, t| is_gated(t, gated))
+}
+
+/// [`gated_size_errors`] with the caller's notion of gated.
+pub fn gated_size_errors_by(items: &[Item], gated: GatedBy) -> Vec<PlanError> {
+    (items
+        .iter()
+        .flat_map(|i| i.tasks.iter().map(move |t| (i, t))))
+    .filter_map(|(i, t)| gated_size_error_by(t, gated(&i.id, t)))
+    .collect()
 }
 
 pub fn total(item: &Item) -> u32 {
@@ -138,9 +230,14 @@ fn coupled(open: &[&Task]) -> Option<(String, String)> {
 
 /// The automatic recommendation for `item`. `gated` are the risk-rule path globs.
 pub fn decide(item: &Item, gated: &[Glob]) -> Decision {
+    decide_by(item, &|_, t| is_gated(t, gated))
+}
+
+/// [`decide`] with the caller's notion of gated.
+pub fn decide_by(item: &Item, gated: GatedBy) -> Decision {
     let total = total(item);
     let (held, open): (Vec<&Task>, Vec<&Task>) =
-        item.tasks.iter().partition(|t| is_gated(t, gated));
+        item.tasks.iter().partition(|t| gated(&item.id, t));
     let gated_ids: Vec<String> = held.iter().map(|t| t.plan_id(&item.id)).collect();
     let longest = chain(item, &open);
     let width = open.len() as f64 / longest.max(1) as f64;
@@ -182,7 +279,12 @@ pub fn decide(item: &Item, gated: &[Glob]) -> Decision {
 
 /// The shape in force: the planner's choice, else the recommendation.
 pub fn effective(item: &Item, gated: &[Glob]) -> Decision {
-    let auto = decide(item, gated);
+    effective_by(item, &|_, t| is_gated(t, gated))
+}
+
+/// [`effective`] with the caller's notion of gated.
+pub fn effective_by(item: &Item, gated: GatedBy) -> Decision {
+    let auto = decide_by(item, gated);
     match item.shape {
         None => auto,
         Some(shape) => Decision {
@@ -379,5 +481,64 @@ mod tests {
         );
         i.shape = None;
         assert_eq!(effective(&i, &[]).shape, Shape::Single);
+    }
+
+    fn real_globs() -> Vec<Glob> {
+        gated_globs(&Rules::defaults())
+    }
+    fn files(f: &[&str]) -> Vec<String> {
+        f.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_subtree_touch_holding_a_gated_file_is_gated() {
+        let g = real_globs();
+        for (touch, file) in [
+            ("packages/**", "packages/a/hoist.toml"),
+            ("crates/x/**", "crates/x/AGENTS.md"),
+            ("web/**", "web/ui/action.yml"),
+            ("web/**", "web/.npmrc"),
+            ("pkg/**", "pkg/dev.sops.yaml"),
+            ("pkg/**", "pkg/secrets.toml"),
+        ] {
+            let tree = files(&["src/a.rs", file]);
+            assert_eq!(
+                touch_gated_in(&[touch.to_string()], &g, Some(&tree)),
+                Ok(true),
+                "{touch} ~ {file}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clean_subtree_is_not_gated_and_an_unknown_tree_is_an_error() {
+        let g = real_globs();
+        let t = vec!["packages/**".to_string()];
+        let tree = files(&["packages/a/lib.rs", "hoist.toml"]);
+        assert_eq!(touch_gated_in(&t, &g, Some(&tree)), Ok(false));
+        let err = touch_gated_in(&t, &g, None).unwrap_err();
+        assert!(err.contains("`packages/**` cannot be checked"), "{err}");
+        // Explicit paths need no tree.
+        assert_eq!(touch_gated_in(&["src/a.rs".into()], &g, None), Ok(false));
+        assert_eq!(touch_gated_in(&["AGENTS.md".into()], &g, None), Ok(true));
+    }
+
+    #[test]
+    fn resolve_gated_flags_subtree_tasks_and_reports_unresolvable_ones() {
+        let g = real_globs();
+        let i = item(
+            vec![
+                task("T1", "packages/**", &[], 50, "normal"),
+                task("T2", "src/a.rs", &[], 50, "normal"),
+            ],
+            1,
+        );
+        let tree = files(&["packages/a/hoist.toml"]);
+        let (set, errs) = resolve_gated(std::slice::from_ref(&i), &g, Some(&tree));
+        assert!(errs.is_empty());
+        assert_eq!(set.into_iter().collect::<Vec<_>>(), ["M1/T1"]);
+        let (_, errs) = resolve_gated(&[i], &g, None);
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].fix.contains("risk: high"), "{}", errs[0].fix);
     }
 }

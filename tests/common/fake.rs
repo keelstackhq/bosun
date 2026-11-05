@@ -120,6 +120,8 @@ pub struct State {
     pub git_commits: HashMap<String, Value>,
     /// Tree sha -> `GET /git/trees/{sha}`; unset answers 404.
     pub git_trees: HashMap<String, Value>,
+    /// `GET /git/trees/main` answers 404 instead of an empty tree.
+    pub main_tree_missing: bool,
     /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
     pub pull_commits: HashMap<u64, Vec<String>>,
     /// Commit sha -> first parent (`GET /commits/{sha}`); unset, the commit answers 422 as GitHub does.
@@ -367,6 +369,11 @@ impl FakeGithub {
             sha.into(),
             json!({"sha": sha, "tree": tree, "truncated": truncated}),
         );
+    }
+
+    /// Make the default branch's tree unreadable (404).
+    pub fn no_main_tree(&self) {
+        self.state.lock().unwrap().main_tree_missing = true;
     }
 
     /// A raw JSON body for tree `sha`, to test malformed answers.
@@ -1262,6 +1269,10 @@ fn route(
         }
         ("GET", ["git", "trees", sha]) => match s.git_trees.get(*sha) {
             Some(t) => ok(t.clone()),
+            // The default branch's tree is empty unless a test says otherwise (`no_main_tree`).
+            None if *sha == "main" && !s.main_tree_missing => {
+                ok(json!({"sha": "main", "tree": [], "truncated": false}))
+            }
             None => msg(404, "Not Found"),
         },
         ("GET", ["pulls", n, "reviews"]) => {

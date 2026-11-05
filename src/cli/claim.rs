@@ -19,7 +19,7 @@ use crate::core::lease::{
 use crate::core::lessons;
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
-use crate::core::shape::touch_gated;
+use crate::core::shape::{touch_gated, touch_gated_in};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -439,16 +439,26 @@ fn refuse_gated_touch(
     if touch_gated(&m.touch, &globs) {
         return Ok(());
     }
-    match touch
-        .iter()
-        .find(|g| touch_gated(std::slice::from_ref(*g), &globs))
-    {
-        Some(g) => Err(BosunError::conflict(
-            format!(
-                "--touch {g} is a gated path: gated work runs as its own task, not inside the bundle"
-            ),
-            "drop the gated path and plan it as its own task (plan amend)",
-        )),
-        None => Ok(()),
+    // Wildcards resolve against the default branch's tree (read once, only when one is given).
+    let wild = touch.iter().any(|g| g.contains('*') || g.contains('?'));
+    let files = if wild {
+        crate::app::base_files(gh)?
+    } else {
+        None
+    };
+    for g in touch {
+        match touch_gated_in(std::slice::from_ref(g), &globs, files.as_deref()) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(BosunError::conflict(
+                    format!(
+                        "--touch {g} is a gated path: gated work runs as its own task, not inside the bundle"
+                    ),
+                    "drop the gated path and plan it as its own task (plan amend)",
+                ));
+            }
+            Err(e) => return Err(BosunError::conflict(e, "narrow --touch to explicit paths")),
+        }
     }
+    Ok(())
 }

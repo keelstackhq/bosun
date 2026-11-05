@@ -117,6 +117,8 @@ match-anywhere rule like `**/agents.md`; risk-check still judges each real file 
 A gated task always gets its own single-task PR and is never bundled, and it is at most 400 changed lines (D-016): a gated task with `size:` over 400 is a plan error at its `size:` line (`plan check`, `import` and `amend` all refuse it; `import` and `amend` judge the risk paths by `.bosun/risk.toml` on the default branch, `plan check` by the working tree). `bosun plan check` lists
 them as `gated`.
 
+A wildcard touch (`*` or `?`, e.g. `packages/**`) is also resolved against the default branch's file tree: it is gated when a file it matches is matched by a risk path (`packages/a/hoist.toml` ~ `**/hoist.toml`). `import` and `amend` read the tree once; when it is unreadable or truncated, a wildcard touch that no risk path settles is a plan error at the task line (fix: narrow the touch to the paths the task edits, or mark it `risk: high`). `plan check` has no GitHub and keeps the advisory working-tree view of anchored paths only.
+
 `shape: auto` (the default) decides on the other tasks, in this order:
 
 1. At most one task is not gated: `single` ("one task", or "N gated tasks run alone").
