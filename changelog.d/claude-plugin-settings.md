@@ -1,0 +1,1 @@
+- `.claude/settings.json` (bosun and the channel core) enable superpowers and caveman from the `keelstack` marketplace, from bosun main (plugin commits pinned by sha in `.claude-plugin/marketplace.json`).

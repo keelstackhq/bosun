@@ -29,3 +29,30 @@ fn marketplace_pins_superpowers_and_caveman_to_commits() {
         assert!(src.get("ref").is_none(), "a ref would float: {}", p["name"]);
     }
 }
+
+/// Both settings files enable the plugins from the `keelstack` marketplace, from bosun's main branch.
+#[test]
+fn settings_pin_the_keelstack_marketplace() {
+    let root = std::fs::read_to_string(".claude/settings.json").unwrap();
+    let channel =
+        std::fs::read_to_string("channel/pieces/core/files/.claude/settings.json").unwrap();
+    let mut refs = Vec::new();
+    for text in [&root, &channel] {
+        let s: Value = serde_json::from_str(text).unwrap();
+        let src = &s["extraKnownMarketplaces"]["keelstack"]["source"];
+        assert_eq!(src["source"], "github");
+        assert_eq!(src["repo"], "keelstackhq/bosun");
+        // A branch or tag: Claude Code clones a marketplace with `--branch`, so a sha fails.
+        // The plugin commits are pinned by sha inside .claude-plugin/marketplace.json.
+        let r = src["ref"].as_str().unwrap_or_default();
+        assert_eq!(r, "main");
+        refs.push(r.to_string());
+        for p in ["superpowers@keelstack", "caveman@keelstack"] {
+            assert_eq!(s["enabledPlugins"][p], true, "{p}");
+        }
+    }
+    assert_eq!(
+        refs[0], refs[1],
+        "root and channel settings pin the same commit"
+    );
+}
