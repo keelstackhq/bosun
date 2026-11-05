@@ -285,3 +285,26 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-03 · ZA-T1 follow-up · local composite actions (`**/action.y*ml`) are workflow files for approval policies · PR (za-t1-composite-actions)
 - 2026-11-02 · ZH-T1 · `bosun handoff` and `bosun resume --handoff` (spec §5.1) · PR (zh-t1-handoff)
 - 2026-11-03 · ZH-T2 · root relay: `bosun spawn --root` and `waves.relay_waves` (spec §5.2) · PR (zh-t2-relay)
+- 2026-11-03 · ZR/T3 · pin bosun 0.5.0 (.bosun/version, setup-script sha512, KNOWN), relay_waves, [cloud], [approvals] policy · PR (chore-pin-0.5.0)
+- 2026-11-03 · Tool pins · setup scripts and splice.yml move to splice 0.4.0 and hoist 0.4.0 (sha512 checked against npm pack) · PR (chore-tool-pins-splice-hoist-0.4.0)
+- 2026-11-04 · Design · agent memory (progress + learnings) design and task plan, `docs/superpowers/specs/2026-11-04-agent-memory-design.md` · PR (claude-agent-memory-design)
+- 2026-11-04 · R2 · archive_session next for finished children · bosun#387
+- R4: doctor step 13 `plugins` checks the keelstack marketplace source, pins and installed plugins.
+- 2026-11-04 · R3a · keelstack plugin marketplace with sha-pinned superpowers and caveman · split from bosun#386
+- 2026-11-04 · R3b · settings enable keelstack plugins, marketplace on main, plugins sha-pinned
+- 2026-11-04 · T4 · Done history moves to `docs/progress-done.md`; fold-fragments targets it; tests set TMPDIR · PR (claude-progress-done-split)
+- 2026-11-04 · R1 · session rules in session-start · bosun#386
+- 2026-11-04 · R1/R5 owner part · session-rules seed and R-gov paths · split from bosun#386
+- 2026-11-04 · FU1b · `bosun handoff-pr <pr>`: send_message to the parent with PR, head SHA, risk paths and review minors · PR (feat-handoff-pr)
+- 2026-11-04 · FU6 · hook accepts the task marker from registered child sessions; spec §4 documents who may run `bosun intake` · PR (feat-hook-child-task-marker)
+- 2026-11-04 · FU4 · plan task field `done-by: #N` imports the task as merged when PR N is merged · PR (feat-plan-done-by)
+- 2026-11-04 · FU1a · `bosun pr --auto-merge` states the gates it relies on (risk-check, review-verdict) before acting · PR (feat-pr-gates)
+- 2026-11-04 · FU2 · `bosun pr <issue> --auto-merge` finds the PR by its `bosun:task-pr` marker from any branch · PR (feat-pr-marker)
+- 2026-11-04 · FU3 · `bosun result`/`reap` reconcile epic tasks from their PR merge state (record, marker) · PR (fix-result-reconcile)
+- 2026-11-04 · feedback · spawn prompt working notes (target dir per worktree, disk, 30 min waits) · PR (fix-spawn-prompt-advice)
+- 2026-11-04 · FU5 · `spawn` create_session call carries source_url and the default branch · PR (fix-spawn-source)
+- 2026-11-04 · feedback · verdict comment fence outgrows backtick runs; apply reads any fence · PR (fix-verdict-fence)
+- 2026-11-04 · feedback · wait --pr says "no checks yet" · PR (fix-wait-no-checks)
+- 2026-11-04 · feedback · GitHub 5xx gives error.kind upstream (exit 1) · PR (fix-wait-upstream)
+- 2026-11-03 · Release · keel-bosun 0.5.0, @keelstackhq/bosun 0.5.0 (release PR; tag and publish by release.yml) · PR (release/0.5.0)
+- 2026-11-04 · R3c · setup script prewarms keelstack plugins, warn-only pin check

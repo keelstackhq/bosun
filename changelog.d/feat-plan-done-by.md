@@ -1,1 +1,0 @@
-- Plan task field `done-by: #N`: `plan import` and `plan amend` make the task merged when PR N is merged.

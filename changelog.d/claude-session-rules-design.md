@@ -1,1 +1,0 @@
-- `bosun hook session-start` adds role rules (worker if spawned, else orchestrator; built-in text, `.bosun/session-rules.toml` overrides), also without GitHub (R1).

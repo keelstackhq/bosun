@@ -1,1 +1,0 @@
-- `bosun status` and `bosun reap` add `next` `archive_session` for children of the caller whose newest result is final (merged, blocked, needs-human) and who have not joined or leased again.

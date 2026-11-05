@@ -1,1 +1,0 @@
-- 2026-11-04 · R3b · settings enable keelstack plugins, marketplace on main, plugins sha-pinned

@@ -1,1 +1,0 @@
-- 2026-11-04 · FU5 · `spawn` create_session call carries source_url and the default branch · PR (fix-spawn-source)

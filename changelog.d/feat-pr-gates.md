@@ -1,1 +1,0 @@
-- `bosun pr --auto-merge` prints the gates it relies on (`risk-check`, `review-verdict` and their states) on stderr and in `data.gates` before it turns auto-merge on.

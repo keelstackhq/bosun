@@ -1,1 +1,0 @@
-- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.5.0 with its npm sha512 values; bosun's own config sets `waves.relay_waves`, `[cloud] environment_id` (the shared keelstack environment) and `[approvals] policy = "owner-gated"`. After it merges, paste `docs/setup-script.sh` into the cloud environments again.

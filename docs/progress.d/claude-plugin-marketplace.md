@@ -1,1 +1,0 @@
-- 2026-11-04 · R3a · keelstack plugin marketplace with sha-pinned superpowers and caveman · split from bosun#386

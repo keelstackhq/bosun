@@ -1,1 +1,0 @@
-- R4: doctor step 13 `plugins` checks the keelstack marketplace source, pins and installed plugins.

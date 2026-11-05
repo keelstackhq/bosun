@@ -1,1 +1,0 @@
-- 2026-11-04 · feedback · verdict comment fence outgrows backtick runs; apply reads any fence · PR (fix-verdict-fence)

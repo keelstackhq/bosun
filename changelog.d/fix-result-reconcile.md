@@ -1,1 +1,0 @@
-- `bosun result` moves every task of the epic whose own PR (task-pr record, else bosun marker) merged to merged, and `bosun reap` does so for tasks with a merged recorded PR, even when the task issue stayed open.

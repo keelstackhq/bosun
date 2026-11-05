@@ -1,1 +1,0 @@
-- 2026-11-04 · feedback · spawn prompt working notes (target dir per worktree, disk, 30 min waits) · PR (fix-spawn-prompt-advice)

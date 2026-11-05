@@ -1,1 +1,0 @@
-- 2026-11-04 · FU2 · `bosun pr <issue> --auto-merge` finds the PR by its `bosun:task-pr` marker from any branch · PR (feat-pr-marker)
