@@ -1414,7 +1414,7 @@ fn main_open_rejudges_when_a_draft_becomes_ready() {
         // The label filter applies to label actions only; every other action reaches the job.
         assert!(
             yaml.contains(
-                "((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||"
+                "github.event.action != 'labeled' && github.event.action != 'unlabeled') ||"
             ),
             "{rel}"
         );

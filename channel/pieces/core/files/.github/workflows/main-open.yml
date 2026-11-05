@@ -31,12 +31,13 @@ permissions:
 
 jobs:
   judge:
-    # Not for a draft (no runner starts; `ready_for_review` judges it). Only the mainfix label
-    # changes the verdict: other label events skip before a runner starts.
+    # Not for a draft (no runner starts; `ready_for_review` judges it), except a mainfix label
+    # change, which judges a draft too so an old verdict never outlives the label. Other label
+    # events skip before a runner starts.
     if: >-
-      github.event.pull_request.draft == false &&
-      ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
-      github.event.label.name == 'bosun:kind/mainfix')
+      (github.event.pull_request.draft == false &&
+      github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+      github.event.label.name == 'bosun:kind/mainfix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
