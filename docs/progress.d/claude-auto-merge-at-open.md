@@ -1,0 +1,1 @@
+- 2026-11-05 · Fix · loop opens PR with --auto-merge before the verdict; already_clean goes to the orchestrator (D-008) · claude/auto-merge-at-open
