@@ -26,6 +26,7 @@ pub fn run(dir: Option<&Path>, args: &FailArgs) -> CmdResult {
             "pass a short stable text, for example --signature \"E0308 in src/x.rs\"",
         ));
     }
+    super::refuse_secret("--signature", signature)?;
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
             format!("issue #{n} does not exist"),

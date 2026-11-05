@@ -748,3 +748,129 @@ fn stop_allows_when_github_is_down() {
     let tmp = repo();
     silent(&stop(None, tmp.path(), stop_in(tmp.path())));
 }
+
+fn bash_in(repo: &Path, session: &str, cmd: &str) -> Out {
+    let mut input = call(repo, "Bash", json!({ "command": cmd }));
+    input["session_id"] = json!(session);
+    hook(None, repo, T0, "pre-tool-use", &input)
+}
+
+#[test]
+fn repeat_lock_warns_at_three_and_denies_at_five() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+    let third = bash_in(r, "s1", " cargo test ");
+    assert_eq!(third.code, 0, "{}", third.stderr);
+    let v: Value = serde_json::from_str(&third.stdout).unwrap();
+    let h = &v["hookSpecificOutput"];
+    assert_eq!(h["hookEventName"], "PreToolUse");
+    assert!(h.get("permissionDecision").is_none());
+    let note = h["additionalContext"].as_str().unwrap();
+    assert!(note.starts_with("repeat-lock"), "{note}");
+    allowed(&bash_in(r, "s1", "cargo test"));
+    let why = denied(&bash_in(r, "s1", "cargo test"));
+    assert!(why.starts_with("repeat-lock"), "{why}");
+}
+
+#[test]
+fn repeat_lock_skips_read_only_polls_and_keeps_the_count() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..6 {
+        let out = bash_in(r, "s1", "bosun wait --child S");
+        assert_eq!(out.stdout.trim(), "", "{}", out.stdout);
+    }
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s1", "bosun wait --child S"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    let third = bash_in(r, "s1", "cargo test");
+    assert!(third.stdout.contains("repeat-lock"), "{}", third.stdout);
+}
+
+#[test]
+fn repeat_lock_resets_on_another_command_or_session() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+    allowed(&bash_in(r, "s1", "cargo build"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s2", "cargo test"));
+    allowed(&bash_in(r, "s2", "cargo test"));
+}
+
+#[test]
+fn destructive_lock_denies_through_the_hook() {
+    let tmp = repo();
+    let why = denied(&bash_in(tmp.path(), "s1", "sudo rm -rf /"));
+    assert!(why.starts_with("destructive-lock"), "{why}");
+}
+
+#[test]
+fn repeat_lock_counts_each_session_on_its_own() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+        allowed(&bash_in(r, "s2", "cargo build"));
+    }
+    let v: Value = serde_json::from_str(&bash_in(r, "s1", "cargo test").stdout).unwrap();
+    assert!(
+        v["hookSpecificOutput"]["additionalContext"].is_string(),
+        "{v}"
+    );
+}
+
+#[test]
+fn repeat_lock_restarts_after_an_edit() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+    let mut edit = call(
+        r,
+        "Edit",
+        json!({"file_path": r.join("a.rs").to_str().unwrap()}),
+    );
+    edit["session_id"] = json!("s1");
+    hook(None, r, T0, "pre-tool-use", &edit);
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+}
+
+#[test]
+fn repeat_lock_needs_a_session_id() {
+    let tmp = repo();
+    let r = tmp.path();
+    let input = json!({"tool_name": "Bash", "tool_input": {"command": "ls"}});
+    for _ in 0..5 {
+        let mut cmd = bosun();
+        cmd.current_dir(r)
+            .env_remove("BOSUN_SESSION")
+            .env("BOSUN_NOW", T0)
+            .args(["hook", "pre-tool-use"])
+            .write_stdin(input.to_string());
+        let out = cmd.output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "", "{out:?}");
+    }
+}
+
+#[test]
+fn repeat_lock_fails_open_when_it_cannot_write() {
+    let tmp = repo();
+    let r = tmp.path();
+    std::fs::create_dir_all(r.join(".git/bosun")).unwrap();
+    std::fs::write(r.join(".git/bosun/repeat"), "not a dir").unwrap();
+    for _ in 0..5 {
+        let out = bash_in(r, "s1", "cargo test");
+        allowed(&out);
+        assert!(out.stderr.contains("repeat-lock skipped"), "{}", out.stderr);
+    }
+}

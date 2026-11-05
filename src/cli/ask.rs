@@ -13,6 +13,7 @@ use crate::core::state::State;
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub fn run(dir: Option<&Path>, args: &AskArgs) -> CmdResult {
+    super::refuse_secret("the question", &args.question)?;
     let app = App::load(dir)?;
     let (gh, n) = (app.gh.as_ref(), args.issue);
     kill_switch(gh)?;

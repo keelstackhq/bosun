@@ -21,6 +21,7 @@ pub mod meta;
 pub mod plan;
 pub mod prereqs;
 pub mod records;
+pub mod repeat;
 pub mod review;
 pub mod risk;
 pub mod signature;

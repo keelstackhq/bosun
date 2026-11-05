@@ -482,6 +482,7 @@ fn too_deep() -> String {
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
     decrypt_rule(command, 0)
+        .or_else(|| destructive_rule(command, 0))
         .or_else(|| check(command, branch_at, default_branch, 0))
         .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
 }
@@ -1079,6 +1080,13 @@ fn nested(command: &str) -> Vec<String> {
     if let Some(start) = tick {
         out.push(chars[start + 1..].iter().collect());
     }
+    out.extend(word_scripts(command));
+    out
+}
+
+/// The scripts of `env -S`, `eval` and `sh|bash|zsh|dash|ksh -c` in a command.
+fn word_scripts(command: &str) -> Vec<String> {
+    let mut out = Vec::new();
     let words = shell_words(command);
     for (i, w) in words.iter().enumerate() {
         let name = w.rsplit('/').next().unwrap_or(w);
@@ -1429,6 +1437,206 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
+}
+
+fn destructive(what: &str) -> String {
+    format!("destructive-lock: `{what}` can wipe a machine or a database; ask the owner to run it")
+}
+
+fn base(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
+}
+
+/// A client whose arguments, stdin or heredoc are SQL.
+fn sql_client(word: &str) -> bool {
+    let clients = "psql pgcli mysql mariadb mycli sqlite3 duckdb usql cockroach clickhouse sqlcmd \
+        clickhouse-client";
+    clients.split_whitespace().any(|c| base(word) == c)
+}
+
+/// Destructive-lock (spec §4): the command word of every segment after wrappers and runners,
+/// and of every nested command; quoted text, other arguments and heredoc bodies are data.
+fn destructive_rule(command: &str, depth: usize) -> Option<String> {
+    if depth > MAX_DEPTH {
+        return Some(too_deep());
+    }
+    let (code, subs) = split_heredocs(command);
+    let inner = subs.into_iter().chain(substitutions(&code, false));
+    if let Some(why) = inner
+        .chain(word_scripts(&code))
+        .find_map(|s| destructive_rule(&s, depth + 1))
+    {
+        return Some(why);
+    }
+    let words = shell_words(&code);
+    // The fork bomb `:(){ :|:& };:` as words (quoted, it is one word: data).
+    if words.concat().contains(":(){:\0:\0}\0:") {
+        return Some(destructive("fork bomb"));
+    }
+    let segments: Vec<&[String]> = words
+        .split(|w| w == SEP)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut client = None;
+    for (i, segment) in segments.iter().enumerate() {
+        if disk_redirect(segment) {
+            return Some(destructive("redirect into a disk device"));
+        }
+        let all: Vec<&str> = segment.iter().map(String::as_str).collect();
+        let mut cmd = all.as_slice();
+        loop {
+            let runs = |w: &str| RUNNERS.iter().any(|r| r.0 == base(w));
+            let skip = (cmd.iter())
+                .take_while(|w| assigned(w).is_some() || WRAPPERS.contains(w) && !runs(w))
+                .count();
+            let (rest, _, shell) = unwrap_runners(&cmd[skip..]);
+            if shell && let Some(why) = destructive_rule(&rest.join(" "), depth + 1) {
+                return Some(why);
+            }
+            if rest.len() == cmd.len() {
+                break;
+            }
+            cmd = rest;
+        }
+        let (name, args) = cmd.split_first().unwrap_or((&"", &[]));
+        if wipes(base(name), args) {
+            return Some(destructive(&segment.join(" ")));
+        }
+        // SQL is what a client reads: its arguments, a pipe into it, its heredoc.
+        let remote = ["docker", "podman", "kubectl", "ssh"].contains(&base(name));
+        let mut named = cmd.iter().take(if remote { cmd.len() } else { 1 });
+        if named.any(|w| sql_client(w)) {
+            client.get_or_insert(i);
+        }
+    }
+    let sql = segments[client?.saturating_sub(1)..].concat().join(" ");
+    let sql: Vec<&str> = sql.split_whitespace().collect();
+    let sql = sql.join(" ").to_ascii_lowercase();
+    ["drop database", "drop schema"]
+        .into_iter()
+        .find(|d| sql.contains(d))
+        .map(destructive)
+}
+
+/// A redirect (`>`, `>>`, `&>`, `2>|`, glued or not) into a disk device.
+fn disk_redirect(segment: &[String]) -> bool {
+    segment.iter().enumerate().any(|(i, w)| {
+        let w = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        let glued = w.trim_start_matches(['>', '|', '&']);
+        let next = segment.get(i + 1).map_or("", String::as_str);
+        let dev = (if glued.is_empty() { next } else { glued }).strip_prefix("/dev/");
+        w.starts_with('>') && dev.is_some_and(|d| DISKS.iter().any(|k| d.starts_with(k)))
+    })
+}
+
+const DISKS: &[&str] = &["sd", "nvme", "disk", "hd", "vd"];
+
+/// `/`, `~` or `$HOME` (in any spelling) alone or with `/`, `/*` or `/.`.
+fn wipe_target(a: &str) -> bool {
+    let home = ["~", "$HOME", "${HOME}", "${HOME:?}"]
+        .iter()
+        .find_map(|h| a.strip_prefix(h));
+    ["/", "/*", "/."].contains(&a) || home.is_some_and(|r| ["", "/", "/*", "/."].contains(&r))
+}
+
+/// Whether the command `name ARGS` wipes a machine, a disk or an infrastructure.
+fn wipes(name: &str, args: &[&str]) -> bool {
+    let flag = |long: &str, short: &[char]| {
+        let short = |a: &&str| a.starts_with('-') && !a.starts_with("--") && a.contains(short);
+        args.iter().any(|a| *a == long || short(a))
+    };
+    let aimed = args.iter().any(|a| wipe_target(a));
+    match name {
+        "rm" => {
+            args.contains(&"--no-preserve-root")
+                || (flag("--recursive", &['r', 'R']) || flag("--force", &['f'])) && aimed
+        }
+        "chmod" | "chown" | "chgrp" => flag("--recursive", &['R']) && aimed,
+        "dd" => (args.iter().filter_map(|a| a.strip_prefix("of=/dev/")))
+            .any(|t| !["null", "stdout", "stderr", "tty"].contains(&t) && !t.starts_with("fd/")),
+        "shred" | "wipefs" => args.iter().any(|a| a.starts_with("/dev/")),
+        "terraform" | "tofu" => match args.iter().find(|a| !a.starts_with('-')) {
+            Some(&"destroy") => true,
+            Some(&"apply") => args.iter().any(|a| a.trim_start_matches('-') == "destroy"),
+            _ => false,
+        },
+        n => n == "mke2fs" || n.starts_with("mkfs"),
+    }
+}
+
+/// The command without its heredoc bodies (data, unless a shell or a SQL client on the opening
+/// line reads it), and the substitutions in unquoted bodies (they run).
+fn split_heredocs(command: &str) -> (String, Vec<String>) {
+    let (mut code, mut subs) = (String::new(), Vec::new());
+    let mut skip: Option<(String, bool, bool)> = None;
+    for line in command.split_inclusive('\n') {
+        if let Some((delim, dash, quoted)) = &skip {
+            let l = line.trim_end_matches('\n');
+            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+                skip = None;
+                code.push_str(line);
+            } else if !quoted {
+                subs.extend(substitutions(line, true));
+            }
+            continue;
+        }
+        code.push_str(line);
+        let Some(at) = heredoc_at(line) else { continue };
+        let dash = line[at + 2..].starts_with('-');
+        let spec = line[at + 2..].trim_start_matches('-').trim_start();
+        let quote = spec.chars().next().filter(|c| matches!(c, '\'' | '"'));
+        let delim = match quote {
+            Some(q) => spec[1..].find(q).map(|end| spec[1..=end].to_string()),
+            None => Some(
+                (spec.chars())
+                    .take_while(|c| !c.is_whitespace() && !";|&<>()".contains(*c))
+                    .filter(|c| *c != '\\')
+                    .collect(),
+            ),
+        };
+        let reads = shell_words(line)
+            .iter()
+            .any(|w| SHELLS.contains(&base(w)) || sql_client(w));
+        if let Some(delim) = delim.filter(|d| !d.is_empty() && !reads) {
+            skip = Some((delim, dash, quote.is_some()));
+        }
+    }
+    (code, subs)
+}
+
+/// The `$( )`, backtick and (outside quotes) `( )` spans of a command line, quote-aware; in a
+/// heredoc `body` quotes are text and only `$( )` and backticks run.
+fn substitutions(text: &str, body: bool) -> Vec<String> {
+    let c: Vec<char> = text.chars().collect();
+    let (mut out, mut quote, mut i) = (Vec::new(), None, 0);
+    while i < c.len() {
+        match (quote, c[i]) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => i += 1,
+            (None, '\'' | '"') if !body => quote = Some(c[i]),
+            (_, '`') => {
+                let end = (i + 1..c.len()).find(|&j| c[j] == '`' && c[j - 1] != '\\');
+                let end = end.unwrap_or(c.len());
+                out.push(c[i + 1..end].iter().collect());
+                i = end;
+            }
+            (q, '(') if (q.is_none() && !body) || (i > 0 && c[i - 1] == '$') => {
+                let (mut level, mut j) = (1, i + 1);
+                while j < c.len() && level > 0 {
+                    level += i32::from(c[j] == '(') - i32::from(c[j] == ')');
+                    j += 1;
+                }
+                let end = if level == 0 { j - 1 } else { j };
+                out.push(c[i + 1..end].iter().collect());
+                i = j;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
 }
 
 const DECRYPT_FIX: &str = "secrets stay encrypted; the owner runs `hoist secrets edit`, CI \
@@ -2533,6 +2741,144 @@ mod tests {
             &|_| Some(branch.into()),
             "main",
         )
+    }
+
+    #[test]
+    fn destructive_lock_denies_the_wipe_commands() {
+        for cmd in [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -fr ~",
+            "rm -rfv ~/",
+            "rm -r -f ~/*",
+            "rm --recursive --force /",
+            "rm -rf $HOME",
+            "rm -rf \"$HOME\"",
+            "rm -rf ${HOME}",
+            "rm -rf /.",
+            "rm -rf --no-preserve-root x",
+            "sudo rm -rf /",
+            "cd x && rm -rf ~",
+            "echo hi; rm -rf /",
+            "bash -c 'rm -rf /'",
+            "sudo bash -c \"cd / && rm -rf /\"",
+            "echo x | xargs rm -rf /",
+            "env X=1 rm -rf ~",
+            "mkfs.ext4 /dev/sda1",
+            "mkfs /dev/sda1",
+            "mke2fs /dev/sda1",
+            "dd if=x of=/dev/sda bs=1M",
+            "shred -n3 /dev/sda",
+            "wipefs -a /dev/nvme0n1",
+            "cat x > /dev/sda",
+            "echo x >/dev/nvme0n1p1",
+            "cat x >> /dev/disk2",
+            "terraform destroy",
+            "terraform apply -destroy",
+            "tofu destroy -auto-approve",
+            "psql -c 'DROP DATABASE prod'",
+            "psql -c \"drop   schema public cascade\"",
+            ":(){ :|:& };:",
+            "chmod -R 777 /",
+            "chown -R me ~",
+            "timeout 5 rm -rf /",
+            "nice -n 5 rm -rf ~",
+            "doas rm -rf /",
+            "sudo -u root rm -rf /",
+            "command rm -rf /",
+            "\\rm -rf /",
+            "/bin/rm -rf /",
+            "X=1 rm -rf /",
+            "(rm -rf /)",
+            "echo $(rm -rf /)",
+            "echo `rm -rf ~`",
+            "git commit -m \"$(rm -rf /)\"",
+            "eval 'rm -rf /'",
+            "sh -c \"bash -c 'rm -rf ~'\"",
+            "bash <<'EOF'\nrm -rf /\nEOF",
+            "cat > f <<EOF\n$(rm -rf /)\nEOF",
+            "terraform -chdir=infra destroy",
+            "echo 'DROP DATABASE x' | psql",
+            "mysql -e \"DROP DATABASE x\"",
+            "docker exec db psql -c 'drop database x'",
+            "psql <<'EOF'\nDROP DATABASE prod;\nEOF",
+            "echo x &>/dev/sda",
+            "echo hi; :(){ :|:& };:",
+            "psql -c \"DROP DATABASE x\"",
+            "rm -rf ~/.",
+            "rm -rf ${HOME:?}",
+            "rm -rf ${HOME:?}/",
+            "rm -rf \"${HOME}\"/",
+            "rm -rf $HOME/.",
+            "rm -rf \"$HOME/\"",
+            "sudo -u postgres psql -c 'DROP DATABASE x'",
+            "PGPASSWORD=x /usr/bin/psql -h db -c 'drop schema s cascade'",
+            "kubectl exec -it db -- psql -c \"DROP DATABASE x\"",
+            "clickhouse-client -q 'DROP DATABASE x'",
+            "docker compose exec db mysql -e 'drop database x'",
+            "echo 'DROP DATABASE x' | sudo -u postgres psql",
+            "echo 'DROP DATABASE x' > d.sql && psql -f d.sql",
+            "rm -rf ~/*",
+            "rm -rf ${HOME}/.",
+            "chmod -R 000 ~/.",
+            "terraform apply --destroy",
+            ":(){:|:&};:",
+            ":(){ :|: & };:",
+        ] {
+            let why = bash(cmd, "feat").unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(why.starts_with("destructive-lock"), "{cmd}: {why}");
+        }
+    }
+
+    #[test]
+    fn destructive_lock_allows_the_everyday_commands() {
+        for cmd in [
+            "rm -rf ./target",
+            "rm -rf target /tmp/x",
+            "rm file",
+            "rm -rf /tmp/x",
+            "rm -rf ~/proj/target",
+            "dd if=x of=y.img",
+            "dd if=/dev/zero of=/dev/null",
+            "cat x > /dev/null",
+            "terraform plan",
+            "chmod -R 755 ./dist",
+            "cargo build 2>&1 | tail",
+            "mkdir -p out",
+            "grep mkfs docs.md",
+            "git commit -m \"fix rm -rf / handling\"",
+            "git commit -m \"guard: a; rm -rf / is refused\"",
+            "git commit -m \"the lock (rm -rf ~) case\"",
+            "git commit -m \"DROP DATABASE and drop schema are refused\"",
+            "cargo nextest run rm",
+            "cargo test destroy mkfs",
+            "grep -rn \"dd of=/dev\" src",
+            "gh pr create --title t --body \"refuses terraform destroy, mkfs and DROP DATABASE\"",
+            "cat > f <<'EOF'\nrm -rf /\nDROP DATABASE x\nmkfs /dev/sda\nEOF",
+            "cat > f <<EOF\nrm -rf ~\nterraform destroy\nEOF",
+            "bosun lessons add \"never rm -rf ~\"",
+            "git log --grep 'rm -rf /'",
+            "psql -c 'select 1'",
+            "git commit -m ':(){ :|:& };:'",
+            "echo \"DROP DATABASE x\"",
+            "dd if=x of=/dev/stdout",
+            "dd if=x of=/dev/stderr",
+            "dd if=x of=/dev/fd/3",
+            "dd if=x of=/dev/tty",
+            "grep -rn \"DROP DATABASE\" src | grep psql",
+            "rg -n psql docs && echo 'drop schema is refused'",
+            "git commit -m \"$(cat <<'EOF'\nfix: refuse psql -c 'DROP DATABASE x', rm -rf / and :(){ :|:& };:\n\nCo-Authored-By: C <c@x>\nEOF\n)\"",
+            "gh pr create --title t --body \"$(cat <<'EOF'\n- (rm -rf ~) is refused\n- dd of=/dev/sda\nEOF\n)\"",
+            "cat > notes.md <<'EOF'\npsql -c 'DROP DATABASE x'\nEOF",
+            "cargo nextest run --locked 2>&1 | tail -5",
+            "grep -n 'rm -rf /' src/core/guard.rs",
+            "ls psql && git diff -- 'drop database'",
+            "git log -S 'DROP SCHEMA' -- src/psql",
+            "echo \":(){ :|:& };:\" >> notes.md",
+            "gh pr create --title \"psql guard\" --body-file - <<'EOF'\nrm -rf ~\nEOF",
+        ] {
+            assert_eq!(bash(cmd, "feat"), None, "{cmd}");
+        }
     }
 
     #[test]
