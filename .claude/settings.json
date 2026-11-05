@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bosun hook stop"
+            "command": "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0"
           }
         ]
       }

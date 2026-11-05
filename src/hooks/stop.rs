@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
-use crate::core::gate_record::{GateRecord, fingerprint, is_stale};
+use crate::core::gate_record::{GateRecord, fingerprint, is_stale, wait_marker_live};
 use crate::core::records::{Note, Record, parse_record};
 use crate::ctx::Origin;
 use crate::github::IssueState;
@@ -73,6 +73,9 @@ fn unfinished(dir: &Path) -> Result<Option<String>, String> {
             .filter_map(|n| parse_record(&n.body))
             .any(|r| mine(&r))
     };
+    if waiting(dir, me) {
+        return Ok(None);
+    }
     let leases = cache::leases(&app, cache::path(dir).as_deref())?;
     // `bosun handoff` (roots only) posts on the registry; read it once, only when needed.
     let mut registry: Option<Vec<Note>> = None;
@@ -94,10 +97,11 @@ fn unfinished(dir: &Path) -> Result<Option<String>, String> {
             }
         }
         let n = lease.issue;
+        let outcomes = crate::cli::RESULT_OUTCOMES.join("|");
         let how = if origin == Origin::Spawned {
-            format!("`bosun result {n} --outcome <merged|abandoned|failed>`")
+            format!("`bosun result {n} --outcome <{outcomes}>`")
         } else {
-            format!("`bosun result {n} --outcome <merged|abandoned|failed>` or `bosun handoff`")
+            format!("`bosun result {n} --outcome <{outcomes}>` or `bosun handoff`")
         };
         return Ok(Some(format!(
             "you hold the lease on #{n} but posted no result or handoff. Run {how}, then stop."
@@ -169,4 +173,71 @@ fn stale_gate(dir: &Path) -> bool {
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| GateRecord::from_json(&v));
     is_stale(record.as_ref(), &now, dirty)
+}
+
+/// `<git dir>/bosun/wait/`: one `<pid>.json` marker per running `bosun wait`.
+fn wait_dir(dir: &Path) -> Option<PathBuf> {
+    Some(record_path(dir)?.with_file_name("wait"))
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Marks a running `bosun wait` of this session; the marker goes away on drop.
+pub struct WaitMarker(Option<PathBuf>);
+
+impl WaitMarker {
+    pub fn start(dir: &Path, session: &str) -> Self {
+        let pid = std::process::id();
+        let file = wait_dir(dir).map(|d| d.join(format!("{pid}.json")));
+        let body = json!({"pid": pid, "session": session, "started": epoch_secs()}).to_string();
+        let write = |f: &Path| -> std::io::Result<()> {
+            std::fs::create_dir_all(f.parent().unwrap_or(Path::new(".")))?;
+            std::fs::write(f, &body)
+        };
+        if let Some(f) = &file
+            && let Err(e) = write(f)
+        {
+            eprintln!("bosun: warning: cannot write the wait marker: {e}");
+        }
+        Self(file)
+    }
+}
+
+impl Drop for WaitMarker {
+    fn drop(&mut self) {
+        if let Some(f) = &self.0 {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+}
+
+/// Does this session have a running `bosun wait`? Markers of dead waits are removed.
+fn waiting(dir: &Path, session: &str) -> bool {
+    let Some(entries) = wait_dir(dir).and_then(|d| std::fs::read_dir(d).ok()) else {
+        return false;
+    };
+    let now = epoch_secs();
+    let has_proc = Path::new("/proc/self").exists();
+    let mut live = false;
+    for path in entries.flatten().map(|e| e.path()) {
+        let Some(v) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
+            continue;
+        };
+        let pid = v["pid"].as_u64().unwrap_or(0);
+        let alive = has_proc.then(|| Path::new(&format!("/proc/{pid}")).exists());
+        let age = now.saturating_sub(v["started"].as_u64().unwrap_or(0));
+        if !wait_marker_live(alive, age, crate::cli::WAIT_TIMEOUT_SECS) {
+            let _ = std::fs::remove_file(&path);
+        } else if v["session"].as_str() == Some(session) {
+            live = true;
+        }
+    }
+    live
 }

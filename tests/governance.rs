@@ -159,6 +159,48 @@ fn owners_name_the_repo_owner() {
     assert!(read(".github/CODEOWNERS").contains("/.bosun/ "));
 }
 
+/// A Stop hook that exits non-zero blocks, so an old bosun (usage error, exit 2) must not.
+const STOP_WRAPPER: &str = "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0";
+
+fn sh_with_bosun(dir: &Path) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::process::Command::new("sh")
+        .args(["-c", STOP_WRAPPER])
+        .env("PATH", path)
+        .output()
+        .unwrap()
+}
+
+fn stub(body: &str) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("bosun");
+    fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(&f, fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+fn stop_wrapper_fails_open_on_an_old_binary() {
+    let old = stub("echo '{\"ok\":false}'; exit 2");
+    let out = sh_with_bosun(old.path());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+}
+
+fn stop_wrapper_passes_the_hook_output_through() {
+    let new = stub("echo '{\"decision\":\"block\"}'");
+    let out = sh_with_bosun(new.path());
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "{\"decision\":\"block\"}\n"
+    );
+}
+
 #[test]
 fn settings_hooks_run_bosun_hook_commands() {
     let settings: Value = serde_json::from_str(&read(".claude/settings.json")).unwrap();
@@ -174,10 +216,16 @@ fn settings_hooks_run_bosun_hook_commands() {
         commands,
         vec![
             "bosun hook session-start",
-            "bosun hook stop",
+            STOP_WRAPPER,
             "bosun hook pre-tool-use"
         ]
     );
+    assert_eq!(
+        read("channel/pieces/core/files/.claude/settings.json"),
+        read(".claude/settings.json")
+    );
+    stop_wrapper_fails_open_on_an_old_binary();
+    stop_wrapper_passes_the_hook_output_through();
     // A merge through Bash is refused by the configured PreToolUse command.
     let input = json!({"session_id": "x", "tool_name": "Bash",
         "tool_input": {"command": "gh pr merge 3"}, "cwd": "/"});

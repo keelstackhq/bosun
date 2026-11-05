@@ -45,8 +45,23 @@ pub fn is_stale(record: Option<&GateRecord>, now: &GateRecord, dirty: bool) -> b
     }
 }
 
+/// Is a `bosun wait` marker still a running wait? `pid_alive` is `None` where the platform
+/// cannot tell; the marker then counts while it is younger than the wait's own timeout.
+pub fn wait_marker_live(pid_alive: Option<bool>, age_secs: u64, timeout_secs: u64) -> bool {
+    pid_alive.unwrap_or(age_secs <= timeout_secs)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wait_marker_liveness() {
+        use super::wait_marker_live as live;
+        assert!(live(Some(true), 99999, 1800));
+        assert!(!live(Some(false), 0, 1800));
+        assert!(live(None, 1800, 1800));
+        assert!(!live(None, 1801, 1800));
+    }
+
     use super::*;
 
     fn rec(head: &str, fp: &str) -> GateRecord {

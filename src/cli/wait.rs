@@ -41,6 +41,10 @@ pub fn run(dir: Option<&Path>, args: &WaitArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
+    let marker_dir = dir
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    let _marker = marker_dir.map(|d| crate::hooks::stop::WaitMarker::start(&d, &app.ctx.session));
     let base = std::env::var("BOSUN_WAIT_BASE_MS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())

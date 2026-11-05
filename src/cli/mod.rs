@@ -335,7 +335,7 @@ pub struct ResultArgs {
     /// The epic issue number.
     pub epic: u64,
     /// How the work ended (`partial`: some tasks merged, the rest goes back to the parent).
-    #[arg(long, value_parser = ["merged", "partial", "blocked", "needs-human"])]
+    #[arg(long, value_parser = RESULT_OUTCOMES)]
     pub outcome: String,
     /// The PR of the work.
     #[arg(long)]
@@ -396,7 +396,7 @@ pub struct WaitArgs {
     #[arg(long, group = "target", value_name = "SESSION")]
     pub child: Option<String>,
     /// Give up after this many seconds (exit 0, changed: false).
-    #[arg(long, default_value_t = 1800)]
+    #[arg(long, default_value_t = WAIT_TIMEOUT_SECS)]
     pub timeout: u64,
 }
 
@@ -928,3 +928,8 @@ pub struct NotifyArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+/// The outcomes `bosun result` accepts.
+pub const RESULT_OUTCOMES: [&str; 4] = ["merged", "partial", "blocked", "needs-human"];
+/// Default `bosun wait --timeout` in seconds.
+pub const WAIT_TIMEOUT_SECS: u64 = 1800;

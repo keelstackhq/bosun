@@ -551,6 +551,55 @@ fn stop_blocks_a_live_lease_without_result_or_handoff() {
         reason.contains("#5") && reason.contains("bosun result"),
         "{reason}"
     );
+    assert!(
+        reason.contains("merged|partial|blocked|needs-human"),
+        "{reason}"
+    );
+    assert!(
+        !reason.contains("abandoned") && !reason.contains("failed"),
+        "{reason}"
+    );
+}
+
+fn wait_marker(repo: &Path, name: &str, pid: u32, session: &str) {
+    let git_dir = git_text(repo, &["rev-parse", "--absolute-git-dir"]);
+    let dir = Path::new(git_dir.trim()).join("bosun").join("wait");
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = json!({"pid": pid, "session": session, "started": 1});
+    std::fs::write(dir.join(format!("{name}.json")), body.to_string()).unwrap();
+}
+
+#[test]
+fn stop_skips_the_block_while_a_wait_of_this_session_runs() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    wait_marker(tmp.path(), "live", std::process::id(), "session_me");
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_blocks_with_a_dead_wait_marker_and_removes_it() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    wait_marker(tmp.path(), "dead", pid, "session_me");
+    blocked(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+    let git_dir = git_text(tmp.path(), &["rev-parse", "--absolute-git-dir"]);
+    let marker = Path::new(git_dir.trim()).join("bosun/wait/dead.json");
+    assert!(!marker.exists());
+}
+
+#[test]
+fn stop_still_blocks_when_the_live_wait_belongs_to_another_session() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    wait_marker(tmp.path(), "other", std::process::id(), "session_other");
+    blocked(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
 }
 
 #[test]
