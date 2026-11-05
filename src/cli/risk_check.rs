@@ -16,7 +16,7 @@ use crate::core::approve::{
     trust_files_changed, verify_ed25519,
 };
 use crate::core::lease::leases_of;
-use crate::core::meta::{closing_issues_in, linked_issues_in};
+use crate::core::meta::linked_issues_in;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
@@ -165,7 +165,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));
     matches.extend(risk::bundle_gated(
-        closing_issues_in(&pull.body, Some(&app.ctx.repo.to_string())).len(),
+        crate::cli::pr_bundle::closed_by_pr(gh, &pull, &app.ctx.repo.to_string())?.count(),
         &files,
         &rules,
     ));

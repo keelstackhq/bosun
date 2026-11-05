@@ -7,6 +7,55 @@ use crate::cli::plan::epic_shape;
 use crate::core::meta::{closing_issues_in, parse_task_meta};
 use crate::core::shape::meta_gated;
 use crate::github::{Github, Issue, PrFile, Pull};
+
+/// GitHub lists at most this many commits of a PR.
+const COMMIT_CAP: usize = 250;
+
+/// The issues of this repo a PR closes: closing keywords in its title, body and commit messages
+/// (GitHub reads all three), deduplicated. `incomplete` when a commit cannot be read or the
+/// commit list hit GitHub's cap: callers fail closed and treat the PR as closing several tasks.
+pub(crate) struct Closed {
+    pub issues: Vec<u64>,
+    pub incomplete: bool,
+}
+
+impl Closed {
+    /// More than one task, or not provably one.
+    pub fn bundles(&self) -> bool {
+        self.incomplete || self.issues.len() > 1
+    }
+
+    /// The count for messages; at least 2 when incomplete.
+    pub fn count(&self) -> usize {
+        if self.incomplete {
+            self.issues.len().max(2)
+        } else {
+            self.issues.len()
+        }
+    }
+}
+
+pub(crate) fn closed_by_pr(gh: &dyn Github, pull: &Pull, repo: &str) -> Result<Closed> {
+    let mut issues = Vec::new();
+    let mut add = |text: &str| {
+        for n in closing_issues_in(text, Some(repo)) {
+            if !issues.contains(&n) {
+                issues.push(n);
+            }
+        }
+    };
+    add(&pull.title);
+    add(&pull.body);
+    let shas = gh.pull_commits(pull.number)?;
+    let mut incomplete = shas.len() >= COMMIT_CAP;
+    for sha in &shas {
+        match gh.commit(sha) {
+            Ok(Some(c)) => add(&c.message),
+            _ => incomplete = true,
+        }
+    }
+    Ok(Closed { issues, incomplete })
+}
 use crate::output::BosunError;
 
 /// The `Closes #N` lines for the issues bundled with `lead` (`bosun pr <lead> --bundle N...`),
@@ -111,8 +160,9 @@ pub(crate) fn refuse_gated_new(
 /// Refuse (exit 3) a PR that closes more than one task and changes a gated file, or whose file
 /// list is incomplete (fail closed). Rules come from the default branch.
 pub(crate) fn refuse_gated_bundle(gh: &dyn Github, pull: &Pull, repo: &str) -> Result<()> {
-    let closes = closing_issues_in(&pull.body, Some(repo)).len();
-    if closes <= 1 {
+    let closed = closed_by_pr(gh, pull, repo)?;
+    let closes = closed.count();
+    if !closed.bundles() {
         return Ok(());
     }
     let files = gh.pull_files(pull.number)?;
