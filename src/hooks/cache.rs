@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, Result, active_issues};
 use crate::core::lease::{Lease, TTL_SECS, live_leases};
+use crate::core::repeat::Repeat;
 use crate::hooks::git_out;
 use crate::time::{Timestamp, parse_rfc3339};
 
@@ -107,4 +108,30 @@ pub fn leases(app: &App, file: Option<&Path>) -> std::result::Result<Vec<Lease>,
             _ => Err(e.message),
         },
     }
+}
+
+/// `<git common dir>/bosun/repeat/<key>.json`; `None` outside a git repo.
+pub fn repeat_path(dir: &Path, key: &str) -> Option<PathBuf> {
+    let common = git_out(dir, &["rev-parse", "--git-common-dir"])?;
+    let file = format!("{key}.json");
+    Some(dir.join(common).join("bosun").join("repeat").join(file))
+}
+
+pub fn read_repeat(file: &Path) -> Option<Repeat> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    Some(Repeat {
+        session: v.get("session")?.as_str()?.into(),
+        command: v.get("command")?.as_str()?.into(),
+        count: v.get("count")?.as_u64()?,
+    })
+}
+
+pub fn write_repeat(file: &Path, r: &Repeat) -> std::io::Result<()> {
+    let body = json!({"session": r.session, "command": r.command, "count": r.count});
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = file.with_extension(format!("json.tmp{}", std::process::id()));
+    std::fs::write(&tmp, body.to_string())?;
+    std::fs::rename(&tmp, file)
 }
