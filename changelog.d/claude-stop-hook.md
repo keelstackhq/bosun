@@ -1,0 +1,1 @@
+- `bosun hook stop`: the Stop hook blocks a child that holds a live lease without a result or handoff, and warns when the work tree changed since the last passing local `bosun gate`.

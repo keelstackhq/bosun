@@ -243,6 +243,7 @@ impl Command {
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
+            Command::Hook(HookCmd::Stop) => "hook stop",
             Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
@@ -335,7 +336,7 @@ pub struct ResultArgs {
     /// The epic issue number.
     pub epic: u64,
     /// How the work ended (`partial`: some tasks merged, the rest goes back to the parent).
-    #[arg(long, value_parser = ["merged", "partial", "blocked", "needs-human"])]
+    #[arg(long, value_parser = RESULT_OUTCOMES)]
     pub outcome: String,
     /// The PR of the work.
     #[arg(long)]
@@ -396,7 +397,7 @@ pub struct WaitArgs {
     #[arg(long, group = "target", value_name = "SESSION")]
     pub child: Option<String>,
     /// Give up after this many seconds (exit 0, changed: false).
-    #[arg(long, default_value_t = 1800)]
+    #[arg(long, default_value_t = WAIT_TIMEOUT_SECS)]
     pub timeout: u64,
 }
 
@@ -648,6 +649,8 @@ pub enum HookCmd {
     PreToolUse,
     /// SessionStart: join and print the session context.
     SessionStart,
+    /// Stop: block once while the lease has no result or handoff; warn on a stale gate.
+    Stop,
 }
 
 #[derive(Debug, Subcommand)]
@@ -953,3 +956,8 @@ pub struct NotifyArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+/// The outcomes `bosun result` accepts.
+pub const RESULT_OUTCOMES: [&str; 4] = ["merged", "partial", "blocked", "needs-human"];
+/// Default `bosun wait --timeout` in seconds.
+pub const WAIT_TIMEOUT_SECS: u64 = 1800;

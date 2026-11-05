@@ -15,6 +15,7 @@ pub mod cache;
 pub mod pre_tool_use;
 pub mod session_rules;
 pub mod session_start;
+pub mod stop;
 
 /// Run a hook with the process stdin; returns the text for stdout, if any.
 pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
@@ -36,6 +37,7 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
     match cmd {
         HookCmd::PreToolUse => pre_tool_use::run(cwd.as_deref(), &input),
         HookCmd::SessionStart => Some(session_start::run(cwd.as_deref())),
+        HookCmd::Stop => stop::run(cwd.as_deref(), &input),
     }
 }
 

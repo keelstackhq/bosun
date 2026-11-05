@@ -9,6 +9,7 @@ pub mod budget;
 pub mod carry;
 pub mod checks;
 pub mod cost;
+pub mod gate_record;
 pub mod glob;
 pub mod guard;
 pub mod handoff;

@@ -151,3 +151,19 @@ spawns one session per area, then coordinates with `bosun wait` and `bosun statu
 The SessionStart context ends with the global lessons of `docs/lessons.toml` (at most 8, as `id *
 rule` lines under `Lessons:`), in the unreachable-GitHub text too; a missing or unparseable file
 adds nothing (spec §6).
+
+Stop hook (`bosun hook stop`, wired in `.claude/settings.json` and the core channel piece): a
+session no human answers (origin `spawned` or `routine`) must post a `result` (which ends its
+lease) or, as a root, a `handoff` before it stops. When it still holds a live lease with neither
+by itself after the lease record (a `result` or `handoff` on the leased issue, or a `handoff` on
+the registry, where `bosun handoff` posts it; comment ids order them), the hook blocks the stop
+once (`{"decision":"block","reason":...}`, naming the issue and `bosun result`, plus `bosun
+handoff` for a root). A `local` or `slack` session is never blocked and reads nothing: its stop
+ends a turn (often a question to the owner, D-009), not the session. With `stop_hook_active`
+true it prints nothing, so it never loops. It fails open: no GitHub, an unreadable repo or a
+panic allows the stop. The settings command is a wrapper, `out=$(bosun hook stop) && printf
+'%s\n' "$out"; exit 0`, so an older bosun that exits 2 on the unknown subcommand cannot block (a
+Stop hook exiting 2 blocks). A session with a running `bosun wait` is not blocked: `wait` writes
+`<git common dir>/bosun/wait/<pid>.json` `{pid, session, started}` (shared by all worktrees) and
+removes it on exit; the hook skips the block for a marker of its session whose pid is alive
+(`/proc/<pid>`; without /proc: started within the wait timeout) and deletes dead markers.
