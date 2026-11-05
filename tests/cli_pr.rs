@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::fake::FakeGithub;
+use common::stamps;
 use common::{bosun, one_object};
 use serde_json::Value;
 
@@ -50,6 +51,10 @@ fn repo_with(branch: &str, subject: &str) -> tempfile::TempDir {
 }
 
 fn bosun_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
+    // `--ready` (alias `--auto-merge`) asks for the pushed head and the local gate stamps.
+    if args.contains(&"--auto-merge") {
+        stamps::ready_all(fake, dir);
+    }
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .arg("-C")
@@ -351,6 +356,7 @@ fn hoist_toml_required_checks_are_reported() {
 #[test]
 fn the_env_overrides_hoist_toml() {
     let (fake, dir) = pr_setup(Some(HULL));
+    stamps::ready_all(&fake, dir.path());
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_REQUIRED_CHECKS", "ci-ok")
@@ -565,6 +571,7 @@ fn bare_pr(fake: &FakeGithub) {
 /// `pr 7 --auto-merge`: the parsed output and stderr.
 fn auto_merge_out(fake: &FakeGithub) -> (Value, String) {
     let dir = repo("claude/t7");
+    stamps::ready_all(fake, dir.path());
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .arg("-C")

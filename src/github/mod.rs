@@ -121,7 +121,19 @@ pub trait Github {
     fn pull_commits(&self, number: u64) -> Result<Vec<String>>;
     /// The first parent of commit `sha`; `None` when GitHub has no such commit or it has no parent.
     fn first_parent(&self, sha: &str) -> Result<Option<String>>;
-    fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull>;
+    /// `draft` opens the pull request as a draft (REST `draft` field).
+    fn create_pull(
+        &self,
+        title: &str,
+        head: &str,
+        base: &str,
+        body: &str,
+        draft: bool,
+    ) -> Result<Pull>;
+    /// Turn a pull request into a draft (`draft` true) or mark it ready for review (false);
+    /// `node_id` is the pull request's. GraphQL only: a Claude Code cloud session gets the
+    /// proxy refusal, which `is_ccr_refusal` recognises.
+    fn set_draft(&self, node_id: &str, draft: bool) -> Result<()>;
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()>;
     fn list_reviews(&self, number: u64) -> Result<Vec<Review>>;
     /// When review `review_id` was dismissed (issue timeline); `None` without such an event.
@@ -183,12 +195,17 @@ pub enum EnvBranches {
 /// What the Claude Code cloud proxy says when it refuses GraphQL.
 pub const CCR_GRAPHQL_REFUSAL: &str = "GraphQL is not available from Claude Code sessions";
 
+/// Whether the Claude Code cloud proxy refused a GraphQL call (403 with its fixed message).
+pub fn is_ccr_refusal(e: &BosunError) -> bool {
+    e.message.contains(" 403 ") && e.message.contains(CCR_GRAPHQL_REFUSAL)
+}
+
 /// Turn on squash auto-merge: GraphQL first, the CCR route when the proxy refuses GraphQL.
 /// Returns the route used: `graphql` or `ccr`.
 pub fn enable_auto_merge_any(gh: &dyn Github, pull: &Pull) -> Result<&'static str> {
     match gh.enable_auto_merge(&pull.node_id, "SQUASH") {
         Ok(()) => Ok("graphql"),
-        Err(e) if e.message.contains(" 403 ") && e.message.contains(CCR_GRAPHQL_REFUSAL) => {
+        Err(e) if is_ccr_refusal(&e) => {
             gh.enable_auto_merge_rest(pull.number, "squash")?;
             Ok("ccr")
         }
@@ -250,6 +267,10 @@ const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
 const MERGE_METHODS: [&str; 3] = ["SQUASH", "MERGE", "REBASE"];
 const AUTO_MERGE: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!) { \
     enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) \
+    { pullRequest { number } } }";
+const TO_DRAFT: &str = "mutation($id: ID!) { convertPullRequestToDraft(input: {pullRequestId: $id}) \
+    { pullRequest { number } } }";
+const TO_READY: &str = "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) \
     { pullRequest { number } } }";
 
 pub struct LiveGithub {
@@ -634,13 +655,36 @@ impl Github for LiveGithub {
         }
     }
 
-    fn create_pull(&self, title: &str, head: &str, base: &str, body: &str) -> Result<Pull> {
+    fn create_pull(
+        &self,
+        title: &str,
+        head: &str,
+        base: &str,
+        body: &str,
+        draft: bool,
+    ) -> Result<Pull> {
         let v = self.http.send_json(
             "POST",
             &self.path("/pulls"),
-            &json!({"title": title, "head": head, "base": base, "body": body}),
+            &json!({"title": title, "head": head, "base": base, "body": body, "draft": draft}),
         )?;
         self.parse("pull request", v)
+    }
+
+    fn set_draft(&self, node_id: &str, draft: bool) -> Result<()> {
+        let query = if draft { TO_DRAFT } else { TO_READY };
+        let body = json!({"query": query, "variables": {"id": node_id}});
+        let v = self.http.send_json("POST", "/graphql", &body)?;
+        match v["errors"].as_array().and_then(|e| e.first()) {
+            Some(first) => {
+                let why = first["message"].as_str().unwrap_or("unknown GraphQL error");
+                Err(BosunError::error(
+                    format!("GitHub refused to change the draft state: {why}"),
+                    "use the web UI (Ready for review / Convert to draft) or ask the owner",
+                ))
+            }
+            None => Ok(()),
+        }
     }
 
     fn update_pull_body(&self, number: u64, body: &str) -> Result<()> {

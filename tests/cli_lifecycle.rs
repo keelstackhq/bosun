@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::fake::FakeGithub;
+use common::stamps;
 use common::{bosun, one_object};
 use serde_json::{Value, json};
 
@@ -108,7 +109,9 @@ fn uc_m1_1_a_task_goes_ready_to_merged_by_bosun_commands_only() {
     assert_eq!(fake.labels_of(7), vec!["bosun:state/review".to_string()]);
     let pr = v["data"]["pr"].as_u64().unwrap();
 
+    // The gates passed locally on the pushed head: that is what `--ready` asks for.
     green(&fake, v["data"]["head_sha"].as_str().unwrap());
+    stamps::ready(&fake, dir.path(), pr);
     let (code, v) = run(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["task_state"], "queued");
@@ -250,7 +253,9 @@ fn reap_reads_the_recorded_pr_without_listing_all_pulls() {
     let (code, v) = run(&fake, dir.path(), &["pr", "7"]);
     assert_eq!(code, 0, "{v}");
     let pr = v["data"]["pr"].as_u64().unwrap();
+    // The gates passed locally on the pushed head: that is what `--ready` asks for.
     green(&fake, v["data"]["head_sha"].as_str().unwrap());
+    stamps::ready(&fake, dir.path(), pr);
     let (code, v) = run(&fake, dir.path(), &["pr", "7", "--auto-merge"]);
     assert_eq!(code, 0, "{v}");
     let record = format!(r#"{{"bosun":"task-pr","session":"{SESSION}","pr":{pr}}}"#);

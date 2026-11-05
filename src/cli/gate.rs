@@ -4,11 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::cli::GateArgs;
+use crate::cli::{GateArgs, stamps};
 use crate::config::Config;
 use crate::gates::ci_env::{self, BaseRule, CiContext, Provider};
 use crate::gates::{self, Request};
-use crate::output::{BosunError, CmdResult};
+use crate::output::{BosunError, CmdResult, Outcome};
 
 /// `--base`, else `GITHUB_BASE_REF` as `origin/<ref>`, else `origin/main`.
 pub fn resolve_base(flag: Option<&str>, github_base_ref: Option<&str>) -> String {
@@ -98,7 +98,17 @@ pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
 pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     // Built in, not in the profile: the same code as `bosun test-integrity`.
     if args.name == "test-integrity" {
-        return crate::cli::test_integrity::check(dir, args.base.as_deref());
+        let out = crate::cli::test_integrity::check(dir, args.base.as_deref())?;
+        return Ok(stamped(
+            dir.unwrap_or(Path::new(".")),
+            &args.name,
+            args.base.is_some(),
+            out,
+        ));
+    }
+    // Built in: the CI-minute rules over .github/workflows (docs/ci-minutes.md).
+    if args.name == "ci-minutes" {
+        return crate::cli::ci_minutes::check(dir);
     }
     // Not a profile gate: it reads GitHub, not the checkout.
     if args.name == "main-open" {
@@ -127,12 +137,58 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
         let (p, e) = (ci.provider.name(), ci.event.name());
         out.data["ci"] = serde_json::json!({"provider": p, "event": e, "base": base});
     }
-    Ok(out)
+    Ok(stamped(&root, &args.name, args.base.is_some(), out))
+}
+
+/// Whether the gate did nothing: every run it made was a skip (empty diff, missing manifest).
+fn all_skipped(data: &serde_json::Value) -> bool {
+    let skipped = |v: &serde_json::Value| v["skipped"] == true;
+    match data["runs"].as_array() {
+        Some(runs) => runs.iter().all(skipped),
+        None => skipped(data),
+    }
+}
+
+/// Outside CI, leave the stamp `bosun pr --ready` looks for and report it as `data.stamp`.
+/// A skip (nothing to check on this tree: no package, empty diff, no manifest) is stamped
+/// `skipped` and counts as done for `--ready`. An explicit `--base` checks a different range
+/// than the PR's and never stamps (`data.stamp` is null then). test-integrity judges only the
+/// diff against the base, so it does not stamp a tree with untracked files it never read.
+/// A failure to stamp goes to stderr and never fails the gate.
+fn stamped(dir: &Path, gate: &str, explicit_base: bool, mut out: Outcome) -> Outcome {
+    let env = |k: &str| std::env::var(k).ok();
+    if ci_env::detect(&env, "main").provider != Provider::Local {
+        return out;
+    }
+    out.data["stamp"] = serde_json::Value::Null;
+    if explicit_base {
+        return out;
+    }
+    if gate == "test-integrity" && stamps::has_untracked(dir) {
+        eprintln!(
+            "bosun: test-integrity passed but is not stamped: untracked files are not judged; commit or ignore them, then rerun"
+        );
+        return out;
+    }
+    match stamps::write(dir, gate, all_skipped(&out.data)) {
+        Ok(path) => out.data["stamp"] = serde_json::json!(path.display().to_string()),
+        Err(e) => eprintln!("bosun: gate {gate} passed but could not be stamped: {e}"),
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gate_is_skipped_only_when_every_run_is() {
+        use serde_json::json;
+        assert!(all_skipped(&json!({"skipped": true})));
+        assert!(!all_skipped(&json!({"exit_status": 0})));
+        let mixed = json!({"skipped": true, "runs": [{"skipped": false}, {"skipped": true}]});
+        assert!(!all_skipped(&mixed));
+    }
 
     #[test]
     fn base_resolution_order() {

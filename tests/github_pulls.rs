@@ -104,7 +104,7 @@ fn create_pull_and_update_body() {
     let (fake, gh) = setup();
     fake.issue(1, "an issue", &[], "");
     let p = gh
-        .create_pull("feat: y", "claude/y", "main", "first")
+        .create_pull("feat: y", "claude/y", "main", "first", false)
         .unwrap();
     assert_eq!(
         (p.number, p.head_ref.as_str(), p.base_ref.as_str()),

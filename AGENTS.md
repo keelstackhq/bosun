@@ -22,24 +22,28 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.
 4. Test first. Before every push run what CI runs, locally:
-   `for g in fmt lint test deps test-integrity; do bosun gate "$g" || break; done`.
+   `for g in fmt lint test deps test-integrity; do bosun gate "$g" || break; done`
+   (a passing gate leaves a stamp for the tree it ran on; step 8 needs them).
    CI minutes are scarce: push once per PR, when it is done and green locally; do review
    rounds locally (step 6) and push their fixes together. Do not edit the PR body or title
    just to retry CI.
-5. `bosun pr <issue> --auto-merge` as soon as the work is pushed: it opens or reuses the PR, moves
-   the task to review and turns auto-merge on right away, before the review of step 6; the
-   required checks (`ci-ok`, `risk-check`, `review-verdict`, `main-open`) still gate the merge,
-   and GitHub merges when they are green. If bosun exits 5 with `already_clean`, the PR is
-   already mergeable: hand it to the orchestrator, which merges it (D-008). You never merge, tag
-   or force-push (the hooks refuse it).
-6. Review: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON, listing
+5. `bosun pr <issue>` — right after the push it opens or reuses the PR as a draft (no CI runs
+   on a draft) and moves the task to review.
+6. Review locally: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON, listing
    every chunk number of the pack in `chunks_reviewed` (a missing one is refused); post it
    with `bosun verdict post --from -` (in a cloud session, which cannot write statuses:
-   `bosun verdict comment --from -`). Fix request-changes findings, then review again; auto-merge
-   stays on after a fix push, so do not rerun `--auto-merge`.
+   `bosun verdict comment --from -`). Fix request-changes findings, then review again.
 7. `bosun risk-check <pr>` runs in CI. A high-risk PR waits for an owner; ask with
    `bosun ask <issue> "<question>"`.
-8. `bosun release <issue>` if you stop before the task is done.
+8. `bosun pr <issue> --ready` once the gates are green locally on the pushed head and the
+   review is clean: it marks the draft ready and turns on auto-merge; do not wait for the
+   checks. GitHub merges it when the required checks are green. Missing gates (exit 1,
+   `missing_gates`) or an unpushed head (exit 3) change nothing: run what the fix says. If
+   `data.ready` is `pending`, make the `next` call (`mcp__github__update_pull_request`) and
+   rerun. If bosun exits 5 with `already_clean`, the PR was already mergeable: hand it to the
+   orchestrator, which merges it (D-008). `bosun hold` and `bosun ask` put the task's PR back to draft. You never merge, tag or force-push (the
+   hooks refuse it).
+9. `bosun release <issue>` if you stop before the task is done.
 
 ## Sessions
 

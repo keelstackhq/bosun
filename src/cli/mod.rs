@@ -40,12 +40,14 @@ pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
 pub mod spawn_relay;
+pub mod stamps;
 pub mod status;
 pub mod verdict;
 pub mod wait;
 pub mod wave;
 use std::path::PathBuf;
 
+pub mod ci_minutes;
 pub mod gate;
 pub mod main_health;
 pub mod review_ci;
@@ -412,7 +414,9 @@ pub struct MsgArgs {
 
 #[derive(Debug, Args)]
 pub struct GateArgs {
-    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, main-open, ...
+    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, ci-minutes, main-open, ...
+    /// `ci-minutes` is built in: it checks `.github/workflows` for the CI-minute rules (drafts skip,
+    /// `ready_for_review`, cancelling concurrency, `paths` on heavy PR jobs).
     pub name: String,
     /// Base ref for the diff (default: the PR base or origin/main).
     #[arg(long)]
@@ -506,9 +510,11 @@ pub struct PrArgs {
     pub issue: u64,
     #[arg(long)]
     pub title: Option<String>,
-    /// Turn on auto-merge once every required check is green (bosun never merges).
-    #[arg(long)]
-    pub auto_merge: bool,
+    /// Mark the draft PR ready for review (it needs the local HEAD pushed and every ready gate
+    /// stamped by `bosun gate`) and turn on auto-merge (bosun never merges). `--auto-merge` is
+    /// the same flag.
+    #[arg(long, alias = "auto-merge")]
+    pub ready: bool,
     /// Another issue of the lead's single-shape bundle (repeatable): the PR closes it too.
     #[arg(long = "bundle", value_name = "ISSUE")]
     pub bundle: Vec<u64>,

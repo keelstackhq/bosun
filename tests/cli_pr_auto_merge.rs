@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::fake::FakeGithub;
+use common::stamps;
 use common::{bosun, one_object};
 use serde_json::{Value, json};
 
@@ -40,6 +41,8 @@ fn repo() -> tempfile::TempDir {
 }
 
 fn run(fake: &FakeGithub, dir: &Path) -> (i32, Value) {
+    // `--ready` asks for the pushed head and the local gate stamps.
+    stamps::ready_all(fake, dir);
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .arg("-C")
@@ -105,7 +108,7 @@ fn assert_clean_refusal(fake: &FakeGithub, code: i32, v: &Value) {
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["already_clean"], true, "{v}");
     assert_eq!(v["data"]["pr"], 20);
-    assert_eq!(v["data"]["head_sha"], "sha20");
+    assert_eq!(v["data"]["head_sha"], fake.pull_head(20).as_str());
     let msg = v["error"]["message"].as_str().unwrap();
     assert!(msg.contains("PR #20 is already mergeable"), "{msg}");
     let fix = v["error"]["fix"].as_str().unwrap();

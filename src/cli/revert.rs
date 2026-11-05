@@ -107,7 +107,7 @@ pub fn run(dir: Option<&Path>, args: &RevertArgs) -> CmdResult {
         body.push_str(&format!("main-red: #{r}\n\n"));
     }
     body.push_str(&format!("<!-- bosun:revert {n} -->"));
-    let created = gh.create_pull(&title, &branch, &base, &body)?;
+    let created = gh.create_pull(&title, &branch, &base, &body, false)?;
     gh.ensure_label(MAINFIX, "b60205", "A fix for a red main")?;
     gh.add_labels(created.number, &[MAINFIX])?;
     Ok(Outcome::data(json!({
