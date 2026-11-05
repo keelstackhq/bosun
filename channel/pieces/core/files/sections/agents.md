@@ -68,4 +68,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   comment; their own `/bosun approve <sha>` comment is only a fallback.
 - Orchestrators relay approvals in batches: `bosun approve --list` gives `data.message`; keep its
   `data.message_pairs`, only the latest message is answerable, numbers come only from the owner.
+- The PreToolUse hook refuses destructive commands (`rm -rf /` or `~`, `mkfs`, `dd` to a device,
+  `terraform destroy`, `DROP DATABASE`) and the same Bash command 5 times in a row (it warns at 3):
+  change the approach instead of retrying.
 - bosun's own rules and their reasons: https://github.com/keelstackhq/bosun/blob/main/docs/spec.md.

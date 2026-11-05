@@ -1,0 +1,1 @@
+- PreToolUse hook: destructive-lock (rm -rf /, mkfs, dd to a device, terraform destroy, DROP DATABASE, fork bomb) and repeat-lock (same Bash command warns at 3, denied at 5).
