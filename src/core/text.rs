@@ -77,6 +77,26 @@ fn is_error_line(line: &str) -> bool {
     })
 }
 
+/// `s` without ANSI CSI sequences (ESC `[`, parameter bytes, a final byte 0x40-0x7E). An
+/// unfinished sequence at the end is dropped.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for f in chars.by_ref() {
+                if ('\u{40}'..='\u{7e}').contains(&f) {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// One log line, cut to 500 characters with a trailing `…` when longer.
 fn cap_line(line: &str) -> String {
     if line.chars().count() <= 500 {
@@ -91,7 +111,8 @@ fn cap_line(line: &str) -> String {
 /// from the middle (the first ones), in original order. A `… N lines cut …` line stands for every
 /// gap before the first kept line and between kept groups; each line is capped at 500 characters. A log of at most `head + tail` lines is returned whole.
 pub fn squash_log(text: &str, head: usize, tail: usize, max_err: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
+    let stripped: Vec<String> = text.lines().map(strip_ansi).collect();
+    let lines: Vec<&str> = stripped.iter().map(String::as_str).collect();
     let n = lines.len();
     let tail_start = n.saturating_sub(tail).max(head.min(n));
     let mut keep: Vec<usize> = (0..head.min(n)).collect();
@@ -231,6 +252,34 @@ mod tests {
             out,
             "l1\nl2\n… 147 lines cut …\nerror[E0308]: mismatched types\n… 148 lines cut …\nl299\nl300"
         );
+    }
+
+    #[test]
+    fn ansi_sequences_are_stripped() {
+        assert_eq!(
+            strip_ansi("\x1b[1m\x1b[31merror\x1b[0m\x1b[1m[E0308]\x1b[0m: x"),
+            "error[E0308]: x"
+        );
+        assert_eq!(
+            strip_ansi("plain ✗ \x1b[2K\x1b[38;5;9mred\x1b[m"),
+            "plain ✗ red"
+        );
+        assert_eq!(strip_ansi("cut\x1b[31"), "cut");
+    }
+
+    #[test]
+    fn colored_error_lines_are_found_and_output_is_stripped() {
+        let mut v: Vec<String> = (1..=300).map(|i| format!("l{i}")).collect();
+        v[99] = "\x1b[1m\x1b[31merror\x1b[0m\x1b[1m[E0308]\x1b[0m: mismatched".into();
+        v[120] = "test a ... \x1b[31mFAILED\x1b[0m".into();
+        v[130] = "test b ... \x1b[32mok\x1b[0m".into();
+        v[140] = "\x1b[32mtest x_errors ... ok\x1b[0m".into();
+        let out = squash_log(&v.join("\n"), 2, 2, 20);
+        assert_eq!(
+            out,
+            "l1\nl2\n… 97 lines cut …\nerror[E0308]: mismatched\n… 20 lines cut …\ntest a ... FAILED\n… 177 lines cut …\nl299\nl300"
+        );
+        assert!(!out.contains('\x1b'));
     }
 
     #[test]
