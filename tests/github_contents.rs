@@ -53,7 +53,10 @@ fn job_log_keeps_the_last_lines() {
     let log: String = (1..=10).map(|i| format!("line {i}\r\n")).collect();
     fake.run_with_job("sha1", "test", "failure", &log);
     let id = gh.failed_jobs("sha1").unwrap()[0].id;
-    assert_eq!(gh.job_log(id, 0, 3).unwrap(), "line 8\nline 9\nline 10");
+    assert_eq!(
+        gh.job_log(id, 0, 3).unwrap(),
+        "… 7 lines cut …\nline 8\nline 9\nline 10"
+    );
     assert_eq!(gh.job_log(id, 0, 50).unwrap().lines().count(), 10);
     assert_eq!(gh.job_log(id, 0, 0).unwrap(), "");
 }
@@ -65,7 +68,7 @@ fn job_log_follows_the_redirect_without_github_headers() {
     fake.run_with_job("sha1", "test", "failure", "unused");
     fake.log_mode(LogMode::Redirect(format!("{}/log?sig=1", host.url)));
     let id = gh.failed_jobs("sha1").unwrap()[0].id;
-    assert_eq!(gh.job_log(id, 0, 2).unwrap(), "b\nc");
+    assert_eq!(gh.job_log(id, 0, 2).unwrap(), "… 1 lines cut …\nb\nc");
     let seen = host.headers_seen();
     assert_eq!(seen.len(), 1);
     for forbidden in ["authorization", "x-github-api-version"] {

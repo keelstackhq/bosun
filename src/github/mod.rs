@@ -147,7 +147,8 @@ pub trait Github {
     fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()>;
     /// Jobs of the workflow runs of `sha` that failed, were cancelled or timed out.
     fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>>;
-    /// The last `tail` lines of a job's log.
+    /// A job's log squashed: the first `head` and last `tail` lines plus up to 20 error lines
+    /// from the middle, with `… N lines cut …` markers (`core::text::squash_log`).
     fn job_log(&self, job_id: u64, head: usize, tail: usize) -> Result<String>;
     /// The repository itself; `None` when it is not readable (404).
     fn repo_info(&self) -> Result<Option<RepoInfo>>;

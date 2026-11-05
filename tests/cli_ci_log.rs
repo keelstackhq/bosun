@@ -22,7 +22,7 @@ fn returns_the_tail_of_the_failed_job() {
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0]["name"], "gate-test");
     assert_eq!(jobs[0]["conclusion"], "failure");
-    assert_eq!(jobs[0]["log"], "l3\nboom");
+    assert_eq!(jobs[0]["log"], "… 2 lines cut …\nl3\nboom");
     assert!(jobs[0]["url"].as_str().unwrap().contains("/job/"));
     assert_eq!(v["data"]["head_sha"], "sha9");
 }

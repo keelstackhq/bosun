@@ -52,17 +52,44 @@ pub fn inert(t: &str, max: usize) -> String {
     format!("`{t}`")
 }
 
-/// Whether a log line looks like a failure (case-insensitive `error`, `fail`, `panic`, or `✗`).
+/// Whether a log line looks like a real failure: `error[`, `error:` or `error ` at a word start
+/// (any case), `FAILED`, `FAIL `, `panicked`, `✗` or `##[error]`. Passing-test noise (`... ok`,
+/// `test result: ok`, `PASS ...`) never matches.
 fn is_error_line(line: &str) -> bool {
-    let l = line.to_lowercase();
-    ["error", "fail", "panic", "✗"]
+    let t = line.trim_end();
+    if t.ends_with(" ok") || t == "ok" || t.starts_with("PASS") || t.contains("test result: ok") {
+        return false;
+    }
+    if ["FAILED", "FAIL ", "panicked", "✗", "##[error]"]
         .iter()
-        .any(|k| l.contains(k))
+        .any(|k| t.contains(k))
+    {
+        return true;
+    }
+    let l = t.to_lowercase();
+    ["error[", "error:", "error "].iter().any(|k| {
+        l.match_indices(k).any(|(i, _)| {
+            !l[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    })
+}
+
+/// One log line, cut to 500 characters with a trailing `…` when longer.
+fn cap_line(line: &str) -> String {
+    if line.chars().count() <= 500 {
+        return line.to_string();
+    }
+    let mut s: String = line.chars().take(500).collect();
+    s.push('…');
+    s
 }
 
 /// Shrink a CI log: keep the first `head` and last `tail` lines plus up to `max_err` error lines
 /// from the middle (the first ones), in original order. A `… N lines cut …` line stands for every
-/// gap between kept groups. A log of at most `head + tail` lines is returned whole.
+/// gap before the first kept line and between kept groups; each line is capped at 500 characters. A log of at most `head + tail` lines is returned whole.
 pub fn squash_log(text: &str, head: usize, tail: usize, max_err: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let n = lines.len();
@@ -75,15 +102,13 @@ pub fn squash_log(text: &str, head: usize, tail: usize, max_err: usize) -> Strin
     );
     keep.extend(tail_start..n);
     let mut out: Vec<String> = Vec::new();
-    let mut prev: Option<usize> = None;
+    let mut next = 0;
     for i in keep {
-        if let Some(p) = prev
-            && i > p + 1
-        {
-            out.push(format!("… {} lines cut …", i - p - 1));
+        if i > next {
+            out.push(format!("… {} lines cut …", i - next));
         }
-        out.push(lines[i].to_string());
-        prev = Some(i);
+        out.push(cap_line(lines[i]));
+        next = i + 1;
     }
     out.join("\n")
 }
@@ -161,15 +186,73 @@ mod tests {
         let v: Vec<String> = (1..=12).map(|i| format!("error {i}")).collect();
         let out = squash_log(&v.join("\n"), 1, 1, 2);
         assert_eq!(out, "error 1\nerror 2\nerror 3\n… 8 lines cut …\nerror 12");
-        assert_eq!(squash_log(&numbered(10), 0, 3, 5), "l8\nl9\nl10");
+        assert_eq!(
+            squash_log(&numbered(10), 0, 3, 5),
+            "… 7 lines cut …\nl8\nl9\nl10"
+        );
         assert_eq!(squash_log(&numbered(10), 0, 0, 5), "");
     }
 
     #[test]
-    fn error_words_match_case_insensitively() {
-        for l in ["an Error", "FAIL", "thread panicked", "✗ gate"] {
+    fn error_words_match_real_failures_only() {
+        for l in [
+            "error[E0308]: mismatched types",
+            "error: could not compile",
+            "an error occurred",
+            "test a ... FAILED",
+            "FAIL src/x.test.ts",
+            "thread 'x' panicked at src/a.rs:1",
+            "✗ gate",
+            "##[error]Process completed with exit code 1.",
+        ] {
             assert!(is_error_line(l), "{l}");
         }
-        assert!(!is_error_line("all fine"));
+        for l in [
+            "all fine",
+            "test x_errors ... ok",
+            "test result: ok. 3 passed; 0 failed",
+            "PASS src/x.test.ts",
+            "terror here",
+            "test a ... ok",
+        ] {
+            assert!(!is_error_line(l), "{l}");
+        }
+    }
+
+    #[test]
+    fn passing_test_names_with_error_are_not_kept() {
+        let mut v: Vec<String> = (1..=300).map(|i| format!("l{i}")).collect();
+        for l in v.iter_mut().skip(30).take(40) {
+            *l = "test x_errors ... ok".into();
+        }
+        v[149] = "error[E0308]: mismatched types".into();
+        let out = squash_log(&v.join("\n"), 2, 2, 20);
+        assert_eq!(
+            out,
+            "l1\nl2\n… 147 lines cut …\nerror[E0308]: mismatched types\n… 148 lines cut …\nl299\nl300"
+        );
+    }
+
+    #[test]
+    fn long_lines_are_capped_at_500_chars() {
+        let long = "x".repeat(600);
+        let out = squash_log(&format!("{long}\nshort"), 5, 5, 20);
+        let first = out.lines().next().unwrap();
+        assert_eq!(first.chars().count(), 501);
+        assert!(first.ends_with('…'));
+        let exact = "y".repeat(500);
+        assert_eq!(squash_log(&exact, 1, 1, 0), exact);
+        let multi = "é".repeat(700);
+        assert_eq!(squash_log(&multi, 1, 1, 0).chars().count(), 501);
+    }
+
+    #[test]
+    fn lines_cut_before_the_first_kept_line_get_a_leading_marker() {
+        let mut v: Vec<String> = (1..=10).map(|i| format!("l{i}")).collect();
+        v[3] = "error: boom".into();
+        assert_eq!(
+            squash_log(&v.join("\n"), 0, 2, 20),
+            "… 3 lines cut …\nerror: boom\n… 4 lines cut …\nl9\nl10"
+        );
     }
 }
