@@ -4,11 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::cli::GateArgs;
+use crate::cli::{GateArgs, stamps};
 use crate::config::Config;
 use crate::gates::ci_env::{self, BaseRule, CiContext, Provider};
 use crate::gates::{self, Request};
-use crate::output::{BosunError, CmdResult};
+use crate::output::{BosunError, CmdResult, Outcome};
 
 /// `--base`, else `GITHUB_BASE_REF` as `origin/<ref>`, else `origin/main`.
 pub fn resolve_base(flag: Option<&str>, github_base_ref: Option<&str>) -> String {
@@ -98,7 +98,8 @@ pub(crate) fn repo_root(dir: &Path) -> Result<PathBuf, BosunError> {
 pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
     // Built in, not in the profile: the same code as `bosun test-integrity`.
     if args.name == "test-integrity" {
-        return crate::cli::test_integrity::check(dir, args.base.as_deref());
+        let out = crate::cli::test_integrity::check(dir, args.base.as_deref())?;
+        return Ok(stamped(dir.unwrap_or(Path::new(".")), &args.name, out));
     }
     // Not a profile gate: it reads GitHub, not the checkout.
     if args.name == "main-open" {
@@ -119,7 +120,21 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
         let (p, e) = (ci.provider.name(), ci.event.name());
         out.data["ci"] = serde_json::json!({"provider": p, "event": e, "base": base});
     }
-    Ok(out)
+    Ok(stamped(&root, &args.name, out))
+}
+
+/// Outside CI, leave the stamp `bosun pr --ready` looks for and report it as `data.stamp`.
+/// A failure to stamp goes to stderr and never fails the gate.
+fn stamped(dir: &Path, gate: &str, mut out: Outcome) -> Outcome {
+    let env = |k: &str| std::env::var(k).ok();
+    if ci_env::detect(&env, "main").provider != Provider::Local {
+        return out;
+    }
+    match stamps::write(dir, gate) {
+        Ok(path) => out.data["stamp"] = serde_json::json!(path.display().to_string()),
+        Err(e) => eprintln!("bosun: gate {gate} passed but could not be stamped: {e}"),
+    }
+    out
 }
 
 #[cfg(test)]

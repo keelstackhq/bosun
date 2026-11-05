@@ -951,7 +951,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     if let Some((app, base)) = &github {
         let pull = app
             .gh
-            .create_pull(PR_TITLE, branch, base, &body)
+            .create_pull(PR_TITLE, branch, base, &body, false)
             .map_err(|e| BosunError {
                 fix: format!(
                     "{branch} is pushed: open its PR by hand with \

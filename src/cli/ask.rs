@@ -47,7 +47,12 @@ pub fn run(dir: Option<&Path>, args: &AskArgs) -> CmdResult {
     );
     let comment = gh.add_comment(n, &body)?;
     set_state(gh, n, &issue, State::NeedsHuman)?;
-    Ok(Outcome::data(
-        json!({"issue": n, "comment_id": comment.id, "owners": owners}),
-    ))
+    // An unfinished task must not spend CI minutes: its open PR goes back to draft.
+    let drafted = super::pr::draft_task_prs(&app, n);
+    let mut data = json!({"issue": n, "comment_id": comment.id, "owners": owners});
+    drafted.add_to(&mut data);
+    Ok(Outcome {
+        data,
+        next: drafted.next,
+    })
 }

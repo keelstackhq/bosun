@@ -26,6 +26,7 @@ pub mod risk;
 pub mod shape;
 pub mod signature;
 pub mod spawn;
+pub mod stamps;
 pub mod state;
 pub mod stop;
 pub mod text;

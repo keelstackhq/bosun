@@ -40,6 +40,7 @@ pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
 pub mod spawn_relay;
+pub mod stamps;
 pub mod status;
 pub mod verdict;
 pub mod wait;
@@ -505,9 +506,11 @@ pub struct PrArgs {
     pub issue: u64,
     #[arg(long)]
     pub title: Option<String>,
-    /// Turn on auto-merge once every required check is green (bosun never merges).
-    #[arg(long)]
-    pub auto_merge: bool,
+    /// Mark the draft PR ready for review (it needs the local HEAD pushed and every ready gate
+    /// stamped by `bosun gate`) and turn on auto-merge (bosun never merges). `--auto-merge` is
+    /// the same flag.
+    #[arg(long, alias = "auto-merge")]
+    pub ready: bool,
 }
 
 #[derive(Debug, Args)]

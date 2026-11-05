@@ -1,0 +1,1 @@
+- 2026-11-05 · draft-first A · bosun pr draft by default, --ready with gate stamps, hold/ask back to draft

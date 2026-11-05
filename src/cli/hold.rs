@@ -125,9 +125,16 @@ pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
 
     release_to(gh, n, &issue, session, &comments, State::Ready)?;
     let lesson_error = lesson(dir, n, &meta.item, &meta.task, step);
-    Ok(Outcome::data(json!({"issue": n, "id": id,
+    // The task waits for the owner: its open PR goes back to draft (no CI minutes while it waits).
+    let drafted = super::pr::draft_task_prs(&app, n);
+    let mut data = json!({"issue": n, "id": id,
         "checklist": {"number": number, "url": url},
-        "released": true, "lesson_error": lesson_error, "warnings": warnings})))
+        "released": true, "lesson_error": lesson_error, "warnings": warnings});
+    drafted.add_to(&mut data);
+    Ok(Outcome {
+        data,
+        next: drafted.next,
+    })
 }
 
 /// Non-empty, at most 300 characters, nothing that hides or fakes markup.

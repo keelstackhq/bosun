@@ -1,6 +1,6 @@
-//! `bosun pr <issue> [--auto-merge]`: open (or find) the PR of the current branch and, with
-//! `--auto-merge`, turn on auto-merge at once; the ruleset's required checks gate the merge.
-//! bosun never merges (spec D13).
+//! `bosun pr <issue> [--ready]`: open (or find) the PR of the current branch as a draft and, with
+//! `--ready` (alias `--auto-merge`), mark it ready once the local gates passed on its head and turn
+//! on auto-merge at once; the ruleset's required checks gate the merge. bosun never merges (D13).
 
 use std::path::Path;
 use std::process::Command;
@@ -9,20 +9,22 @@ use serde_json::json;
 
 use super::PrArgs;
 use super::reap::{EpicScope, close_done_epics};
+use super::stamps;
 use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged};
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
 use crate::core::meta::{closing_issues, linked_issues, parse_task_meta};
 use crate::core::records::Record;
+use crate::core::stamps::gate_loop;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
 use crate::core::touch::{Changed, outside};
 use crate::github::{
     CheckRun, Github, IssueState, Live, PrFile, Pull, Status, enable_auto_merge_any,
-    is_already_clean, is_unstable,
+    is_already_clean, is_ccr_refusal, is_unstable,
 };
-use crate::output::{BosunError, CmdResult, Outcome};
+use crate::output::{BosunError, CmdResult, Next, Outcome};
 
 /// The default checks the ruleset requires before a merge (spec D15, D32), reported as
 /// `pending_checks` while they are not green. `required` lets `BOSUN_REQUIRED_CHECKS` replace
@@ -121,6 +123,88 @@ fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, Bosu
         .collect())
 }
 
+/// The `mcp__github__update_pull_request` call that sets the draft state, for a session whose
+/// proxy refuses GraphQL (D29: bosun returns the tool call in `next`).
+fn update_pull_call(app: &App, pr: u64, draft: bool) -> Next {
+    Next {
+        tool: "mcp__github__update_pull_request".into(),
+        args: json!({
+            "owner": app.ctx.repo.owner, "repo": app.ctx.repo.name,
+            "pullNumber": pr, "draft": draft,
+        }),
+    }
+}
+
+/// What `draft_task_prs` did.
+pub struct Drafted {
+    pub drafted: Vec<u64>,
+    /// Why some PR could not be drafted; `None` when all went well.
+    pub error: Option<String>,
+    pub next: Vec<Next>,
+}
+
+impl Drafted {
+    /// Add `drafted` and `pr_draft_error` to a command's data.
+    pub fn add_to(&self, data: &mut serde_json::Value) {
+        data["drafted"] = json!(self.drafted);
+        data["pr_draft_error"] = json!(self.error);
+    }
+}
+
+/// Put the open, non-draft PRs of task `n` (a writer's PR from this repo whose body links the
+/// task) back to draft: an unfinished task must not spend CI minutes. Never fails: a GraphQL
+/// refusal of the Claude Code proxy becomes a `next` call, any other error `error`.
+pub fn draft_task_prs(app: &App, n: u64) -> Drafted {
+    let mut out = Drafted {
+        drafted: Vec::new(),
+        error: None,
+        next: Vec::new(),
+    };
+    let gh = app.gh.as_ref();
+    let repo = app.ctx.repo.to_string();
+    let pulls = match gh.list_pulls(None, IssueState::Open) {
+        Ok(p) => p,
+        Err(e) => {
+            out.error = Some(format!("cannot list the PRs: {}", e.message));
+            return out;
+        }
+    };
+    for p in pulls {
+        let ours = !p.draft
+            && linked_issues(&p.body).contains(&n)
+            && p.head_repo.eq_ignore_ascii_case(&repo);
+        if !ours {
+            continue;
+        }
+        match is_writer(gh, &p.user) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                out.error = Some(e.message);
+                return out;
+            }
+        }
+        match gh.set_draft(&p.node_id, true) {
+            Ok(()) => out.drafted.push(p.number),
+            Err(e) if is_ccr_refusal(&e) => {
+                out.error = Some(format!(
+                    "GraphQL is refused in this session: convert PR #{} to draft with the returned tool call",
+                    p.number
+                ));
+                out.next.push(update_pull_call(app, p.number, true));
+            }
+            Err(e) => {
+                out.error = Some(format!(
+                    "cannot convert PR #{} to draft: {}",
+                    p.number, e.message
+                ));
+                return out;
+            }
+        }
+    }
+    out
+}
+
 /// The compare API lists at most 300 files (as in review_ci and approve).
 const COMPARE_CAP: usize = 300;
 
@@ -183,6 +267,56 @@ fn touch_check(
     .with_data(json!({"outside": out})))
 }
 
+/// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
+/// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
+fn check_local_gates(app: &App, issue: u64, pull: &Pull) -> Result<(), BosunError> {
+    let (n, dir) = (pull.number, app.ctx.dir.as_path());
+    let local = stamps::head_sha(dir).ok_or_else(|| {
+        BosunError::error(
+            "cannot read the local HEAD",
+            "run bosun inside the repo checkout on your task branch",
+        )
+    })?;
+    if local != pull.head_sha {
+        let short = |s: &str| s.chars().take(10).collect::<String>();
+        return Err(BosunError::conflict(
+            format!(
+                "local HEAD {} is not the head of PR #{n} ({})",
+                short(&local),
+                short(&pull.head_sha)
+            ),
+            format!(
+                "push your commits (`git push`) or pull the branch (`git pull`) so the local HEAD is the PR head, then rerun `bosun pr {issue} --ready`"
+            ),
+        )
+        .with_data(json!({"pr": n, "head_sha": pull.head_sha, "local_head": local})));
+    }
+    let tree = stamps::head_tree(dir).ok_or_else(|| {
+        BosunError::error(
+            "cannot read the tree of HEAD",
+            "run bosun inside the repo checkout",
+        )
+    })?;
+    let missing: Vec<String> = stamps::ready_gates(dir)?
+        .into_iter()
+        .filter(|g| !stamps::has(dir, &tree, g))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(BosunError::error(
+        format!(
+            "PR #{n} is not ready: gates not passed locally on this tree: {}",
+            missing.join(", ")
+        ),
+        format!(
+            "commit your work, then run `{}`; fix what fails, then rerun `bosun pr {issue} --ready`",
+            gate_loop(&missing)
+        ),
+    )
+    .with_data(json!({"pr": n, "head_sha": pull.head_sha, "missing_gates": missing})))
+}
+
 pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
@@ -225,7 +359,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 };
                 let mut data = json!({
                     "pr": p.number, "head_sha": p.head_sha, "created": false,
-                    "auto_merge": false, "merged": true, "task_state": task_state.map(State::name),
+                    "auto_merge": false, "merged": true, "draft": false, "task_state": task_state.map(State::name),
                 });
                 // The last merged task closes its epic (a root session working it directly never
                 // runs `result`; a spawned child's lease leaves it to its `result`); housekeeping after the move: a failure is reported, not fatal.
@@ -294,7 +428,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     }
     let branch = by_marker.as_ref().map_or(branch, |p| p.head_ref.clone());
     let touch;
-    let (pull, created) = match open.map(|i| found.swap_remove(i)).or(by_marker) {
+    let (mut pull, created) = match open.map(|i| found.swap_remove(i)).or(by_marker) {
         Some(p) if !linked_issues(&p.body).contains(&n) => {
             // Before any state change, record or auto-merge: this PR belongs to something else.
             return Err(BosunError::conflict(
@@ -340,7 +474,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 .unwrap_or_else(|| issue.title.clone());
             super::refuse_secret("the PR title", &title)?;
             let body = format!("Closes #{n}\n\n<!-- bosun:task-pr {n} -->");
-            (gh.create_pull(&title, &branch, &base, &body)?, true)
+            (gh.create_pull(&title, &branch, &base, &body, true)?, true)
         }
     };
     let mut state = state_of(&issue.labels);
@@ -359,14 +493,15 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let mut pending = Vec::new();
     let mut gates = Vec::new();
     let mut enforced = None;
-    if args.auto_merge {
+    if args.ready {
         if state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
             return Err(BosunError::conflict(
-                format!("#{n} is {now}; auto-merge needs the task in review"),
+                format!("#{n} is {now}; --ready needs the task in review"),
                 "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
             ));
         }
+        check_local_gates(&app, n, &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;
         gates = merge_gates(gh, &pull.head_sha)?;
         // Auto-merge waits only for what the branch enforces: never turn it on for a branch
@@ -384,7 +519,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                             pull.number
                         ),
                         format!(
-                            "an admin runs `hoist apply --area github` so the ruleset requires them, then rerun `bosun pr {n} --auto-merge`"
+                            "an admin runs `hoist apply --area github` so the ruleset requires them, then rerun `bosun pr {n} --ready`"
                         ),
                     )
                     .with_data(json!({
@@ -407,6 +542,29 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             pull.number,
             line.join(", ")
         );
+        // GitHub cannot auto-merge a draft: mark it ready only now that nothing else can refuse.
+        if pull.draft {
+            match gh.set_draft(&pull.node_id, false) {
+                Ok(()) => pull.draft = false,
+                Err(e) if is_ccr_refusal(&e) => {
+                    let note = format!(
+                        "this session cannot call GraphQL: mark PR #{} ready with the tool call in `next`, then rerun `bosun pr {n} --ready`",
+                        pull.number
+                    );
+                    eprintln!("bosun: {note}");
+                    let data = json!({
+                        "pr": pull.number, "head_sha": pull.head_sha, "created": created,
+                        "draft": true, "ready": "pending", "auto_merge": false,
+                        "task_state": state.map(State::name), "touch_check": touch,
+                        "enforced_checks": enforced, "note": note,
+                    });
+                    let mut out = Outcome::data(data);
+                    out.next.push(update_pull_call(&app, pull.number, false));
+                    return Ok(out);
+                }
+                Err(e) => return Err(e),
+            }
+        }
         // Before auto-merge: a failed write leaves nothing turned on, so a rerun is clean.
         let record = Record::TaskPr {
             session: app.ctx.session.clone(),
@@ -430,7 +588,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                         pull.number
                     ),
                     format!(
-                        "the orchestrator merges PR #{0} (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --auto-merge`",
+                        "the orchestrator merges PR #{0} (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --ready`",
                         pull.number
                     ),
                 )
@@ -442,7 +600,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 return Err(BosunError::error(
                     format!("PR #{} has a failing check, so GitHub cannot turn on auto-merge", pull.number),
                     format!(
-                        "`bosun wait --pr {0}` names the failing checks: fix them, push, then rerun `bosun pr {n} --auto-merge`",
+                        "`bosun wait --pr {0}` names the failing checks: fix them, push, then rerun `bosun pr {n} --ready`",
                         pull.number
                     ),
                 )
@@ -456,7 +614,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     }
     Ok(Outcome::data(json!({
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
-        "auto_merge": args.auto_merge, "auto_merge_route": route, "task_state": state.map(State::name),
+        "draft": pull.draft, "ready": !pull.draft,
+        "auto_merge": args.ready, "auto_merge_route": route, "task_state": state.map(State::name),
         "touch_check": touch, "enforced_checks": enforced,
         "gates": gates.iter().map(|(c, s)| json!({"context": c, "state": s})).collect::<Vec<_>>(),
         "pending_checks": pending.iter().map(|(c, s)| json!({"context": c, "state": s}))

@@ -144,9 +144,10 @@ fn a_missing_plan_is_a_usage_error_and_writes_nothing() {
 fn auto_merge_passes_on_to_bosun_pr() {
     let fake = FakeGithub::start();
     let dir = repo("claude/plan-am");
-    // The branch requires none of the checks: `bosun pr --auto-merge` refuses (exit 5).
+    // The PR was just opened as a draft and its head is not the local HEAD: `bosun pr --ready`
+    // refuses before any change (exit 3).
     let (code, v) = plan_pr(&fake, dir.path(), &["--auto-merge"]);
-    assert_eq!(code, 5, "{v}");
+    assert_eq!(code, 3, "{v}");
     assert!(v["data"]["claim"]["lease"].is_object(), "{v}");
 }
 

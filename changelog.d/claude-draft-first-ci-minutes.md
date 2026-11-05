@@ -1,0 +1,1 @@
+- `bosun pr` opens PRs as drafts; `bosun pr --ready` (alias `--auto-merge`) needs the PR head pushed and a local `bosun gate` stamp for every ready gate, marks the PR ready and turns on auto-merge; `bosun hold` and `bosun ask` put the task PR back to draft; a passing `bosun gate` outside CI writes a stamp (`data.stamp`).
