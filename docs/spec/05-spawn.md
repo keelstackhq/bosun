@@ -162,6 +162,6 @@ true it prints nothing, so it never loops. It fails open: no GitHub, an unreadab
 panic allows the stop. The settings command is a wrapper, `out=$(bosun hook stop) && printf
 '%s\n' "$out"; exit 0`, so an older bosun that exits 2 on the unknown subcommand cannot block (a
 Stop hook exiting 2 blocks). A session with a running `bosun wait` is not blocked: `wait` writes
-`<git dir>/bosun/wait/<pid>.json` `{pid, session, started}` and removes it on exit; the hook skips
-the block for a marker of its session whose pid is alive (`/proc/<pid>`; without /proc: started
-within the wait timeout) and deletes dead markers.
+`<git common dir>/bosun/wait/<pid>.json` `{pid, session, started}` (shared by all worktrees) and
+removes it on exit; the hook skips the block for a marker of its session whose pid is alive
+(`/proc/<pid>`; without /proc: started within the wait timeout) and deletes dead markers.

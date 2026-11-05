@@ -175,9 +175,15 @@ fn stale_gate(dir: &Path) -> bool {
     is_stale(record.as_ref(), &now, dirty)
 }
 
-/// `<git dir>/bosun/wait/`: one `<pid>.json` marker per running `bosun wait`.
+/// `<git common dir>/bosun/wait/`: one `<pid>.json` marker per running `bosun wait`, shared by
+/// all worktrees (the hook may run in another worktree than the wait).
 fn wait_dir(dir: &Path) -> Option<PathBuf> {
-    Some(record_path(dir)?.with_file_name("wait"))
+    let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+    Some(
+        PathBuf::from(git_out(dir, &args)?)
+            .join("bosun")
+            .join("wait"),
+    )
 }
 
 fn epoch_secs() -> u64 {
