@@ -198,7 +198,8 @@ pub fn expire(
 /// Which epics `close_done_epics` looks at and what it lets through. `reap` takes every epic with
 /// the quiet period; `result` takes the one it reports on, without the quiet period (the caller
 /// just reported; a later amend reopens the epic), and its own session's lease does not block.
-/// `pr` sets no `own_session`: a child's own lease on its epic leaves the close to its `result`.
+/// `pr` sets `own_spawned_blocks`: its own lease is ignored unless it is a spawned child's, which
+/// leaves the close to that child's `result`.
 /// `done` lists tasks the caller just moved to merged: GitHub's list lags, so they count as done
 /// even when it still shows the old label, and their own `updated_at` does not start the quiet
 /// period.
@@ -207,6 +208,7 @@ pub(crate) struct EpicScope<'a> {
     pub only: Option<u64>,
     pub quiet: bool,
     pub own_session: Option<&'a str>,
+    pub own_spawned_blocks: bool,
     pub done: &'a [u64],
 }
 
@@ -229,6 +231,7 @@ impl EpicScope<'_> {
         only: None,
         quiet: true,
         own_session: None,
+        own_spawned_blocks: false,
         done: &[],
     };
 }
@@ -274,7 +277,8 @@ pub(crate) fn close_done_epics(
         let claimed = state_of(&e.labels) == Some(State::Claimed);
         if !leases_of(e.number, &notes(gh, e.number)?).iter().any(|l| {
             (l.is_live(now) || (claimed && l.origin == "spawned"))
-                && scope.own_session != Some(l.session.as_str())
+                && (scope.own_session != Some(l.session.as_str())
+                    || (scope.own_spawned_blocks && l.origin == "spawned"))
         }) {
             candidates.push(e);
         }

@@ -236,7 +236,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                         only: Some(epic),
                         quiet: false,
                         // A child's own epic lease blocks: its `result` closes the epic.
-                        own_session: None,
+                        own_session: Some(&app.ctx.session),
+                        own_spawned_blocks: true,
                         done: &[n],
                     };
                     let err = close_done_epics(gh, app.ctx.now, scope, &mut closed).err();

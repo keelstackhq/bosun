@@ -149,6 +149,7 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         only: Some(n),
         quiet: false,
         own_session: Some(session),
+        own_spawned_blocks: false,
         done: &tasks_merged,
     };
     let epic_error = close_done_epics(gh, app.ctx.now, scope, &mut closed).err();

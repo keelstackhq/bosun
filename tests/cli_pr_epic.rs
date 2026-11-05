@@ -132,3 +132,16 @@ fn an_expired_child_lease_on_a_ready_epic_does_not_block() {
     let v = pr(&fake);
     assert_eq!(v["data"]["epic_closed"], json!(true), "{v}");
 }
+
+#[test]
+fn a_roots_own_local_lease_does_not_block() {
+    let fake = FakeGithub::start();
+    setup(&fake, None);
+    fake.comment(
+        9,
+        &common::lease_note("session_root", "2026-11-05T11:00:00Z", "x/**"),
+    );
+    let v = pr(&fake);
+    assert_eq!(v["data"]["epic_closed"], json!(true), "{v}");
+    assert_eq!(fake.issue_state(9).state, "closed");
+}
