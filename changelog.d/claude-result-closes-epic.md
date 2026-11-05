@@ -1,0 +1,1 @@
+- `bosun result` and `bosun pr` (task found merged) close the epic when every task is merged (no quiet period, only other sessions' leases block it), reporting `data.epic_closed`; before, only `reap` did, after a 10-minute wait.

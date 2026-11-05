@@ -113,7 +113,16 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     let (reaped, left) = expire(gh, now)?;
     // Closing epics is housekeeping: a failure there must not undo or hide the work above.
     let mut epics_closed = Vec::new();
-    let epics_error = close_done_epics(gh, now, &mut epics_closed).err();
+    let epics_error = close_done_epics(
+        gh,
+        now,
+        EpicScope {
+            done: &merged,
+            ..EpicScope::ALL
+        },
+        &mut epics_closed,
+    )
+    .err();
     epics_closed.sort_unstable();
     let mut data =
         json!({"reaped": reaped, "left": left, "merged": merged, "epics_closed": &epics_closed});
@@ -186,6 +195,43 @@ pub fn expire(
     Ok((reaped, left))
 }
 
+/// Which epics `close_done_epics` looks at and what it lets through. `reap` takes every epic with
+/// the quiet period; `result` takes the one it reports on, without the quiet period (the caller
+/// just reported; a later amend reopens the epic), and its own session's lease does not block.
+/// `done` lists tasks the caller just moved to merged: GitHub's list lags, so they count as done
+/// even when it still shows the old label, and their own `updated_at` does not start the quiet
+/// period.
+#[derive(Clone, Copy)]
+pub(crate) struct EpicScope<'a> {
+    pub only: Option<u64>,
+    pub quiet: bool,
+    pub own_session: Option<&'a str>,
+    pub done: &'a [u64],
+}
+
+impl EpicScope<'_> {
+    /// How task `t` ends, `done` overriding its labels.
+    fn end(&self, t: &Issue) -> TaskEnd {
+        if self.done.contains(&t.number) {
+            return TaskEnd::Done;
+        }
+        TaskEnd::of(
+            state_of(&t.labels),
+            t.state == "closed",
+            t.state_reason.as_deref(),
+        )
+    }
+}
+
+impl EpicScope<'_> {
+    pub const ALL: EpicScope<'static> = EpicScope {
+        only: None,
+        quiet: true,
+        own_session: None,
+        done: &[],
+    };
+}
+
 /// Close each open epic whose tasks are all merged or closed, one at least done (see
 /// `epic_complete`): state `merged`, closed as completed. A live lease (an orchestrator's) blocks
 /// it; a `claimed` epic without one is a finished spawned orchestrator's (`result` ends the
@@ -194,9 +240,10 @@ pub fn expire(
 /// every open issue once (an open task of the epic's item blocks it, whatever its labels and
 /// `epic` field), then all plan issues (epics with only dropped tasks pay that every run).
 /// Closed epics go into `closed` as they happen, so an error keeps the progress.
-fn close_done_epics(
+pub(crate) fn close_done_epics(
     gh: &dyn Github,
     now: Timestamp,
+    scope: EpicScope,
     closed: &mut Vec<u64>,
 ) -> crate::app::Result<()> {
     let epic_of = |i: &Issue| parse_task_meta(i.body_text()).and_then(|m| m.epic);
@@ -205,6 +252,7 @@ fn close_done_epics(
     for e in open
         .iter()
         .filter(|i| !i.pull_request && epic_item(i.body_text()).is_some())
+        .filter(|i| scope.only.is_none_or(|n| i.number == n))
         .filter(|i| {
             matches!(
                 state_of(&i.labels),
@@ -214,13 +262,14 @@ fn close_done_epics(
         .filter(|e| {
             !open.iter().any(|t| {
                 epic_of(t) == Some(e.number)
+                    && !scope.done.contains(&t.number)
                     && TaskEnd::of(state_of(&t.labels), false, None) == TaskEnd::Open
             })
         })
     {
         if !leases_of(e.number, &notes(gh, e.number)?)
             .iter()
-            .any(|l| l.is_live(now))
+            .any(|l| l.is_live(now) && scope.own_session != Some(l.session.as_str()))
         {
             candidates.push(e);
         }
@@ -234,6 +283,7 @@ fn close_done_epics(
     let adopted_open = |item: &str| {
         every_open.iter().any(|t| {
             parse_task_meta(t.body_text()).is_some_and(|m| m.item == item)
+                && !scope.done.contains(&t.number)
                 && TaskEnd::of(state_of(&t.labels), false, None) == TaskEnd::Open
         })
     };
@@ -244,18 +294,16 @@ fn close_done_epics(
     let all = gh.list_issues(&["bosun:source/plan"], IssueState::All)?;
     for epic in candidates {
         let tasks = all.iter().filter(|t| epic_of(t) == Some(epic.number));
-        let end = |t: &Issue| {
-            let reason = t.state_reason.as_deref();
-            TaskEnd::of(state_of(&t.labels), t.state == "closed", reason)
-        };
-        if !epic_complete(&tasks.clone().map(end).collect::<Vec<_>>()) {
+        if !epic_complete(&tasks.clone().map(|t| scope.end(t)).collect::<Vec<_>>()) {
             continue;
         }
         // Quiet period: an amend may be adding a task right now (GitHub's list lags).
+        // The tasks the caller just moved to merged changed because of it: they do not count.
         let newest = tasks
+            .filter(|t| !scope.done.contains(&t.number))
             .filter_map(|t| parse_rfc3339(&t.updated_at))
             .max_by_key(|t| t.0);
-        if newest.is_some_and(|n| n.0 > now.minus_secs(QUIET_SECS).0) {
+        if scope.quiet && newest.is_some_and(|n| n.0 > now.minus_secs(QUIET_SECS).0) {
             continue;
         }
         // Close first: an epic labelled merged but still open would never be a candidate again.

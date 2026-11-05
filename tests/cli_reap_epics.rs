@@ -144,3 +144,40 @@ fn reap_archives_a_child_whose_result_is_on_the_epic_it_just_closed() {
         json!([{"tool": "archive_session", "args": {"session_id": "kid"}}])
     );
 }
+
+const TASK_PR: &str = r#"{"bosun":"task-pr","session":"s","pr":30}"#;
+
+/// A queued task 10 of epic 1 whose recorded PR merged; task 10's `updated_at` is set to NOW, as
+/// the move to merged does on GitHub (the fake does not bump it on a label change).
+fn queued_and_merged(fake: &FakeGithub) {
+    epic(fake, 1, "ready");
+    task(fake, 10, 1, "queued");
+    fake.comment(10, TASK_PR);
+    fake.pull(30, "t", "claude/t10", "Closes #10");
+    fake.pull_merged(30, "abc");
+    fake.issue_updated(10, NOW);
+}
+
+/// The usual flow: auto-merge, then `reap` moves the queued task to merged. The move bumps the
+/// task's `updated_at`, so the quiet period must not hold the epic back in the same run.
+#[test]
+fn reap_closes_the_epic_in_the_run_that_moved_its_last_task_to_merged() {
+    let fake = FakeGithub::start();
+    queued_and_merged(&fake);
+    let v = reap(&fake);
+    assert_eq!(v["data"]["merged"], json!([10]), "{v}");
+    assert_eq!(v["data"]["epics_closed"], json!([1]), "{v}");
+    assert_eq!(fake.issue_state(1).state, "closed");
+}
+
+/// A task this run did not move still applies the quiet period (an amend may be adding it).
+#[test]
+fn a_recently_changed_task_reap_did_not_move_still_holds_the_epic() {
+    let fake = FakeGithub::start();
+    queued_and_merged(&fake);
+    task(&fake, 11, 1, "merged");
+    fake.issue_updated(11, NOW);
+    let v = reap(&fake);
+    assert_eq!(v["data"]["merged"], json!([10]), "{v}");
+    assert_eq!(v["data"]["epics_closed"], json!([]), "{v}");
+}
