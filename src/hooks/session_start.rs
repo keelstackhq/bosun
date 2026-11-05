@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use super::cache;
+use super::session_rules::rules_context;
 use crate::app::{App, halt_reason, main_red};
 use crate::cli::lesson;
 use crate::core::lessons;
@@ -22,13 +23,17 @@ pub fn run(cwd: Option<&Path>) -> String {
         .or_else(|| std::env::current_dir().ok());
     let lessons = lessons_block(dir.as_deref());
     match context(dir.as_deref()) {
-        Ok(text) => output(&format!("{text}{lessons}")),
+        Ok(text) => output(&format!(
+            "{text}{lessons}\n{}",
+            rules_context(dir.as_deref())
+        )),
         Err(why) => {
             eprintln!("bosun: warning: session start: {why}");
             output(&format!(
                 "bosun could not reach GitHub ({why}), so this session is not registered and \
                  edit locks may be stale. Set GH_TOKEN (or GITHUB_TOKEN) and BOSUN_REPO=owner/name, \
-                 then run `bosun join`.{lessons}"
+                 then run `bosun join`.{lessons}\n{}",
+                rules_context(dir.as_deref())
             ))
         }
     }

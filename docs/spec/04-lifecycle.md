@@ -81,6 +81,7 @@ Conflict avoidance (three layers):
    fails it exits 1 and the fix says to release the task. The grow re-reads the active issues
    after it writes, and if the task is no longer held (state not active, or a newer `lease-end`
    of the session) it edits its record back and exits 3.
+SessionStart also gives the session its rules (no GitHub call): `Session rules (<role>): <role text> <all text>`; the role comes from the origin: `BOSUN_ORIGIN` wins, else `CLAUDE_CODE_CHILD_SESSION=1` means `spawned`, else `local`; an invalid `BOSUN_ORIGIN` falls back to the child-session check; `spawned` is `worker`, every other origin `orchestrator`. The text comes from `.bosun/session-rules.toml` at the git top level (keys `orchestrator`, `worker`, `all`; a missing file or key keeps the built-in text; an unknown key or bad TOML falls back to the defaults with a note naming the file and error). The block is appended on both the registered path and the could-not-reach-GitHub path.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
