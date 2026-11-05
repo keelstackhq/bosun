@@ -112,21 +112,65 @@ pub fn secret_kind(t: &str) -> Option<&'static str> {
         }
     }
     t.split(|c: char| !(c.is_ascii_alphanumeric() || "+/_=-".contains(c)))
-        .any(|w| high_entropy(w) || w.split_once('=').is_some_and(|(_, v)| high_entropy(v)))
+        .any(|w| {
+            if is_digest_word(w) {
+                return false;
+            }
+            high_entropy(w)
+                || w.split_once('=')
+                    .is_some_and(|(_, v)| !is_digest_value(w, v) && high_entropy(v))
+        })
         .then_some("high-entropy token")
+}
+
+/// A bare base64 hash digest: exactly 28, 44, 64 or 88 characters (sha1, sha256, sha384,
+/// sha512) with the padding that length needs and nothing else.
+fn is_b64_digest(v: &str) -> bool {
+    let body = v.trim_end_matches('=');
+    let pad = v.len() - body.len();
+    let want = match v.len() {
+        28 | 44 => 1,
+        64 => 0,
+        88 => 2,
+        _ => return false,
+    };
+    pad == want
+        && body
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/')
+}
+
+/// A public integrity value `sha1|sha256|sha384|sha512-<digest>` and nothing more.
+fn is_integrity(w: &str) -> bool {
+    ["sha1-", "sha256-", "sha384-", "sha512-"]
+        .iter()
+        .find_map(|p| w.strip_prefix(p))
+        .is_some_and(is_b64_digest)
+}
+
+/// An integrity value, or a `NAME=value` word whose name says it holds a digest.
+fn is_digest_word(w: &str) -> bool {
+    is_integrity(w)
+        || w.split_once('=')
+            .is_some_and(|(n, v)| is_digest_value(n, v))
+}
+
+/// `v` is a digest (or integrity value) held by a variable named `name` that mentions a hash.
+fn is_digest_value(name: &str, v: &str) -> bool {
+    let n = name.to_ascii_uppercase();
+    ["SHA", "HASH", "INTEGRITY", "DIGEST", "CHECKSUM"]
+        .iter()
+        .any(|k| n.contains(k))
+        && (is_b64_digest(v) || is_integrity(v))
 }
 
 /// A 32+ character word of base64/URL-safe characters that looks random: hex of a length other
 /// than a git sha's (40, 64), or letters and digits with Shannon entropy of at least 4.0 bits
-/// per character. Not a session id (`session_`, `cse_`), an integrity hash (`sha512-`), a
+/// per character. Not a session id (`session_`, `cse_`), an integrity hash (see `is_integrity`), a
 /// snake or kebab case phrase (3+ lowercase words) or a lowercase path.
 fn high_entropy(w: &str) -> bool {
     let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    if w.len() < 32
-        || ["session_", "cse_", "sha1-", "sha256-", "sha384-", "sha512-"]
-            .iter()
-            .any(|p| w.starts_with(p))
-    {
+    if w.len() < 32 || ["session_", "cse_"].iter().any(|p| w.starts_with(p)) {
         return false;
     }
     let hex = w.chars().all(|c| c.is_ascii_hexdigit());
@@ -220,10 +264,7 @@ mod tests {
 
     #[test]
     fn secret_kind_passes_known_lookalikes() {
-        let integrity = format!(
-            "sha512-{}==",
-            "q8Zr3KxP0vLm5NwT2bYc7HdJ4sFg9AeUq8Zr3KxP0vLm5NwT2bYc"
-        );
+        let integrity = format!("sha512-{}==", b64(86));
         for ok in [
             "session_01SsFUkfeX2mg29KV4Lhoi5P",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -234,6 +275,49 @@ mod tests {
             integrity.as_str(),
         ] {
             assert_eq!(secret_kind(ok), None, "{ok}");
+        }
+    }
+
+    fn b64(n: usize) -> String {
+        let a = "q8Zr3KxP0vLm5NwT2bYc7HdJ4sFg9AeUZ1Xo6RiEt/+";
+        a.chars().cycle().take(n).collect()
+    }
+
+    #[test]
+    fn secret_kind_passes_integrity_values_and_digest_variables() {
+        let d88 = format!("{}==", b64(86));
+        let d44 = format!("{}=", b64(43));
+        let d64 = b64(64);
+        let d28 = format!("{}=", b64(27));
+        for ok in [
+            format!("sha512-{d88}"),
+            format!("sha256-{d44}"),
+            format!("sha384-{}", b64(64)),
+            format!("sha1-{d28}"),
+            format!("BOSUN_SHA512={d88}"),
+            format!("bosun_sha256={d44}"),
+            format!("FILE_INTEGRITY={d88}"),
+            format!("RELEASE_CHECKSUM={d64}"),
+            format!("PKG_DIGEST={d28}"),
+            format!("MY_HASH={d44}"),
+        ] {
+            assert_eq!(secret_kind(&ok), None, "{ok}");
+        }
+    }
+
+    #[test]
+    fn secret_kind_still_refuses_near_integrity_shapes() {
+        let d44 = format!("{}=", b64(43));
+        for bad in [
+            format!("API_KEY={d44}"),
+            format!("API_KEY={}", b64(40)),
+            format!("SECRET={}==", b64(86)),
+            format!("sha512-{}x!extra", b64(86)),
+            format!("sha512-{}extra", b64(86)),
+            format!("HASH_TOKEN_KEY={}", b64(40)),
+            format!("MY_HASH={}", b64(45)),
+        ] {
+            assert!(secret_kind(&bad).is_some(), "{bad}");
         }
     }
 

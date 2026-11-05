@@ -1,0 +1,1 @@
+- 2026-11-05 · secrets · allow integrity hashes; check pr title · PR #?

@@ -1,0 +1,1 @@
+- `bosun` secret check allows public integrity hashes (`sha512-<b64>`, `NAME_SHA512=<b64>`) and `bosun pr` refuses a secret-shaped title.

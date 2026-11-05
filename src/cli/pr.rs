@@ -337,6 +337,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 .clone()
                 .or_else(|| head_subject(&app.ctx.dir).filter(|s| is_conventional(s)))
                 .unwrap_or_else(|| issue.title.clone());
+            super::refuse_secret("the PR title", &title)?;
             let body = format!("Closes #{n}\n\n<!-- bosun:task-pr {n} -->");
             (gh.create_pull(&title, &branch, &base, &body)?, true)
         }
