@@ -4,10 +4,16 @@
 //!
 //! Rules:
 //! - `draft`: a `pull_request(_target)` workflow whose job has no draft skip in its job-level `if:`
-//!   (the aggregate `ci-ok` / `bosun-ok` is exempt: see `aggregate`).
+//!   (the aggregate `ci-ok` / `bosun-ok` is exempt: see `aggregate`). A job confined to other
+//!   events (`github.event_name == 'push'`) needs no guard, nor does a job that `needs:` a
+//!   draft-skipping job (without a status function): it is skipped with it. A `pull_request`
+//!   trigger whose `types:` has none of opened, synchronize, reopened, ready_for_review, edited
+//!   never starts a draft's run, so no rule reads it.
 //! - `aggregate`: the required aggregate job `ci-ok` or `bosun-ok` skips drafts, or has `needs:`
-//!   and an `if:` without `always()`. A skipped required check counts as passed (a stale green),
-//!   so it must run and fail on a draft.
+//!   and an `if:` without `always()`, or has `needs:` and no step that fails on a draft: a step
+//!   that reads `pull_request.draft` and exits non-zero, or a `test` that a `needs.*.result` is
+//!   `success`. A skipped required check counts as passed (a stale green), so it must run and
+//!   fail on a draft.
 //! - `ready_for_review`: such a workflow whose `types:` omits `ready_for_review` (no `types:` is
 //!   the default set, which lacks it).
 //! - `concurrency`: a `pull_request(_target)` or `push` workflow without a top-level
@@ -118,7 +124,22 @@ fn skips_draft(cond: &str, target: bool) -> bool {
         // The guard's own form, or every branch skips drafts or is another event's.
         return guard(expr) || ors.iter().all(|p| conj(p, &guard) || conj(p, &other_event));
     }
-    conj(expr, &guard)
+    conj(expr, &|t| guard(t) || other_event(t))
+}
+
+/// A YAML quoted scalar without its quotes; other text as it is.
+fn unquote(v: &str) -> String {
+    let v = v.trim();
+    let inner = |q: char| v.strip_prefix(q).and_then(|x| x.strip_suffix(q));
+    if v.len() >= 2 {
+        if let Some(x) = inner('\'') {
+            return x.replace("''", "'");
+        }
+        if let Some(x) = inner('"') {
+            return x.replace("\\\"", "\"");
+        }
+    }
+    v.to_string()
 }
 
 /// Entry of the reader: a line (comments and blanks dropped) and, for a block scalar
@@ -341,13 +362,50 @@ struct Job {
     /// The job-level `if:`, if any.
     cond: Option<String>,
     needs: bool,
+    /// The ids in `needs:` (empty when `needs:` is absent or unreadable).
+    needs_ids: Vec<String>,
     heavy: bool,
+    /// The text of the job's whole body (steps included).
+    body: String,
 }
 
 impl Job {
     /// The required aggregate check: it runs on a draft and fails there.
     fn aggregate(&self) -> bool {
         matches!(self.id.as_str(), "ci-ok" | "bosun-ok")
+    }
+}
+
+/// Read the properties of a job (or of an anchor merged into one) into `job`.
+fn apply_props(job: &mut Job, body: &[Line], props: &[usize]) {
+    for &j in props {
+        let value = body[j].value();
+        match body[j].key() {
+            Some("if") => job.cond = Some(unquote(&value)),
+            Some("needs") => {
+                job.needs = true;
+                job.needs_ids = flow_list(&value);
+                job.needs_ids.extend(
+                    children(body, j)
+                        .iter()
+                        .filter_map(|c| c.item())
+                        .map(|c| c.trim_matches(|x| x == '"' || x == '\'').to_string()),
+                );
+            }
+            Some("runs-on") => {
+                let mut all = value;
+                for c in children(body, j) {
+                    all.push(' ');
+                    all.push_str(&c.text);
+                }
+                let all = all.to_ascii_lowercase();
+                job.heavy |= all.contains("macos") || all.contains("windows");
+            }
+            Some("strategy") => {
+                job.heavy |= children(body, j).iter().any(|c| c.key() == Some("matrix"));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -371,29 +429,48 @@ fn jobs(lines: &[Line]) -> Vec<Job> {
             id: id.to_string(),
             cond: None,
             needs: false,
+            needs_ids: Vec::new(),
             heavy: false,
+            body: body
+                .iter()
+                .map(|l| format!("{} {}", l.text, l.body))
+                .collect::<Vec<_>>()
+                .join("\n"),
         };
+        apply_props(&mut job, body, &props);
+        // A merge key (`<<: *anchor`) brings the anchor's properties; the job's own win.
         for &j in &props {
-            let value = body[j].value();
-            match body[j].key() {
-                Some("if") => {
-                    job.cond = Some(value);
-                }
-                Some("needs") => job.needs = true,
-                Some("runs-on") => {
-                    let mut all = value;
-                    for c in children(body, j) {
-                        all.push(' ');
-                        all.push_str(&c.text);
-                    }
-                    let all = all.to_ascii_lowercase();
-                    job.heavy |= all.contains("macos") || all.contains("windows");
-                }
-                Some("strategy") => {
-                    job.heavy |= children(body, j).iter().any(|c| c.key() == Some("matrix"));
-                }
-                _ => {}
+            if body[j].key() != Some("<<") {
+                continue;
             }
+            let value = body[j].value();
+            let Some(name) = value.strip_prefix('*') else {
+                continue;
+            };
+            let marker = format!("&{}", name.trim());
+            let anchor = lines.iter().position(|l| {
+                l.key().is_some() && l.value_inline().split_whitespace().any(|w| w == marker)
+            });
+            let Some(a) = anchor else { continue };
+            let abody = children(lines, a);
+            let Some(first) = abody.first() else { continue };
+            let aprops: Vec<usize> = (0..abody.len())
+                .filter(|&k| abody[k].indent == first.indent)
+                .collect();
+            let mut from = Job {
+                id: String::new(),
+                cond: None,
+                needs: false,
+                needs_ids: Vec::new(),
+                heavy: false,
+                body: String::new(),
+            };
+            apply_props(&mut from, abody, &aprops);
+            job.cond = job.cond.take().or(from.cond);
+            if !job.needs {
+                (job.needs, job.needs_ids) = (from.needs, from.needs_ids);
+            }
+            job.heavy |= from.heavy;
         }
         out.push(job);
     }
@@ -410,12 +487,38 @@ fn allowed(text: &str, rule: &str) -> bool {
     })
 }
 
+/// Whether an aggregate job's text fails when its needed jobs were skipped on a draft: a step
+/// that reads `pull_request.draft` and exits non-zero, or a check that a `needs.*.result` is
+/// `success` (a skipped need is not).
+fn fails_on_draft(body: &str) -> bool {
+    let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    let exits = ["exit1", "exit2", "exit3"].iter().any(|e| flat.contains(e));
+    let draft_exit = flat.contains("pull_request.draft") && exits;
+    let success = flat.contains("needs.")
+        && [r#"="success""#, "=='success'", "=success", r#"=="success""#]
+            .iter()
+            .any(|p| flat.contains(p));
+    draft_exit || success
+}
+
 /// Findings for one workflow file (`file` is only a label), in file order.
 pub fn check(file: &str, text: &str) -> Vec<Finding> {
     let lines = lex(text);
     let trig = triggers(&lines);
     let is_pr = |t: &&Trigger| matches!(t.name.as_str(), "pull_request" | "pull_request_target");
-    let prs: Vec<&Trigger> = trig.iter().filter(is_pr).collect();
+    // Types that never start a run of a draft (closed, labeled, ...) leave nothing to guard.
+    let live = |t: &&Trigger| {
+        t.types.as_ref().is_none_or(|ty| {
+            ty.is_empty()
+                || ty.iter().any(|x| {
+                    matches!(
+                        x.as_str(),
+                        "opened" | "synchronize" | "reopened" | "ready_for_review" | "edited"
+                    )
+                })
+        })
+    };
+    let prs: Vec<&Trigger> = trig.iter().filter(is_pr).filter(live).collect();
     let mut out = Vec::new();
     let mut add = |job: Option<&str>, rule: &'static str, fix: String| {
         out.push(Finding {
@@ -434,7 +537,35 @@ pub fn check(file: &str, text: &str) -> Vec<Finding> {
             DRAFT_SKIP
         };
         let skips = |j: &Job| j.cond.as_deref().is_some_and(|c| skips_draft(c, target));
-        for j in jobs.iter().filter(|j| !skips(j) && !j.aggregate()) {
+        // A job that needs a skipped job is skipped with it, unless a status function in its
+        // `if:` runs it anyway.
+        let mut skipped: Vec<&str> = jobs
+            .iter()
+            .filter(|j| skips(j))
+            .map(|j| j.id.as_str())
+            .collect();
+        loop {
+            let more: Vec<&str> = jobs
+                .iter()
+                .filter(|j| !skipped.contains(&j.id.as_str()))
+                .filter(|j| {
+                    let cond = j.cond.as_deref().unwrap_or_default();
+                    let status = ["always()", "cancelled()", "failure()"]
+                        .iter()
+                        .any(|f| cond.contains(f));
+                    !status && j.needs_ids.iter().any(|n| skipped.contains(&n.as_str()))
+                })
+                .map(|j| j.id.as_str())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            skipped.extend(more);
+        }
+        for j in jobs
+            .iter()
+            .filter(|j| !skipped.contains(&j.id.as_str()) && !j.aggregate())
+        {
             add(
                 Some(&j.id),
                 "draft",
@@ -461,6 +592,15 @@ pub fn check(file: &str, text: &str) -> Vec<Finding> {
                     "aggregate",
                     format!(
                         "job `{}` is a required check with `needs:`: set `if: always()`, because it is skipped when a needed job is skipped and a skipped required check counts as passed",
+                        j.id
+                    ),
+                );
+            } else if j.needs && !fails_on_draft(&j.body) {
+                add(
+                    Some(&j.id),
+                    "aggregate",
+                    format!(
+                        "job `{}` is a required check with `needs:` but no step fails on a draft: add a step that exits 1 when `github.event.pull_request.draft` is true, or `test \"${{{{ needs.<job>.result }}}}\" = \"success\"`, because a needed job skipped on a draft must not leave this check green",
                         j.id
                     ),
                 );
@@ -575,7 +715,7 @@ jobs:
     #[test]
     fn the_aggregate_check_must_run_on_drafts() {
         let ok = format!(
-            "{CLEAN}  ci-ok:\n    needs: [ci]\n    if: always()\n    runs-on: ubuntu-latest\n"
+            "{CLEAN}  ci-ok:\n    needs: [ci]\n    if: always()\n    runs-on: ubuntu-latest\n    steps:\n      - run: test \"${{{{ needs.ci.result }}}}\" = \"success\"\n"
         );
         assert_eq!(rules(&ok), vec![], "no draft skip needed, none allowed");
         let bare = format!("{CLEAN}  bosun-ok:\n    needs: [ci]\n    runs-on: ubuntu-latest\n");
@@ -785,6 +925,141 @@ jobs:
         let matrix = heavy("${{ matrix.os }}", "")
             + "    strategy:\n      matrix:\n        os: [ubuntu-latest]\n";
         assert_eq!(rules(&matrix), vec![(Some("b".into()), "paths")]);
+    }
+
+    const AGG: &str =
+        "  ci-ok:\n    needs: [ci]\n    if: always()\n    runs-on: ubuntu-latest\n    steps:\n";
+
+    #[test]
+    fn an_aggregate_that_goes_green_on_a_draft_is_found() {
+        // needs a draft-skipping job, always() runs it, but no step fails when that need is skipped.
+        let green = format!("{CLEAN}{AGG}      - run: echo ok\n");
+        assert_eq!(rules(&green), vec![(Some("ci-ok".into()), "aggregate")]);
+        for good in [
+            "      - run: test \"${{ needs.ci.result }}\" = \"success\"\n",
+            "      - run: test ${{ needs.ci.result }} == 'success'\n",
+            "      - env:\n          DRAFT: ${{ github.event.pull_request.draft }}\n        run: |\n          if [ \"$DRAFT\" = true ]; then exit 1; fi\n",
+        ] {
+            let t = format!("{CLEAN}{AGG}{good}");
+            assert_eq!(rules(&t), vec![], "{good}");
+        }
+        // A draft check that never exits non-zero is not enough.
+        let weak = format!(
+            "{CLEAN}{AGG}      - run: echo \"draft ${{{{ github.event.pull_request.draft }}}}\"\n"
+        );
+        assert_eq!(rules(&weak), vec![(Some("ci-ok".into()), "aggregate")]);
+    }
+
+    fn push_only(cond: &str) -> String {
+        format!("{CLEAN}  rel:\n    if: {cond}\n    runs-on: ubuntu-latest\n")
+    }
+
+    #[test]
+    fn a_job_confined_to_other_events_needs_no_draft_guard() {
+        for ok in [
+            "github.event_name == 'push'",
+            "${{ github.event_name == 'push' }}",
+            "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+            "github.event_name == 'push' || github.event_name == 'schedule'",
+        ] {
+            assert_eq!(rules(&push_only(ok)), vec![], "{ok}");
+        }
+        for bad in [
+            "github.event_name != 'push'",
+            "github.event_name == 'push' || github.actor == 'bot'",
+            "github.event_name == 'pull_request'",
+        ] {
+            assert_eq!(
+                rules(&push_only(bad)),
+                vec![(Some("rel".into()), "draft")],
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_job_that_needs_a_skipped_job_is_skipped_with_it() {
+        let after = |needs: &str, cond: &str| {
+            format!("{CLEAN}  b:\n    needs: {needs}\n{cond}    runs-on: ubuntu-latest\n")
+        };
+        assert_eq!(rules(&after("[ci]", "")), vec![]);
+        assert_eq!(rules(&after("ci", "")), vec![]);
+        assert_eq!(rules(&after("\n      - ci", "")), vec![]);
+        let chain = format!(
+            "{}  c:\n    needs: [b]\n    runs-on: x\n",
+            after("[ci]", "")
+        );
+        assert_eq!(rules(&chain), vec![]);
+        // always() runs it on a draft, so it needs its own guard.
+        assert_eq!(
+            rules(&after("[ci]", "    if: always()\n")),
+            vec![(Some("b".into()), "draft")]
+        );
+        // A need that does not skip drafts does not help.
+        let loose = format!("{CLEAN}  a:\n    runs-on: x\n  b:\n    needs: [a]\n    runs-on: x\n");
+        assert_eq!(
+            rules(&loose),
+            vec![(Some("a".into()), "draft"), (Some("b".into()), "draft")]
+        );
+    }
+
+    #[test]
+    fn a_trigger_with_only_inert_types_is_not_read() {
+        let bare = "jobs:\n  a:\n    runs-on: x\n";
+        for ty in ["[closed]", "[labeled, unlabeled]", "[closed, labeled]"] {
+            let t = format!(
+                "on:\n  pull_request:\n    types: {ty}\nconcurrency:\n  group: g\n  cancel-in-progress: true\n{bare}"
+            );
+            assert_eq!(rules(&t), vec![], "{ty}");
+        }
+        let live = "on:\n  pull_request:\n    types: [labeled, edited]\nconcurrency:\n  group: g\n  cancel-in-progress: true\njobs:\n  a:\n    runs-on: x\n";
+        assert_eq!(
+            rules(live),
+            vec![(Some("a".into()), "draft"), (None, "ready_for_review")]
+        );
+    }
+
+    #[test]
+    fn quoted_guards_count() {
+        for cond in [
+            "'!github.event.pull_request.draft'",
+            "\"!github.event.pull_request.draft\"",
+            "'${{ github.event.pull_request.draft == false }}'",
+            "'github.event_name != ''pull_request'' || github.event.pull_request.draft == false'",
+            "\"github.event.pull_request.draft == false\"",
+        ] {
+            assert_eq!(rules(&with_if(cond)), vec![], "{cond}");
+        }
+    }
+
+    #[test]
+    fn merge_keys_do_not_break_parsing() {
+        let t = "on:
+  pull_request:
+    types: [opened, ready_for_review]
+concurrency:
+  group: g
+  cancel-in-progress: true
+x-base: &base
+  runs-on: ubuntu-latest
+  if: github.event.pull_request.draft == false
+jobs:
+  a:
+    <<: *base
+    steps:
+      - run: x
+  b:
+    <<: *base
+    if: always()
+    steps:
+      - run: y
+  c:
+    runs-on: ubuntu-latest
+";
+        assert_eq!(
+            rules(t),
+            vec![(Some("b".into()), "draft"), (Some("c".into()), "draft")]
+        );
     }
 
     #[test]

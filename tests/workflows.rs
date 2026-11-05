@@ -1398,3 +1398,29 @@ fn the_secret_scan_catches_each_form_of_secret_use() {
     let got = secret_problems("x", called);
     assert!(got.is_empty(), "{got:?}");
 }
+
+/// A mainfix label event on a draft is skipped, so the verdict must be recomputed when the PR
+/// leaves draft: `ready_for_review` is a trigger type and the label filter spares it.
+#[test]
+fn main_open_rejudges_when_a_draft_becomes_ready() {
+    for rel in [
+        ".github/workflows/main-open.yml",
+        "channel/pieces/core/files/.github/workflows/main-open.yml",
+    ] {
+        let path = format!("{}/{rel}", env!("CARGO_MANIFEST_DIR"));
+        let yaml = fs::read_to_string(path).unwrap();
+        let types = yaml.lines().find(|l| l.contains("types:")).unwrap();
+        assert!(types.contains("ready_for_review"), "{rel}: {types}");
+        // The label filter applies to label actions only; every other action reaches the job.
+        assert!(
+            yaml.contains(
+                "((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||"
+            ),
+            "{rel}"
+        );
+        assert!(
+            yaml.contains("github.event.pull_request.draft == false &&"),
+            "{rel}"
+        );
+    }
+}

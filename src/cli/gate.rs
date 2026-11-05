@@ -150,8 +150,10 @@ fn all_skipped(data: &serde_json::Value) -> bool {
 }
 
 /// Outside CI, leave the stamp `bosun pr --ready` looks for and report it as `data.stamp`.
-/// Only a real run on the default base stamps: a skip proves nothing about the tree, and an
-/// explicit `--base` checks a different range than the PR's (`data.stamp` is null then).
+/// A skip (nothing to check on this tree: no package, empty diff, no manifest) is stamped
+/// `skipped` and counts as done for `--ready`. An explicit `--base` checks a different range
+/// than the PR's and never stamps (`data.stamp` is null then). test-integrity judges only the
+/// diff against the base, so it does not stamp a tree with untracked files it never read.
 /// A failure to stamp goes to stderr and never fails the gate.
 fn stamped(dir: &Path, gate: &str, explicit_base: bool, mut out: Outcome) -> Outcome {
     let env = |k: &str| std::env::var(k).ok();
@@ -159,10 +161,16 @@ fn stamped(dir: &Path, gate: &str, explicit_base: bool, mut out: Outcome) -> Out
         return out;
     }
     out.data["stamp"] = serde_json::Value::Null;
-    if explicit_base || all_skipped(&out.data) {
+    if explicit_base {
         return out;
     }
-    match stamps::write(dir, gate) {
+    if gate == "test-integrity" && stamps::has_untracked(dir) {
+        eprintln!(
+            "bosun: test-integrity passed but is not stamped: untracked files are not judged; commit or ignore them, then rerun"
+        );
+        return out;
+    }
+    match stamps::write(dir, gate, all_skipped(&out.data)) {
         Ok(path) => out.data["stamp"] = serde_json::json!(path.display().to_string()),
         Err(e) => eprintln!("bosun: gate {gate} passed but could not be stamped: {e}"),
     }

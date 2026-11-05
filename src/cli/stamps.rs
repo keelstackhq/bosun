@@ -79,14 +79,21 @@ fn stamp_file(dir: &Path, tree: &str, gate: &str) -> Option<PathBuf> {
     Some(common_dir(dir)?.join(rel_path(tree, gate)))
 }
 
-/// Write the stamp of a passing `gate` for the current working state; the path written.
+/// Whether the working state has untracked files that git does not ignore.
+pub fn has_untracked(dir: &Path) -> bool {
+    git_out(dir, &["ls-files", "--others", "--exclude-standard"]).is_some()
+}
+
+/// Write the stamp of a passing `gate` for the current working state; the path written. A gate
+/// that skipped (nothing to check on this tree) is stamped `skipped`: it counts as done.
 /// Errors are for stderr only: a gate never fails because it could not stamp.
-pub fn write(dir: &Path, gate: &str) -> Result<PathBuf, String> {
+pub fn write(dir: &Path, gate: &str, skipped: bool) -> Result<PathBuf, String> {
     let tree = working_tree(dir).ok_or("cannot read the tree of the working state")?;
     let path = stamp_file(dir, &tree, gate).ok_or("cannot find the git directory")?;
     let parent = path.parent().ok_or("bad stamp path")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    std::fs::write(&path, "ok\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::write(&path, if skipped { "skipped\n" } else { "ok\n" })
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)
 }
 

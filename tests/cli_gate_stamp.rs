@@ -155,11 +155,32 @@ fn an_explicit_base_does_not_stamp() {
     assert!(!stamps_dir(&root).exists());
 }
 
+fn stamp_text(root: &Path, gate: &str) -> Option<String> {
+    let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+    let p = stamp_path(root, &tree).with_file_name(gate);
+    fs::read_to_string(p).ok()
+}
+
+fn commit_all(root: &Path, msg: &str) {
+    git(root, &["add", "."]);
+    git(root, &["commit", "-q", "-m", msg]);
+}
+
 #[test]
-fn a_skipped_gate_does_not_stamp() {
-    // No change against the base: a green skip proves nothing about the tree.
+fn a_skipped_gate_stamps_as_skipped() {
+    // No change against the base: the gate has nothing to check, which counts as done.
     let (_tmp, root) = repo();
     let (code, v) = gate_named(&root, "fmt", &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert!(v["data"]["stamp"].is_string(), "{v}");
+    assert_eq!(stamp_text(&root, "fmt").as_deref(), Some("skipped\n"));
+}
+
+#[test]
+fn a_skipped_gate_on_an_explicit_base_does_not_stamp() {
+    let (_tmp, root) = repo();
+    let (code, v) = gate_named(&root, "fmt", &[], &["--base", "main"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["skipped"], true, "{v}");
     assert!(v["data"]["stamp"].is_null(), "{v}");
@@ -167,30 +188,94 @@ fn a_skipped_gate_does_not_stamp() {
 }
 
 #[test]
-fn the_stamp_tree_includes_untracked_files() {
+fn ts_pnpm_deps_without_a_lockfile_stamps_as_skipped() {
+    let (_tmp, root) = repo();
+    put(
+        &root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \".\"\nprofile = \"ts-pnpm\"\n",
+    );
+    put(
+        &root,
+        "package.json",
+        "{\"name\":\"root\",\"private\":true}",
+    );
+    put(&root, "a.ts", "export {};\n");
+    commit_all(&root, "ts");
+    let (code, v) = gate_named(&root, "deps", &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert_eq!(stamp_text(&root, "deps").as_deref(), Some("skipped\n"));
+}
+
+#[test]
+fn a_sub_path_stack_with_a_docs_only_change_stamps_as_skipped() {
+    let (_tmp, root) = repo();
+    put(
+        &root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \"web\"\nprofile = \"ts-pnpm\"\n",
+    );
+    put(
+        &root,
+        "web/package.json",
+        "{\"name\":\"w\",\"private\":true}",
+    );
+    commit_all(&root, "web");
+    git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    put(&root, "docs/x.md", "x\n");
+    commit_all(&root, "docs only");
+    let (code, v) = gate_named(&root, "lint", &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert_eq!(stamp_text(&root, "lint").as_deref(), Some("skipped\n"));
+}
+
+#[test]
+fn rust_test_with_no_affected_package_stamps_as_skipped() {
+    let (_tmp, root) = repo();
+    put(
+        &root,
+        ".bosun/bosun.toml",
+        "[[stack]]\npath = \".\"\nprofile = \"rust\"\n",
+    );
+    put(
+        &root,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/p\"]\nresolver = \"2\"\n",
+    );
+    put(
+        &root,
+        "crates/p/Cargo.toml",
+        "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    put(&root, "crates/p/src/lib.rs", "");
+    commit_all(&root, "crate");
+    git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    put(&root, "NOTES.md", "n\n");
+    commit_all(&root, "notes only");
+    let (code, v) = gate_named(&root, "test", &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "{v}");
+    assert_eq!(stamp_text(&root, "test").as_deref(), Some("skipped\n"));
+}
+
+#[test]
+fn test_integrity_does_not_stamp_a_tree_with_untracked_files() {
+    // It judges the diff against the base; a new untracked file is never read.
     let (_tmp, root) = repo();
     put(&root, "src/lib.rs", "pub fn f() { let _ = 3; }\n");
     put(&root, "src/new.rs", "pub fn g() {}\n");
     let (code, v) = gate(&root, &[]);
     assert_eq!(code, 0, "{v}");
-    let stamp = PathBuf::from(v["data"]["stamp"].as_str().unwrap());
-    let tree = stamp
-        .parent()
-        .unwrap()
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
-    // The stamp is not the tree of the tracked changes alone ...
-    git(&root, &["commit", "-q", "-a", "-m", "tracked only"]);
-    assert_ne!(git(&root, &["rev-parse", "HEAD^{tree}"]), tree);
-    // ... but of everything git add -A takes in.
-    git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-q", "--amend", "--no-edit"]);
-    assert_eq!(git(&root, &["rev-parse", "HEAD^{tree}"]), tree);
-    assert!(
-        git(&root, &["status", "--porcelain"]).is_empty(),
-        "stamping must not touch the index or tree"
-    );
+    assert!(v["data"]["stamp"].is_null(), "{v}");
+    assert!(!stamps_dir(&root).exists());
+    // Ignored files are not part of the stamped tree, so they do not block it.
+    fs::remove_file(root.join("src/new.rs")).unwrap();
+    put(&root, ".gitignore", "junk\n");
+    git(&root, &["add", ".gitignore"]);
+    put(&root, "junk", "x\n");
+    let (code, v) = gate(&root, &[]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["stamp"].is_string(), "{v}");
 }

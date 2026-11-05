@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::fake::FakeGithub;
+use common::stamps;
 use serde_json::Value;
 
 const T0: &str = "2026-10-23T10:00:00Z";
@@ -141,14 +142,29 @@ fn a_missing_plan_is_a_usage_error_and_writes_nothing() {
 }
 
 #[test]
-fn auto_merge_passes_on_to_bosun_pr() {
+fn auto_merge_on_a_stale_head_is_refused_before_any_change() {
     let fake = FakeGithub::start();
-    let dir = repo("claude/plan-am");
+    let dir = repo("claude/plan-am-stale");
     // The PR was just opened as a draft and its head is not the local HEAD: `bosun pr --ready`
     // refuses before any change (exit 3).
     let (code, v) = plan_pr(&fake, dir.path(), &["--auto-merge"]);
     assert_eq!(code, 3, "{v}");
     assert!(v["data"]["claim"]["lease"].is_object(), "{v}");
+}
+
+#[test]
+fn auto_merge_passes_on_to_bosun_pr() {
+    let fake = FakeGithub::start();
+    let dir = repo("claude/plan-am");
+    // First run opens the draft PR; then the head is pushed and every gate is stamped.
+    let (code, v) = plan_pr(&fake, dir.path(), &[]);
+    assert_eq!(code, 0, "{v}");
+    let pr = v["data"]["pr"]["pr"].as_u64().expect("pr number");
+    stamps::ready(&fake, dir.path(), pr);
+    // The branch requires none of the checks: `bosun pr --ready` refuses (exit 5).
+    let (code, v) = plan_pr(&fake, dir.path(), &["--auto-merge"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["data"]["failed"]["unenforced"].is_array(), "{v}");
 }
 
 fn plan_pr_with(fake: &FakeGithub, dir: &Path, plan: &str) -> (i32, Value) {
