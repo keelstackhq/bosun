@@ -1,1 +1,0 @@
-- The edit hook lets a registered child (a trusted live `spawned` lease with empty touch on its epic) create one new issue with a task marker for that epic; edits, comments, other repos and the `allow` and `capabilities` keys stay refused. Spec §4 says any session may run `bosun intake`.

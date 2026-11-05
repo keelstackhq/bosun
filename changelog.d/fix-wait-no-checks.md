@@ -1,1 +1,0 @@
-- `bosun wait --pr` says `"no checks yet"` in `checks` while nothing has reported for the head, instead of an empty map.

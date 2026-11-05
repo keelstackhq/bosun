@@ -1,1 +1,0 @@
-- `bosun handoff-pr <pr> [--to SESSION]` returns a `send_message` call to the parent with the PR, head SHA, risk paths and review minors.

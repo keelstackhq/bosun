@@ -1,1 +1,0 @@
-- 2026-11-04 · feedback · GitHub 5xx gives error.kind upstream (exit 1) · PR (fix-wait-upstream)

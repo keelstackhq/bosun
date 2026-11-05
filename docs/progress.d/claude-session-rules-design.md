@@ -1,1 +1,0 @@
-- 2026-11-04 · R1 · session rules in session-start · bosun#386

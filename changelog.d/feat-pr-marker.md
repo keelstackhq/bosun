@@ -1,1 +1,0 @@
-- `bosun pr <issue>` (and `--auto-merge`) works from any branch: with no open PR on the current branch it uses the open PR carrying the `bosun:task-pr` marker of the task.

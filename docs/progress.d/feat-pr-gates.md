@@ -1,1 +1,0 @@
-- 2026-11-04 · FU1a · `bosun pr --auto-merge` states the gates it relies on (risk-check, review-verdict) before acting · PR (feat-pr-gates)

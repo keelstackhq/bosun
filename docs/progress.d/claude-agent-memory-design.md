@@ -1,1 +1,0 @@
-- 2026-11-04 · Design · agent memory (progress + learnings) design and task plan, `docs/superpowers/specs/2026-11-04-agent-memory-design.md` · PR (claude-agent-memory-design)

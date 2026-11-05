@@ -1,1 +1,0 @@
-- 2026-11-04 · feedback · wait --pr says "no checks yet" · PR (fix-wait-no-checks)

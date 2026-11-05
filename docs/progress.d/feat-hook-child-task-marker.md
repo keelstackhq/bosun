@@ -1,1 +1,0 @@
-- 2026-11-04 · FU6 · hook accepts the task marker from registered child sessions; spec §4 documents who may run `bosun intake` · PR (feat-hook-child-task-marker)
