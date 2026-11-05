@@ -369,3 +369,35 @@ fn a_joined_root_with_spawned_origin_is_not_read_back() {
     let (_, v) = run(&fake, "root_b", NOW, &["resume", "--handoff"]);
     assert!(v["data"]["handoff"].is_null());
 }
+
+#[test]
+fn a_secret_in_the_input_is_refused_and_writes_nothing() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
+    let secret = format!("sk-ant-{}", "a1B2".repeat(9));
+    let file = lines_file("secret", &format!("next: ok\nblocker: key is {secret}\n"));
+    let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("redact"));
+    let message = v["error"]["message"].as_str().unwrap();
+    assert!(message.contains("API key"), "{message}");
+    assert!(!v.to_string().contains(&secret));
+    assert_eq!(bodies(&fake, 1).len(), 1, "no handoff comment");
+}
+
+#[test]
+fn a_session_id_in_a_line_is_not_a_secret() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
+    let file = lines_file(
+        "sid",
+        &format!(
+            "next: ask session_{} about it\n",
+            "01SsFUkfeX2mg29KV4Lhoi5P"
+        ),
+    );
+    let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
+    assert_eq!(code, 0, "{v}");
+}

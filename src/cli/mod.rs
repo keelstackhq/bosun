@@ -776,6 +776,26 @@ pub struct IntakeArgs {
     pub plan: Option<String>,
 }
 
+/// Refuse text that looks like a secret (exit 2). The error names the kind and `field`, never
+/// the matched text (spec §6).
+pub(crate) fn refuse_secret(field: &str, text: &str) -> Result<(), crate::output::BosunError> {
+    match crate::core::text::secret_kind(text) {
+        None => Ok(()),
+        Some(kind) => Err(crate::output::BosunError::usage(
+            format!("{field} looks like a secret ({kind}); bosun does not store or post it"),
+            "redact the secret (replace it with <redacted>) and run again; never put tokens, keys or PEM in bosun text",
+        )),
+    }
+}
+
+/// [`refuse_secret`] for every value of a repeatable option.
+pub(crate) fn refuse_secrets(
+    field: &str,
+    items: &[String],
+) -> Result<(), crate::output::BosunError> {
+    items.iter().try_for_each(|t| refuse_secret(field, t))
+}
+
 /// `text` and `--source` default to empty; `intake::args_ok` refuses an empty one.
 fn parse_source(s: &str) -> Result<String, String> {
     match s {

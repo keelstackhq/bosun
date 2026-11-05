@@ -105,6 +105,10 @@ pub fn run(dir: Option<&Path>, args: &AnswerArgs) -> CmdResult {
         ));
     }
     let text = read_text(&args.from)?;
+    // A relayed chat form carries a signature; the plain answer (also the one to sign) is text.
+    if !args.chat || args.sign_key.is_some() {
+        super::refuse_secret("the answer", &text)?;
+    }
     if text.trim().is_empty() {
         return Err(BosunError::usage(
             "the answer text is empty",
