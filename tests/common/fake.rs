@@ -356,6 +356,15 @@ impl FakeGithub {
         );
     }
 
+    /// A git commit with only a message (`GET /git/commits/{sha}`).
+    pub fn git_commit_message(&self, sha: &str, message: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.git_commits.insert(
+            sha.into(),
+            json!({"sha": sha, "tree": {"sha": "t"}, "parents": [], "message": message}),
+        );
+    }
+
     /// A tree (`GET /git/trees/{sha}`); entries are `(path, mode, type, sha)`.
     pub fn git_tree(&self, sha: &str, entries: &[(&str, &str, &str, &str)], truncated: bool) {
         let tree: Vec<Value> = entries
@@ -1262,6 +1271,12 @@ fn route(
         },
         ("GET", ["git", "commits", sha]) => match s.git_commits.get(*sha) {
             Some(c) => ok(c.clone()),
+            // A sha only a compare names (the PR-commits fallback): a bare commit, no message.
+            None if !s.pull_commits.values().any(|v| v.iter().any(|x| x == sha))
+                && s.compares.keys().any(|k| k.split("...").any(|x| x == *sha)) =>
+            {
+                ok(json!({"sha": sha, "tree": {"sha": "t"}, "parents": []}))
+            }
             None => msg(404, "Not Found"),
         },
         ("GET", ["git", "trees", _]) if query.get("recursive").map(String::as_str) != Some("1") => {
