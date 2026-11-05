@@ -140,7 +140,9 @@ fn builtin_rules_equal_the_repo_rules() {
 
 #[test]
 fn repo_session_rules_cover_the_own_task_loop() {
-    let rules = bosun::hooks::session_rules::parse(&read(".bosun/session-rules.toml")).unwrap();
+    // CI puts the base's .bosun/ over the checkout: read what this commit has.
+    let rules =
+        bosun::hooks::session_rules::parse(&committed(".bosun/session-rules.toml")).unwrap();
     for (role, text) in [
         ("orchestrator", &rules.orchestrator),
         ("worker", &rules.worker),
