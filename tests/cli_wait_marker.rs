@@ -21,6 +21,9 @@ fn git(dir: &Path, args: &[&str]) -> String {
 fn repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     git(tmp.path(), &["init", "-q", "-b", "main"]);
+    // CI runners have no global git identity; commits in the test repo need one.
+    git(tmp.path(), &["config", "user.email", "t@example.com"]);
+    git(tmp.path(), &["config", "user.name", "t"]);
     tmp
 }
 
