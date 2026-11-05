@@ -1,1 +1,0 @@
-- 2026-11-04 · R3c · setup script prewarms keelstack plugins, warn-only pin check

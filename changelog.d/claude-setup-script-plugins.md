@@ -1,1 +1,0 @@
-- `docs/setup-script.sh` (and the channel copy) prewarms superpowers and caveman from the `keelstack` marketplace and warns when an installed commit is off its pin; it never fails.

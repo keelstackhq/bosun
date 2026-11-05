@@ -307,3 +307,4 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-04 · feedback · wait --pr says "no checks yet" · PR (fix-wait-no-checks)
 - 2026-11-04 · feedback · GitHub 5xx gives error.kind upstream (exit 1) · PR (fix-wait-upstream)
 - 2026-11-03 · Release · keel-bosun 0.5.0, @keelstackhq/bosun 0.5.0 (release PR; tag and publish by release.yml) · PR (release/0.5.0)
+- 2026-11-04 · R3c · setup script prewarms keelstack plugins, warn-only pin check
