@@ -198,6 +198,8 @@ pub fn expire(
 /// Which epics `close_done_epics` looks at and what it lets through. `reap` takes every epic with
 /// the quiet period; `result` takes the one it reports on, without the quiet period (the caller
 /// just reported; a later amend reopens the epic), and its own session's lease does not block.
+/// `pr` sets `own_spawned_blocks`: its own lease is ignored unless it is a spawned child's, which
+/// leaves the close to that child's `result`.
 /// `done` lists tasks the caller just moved to merged: GitHub's list lags, so they count as done
 /// even when it still shows the old label, and their own `updated_at` does not start the quiet
 /// period.
@@ -206,6 +208,7 @@ pub(crate) struct EpicScope<'a> {
     pub only: Option<u64>,
     pub quiet: bool,
     pub own_session: Option<&'a str>,
+    pub own_spawned_blocks: bool,
     pub done: &'a [u64],
 }
 
@@ -228,13 +231,14 @@ impl EpicScope<'_> {
         only: None,
         quiet: true,
         own_session: None,
+        own_spawned_blocks: false,
         done: &[],
     };
 }
 
 /// Close each open epic whose tasks are all merged or closed, one at least done (see
-/// `epic_complete`): state `merged`, closed as completed. A live lease (an orchestrator's) blocks
-/// it; a `claimed` epic without one is a finished spawned orchestrator's (`result` ends the
+/// `epic_complete`): state `merged`, closed as completed. A live lease (an orchestrator's) or a
+/// spawned child's lease not yet ended (its result is pending) blocks it; a `claimed` epic without one is a finished spawned orchestrator's (`result` ends the
 /// lease, not the state). The quiet period does not cover an amend adding a task right now; the
 /// next import or amend reopens the epic. Open plan issues are listed first; with candidates,
 /// every open issue once (an open task of the epic's item blocks it, whatever its labels and
@@ -267,10 +271,15 @@ pub(crate) fn close_done_epics(
             })
         })
     {
-        if !leases_of(e.number, &notes(gh, e.number)?)
-            .iter()
-            .any(|l| l.is_live(now) && scope.own_session != Some(l.session.as_str()))
-        {
+        // A spawned child's lease on a `claimed` epic ends only with its `result` (or reap's
+        // expiry, which runs first): until then the child may still report partial or blocked,
+        // so even an expired one blocks. Other states are not reaped: only live leases count.
+        let claimed = state_of(&e.labels) == Some(State::Claimed);
+        if !leases_of(e.number, &notes(gh, e.number)?).iter().any(|l| {
+            (l.is_live(now) || (claimed && l.origin == "spawned"))
+                && (scope.own_session != Some(l.session.as_str())
+                    || (scope.own_spawned_blocks && l.origin == "spawned"))
+        }) {
             candidates.push(e);
         }
     }
