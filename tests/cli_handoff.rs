@@ -385,3 +385,19 @@ fn a_secret_in_the_input_is_refused_and_writes_nothing() {
     assert!(!v.to_string().contains(&secret));
     assert_eq!(bodies(&fake, 1).len(), 1, "no handoff comment");
 }
+
+#[test]
+fn a_session_id_in_a_line_is_not_a_secret() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.comment(1, &join_note("root_a", None));
+    let file = lines_file(
+        "sid",
+        &format!(
+            "next: ask session_{} about it\n",
+            "01SsFUkfeX2mg29KV4Lhoi5P"
+        ),
+    );
+    let (code, v) = run(&fake, "root_a", NOW, &["handoff", "--from", &file]);
+    assert_eq!(code, 0, "{v}");
+}

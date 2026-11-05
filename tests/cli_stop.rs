@@ -237,3 +237,12 @@ fn a_secret_in_the_signature_is_refused_and_records_nothing() {
     assert!(!v.to_string().contains(&secret));
     assert!(fake.comments_of(5).is_empty());
 }
+
+#[test]
+fn a_snake_case_signature_is_not_a_secret() {
+    let fake = FakeGithub::start();
+    building(&fake, 5);
+    let sig = "E0308_mismatched_types_in_src_cli_handoff_rs_line_72";
+    let (code, v) = fail(&fake, 5, sig, &[]);
+    assert_eq!(code, 0, "{v}");
+}

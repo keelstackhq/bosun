@@ -57,3 +57,29 @@ fn a_secret_in_the_text_is_refused_without_echo() {
     assert!(!v.to_string().contains(&secret));
     assert!(v["next"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn a_high_entropy_word_is_refused_and_ids_and_hashes_pass() {
+    let fake = FakeGithub::start();
+    let secret = format!("{}/{}", "wJalrXUtnFEMI/K7MDENG", "bPxRfiCYEXAMPLEKEY");
+    let (code, v) = run(&fake, "session_test", NOW, &["msg", "s", &secret]);
+    assert_eq!(code, 2, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("high-entropy")
+    );
+    assert!(!v.to_string().contains(&secret));
+    let integrity = format!(
+        "sha512-{}==",
+        "q8Zr3KxP0vLm5NwT2bYc7HdJ4sFg9AeUq8Zr3KxP0vLm5NwT2bYc"
+    );
+    for ok in [
+        format!("session_{}", "01SsFUkfeX2mg29KV4Lhoi5P"),
+        format!("see {integrity}"),
+    ] {
+        let (code, v) = run(&fake, "session_test", NOW, &["msg", "s", &ok]);
+        assert_eq!(code, 0, "{v}");
+    }
+}
