@@ -67,3 +67,29 @@ fn claim_judges_gated_as_wave_does_not_by_the_stored_flag() {
     let (code, v) = run(&fake, "session_c", NOW, &["claim", "11"]);
     assert_eq!(code, 3, "the plain task is still bundled: {v}");
 }
+
+#[test]
+fn a_task_gated_by_the_tree_may_grow_onto_a_gated_path() {
+    // Gated now only by the default branch's tree: it runs alone, outside the bundle, so a
+    // `--touch` on a gated path is not refused as bundle growth.
+    let fake = world(Some(("packages/a/hoist.toml", false)));
+    let body = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["packages/**"]} -->"#;
+    fake.issue(13, "Task 13", &["bosun:state/ready"], body);
+    let args = ["claim", "13", "--touch", ".github/workflows/x.yml"];
+    let (code, v) = run(&fake, "session_b", NOW, &args);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_wildcard_touch_reads_the_tree_once_per_check() {
+    let fake = world(Some(("packages/a/x.rs", false)));
+    let body = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["packages/**"]} -->"#;
+    fake.issue(13, "Task 13", &["bosun:state/ready"], body);
+    let args = ["claim", "13", "--touch", "packages/**"];
+    let (code, v) = run(&fake, "session_b", NOW, &args);
+    let trees = (fake.requests().iter())
+        .filter(|r| r.path.contains("/git/trees/"))
+        .count();
+    assert!(code == 0 || code == 3, "{v}");
+    assert!(trees <= 2, "tree read {trees} times");
+}

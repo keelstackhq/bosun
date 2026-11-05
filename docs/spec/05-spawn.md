@@ -6,7 +6,7 @@ of merged tasks. `bosun wave plan <epic>` returns the next set of tasks that can
 no overlapping touch paths, all dependencies merged, at most `waves.max_parallel`.
 A task counts as merged when its state is `merged` or its issue is closed; tasks of other epics count too.
 
-Wave plan for a single-shape epic (`"shape":"single"` in its epic metadata, from the item's `shape`): all ready tasks are one PR. `run` has one entry, the lowest ready issue, with `bundle` (the other ready issues), `touch` (the union of their touch paths) and `closes` (the lead and the bundle). The bundle waits as a whole for a dependency outside it, for a lease conflict of the union, and while one of its tasks is in flight (active, with or without a lease: the bundled issues stay `ready` until the lead's PR merges and closes them): the others wait "bundled into #N's PR". Only the planner's own leases on the bundled issues are skipped in the conflict check. While an owner prerequisite holds one ready task, the whole bundle waits. Gated tasks (D-016: task metadata `gated`, `risk: high`, or a touch path under a risk rule: the wave recomputes this from `.bosun/risk.toml` on the default branch, built-in rules when absent, and does not trust the stored `gated`; a wildcard touch is resolved against the default branch's file tree, so `packages/**` holding a `hoist.toml` is gated, and when that tree is unreadable or truncated the task counts as gated and `data.warnings` says why) never join the bundle: the bundle is planned over the other tasks, and a ready gated task is planned like a split task (dependencies, leases, in-flight overlap), with its own run entry without `bundle`. One that overlaps the bundle's touch union waits "overlaps the bundle of #N". In-flight detection counts only bundled tasks. An epic without `shape` plans as split. `waves.max_parallel` caps the gated entries (the bundle takes one slot).
+Wave plan for a single-shape epic (`"shape":"single"` in its epic metadata, from the item's `shape`): all ready tasks are one PR. `run` has one entry, the lowest ready issue, with `bundle` (the other ready issues), `touch` (the union of their touch paths) and `closes` (the lead and the bundle). The bundle waits as a whole for a dependency outside it, for a lease conflict of the union, and while one of its tasks is in flight (active, with or without a lease: the bundled issues stay `ready` until the lead's PR merges and closes them): the others wait "bundled into #N's PR". Only the planner's own leases on the bundled issues are skipped in the conflict check. While an owner prerequisite holds one ready task, the whole bundle waits. Gated tasks (D-016: task metadata `gated`, `risk: high`, or a touch path under a risk rule: the wave recomputes this from `.bosun/risk.toml` on the default branch, built-in rules when absent, and does not trust the stored `gated`; a wildcard touch is resolved against the default branch's file tree, so `packages/**` holding a `hoist.toml` is gated, and when that tree is unreadable or truncated the task counts as gated and `data.warnings` says why) never join the bundle: the bundle is planned over the other tasks, and a ready gated task is planned like a split task (dependencies, leases, in-flight overlap), with its own run entry without `bundle`. One that overlaps the bundle's touch union waits "overlaps the bundle of #N". In-flight detection counts only bundled tasks. The agent opens the bundle's PR with `bosun pr <lead> --bundle <issue>... --auto-merge` (one `--bundle` per other issue of `closes`), and risk-check re-judges the PR as R-bundle if it closes several tasks and changes a gated path. An epic without `shape` plans as split. `waves.max_parallel` caps the gated entries (the bundle takes one slot).
 
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
@@ -151,3 +151,19 @@ spawns one session per area, then coordinates with `bosun wait` and `bosun statu
 The SessionStart context ends with the global lessons of `docs/lessons.toml` (at most 8, as `id *
 rule` lines under `Lessons:`), in the unreachable-GitHub text too; a missing or unparseable file
 adds nothing (spec §6).
+
+Stop hook (`bosun hook stop`, wired in `.claude/settings.json` and the core channel piece): a
+session no human answers (origin `spawned` or `routine`) must post a `result` (which ends its
+lease) or, as a root, a `handoff` before it stops. When it still holds a live lease with neither
+by itself after the lease record (a `result` or `handoff` on the leased issue, or a `handoff` on
+the registry, where `bosun handoff` posts it; comment ids order them), the hook blocks the stop
+once (`{"decision":"block","reason":...}`, naming the issue and `bosun result`, plus `bosun
+handoff` for a root). A `local` or `slack` session is never blocked and reads nothing: its stop
+ends a turn (often a question to the owner, D-009), not the session. With `stop_hook_active`
+true it prints nothing, so it never loops. It fails open: no GitHub, an unreadable repo or a
+panic allows the stop. The settings command is a wrapper, `out=$(bosun hook stop) && printf
+'%s\n' "$out"; exit 0`, so an older bosun that exits 2 on the unknown subcommand cannot block (a
+Stop hook exiting 2 blocks). A session with a running `bosun wait` is not blocked: `wait` writes
+`<git common dir>/bosun/wait/<pid>.json` `{pid, session, started}` (shared by all worktrees) and
+removes it on exit; the hook skips the block for a marker of its session whose pid is alive
+(`/proc/<pid>`; without /proc: started within the wait timeout) and deletes dead markers.

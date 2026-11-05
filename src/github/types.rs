@@ -372,6 +372,8 @@ pub struct GitCommit {
     /// The sha of the commit's root tree.
     pub tree: String,
     pub parents: Vec<String>,
+    /// The full commit message (empty when GitHub sent none).
+    pub message: String,
 }
 
 #[derive(Deserialize)]
@@ -384,6 +386,8 @@ pub(crate) struct RawGitCommit {
     sha: String,
     tree: Sha,
     parents: Vec<Sha>,
+    #[serde(default)]
+    message: String,
 }
 
 impl From<RawGitCommit> for GitCommit {
@@ -392,6 +396,7 @@ impl From<RawGitCommit> for GitCommit {
             sha: r.sha,
             tree: r.tree.sha,
             parents: r.parents.into_iter().map(|p| p.sha).collect(),
+            message: r.message,
         }
     }
 }

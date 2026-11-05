@@ -16,7 +16,7 @@ use crate::core::approve::{
     trust_files_changed, verify_ed25519,
 };
 use crate::core::lease::leases_of;
-use crate::core::meta::linked_issues;
+use crate::core::meta::linked_issues_in;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
@@ -144,7 +144,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     // Every linked issue counts: the agent writes the PR body, so a decoy first link must not
     // hide the real task's capabilities.
     let mut task = None;
-    for i in linked_issues(&pull.body) {
+    for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
         if let Some(issue) = gh.get_issue(i)?
             && let Some(meta) = task_meta(&issue)
         {
@@ -164,6 +164,11 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         })
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));
+    matches.extend(risk::bundle_gated(
+        crate::cli::pr_bundle::closed_by_pr(gh, &pull, &app.ctx.repo.to_string())?.count(),
+        &files,
+        &rules,
+    ));
     // The critical floor: a delegate never approves the approval system, secrets or prod.
     let critical = if matches.iter().any(|m| m.approval == Approval::Delegate) {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
@@ -233,7 +238,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     } else {
         Err("signed approvals do not count on this PR".into())
     };
-    let linked = linked_issues(&pull.body);
+    let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
     // Without a linked task there is no lease to check the reviewers against: fail closed.
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);

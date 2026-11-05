@@ -105,14 +105,14 @@ test-integrity:
 The task in a review pack (below) also has `claimant`, `lease_touch` and `touch_added`. The
 claimant is the session of the newest `task-pr` record for the PR on the task issue (else of the
 newest lease record); `lease_touch` is every touch glob of the claimant's lease records, in order,
-ended leases included, and `touch_added` the ones the task metadata's `touch` lacks (a lease
+ended leases included, and `touch_added` the ones that neither the task's `touch` nor any bundled task's `touch` contains (a lease
 widened by `bosun claim <n> --touch ..`). Only comments by writers count, and only the claimant's
 leases; all three are `null` when the comments cannot be read. The instructions ask the reviewer
 to check the files of `touch_added`. The task metadata is not rewritten: it comes from the plan,
-and `plan amend` reconciles it.
+and `plan amend` reconciles it. `task` is the first issue the PR links; `bundle_tasks` lists every other issue of this repo that the PR closes (`Closes #N`, `Closes owner/repo#N` or an issue URL) and that has task metadata of the same epic as the first task, as `{issue, title, body, meta}` (a single-shape bundle; others are left out): the review covers them all, and their `touch` joins the `touch_added` comparison.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
-REVIEW.md). The pack also lists `chunks`: the changed files grouped in order into chunks of at most 40,000 patch bytes (a larger file is a chunk alone); with more than one chunk, the reviewer may give each to its own subagent and then returns one verdict for the whole head, listing every chunk number (1-based) in `chunks_reviewed`. `bosun verdict post`, `comment` and `apply` refuse (exit 1, nothing written) a verdict for a pack with more than one chunk that misses a number: "verdict lists chunks [..] of N; missing [..]"; Only an approving verdict is checked. `review-ci` reviews the whole pack in one call and lists all. A verdict comment carries the list in its own line `<!-- bosun:chunks 1,2 -->` before the verdict marker, never in the JSON (the field is left out when empty), because the release pinned for `verdict apply` may refuse unknown fields; `apply` reads that line. The pack also carries `drift`: when the changed lines of the PR (tests and lockfiles excluded) exceed twice the sum of the `size` in the metadata of the tasks its body links, `{"planned":P,"actual":A}` and a `note` "re-plan? PR #N is A changed lines, planned P"; else null. It is a signal, never an error. A single-shape bundle PR closes several tasks; the pack shows the first linked task, and its `touch_added` lists the other tasks' paths, which the instructions say belong to the bundle. The reviewer returns:
+REVIEW.md). The pack also lists `chunks`: the changed files grouped in order into chunks of at most 40,000 patch bytes (a larger file is a chunk alone); with more than one chunk, the reviewer may give each to its own subagent and then returns one verdict for the whole head, listing every chunk number (1-based) in `chunks_reviewed`. `bosun verdict post`, `comment` and `apply` refuse (exit 1, nothing written) a verdict for a pack with more than one chunk that misses a number: "verdict lists chunks [..] of N; missing [..]"; Only an approving verdict is checked. `review-ci` reviews the whole pack in one call and lists all. A verdict comment carries the list in its own line `<!-- bosun:chunks 1,2 -->` before the verdict marker, never in the JSON (the field is left out when empty), because the release pinned for `verdict apply` may refuse unknown fields; `apply` reads that line. The pack also carries `drift`: when the changed lines of the PR (tests and lockfiles excluded) exceed twice the sum of the `size` in the metadata of the tasks its body links, `{"planned":P,"actual":A}` and a `note` "re-plan? PR #N is A changed lines, planned P"; else null. It is a signal, never an error. The reviewer returns:
 
 ```json
 {"pr":42,"head_sha":"abc123","verdict":"approve","confidence":0.9,
@@ -151,3 +151,11 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
 
 Flakes: a test that fails and then passes on the same commit is a flake. bosun opens a kind/flake
 task and a lesson. A test is never skipped to get green.
+
+Gate record: a local `bosun gate` run that passed (not under `CI` or `GITHUB_ACTIONS`) writes
+`<git dir>/bosun/gate.json` `{head, fingerprint}` (the worktree's own git dir, so parallel
+worktrees keep their own), the fingerprint being the sha256 of `git status --porcelain=v1` plus
+`git diff --no-ext-diff HEAD`. A failed run removes the record, so an earlier gate that passed on
+the same tree no longer vouches for it. The Stop hook adds a `systemMessage` (never a block) when
+the tree is not what that record saw: another head or fingerprint, or no record and uncommitted
+changes. A clean tree with no record, or a tree equal to the record, is silent.

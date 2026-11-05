@@ -8,7 +8,7 @@ use crate::cli::risk_check::owner_logins;
 use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
 use crate::core::lease::{Lease, leases_of, race_winner};
-use crate::core::meta::{TaskMeta, closing_issues, parse_task_meta};
+use crate::core::meta::{TaskMeta, closing_issues_in, parse_task_meta};
 use crate::core::records::{Note, Record, parse_record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
@@ -357,6 +357,7 @@ pub fn is_writer(gh: &dyn Github, user: &str) -> Result<bool> {
 /// usable record and without `scan`, no PR list is read.
 pub fn task_pr_merged(
     gh: &dyn Github,
+    repo: &str,
     base: &str,
     number: u64,
     pulls: &mut Option<Vec<Pull>>,
@@ -372,7 +373,7 @@ pub fn task_pr_merged(
             });
     if let Some(pr) = recorded
         && let Some(p) = gh.get_pull(pr)?
-        && closing_issues(&p.body).contains(&number)
+        && closing_issues_in(&p.body, Some(repo)).contains(&number)
     {
         match (p.state.as_str(), p.merged && p.base_ref == base) {
             ("open", _) => return Ok(false),
@@ -390,7 +391,7 @@ pub fn task_pr_merged(
     let mut ours: Vec<&Pull> = Vec::new();
     for p in all
         .iter()
-        .filter(|p| closing_issues(&p.body).contains(&number))
+        .filter(|p| closing_issues_in(&p.body, Some(repo)).contains(&number))
     {
         if is_writer(gh, &p.user)? {
             ours.push(p);

@@ -102,7 +102,14 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         let mut none = None;
         for issue in unsettled {
             if !merged.contains(&issue.number)
-                && task_pr_merged(gh, &base, issue.number, &mut none, false)?
+                && task_pr_merged(
+                    gh,
+                    &app.ctx.repo.to_string(),
+                    &base,
+                    issue.number,
+                    &mut none,
+                    false,
+                )?
                 && sync_merged(gh, issue.number, &issue, None)?
             {
                 merged.push(issue.number);
