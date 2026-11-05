@@ -108,7 +108,19 @@ fn skips_draft(cond: &str, target: bool) -> bool {
     let expr = unwrap_parens(&expr);
     let guard = |term: &str| {
         let term = unwrap_parens(term);
-        term == plain || term == "!github.event.pull_request.draft" || (!target && term == event)
+        let not_true = plain.replace("==false", "!=true");
+        let event_not_true = event.replace("==false", "!=true");
+        term == plain
+            || term == not_true
+            || term == "!github.event.pull_request.draft"
+            || (!target && (term == event || term == event_not_true))
+    };
+    // A label event's own branch (`github.event.label.name == '...'`): one named label may judge
+    // a draft; such events are rare and cheap.
+    let label = |term: &str| {
+        unwrap_parens(term)
+            .strip_prefix("github.event.label.name==")
+            .is_some_and(|v| v.len() > 2 && v.starts_with('\'') && v.ends_with('\''))
     };
     // A term that confines the job to an event other than a pull request.
     let other_event = |term: &str| {
@@ -122,7 +134,10 @@ fn skips_draft(cond: &str, target: bool) -> bool {
     let ors = split_top(expr, "||");
     if ors.len() > 1 {
         // The guard's own form, or every branch skips drafts or is another event's.
-        return guard(expr) || ors.iter().all(|p| conj(p, &guard) || conj(p, &other_event));
+        return guard(expr)
+            || ors
+                .iter()
+                .all(|p| conj(p, &guard) || conj(p, &other_event) || conj(p, &label));
     }
     conj(expr, &|t| guard(t) || other_event(t))
 }
@@ -367,6 +382,9 @@ struct Job {
     heavy: bool,
     /// The text of the job's whole body (steps included).
     body: String,
+    /// Its first step reads `pull_request.draft` and exits non-zero: a fail-fast check of any
+    /// name, which must run on a draft and not be skipped.
+    fails_fast: bool,
 }
 
 impl Job {
@@ -436,6 +454,7 @@ fn jobs(lines: &[Line]) -> Vec<Job> {
                 .map(|l| format!("{} {}", l.text, l.body))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            fails_fast: first_step_fails_on_draft(body, &props),
         };
         apply_props(&mut job, body, &props);
         // A merge key (`<<: *anchor`) brings the anchor's properties; the job's own win.
@@ -464,6 +483,7 @@ fn jobs(lines: &[Line]) -> Vec<Job> {
                 needs_ids: Vec::new(),
                 heavy: false,
                 body: String::new(),
+                fails_fast: false,
             };
             apply_props(&mut from, abody, &aprops);
             job.cond = job.cond.take().or(from.cond);
@@ -499,6 +519,26 @@ fn fails_on_draft(body: &str) -> bool {
             .iter()
             .any(|p| flat.contains(p));
     draft_exit || success
+}
+
+/// Whether the job's first step (under `steps:`) reads `pull_request.draft` and exits non-zero.
+fn first_step_fails_on_draft(body: &[Line], props: &[usize]) -> bool {
+    let Some(&s) = props.iter().find(|&&j| body[j].key() == Some("steps")) else {
+        return false;
+    };
+    let steps = children(body, s);
+    let Some(first) = steps.first() else {
+        return false;
+    };
+    let text: String = steps
+        .iter()
+        .enumerate()
+        .take_while(|(k, l)| *k == 0 || l.indent > first.indent)
+        .map(|(_, l)| format!("{}{}", l.text, l.body))
+        .collect();
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    flat.contains("pull_request.draft")
+        && ["exit1", "exit2", "exit3"].iter().any(|e| flat.contains(e))
 }
 
 /// Findings for one workflow file (`file` is only a label), in file order.
@@ -564,7 +604,7 @@ pub fn check(file: &str, text: &str) -> Vec<Finding> {
         }
         for j in jobs
             .iter()
-            .filter(|j| !skipped.contains(&j.id.as_str()) && !j.aggregate())
+            .filter(|j| !skipped.contains(&j.id.as_str()) && !j.aggregate() && !j.fails_fast)
         {
             add(
                 Some(&j.id),
@@ -1066,5 +1106,50 @@ jobs:
     fn a_heavy_job_on_push_only_is_not_a_paths_finding() {
         let t = "on:\n  push:\n    branches: [main]\nconcurrency:\n  group: g\n  cancel-in-progress: true\njobs:\n  b:\n    runs-on: windows-latest\n";
         assert_eq!(rules(t), vec![]);
+    }
+    #[test]
+    fn draft_not_true_counts_as_a_skip() {
+        for g in [
+            "github.event.pull_request.draft != true",
+            "github.event_name != 'pull_request' || github.event.pull_request.draft != true",
+        ] {
+            let t = CLEAN.replace(
+                "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+                g,
+            );
+            assert_eq!(rules(&t), vec![], "{g}");
+        }
+    }
+
+    #[test]
+    fn a_job_whose_first_step_fails_on_a_draft_needs_no_skip() {
+        let fast = CLEAN.replace(
+            "    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false\n    runs-on: ubuntu-latest\n    steps:\n",
+            "    runs-on: ubuntu-latest\n    steps:\n      - env:\n          DRAFT: ${{ github.event.pull_request.draft || false }}\n        run: if [ \"$DRAFT\" = true ]; then exit 1; fi\n",
+        );
+        assert_ne!(fast, CLEAN);
+        assert_eq!(rules(&fast), vec![]);
+        // The draft test after a heavy step does not save the minutes.
+        let late = CLEAN.replace(
+            "    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n",
+            "    runs-on: ubuntu-latest\n    steps:\n      - run: cargo test\n      - env:\n          DRAFT: ${{ github.event.pull_request.draft || false }}\n        run: if [ \"$DRAFT\" = true ]; then exit 1; fi\n",
+        );
+        assert_ne!(late, CLEAN);
+        assert_eq!(rules(&late), vec![(Some("ci".into()), "draft")]);
+    }
+
+    #[test]
+    fn a_label_branch_may_judge_a_draft() {
+        let t = CLEAN.replace(
+            "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+            "(github.event.pull_request.draft == false && github.event.action != 'labeled') || (github.event.action == 'labeled' && github.event.label.name == 'bosun:kind/mainfix')",
+        );
+        assert_eq!(rules(&t), vec![]);
+        // Any other `||` branch still breaks the skip.
+        let t = CLEAN.replace(
+            "github.event_name != 'pull_request' || github.event.pull_request.draft == false",
+            "github.event.pull_request.draft == false || github.event.label.name != ''",
+        );
+        assert_eq!(rules(&t), vec![(Some("ci".into()), "draft")]);
     }
 }
