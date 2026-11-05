@@ -22,6 +22,7 @@ pub mod prereqs;
 pub mod records;
 pub mod review;
 pub mod risk;
+pub mod shape;
 pub mod signature;
 pub mod spawn;
 pub mod state;

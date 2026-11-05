@@ -10,6 +10,11 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 1. `bosun status` — see sessions, leases, halt and main-red.
 2. `bosun claim <issue>` — exit 3 means another session holds an overlapping lease; pick
    another task (`bosun wave plan <epic>`).
+   When the run entry has a `bundle`, the whole item is one PR: claim the lead issue with
+   `bosun claim <lead>` and one `--touch <glob>` per glob of the entry's `touch`, do every task
+   of the bundle, and open the PR yourself with a body that has one `Closes #N` line per issue
+   in `closes` and `<!-- bosun:task-pr <lead> -->`. Then `bosun pr <lead> --auto-merge` reuses
+   that PR (from its branch, or by the marker with `Closes #<lead>`).
 3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.

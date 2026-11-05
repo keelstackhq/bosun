@@ -16,9 +16,9 @@ fn a_broken_plan_reports_every_error_with_its_line() {
     let e = plan::parse(text).unwrap_err();
     let lines: Vec<_> = e.iter().map(|e| e.line).collect();
     assert_eq!(lines, [1, 1]);
-    let text = "# P\n## M1: Bad\n### Tasks\n- T1: a\n  size: 999\n### Done when\n- UC-M1-2: x\n";
+    let text = "# P\n## M1: Bad\nshape: split\n### Tasks\n- T1: a\n  size: 999\n### Done when\n- UC-M1-2: x\n";
     let e = plan::parse(text).unwrap_err();
     let lines: Vec<_> = e.iter().map(|e| e.line).collect();
-    assert_eq!(lines, [2, 2, 4, 5, 7]);
+    assert_eq!(lines, [2, 2, 5, 6, 8]);
     assert!(e.iter().all(|e| !e.fix.is_empty()));
 }

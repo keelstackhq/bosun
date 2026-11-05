@@ -53,6 +53,8 @@ The state machine, stop rules and resume.
    - `area:` (required) the area label, `^[a-z0-9-]+$`. One area has one orchestrator.
    - `depends:` (optional) comma-separated item IDs, or `seed`. Every ID must exist in the plan,
      and the graph has no cycles.
+   - `shape:` (optional) `single`, `split` or `auto` (default). `single` makes the whole item
+     one PR; `split` makes one small PR per task. See "Choosing the PR shape".
 4. Text between the fields and `### Tasks` is the item's description; it goes into the epic body.
 5. `### Tasks` lists the tasks, one `- <ID>: <title>` bullet each. The task ID matches
    `^T[0-9]{1,3}$` and is unique in its item. Indented `key: value` lines under the bullet:
@@ -63,8 +65,8 @@ The state machine, stop rules and resume.
      it and at the root, and a `package.json` counts `pnpm-lock.yaml` the same way. Claim, the
      edit hook and `bosun pr` will adopt this in later tasks.
    - `depends:` (optional) task IDs of the same item, or `<item>/<task>` for another item.
-   - `size:` (optional) the planned changed lines. More than 400 is an error; a `risk: high` task
-     over 100 is a warning.
+   - `size:` (optional) the planned changed lines. More than 400 is an error in a split item; a single item's
+     tasks have no per-task cap; over 1500 in all is a warning. A `risk: high` task over 100 is a warning.
    - `kind:` (optional) `feature` (default), `bookkeeping`, `mainfix`, `process-fix`, `flake`.
    - `risk:` (optional) `high` marks a task that bosun expects to need an owner review.
    - `done-by:` (optional) `#N` (or `N`): PR N already did this task. `bosun plan import` and
@@ -102,7 +104,29 @@ The state machine, stop rules and resume.
 8. Any rule broken is a parse error with the file, the line and the fix; `bosun plan import` then
    changes nothing (exit 1).
 
+## Choosing the PR shape
+
+Small capped PRs cost review cycles, so the default is one PR for the whole item. `shape: auto`
+(the default) lets `bosun plan check` decide, in this order:
+
+1. A `risk: high` task: `split`, forced. It needs its own small PR (D-013), at most 400 lines.
+2. One task: `single`.
+3. More than 1500 lines in all (a task without `size:` counts 200): `split`. The cap is soft:
+   `shape: single` keeps the item whole with a warning, and the review pack scales by chunks.
+4. `split` only when at least 2 tasks run side by side (tasks divided by the longest `depends`
+   chain), the item is over 600 lines, and no two tasks touch overlapping paths.
+5. Otherwise `single`.
+
+`bosun plan check` prints `shape` and `shape_reasons` for each item. `shape: single` on an item
+that has a `risk: high` task is an error. Set `shape: split` when parallel PRs clearly win, for
+example `shape: split` for an item of three independent 350-line tasks.
+
+A single item is one wave entry: `bosun wave plan` returns the lowest ready issue with a
+`bundle` of the others, and one PR closes every bundled task (`Closes #N` per issue).
+
 ## Cutting tasks for parallel work
+
+These rules matter for split items; a single item is one PR.
 
 PRs that run in parallel must not edit the same file, or the second one to merge has a merge
 conflict to resolve. Cut the plan by file ownership:

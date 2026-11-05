@@ -15,6 +15,7 @@ use crate::core::lease::leases_of;
 use crate::core::meta::{TaskMeta, closing_issues, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::prereqs as pq;
+use crate::core::shape;
 use crate::core::state::{State, labels_to_remove, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -93,8 +94,10 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
         .items
         .iter()
         .map(|i| {
+            let d = shape::effective(i).unwrap_or_else(|_| shape::decide(i));
             json!({"id": i.id, "title": i.title, "area": i.area,
-                "tasks": i.tasks.len(), "ucs": i.ucs.len()})
+                "tasks": i.tasks.len(), "ucs": i.ucs.len(), "shape": d.shape,
+                "shape_reasons": d.reasons, "size": d.total})
         })
         .collect();
     Ok(Outcome::data(json!({"file": a.file, "title": p.title,
@@ -458,7 +461,8 @@ fn epic_body(item: &Item, file: &str) -> String {
         .collect();
     let ids: Vec<&str> = item.ucs.iter().map(|u| u.id.as_str()).collect();
     let meta = json!({"item": item.id, "area": item.area, "plan": file,
-        "depends": item.depends, "ucs": ids});
+        "depends": item.depends, "ucs": ids,
+        "shape": shape::effective(item).unwrap_or_else(|_| shape::decide(item)).shape});
     format!(
         "{}\n{}\n\n{tasks}\n{ucs}\n<!-- bosun:epic {meta} -->",
         marker(&item.id),
@@ -656,6 +660,13 @@ pub(crate) fn epic_plan(body: &str) -> Option<String> {
     let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
     let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
     v["plan"].as_str().map(str::to_string)
+}
+
+/// The `shape` (`single` or `split`) named in the metadata of an epic body.
+pub(crate) fn epic_shape(body: &str) -> Option<String> {
+    let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
+    let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
+    v["shape"].as_str().map(str::to_string)
 }
 
 /// Replace the task metadata comment of `body`, keeping every other byte.

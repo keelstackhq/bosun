@@ -73,7 +73,7 @@ to check the files of `touch_added`. The task metadata is not rewritten: it come
 and `plan amend` reconciles it.
 
 Review verdict: `bosun review-pack <pr>` builds the input (diff, task, UCs, matching lessons,
-REVIEW.md). The reviewer returns:
+REVIEW.md). The pack also lists `chunks`: the changed files grouped in order into chunks of at most 40,000 patch bytes (a larger file is a chunk alone); with more than one chunk, the reviewer may give each to its own subagent and then returns one verdict for the whole head. A single-shape bundle PR closes several tasks; the pack shows the first linked task, and its `touch_added` lists the other tasks' paths, which the instructions say belong to the bundle. The reviewer returns:
 
 ```json
 {"pr":42,"head_sha":"abc123","verdict":"approve","confidence":0.9,

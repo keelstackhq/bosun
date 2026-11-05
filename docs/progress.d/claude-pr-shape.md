@@ -1,0 +1,1 @@
+- 2026-11-05 · pr-shape · item `shape:` (single/split/auto), single-PR wave bundle, review-pack chunks · PR (claude/pr-shape)

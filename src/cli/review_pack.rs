@@ -9,7 +9,7 @@ use super::PrArg;
 use crate::app::{App, notes, task_meta, trusted_notes};
 use crate::core::lessons;
 use crate::core::records::{Record, parse_record};
-use crate::core::review::use_cases;
+use crate::core::review::{chunks, use_cases};
 use crate::core::verdict::closes_issue;
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -19,6 +19,9 @@ const MAX_SCAN: usize = 20;
 /// GitHub lists at most this many commits of a PR.
 const MAX_PR_COMMITS: usize = 250;
 
+/// Patch bytes per reviewer subagent chunk (docs/defaults.md).
+const CHUNK_BYTES: usize = 40_000;
+
 const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
 \"verdict\":\"approve\"|\"request-changes\",\"confidence\":0..1,\"findings\":[{\"severity\":\
 \"blocker\"|\"major\"|\"minor\"|\"nit\",\"file\":\"\",\"line\":N,\"claim\":\"\",\"evidence\":\"\"}],\
@@ -26,7 +29,11 @@ const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions
 Set `escalate_risk` only when the change touches governance, CI, secrets, dependencies or production writes \
 and the risk rules did not catch it; an escalated verdict never turns green, so do not escalate what \
 risk-check already flags (R-gov, R-ci, ...). If `task.touch_added` is not empty, the claimant widened \
-its lease beyond the task's `touch`: check that the changes to those files belong to the task.";
+its lease beyond the task's `touch`: check that the changes to those files belong to the task; a PR that closes several tasks of one \
+item (a single-shape bundle) widens it to their paths by design, so check the files against those tasks. \
+When `chunks` has more than one entry and you can start subagents, give each chunk to its own reviewer \
+subagent (with the task, UCs, lessons and REVIEW.md), then check how the chunks fit together yourself and \
+return one verdict for the whole head; findings keep their file and line.";
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let app = App::load(dir)?;
@@ -149,7 +156,25 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
     }
     let store = lessons::parse(gh.file_at("docs/lessons.toml", &pull.base_sha)?.as_deref())
         .map_err(|m| BosunError::error(m, "fix docs/lessons.toml on the base branch"))?;
+    let sizes: Vec<(String, usize)> = files
+        .iter()
+        .map(|f| {
+            (
+                f.filename.clone(),
+                f.patch.as_ref().map_or(
+                    // No patch (binary or too large to show): its own chunk.
+                    if f.additions + f.deletions > 0 {
+                        CHUNK_BYTES
+                    } else {
+                        0
+                    },
+                    String::len,
+                ),
+            )
+        })
+        .collect();
     Ok(json!({
+        "chunks": chunks(&sizes, CHUNK_BYTES),
         "pr": n, "title": pull.title, "head_sha": pull.head_sha, "base_sha": pull.base_sha,
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,

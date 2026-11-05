@@ -20,6 +20,8 @@ pub struct TaskInfo {
 pub struct Wave {
     /// Issues to start now, in issue order.
     pub run: Vec<u64>,
+    /// Single-shape epic: the other issues done in the same PR as `run[0]` (empty for split).
+    pub bundle: Vec<u64>,
     /// Issues not started, with the reason.
     pub waiting: Vec<(u64, String)>,
 }
@@ -101,6 +103,88 @@ pub fn plan(
         }
         wave.run.push(t.issue);
         picked.push((t.issue, touch));
+    }
+    wave
+}
+
+/// Wave of a single-shape epic: all its ready tasks are one PR, led by the lowest issue. Nothing
+/// runs while one of its tasks is in flight, while a dependency outside the bundle is open, or
+/// while the union of the touch paths conflicts with a lease of another issue.
+pub fn plan_single(tasks: &[TaskInfo], merged: &[String], leases: &[Lease], me: &str) -> Wave {
+    let mut sorted: Vec<&TaskInfo> = tasks.iter().collect();
+    sorted.sort_by_key(|t| t.issue);
+    let mut wave = Wave::default();
+    let inflight = sorted
+        .iter()
+        // Any active member is in flight, lease or not: the bundled issues stay `ready` until the
+        // lead's PR merges and closes them, so a lapsed lease must not hand them out again.
+        .find(|t| t.state.is_some_and(State::is_active))
+        .map(|t| t.issue);
+    let mut members: Vec<&TaskInfo> = Vec::new();
+    for t in sorted {
+        if t.state == Some(State::Ready) {
+            members.push(t);
+        } else {
+            let st = t.state.map_or("no state".to_string(), |s| s.to_string());
+            wave.waiting.push((t.issue, format!("state is {st}")));
+        }
+    }
+    let hold = |why: Option<String>, members: &[&TaskInfo], wave: &mut Wave| match why {
+        Some(why) => {
+            wave.waiting
+                .extend(members.iter().map(|t| (t.issue, why.clone())));
+            true
+        }
+        None => false,
+    };
+    if hold(
+        inflight.map(|n| format!("bundled into #{n}'s PR")),
+        &members,
+        &mut wave,
+    ) {
+        return wave;
+    }
+    let ids: Vec<&String> = members.iter().map(|t| &t.plan_id).collect();
+    let mut open: Vec<&str> = Vec::new();
+    for d in members.iter().flat_map(|t| &t.depends) {
+        if !merged.contains(d) && !ids.contains(&d) && !open.contains(&d.as_str()) {
+            open.push(d);
+        }
+    }
+    let open = (!open.is_empty()).then(|| format!("waits for {}", open.join(", ")));
+    if hold(open, &members, &mut wave) {
+        return wave;
+    }
+    let mut touch: Vec<String> = Vec::new();
+    for g in members.iter().flat_map(|t| &t.touch) {
+        if !touch.contains(g) {
+            touch.push(g.clone());
+        }
+    }
+    let globs = match glob::parse_all(&touch) {
+        Ok(g) if !g.is_empty() => g,
+        Ok(_) => {
+            hold(Some("has no touch paths".into()), &members, &mut wave);
+            return wave;
+        }
+        Err(e) => {
+            hold(Some(e), &members, &mut wave);
+            return wave;
+        }
+    };
+    // Only my own leases on the members are mine; another session's lease on one still conflicts.
+    let own = |l: &Lease| l.session == me && members.iter().any(|t| t.issue == l.issue);
+    let others: Vec<Lease> = leases.iter().filter(|l| !own(l)).cloned().collect();
+    let lead = members.first().map(|t| t.issue);
+    let conflict = lease::conflicts(&globs, &others, me, lead)
+        .first()
+        .map(|c| c.describe());
+    if hold(conflict, &members, &mut wave) {
+        return wave;
+    }
+    if let Some((lead, rest)) = members.split_first() {
+        wave.run.push(lead.issue);
+        wave.bundle = rest.iter().map(|t| t.issue).collect();
     }
     wave
 }
@@ -214,5 +298,88 @@ mod tests {
         assert!(reasons.contains(&"waves.max_parallel is 3"), "{reasons:?}");
         // With a cap of 1 nothing starts while a task is in flight.
         assert!(plan(&tasks, &[], &leases, "me", 2).run.is_empty());
+    }
+
+    fn lease(issue: u64, session: &str, touch: &[&str]) -> Lease {
+        Lease {
+            issue,
+            session: session.into(),
+            origin: "local".into(),
+            expires: Timestamp(i64::MAX),
+            touch: touch.iter().map(|s| s.to_string()).collect(),
+            comment_id: issue,
+        }
+    }
+
+    fn trio() -> Vec<TaskInfo> {
+        vec![
+            task(7, "M1/T3", State::Ready, &["M1/T2"], &["c/**", "a/**"]),
+            task(5, "M1/T1", State::Ready, &[], &["a/**"]),
+            task(6, "M1/T2", State::Ready, &["M1/T1"], &["b/**"]),
+        ]
+    }
+
+    #[test]
+    fn single_bundles_ready_tasks_behind_the_lowest_issue() {
+        let w = plan_single(&trio(), &[], &[], "me");
+        assert_eq!((w.run, w.bundle), (vec![5], vec![6, 7]));
+        assert!(w.waiting.is_empty());
+    }
+
+    #[test]
+    fn single_in_flight_member_runs_nothing() {
+        let mut t = trio();
+        t.push(task(4, "M1/T0", State::Building, &[], &["z/**"]));
+        let w = plan_single(&t, &[], &[lease(4, "me", &["z/**"])], "me");
+        assert!(w.run.is_empty() && w.bundle.is_empty());
+        assert!(w.waiting.contains(&(5, "bundled into #4's PR".to_string())));
+        assert!(w.waiting.contains(&(4, "state is building".to_string())));
+        // Active without a live lease (the lead's PR waits on CI): still in flight.
+        assert!(plan_single(&t, &[], &[], "me").run.is_empty());
+    }
+
+    #[test]
+    fn single_respects_another_sessions_lease_on_a_member() {
+        let t = trio();
+        let w = plan_single(&t, &[], &[lease(5, "other", &["a/**"])], "me");
+        assert!(w.run.is_empty(), "{w:?}");
+        assert_eq!(
+            plan_single(&t, &[], &[lease(5, "me", &["a/**"])], "me").run,
+            vec![5]
+        );
+    }
+
+    #[test]
+    fn single_external_dependency_holds_the_whole_bundle() {
+        let mut t = trio();
+        t[1].depends = vec!["X1/T1".into()];
+        let w = plan_single(&t, &[], &[], "me");
+        assert!(w.run.is_empty());
+        assert_eq!(w.waiting.len(), 3);
+        assert!(w.waiting.iter().all(|(_, r)| r == "waits for X1/T1"));
+        assert_eq!(plan_single(&t, &["X1/T1".into()], &[], "me").run, vec![5]);
+    }
+
+    #[test]
+    fn single_waits_on_state_touch_and_foreign_leases() {
+        let mut t = trio();
+        t.push(task(8, "M1/T4", State::Blocked, &[], &["d"]));
+        let w = plan_single(&t, &[], &[], "me");
+        assert_eq!(w.run, vec![5]);
+        assert_eq!(w.waiting, vec![(8, "state is blocked".to_string())]);
+        t[0].touch.clear();
+        t[1].touch.clear();
+        t[2].touch.clear();
+        let w = plan_single(&t, &[], &[], "me");
+        assert!(w.run.is_empty());
+        assert!(w.waiting.iter().any(|(_, r)| r == "has no touch paths"));
+        let t = trio();
+        let w = plan_single(&t, &[], &[lease(99, "other", &["b/x.rs"])], "me");
+        assert!(w.run.is_empty());
+        assert!(
+            w.waiting.iter().all(|(_, r)| r.contains("#99")),
+            "{:?}",
+            w.waiting
+        );
     }
 }

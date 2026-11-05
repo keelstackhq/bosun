@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use crate::core::meta::ALLOW_KINDS;
+use crate::core::shape::{self, MAX_SINGLE, MAX_TASK, Shape};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Plan {
@@ -22,6 +23,9 @@ pub struct Item {
     pub area: String,
     /// Item ids or "seed".
     pub depends: Vec<String>,
+    /// `shape:`; `None` is auto (`core::shape::decide`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<Shape>,
     pub description: String,
     pub tasks: Vec<Task>,
     pub ucs: Vec<Uc>,
@@ -36,6 +40,8 @@ pub struct Task {
     /// Normalised to `<item>/<task>`.
     pub depends: Vec<String>,
     pub size: Option<u32>,
+    #[serde(skip)]
+    pub size_line: usize,
     pub kind: String,
     pub risk: String,
     /// Test-integrity finding kinds the task may raise (`allow:`), from [`ALLOW_KINDS`].
@@ -306,7 +312,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             Sec::Fields | Sec::Desc => {
                 let key = KEY.captures(line).filter(|_| sec == Sec::Fields);
                 let known = key.as_ref().map(|c| c[1].to_string());
-                if let Some(k) = known.filter(|k| k == "area" || k == "depends") {
+                if let Some(k) = known.filter(|k| k == "area" || k == "depends" || k == "shape") {
                     if ifields.contains(&k) {
                         bad!(errs, n; "keep one line per field" => "`{k}:` is given twice");
                         continue;
@@ -319,6 +325,13 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                         bad!(errs, n; "use lowercase letters, digits and `-`" => "area `{v}` does not match ^[a-z0-9-]+$")
                     }
                     Some(("depends", v)) => it.depends = csv(v),
+                    Some(("shape", "auto")) => it.shape = None,
+                    Some(("shape", v)) => match Shape::parse(v) {
+                        Some(s) => it.shape = Some(s),
+                        None => {
+                            bad!(errs, n; "use shape: single, split or auto" => "shape `{v}` is not valid")
+                        }
+                    },
                     _ => {
                         sec = Sec::Desc;
                         desc.push(line);
@@ -343,10 +356,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                     "touch" => t.touch = csv(v),
                     "depends" => t.depends = csv(v),
                     "size" => match v.parse::<u32>() {
-                        Ok(s) if s > 400 => {
-                            bad!(errs, n; "split the task so each PR is at most 400 lines" => "size {s} is over 400 changed lines")
-                        }
-                        Ok(s) => t.size = Some(s),
+                        Ok(s) => (t.size, t.size_line) = (Some(s), n),
                         Err(_) => {
                             bad!(errs, n; "write the planned changed lines, e.g. `size: 250`" => "size `{v}` is not an integer")
                         }
@@ -573,6 +583,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             }
         }
     }
+    shape_errors(&items, &mut errs, &mut warns);
     errs.sort_by_key(|e| e.line);
     if errs.is_empty() {
         touch_warnings(&items, &mut warns);
@@ -592,6 +603,29 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             warnings: warns,
         }),
         _ => Err(errs),
+    }
+}
+
+/// Size rules by the effective shape: a split item's tasks are at most 400 lines each, a single
+/// item over 1500 in all is a warning (the cap is soft: review chunks scale), and `shape: single`
+/// is refused where the shape is forced to split.
+fn shape_errors(items: &[Item], errs: &mut Vec<PlanError>, warns: &mut Vec<PlanError>) {
+    for it in items.iter().filter(|i| !i.tasks.is_empty()) {
+        match shape::effective(it) {
+            Err(why) => {
+                bad!(errs, it.line; "remove the risk: high task to its own item, or use shape: split" => "`shape: single` is not allowed: {why}")
+            }
+            Ok(d) if d.shape == Shape::Split => {
+                for t in it.tasks.iter().filter(|t| t.size > Some(MAX_TASK)) {
+                    let s = t.size.unwrap_or(0);
+                    bad!(errs, t.size_line; "split the task so each PR is at most 400 lines, or set `shape: single` (no risk: high task)" => "size {s} is over 400 changed lines");
+                }
+            }
+            Ok(d) if d.total > MAX_SINGLE => {
+                bad!(warns, it.line; "keep it whole only if one review of the goal beats parallel PRs; else use shape: split" => "{} is {} lines, over the {MAX_SINGLE}-line single-PR cap", it.id, d.total);
+            }
+            Ok(_) => {}
+        }
     }
 }
 
@@ -758,6 +792,29 @@ mod tests {
     }
 
     #[test]
+    fn shape_field() {
+        let sh = |v: &str| w("depends: seed", &format!("depends: seed\nshape: {v}"));
+        assert_eq!(parse(&sh("split")).unwrap().items[0].shape, Some(Shape::Split));
+        assert_eq!(parse(&sh("single")).unwrap().items[0].shape, Some(Shape::Single));
+        assert_eq!(parse(&sh("auto")).unwrap().items[0].shape, None);
+        at(&sh("big"), 9, "shape `big` is not valid");
+        let e = parse(&sh("big")).unwrap_err();
+        assert_eq!(e[0].fix, "use shape: single, split or auto");
+        at(&w("depends: seed", "depends: seed\nshape: split\nshape: single"), 10, "`shape:` is given twice");
+        // Unknown item fields stay description.
+        assert_eq!(parse(&w("Words here.", "foo: bar")).unwrap().items[0].description, "foo: bar");
+    }
+
+    #[test]
+    fn single_is_refused_for_a_risk_high_task() {
+        let t = w("kind: flake", "risk: high").replace("depends: seed", "depends: seed\nshape: single");
+        at(&t, 5, "`shape: single` is not allowed: M1/T2 is risk: high");
+        let e = parse(&t).unwrap_err();
+        assert_eq!(e[0].fix, "remove the risk: high task to its own item, or use shape: split");
+        assert!(parse(&t.replace("shape: single", "shape: split")).is_ok());
+    }
+
+    #[test]
     fn rule5_tasks() {
         for b in ["* T2: x", "+ T2: x", "1. T2: x", "plain text"] {
             chk("- T2: Second", b, 17, "expected a `- T<n>: title` bullet");
@@ -765,7 +822,16 @@ mod tests {
         chk("- T2:", "- T1:", 17, "used twice");
         chk("- T2:", "- X2:", 17, "task bullet");
         chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
-        chk("size: 100", "size: 401", 16, "over 400");
+        at(&w("size: 100", "size: 401").replace("depends: seed", "depends: seed\nshape: split"), 17, "over 400");
+        assert!(parse(&w("size: 100", "size: 401")).is_ok()); // single: 601 lines in all
+        // Over the cap the auto shape is split, so the task is over 400 too.
+        chk("size: 100", "size: 1501", 16, "over 400");
+        let one = w("size: 100", "size: 1501").replace("- T2: Second\n  touch: src/b.rs\n  depends: T1\n  kind: flake\n", "");
+        let warn = &parse(&one).expect("the single cap is soft").warnings;
+        assert!(warn.iter().any(|x| x.line == 5 && x.message.contains("M1 is 1501 lines, over the 1500-line single-PR cap")), "{warn:?}");
+        // An explicit single keeps a big multi-task item whole, with the same warning.
+        let big = w("size: 100", "size: 1501").replace("depends: seed", "depends: seed\nshape: single");
+        assert!(parse(&big).expect("soft cap").warnings.iter().any(|x| x.message.contains("single-PR cap")));
         chk("size: 100", "size: ten", 16, "not an integer");
         chk("kind: flake", "kind: odd", 20, "kind");
         chk("kind: flake", "risk: low", 20, "risk");

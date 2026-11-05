@@ -1,0 +1,1 @@
+- `shape: single|split|auto` on plan items: `bosun plan check` picks one PR for the whole item unless a parallel split clearly wins; `wave plan` bundles a single item into one run entry; `review-pack` adds `chunks` for reviewer subagents.

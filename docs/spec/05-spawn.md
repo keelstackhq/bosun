@@ -6,6 +6,8 @@ of merged tasks. `bosun wave plan <epic>` returns the next set of tasks that can
 no overlapping touch paths, all dependencies merged, at most `waves.max_parallel`.
 A task counts as merged when its state is `merged` or its issue is closed; tasks of other epics count too.
 
+Wave plan for a single-shape epic (`"shape":"single"` in its epic metadata, from the item's `shape`): all ready tasks are one PR. `run` has one entry, the lowest ready issue, with `bundle` (the other ready issues), `touch` (the union of their touch paths) and `closes` (the lead and the bundle). The bundle waits as a whole for a dependency outside it, for a lease conflict of the union, and while one of its tasks is in flight (active, with or without a lease: the bundled issues stay `ready` until the lead's PR merges and closes them): the others wait "bundled into #N's PR". Only the planner's own leases on the bundled issues are skipped in the conflict check. While an owner prerequisite holds one ready task, the whole bundle waits. An epic with an open `risk: high` task (an amend can add one) plans as split, and so does an epic without `shape`. `waves.max_parallel` does not apply.
+
 `bosun wait` blocks until a PR, a check, an issue or a child session's result comment changes
 state (D14). It polls GitHub with backoff (5 s, doubling, at most 60 s) inside one call, up to
 `--timeout` (default 30 min), and returns the change as JSON. It replaces polling by the session
