@@ -512,6 +512,10 @@ pub struct PrArgs {
 #[derive(Debug, Args)]
 pub struct CiLogArgs {
     pub pr: u64,
+    /// Lines kept from the start of each log.
+    #[arg(long, default_value_t = 20)]
+    pub head: usize,
+    /// Lines kept from the end of each log.
     #[arg(long, default_value_t = 80)]
     pub tail: usize,
 }

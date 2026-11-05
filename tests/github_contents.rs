@@ -53,9 +53,12 @@ fn job_log_keeps_the_last_lines() {
     let log: String = (1..=10).map(|i| format!("line {i}\r\n")).collect();
     fake.run_with_job("sha1", "test", "failure", &log);
     let id = gh.failed_jobs("sha1").unwrap()[0].id;
-    assert_eq!(gh.job_log(id, 3).unwrap(), "line 8\nline 9\nline 10");
-    assert_eq!(gh.job_log(id, 50).unwrap().lines().count(), 10);
-    assert_eq!(gh.job_log(id, 0).unwrap(), "");
+    assert_eq!(
+        gh.job_log(id, 0, 3).unwrap(),
+        "… 7 lines cut …\nline 8\nline 9\nline 10"
+    );
+    assert_eq!(gh.job_log(id, 0, 50).unwrap().lines().count(), 10);
+    assert_eq!(gh.job_log(id, 0, 0).unwrap(), "");
 }
 
 #[test]
@@ -65,7 +68,7 @@ fn job_log_follows_the_redirect_without_github_headers() {
     fake.run_with_job("sha1", "test", "failure", "unused");
     fake.log_mode(LogMode::Redirect(format!("{}/log?sig=1", host.url)));
     let id = gh.failed_jobs("sha1").unwrap()[0].id;
-    assert_eq!(gh.job_log(id, 2).unwrap(), "b\nc");
+    assert_eq!(gh.job_log(id, 0, 2).unwrap(), "… 1 lines cut …\nb\nc");
     let seen = host.headers_seen();
     assert_eq!(seen.len(), 1);
     for forbidden in ["authorization", "x-github-api-version"] {
@@ -85,17 +88,17 @@ fn job_log_redirect_to_a_non_http_scheme_is_refused() {
     fake.run_with_job("sha1", "test", "failure", "a");
     fake.log_mode(LogMode::Redirect("ftp://logs.example.test/x".into()));
     let id = gh.failed_jobs("sha1").unwrap()[0].id;
-    let e = gh.job_log(id, 5).unwrap_err();
+    let e = gh.job_log(id, 0, 5).unwrap_err();
     assert!(e.message.contains("not an https URL"), "{}", e.message);
 }
 
 #[test]
 fn job_log_missing_log_and_failing_signed_url_are_errors() {
     let (fake, gh) = setup();
-    assert!(gh.job_log(42, 5).is_err());
+    assert!(gh.job_log(42, 0, 5).is_err());
     // the signed URL answers 401 (the fake wants auth, which is never sent there)
     fake.run_with_job("sha1", "test", "failure", "a");
     fake.log_mode(LogMode::Redirect(format!("{}/again", fake.url())));
     let id = gh.failed_jobs("sha1").unwrap()[0].id;
-    assert!(gh.job_log(id, 5).is_err());
+    assert!(gh.job_log(id, 0, 5).is_err());
 }

@@ -147,8 +147,9 @@ pub trait Github {
     fn enable_auto_merge(&self, node_id: &str, method: &str) -> Result<()>;
     /// Jobs of the workflow runs of `sha` that failed, were cancelled or timed out.
     fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>>;
-    /// The last `tail` lines of a job's log.
-    fn job_log(&self, job_id: u64, tail: usize) -> Result<String>;
+    /// A job's log squashed: the first `head` and last `tail` lines plus up to 20 error lines
+    /// from the middle, with `… N lines cut …` markers (`core::text::squash_log`).
+    fn job_log(&self, job_id: u64, head: usize, tail: usize) -> Result<String>;
     /// The repository itself; `None` when it is not readable (404).
     fn repo_info(&self) -> Result<Option<RepoInfo>>;
     /// The newest published release; `None` when there is none.
@@ -796,7 +797,7 @@ impl Github for LiveGithub {
         Ok(failed)
     }
 
-    fn job_log(&self, job_id: u64, tail: usize) -> Result<String> {
+    fn job_log(&self, job_id: u64, head: usize, tail: usize) -> Result<String> {
         let path = self.path(&format!("/actions/jobs/{job_id}/logs"));
         let text = self.http.get_text(&path)?.ok_or_else(|| {
             BosunError::error(
@@ -804,8 +805,7 @@ impl Github for LiveGithub {
                 "logs expire after 90 days; check the job id",
             )
         })?;
-        let lines: Vec<&str> = text.lines().collect();
-        Ok(lines[lines.len().saturating_sub(tail)..].join("\n"))
+        Ok(crate::core::text::squash_log(&text, head, tail, 20))
     }
 
     fn exists(&self, rest: &str) -> Result<Option<bool>> {
