@@ -20,6 +20,13 @@ BERTH_VERSION=0.1.0
 BERTH_SHA512=4V71F1YqcduupUm/yqc3HaK5/VMH6bD1PZa6xskA+84UiSs1UZRnkX7W+zoLPNizoT2CM1bVGmEtk2cjjYg3Eg==
 BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+J+jEvUBHKxS3xfQMT7HqCO35TUysw==
 BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
+# Claude Code plugins. `keelstack` is bosun's marketplace (.claude-plugin/marketplace.json on this
+# branch of keelstackhq/bosun, owner-reviewed); it pins each plugin source by sha. A marketplace ref
+# must be a branch or tag (`#<sha>` fails to clone). Move the plugin pins with marketplace.json;
+# `bosun doctor` shows drift red.
+KEELSTACK_MARKETPLACE_REF=main
+SUPERPOWERS_SHA=22f0b463e7a5e579904dd6211a520321035526f7
+CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION={% if bosun_version %}{{ bosun_version }}{% else %}{{ template.version }}{% endif %}
 {% if "rust" in pieces %}
@@ -132,3 +139,27 @@ install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$
 npm install -g --ignore-scripts "@keelstackhq/bosun@${BOSUN_VERSION}"
 
 bosun --version
+
+# Prewarm the Claude Code plugins (user scope) so the first session does not clone them. Every
+# failure, an outage or a pin mismatch, only warns (owner decision): `bosun doctor` shows it red.
+# No token: the marketplace and the plugins are public.
+if command -v claude >/dev/null 2>&1; then
+  claude plugin marketplace add "https://github.com/keelstackhq/bosun.git#$KEELSTACK_MARKETPLACE_REF" >/dev/null ||
+    echo "setup-script: adding the keelstack plugin marketplace failed; continuing" >&2
+  plugins_file="${CLAUDE_CONFIG_DIR:-${HOME:-/root}/.claude}/plugins/installed_plugins.json"
+  # plugin_prewarm <plugin@keelstack> <pinned sha>
+  plugin_prewarm() {
+    claude plugin install "$1" --scope user >/dev/null ||
+      echo "setup-script: claude plugin install $1 failed; continuing" >&2
+    got="$(node -e 'try{const p=require(process.argv[1]).plugins[process.argv[2]]||[];process.stdout.write(String((p[0]||{}).gitCommitSha||""))}catch(e){}' "$plugins_file" "$1" 2>/dev/null || true)"
+    if [ -z "$got" ]; then
+      echo "setup-script: $1 is not installed; cannot check its pin" >&2
+    elif [ "$got" != "$2" ]; then
+      echo "setup-script: $1 is at $got, not its pinned $2" >&2
+    fi
+  }
+  plugin_prewarm superpowers@keelstack "$SUPERPOWERS_SHA"
+  plugin_prewarm caveman@keelstack "$CAVEMAN_SHA"
+else
+  echo "setup-script: claude is not on PATH; skipping the plugin prewarm" >&2
+fi
