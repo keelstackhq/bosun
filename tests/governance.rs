@@ -139,6 +139,20 @@ fn builtin_rules_equal_the_repo_rules() {
 }
 
 #[test]
+fn repo_session_rules_cover_the_own_task_loop() {
+    // CI puts the base's .bosun/ over the checkout: read what this commit has.
+    let rules =
+        bosun::hooks::session_rules::parse(&committed(".bosun/session-rules.toml")).unwrap();
+    for (role, text) in [
+        ("orchestrator", &rules.orchestrator),
+        ("worker", &rules.worker),
+    ] {
+        assert!(text.contains("auto-merge"), "{role}: {text}");
+        assert!(text.contains("owner approval"), "{role}: {text}");
+    }
+}
+
+#[test]
 fn owners_name_the_repo_owner() {
     let owners = parse_owners(&read("governance/owners.toml")).unwrap();
     assert_eq!(owners[0].github, "urbanisierung");
