@@ -12,9 +12,10 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    another task (`bosun wave plan <epic>`).
    When the run entry has a `bundle`, the whole item is one PR: claim the lead issue with
    `bosun claim <lead>` and one `--touch <glob>` per glob of the entry's `touch`, do every task
-   of the bundle, and open the PR yourself with a body that has one `Closes #N` line per issue
-   in `closes` and `<!-- bosun:task-pr <lead> -->`. Then `bosun pr <lead> --auto-merge` reuses
-   that PR (from its branch, or by the marker with `Closes #<lead>`). Gated tasks (`risk: high`
+   of the bundle, then open the PR with `bosun pr <lead> --bundle <issue> ... --auto-merge` (one
+   `--bundle` per other issue in `closes`): its body gets a `Closes #N` line for each and the
+   marker; run it again later and it reuses the PR (by branch, or by the marker with `Closes
+   #<lead>`; a PR made by hand needs a `Closes` per bundled issue). Gated tasks (`risk: high`
    or touching a risk path) run alone in their own entry and are never bundled; a bundled
    issue is not claimable while the lead holds the bundle, and `--touch` never adds a risk path to it.
 3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so

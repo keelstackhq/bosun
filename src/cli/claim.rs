@@ -19,7 +19,7 @@ use crate::core::lease::{
 use crate::core::lessons;
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
-use crate::core::shape::{meta_gated, touch_gated, touch_gated_in};
+use crate::core::shape::{meta_gated, touch_gated_in};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -421,10 +421,7 @@ fn refuse_gated_touch(
     meta: &Option<crate::core::meta::TaskMeta>,
     touch: &[String],
 ) -> Result<(), BosunError> {
-    let Some(m) = meta
-        .as_ref()
-        .filter(|m| !m.gated && m.risk != "high" && !touch.is_empty())
-    else {
+    let Some(m) = meta.as_ref().filter(|_| !touch.is_empty()) else {
         return Ok(());
     };
     let single = m
@@ -437,17 +434,13 @@ fn refuse_gated_touch(
     if !single {
         return Ok(());
     }
+    // Judge the task as `wave plan` does: one gated by the rules or the tree runs alone.
     let globs = crate::app::gated_from_default(gh)?;
-    if touch_gated(&m.touch, &globs) {
+    // The default branch's tree, read once: it judges the task and resolves wildcard touches.
+    let files = crate::app::base_files(gh)?;
+    if meta_gated(m, &globs, files.as_deref()) {
         return Ok(());
     }
-    // Wildcards resolve against the default branch's tree (read once, only when one is given).
-    let wild = touch.iter().any(|g| g.contains('*') || g.contains('?'));
-    let files = if wild {
-        crate::app::base_files(gh)?
-    } else {
-        None
-    };
     for g in touch {
         match touch_gated_in(std::slice::from_ref(g), &globs, files.as_deref()) {
             Ok(false) => {}

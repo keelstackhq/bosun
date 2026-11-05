@@ -1,0 +1,1 @@
+- `bosun pr <lead> --bundle <issue>...` writes a `Closes` per bundled issue; risk-check adds `R-bundle` (owner) for a multi-task PR that changes a gated path; closing references in `owner/repo#N` and issue-URL forms count; `review-pack` adds `bundle_tasks` and compares `touch_added` against the whole bundle.

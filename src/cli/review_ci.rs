@@ -51,7 +51,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
         ));
     }
     budget_guard(&app)?;
-    let mut pack = build(gh, n, dry)?;
+    let mut pack = build(gh, &app.ctx.repo.to_string(), n, dry)?;
     let head_sha = pack["head_sha"].as_str().unwrap_or_default().to_string();
 
     // Fail closed: a diff the model cannot see is never approved.

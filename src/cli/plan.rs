@@ -13,7 +13,7 @@ use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
 use crate::core::glob::Glob;
 use crate::core::lease::leases_of;
-use crate::core::meta::{TaskMeta, closing_issues, linked_issues, parse_task_meta};
+use crate::core::meta::{TaskMeta, closing_issues_in, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::prereqs as pq;
 use crate::core::risk::Rules;
@@ -223,6 +223,7 @@ struct Importer<'a> {
     /// `done-by` fields that were refused: the import still runs, then it exits 1.
     refused: Vec<String>,
     dir: PathBuf,
+    repo: String,
     promoted: Vec<String>,
     /// Open owner-checklist items of the plan being imported, and what they hold back.
     open_items: Vec<Held>,
@@ -612,6 +613,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         warnings: vec![],
         refused: vec![],
         dir: app.ctx.dir.clone(),
+        repo: app.ctx.repo.to_string(),
         promoted: vec![],
         open_items: vec![],
         held: vec![],
@@ -1157,7 +1159,7 @@ fn done_by_refusal(
         regex::escape(tid)
     ))
     .is_ok_and(|re| re.is_match(&text));
-    let closes = number.is_some_and(|n| closing_issues(&p.body).contains(&n));
+    let closes = number.is_some_and(|n| closing_issues_in(&p.body, Some(&imp.repo)).contains(&n));
     Ok((!named && !closes).then(|| format!("PR #{pr} does not close {tid} or name it")))
 }
 
