@@ -272,6 +272,7 @@ mod tests {
         assert_eq!(closes_issue("Closes #12\n\nx"), Some(12));
         assert_eq!(closes_issue("this fixes #7."), Some(7));
         assert_eq!(closes_issue("no link"), None);
+        assert_eq!(closes_issue("Fixes other/repo#40"), None);
     }
 
     #[test]

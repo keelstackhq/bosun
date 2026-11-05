@@ -13,7 +13,7 @@ use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
-use crate::core::meta::{closing_issues, linked_issues, parse_task_meta};
+use crate::core::meta::{closing_issues_in, linked_issues, parse_task_meta};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
@@ -194,6 +194,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             "check the number; `bosun status` lists the tasks",
         )
     })?;
+    let bundle = super::pr_bundle::bundle_lines(gh, &issue, &args.bundle)?;
     let branch = current_branch(&app.ctx.dir)?;
     let base = default_branch(gh)?;
     // On the default branch or a detached HEAD there is no task branch: the PR is found by its
@@ -263,7 +264,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         let mut ours: Vec<Pull> = Vec::new();
         for p in gh.list_pulls(None, IssueState::Open)? {
             if p.body.contains(&marker)
-                && closing_issues(&p.body).contains(&n)
+                && closing_issues_in(&p.body, Some(&repo)).contains(&n)
                 && p.base_ref == base
                 && p.head_repo.eq_ignore_ascii_case(&repo)
                 && is_writer(gh, &p.user)?
@@ -309,7 +310,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             .with_data(json!({"pr": p.number})));
         }
         Some(p) => {
-            super::pr_bundle::refuse_gated_bundle(gh, &p)?;
+            super::pr_bundle::refuse_gated_bundle(gh, &p, &repo)?;
+            super::pr_bundle::require_bundle_closes(&p, &repo, &args.bundle)?;
             touch = touch_check(&app, n, || {
                 let total = gh
                     .get_pull(p.number)?
@@ -339,7 +341,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 .or_else(|| head_subject(&app.ctx.dir).filter(|s| is_conventional(s)))
                 .unwrap_or_else(|| issue.title.clone());
             super::refuse_secret("the PR title", &title)?;
-            let body = format!("Closes #{n}\n\n<!-- bosun:task-pr {n} -->");
+            super::pr_bundle::refuse_gated_new(gh, &base, &branch, 1 + args.bundle.len())?;
+            let body = format!("Closes #{n}\n{bundle}\n<!-- bosun:task-pr {n} -->");
             (gh.create_pull(&title, &branch, &base, &body)?, true)
         }
     };

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::PrArg;
 use crate::app::{App, notes, task_meta, trusted_notes};
 use crate::core::lessons;
-use crate::core::meta::linked_issues;
+use crate::core::meta::{closing_issues_in, linked_issues};
 use crate::core::records::{Record, parse_record};
 use crate::core::review::{chunks, use_cases};
 use crate::core::risk::test_path;
@@ -31,8 +31,8 @@ const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions
 Set `escalate_risk` only when the change touches governance, CI, secrets, dependencies or production writes \
 and the risk rules did not catch it; an escalated verdict never turns green, so do not escalate what \
 risk-check already flags (R-gov, R-ci, ...). If `task.touch_added` is not empty, the claimant widened \
-its lease beyond the task's `touch`: check that the changes to those files belong to the task; a PR that closes several tasks of one \
-item (a single-shape bundle) widens it to their paths by design, so check the files against those tasks. \
+its lease beyond the `touch` of the task and of every task in `bundle_tasks`: check that the changes to those files belong to the task. \
+`bundle_tasks` lists the other tasks the PR closes (a single-shape bundle); the review covers them all. \
 When `chunks` has more than one entry and you can start subagents, give each chunk to its own reviewer \
 subagent (with the task, UCs, lessons and REVIEW.md), then check how the chunks fit together yourself and \
 return one verdict for the whole head; findings keep their file and line. When `chunks` has more than one \
@@ -40,7 +40,7 @@ entry, list every chunk number (1-based) in `chunks_reviewed`: a verdict that mi
 
 pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let app = App::load(dir)?;
-    let mut pack = build(app.gh.as_ref(), args.pr, false)?;
+    let mut pack = build(app.gh.as_ref(), &app.ctx.repo.to_string(), args.pr, false)?;
     // Size is a drift signal only (D-016): a note for the reviewer, never an error.
     if let Some(d) = pack["drift"].as_object() {
         let (planned, actual) = (d["planned"].as_u64(), d["actual"].as_u64());
@@ -91,7 +91,7 @@ fn is_lockfile(path: &str) -> bool {
 
 /// The pack of PR `n` (also the input of `bosun review-ci`). With `full` there is no delta
 /// scan: `since_sha` and `delta_fallback` are null and the files are all of the PR's.
-pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunError> {
+pub(crate) fn build(gh: &dyn Github, repo: &str, n: u64, full: bool) -> Result<Value, BosunError> {
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
             format!("PR #{n} does not exist"),
@@ -170,6 +170,8 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
 
     let mut task = Value::Null;
     let mut ucs: Vec<String> = vec![];
+    let mut bundle_tasks: Vec<Value> = vec![];
+    let mut bundle_touch: Vec<String> = vec![];
     if let Some(num) = closes_issue(&pull.body)
         && let Some(issue) = gh.get_issue(num)?
     {
@@ -179,6 +181,18 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
         {
             ucs = use_cases(e.body_text());
         }
+        // The other tasks this PR closes (a single-shape bundle): reviewed with the first one.
+        for b in closing_issues_in(&pull.body, Some(repo)) {
+            if b != num
+                && let Some(bi) = gh.get_issue(b)?
+                && let Some(bm) = task_meta(&bi)
+                && bm.epic == meta.as_ref().and_then(|m| m.epic)
+            {
+                bundle_touch.extend(bm.touch.iter().cloned());
+                bundle_tasks.push(json!({"issue": b, "title": bi.title,
+                    "body": bi.body_text(), "meta": bm}));
+            }
+        }
         // A re-claim with `--touch` widens the lease, not the task metadata: show the globs of
         // the claimant's lease records (ended ones too: the lease may be reaped by now), and
         // which of them the task's `touch` lacks. Only information: an unreadable comment list
@@ -187,8 +201,10 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
             Ok(list) => {
                 let task_touch = meta.as_ref().map(|m| m.touch.clone()).unwrap_or_default();
                 let (who, globs) = claimant_touch(&list, n);
-                let added: Vec<&String> =
-                    globs.iter().filter(|g| !task_touch.contains(g)).collect();
+                let added: Vec<&String> = globs
+                    .iter()
+                    .filter(|g| !task_touch.contains(g) && !bundle_touch.contains(g))
+                    .collect();
                 (json!(who), json!(globs), json!(added))
             }
             Err(e) => {
@@ -229,7 +245,7 @@ pub(crate) fn build(gh: &dyn Github, n: u64, full: bool) -> Result<Value, BosunE
         "since_sha": since, "files": files.iter().map(|f| json!({
             "filename": f.filename, "status": f.status, "additions": f.additions,
             "deletions": f.deletions, "patch": f.patch})).collect::<Vec<_>>(),
-        "task": task, "ucs": ucs, "lessons": lessons::matching(&store, &names).into_iter().map(lessons::line).collect::<Vec<_>>(),
+        "task": task, "bundle_tasks": bundle_tasks, "ucs": ucs, "lessons": lessons::matching(&store, &names).into_iter().map(lessons::line).collect::<Vec<_>>(),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
         "instructions": INSTRUCTIONS, "delta_fallback": delta_fallback,
         "changed_files": pull.changed_files,

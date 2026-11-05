@@ -508,6 +508,9 @@ pub struct PrArgs {
     /// Turn on auto-merge once every required check is green (bosun never merges).
     #[arg(long)]
     pub auto_merge: bool,
+    /// Another issue of the lead's single-shape bundle (repeatable): the PR closes it too.
+    #[arg(long = "bundle", value_name = "ISSUE")]
+    pub bundle: Vec<u64>,
 }
 
 #[derive(Debug, Args)]

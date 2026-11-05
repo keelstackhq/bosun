@@ -334,6 +334,33 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
     })
 }
 
+/// `R-bundle` when a PR that closes several tasks (`closes`) changes a path any rule gates
+/// (D-016): gated work needs its own single-task PR. Re-checked on every push, since `bosun pr`
+/// only sees the files once. Built in, like [`unseen_diff`].
+pub fn bundle_gated(closes: usize, files: &[ChangedFile], rules: &Rules) -> Option<Match> {
+    if closes < 2 {
+        return None;
+    }
+    let evidence: Vec<String> = files
+        .iter()
+        .flat_map(|f| std::iter::once(&f.path).chain(f.previous_path.as_ref()))
+        .filter(|p| {
+            rules
+                .rules
+                .iter()
+                .any(|r| r.paths.iter().any(|g| matches_any_case(g, p)))
+        })
+        .take(5)
+        .map(|p| format!("path {p}"))
+        .collect();
+    (!evidence.is_empty()).then(|| Match {
+        rule: "R-bundle".into(),
+        why: "a PR that closes several tasks changes a gated path: gated work needs its own single-task PR (D-016)".into(),
+        approval: Approval::Owner,
+        evidence,
+    })
+}
+
 /// `high` when any rule matched, else `normal`.
 pub fn level(matches: &[Match]) -> &'static str {
     if matches.is_empty() { "normal" } else { "high" }

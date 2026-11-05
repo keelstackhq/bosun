@@ -106,8 +106,14 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
             {
                 continue;
             }
-            if task_pr_merged(gh, &base, task.number, &mut pulls, true)?
-                && sync_merged(gh, task.number, &task, None)?
+            if task_pr_merged(
+                gh,
+                &app.ctx.repo.to_string(),
+                &base,
+                task.number,
+                &mut pulls,
+                true,
+            )? && sync_merged(gh, task.number, &task, None)?
             {
                 tasks_merged.push(task.number);
             }
