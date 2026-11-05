@@ -54,13 +54,20 @@ These are public today, so they cost nothing. The orchestrator has run data only
   mixed stack splits off `bosun-trusted`: test-integrity and deps, no install, no cache, about
   1 min billed (more for a mixed stack, whose toolchain and `cargo deny` run without a cache).
   The required check's job runs install, fmt, lint and test only after it passed. This costs
-  about 1 more billed minute per run, also for an edit or a draft.
+  about 1 more billed minute per run, also for an edit (a draft starts no job).
 - **Edits run test-integrity only.** A PR body or title edit changes no file. The edit run
   waits for the running run. If the head passed, it keeps the file gates and runs only
   test-integrity, which reads the body, with no toolchain setup (~1 min). Otherwise it runs
   every gate.
-- **Drafts fail fast.** A draft PR fails the check in seconds and runs no gate. A skipped
-  required check would count as passed. `ready_for_review` runs the gates.
+- **Drafts skip the heavy jobs.** A draft PR is not finished, so every heavy job that a pull
+  request event starts skips it at job level (`github.event.pull_request.draft == false`): no
+  runner starts there. The required aggregate (`ci-ok`, `bosun-ok`) is never skipped, since a
+  skipped required check counts as passed: it fails in seconds on a draft. `ready_for_review`
+  runs everything. risk, main-open and review skip drafts too (they post a status only when
+  ready). `bosun gate ci-minutes` fails a workflow that does not (and one without `ready_for_review`,
+  without cancelling concurrency, or with a matrix or macOS or Windows job on every PR); a
+  comment `# ci-minutes: allow concurrency <reason>` allows a release workflow that must not
+  cancel itself.
 - **Label events skip.** main-open judges again only when the label is `bosun:kind/mainfix`.
 - **Weekly, not nightly.** main-health runs the gates weekly. Every push to main already runs
   them on all of main. The trade-off: a new advisory against an unchanged lockfile (cargo deny)

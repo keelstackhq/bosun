@@ -20,7 +20,7 @@ name: risk
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   issue_comment:
     types: [created]
 
@@ -47,10 +47,11 @@ jobs:
   risk:
     # On a comment: only PR comments that ask for an approval (open to all: bosun counts only an
     # owner's) or a recheck from the repo's owners, members and collaborators (a recheck only
-    # re-judges; the filter limits CI minutes only).
+    # re-judges; the filter limits CI minutes only). On the PR events: not for a draft (no runner
+    # starts; `ready_for_review` judges it). A comment on a draft still judges, as before.
     if: >-
-      github.event_name != 'issue_comment' ||
-      (github.event.issue.pull_request && (contains(github.event.comment.body, '/bosun approve') ||
+      (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (contains(github.event.comment.body, '/bosun approve') ||
       (contains(github.event.comment.body, '/bosun recheck') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))))
     runs-on: ubuntu-latest

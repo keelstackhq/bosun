@@ -47,6 +47,7 @@ pub mod wait;
 pub mod wave;
 use std::path::PathBuf;
 
+pub mod ci_minutes;
 pub mod gate;
 pub mod main_health;
 pub mod review_ci;
@@ -412,7 +413,9 @@ pub struct MsgArgs {
 
 #[derive(Debug, Args)]
 pub struct GateArgs {
-    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, main-open, ...
+    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, ci-minutes, main-open, ...
+    /// `ci-minutes` is built in: it checks `.github/workflows` for the CI-minute rules (drafts skip,
+    /// `ready_for_review`, cancelling concurrency, `paths` on heavy PR jobs).
     pub name: String,
     /// Base ref for the diff (default: the PR base or origin/main).
     #[arg(long)]

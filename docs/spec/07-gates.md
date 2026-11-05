@@ -17,7 +17,7 @@ CI templates call only `bosun gate <name>`. The channel's bosun.yml runs every g
 minute on a private repo (docs/ci-minutes.md). With a ts-pnpm stack (or mixed) it is two jobs
 (§3): `bosun-trusted` runs test-integrity and deps with no PR code, and `ci-ok` (or `bosun-ok`)
 runs install, fmt, lint and test only after it passed, so no PR code runs before or beside the
-gates that must not trust it. bosun's own ci.yml runs them in one job `ci`, the same way (including the edit and draft rules; every step that runs PR code, lint, test and the npm launcher tests, comes after the base's bosun, the pin check and the other gates), and `ci-ok` aggregates it. No PR code runs before the first gate that runs it (lint for rust; for ts-pnpm, the install in the second job): before anything runs rustc, cargo or a stack tool, both workflows put the base commit's `.bosun/` (the gate commands are in its profiles), every `.cargo` directory and every `rust-toolchain(.toml)`, every `.npmrc`, every `.pnpmfile.*` and every `deny.toml`, `.deny.toml`, `deny.exceptions.toml` and `.deny.exceptions.toml` (so cargo deny never reads the PR's policy) over the checkout and delete those the base lacks (a symlinked `.cargo` too), so a PR's edits to them never affect its own run and apply after merge (the run prints a notice naming them; a setup PR, whose base has no `.bosun`, keeps its own `.bosun` with a warning); bosun's ci.yml also pins `RUSTUP_TOOLCHAIN` to its rust-toolchain.toml channel (a test keeps them equal), the channel's toolchain step parses the base's toolchain file (python3 tomllib; only a `[toolchain]` with a plain `channel`, `components`, `targets` and `profile`) and exports `RUSTUP_TOOLCHAIN`, and both override cargo's rustc and wrappers with env (`RUSTC=rustc`, empty `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER`). The gates stop at the first failure, so PR code never runs after a failure it could hide; the bosun binary's sha256 is checked before each gate as defence in depth. Residual: PR code in lint and test (and, for ts-pnpm, in the install and fmt of the second job) has the runner's sudo and can fake its own job's result, as in a gate job of its own before; the owner reviews R-ci. ts-pnpm residual: the PR's `pnpm-lock.yaml` is the audit's input, and its `packageManager` picks the pnpm release (an exact registry version) only while the base has none. Neither caches `~/.cargo/bin` (`cache-bin: false`): a cache a PR's earlier run saved must not put a binary on PATH (residual, as before: the restored `~/.cargo/registry` that the deps gate reads can come from such a run; not with two jobs, where bosun-trusted restores no cache). Jobs cache through
+gates that must not trust it. bosun's own ci.yml runs them in one job `ci`, the same way (including the edit and draft-skip rules; every step that runs PR code, lint, test and the npm launcher tests, comes after the base's bosun, the pin check and the other gates), and `ci-ok` aggregates it. No PR code runs before the first gate that runs it (lint for rust; for ts-pnpm, the install in the second job): before anything runs rustc, cargo or a stack tool, both workflows put the base commit's `.bosun/` (the gate commands are in its profiles), every `.cargo` directory and every `rust-toolchain(.toml)`, every `.npmrc`, every `.pnpmfile.*` and every `deny.toml`, `.deny.toml`, `deny.exceptions.toml` and `.deny.exceptions.toml` (so cargo deny never reads the PR's policy) over the checkout and delete those the base lacks (a symlinked `.cargo` too), so a PR's edits to them never affect its own run and apply after merge (the run prints a notice naming them; a setup PR, whose base has no `.bosun`, keeps its own `.bosun` with a warning); bosun's ci.yml also pins `RUSTUP_TOOLCHAIN` to its rust-toolchain.toml channel (a test keeps them equal), the channel's toolchain step parses the base's toolchain file (python3 tomllib; only a `[toolchain]` with a plain `channel`, `components`, `targets` and `profile`) and exports `RUSTUP_TOOLCHAIN`, and both override cargo's rustc and wrappers with env (`RUSTC=rustc`, empty `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER`). The gates stop at the first failure, so PR code never runs after a failure it could hide; the bosun binary's sha256 is checked before each gate as defence in depth. Residual: PR code in lint and test (and, for ts-pnpm, in the install and fmt of the second job) has the runner's sudo and can fake its own job's result, as in a gate job of its own before; the owner reviews R-ci. ts-pnpm residual: the PR's `pnpm-lock.yaml` is the audit's input, and its `packageManager` picks the pnpm release (an exact registry version) only while the base has none. Neither caches `~/.cargo/bin` (`cache-bin: false`): a cache a PR's earlier run saved must not put a binary on PATH (residual, as before: the restored `~/.cargo/registry` that the deps gate reads can come from such a run; not with two jobs, where bosun-trusted restores no cache). Jobs cache through
 `keelstackhq/hoard@v0` (D19). A profile maps each gate to a command.
 
 Profiles map gates to commands with the placeholders `{packages}`, `{files}` and `{diff}`. Each
@@ -53,6 +53,43 @@ profile has three adapters:
 
 Time budgets: a PR run is at most 10 min, a merge queue run at most 15 min, one gate at most 8 min.
 A gate over budget opens a lesson.
+
+Drafts skip CI (docs/ci-minutes.md). A PR that is not finished is a draft, and `bosun pr` opens
+it as one. Every heavy job (the work, gate and trusted jobs) of a workflow that a `pull_request` or
+`pull_request_target` event starts has the job-level
+`if: github.event_name != 'pull_request' || github.event.pull_request.draft == false` (a push,
+merge-group, schedule or comment event still runs), so a draft starts no runner there. The
+required aggregate `ci-ok` / `bosun-ok` is never skipped, because a skipped required check counts
+as passed (a stale green): it keeps `always()`, runs on a draft and its first step fails with
+`draft: CI not run, mark ready for review` (in the channel's rust single-job variant, where
+`ci-ok` is the work job, the plan step fails first, before any heavy step). `ready_for_review`
+(listed in every such trigger's `types`) runs everything. `risk` and `main-open` skip drafts
+(they post a status; none is posted until the PR is ready). The CircleCI pipeline has no draft
+flag and still runs on drafts (S12, open).
+
+`bosun gate ci-minutes` (built in, like test-integrity: it is not in a profile, runs no repo code
+and needs no GitHub) reads `.github/workflows/*.yml` and `*.yaml` with a small line-based reader
+(no YAML crate; it understands the subset these workflows use and is conservative) and fails
+(exit 1, `data.findings` = `{file, job, rule, fix}`, `error.fix` the first fix) on:
+- `draft`: a `pull_request(_target)` workflow with a job whose job-level `if:` lacks
+  `pull_request.draft == false` (or `!github.event.pull_request.draft`); the aggregate jobs
+  `ci-ok` and `bosun-ok` are exempt;
+- `aggregate`: `ci-ok` or `bosun-ok` whose `if:` skips drafts (it must run and fail on a draft);
+- `ready_for_review`: such a trigger whose `types:` lacks `ready_for_review` (no `types:` is the
+  default set, which lacks it);
+- `concurrency`: a `pull_request`, `pull_request_target` or `push` workflow without a top-level
+  `concurrency:` whose `cancel-in-progress` is not `false` (an expression counts);
+- `paths`: a heavy job (a `macos*` or `windows*` runner, or a matrix) on a `pull_request(_target)`
+  trigger without `paths` or `paths-ignore`.
+Workflows started only by `schedule`, `workflow_dispatch`, `workflow_run`, `issue_comment`,
+`workflow_call` or `status` are exempt. A comment `# ci-minutes: allow <concurrency|paths> <reason>`
+switches off one of the last two rules for a file (bosun's release.yml never cancels a release).
+`bosun doctor` reports the same findings as step 14 "CI minutes" (missing if any; ok without
+workflows). bosun's own ci.yml and the channel's bosun.yml add the gate to their loop after the
+release that contains it is pinned in `.bosun/version` (the gates run the pinned release); until
+then `tests/cli_gate_ci_minutes.rs` and `tests/channel_render.rs` run the same check on bosun's
+own and on every rendered workflow. Later: a per-PR minutes report (jobs started and billed
+minutes per push, from the Actions API) as a `bosun` command or a comment; not built.
 
 test-integrity:
 - Refuses a PR that deletes a test, adds a skip marker, or lowers the assertion count, unless the

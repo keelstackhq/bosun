@@ -1,8 +1,9 @@
 name: ci
 
 # CI minutes (docs/ci-minutes.md): every job is billed as at least one minute on a private repo,
-# so one job `ci` does all the work and `ci-ok` only aggregates it. A draft fails at once
-# (ready_for_review runs the gates); after a PR body or title edit only test-integrity (which
+# so one job `ci` does all the work and `ci-ok` only aggregates it. A draft PR skips `ci`
+# (job-level `if:`) and fails `ci-ok` at once, never skipped (a skipped required check counts as
+# passed); ready_for_review runs the gates; after a PR body or title edit only test-integrity (which
 # reads the body) runs again on a head that passed. Run the same checks locally first
 # (CLAUDE.md, Commands).
 on:
@@ -46,6 +47,7 @@ env:
 
 jobs:
   ci:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -81,10 +83,8 @@ jobs:
       # work: run anything; setup: the file checks and their tools; only: the gates.
       - id: plan
         env:
-          DRAFT: ${{ github.event.pull_request.draft || false }}
           MODE: ${{ steps.edit.outputs.mode || 'run' }}
         run: |
-          if [ "$DRAFT" = true ]; then echo "::error::draft: not checked; mark it ready to run the gates"; exit 1; fi
           if [ "$MODE" = integrity ]; then
             { echo "work=true"; echo "setup=false"; echo "only=test-integrity"; } >> "$GITHUB_OUTPUT"
             echo "this head passed the file checks; test-integrity runs on this body"
@@ -275,12 +275,16 @@ jobs:
 
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).
+  # A draft PR fails it at once (never skipped: a skipped required check counts as passed).
   ci-ok:
     needs: [ci]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: All CI jobs succeeded
+        env:
+          DRAFT: ${{ github.event.pull_request.draft || false }}
         run: |
+          if [ "$DRAFT" = true ]; then echo "::error::draft: CI not run, mark ready for review"; exit 1; fi
           echo "ci: ${{ needs.ci.result }}"
           test "${{ needs.ci.result }}" = "success"

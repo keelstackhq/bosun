@@ -1,0 +1,1 @@
+- Heavy CI jobs skip draft PRs and the required check fails fast on a draft (`ready_for_review` runs them); new built-in `bosun gate ci-minutes` and `bosun doctor` step 14 check the workflows for drafts, `ready_for_review`, cancelling concurrency and `paths` on heavy PR jobs

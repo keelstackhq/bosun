@@ -1104,6 +1104,30 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
 
     items.push(plugins_item(root, script.as_deref()));
 
+    // Step 14: the CI-minute rules (docs/ci-minutes.md), the same check as `bosun gate ci-minutes`.
+    let (_, minutes) = crate::cli::ci_minutes::scan(root);
+    items.push(item(
+        14,
+        "CI minutes",
+        minutes.first().map(|f| {
+            format!(
+                "{} CI-minute finding(s); first: {} {}{}",
+                minutes.len(),
+                f.file,
+                f.rule,
+                f.job
+                    .as_ref()
+                    .map_or(String::new(), |j| format!(" (job {j})"))
+            )
+        }),
+        "every pull_request workflow skips drafts, runs on ready_for_review and cancels older runs"
+            .into(),
+        &minutes.first().map_or_else(
+            || "run `bosun gate ci-minutes`".to_string(),
+            |f| format!("{}; `bosun gate ci-minutes` lists every finding", f.fix),
+        ),
+    ));
+
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();

@@ -101,6 +101,10 @@ pub fn run(dir: Option<&Path>, args: &GateArgs) -> CmdResult {
         let out = crate::cli::test_integrity::check(dir, args.base.as_deref())?;
         return Ok(stamped(dir.unwrap_or(Path::new(".")), &args.name, out));
     }
+    // Built in: the CI-minute rules over .github/workflows (docs/ci-minutes.md).
+    if args.name == "ci-minutes" {
+        return crate::cli::ci_minutes::check(dir);
+    }
     // Not a profile gate: it reads GitHub, not the checkout.
     if args.name == "main-open" {
         return gates::main_open::run(dir, args.pr);

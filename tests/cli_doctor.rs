@@ -42,13 +42,13 @@ fn statuses(v: &Value) -> Vec<String> {
 }
 
 #[test]
-fn an_empty_repo_reports_all_thirteen_steps() {
+fn an_empty_repo_reports_all_fourteen_steps() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let (code, v) = doctor(&fake, tmp.path(), false);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["error"]["kind"], "needs-human");
     let items = v["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 13);
+    assert_eq!(items.len(), 14);
     for (i, it) in items.iter().enumerate() {
         assert_eq!(it["step"], i + 1);
         assert!(!it["fix"].as_str().unwrap().is_empty());
@@ -59,11 +59,12 @@ fn an_empty_repo_reports_all_thirteen_steps() {
     assert_eq!(st[0], "ok");
     assert_eq!((st[6].as_str(), st[9].as_str()), ("skipped", "skipped"));
     assert_eq!(st[12], "missing");
+    assert_eq!(st[13], "ok", "no workflows, nothing to find");
     assert!(
         st.iter()
             .enumerate()
             .skip(1)
-            .filter(|(i, _)| ![6, 9, 12].contains(i))
+            .filter(|(i, _)| ![6, 9, 12, 13].contains(i))
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
