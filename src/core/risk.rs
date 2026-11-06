@@ -454,7 +454,7 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
 ];
 
 /// Why a bootstrap-mode approval cannot count: the excluded paths among `(path, previous path,
-/// patch)` (a rename counts on both sides), a workflow whose diff may reach an environment or is not
+/// patch)` (a rename counts on both sides), a workflow whose diff names `environment:` or is not
 /// shown, and an R-secrets match. `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: it can count.
 pub fn bootstrap_excluded(
     files: &[(&str, Option<&str>, Option<&str>)],
@@ -466,80 +466,15 @@ pub fn bootstrap_excluded(
     } else {
         &[]
     };
-    excluded_in(files, matches, BOOTSTRAP_EXCLUDED.iter().chain(code))
-}
-
-/// What an autonomous-mode approval (D-017) never covers: release workflows (`.jinja` copies
-/// too), the secrets config, the rules and workflows that run the check (so no autonomous PR can
-/// reopen them), a workflow whose diff may reach an environment or is not shown, and an R-secrets
-/// or R-prod-write match. Trust files are not listed: signed approvals never count on them.
-pub const AUTONOMOUS_EXCLUDED: [&str; 10] = [
-    "**/workflows/release*",
-    "**/hoist.toml",
-    "**/.sops.yaml",
-    "**/secrets.toml",
-    "**/access.toml",
-    "**/.bosun/risk.toml",
-    // `.bosun/version` picks the binary that runs the check.
-    "**/.bosun/version*",
-    "**/workflows/risk.y*ml*",
-    "**/workflows/verdict.y*ml*",
-    "**/workflows/bosun.y*ml*",
-];
-
-/// The excluded paths among `(path, previous path, patch)` for autonomous mode; see
-/// [`AUTONOMOUS_EXCLUDED`]. Empty: it can count.
-pub fn autonomous_excluded(
-    files: &[(&str, Option<&str>, Option<&str>)],
-    matches: &[Match],
-) -> Vec<String> {
-    let mut why = excluded_in(files, matches, AUTONOMOUS_EXCLUDED.iter());
-    if matches.iter().any(|m| m.rule == "R-prod-write") {
-        why.push("R-prod-write".into());
-    }
-    why
-}
-
-/// Whether workflow `text` may reach a GitHub environment: the word `environment` (quoted keys,
-/// `environment :` and flow maps too), a `\u`/`\x` escape that could spell it, or a call of
-/// another workflow file, which may name one itself. A false hit only sends the PR to the owner.
-pub fn may_reach_environment(text: &str) -> bool {
-    // A YAML escaped line break (`\` at the end of a line in a quoted scalar) joins the next
-    // line without its indentation, so `"envir\` + newline + `onment"` spells the key.
-    let (low, mut t, mut join) = (text.to_ascii_lowercase(), String::new(), false);
-    for l in low.lines() {
-        let l = if join { l.trim_start() } else { l };
-        join = l.ends_with('\\');
-        match l.strip_suffix('\\') {
-            Some(head) => t.push_str(head),
-            None => {
-                t.push_str(l);
-                t.push('\n');
-            }
-        }
-    }
-    ["environment", "\\u", "\\x", ".github/workflows/"]
-        .iter()
-        .any(|w| t.contains(w))
-}
-
-/// A workflow file, root or a copy (channel pieces, `.jinja`).
-pub fn is_workflow(path: &str) -> bool {
-    path.to_ascii_lowercase().contains(".github/workflows/")
-}
-
-fn excluded_in<'a>(
-    files: &[(&str, Option<&str>, Option<&str>)],
-    matches: &[Match],
-    globs: impl Iterator<Item = &'a &'a str>,
-) -> Vec<String> {
-    let globs: Vec<Glob> = globs
-        .map(|g| Glob::parse(g).expect("built-in approval glob"))
+    let globs: Vec<Glob> = (BOOTSTRAP_EXCLUDED.iter().chain(code))
+        .map(|g| Glob::parse(g).expect("built-in bootstrap glob"))
         .collect();
     let environment = |patch: Option<&str>| {
         patch.is_none_or(|p| {
-            p.lines()
-                .any(|l| (l.starts_with('+') || l.starts_with('-')) && may_reach_environment(l))
+            p.lines().any(|l| {
+                (l.starts_with('+') || l.starts_with('-'))
+                    && l.to_ascii_lowercase().contains("environment:")
+            })
         })
     };
     let mut why: Vec<String> = (files.iter())
@@ -547,7 +482,8 @@ fn excluded_in<'a>(
             let mut both = std::iter::once(*path).chain(*prev);
             both.clone()
                 .any(|p| globs.iter().any(|g| matches_any_case(g, p)))
-                || (both.any(is_workflow) && environment(*patch))
+                || (both.any(|p| p.to_ascii_lowercase().starts_with(".github/workflows/"))
+                    && environment(*patch))
         })
         .map(|(path, ..)| path.to_string())
         .collect();
@@ -555,6 +491,68 @@ fn excluded_in<'a>(
         why.push("R-secrets".into());
     }
     why
+}
+
+/// Autonomous mode (D-017) covers only these paths; every other changed path is the owner's.
+pub const AUTONOMOUS_ALLOWED: [&str; 4] = ["src/**", "tests/**", "docs/**", "changelog.d/**"];
+
+/// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
+/// and the files the review and the plans trust.
+pub const AUTONOMOUS_DENIED: [&str; 6] = [
+    "docs/setup-script.sh",
+    "docs/agents/**",
+    "docs/lessons.toml",
+    "**/plans/**",
+    "**/*.jinja",
+    "**/build.rs",
+];
+
+/// What an autonomous-mode approval never covers among `(path, previous path)`: every path
+/// outside [`AUTONOMOUS_ALLOWED`] or inside [`AUTONOMOUS_DENIED`] (a rename counts on both sides,
+/// any case; a `..` segment too), and an R-secrets or R-prod-write match. Empty: it can count.
+pub fn autonomous_excluded(files: &[(&str, Option<&str>)], matches: &[Match]) -> Vec<String> {
+    let globs = |l: &[&str]| -> Vec<Glob> {
+        (l.iter())
+            .map(|g| Glob::parse(g).expect("built-in autonomous glob"))
+            .collect()
+    };
+    let (allow, deny) = (globs(&AUTONOMOUS_ALLOWED), globs(&AUTONOMOUS_DENIED));
+    let any = |gs: &[Glob], p: &str| gs.iter().any(|g| matches_any_case(g, p));
+    let mut why: Vec<String> = (files.iter())
+        .filter(|(path, prev)| {
+            (std::iter::once(path).chain(prev))
+                .any(|p| p.split('/').any(|s| s == "..") || !any(&allow, p) || any(&deny, p))
+        })
+        .map(|(path, _)| path.to_string())
+        .collect();
+    for rule in ["R-secrets", "R-prod-write"] {
+        if matches.iter().any(|m| m.rule == rule) {
+            why.push(rule.into());
+        }
+    }
+    why
+}
+
+/// The sessions whose clean verdict on `head` lets the orchestrator approve on its own (D-017):
+/// `(author, body, unedited)` comments oldest first. As [`clean_verdicts`], but an edited comment
+/// never counts, and any unedited verdict by [`VERDICT_AUTHOR`] on `head` that does not approve,
+/// from any session and in any order, leaves nothing.
+pub fn autonomous_verdicts<'a>(
+    comments: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+    head: &str,
+    excluded: &[String],
+) -> Vec<String> {
+    let kept: Vec<_> = (comments.into_iter())
+        .filter_map(|(a, b, unedited)| unedited.then_some((a, b)))
+        .collect();
+    let refused = kept.iter().any(|(a, b)| {
+        a.eq_ignore_ascii_case(VERDICT_AUTHOR)
+            && matches!(apply_record(b), Some(Record::Verdict { head_sha, approved: false, .. }) if head_sha == head)
+    });
+    if refused {
+        return Vec::new();
+    }
+    clean_verdicts(kept, head, excluded)
 }
 
 /// The changed paths among `(path, previous path)` pairs that are CI workflow files
@@ -1104,65 +1102,87 @@ mod tests {
     }
 
     #[test]
-    fn autonomous_excludes_releases_secrets_environments_and_unseen_workflows() {
-        let some = Some("@@\n+x");
-        let env = Some("@@\n+    environment: prod");
-        for p in [
-            ".github/workflows/release.yml",
-            ".github/workflows/release-npm.yaml",
-            "hoist.toml",
-            "sub/hoist.toml",
-            ".sops.yaml",
-            "secrets.toml",
-            "x/access.toml",
-            // The rules and workflows that run the check cannot reopen themselves.
-            ".bosun/risk.toml",
-            "channel/pieces/core/files/.bosun/risk.toml",
-            ".bosun/version",
-            "channel/pieces/core/files/.bosun/version.jinja",
-            ".github/workflows/risk.yml",
-            "channel/pieces/core/files/.github/workflows/verdict.yml.jinja",
-            "channel/pieces/core/files/.github/workflows/release.yml.jinja",
-        ] {
-            let f = [(p, None, some)];
-            assert_eq!(autonomous_excluded(&f, &[]), [p], "{p}");
-        }
-        // Channel copies are workflows too.
-        let f = [("channel/x/files/.github/workflows/ci.yml", None, env)];
-        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
-        for t in [
-            "\"envir\\u006fnment\": x",
-            "uses: ./.github/workflows/x.yml",
-            "? \"envir\\\n      onment\"\n    : production",
-            "? \"ENVIR\\\r\n onment\": x",
-        ] {
-            assert!(may_reach_environment(t), "{t}");
-        }
-        assert!(!may_reach_environment("steps:\n  - run: cargo test\n"));
-        let f = [(".github/workflows/ci.yml", None, env)];
-        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
-        let f = [(".github/workflows/ci.yml", None, None)];
-        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
-        let f = [(".github/workflows/old.yml", None, some)];
-        assert!(autonomous_excluded(&f, &[]).is_empty());
-        let f = [(".github/workflows/ci.yml", Some("hoist.toml"), some)];
-        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
-        let f = [
-            (".bosun/limits.toml", None, some),
-            ("src/cli/approve.rs", None, some),
+    fn autonomous_covers_only_the_allowlist_minus_the_denied() {
+        let ok = [
+            "src/cli/approve.rs",
+            "tests/cli_x.rs",
+            "docs/spec/08-risk.md",
+            "changelog.d/x.md",
         ];
-        assert!(autonomous_excluded(&f, &[]).is_empty());
-        // Production writes stay with the owner, like secrets.
+        let no = [
+            ".github/workflows/ci.yml",
+            ".github/actions/x/action.yml",
+            ".bosun/risk.toml",
+            "channel/pieces/core/files/src/a.rs",
+            ".circleci/config.yml",
+            "Cargo.toml",
+            "build.rs",
+            "deny.toml",
+            "hoist.toml",
+            "src/x/build.rs",
+            "src/a/b.rs.jinja",
+            "docs/agents/org-decisions.md",
+            "docs/lessons.toml",
+            "docs/setup-script.sh",
+            "docs/superpowers/plans/p.md",
+            "SRC/Build.RS",
+            "Docs/Agents/X.md",
+        ];
+        for p in ok {
+            assert!(autonomous_excluded(&[(p, None)], &[]).is_empty(), "{p}");
+        }
+        for p in no {
+            assert_eq!(autonomous_excluded(&[(p, None)], &[]), [p], "{p}");
+        }
+        // A rename counts on both sides.
+        let f = [("src/a.rs", Some(".github/workflows/ci.yml"))];
+        assert_eq!(autonomous_excluded(&f, &[]), ["src/a.rs"]);
+        let f = [(".bosun/x.toml", Some("src/a.rs"))];
+        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
         let m = |rule: &str| Match {
             rule: rule.into(),
             why: String::new(),
             approval: Approval::Owner,
             evidence: Vec::new(),
         };
-        let ex = |r: &str| autonomous_excluded(&f, &[m(r)]);
-        assert_eq!(ex("R-prod-write"), ["R-prod-write"]);
-        assert_eq!(ex("R-secrets"), ["R-secrets"]);
-        assert!(ex("R-gov").is_empty());
+        let f = [("src/a.rs", None)];
+        assert_eq!(autonomous_excluded(&f, &[m("R-secrets")]), ["R-secrets"]);
+        assert_eq!(
+            autonomous_excluded(&f, &[m("R-prod-write")]),
+            ["R-prod-write"]
+        );
+        assert!(autonomous_excluded(&f, &[m("R-gov")]).is_empty());
+    }
+
+    #[test]
+    fn autonomous_verdicts_skip_edits_and_stop_at_any_request_for_changes() {
+        let h = "a".repeat(40);
+        let v = |s: &str, head: &str, approved: bool| {
+            let r = serde_json::json!({"bosun": "verdict", "session": s, "head_sha": head,
+                "approved": approved, "confidence": 0.95, "major": 0});
+            format!("Review verdict: approve 0.95, 0 blocker.\n\n{r}")
+        };
+        let (a, b) = (v("a", &h, true), v("b", &h, false));
+        let (other, bad) = (v("c", &"b".repeat(40), false), v("d", &h, true));
+        let (a, b, other, bad) = (a.as_str(), b.as_str(), other.as_str(), bad.as_str());
+        let run = |c: &[(&str, &str, bool)], ex: &[String]| {
+            autonomous_verdicts(c.iter().copied(), &h, ex)
+        };
+        let bot = VERDICT_AUTHOR;
+        assert_eq!(run(&[(bot, a, true)], &[]), ["a"]);
+        assert!(run(&[(bot, a, false)], &[]).is_empty());
+        // A rejection from any session, before or after, or from an excluded one.
+        assert!(run(&[(bot, b, true), (bot, a, true)], &[]).is_empty());
+        assert!(run(&[(bot, a, true), (bot, b, true)], &[]).is_empty());
+        assert!(run(&[(bot, a, true), (bot, b, true)], &["b".into()]).is_empty());
+        // An edited rejection, one on another head and one by someone else do not block.
+        let c = [(bot, a, true), (bot, b, false), (bot, other, true)];
+        assert_eq!(run(&c, &[]), ["a"]);
+        assert_eq!(run(&[("mallory", b, true), (bot, a, true)], &[]), ["a"]);
+        assert_eq!(
+            run(&[(bot, a, true), (bot, bad, true)], &["d".into()]),
+            ["a"]
+        );
     }
 
     fn file(path: &str, added: &[&str]) -> ChangedFile {

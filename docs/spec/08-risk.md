@@ -179,8 +179,8 @@ High-risk PRs:
   `Cargo.lock`, `build.rs` in any directory, `.cargo/**`, `npm/**`: the code of the check and of
   signature verification, derived from the same list so the two never drift), the channel's
   `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow
-  (root and channel copies), nor a workflow file (root or channel copy) whose diff adds or removes a line
-  that may reach an environment (`risk::may_reach_environment`, or is not shown), nor matches R-secrets. The list is separate from
+  (root and channel copies), nor a `.github/workflows/**` file whose diff adds or removes a line
+  naming `environment:` (or is not shown), nor matches R-secrets. The list is separate from
   `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
   bootstrap signature counts for nothing, and the error message and fix start with `a
   bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
@@ -212,34 +212,36 @@ High-risk PRs:
   approvals. Release ordering: the pinned release rejects unknown keys, so set `policy` only after
   a release that reads it is pinned and `KNOWN_APPROVALS` in `tests/pinned_config.rs` lists it.
 - Autonomous policy (D-017). `[approvals] policy = "autonomous"` lets the orchestrator approve
-  every PR, gated ones included (workflows, `.bosun`, governance, approval code), signed in the
-  bootstrap form with the note line `Signed in autonomous mode (D-017), not an owner answer`
+  gated PRs inside the allowlist below, signed in its own form
+  (first line `/bosun approve <head> autonomous`, message `bosun-autonomous v1 <o>/<r>#<pr> <head>`, owner keys only; under this policy a bootstrap-form signature does not count, and an autonomous one never counts under another policy or as an owner approval) with the note line `Signed in autonomous mode (D-017), not an owner answer`
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
-  bootstrap window and whatever the requirement: only `risk::autonomous_excluded` stops it
-  (release workflows `**/workflows/release*` (`.jinja` copies too), `hoist.toml`, `.sops.yaml`, `secrets.toml`,
-  `access.toml`, the rules and workflows that run the check (`.bosun/risk.toml`, `.bosun/version` (it picks the binary that runs the check), `risk.yml`, `verdict.yml`, `bosun.yml`, channel copies too, so no autonomous PR can reopen them), a workflow (root or channel copy) whose diff may reach an environment or is not shown, an `R-secrets` or
-  `R-prod-write` match); the owner approves those (the status keeps the `high risk, owner approval needed`
-  text). Trust files (`approvers.toml`, owners, CODEOWNERS) and an unseen diff still make
-  signatures not count at all. A signature counts in risk-check only with a clean verdict on the
-  head (approve, confidence >= min, no major finding) from a session that holds no lease on a
-  linked task; a PR that links no task gets no autonomous approval (fail closed). Waiting for
-  that is `high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed`,
-  which does not start with the owner-wait text, so `bosun approve --list` leaves it off the
-  owner board. `data.autonomous_verdicts` lists the counted sessions. Like any approval, it
-  carries over a clean merge of main (design C7), judged with the verdict on the older head.
-  `bosun approve` checks paths only, so it may sign an R-secrets or R-prod-write PR that
-  risk-check then refuses to count. `bosun approve --bootstrap`
-  refuses (exit 1) on an excluded path, and unless a clean verdict on the head comes from a
-  session that is neither a lease holder nor the signer. Gap: risk-check cannot see the
-  signer's session (only the leases), so only `approve` enforces signer != reviewer. Never
-  covered: release environments, secrets, tags. `policy = "autonomous"` under a pinned release older
-  than this one is a parse error, so it fails closed (signatures do not count). Set it only after
-  pinning a release that knows it. A linked issue must be a task (carries the task marker) and
-  that same issue must carry a lease record (any, also an ended one: it names the author); a decoy `Closes #N` leaves the owner path (status keeps
-  the owner-wait text; `approve` exits 1). Under this policy a changed `.github/workflows/**` file
-  (path or previous path) is also excluded when its content at the PR head or at base contains
-  anything that may reach an environment (`risk::may_reach_environment`: the word `environment` in any case, a `\u` or `\x` escape, an escaped line break (`\` at a line end) joined first, or a call of another workflow file; changed
-  line or not) or cannot be read. Gap: lease records are read from any commenter on the task.
+  bootstrap window and whatever the requirement, and only by an allowlist
+  (`risk::autonomous_excluded`): every changed path (previous name too, any case) must be under
+  `src/**`, `tests/**`, `docs/**` or `changelog.d/**` (`AUTONOMOUS_ALLOWED`) and outside
+  `docs/setup-script.sh`, `docs/agents/**`, `docs/lessons.toml`, `**/plans/**`, `**/*.jinja` and
+  `**/build.rs` (`AUTONOMOUS_DENIED`). Everything else is the owner's: workflows, `.github/**`,
+  `.bosun/**`, `channel/**`, `.circleci/**`, actions, root files (`Cargo.toml`, `deny.toml`,
+  `hoist.toml`, ...), and an `R-secrets` or `R-prod-write` match (the status keeps the `high
+  risk, owner approval needed` text). Trust files and an unseen diff still make signatures not
+  count at all. A signature counts in risk-check only with a counting verdict on the head
+  (`risk::autonomous_verdicts`): approve, confidence >= min, no major finding, from a session
+  that holds no lease on a linked issue, on an unedited comment by the verdict author; any
+  unedited non-approving verdict record on the head, from any session and in any order, leaves
+  nothing. The PR must close (`Closes`, `Fixes`, `Resolves`; the `bosun:task-pr` marker does not
+  count) an issue that is open, not a PR, not the PR itself, carries task meta and has a lease
+  record written by the PR author; else it fails closed to the owner path. Waiting for the
+  verdict or signature is `high risk, autonomous mode (D-017): clean verdict and orchestrator
+  signature needed`, which does not start with the owner-wait text, so `bosun approve --list`
+  leaves it off the owner board. `data.autonomous_verdicts` lists the counted sessions. It
+  carries over a clean merge of main (design C7). `bosun approve --bootstrap` refuses (exit 1)
+  on an excluded path (it cannot see R-secrets), and unless a counting verdict on the head comes
+  from a session that is neither a lease holder nor the signer. Known limits: a session id is
+  self-declared (`<!-- bosun:session -->` comes from `BOSUN_SESSION`) and cloud sessions have no
+  verifiable identity, so reviewer independence holds only against honest agents; the signer key
+  is the trust root. risk-check cannot see the signer's session, so only `approve` enforces
+  signer != reviewer. Never covered: release environments, secrets, tags. `policy =
+  "autonomous"` under an older pinned release is a parse error (fails closed); set it only after
+  pinning a release that knows it.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

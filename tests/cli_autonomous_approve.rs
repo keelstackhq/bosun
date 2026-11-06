@@ -15,7 +15,7 @@ const OTHER: &str = "89abcdef0123456789abcdef0123456789abcdef";
 const MAIN: &str = "refs/heads/main";
 const NOW: &str = "2026-12-05T10:00:00Z";
 const PLAIN: &str = "@@ -0,0 +1,1 @@\n+x";
-const ENV_DIFF: &str = "@@ -1,1 +1,1 @@\n-    environment: release\n+x";
+const GATE: &str = "src/core/risk.rs";
 const WAITING: &str = "high risk, owner approval needed";
 const AUTO: &str = "high risk, autonomous mode (D-017)";
 
@@ -40,20 +40,37 @@ fn config(policy: Option<&str>) -> String {
 }
 
 fn verdict(session: &str, head: &str, major: u32) -> String {
+    verdict_of(session, head, major, true)
+}
+
+fn verdict_of(session: &str, head: &str, major: u32, approved: bool) -> String {
     let r = json!({"bosun": "verdict", "session": session, "head_sha": head,
-        "approved": true, "confidence": 0.95, "major": major});
+        "approved": approved, "confidence": 0.95, "major": major});
     format!("Review verdict: approve 0.95, 0 blocker.\n\n{r}")
 }
 
 /// PR 1 (Closes #7, leased by `session_w`) at HEAD changing `file`; owner `ada`, key `k1`.
 fn pr(k: &Key, file: &str, patch: &str, body: &str, policy: Option<&str>) -> FakeGithub {
+    pr_by(k, file, patch, body, policy, "octocat")
+}
+
+/// As `pr`, with the task's lease written by `lease_user` (the PR author is `octocat`).
+fn pr_by(
+    k: &Key,
+    file: &str,
+    patch: &str,
+    body: &str,
+    policy: Option<&str>,
+    lease_user: &str,
+) -> FakeGithub {
     let fake = FakeGithub::start();
     fake.pull(1, "change", "feature", body);
     fake.pull_as_issue(1, "change");
     fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
     fake.issue(7, "task", &[], "task\n<!-- bosun:task {} -->");
-    fake.comment(
+    fake.comment_by(
         7,
+        lease_user,
         &lease_note("session_w", "2026-12-06T12:00:00Z", "src/**"),
     );
     fake.content(
@@ -75,13 +92,15 @@ fn auto(k: &Key, file: &str, patch: &str) -> FakeGithub {
 }
 
 fn post_sig(fake: &FakeGithub, k: &Key) {
-    let msg = format!("bosun-bootstrap v1 acme/widget#1 {HEAD}");
+    post_sig_as(fake, k, "autonomous", "bosun-autonomous");
+}
+
+/// A signature line of `form` (`bootstrap`, `autonomous`) over `<prefix> v1 acme/widget#1 HEAD`.
+fn post_sig_as(fake: &FakeGithub, k: &Key, form: &str, prefix: &str) {
+    let msg = format!("{prefix} v1 acme/widget#1 {HEAD}");
     let s = b64::encode(k.0.sign(msg.as_bytes()).as_ref());
-    fake.comment_by(
-        1,
-        "claude",
-        &format!("/bosun approve {HEAD} bootstrap\nbosun-sig ed25519 k1 {s}"),
-    );
+    let body = format!("/bosun approve {HEAD} {form}\nbosun-sig ed25519 k1 {s}");
+    fake.comment_by(1, "claude", &body);
     fake.last_comment(|c| c.via_app = Some("claude".into()));
 }
 
@@ -115,7 +134,7 @@ fn with(file: &str, patch: &str, session: &str, head: &str, major: u32) -> (i32,
 
 #[test]
 fn a_signature_with_a_clean_independent_verdict_counts() {
-    let (code, v, _) = with("deny.toml", PLAIN, "session_r", HEAD, 0);
+    let (code, v, _) = with(GATE, PLAIN, "session_r", HEAD, 0);
     assert_eq!(code, 0, "{v}");
     let by = v["data"]["approved_by"].as_str().unwrap();
     assert!(
@@ -127,15 +146,22 @@ fn a_signature_with_a_clean_independent_verdict_counts() {
 }
 
 #[test]
-fn a_workflow_change_without_an_environment_counts() {
-    let (code, v, _) = with(".github/workflows/ci.yml", PLAIN, "session_r", HEAD, 0);
+fn source_docs_and_test_changes_count_together() {
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    for p in ["docs/spec/08-risk.md", "tests/cli_x.rs", "changelog.d/x.md"] {
+        fake.pull_file(1, p, "added", 1, 0, Some(PLAIN));
+    }
+    post_verdict(&fake, "session_r", HEAD, 0);
+    post_sig(&fake, &k);
+    let (code, v) = check(&fake);
     assert_eq!(code, 0, "{v}");
 }
 
 #[test]
 fn a_signature_alone_or_a_verdict_alone_does_not_count() {
     let k = key();
-    let fake = auto(&k, "deny.toml", PLAIN);
+    let fake = auto(&k, GATE, PLAIN);
     post_sig(&fake, &k);
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
@@ -143,7 +169,7 @@ fn a_signature_alone_or_a_verdict_alone_does_not_count() {
     assert!(d.starts_with(AUTO) && !d.starts_with(WAITING), "{d}");
     assert_eq!(v["data"]["policy"], "autonomous");
 
-    let fake = auto(&k, "deny.toml", PLAIN);
+    let fake = auto(&k, GATE, PLAIN);
     post_verdict(&fake, "session_r", HEAD, 0);
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
@@ -157,7 +183,7 @@ fn the_verdict_must_be_independent_clean_and_on_the_head() {
         ("session_r", OTHER, 0),
         ("session_r", HEAD, 1),
     ] {
-        let (code, v, d) = with("deny.toml", PLAIN, session, head, major);
+        let (code, v, d) = with(GATE, PLAIN, session, head, major);
         assert_eq!(code, 5, "{session} {head} {major}: {v}");
         assert!(d.starts_with(AUTO), "{d}");
     }
@@ -166,7 +192,7 @@ fn the_verdict_must_be_independent_clean_and_on_the_head() {
 #[test]
 fn an_unlinked_pr_gets_no_autonomous_approval() {
     let k = key();
-    let fake = pr(&k, "deny.toml", PLAIN, "", Some("autonomous"));
+    let fake = pr(&k, GATE, PLAIN, "", Some("autonomous"));
     post_verdict(&fake, "session_r", HEAD, 0);
     post_sig(&fake, &k);
     let (code, v) = check(&fake);
@@ -178,7 +204,10 @@ fn an_unlinked_pr_gets_no_autonomous_approval() {
 fn releases_secrets_environments_and_trust_files_stay_with_the_owner() {
     for (file, patch) in [
         (".github/workflows/release.yml", PLAIN),
-        (".github/workflows/ci.yml", ENV_DIFF),
+        (".github/workflows/ci.yml", PLAIN),
+        ("Cargo.toml", PLAIN),
+        (".bosun/limits.toml", PLAIN),
+        ("docs/agents/org-decisions.md", PLAIN),
         ("hoist.toml", PLAIN),
         (".bosun/approvers.toml", PLAIN),
     ] {
@@ -226,7 +255,7 @@ fn sign(fake: &FakeGithub, k: &Key, session: &str) -> (i32, Value) {
 #[test]
 fn approve_signs_with_the_autonomous_line_after_a_clean_verdict() {
     let k = key();
-    let fake = auto(&k, ".github/workflows/ci.yml", PLAIN);
+    let fake = auto(&k, GATE, PLAIN);
     post_verdict(&fake, "session_r", HEAD, 0);
     let (code, v) = sign(&fake, &k, "session_o");
     assert_eq!(code, 0, "{v}");
@@ -235,7 +264,7 @@ fn approve_signs_with_the_autonomous_line_after_a_clean_verdict() {
         body.contains("Signed in autonomous mode (D-017), not an owner answer"),
         "{body}"
     );
-    assert!(body.starts_with(&format!("/bosun approve {HEAD} bootstrap\n")));
+    assert!(body.starts_with(&format!("/bosun approve {HEAD} autonomous\n")));
     assert_eq!(v["data"]["policy"], "autonomous");
 }
 
@@ -248,15 +277,15 @@ fn approve_refuses_without_an_independent_clean_verdict() {
         ("session_r", OTHER, 0),
         ("session_r", HEAD, 2),
     ] {
-        let fake = auto(&k, "deny.toml", PLAIN);
+        let fake = auto(&k, GATE, PLAIN);
         post_verdict(&fake, session, head, major);
         let (code, v) = sign(&fake, &k, "session_o");
         assert_eq!(code, 1, "{session} {head} {major}: {v}");
     }
-    let fake = auto(&k, "deny.toml", PLAIN);
+    let fake = auto(&k, GATE, PLAIN);
     assert_eq!(sign(&fake, &k, "session_o").0, 1);
     // No linked task: no lease to check the reviewer against.
-    let fake = pr(&k, "deny.toml", PLAIN, "", Some("autonomous"));
+    let fake = pr(&k, GATE, PLAIN, "", Some("autonomous"));
     post_verdict(&fake, "session_r", HEAD, 0);
     assert_eq!(sign(&fake, &k, "session_o").0, 1);
 }
@@ -266,7 +295,10 @@ fn approve_refuses_excluded_paths_even_with_a_verdict() {
     let k = key();
     for (file, patch) in [
         (".github/workflows/release.yml", PLAIN),
-        (".github/workflows/ci.yml", ENV_DIFF),
+        (".github/workflows/ci.yml", PLAIN),
+        ("Cargo.toml", PLAIN),
+        (".bosun/limits.toml", PLAIN),
+        ("docs/agents/org-decisions.md", PLAIN),
         ("hoist.toml", PLAIN),
     ] {
         let fake = auto(&k, file, patch);
@@ -280,7 +312,7 @@ const SECRET_DIFF: &str = "@@ -0,0 +1,1 @@\n+API_KEY = abc";
 
 /// A signature and a clean verdict by `session_r` on a PR that links `body`'s issues.
 fn decoy(k: &Key, body: &str) -> FakeGithub {
-    let fake = pr(k, "deny.toml", PLAIN, body, Some("autonomous"));
+    let fake = pr(k, GATE, PLAIN, body, Some("autonomous"));
     fake.issue(8, "decoy", &[], "no task marker");
     fake.issue(9, "unleased", &[], "<!-- bosun:task {} -->");
     post_verdict(&fake, "session_r", HEAD, 0);
@@ -309,35 +341,165 @@ fn a_decoy_link_leaves_the_owner_path_and_approve_refuses() {
 }
 
 #[test]
-fn an_unchanged_environment_line_in_a_workflow_stays_with_the_owner() {
-    // Quoted keys and a space before the colon are valid YAML too.
-    let ymls = [
-        "jobs:\n  x:\n    environment: prod\n    steps: []\n",
-        "jobs:\n  x:\n    \"environment\": prod\n",
-        "jobs:\n  x:\n    'Environment' : prod\n",
-        "jobs: {x: {environment : prod}}\n",
-        // An escaped key, and reusable workflows that may name one themselves.
-        "jobs:\n  x:\n    \"envir\\u006fnment\": prod\n",
-        "jobs:\n  d:\n    uses: ./.github/workflows/x.yml\n",
-        "jobs:\n  d:\n    uses: o/r/.github/workflows/x.yml@v1\n",
-    ];
-    for (r, yml) in [HEAD, BASE].into_iter().flat_map(|r| ymls.map(|y| (r, y))) {
+fn a_secret_match_keeps_the_owner_path() {
+    let (code, v, d) = with("src/a.env", SECRET_DIFF, "session_r", HEAD, 0);
+    assert_eq!(code, 5, "{v}");
+    assert!(d.starts_with(WAITING), "{d}");
+}
+
+#[test]
+fn only_the_allowlist_counts_and_its_denied_paths_stay_with_the_owner() {
+    for file in [
+        "channel/pieces/core/files/src/a.rs",
+        "deny.toml",
+        "build.rs",
+        "src/x/build.rs",
+        "src/templates/a.rs.jinja",
+        "docs/superpowers/plans/p.md",
+        "docs/lessons.toml",
+        "docs/setup-script.sh",
+        "SRC/../Cargo.toml",
+    ] {
         let k = key();
-        let fake = auto(&k, ".github/workflows/ci.yml", PLAIN);
-        fake.content(".github/workflows/ci.yml", r, yml);
+        let fake = auto(&k, GATE, PLAIN);
+        fake.pull_file(1, file, "modified", 1, 0, Some(PLAIN));
         post_verdict(&fake, "session_r", HEAD, 0);
         post_sig(&fake, &k);
         let (code, v) = check(&fake);
-        assert_eq!(code, 5, "{r}: {v}");
-        assert!(description(&fake).starts_with(WAITING), "{r}");
-        let (code, v) = sign(&fake, &k, "session_o");
-        assert_eq!(code, 1, "{r}: {v}");
+        assert_eq!(code, 5, "{file}: {v}");
+        assert!(description(&fake).starts_with(WAITING), "{file}");
     }
 }
 
 #[test]
-fn a_secret_match_keeps_the_owner_path() {
-    let (code, v, d) = with("a.env", SECRET_DIFF, "session_r", HEAD, 0);
-    assert_eq!(code, 5, "{v}");
-    assert!(d.starts_with(WAITING), "{d}");
+fn a_rename_out_of_the_allowlist_stays_with_the_owner() {
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    fake.pull_file(1, "src/new.yml", "renamed", 1, 0, Some(PLAIN));
+    fake.renamed_from(1, ".github/workflows/ci.yml");
+    post_verdict(&fake, "session_r", HEAD, 0);
+    post_sig(&fake, &k);
+    assert_eq!(check(&fake).0, 5);
+    assert!(description(&fake).starts_with(WAITING));
+}
+
+/// Signature and a clean verdict on a PR whose task link or lease is wrong: the owner path.
+fn owner_path(fake: &FakeGithub, k: &Key, what: &str) {
+    post_verdict(fake, "session_r", HEAD, 0);
+    post_sig(fake, k);
+    let (code, v) = check(fake);
+    assert_eq!(code, 5, "{what}: {v}");
+    assert!(description(fake).starts_with(WAITING), "{what}");
+    assert!(v["data"].get("autonomous_verdicts").is_none(), "{what}");
+}
+
+#[test]
+fn the_task_must_be_open_linked_by_keyword_and_leased_by_the_author() {
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    fake.close_issue(7, "2026-12-01T00:00:00Z");
+    owner_path(&fake, &k, "closed task");
+    let fake = pr_by(&k, GATE, PLAIN, "Closes #7", Some("autonomous"), "mallory");
+    owner_path(&fake, &k, "lease by another login");
+    let fake = pr(
+        &k,
+        GATE,
+        PLAIN,
+        "<!-- bosun:task-pr 7 -->",
+        Some("autonomous"),
+    );
+    owner_path(&fake, &k, "marker only");
+    // The PR itself is never its own task, even with a lease on it.
+    let fake = pr(&k, GATE, PLAIN, "Closes #1", Some("autonomous"));
+    fake.comment(
+        1,
+        &lease_note("session_x", "2026-12-06T12:00:00Z", "src/**"),
+    );
+    owner_path(&fake, &k, "the PR itself");
+    // A leaseholder of a decoy linked issue is still excluded as a reviewer.
+    let fake = auto(&k, GATE, PLAIN);
+    fake.issue(8, "other", &[], "x");
+    fake.pull_set(1, "body", json!("Closes #7\nCloses #8"));
+    fake.comment(
+        8,
+        &lease_note("session_r", "2026-12-06T12:00:00Z", "src/**"),
+    );
+    post_verdict(&fake, "session_r", HEAD, 0);
+    post_sig(&fake, &k);
+    assert_eq!(check(&fake).0, 5);
+    assert!(description(&fake).starts_with(AUTO));
+}
+
+#[test]
+fn an_edited_verdict_does_not_count() {
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    post_verdict(&fake, "session_r", HEAD, 0);
+    fake.last_comment(|c| c.updated_at = "2026-12-05T11:00:00Z".into());
+    post_sig(&fake, &k);
+    assert_eq!(check(&fake).0, 5);
+    assert!(description(&fake).starts_with(AUTO));
+    let fake = auto(&k, GATE, PLAIN);
+    post_verdict(&fake, "session_r", HEAD, 0);
+    fake.last_comment(|c| c.updated_at = "2026-12-05T11:00:00Z".into());
+    assert_eq!(sign(&fake, &k, "session_o").0, 1);
+}
+
+#[test]
+fn a_request_for_changes_on_the_head_blocks_in_any_order() {
+    let reject = |fake: &FakeGithub, session: &str, head: &str| {
+        fake.comment_by(
+            1,
+            "github-actions[bot]",
+            &verdict_of(session, head, 1, false),
+        );
+    };
+    // Before or after the clean verdict, from a reviewer or an excluded session (the author).
+    for (who, before) in [
+        ("session_x", true),
+        ("session_x", false),
+        ("session_w", false),
+    ] {
+        let k = key();
+        let fake = auto(&k, GATE, PLAIN);
+        if before {
+            reject(&fake, who, HEAD);
+        }
+        post_verdict(&fake, "session_r", HEAD, 0);
+        if !before {
+            reject(&fake, who, HEAD);
+        }
+        post_sig(&fake, &k);
+        assert_eq!(check(&fake).0, 5, "{who} {before}");
+        assert!(description(&fake).starts_with(AUTO), "{who} {before}");
+        assert_eq!(sign(&fake, &k, "session_o").0, 1, "{who} {before}");
+    }
+    // A request for changes on another head does not block.
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    reject(&fake, "session_x", OTHER);
+    post_verdict(&fake, "session_r", HEAD, 0);
+    post_sig(&fake, &k);
+    assert_eq!(check(&fake).0, 0);
+}
+
+#[test]
+fn only_the_autonomous_form_counts_under_the_autonomous_policy_and_never_elsewhere() {
+    let boot = |f: &FakeGithub, k: &Key| post_sig_as(f, k, "bootstrap", "bosun-bootstrap");
+    let k = key();
+    // A bootstrap-form signature does not count under the autonomous policy.
+    let fake = auto(&k, GATE, PLAIN);
+    post_verdict(&fake, "session_r", HEAD, 0);
+    boot(&fake, &k);
+    assert_eq!(check(&fake).0, 5);
+    assert!(description(&fake).starts_with(AUTO));
+    // An autonomous-form signature never counts as an owner approval, whatever the policy.
+    for policy in [None, Some("owner-gated"), Some("orchestrator")] {
+        let fake = pr(&k, GATE, PLAIN, "Closes #7", policy);
+        post_verdict(&fake, "session_r", HEAD, 0);
+        post_sig(&fake, &k);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{policy:?}: {v}");
+        assert!(v["data"]["approved_by"].is_null(), "{policy:?}: {v}");
+    }
 }

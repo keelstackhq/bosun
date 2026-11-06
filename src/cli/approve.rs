@@ -15,17 +15,16 @@ use super::ApproveArgs;
 use crate::app::App;
 use crate::app::{Result, default_ref, kill_switch, main_red};
 use crate::cli::risk_check::{
-    autonomous_inputs, decisive_review, dismissed_review, enrolled_keys, environment_workflows,
+    autonomous_clean, autonomous_inputs, decisive_review, dismissed_review, enrolled_keys,
     owner_comment, owner_logins,
 };
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
     api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud, only_r_ci, parse_target,
-    policy_line, readiness, signed_comment, signed_message, signed_message_bootstrap,
-    signed_message_v2,
+    policy_line, readiness, signed_comment, signed_message, signed_message_autonomous,
+    signed_message_bootstrap, signed_message_v2,
 };
-use crate::core::meta::linked_issues_in;
 use crate::core::records::{PrHead, Record};
 use crate::core::risk;
 use crate::ctx::Ctx;
@@ -598,6 +597,10 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     for after in reviews {
         let (form, msg) = match (after, &boot) {
             (Some(r), _) => (Form::V2(r), signed_message_v2(owner, repo, pr, &head, r)),
+            (None, Some((.., Policy::Autonomous))) => (
+                Form::Autonomous,
+                signed_message_autonomous(owner, repo, pr, &head),
+            ),
             (None, Some(_)) => (
                 Form::Bootstrap,
                 signed_message_bootstrap(owner, repo, pr, &head),
@@ -696,22 +699,10 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     let gh = app.gh.as_ref();
     let fix = "nothing was signed: ask the owner with a form in the Claude Code chat and sign without --bootstrap on their answer";
     let files = gh.pull_files(pull.number)?;
-    let plain: Vec<_> = (files.iter())
-        .map(|f| {
-            (
-                &*f.filename,
-                f.previous_filename.as_deref(),
-                f.patch.as_deref(),
-            )
-        })
+    let paths: Vec<_> = (files.iter())
+        .map(|f| (&*f.filename, f.previous_filename.as_deref()))
         .collect();
-    let mut hit = risk::autonomous_excluded(&plain, &[]);
-    hit.extend(environment_workflows(
-        gh,
-        &files,
-        &pull.base_sha,
-        &pull.head_sha,
-    ));
+    let hit = risk::autonomous_excluded(&paths, &[]);
     if !hit.is_empty() {
         return Err(BosunError::error(
             format!(
@@ -721,21 +712,16 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
             fix,
         ));
     }
-    let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
-    // A decoy link (no task, no lease) leaves no author to exclude: nothing counts.
-    let inputs = autonomous_inputs(gh, pull.number, &linked)?;
+    // A decoy link (no open task the author leased) leaves no author to exclude: nothing counts.
+    let inputs = autonomous_inputs(gh, pull, &app.ctx.repo.to_string())?;
     let clean = inputs.map_or(vec![], |(comments, mut excluded)| {
         excluded.push(app.ctx.session.clone());
-        risk::clean_verdicts(
-            comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
-            &pull.head_sha,
-            &excluded,
-        )
+        autonomous_clean(&comments, &pull.head_sha, &excluded)
     });
     if clean.is_empty() {
         return Err(BosunError::error(
             format!(
-                "autonomous mode (D-017) needs a clean verdict on head {} from a reviewer who is neither the author (a task lease holder) nor this session, and a linked task (`Closes #N`) that a session holds a lease on",
+                "autonomous mode (D-017) needs a clean verdict on head {} from a reviewer who is neither the author (a task lease holder) nor this session, and an open linked task (`Closes #N`) with a lease record by the PR author",
                 pull.head_sha
             ),
             "get one independent clean verdict (approve, confidence >= min, no major finding) with `bosun verdict comment --from -` in a reviewer session, then sign again",

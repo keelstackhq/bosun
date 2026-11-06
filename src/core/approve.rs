@@ -269,6 +269,8 @@ pub enum Form {
     V2(u64),
     /// `/bosun approve <head> bootstrap`: an owner key in bootstrap mode (D-012).
     Bootstrap,
+    /// `/bosun approve <head> autonomous`: an owner key under the autonomous policy (D-017).
+    Autonomous,
 }
 
 /// The form of a comment's first line for `head`: a v2 review id is plain decimal digits without
@@ -278,6 +280,7 @@ fn form(first: &str, head: &str) -> Option<Form> {
     match rest {
         "" => return Some(Form::V1),
         " bootstrap" => return Some(Form::Bootstrap),
+        " autonomous" => return Some(Form::Autonomous),
         _ => {}
     }
     let id = rest.strip_prefix(" after-review ")?;
@@ -334,6 +337,13 @@ pub fn signed_message_v2(owner: &str, repo: &str, pr: u64, head: &str, review: u
 pub fn signed_message_bootstrap(owner: &str, repo: &str, pr: u64, head: &str) -> String {
     let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
     format!("bosun-bootstrap v1 {o}/{r}#{pr} {head}")
+}
+
+/// The bytes an owner key signs under the autonomous policy (D-017): its own prefix again, so it
+/// never verifies as an owner approval of any other form.
+pub fn signed_message_autonomous(owner: &str, repo: &str, pr: u64, head: &str) -> String {
+    let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
+    format!("bosun-autonomous v1 {o}/{r}#{pr} {head}")
 }
 
 /// The line a bootstrap-mode comment carries, for the reader; the first line is the marker.
@@ -518,6 +528,7 @@ pub fn signed_comment(
         Form::V1 => String::new(),
         Form::V2(r) => format!(" after-review {r}"),
         Form::Bootstrap => " bootstrap".into(),
+        Form::Autonomous => " autonomous".into(),
     };
     let note = note.map_or(String::new(), |n| format!("{n}\n"));
     format!("/bosun approve {head}{tail}\n{note}bosun-sig ed25519 {key_id} {sig_b64}")
@@ -897,6 +908,12 @@ mod tests {
             bootstrap_line("2026-11-30")
         );
         assert_eq!(signature_lines(&b3, &h), [(Form::Bootstrap, "k1", "AAAA")]);
+        let b4 = format!("/bosun approve {h} autonomous\n{sig}");
+        assert_eq!(signature_lines(&b4, &h), [(Form::Autonomous, "k1", "AAAA")]);
+        assert_eq!(
+            signed_message_autonomous("Acme", "Widget", 3, &h),
+            format!("bosun-autonomous v1 acme/widget#3 {h}")
+        );
         for bad in ["", "x", "07", "-1", "1 2", "99999999999999999999999"] {
             let body = format!("/bosun approve {h} after-review {bad}\n{sig}");
             assert!(signature_lines(&body, &h).is_empty(), "{bad:?}");
