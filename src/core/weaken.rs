@@ -59,8 +59,14 @@ type Flat = BTreeMap<String, Value>;
 fn flatten(v: &Value, key: &str, out: &mut Flat) {
     match v {
         Value::Table(t) => t.iter().for_each(|(k, v)| {
-            let k = if key.is_empty() {
+            // A dotted key stays quoted, so `"a.b" = 1` never collides with `[a] b = 1`.
+            let k = if k.contains('.') {
+                format!("{k:?}")
+            } else {
                 k.clone()
+            };
+            let k = if key.is_empty() {
+                k
             } else {
                 format!("{key}.{k}")
             };
@@ -149,15 +155,10 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             }
         }
         Kind::Deny => {
-            const ADDS: [&str; 7] = [
-                "allow",
-                "ignore",
-                "skip",
-                "skip-tree",
-                "exceptions",
-                "allow-git",
-                "allow-registry",
-            ];
+            let adds = |l: &str| {
+                let all = "allow ignore skip skip-tree exceptions allow-git allow-registry";
+                all.split(' ').any(|a| a == l)
+            };
             const LEVELS: [&str; 3] = ["allow", "warn", "deny"];
             for (k, old) in &fb {
                 let org = k.split('.').any(|s| s == "allow-org");
@@ -171,7 +172,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
                     if new.and_then(|n| rank(n, &LEVELS)).is_none_or(|n| n < r) {
                         add(k, &show(old), &new.map_or("(removed)".into(), show));
                     }
-                } else if old.is_array() && (last == "deny" || org || ADDS.contains(&last)) {
+                } else if old.is_array() && (last == "deny" || org || adds(last)) {
                     let (o, n) = (items(old), new.map(items).unwrap_or_default());
                     if last == "deny" {
                         o.iter()
@@ -190,9 +191,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             // Keys new at head: allow-list items, any other setting but a `deny`.
             for (k, new) in fh.iter().filter(|(k, _)| !fb.contains_key(*k)) {
                 let last = k.rsplit('.').next().unwrap_or_default();
-                if new.is_array()
-                    && (ADDS.contains(&last) || k.split('.').any(|s| s == "allow-org"))
-                {
+                if new.is_array() && (adds(last) || k.split('.').any(|s| s == "allow-org")) {
                     items(new).iter().for_each(|i| add(k, "(none)", i));
                 } else if last != "deny" && rank(new, &LEVELS) != Some(2) {
                     // Any new setting may narrow what is checked; only a new `deny` tightens.
@@ -212,13 +211,16 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             };
             let (nb, nh) = (norm(&fb), norm(&fh));
             for (k, new) in nh.iter().filter(|(k, _)| !nb.contains_key(*k)) {
-                if rank(new, &LEVELS) == Some(0) {
+                // A new `priority` can lift an allow group over a deny.
+                if rank(new, &LEVELS) == Some(0) || k.ends_with(".priority") {
                     add(k, "(none)", &show(new));
                 }
             }
             for (k, old) in nb {
                 let new = nh.get(&k);
-                if k.ends_with("lints.workspace") {
+                if k.ends_with(".priority") && new != Some(&old) {
+                    add(&k, &show(&old), &new.map_or("(removed)".into(), show));
+                } else if k.ends_with("lints.workspace") {
                     if old.as_bool() == Some(true) && new.and_then(Value::as_bool) != Some(true) {
                         add(&k, "true", &new.map_or("(removed)".into(), show));
                     }
@@ -777,6 +779,23 @@ mod tests {
     }
 
     #[test]
+    fn dotted_keys_and_lint_priority() {
+        let c = "Cargo.toml";
+        let base = "[lints.rust]\nunsafe_code = \"forbid\"\n";
+        let head =
+            "\"lints.rust.unsafe_code\" = \"forbid\"\n[lints.rust]\nunsafe_code = \"allow\"\n";
+        assert_eq!(
+            t(c, base, head),
+            ["Cargo.toml: lints.rust.unsafe_code forbid → allow"]
+        );
+        let p = |n: i32| format!("[lints.clippy]\nall = {{ level = \"allow\", priority = {n} }}\n");
+        assert_eq!(
+            t(c, &p(-1), &p(1)),
+            ["Cargo.toml: lints.clippy.all.priority -1 → 1"]
+        );
+    }
+
+    #[test]
     fn new_keys_that_loosen() {
         let d = "deny.toml";
         assert_eq!(
@@ -814,7 +833,11 @@ mod tests {
             got.contains("workspace.lints.clippy.y warn → (removed)"),
             "{got}"
         );
-        assert!(!got.contains("lints.clippy.x"), "{got}");
+        assert!(!got.contains("lints.clippy.x deny"), "{got}");
+        assert!(
+            got.contains("lints.clippy.x.priority -1 → (removed)"),
+            "{got}"
+        );
         assert_eq!(
             t("Cargo.toml", "[lints]\nworkspace = true\n", "[package]\n"),
             ["Cargo.toml: lints.workspace true → (removed)"]
