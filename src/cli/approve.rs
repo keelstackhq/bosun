@@ -15,7 +15,8 @@ use super::ApproveArgs;
 use crate::app::App;
 use crate::app::{Result, default_ref, kill_switch, main_red};
 use crate::cli::risk_check::{
-    decisive_review, dismissed_review, enrolled_keys, owner_comment, owner_logins, verdict_inputs,
+    autonomous_inputs, decisive_review, dismissed_review, enrolled_keys, environment_workflows,
+    owner_comment, owner_logins,
 };
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -704,7 +705,13 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
             )
         })
         .collect();
-    let hit = risk::autonomous_excluded(&plain, &[]);
+    let mut hit = risk::autonomous_excluded(&plain, &[]);
+    hit.extend(environment_workflows(
+        gh,
+        &files,
+        &pull.base_sha,
+        &pull.head_sha,
+    ));
     if !hit.is_empty() {
         return Err(BosunError::error(
             format!(
@@ -715,23 +722,21 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
         ));
     }
     let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
-    let (comments, mut excluded) = verdict_inputs(gh, pull.number, &linked)?;
-    excluded.push(app.ctx.session.clone());
-    let clean = risk::clean_verdicts(
-        comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
-        &pull.head_sha,
-        &excluded,
-    );
-    if linked.is_empty() || clean.is_empty() {
+    // A decoy link (no task, no lease) leaves no author to exclude: nothing counts.
+    let inputs = autonomous_inputs(gh, pull.number, &linked)?;
+    let clean = inputs.map_or(vec![], |(comments, mut excluded)| {
+        excluded.push(app.ctx.session.clone());
+        risk::clean_verdicts(
+            comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+            &pull.head_sha,
+            &excluded,
+        )
+    });
+    if clean.is_empty() {
         return Err(BosunError::error(
             format!(
-                "autonomous mode (D-017) needs a clean verdict on head {} from a reviewer who is neither the author (a task lease holder) nor this session{}",
-                pull.head_sha,
-                if linked.is_empty() {
-                    "; the PR links no task (`Closes #N`)"
-                } else {
-                    ""
-                }
+                "autonomous mode (D-017) needs a clean verdict on head {} from a reviewer who is neither the author (a task lease holder) nor this session, and a linked task (`Closes #N`) that a session holds a lease on",
+                pull.head_sha
             ),
             "get one independent clean verdict (approve, confidence >= min, no major finding) with `bosun verdict comment --from -` in a reviewer session, then sign again",
         ));

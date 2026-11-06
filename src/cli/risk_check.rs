@@ -229,22 +229,25 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     }
     let signed_ok = trust.is_empty() && !unseen;
     let requirement = requirement(&matches);
-    let (bootstrap, autonomous) = if high && signed_ok {
+    let (mut bootstrap, autonomous) = if high && signed_ok {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
-        orchestrator_window(gh, base, &today[..10], pr, &excluded)?
+        orchestrator_window(gh, (base, head), &today[..10], pr, &excluded)?
     } else {
         (
             Err("signed approvals do not count on this PR".into()),
             false,
         )
     };
-    // D-017: the signature counts only with a clean verdict; an excluded PR keeps the owner path.
-    let autonomous = autonomous && bootstrap.is_ok();
     let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
-    // Without a linked task there is no lease to check the reviewers against: fail closed.
+    // D-017: the signature counts only with a clean verdict and a leased task to judge it by.
+    let mut autonomous = autonomous && bootstrap.is_ok();
+    if autonomous && autonomous_inputs(gh, n, &linked)?.is_none() {
+        bootstrap = Err("autonomous mode (D-017) needs a linked task that a session leases".into());
+        autonomous = false;
+    }
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
     let need = Need {
@@ -376,13 +379,8 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         _ => String::new(),
     };
     let fix = if autonomous {
-        let task = if linked.is_empty() {
-            "link the task (`Closes #N`) so a reviewer's independence can be checked, then "
-        } else {
-            ""
-        };
         format!(
-            "{task}get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
+            "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
             risk::VERDICT_MIN_CONFIDENCE
         )
     } else if unlinked {
@@ -463,9 +461,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     let mut found = Found::default();
     let mut bootstrap = need.bootstrap;
     if need.autonomous {
-        // No linked task means no lease to check the reviewer against: the signature fails closed.
-        if !need.linked.is_empty() {
-            let (comments, excluded) = verdict_inputs(gh, pr, need.linked)?;
+        if let Some((comments, excluded)) = autonomous_inputs(gh, pr, need.linked)? {
             found.autonomous_verdicts = clean_verdicts(
                 comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
                 sha,
@@ -837,6 +833,47 @@ pub fn verdict_inputs(gh: &dyn Github, n: u64, ls: &[u64]) -> Result<(Vec<Commen
     Ok((comments, excluded))
 }
 
+/// D-017: `verdict_inputs` only when a linked issue is a task and some session holds a lease on
+/// it; else no reviewer can be shown independent of the author (a decoy `Closes #N` fails closed).
+pub(crate) fn autonomous_inputs(
+    gh: &dyn Github,
+    n: u64,
+    ls: &[u64],
+) -> Result<Option<(Vec<Comment>, Vec<String>)>> {
+    let mut task = false;
+    for i in ls {
+        task |= gh.get_issue(*i)?.is_some_and(|x| task_meta(&x).is_some());
+    }
+    let (comments, excluded) = verdict_inputs(gh, n, ls)?;
+    Ok((task && !excluded.is_empty()).then_some((comments, excluded)))
+}
+
+/// D-017: the changed workflow files that name `environment:` at the head or at base (a changed
+/// line is not needed), or that cannot be read: the owner approves those.
+pub(crate) fn environment_workflows(
+    gh: &dyn Github,
+    files: &[PrFile],
+    base: &str,
+    head: &str,
+) -> Vec<String> {
+    let wf = |p: &str| p.to_ascii_lowercase().starts_with(".github/workflows/");
+    let named = |(p, r): (&str, &str)| match gh.file_at(p, r) {
+        Ok(t) => t.is_some_and(|t| t.to_ascii_lowercase().contains("environment:")),
+        Err(_) => true,
+    };
+    (files.iter())
+        .filter(|f| {
+            let prev = f.previous_filename.as_deref();
+            (wf(&f.filename) || prev.is_some_and(wf))
+                && [(&*f.filename, head), (&*f.filename, base)]
+                    .into_iter()
+                    .chain(prev.map(|p| (p, base)))
+                    .any(named)
+        })
+        .map(|f| f.filename.clone())
+        .collect()
+}
+
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
 /// approvals); `accept` takes the comment's form. Only an owner key signs v2 and bootstrap.
 /// The keys come from the default branch only, so a PR cannot enroll its own. Any author and app
@@ -910,7 +947,7 @@ fn signed_approver(
 /// `policy` (D-014) and the PR's rules, exclusions and workflow files.
 fn orchestrator_window(
     gh: &dyn Github,
-    base: &str,
+    (base, head): (&str, &str),
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
     excluded: &[String],
@@ -937,7 +974,10 @@ fn orchestrator_window(
             )
         })
         .collect();
-    let autonomous_excluded = risk::autonomous_excluded(&plain, matches);
+    let mut autonomous_excluded = risk::autonomous_excluded(&plain, matches);
+    if approvals.policy() == Policy::Autonomous {
+        autonomous_excluded.extend(environment_workflows(gh, files, base, head));
+    }
     let counts = orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),
         bootstrap_until: approvals.bootstrap_until.as_deref(),

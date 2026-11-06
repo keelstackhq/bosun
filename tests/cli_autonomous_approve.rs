@@ -51,7 +51,7 @@ fn pr(k: &Key, file: &str, patch: &str, body: &str, policy: Option<&str>) -> Fak
     fake.pull(1, "change", "feature", body);
     fake.pull_as_issue(1, "change");
     fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
-    fake.issue(7, "task", &[], "task");
+    fake.issue(7, "task", &[], "task\n<!-- bosun:task {} -->");
     fake.comment(
         7,
         &lease_note("session_w", "2026-12-06T12:00:00Z", "src/**"),
@@ -171,7 +171,7 @@ fn an_unlinked_pr_gets_no_autonomous_approval() {
     post_sig(&fake, &k);
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
-    assert!(description(&fake).starts_with(AUTO));
+    assert!(description(&fake).starts_with(WAITING));
 }
 
 #[test]
@@ -274,4 +274,55 @@ fn approve_refuses_excluded_paths_even_with_a_verdict() {
         let (code, v) = sign(&fake, &k, "session_o");
         assert_eq!(code, 1, "{file}: {v}");
     }
+}
+
+const SECRET_DIFF: &str = "@@ -0,0 +1,1 @@\n+API_KEY = abc";
+
+/// A signature and a clean verdict by `session_r` on a PR that links `body`'s issues.
+fn decoy(k: &Key, body: &str) -> FakeGithub {
+    let fake = pr(k, "deny.toml", PLAIN, body, Some("autonomous"));
+    fake.issue(8, "decoy", &[], "no task marker");
+    fake.issue(9, "unleased", &[], "<!-- bosun:task {} -->");
+    post_verdict(&fake, "session_r", HEAD, 0);
+    fake
+}
+
+#[test]
+fn a_decoy_link_leaves_the_owner_path_and_approve_refuses() {
+    for body in ["Closes #8", "Closes #9"] {
+        let k = key();
+        let fake = decoy(&k, body);
+        post_sig(&fake, &k);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{body}: {v}");
+        assert!(description(&fake).starts_with(WAITING), "{body}");
+        assert!(v["data"].get("autonomous_verdicts").is_none());
+        let fake = decoy(&k, body);
+        let (code, v) = sign(&fake, &k, "session_o");
+        assert_eq!(code, 1, "{body}: {v}");
+    }
+}
+
+#[test]
+fn an_unchanged_environment_line_in_a_workflow_stays_with_the_owner() {
+    let yml = "jobs:\n  x:\n    environment: prod\n    steps: []\n";
+    for r in [HEAD, BASE] {
+        let k = key();
+        let fake = auto(&k, ".github/workflows/ci.yml", PLAIN);
+        fake.content(".github/workflows/ci.yml", r, yml);
+        post_verdict(&fake, "session_r", HEAD, 0);
+        post_sig(&fake, &k);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{r}: {v}");
+        assert!(description(&fake).starts_with(WAITING), "{r}");
+        let (code, v) = sign(&fake, &k, "session_o");
+        assert_eq!(code, 1, "{r}: {v}");
+    }
+}
+
+#[test]
+fn a_secret_match_keeps_the_owner_path() {
+    let (code, v, d) = with("a.env", SECRET_DIFF, "session_r", HEAD, 0);
+    assert_eq!(code, 5, "{v}");
+    assert!(d.starts_with(WAITING), "{d}");
 }

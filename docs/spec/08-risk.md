@@ -232,8 +232,13 @@ High-risk PRs:
   refuses (exit 1) on an excluded path, and unless a clean verdict on the head comes from a
   session that is neither a lease holder nor the signer. Gap: risk-check cannot see the
   signer's session (only the leases), so only `approve` enforces signer != reviewer. Never
-  covered: release environments, secrets, tags. Set the key only after a release that reads it
-  is pinned.
+  covered: release environments, secrets, tags. `policy = "autonomous"` under a pinned release older
+  than this one is a parse error, so it fails closed (signatures do not count). Set it only after
+  pinning a release that knows it. A linked issue must be a task (carries the task marker) and
+  some session must hold a lease on it; a decoy `Closes #N` leaves the owner path (status keeps
+  the owner-wait text; `approve` exits 1). Under this policy a changed `.github/workflows/**` file
+  (path or previous path) is also excluded when its content at the PR head or at base contains
+  `environment:` (case-insensitive, changed line or not) or cannot be read.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

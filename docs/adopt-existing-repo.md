@@ -232,10 +232,10 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    (default), `owner-gated` (the orchestrator, only when R-ci alone matches and no workflow
    changes, e.g. `deny.toml`) or `orchestrator`. Workflow changes always need you. Bootstrap mode
    (D-012) ends on 2026-11-30; init writes `[approvals]` only without `--bosun-version`.
-   Autonomous mode (D-017): set `policy = "autonomous"` only after a release that reads it is
-   pinned. The orchestrator then approves every PR, workflows and `.bosun` included, but only
-   with a clean verdict from an independent reviewer session on the exact head. Release
-   workflows, `hoist.toml` and other secrets config, jobs with an `environment:`, tags and
+   Autonomous mode (D-017): `policy = "autonomous"` under an older pinned release is a parse error (signatures do not count); set it only after
+   pinning a release that knows it. The orchestrator then approves every PR, workflows and `.bosun` included, but only
+   with a clean verdict from an independent reviewer session on the exact head, for a PR that links a leased task. Release
+   workflows, `hoist.toml` and other secrets config, workflow files that contain `environment:` (at head or base), tags and
    key or owner changes still need you.
 5. **Permission checks (Claude Code behaviour, not bosun's).** Each cloud session asks for its
    own permissions. An orchestrator's go
