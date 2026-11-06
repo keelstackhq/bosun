@@ -1150,13 +1150,12 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             "",
         );
         if seat_ok.is_none() {
-            tag["status"] = json!("warn");
+            // No seat is normal for a session outside Claude Tag: skipped, not a warning. A
+            // failed registry read is a warning.
+            tag["status"] = json!(if seat.is_err() { "warn" } else { "skipped" });
             tag["detail"] = json!(match &seat {
                 Err(e) => format!("the registry could not be read: {}", e.message),
-                Ok(_) => format!(
-                    "this session ({}) has no live Claude Tag seat in the registry; Slack posts stay plain slack_post",
-                    ctx.session
-                ),
+                Ok(_) => "no Claude Tag seat for this session".to_string(),
             });
             tag["fix"] = json!(format!(
                 "in a Claude Tag session run `bosun join --origin slack --slack-channel {} [--slack-thread <ts>]`",

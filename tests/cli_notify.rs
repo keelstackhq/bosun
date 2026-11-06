@@ -703,6 +703,10 @@ fn a_thread_seat_lists_its_thread_and_channel_posts_only() {
 fn an_explicit_thread_beats_the_thread_seat() {
     let e = env();
     threaded_ask(&e, 4, TS);
+    e.fake.comment(
+        4,
+        &json!({"bosun": "result", "session": "s", "outcome": "merged"}).to_string(),
+    );
     seat(
         &e,
         json!({"role": "thread", "channel": "C1", "thread_ts": TS2}),
@@ -710,10 +714,11 @@ fn an_explicit_thread_beats_the_thread_seat() {
     let (code, v) = e.run(&["notify", "--channel-info", "-", "--thread", TS], GOOD);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["seat"]["role"], "thread");
+    assert_eq!(v["next"][0]["tool"], "slack_post");
 }
 
 #[test]
-fn an_unreadable_registry_leaves_the_posts_alone() {
+fn a_missing_registry_leaves_the_posts_alone() {
     let e = env();
     threaded_ask(&e, 4, TS);
     // No registry issue: no seat, no error, plain slack_post.
@@ -838,4 +843,25 @@ fn a_routed_key_can_be_acked() {
     assert_eq!(v["data"]["already"], false);
     let (_, v) = e.run(&["notify"], "");
     assert_eq!(v["data"]["pending"], json!([]));
+}
+
+#[test]
+fn an_over_cap_own_ask_can_be_acked() {
+    let e = env();
+    for n in 4..=8 {
+        threaded_ask(&e, n, TS2);
+    }
+    let own = threaded_ask(&e, 9, TS);
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), std::slice::from_ref(&own));
+    let (code, v) = e.run(&["notify", "--ack", &own], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], false);
+    let (_, v) = e.notify();
+    assert_eq!(Env::keys(&v), Vec::<String>::new());
 }

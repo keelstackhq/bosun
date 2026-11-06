@@ -39,6 +39,8 @@ enum Results {
     Scan,
     /// One issue (for `--ack` of a `result:<issue>:<comment>` key).
     Issue(u64),
+    /// Only the owner question of one issue, uncapped (for `--ack` of an `ask:<issue>:<comment>` key).
+    Ask(u64),
 }
 
 pub fn run(dir: Option<&Path>, args: &NotifyArgs) -> CmdResult {
@@ -71,15 +73,16 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
     }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    // A result key is checked on its own issue: the capped list may not hold it, but
-    // `--thread` can list it.
-    let mode = match key
-        .strip_prefix("result:")
-        .and_then(|r| r.split_once(':'))
-        .and_then(|(n, _)| n.parse().ok())
-    {
-        Some(n) => Results::Issue(n),
-        None => Results::Off,
+    // A result or ask key is checked on its own issue: the capped list may not hold it.
+    let issue_of = |prefix: &str| {
+        key.strip_prefix(prefix)
+            .and_then(|r| r.split_once(':'))
+            .and_then(|(n, _)| n.parse().ok())
+    };
+    let mode = match (issue_of("result:"), issue_of("ask:")) {
+        (Some(n), _) => Results::Issue(n),
+        (_, Some(n)) => Results::Ask(n),
+        _ => Results::Off,
     };
     let found = collect(&app, None, false, mode)?;
     if found.done.iter().any(|k| k == key) {
@@ -163,7 +166,7 @@ fn collect(
     let listed = |kind: &str| slack.notify.is_empty() || slack.notify.iter().any(|k| k == kind);
     let wants = |kind: &str| {
         (only_thread.is_none() || keep_channel)
-            && !matches!(results, Results::Issue(_))
+            && !matches!(results, Results::Issue(_) | Results::Ask(_))
             && listed(kind)
     };
     let url = |n: u64| {
@@ -283,14 +286,20 @@ fn collect(
             Err(e) => errors.push(json!({"kind": "budget-halt", "message": e.message})),
         }
     }
-    if wants("owner-question") && notified_ok {
+    let ask_only = match results {
+        Results::Ask(n) => Some(n),
+        _ => None,
+    };
+    if (wants("owner-question") || (ask_only.is_some() && listed("owner-question"))) && notified_ok
+    {
         let r = (|| -> Result<(), BosunError> {
             let mut issues = gh.list_issues(&[&State::NeedsHuman.label()], IssueState::Open)?;
             issues.sort_by_key(|i| i.number);
+            issues.retain(|i| ask_only.is_none_or(|n| n == i.number));
             let mut count = 0;
             for i in issues {
                 // Only asks still pending count toward the cap.
-                if count >= MAX_ASKS {
+                if ask_only.is_none() && count >= MAX_ASKS {
                     break;
                 }
                 // The latest ask by a writer; anyone else's ask is not an owner question. Its
@@ -420,7 +429,7 @@ fn thread_results(
 ) -> Result<(), BosunError> {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let issues: Vec<u64> = match mode {
-        Results::Off => return Ok(()),
+        Results::Off | Results::Ask(_) => return Ok(()),
         Results::Issue(n) => vec![n],
         Results::Scan => {
             let (found, more) = gh.recent_issues(&ctx.now.minus_secs(WINDOW_SECS).to_string())?;

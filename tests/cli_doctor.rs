@@ -114,10 +114,10 @@ fn a_fully_set_up_repo_is_ok() {
     let d = tmp.path();
     let (code, v) = doctor(&fake, d, true);
     assert_eq!(code, 0, "{v}");
-    // The only warning is the Claude Tag seat: this session has not joined with one.
+    // The Claude Tag seat is skipped: this session has not joined with one.
     for it in v["data"]["items"].as_array().unwrap() {
         let want = if it["name"] == "claude-tag" {
-            "warn"
+            "skipped"
         } else {
             "ok"
         };
@@ -740,7 +740,7 @@ fn claude_tag_step_names_the_seat_or_the_join_command() {
 
     let (_, v, _) = tag_doctor(&[], true, None);
     let it = item_named(&v, "claude-tag").unwrap();
-    assert_eq!(it["status"], "warn", "{it}");
+    assert_eq!(it["status"], "skipped", "{it}");
     assert!(
         it["fix"]
             .as_str()
@@ -805,7 +805,7 @@ fn claude_tag_ignores_forged_and_expired_seats_and_shows_read_errors() {
         f.comment_by(1, "mallory", &join_line(seat, "2026-10-22T10:30:00Z"));
     });
     let it = item_named(&v, "claude-tag").unwrap();
-    assert_eq!(it["status"], "warn", "{it}");
+    assert_eq!(it["status"], "skipped", "{it}");
     assert!(
         it["fix"].as_str().unwrap().contains("--slack-channel G9 "),
         "{it}"
@@ -815,7 +815,7 @@ fn claude_tag_ignores_forged_and_expired_seats_and_shows_read_errors() {
         f.issue(1, "bosun registry", &["bosun:registry"], "");
         f.comment(1, &join_line(seat, "2026-10-22T09:00:00Z"));
     });
-    assert_eq!(item_named(&v, "claude-tag").unwrap()["status"], "warn");
+    assert_eq!(item_named(&v, "claude-tag").unwrap()["status"], "skipped");
 
     let (_, v, _) = tag_doctor_with(&[], Some("C1"), |f| {
         f.issue(1, "bosun registry", &["bosun:registry"], "");
