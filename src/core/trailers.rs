@@ -7,6 +7,20 @@ pub const MODEL: &str = "Bosun-Model";
 /// A commit must carry these; the model is added only when known.
 pub const REQUIRED: [&str; 2] = [SESSION, TASK];
 
+/// `line` is the trailer `key: value`, ignoring the key's case (git matches that way).
+fn has_key(line: &str, key: &str) -> bool {
+    // Bytes, not str slices: a multibyte char may straddle the key's end.
+    let (k, b) = (key.as_bytes(), line.as_bytes());
+    b.get(..k.len()).is_some_and(|p| p.eq_ignore_ascii_case(k))
+        && b[k.len()..].starts_with(b": ")
+        && is_trailer(line)
+}
+
+/// An editor comment: `# text` or a lone `#`. `#123` is body text.
+fn is_comment(line: &str) -> bool {
+    line == "#" || line.starts_with("# ")
+}
+
 fn is_trailer(line: &str) -> bool {
     line.split_once(": ").is_some_and(|(k, v)| {
         !v.trim().is_empty()
@@ -21,7 +35,7 @@ fn body_end(lines: &[&str]) -> usize {
         .iter()
         .position(|l| l.starts_with("# ------------------------ >8"))
         .unwrap_or(lines.len());
-    while end > 0 && (lines[end - 1].starts_with('#') || lines[end - 1].trim().is_empty()) {
+    while end > 0 && (is_comment(lines[end - 1]) || lines[end - 1].trim().is_empty()) {
         end -= 1;
     }
     end
@@ -38,10 +52,7 @@ pub fn missing(msg: &str) -> Vec<&'static str> {
     let block = &lines[start..end];
     REQUIRED
         .into_iter()
-        .filter(|k| {
-            let p = format!("{k}: ");
-            !block.iter().any(|l| l.starts_with(&p) && is_trailer(l))
-        })
+        .filter(|k| !block.iter().any(|l| has_key(l, k)))
         .collect()
 }
 
@@ -56,10 +67,7 @@ pub fn stamp(msg: &str, want: &[(&str, String)]) -> String {
     let block = &lines[start..end];
     let add: Vec<String> = want
         .iter()
-        .filter(|(k, v)| {
-            let p = format!("{k}: ");
-            !v.trim().is_empty() && !block.iter().any(|l| l.starts_with(&p) && is_trailer(l))
-        })
+        .filter(|(k, v)| !v.trim().is_empty() && !block.iter().any(|l| has_key(l, k)))
         .map(|(k, v)| format!("{k}: {}", v.trim()))
         .collect();
     if add.is_empty() || end == 0 {
@@ -151,6 +159,31 @@ mod tests {
             got.contains("Bosun-Session: s1\nBosun-Task: 7\n"),
             "{got:?}"
         );
+    }
+
+    #[test]
+    fn issue_ref_line_is_body_and_keys_ignore_case() {
+        let m = "feat: x\n\nRefs\n#123\n";
+        assert_eq!(
+            stamp(m, &want()),
+            "feat: x\n\nRefs\n#123\n\nBosun-Session: s1\nBosun-Task: 7\n"
+        );
+        // editor comments (`# text`, a lone `#`) still sit below the trailers
+        assert_eq!(
+            stamp("x\n\n#\n# hi\n", &want()),
+            "x\n\nBosun-Session: s1\nBosun-Task: 7\n\n#\n# hi\n"
+        );
+        let c = "x\n\nbosun-session: s\nBOSUN-TASK: 3\n";
+        assert!(missing(c).is_empty());
+        assert_eq!(stamp(c, &want()), c);
+    }
+
+    #[test]
+    fn multibyte_text_near_a_key_does_not_panic() {
+        assert_eq!(missing("x\n\nBosun-Sessio\u{20ac}: x\n"), [SESSION, TASK]);
+        let m = "Fixes the \u{1f600} bug\n";
+        assert!(stamp(m, &want()).contains("Bosun-Task: 7"));
+        assert_eq!(missing("a\n\nBosun-Sessi\u{1f600}: x\n"), [SESSION, TASK]);
     }
 
     #[test]

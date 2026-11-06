@@ -234,3 +234,37 @@ pub fn check_pr(
     }
     Ok(data)
 }
+
+/// `bosun pr`, before a PR is created: with `require`, the local commits `origin/<base>..HEAD`
+/// (merge commits skipped) must carry the trailers, so a refusal leaves no draft PR behind.
+/// Without `require`, or when git cannot say, it passes; `check_pr` judges the PR afterwards.
+pub fn check_local(dir: &Path, base: &str, require: bool) -> Result<(), BosunError> {
+    if !require {
+        return Ok(());
+    }
+    let range = format!("origin/{base}..HEAD");
+    let Some(raw) = git_out(
+        dir,
+        &["log", "--no-merges", "--format=%h%x1f%B%x1e", &range],
+    ) else {
+        return Ok(());
+    };
+    let bad: Vec<&str> = raw
+        .split('\x1e')
+        .filter_map(|rec| rec.trim().split_once('\x1f'))
+        .filter(|(_, msg)| !crate::core::trailers::missing(msg).is_empty())
+        .map(|(sha, _)| sha)
+        .collect();
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(BosunError::error(
+        format!(
+            "{} local commit(s) lack Bosun-Session/Bosun-Task trailers, so no PR is created: {}",
+            bad.len(),
+            bad.join(", ")
+        ),
+        "run `git fetch origin` (a stale origin/main counts commits that are already merged), `bosun trailers install`, then redo the commits stamped on a new branch (`git switch -c <new> origin/main && git merge --squash <old> && git commit`), push it and rerun `bosun pr` (never force-push)",
+    )
+    .with_data(json!({"trailers": {"missing": bad}})))
+}

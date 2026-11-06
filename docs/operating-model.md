@@ -113,7 +113,7 @@ candidates are gated in practice.
 | 2 | Close the bootstrap gaps | add the rest of R-gov to `BOOTSTRAP_EXCLUDED`; refuse bootstrap approval on R-prod-write | 30 | yes (R-gate) — done (window refuses R-gov, R-prod-write) |
 | 3 | Flag PRs that weaken a gate: lower limits, profiles, `deny.toml`, removed `ci.yml` gate steps | risk rule with a base/head value compare | 250 | yes (R-gov, R-ci, R-gate) |
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298) | 200 | yes (R-gate) |
-| 5 | Commit trailers `Bosun-Session`, `Bosun-Model`, `Bosun-Task` | `bosun pr` checks commits; hook warns on a missing trailer | 150 | probably — in review (draft PR, gated) |
+| 5 | Commit trailers `Bosun-Session`, `Bosun-Model`, `Bosun-Task` | `bosun pr` checks commits; hook warns on a missing trailer | 150 | done (#427 merged) |
 | 6 | Self-repair opens "which gate missed this?" | `main-health` / `revert` open a process-fix task linked to the main-red lesson | 120 | yes (R-gate: `mod.rs`) — done (`gate-missed`, `bosun:process-fix`, spec §9) |
 | 7 | Autonomy earned per change class | revert and escape rate per rule id; delegate only while under a limit in `limits.toml` | 350 | yes (R-gate) |
 | 8 | New model resets trust | record model per verdict; delegate counts only verdicts from the enrolled model | 200 | yes (R-gate) |

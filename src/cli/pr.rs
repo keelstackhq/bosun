@@ -468,6 +468,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                     ),
                 ));
             }
+            super::trailers::check_local(&app.ctx.dir, &base, app.ctx.config.trailers.require)?;
             touch = touch_check(&app, n, || Ok((gh.compare_files(&base, &branch)?, None)))?;
             let title = args
                 .title
