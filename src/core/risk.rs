@@ -470,8 +470,8 @@ pub fn bootstrap_excluded(
 }
 
 /// What an autonomous-mode approval (D-017) never covers: release workflows, the secrets
-/// config, a workflow whose diff names `environment:` or is not shown, and an R-secrets match.
-/// Trust files are not listed: they make signed approvals not count at all.
+/// config, a workflow whose diff names `environment:` or is not shown, and an R-secrets or
+/// R-prod-write match. Trust files are not listed: they make signed approvals not count at all.
 pub const AUTONOMOUS_EXCLUDED: [&str; 6] = [
     "**/workflows/release*.yml",
     "**/workflows/release*.yaml",
@@ -487,7 +487,11 @@ pub fn autonomous_excluded(
     files: &[(&str, Option<&str>, Option<&str>)],
     matches: &[Match],
 ) -> Vec<String> {
-    excluded_in(files, matches, AUTONOMOUS_EXCLUDED.iter())
+    let mut why = excluded_in(files, matches, AUTONOMOUS_EXCLUDED.iter());
+    if matches.iter().any(|m| m.rule == "R-prod-write") {
+        why.push("R-prod-write".into());
+    }
+    why
 }
 
 fn excluded_in<'a>(
@@ -1097,6 +1101,17 @@ mod tests {
             ("src/cli/approve.rs", None, some),
         ];
         assert!(autonomous_excluded(&f, &[]).is_empty());
+        // Production writes stay with the owner, like secrets.
+        let m = |rule: &str| Match {
+            rule: rule.into(),
+            why: String::new(),
+            approval: Approval::Owner,
+            evidence: Vec::new(),
+        };
+        let ex = |r: &str| autonomous_excluded(&f, &[m(r)]);
+        assert_eq!(ex("R-prod-write"), ["R-prod-write"]);
+        assert_eq!(ex("R-secrets"), ["R-secrets"]);
+        assert!(ex("R-gov").is_empty());
     }
 
     fn file(path: &str, added: &[&str]) -> ChangedFile {

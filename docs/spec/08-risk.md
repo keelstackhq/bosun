@@ -190,7 +190,7 @@ High-risk PRs:
   `[approvals]`, since its release may reject the key (`tests/channel_render.rs`). A consumer
   drops the key to opt out.
 - Approval policy (D-014 draft, spec B6). `[approvals] policy = "owner" | "owner-gated" |
-  "orchestrator"` (default `owner`, fail safe: intake writes the policy explicitly for new and
+  "orchestrator"` (or `"autonomous"`, next bullet; default `owner`, fail safe: intake writes the policy explicitly for new and
   adopted repos; another value is a parse error) says when an orchestrator approval (the
   bootstrap-form signature above, format unchanged) counts. Checks, in order, first failure wins
   (`orchestrator_counts` in `src/core/approve.rs`): the requirement is `owner`; no
@@ -217,15 +217,18 @@ High-risk PRs:
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
   bootstrap window and whatever the requirement: only `risk::autonomous_excluded` stops it
   (release workflows `**/workflows/release*.y*ml`, `hoist.toml`, `.sops.yaml`, `secrets.toml`,
-  `access.toml`, a workflow whose diff names `environment:` or is not shown, an `R-secrets`
-  match); the owner approves those (the status keeps the `high risk, owner approval needed`
+  `access.toml`, a workflow whose diff names `environment:` or is not shown, an `R-secrets` or
+  `R-prod-write` match); the owner approves those (the status keeps the `high risk, owner approval needed`
   text). Trust files (`approvers.toml`, owners, CODEOWNERS) and an unseen diff still make
   signatures not count at all. A signature counts in risk-check only with a clean verdict on the
   head (approve, confidence >= min, no major finding) from a session that holds no lease on a
   linked task; a PR that links no task gets no autonomous approval (fail closed). Waiting for
   that is `high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed`,
   which does not start with the owner-wait text, so `bosun approve --list` leaves it off the
-  owner board. `data.autonomous_verdicts` lists the counted sessions. `bosun approve --bootstrap`
+  owner board. `data.autonomous_verdicts` lists the counted sessions. Like any approval, it
+  carries over a clean merge of main (design C7), judged with the verdict on the older head.
+  `bosun approve` checks paths only, so it may sign an R-secrets or R-prod-write PR that
+  risk-check then refuses to count. `bosun approve --bootstrap`
   refuses (exit 1) on an excluded path, and unless a clean verdict on the head comes from a
   session that is neither a lease holder nor the signer. Gap: risk-check cannot see the
   signer's session (only the leases), so only `approve` enforces signer != reviewer. Never
