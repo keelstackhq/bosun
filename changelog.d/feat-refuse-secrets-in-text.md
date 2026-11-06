@@ -1,1 +1,0 @@
-- `lesson add`, `handoff`, `msg` and `fail` refuse secret-shaped text (tokens, keys, PEM, high-entropy words) with exit 2 and never echo it.

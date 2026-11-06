@@ -4,6 +4,22 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- When `bosun pr --ready` exits 5 with `already_clean` (the PR is already mergeable, so auto-merge cannot be turned on), the orchestrator merges it (D-008).
+- risk-check R-bundle and `bosun pr` bundle checks count closing refs in the PR title and commit messages too, failing closed at the commit cap.
+- main-open judges a draft when the mainfix label changes; `bosun gate ci-minutes` accepts `draft != true` and a fail-fast job of any name.
+- PreToolUse hook: destructive-lock (rm -rf /, mkfs, dd to a device, terraform destroy, DROP DATABASE, fork bomb) and repeat-lock (same Bash command warns at 3, denied at 5).
+- Draft-first PRs: `bosun pr` opens a draft, `bosun pr --ready` (alias `--auto-merge`) needs local gate stamps (a skipped gate counts) for the pushed head, then marks it ready and turns on auto-merge; `bosun hold`/`ask` put the PR back to draft; heavy CI jobs skip drafts while the required check fails fast; new `bosun gate ci-minutes` and doctor step 14 check workflows for draft skips, `ready_for_review`, cancelling concurrency and `paths` on heavy PR jobs.
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.6.0 with its npm sha512 values; KNOWN lists gain 0.6.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
+- `bosun pr` no longer closes a spawned child's epic before its `result` (its own lease and a pending child lease block the close); `bosun result` reports an outcome it could not apply as `data.state_skipped` and `data.epic_already_closed` (#400).
+- `bosun pr <lead> --bundle <issue>...` writes a `Closes` per bundled issue; risk-check adds `R-bundle` (owner) for a multi-task PR that changes a gated path; closing references in `owner/repo#N` and issue-URL forms count; `review-pack` adds `bundle_tasks` and compares `touch_added` against the whole bundle.
+- `shape: single|split|auto` on plan items (D-016, no line caps): gated tasks (`risk: high` or touching a risk path) get their own PR and are never bundled; `wave plan` bundles the rest of a single item; a bundled issue is not claimable while the lead holds it; `review-pack` adds `chunks` and a `drift` note at 2x the planned size, and a verdict must list every chunk in `chunks_reviewed`. Gated detection resolves wildcard touches against the default branch's tree (plan, wave, claim); `bosun pr` refuses a multi-task PR that changes gated files.
+- `bosun result` and `bosun pr` (task found merged) close the epic when every task is merged (no quiet period, only other sessions' leases block it), reporting `data.epic_closed`; before, only `reap` did, after a 10-minute wait.
+- This repo's session rules now tell every session that the owner's start request covers its own task loop (push, PRs, verdicts, auto-merge); gated PRs still need an owner approval.
+- `bosun hook stop`: the Stop hook blocks a child that holds a live lease without a result or handoff, and warns when the work tree changed since the last passing local `bosun gate`.
+- `bosun ci-log` keeps the head (`--head`, default 20), the tail and up to 20 error lines from the middle of each failed job log, with `… N lines cut …` markers; before, only the tail.
+- `lesson add`, `handoff`, `msg` and `fail` refuse secret-shaped text (tokens, keys, PEM, high-entropy words) with exit 2 and never echo it.
+- `bosun` secret check allows public integrity hashes (`sha512-<b64>`, `NAME_SHA512=<b64>`) and `bosun pr` refuses a secret-shaped title.
+
 ## 0.6.0 (2026-11-05)
 
 - `docs/setup-script.sh` (and the channel copy) prewarms superpowers and caveman from the `keelstack` marketplace and warns when an installed commit is off its pin; it never fails.

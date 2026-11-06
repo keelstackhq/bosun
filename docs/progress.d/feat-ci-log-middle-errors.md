@@ -1,1 +1,0 @@
-- 2026-11-05 · ci-log · head + middle error lines kept besides the tail (`core::text::squash_log`) · PR #402

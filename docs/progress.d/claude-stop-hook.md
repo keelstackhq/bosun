@@ -1,1 +1,0 @@
-- 2026-11-05 · N1 · Stop hook blocks a child with a live lease and no result or handoff; warns on a stale gate · PR #405

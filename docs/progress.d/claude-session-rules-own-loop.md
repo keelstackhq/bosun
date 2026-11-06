@@ -1,1 +1,0 @@
-- 2026-11-05 · session-rules · start request covers the session's own task loop

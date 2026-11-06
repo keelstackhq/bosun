@@ -1,1 +1,0 @@
-- 2026-11-05 · N2 · destructive-lock and repeat-lock in the PreToolUse hook · PR #406

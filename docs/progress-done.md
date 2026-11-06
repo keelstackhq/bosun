@@ -308,3 +308,19 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-04 · feedback · GitHub 5xx gives error.kind upstream (exit 1) · PR (fix-wait-upstream)
 - 2026-11-03 · Release · keel-bosun 0.5.0, @keelstackhq/bosun 0.5.0 (release PR; tag and publish by release.yml) · PR (release/0.5.0)
 - 2026-11-04 · R3c · setup script prewarms keelstack plugins, warn-only pin check
+- 2026-11-05 · Fix · loop opens PR with --auto-merge before the verdict; already_clean goes to the orchestrator (D-008) · claude/auto-merge-at-open
+- R-bundle counts closing refs in title and commit messages (fail closed at the cap).
+- 2026-11-05 · ci-minutes follow-ups · main-open mainfix label on drafts, `draft != true` and named fail-fast jobs in ci-minutes
+- 2026-11-05 · N2 · destructive-lock and repeat-lock in the PreToolUse hook · PR #406
+- 2026-11-05 · draft-first CI · bosun pr drafts and --ready with gate stamps, hold/ask back to draft, heavy jobs skip drafts, `bosun gate ci-minutes` and doctor step 14
+- 2026-11-05 · R6 · pin bosun 0.6.0 (.bosun/version, setup script, KNOWN lists)
+- 2026-11-05 · Fix · bosun pr leaves a spawned child's epic close to its result; late results reported (#400) · claude/pr-epic-own-lease
+- 2026-11-05 · pr-shape-followup · closing refs in all forms, R-bundle in risk-check, `bosun pr --bundle`, review-pack bundle_tasks (D-016) · PR (claude/pr-shape-followup)
+- 2026-11-05 · pr-shape · item `shape:`, gated tasks, single-PR wave bundle, bundled-claim refusal, review chunks and drift (D-016) · PR (claude/pr-shape)
+- 2026-11-05 · Release · keel-bosun 0.6.0, @keelstackhq/bosun 0.6.0 (release PR; tag and publish by release.yml) · PR (claude/release-0.6.0)
+- 2026-11-05 · R7 · `bosun result` and `bosun pr` close a fully merged epic (data.epic_closed), not only reap
+- 2026-11-05 · session-rules · start request covers the session's own task loop
+- 2026-11-05 · N1 · Stop hook blocks a child with a live lease and no result or handoff; warns on a stale gate · PR #405
+- 2026-11-05 · ci-log · head + middle error lines kept besides the tail (`core::text::squash_log`) · PR #402
+- 2026-11-05 · refuse secrets in text · `secret_kind` in core/text.rs; lesson add, handoff, msg, fail refuse tokens/keys/PEM (exit 2)
+- 2026-11-05 · secrets · allow integrity hashes; check pr title · PR #407

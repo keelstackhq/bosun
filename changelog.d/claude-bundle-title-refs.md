@@ -1,1 +1,0 @@
-- risk-check R-bundle and `bosun pr` bundle checks count closing refs in the PR title and commit messages too, failing closed at the commit cap.

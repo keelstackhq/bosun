@@ -1,1 +1,0 @@
-- This repo's session rules now tell every session that the owner's start request covers its own task loop (push, PRs, verdicts, auto-merge); gated PRs still need an owner approval.
