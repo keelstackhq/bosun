@@ -1,0 +1,1 @@
+- 2026-11-06 · operating-model #3 · R-weaken risk rule (base/head compare, capability weaken) · PR #TBD

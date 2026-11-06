@@ -1,0 +1,1 @@
+- `bosun risk-check` flags a PR that loosens a gate config (raised cap, loosened risk rule, lowered deny or lint level, removed profile gate) as R-weaken, owner approval.

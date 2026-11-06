@@ -88,7 +88,8 @@ fn shipped_rules_have_the_decided_approval_class() {
                 "R-ci-review",
                 "R-secrets",
                 "R-deps",
-                "R-prod-write"
+                "R-prod-write",
+                "R-weaken"
             ]
         );
     }

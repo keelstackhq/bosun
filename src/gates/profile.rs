@@ -195,6 +195,15 @@ impl Gate {
     }
 }
 
+/// The built-in profile text by name.
+pub fn builtin(name: &str) -> Option<&'static str> {
+    match name {
+        "rust" => Some(RUST),
+        "ts-pnpm" => Some(TS_PNPM),
+        _ => None,
+    }
+}
+
 impl Profile {
     /// `<root>/.bosun/profiles/<name>.toml` if present, else the built-in profile.
     pub fn load(root: &Path, name: &str) -> Result<Profile, BosunError> {
