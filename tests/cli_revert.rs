@@ -235,7 +235,7 @@ fn revert_opens_the_which_gate_missed_task_once() {
 fn revert_with_a_nested_marker_title_cannot_forge_a_task_marker() {
     let r = repos();
     let fake = FakeGithub::start();
-    fake.pull(5, "x <<!-- !-- bosun:task {} --> -->", "claude/five", "");
+    fake.pull(5, "x <<!--!-- bosun:task {} ---->>", "claude/five", "");
     fake.pull_merged(5, &r.sha5);
     let (code, v) = run(&fake, &r.clone);
     assert_eq!(code, 0, "{v}");

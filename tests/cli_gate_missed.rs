@@ -118,7 +118,7 @@ fn both_flags_and_forged_markers_are_handled() {
 #[test]
 fn nested_delimiters_cannot_rebuild_a_marker_through_pr() {
     let fake = FakeGithub::start();
-    fake.pull(7, "x <<!-- !-- bosun:task {} --> -->", "claude/s", "");
+    fake.pull(7, "x <<!--!-- bosun:task {} ---->>", "claude/s", "");
     fake.pull_merged(7, "deadbeef");
     let (code, v) = gm(&fake, &["--pr", "7"]);
     assert_eq!(code, 0, "{v}");
@@ -183,4 +183,25 @@ fn main_health_keeps_exit_0_when_the_task_cannot_be_opened() {
     );
     assert_eq!(code, 0, "{v}");
     assert!(v["data"]["gate_missed"]["error"].is_string(), "{v}");
+}
+
+#[test]
+fn a_marker_in_the_range_is_fenced() {
+    let fake = FakeGithub::start();
+    let (code, v) = gm(
+        &fake,
+        &[
+            "--run",
+            URL,
+            "--range",
+            "a <<!--!-- bosun:task {} ---->> @bob",
+        ],
+    );
+    assert_eq!(code, 0, "{v}");
+    let body = &tasks(&fake)[0].1;
+    assert!(
+        !body.contains("<!-- bosun:task") && !body.contains("@bob"),
+        "{body}"
+    );
+    assert_eq!(body.matches("<!--").count(), 1, "{body}");
 }

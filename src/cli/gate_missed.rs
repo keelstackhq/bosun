@@ -47,9 +47,10 @@ pub fn open(gh: &dyn Github, inc: &Incident) -> Result<(u64, bool), BosunError> 
     }
     let (what, link) = (safe(inc.what), safe(inc.link));
     gh.ensure_label(LABEL, "d93f0b", "a gate missed an escaped defect")?;
-    let range = inc.range.unwrap_or(
-        "not known: from the last green main run to the failing commit (`bosun main-triage --good REV`)",
-    );
+    let range = inc.range.map(safe).unwrap_or_else(|| {
+        "not known: from the last green main run to the failing commit (`bosun main-triage --good REV`)"
+            .into()
+    });
     let body = format!(
         "An escaped defect: {what}.\n\n- Evidence: {link}\n- Commit range: {range}\n\n\
          Which gate missed this? Fill in each item, then close the issue with the PR that adds the check.\n\n\
