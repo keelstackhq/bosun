@@ -23,6 +23,7 @@ pub struct Incident<'a> {
 }
 
 fn marker(key: &str) -> String {
+    let key = key.replace("<!--", "").replace("-->", "");
     format!("<!-- bosun:gate-missed {key} -->")
 }
 
@@ -37,6 +38,8 @@ pub fn open(gh: &dyn Github, inc: &Incident) -> Result<(u64, bool), BosunError> 
     {
         return Ok((i.number, false));
     }
+    let clean = |t: &str| t.replace("<!--", "").replace("-->", "");
+    let (what, link) = (clean(inc.what), clean(inc.link));
     gh.ensure_label(LABEL, "d93f0b", "a gate missed an escaped defect")?;
     let range = inc.range.unwrap_or(
         "not known: from the last green main run to the failing commit (`bosun main-triage --good REV`)",
@@ -47,21 +50,23 @@ pub fn open(gh: &dyn Github, inc: &Incident) -> Result<(u64, bool), BosunError> 
          - [ ] Root cause\n\
          - [ ] The tightest loop that could catch it (local, CI, nightly)\n\
          - [ ] The proposed gate or test\n\n{mark}",
-        what = inc.what,
-        link = inc.link,
+        what = what,
+        link = link,
     );
     let n = gh
-        .create_issue(
-            &format!("Which gate missed this? {}", inc.what),
-            &body,
-            &[LABEL],
-        )?
+        .create_issue(&format!("Which gate missed this? {what}"), &body, &[LABEL])?
         .number;
     Ok((n, true))
 }
 
 pub fn run(dir: Option<&Path>, a: &GateMissedArgs) -> CmdResult {
     super::refuse_secret("--run", a.run.as_deref().unwrap_or(""))?;
+    if a.pr.is_some() == a.run.is_some() {
+        return Err(BosunError::usage(
+            "name the incident with exactly one of --pr or --run",
+            "pass --pr N (the reverted or escaped PR) or --run URL (the failing run)",
+        ));
+    }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
@@ -81,12 +86,7 @@ pub fn run(dir: Option<&Path>, a: &GateMissedArgs) -> CmdResult {
             "a failing run".into(),
             url.to_string(),
         ),
-        _ => {
-            return Err(BosunError::usage(
-                "name the incident with exactly one of --pr or --run",
-                "pass --pr N (the reverted or escaped PR) or --run URL (the failing run)",
-            ));
-        }
+        _ => unreachable!("checked above"),
     };
     let inc = Incident {
         key: &key,

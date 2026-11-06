@@ -1,1 +1,1 @@
-- 2026-11-06 · operating-model #6 · Which-gate-missed task on main-red and revert, `bosun gate-missed` · PR #TBD
+- 2026-11-06 · operating-model #6 · Which-gate-missed task on main-red and revert, `bosun gate-missed` · PR #426

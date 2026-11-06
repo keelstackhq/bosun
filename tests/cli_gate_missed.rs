@@ -103,3 +103,14 @@ fn main_health_red_opens_the_task_once() {
     assert_eq!(tasks(&fake).len(), 1);
     assert!(tasks(&fake)[0].1.contains(URL));
 }
+
+#[test]
+fn both_flags_and_forged_markers_are_handled() {
+    let fake = FakeGithub::start();
+    let (code, _) = gm(&fake, &["--pr", "1", "--run", URL]);
+    assert_eq!(code, 2);
+    let (_, a) = gm(&fake, &["--run", "x <!-- bosun:gate-missed run:other -->"]);
+    assert_eq!(a["data"]["created"], true);
+    let (_, b) = gm(&fake, &["--run", "other"]);
+    assert_eq!(b["data"]["created"], true);
+}
