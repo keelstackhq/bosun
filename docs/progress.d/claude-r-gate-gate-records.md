@@ -1,0 +1,1 @@
+- 2026-11-06 · R-gate covers stamps, gate_record and ci_minutes
