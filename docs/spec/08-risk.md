@@ -242,10 +242,14 @@ High-risk PRs:
   signer != reviewer. The task link binds the PR author's login, not a session: agents that
   share one login can close another session's task and review their own PR, which is within
   the honest-agent limit. The session that holds an owner key must never build or run bosun code
-  from an autonomous PR (it would run unreviewed code next to the key). Approval and gate code
-  (`AUTONOMOUS_DENIED`: `src/core/{approve,risk,signature,verdict,records,guard}.rs`, the
-  approve, risk-check, carry-over, verdict and gate commands, `src/hooks/**`, `src/gates/**`)
-  always goes to the owner. Any verdict record on the head that would not count (a rejection,
+  from an autonomous PR (it would run unreviewed code next to the key). Gate code always goes to
+  the owner: any path the base branch's R-gate rule matches (`AUTONOMOUS_DENIED_RULES`, with
+  R-secrets and R-prod-write; a unit test walks every default R-gate path), the module roots
+  `src/lib.rs`, `src/main.rs` and `src/**/mod.rs`, and any Rust file whose diff is not shown or
+  changes a line that may set `#[path]` (`path = "`, spaces dropped, `cfg_attr` too;
+  `risk::path_attributes`). R-gate is the trust boundary: a module it does not list (e.g. one
+  risk-check imports) is gate code only once the rule names it. `bosun approve` sees paths and
+  `#[path]` only, not R-gate, so it may sign a PR risk-check then refuses. Any verdict record on the head that would not count (a rejection,
   majors, a low or missing confidence), edited or not, blocks autonomous approval. The verdict
   record carries no `escalate_risk`, so an escalation is seen only as its verdict. Never
   covered: release environments, secrets, tags. `policy =

@@ -15,7 +15,12 @@ const OTHER: &str = "89abcdef0123456789abcdef0123456789abcdef";
 const MAIN: &str = "refs/heads/main";
 const NOW: &str = "2026-12-05T10:00:00Z";
 const PLAIN: &str = "@@ -0,0 +1,1 @@\n+x";
-const GATE: &str = "src/core/meta.rs";
+const GATE: &str = "src/feature/a.rs";
+/// The default rules plus a repo rule that makes `src/feature/**` high risk outside R-gate.
+const RULES: &str = concat!(
+    include_str!("../src/core/risk_default.toml"),
+    "\n[[rule]]\nid = \"R-feature\"\nwhy = \"x\"\npaths = [\"src/feature/**\"]\n"
+);
 const WAITING: &str = "high risk, owner approval needed";
 const AUTO: &str = "high risk, autonomous mode (D-017)";
 
@@ -82,6 +87,7 @@ fn pr_by(
     let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{public}\"\n");
     fake.content(".bosun/approvers.toml", MAIN, &keys);
     fake.content(".bosun/bosun.toml", BASE, &config(policy));
+    fake.content(".bosun/risk.toml", BASE, RULES);
     fake.content(".bosun/bosun.toml", MAIN, &config(policy));
     fake.pull_file(1, file, "modified", 1, 0, Some(patch));
     fake
@@ -208,6 +214,8 @@ fn releases_secrets_environments_and_trust_files_stay_with_the_owner() {
         ("Cargo.toml", PLAIN),
         ("src/core/approve.rs", PLAIN),
         ("src/cli/risk_check.rs", PLAIN),
+        ("src/core/meta.rs", PLAIN),
+        ("src/lib.rs", PLAIN),
         (".bosun/limits.toml", PLAIN),
         ("docs/agents/org-decisions.md", PLAIN),
         ("hoist.toml", PLAIN),
@@ -504,4 +512,12 @@ fn only_the_autonomous_form_counts_under_the_autonomous_policy_and_never_elsewhe
         assert_eq!(code, 5, "{policy:?}: {v}");
         assert!(v["data"]["approved_by"].is_null(), "{policy:?}: {v}");
     }
+}
+
+#[test]
+fn a_path_attribute_in_the_diff_stays_with_the_owner() {
+    let patch = "@@ -0,0 +1,2 @@\n+#[path = \"../core/risk.rs\"]\n+mod x;";
+    let (code, v, d) = with(GATE, patch, "session_r", HEAD, 0);
+    assert_eq!(code, 5, "{v}");
+    assert!(d.starts_with(WAITING), "{d}");
 }

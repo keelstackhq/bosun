@@ -972,7 +972,11 @@ fn orchestrator_window(
         .collect();
     let workflows = risk::workflow_files(&paths);
     let rules: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
-    let autonomous_excluded = risk::autonomous_excluded(&paths, matches);
+    let mut autonomous_excluded = risk::autonomous_excluded(&paths, matches);
+    let patches: Vec<_> = (files.iter())
+        .map(|f| (&*f.filename, f.patch.as_deref()))
+        .collect();
+    autonomous_excluded.extend(risk::path_attributes(&patches));
     let counts = orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),
         bootstrap_until: approvals.bootstrap_until.as_deref(),

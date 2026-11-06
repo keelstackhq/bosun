@@ -498,33 +498,43 @@ pub const AUTONOMOUS_ALLOWED: [&str; 4] = ["src/**", "tests/**", "docs/**", "cha
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
 /// and the files the review and the plans trust.
-pub const AUTONOMOUS_DENIED: [&str; 20] = [
+pub const AUTONOMOUS_DENIED: [&str; 9] = [
     "docs/setup-script.sh",
     "docs/agents/**",
     "docs/lessons.toml",
     "**/plans/**",
     "**/*.jinja",
     "**/build.rs",
-    // The code that judges approvals, verdicts and gates: a change to it goes to the owner.
-    "src/core/approve.rs",
-    "src/core/risk.rs",
-    "src/core/risk_default.toml",
-    "src/core/signature.rs",
-    "src/core/verdict.rs",
-    "src/core/records.rs",
-    "src/core/guard.rs",
-    "src/cli/approve.rs",
-    "src/cli/risk_check.rs",
-    "src/cli/carry_over.rs",
-    "src/cli/verdict.rs",
-    "src/cli/gate.rs",
-    "src/hooks/**",
-    "src/gates/**",
+    // Module roots: a `mod` line there can swap a gated module for another file.
+    "src/lib.rs",
+    "src/main.rs",
+    "src/**/mod.rs",
 ];
+
+/// The rules whose match autonomous mode never covers: secrets, production writes and the gate
+/// code (R-gate at base: what decides approvals, so the deny set follows the rule).
+pub const AUTONOMOUS_DENIED_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-gate"];
+
+/// The Rust files among `(path, patch)` whose diff is not shown or changes a line that may set a
+/// `#[path]` (also inside `cfg_attr`, over several lines): `path` then `=` and a quote, spaces
+/// dropped. A false hit (`let path = "x"`) only sends the PR to the owner.
+pub fn path_attributes(files: &[(&str, Option<&str>)]) -> Vec<String> {
+    let attr = |l: &str| {
+        let t: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+        (l.starts_with('+') || l.starts_with('-'))
+            && (t.contains("path=\"") || t.contains("path=r"))
+    };
+    (files.iter())
+        .filter(|(p, patch)| {
+            p.to_ascii_lowercase().ends_with(".rs") && patch.is_none_or(|d| d.lines().any(attr))
+        })
+        .map(|(p, _)| p.to_string())
+        .collect()
+}
 
 /// What an autonomous-mode approval never covers among `(path, previous path)`: every path
 /// outside [`AUTONOMOUS_ALLOWED`] or inside [`AUTONOMOUS_DENIED`] (a rename counts on both sides,
-/// any case; a `..` segment too), and an R-secrets or R-prod-write match. Empty: it can count.
+/// any case; a `..` segment too), and a match of [`AUTONOMOUS_DENIED_RULES`]. Empty: it can count.
 pub fn autonomous_excluded(files: &[(&str, Option<&str>)], matches: &[Match]) -> Vec<String> {
     let globs = |l: &[&str]| -> Vec<Glob> {
         (l.iter())
@@ -540,7 +550,7 @@ pub fn autonomous_excluded(files: &[(&str, Option<&str>)], matches: &[Match]) ->
         })
         .map(|(path, _)| path.to_string())
         .collect();
-    for rule in ["R-secrets", "R-prod-write"] {
+    for rule in AUTONOMOUS_DENIED_RULES {
         if matches.iter().any(|m| m.rule == rule) {
             why.push(rule.into());
         }
@@ -1146,18 +1156,32 @@ mod tests {
             "docs/superpowers/plans/p.md",
             "SRC/Build.RS",
             "Docs/Agents/X.md",
-            // Approval and gate code goes to the owner.
-            "src/core/approve.rs",
-            "src/core/guard.rs",
-            "src/cli/risk_check.rs",
-            "src/hooks/pre_tool_use.rs",
-            "src/gates/integrity.rs",
+            // Module roots can swap a gated module for another file.
+            "src/lib.rs",
+            "src/main.rs",
+            "src/cli/mod.rs",
         ];
         for p in ok {
             assert!(autonomous_excluded(&[(p, None)], &[]).is_empty(), "{p}");
         }
         for p in no {
             assert_eq!(autonomous_excluded(&[(p, None)], &[]), [p], "{p}");
+        }
+        // Gate code goes to the owner: every path of the default R-gate rule is a match that
+        // autonomous mode refuses, so the deny set follows R-gate.
+        let gate = Rules::defaults()
+            .rules
+            .into_iter()
+            .find(|r| r.id == "R-gate");
+        let gate = gate.expect("R-gate");
+        assert!(!gate.paths.is_empty());
+        for g in &gate.paths {
+            let p = g.as_str().replace("**", "x.rs");
+            let m = eval(&[file(&p, &[])]);
+            assert!(
+                autonomous_excluded(&[(&p, None)], &m).contains(&"R-gate".to_string()),
+                "{p}"
+            );
         }
         // A rename counts on both sides.
         let f = [("src/a.rs", Some(".github/workflows/ci.yml"))];
@@ -1177,6 +1201,15 @@ mod tests {
             ["R-prod-write"]
         );
         assert!(autonomous_excluded(&f, &[m("R-gov")]).is_empty());
+        // A `#[path]` attribute in a changed Rust line, or an unseen Rust diff, goes to the owner.
+        let some = Some("@@\n+fn a() {}");
+        let attr = Some("@@\n+#[cfg_attr(x,\n+   path = \"other.rs\")]\n+mod risk;");
+        assert!(path_attributes(&[("src/a.rs", some)]).is_empty());
+        assert!(path_attributes(&[("docs/a.md", None)]).is_empty());
+        assert_eq!(path_attributes(&[("src/a.rs", attr)]), ["src/a.rs"]);
+        assert_eq!(path_attributes(&[("src/a.RS", None)]), ["src/a.RS"]);
+        let attr = Some("@@\n-#[path = \"x.rs\"]");
+        assert_eq!(path_attributes(&[("src/a.rs", attr)]).len(), 1);
     }
 
     #[test]

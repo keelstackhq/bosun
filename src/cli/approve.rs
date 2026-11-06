@@ -702,7 +702,11 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     let paths: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.previous_filename.as_deref()))
         .collect();
-    let hit = risk::autonomous_excluded(&paths, &[]);
+    let mut hit = risk::autonomous_excluded(&paths, &[]);
+    let patches: Vec<_> = (files.iter())
+        .map(|f| (&*f.filename, f.patch.as_deref()))
+        .collect();
+    hit.extend(risk::path_attributes(&patches));
     if !hit.is_empty() {
         return Err(BosunError::error(
             format!(

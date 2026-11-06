@@ -235,7 +235,7 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    Autonomous mode (D-017): `policy = "autonomous"` under an older pinned release is a parse
    error (signatures do not count); set it only after pinning a release that knows it. The
    orchestrator then approves PRs that change only `src/`, `tests/`, `docs/` or `changelog.d/`
-   (not `docs/agents/`, plans, `*.jinja`, `build.rs`, `docs/lessons.toml`, `docs/setup-script.sh`, nor bosun's approval, gate and hook code),
+   (not `docs/agents/`, plans, `*.jinja`, `build.rs`, `docs/lessons.toml`, `docs/setup-script.sh`, nor R-gate code, module roots or `#[path]` changes),
    when every verdict on the exact head is clean and one is from an independent reviewer session, for a PR that
    closes an open task leased by its author. Everything else (workflows, `.bosun`, `channel/`,
    root files such as `Cargo.toml`, secrets, releases, tags, key or owner changes) still needs you.
