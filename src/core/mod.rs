@@ -1,6 +1,7 @@
 //! Pure process logic: no file system, no processes, no network, no GitHub client.
 //! `tests/core_is_pure.rs` enforces it.
 
+pub mod adopt;
 pub mod agreement;
 pub mod answer;
 pub mod approve;
@@ -22,6 +23,7 @@ pub mod meta;
 pub mod plan;
 pub mod prereqs;
 pub mod records;
+pub mod render;
 pub mod repeat;
 pub mod review;
 pub mod risk;

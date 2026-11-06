@@ -192,7 +192,7 @@ fn valid_branch(name: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-fn is_semver(s: &str) -> bool {
+pub(crate) fn is_semver(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     parts.len() == 3
         && parts
@@ -279,11 +279,17 @@ fn main_owns_claude_md(root: &Path) -> bool {
 
 /// Does a workflow under `.github/workflows` report the check `ci-ok` (a job named so, or keyed
 /// so without a `name:`)? Then the repo has its own required-check gate.
-fn has_ci_ok_job(root: &Path) -> bool {
+pub(crate) fn has_ci_ok_job(root: &Path) -> bool {
+    has_ci_ok_job_except(root, "")
+}
+
+/// Like `has_ci_ok_job`, ignoring the workflow file named `skip` (adopt's own `bosun.yml`).
+pub(crate) fn has_ci_ok_job_except(root: &Path, skip: &str) -> bool {
     let Ok(dir) = std::fs::read_dir(root.join(".github/workflows")) else {
         return false;
     };
     dir.flatten()
+        .filter(|e| e.file_name() != skip)
         .filter(|e| {
             e.path()
                 .extension()

@@ -1,0 +1,1 @@
+- 2026-11-06 · bosun adopt + uninstall (no splice path), core::render, Github::delete_label
