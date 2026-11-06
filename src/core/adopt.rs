@@ -25,6 +25,9 @@ pub struct Manifest {
     /// Labels adopt created (they did not exist before).
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Directories adopt created (they did not exist), for `bosun uninstall` to remove when empty.
+    #[serde(default)]
+    pub dirs: Vec<String>,
     /// The registry issue, only when adopt created it.
     #[serde(default)]
     pub registry_issue: Option<u64>,
@@ -52,6 +55,12 @@ impl Manifest {
         self.files.sort_by(|a, b| a.path.cmp(&b.path));
     }
 
+    pub fn add_dir(&mut self, dir: &str) {
+        if !self.dirs.iter().any(|d| d == dir) {
+            self.dirs.push(dir.to_string());
+        }
+    }
+
     pub fn add_label(&mut self, name: &str) {
         if !self.labels.iter().any(|l| l == name) {
             self.labels.push(name.to_string());
@@ -68,6 +77,10 @@ impl Manifest {
         if !self.labels.is_empty() {
             let l: Vec<String> = self.labels.iter().map(|s| q(s)).collect();
             out.push_str(&format!("labels = [{}]\n", l.join(", ")));
+        }
+        if !self.dirs.is_empty() {
+            let d: Vec<String> = self.dirs.iter().map(|s| q(s)).collect();
+            out.push_str(&format!("dirs = [{}]\n", d.join(", ")));
         }
         if let Some(n) = self.registry_issue {
             out.push_str(&format!("registry_issue = {n}\n"));

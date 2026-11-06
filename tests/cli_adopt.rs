@@ -361,3 +361,49 @@ fn an_unreadable_file_is_an_error_not_absent() {
     assert_eq!(out.status.code(), Some(1), "{v}");
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinks_are_never_written_through() {
+    let fake = FakeGithub::start();
+    let t = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    // A dangling symlink as a file, and a symlinked parent directory.
+    std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
+    let target = outside.path().join("elsewhere");
+    std::os::unix::fs::symlink(&target, t.path().join(".bosun/version")).unwrap();
+    let dir = outside.path().join("claude");
+    std::fs::create_dir(&dir).unwrap();
+    std::os::unix::fs::symlink(&dir, t.path().join(".claude")).unwrap();
+    let (code, v) = adopt(&fake, t.path(), &["--stack", "rust"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(action(&v, ".bosun/version"), "kept");
+    assert_eq!(action(&v, ".claude/settings.json"), "kept");
+    assert!(!target.exists());
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_manifest_directory_is_an_error() {
+    let fake = FakeGithub::start();
+    let t = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), t.path().join(".bosun")).unwrap();
+    let (code, v) = adopt(&fake, t.path(), &["--stack", "rust"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn the_manifest_records_only_the_dirs_adopt_created() {
+    let fake = FakeGithub::start();
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir(t.path().join(".github")).unwrap();
+    adopt(&fake, t.path(), &["--stack", "rust"]);
+    let m = Manifest::parse(&read(t.path(), ".bosun/adopt.toml")).unwrap();
+    assert!(m.dirs.contains(&".bosun".to_string()));
+    assert!(m.dirs.contains(&".github/workflows".to_string()));
+    assert!(!m.dirs.contains(&".github".to_string()));
+}

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::UninstallArgs;
-use super::adopt::{known_paths, read_opt};
+use super::adopt::{known_paths, read_opt, symlink_in};
 use crate::core::adopt::{MANIFEST_PATH, Manifest, fnv1a_hex};
 use crate::ctx::{git_out, parse_remote_url, parse_repo};
 use crate::github::{Github, IssuePatch, IssueState, LiveGithub, PatchState};
@@ -16,14 +16,7 @@ fn unsafe_reason(root: &Path, rel: &str, known: &[&str]) -> Option<String> {
     if !known.contains(&rel) {
         return Some(format!("{rel} is not a path bosun adopt writes"));
     }
-    let mut p = root.to_path_buf();
-    for part in rel.split('/') {
-        p.push(part);
-        if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Some(format!("{} is a symlink", p.display()));
-        }
-    }
-    None
+    symlink_in(root, rel).map(|p| format!("{} is a symlink", p.display()))
 }
 
 fn io_err(what: &str, path: &Path, e: std::io::Error) -> BosunError {
@@ -31,6 +24,22 @@ fn io_err(what: &str, path: &Path, e: std::io::Error) -> BosunError {
         format!("cannot {what} {}: {e}", path.display()),
         "make the path accessible, then rerun `bosun uninstall`",
     )
+}
+
+fn connect(root: &Path) -> Result<LiveGithub, BosunError> {
+    let repo = std::env::var("BOSUN_REPO")
+        .ok()
+        .and_then(|v| parse_repo(&v))
+        .or_else(|| {
+            git_out(root, &["remote", "get-url", "origin"]).and_then(|u| parse_remote_url(&u))
+        })
+        .ok_or_else(|| {
+            BosunError::error(
+                "cannot tell which GitHub repo this is (no BOSUN_REPO and no parseable origin remote)",
+                "set BOSUN_REPO=owner/name, or run without --labels",
+            )
+        })?;
+    LiveGithub::new(&repo.owner, &repo.name)
 }
 
 pub fn run(dir: Option<&Path>, a: &UninstallArgs) -> CmdResult {
@@ -45,6 +54,15 @@ pub fn run(dir: Option<&Path>, a: &UninstallArgs) -> CmdResult {
     };
     let root: PathBuf = git_out(&start, &["rev-parse", "--show-toplevel"])
         .map_or_else(|| start.clone(), PathBuf::from);
+    if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
+        return Err(BosunError::error(
+            format!(
+                "{} is a symlink; bosun does not follow symlinks",
+                link.display()
+            ),
+            "replace it with a real directory or file, or remove the adopted files by hand (docs/adopt-existing-repo.md)",
+        ));
+    }
     let Some(bytes) = read_opt(&root.join(MANIFEST_PATH))? else {
         return Err(BosunError::error(
             format!("{MANIFEST_PATH} is missing: nothing was adopted here"),
@@ -84,53 +102,50 @@ pub fn run(dir: Option<&Path>, a: &UninstallArgs) -> CmdResult {
     let mut registry = json!({"action": "skipped"});
     let mut keep_labels: Vec<String> = m.labels.clone();
     let mut keep_registry = m.registry_issue;
-    if a.labels && a.dry_run {
-        labels = m
-            .labels
-            .iter()
-            .map(|l| json!({"name": l, "action": "delete"}))
-            .collect();
-        if let Some(n) = m.registry_issue {
-            registry = json!({"action": "close", "number": n});
-        }
-    } else if a.labels && (!m.labels.is_empty() || m.registry_issue.is_some()) {
+    if a.labels && (!m.labels.is_empty() || m.registry_issue.is_some()) {
         // GitHub first: a failure there leaves the manifest, so the command can be rerun.
-        let repo = std::env::var("BOSUN_REPO")
-            .ok()
-            .and_then(|v| parse_repo(&v))
-            .or_else(|| {
-                git_out(&root, &["remote", "get-url", "origin"]).and_then(|u| parse_remote_url(&u))
-            })
-            .ok_or_else(|| {
-                BosunError::error(
-                    "cannot tell which GitHub repo this is (no BOSUN_REPO and no parseable origin remote)",
-                    "set BOSUN_REPO=owner/name, or run without --labels",
-                )
-            })?;
-        let gh = LiveGithub::new(&repo.owner, &repo.name)?;
+        // A dry run only reads; without a token it previews every label as `delete`.
+        let gh = connect(&root);
+        let gh = match gh {
+            Ok(g) => Some(g),
+            Err(_) if a.dry_run => None,
+            Err(e) => return Err(e),
+        };
         if let Some(n) = m.registry_issue {
-            gh.update_issue(
-                n,
-                IssuePatch {
-                    state: Some(PatchState::Closed),
-                    state_reason: Some("completed".into()),
-                    ..Default::default()
-                },
-            )?;
+            if let (Some(gh), false) = (&gh, a.dry_run) {
+                gh.update_issue(
+                    n,
+                    IssuePatch {
+                        state: Some(PatchState::Closed),
+                        state_reason: Some("completed".into()),
+                        ..Default::default()
+                    },
+                )?;
+            }
             registry = json!({"action": "close", "number": n});
             keep_registry = None;
         }
         keep_labels.clear();
         for l in &m.labels {
-            if gh.list_issues(&[l.as_str()], IssueState::Open)?.is_empty() {
-                gh.delete_label(l)?;
-                labels.push(json!({"name": l, "action": "delete"}));
-            } else {
+            let in_use = match &gh {
+                // The registry issue is about to close, so it does not hold its label.
+                Some(g) => g
+                    .list_issues(&[l.as_str()], IssueState::Open)?
+                    .iter()
+                    .any(|i| !(a.dry_run && Some(i.number) == m.registry_issue)),
+                None => false,
+            };
+            if in_use {
                 labels.push(json!({
                     "name": l, "action": "in-use",
                     "fix": format!("open issues still carry {l}; close or relabel them, then run `bosun uninstall --labels` again"),
                 }));
                 keep_labels.push(l.clone());
+            } else {
+                if let (Some(g), false) = (&gh, a.dry_run) {
+                    g.delete_label(l)?;
+                }
+                labels.push(json!({"name": l, "action": "delete"}));
             }
         }
     }
@@ -144,29 +159,39 @@ pub fn run(dir: Option<&Path>, a: &UninstallArgs) -> CmdResult {
         }
         // The manifest stays while labels or the registry issue are left, for a later --labels.
         let manifest_path = root.join(MANIFEST_PATH);
-        if keep_labels.is_empty() && keep_registry.is_none() {
+        let manifest_goes = keep_labels.is_empty() && keep_registry.is_none();
+        if manifest_goes {
             std::fs::remove_file(&manifest_path)
                 .map_err(|e| io_err("delete", &manifest_path, e))?;
-            removed.push(manifest_path);
-        } else {
+        }
+        // Only directories adopt created, deepest first, and only when empty.
+        let mut dirs: Vec<&String> = m
+            .dirs
+            .iter()
+            .filter(|d| {
+                known.iter().any(|k| k.starts_with(&format!("{d}/")))
+                    && symlink_in(&root, d).is_none()
+            })
+            .collect();
+        dirs.sort_by_key(|d| std::cmp::Reverse(d.len()));
+        for d in &dirs {
+            let _ = std::fs::remove_dir(root.join(d.as_str()));
+        }
+        if !manifest_goes {
             let rest = Manifest {
                 bosun_version: m.bosun_version.clone(),
                 files: Vec::new(),
+                dirs: m
+                    .dirs
+                    .iter()
+                    .filter(|d| root.join(d.as_str()).is_dir())
+                    .cloned()
+                    .collect(),
                 labels: keep_labels,
                 registry_issue: keep_registry,
             };
             std::fs::write(&manifest_path, rest.to_toml())
                 .map_err(|e| io_err("write", &manifest_path, e))?;
-        }
-        // Empty directories that held them, innermost first; a non-empty one stays.
-        for path in removed {
-            let mut dir = path.parent();
-            while let Some(d) = dir.filter(|d| *d != root && d.starts_with(&root)) {
-                if std::fs::remove_dir(d).is_err() {
-                    break;
-                }
-                dir = d.parent();
-            }
         }
     }
     Ok(Outcome::data(json!({

@@ -188,6 +188,19 @@ pub fn known_paths() -> Vec<&'static str> {
     v
 }
 
+/// The first component of `rel` under `root` that is a symlink (dangling or not), if any.
+/// bosun never reads, writes or deletes through one.
+pub(crate) fn symlink_in(root: &Path, rel: &str) -> Option<PathBuf> {
+    let mut p = root.to_path_buf();
+    for part in rel.split('/') {
+        p.push(part);
+        if std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// The bytes of a file; `None` only when it does not exist. Any other failure is an error.
 pub(crate) fn read_opt(path: &Path) -> Result<Option<Vec<u8>>> {
     match std::fs::read(path) {
@@ -277,6 +290,15 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     let own_ci = has_ci_ok_job_except(&root, "bosun.yml");
     let vars = vars_for(&project, &owner, &version, &stacks, own_ci);
 
+    if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
+        return Err(BosunError::error(
+            format!(
+                "{} is a symlink; bosun does not write through symlinks",
+                link.display()
+            ),
+            "replace it with a real directory or file, then rerun `bosun adopt`",
+        ));
+    }
     let old_manifest =
         read_opt(&root.join(MANIFEST_PATH))?.map(|b| String::from_utf8_lossy(&b).into_owned());
     let mut manifest = match &old_manifest {
@@ -304,6 +326,13 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
                 "this is a bosun bug; report it",
             )
         })?;
+        if let Some(link) = symlink_in(&root, t.path) {
+            changes.push(json!({
+                "path": t.path, "action": "kept",
+                "fix": format!("{} is a symlink; bosun does not write through symlinks: replace it with a real file or directory, then rerun `bosun adopt`", link.display()),
+            }));
+            continue;
+        }
         match read_opt(&root.join(t.path))? {
             Some(old) if old == text.as_bytes() => {
                 changes.push(json!({"path": t.path, "action": "unchanged"}));
@@ -334,7 +363,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
                     &mut registry_out,
                 );
                 if !a.dry_run {
-                    persist(&root, &manifest, &mut last)?;
+                    persist(&root, &mut manifest, &mut last)?;
                 }
                 res?;
             }
@@ -351,9 +380,10 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
 
     if !a.dry_run {
         for (t, text) in &writes {
+            record_dirs(&root, t.path, &mut manifest);
             write_file(&root.join(t.path), text, t.exec)?;
             manifest.set_file(t.path, fnv1a_hex(text.as_bytes()));
-            persist(&root, &manifest, &mut last)?;
+            persist(&root, &mut manifest, &mut last)?;
         }
     }
     // The manifest, last of the changes.
@@ -378,13 +408,25 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
 }
 
 /// Write the manifest when its text differs from what is on disk (`last`).
-fn persist(root: &Path, m: &Manifest, last: &mut Option<String>) -> Result<()> {
+fn persist(root: &Path, m: &mut Manifest, last: &mut Option<String>) -> Result<()> {
+    record_dirs(root, MANIFEST_PATH, m);
     let text = m.to_toml();
     if last.as_deref() != Some(text.as_str()) {
         write_file(&root.join(MANIFEST_PATH), &text, false)?;
         *last = Some(text);
     }
     Ok(())
+}
+
+/// Note in the manifest each directory above `rel` that does not exist yet (adopt creates it).
+fn record_dirs(root: &Path, rel: &str, m: &mut Manifest) {
+    let parts: Vec<&str> = rel.split('/').collect();
+    for i in 1..parts.len() {
+        let dir = parts[..i].join("/");
+        if !root.join(&dir).exists() {
+            m.add_dir(&dir);
+        }
+    }
 }
 
 fn write_file(path: &Path, text: &str, exec: bool) -> Result<()> {

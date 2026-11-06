@@ -218,3 +218,47 @@ fn labels_still_on_open_issues_are_kept() {
         .unwrap();
     assert_eq!(m.labels, ["bosun:state/ready"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_manifest_directory_is_refused() {
+    let (t, fake) = adopted();
+    let outside = tempfile::tempdir().unwrap();
+    let moved = outside.path().join("b");
+    std::fs::rename(t.path().join(".bosun"), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, t.path().join(".bosun")).unwrap();
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &[]);
+    assert_eq!(code, 1, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert!(moved.join("adopt.toml").is_file());
+}
+
+#[test]
+fn only_dirs_adopt_created_are_removed() {
+    let (t, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    std::fs::create_dir(t.path().join(".github")).unwrap();
+    std::fs::create_dir(t.path().join(".claude")).unwrap();
+    cmd(&fake, t.path(), "adopt", &["--stack", "rust"]);
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &["--labels"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(t.path().join(".github").is_dir());
+    assert!(t.path().join(".claude").is_dir());
+    assert!(!t.path().join(".github/workflows").exists());
+    assert!(!t.path().join(".bosun").exists());
+}
+
+#[test]
+fn dry_run_with_labels_reports_in_use() {
+    let (t, fake) = adopted();
+    fake.issue(50, "task", &["bosun:state/ready"], "");
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &["--labels", "--dry-run"]);
+    assert_eq!(code, 0, "{v}");
+    let l = v["data"]["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["name"] == "bosun:state/ready")
+        .unwrap();
+    assert_eq!(l["action"], "in-use");
+    assert!(fake.label_names().iter().any(|n| n == "bosun:halt"));
+}
