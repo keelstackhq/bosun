@@ -192,7 +192,7 @@ fn valid_branch(name: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-fn is_semver(s: &str) -> bool {
+pub(crate) fn is_semver(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
     parts.len() == 3
         && parts

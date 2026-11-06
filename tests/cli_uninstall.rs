@@ -64,12 +64,24 @@ fn removes_exactly_the_adopted_files_and_empty_dirs() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(
         files_under(t.path()),
+        [
+            ".bosun/adopt.toml",
+            ".github/workflows/ci.yml",
+            "src/main.rs"
+        ]
+    );
+    assert!(!t.path().join(".claude").exists());
+    // The manifest stays with the labels and the registry issue, for a later --labels.
+    let m = Manifest::parse(&std::fs::read_to_string(t.path().join(".bosun/adopt.toml")).unwrap())
+        .unwrap();
+    assert!(m.files.is_empty() && !m.labels.is_empty() && m.registry_issue.is_some());
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &["--labels"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        files_under(t.path()),
         [".github/workflows/ci.yml", "src/main.rs"]
     );
-    assert!(!t.path().join(".bosun").exists());
-    assert!(!t.path().join(".claude").exists());
-    // Labels stay without --labels.
-    assert!(fake.label_names().iter().any(|l| l == "bosun:halt"));
+    assert!(fake.label_names().is_empty());
 }
 
 #[test]
@@ -87,7 +99,6 @@ fn keeps_modified_files_and_reports_gone() {
         "# edited\n"
     );
     assert!(t.path().join(".bosun").is_dir());
-    assert!(!t.path().join(".bosun/adopt.toml").exists());
 }
 
 #[test]
@@ -143,4 +154,67 @@ fn no_manifest_is_an_error_with_a_fix() {
             .unwrap()
             .contains("adopt-existing-repo.md")
     );
+}
+
+#[test]
+fn a_manifest_path_outside_the_repo_is_never_deleted() {
+    let (t, fake) = adopted();
+    let outside = tempfile::tempdir().unwrap();
+    write(outside.path(), "victim", "precious\n");
+    let rel = format!(
+        "../{}/victim",
+        outside.path().file_name().unwrap().to_string_lossy()
+    );
+    let path = t.path().join(".bosun/adopt.toml");
+    let mut m = Manifest::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    m.set_file(&rel, bosun::core::adopt::fnv1a_hex(b"precious\n"));
+    m.set_file("/etc/hostname", "0".into());
+    std::fs::write(&path, m.to_toml()).unwrap();
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(action(&v, &rel), "kept");
+    assert!(outside.path().join("victim").is_file());
+    let kept = v["data"]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["path"] == rel.as_str())
+        .unwrap();
+    assert!(!kept["fix"].as_str().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_directory_is_never_followed() {
+    let (t, fake) = adopted();
+    let outside = tempfile::tempdir().unwrap();
+    let moved = outside.path().join("gh");
+    std::fs::rename(t.path().join(".github"), &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, t.path().join(".github")).unwrap();
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(action(&v, ".github/workflows/risk.yml"), "kept");
+    assert!(moved.join("workflows/risk.yml").is_file());
+    assert!(t.path().join(".github").is_symlink());
+}
+
+#[test]
+fn labels_still_on_open_issues_are_kept() {
+    let (t, fake) = adopted();
+    fake.issue(50, "task", &["bosun:state/ready"], "");
+    let (code, v) = cmd(&fake, t.path(), "uninstall", &["--labels"]);
+    assert_eq!(code, 0, "{v}");
+    let l = v["data"]["labels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["name"] == "bosun:state/ready")
+        .unwrap();
+    assert_eq!(l["action"], "in-use");
+    assert!(!l["fix"].as_str().unwrap().is_empty());
+    assert!(fake.label_names().iter().any(|n| n == "bosun:state/ready"));
+    assert!(!fake.label_names().iter().any(|n| n == "bosun:halt"));
+    let m = Manifest::parse(&std::fs::read_to_string(t.path().join(".bosun/adopt.toml")).unwrap())
+        .unwrap();
+    assert_eq!(m.labels, ["bosun:state/ready"]);
 }

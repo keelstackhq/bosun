@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::AdoptArgs;
-use super::init::has_ci_ok_job_except;
+use super::init::{has_ci_ok_job_except, is_semver};
 use crate::app::Result;
 use crate::core::adopt::{MANIFEST_PATH, Manifest, fnv1a_hex};
 use crate::core::render::{Vars, render};
@@ -170,12 +170,32 @@ fn labels_wanted() -> Vec<(String, &'static str, &'static str)> {
     v
 }
 
-const OWNER_STEPS: [&str; 4] = [
-    "Add your approver key to .bosun/approvers.toml and your login to governance/owners.toml.",
-    "Set branch protection on the default branch with the required checks ci-ok, risk-check, review-verdict and main-open.",
-    "Review and merge the setup PR yourself: git add .bosun .github .claude governance, commit, push, open the PR. The checks cannot run on main before it merges.",
-    "Run `bosun doctor --remote` to see what is still missing.",
-];
+fn owner_steps(own_ci: bool) -> Vec<String> {
+    // With a ci.yml of its own, bosun's aggregate job is `bosun-ok` and `ci-ok` stays yours.
+    let first = if own_ci { "bosun-ok" } else { "ci-ok" };
+    vec![
+        "Add your approver key to .bosun/approvers.toml and your login to governance/owners.toml.".into(),
+        format!("Set branch protection on the default branch with the required checks {first}, risk-check, review-verdict and main-open."),
+        "Review and merge the setup PR yourself: git add .bosun .github .claude governance, commit, push, open the PR. The checks cannot run on main before it merges.".into(),
+        "Run `bosun doctor --remote` to see what is still missing.".into(),
+    ]
+}
+
+/// Every path adopt can write; `bosun uninstall` deletes nothing else.
+pub fn known_paths() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = templates().iter().map(|t| t.path).collect();
+    v.push(OWNERS.path);
+    v
+}
+
+/// The bytes of a file; `None` only when it does not exist. Any other failure is an error.
+pub(crate) fn read_opt(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(b) => Ok(Some(b)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_err("read", path, e)),
+    }
+}
 
 fn io_err(what: &str, path: &Path, e: std::io::Error) -> BosunError {
     BosunError::error(
@@ -202,6 +222,12 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         .bosun_version
         .clone()
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+    if !is_semver(&version) {
+        return Err(BosunError::usage(
+            format!("--bosun-version {version:?} is not X.Y.Z"),
+            "pass a release such as 0.7.0",
+        ));
+    }
     let stacks: Vec<String> = if a.stack.is_empty() {
         detect(&root)
     } else {
@@ -251,14 +277,16 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     let own_ci = has_ci_ok_job_except(&root, "bosun.yml");
     let vars = vars_for(&project, &owner, &version, &stacks, own_ci);
 
-    let mut manifest = match std::fs::read_to_string(root.join(MANIFEST_PATH)) {
-        Ok(t) => Manifest::parse(&t).map_err(|e| {
+    let old_manifest =
+        read_opt(&root.join(MANIFEST_PATH))?.map(|b| String::from_utf8_lossy(&b).into_owned());
+    let mut manifest = match &old_manifest {
+        Some(t) => Manifest::parse(t).map_err(|e| {
             BosunError::error(
                 format!("{MANIFEST_PATH}: {e}"),
                 format!("fix or delete {MANIFEST_PATH}, then rerun `bosun adopt`"),
             )
         })?,
-        Err(_) => Manifest::default(),
+        None => Manifest::default(),
     };
     manifest.bosun_version.clone_from(&version);
 
@@ -276,61 +304,87 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
                 "this is a bosun bug; report it",
             )
         })?;
-        match std::fs::read(root.join(t.path)) {
-            Ok(old) if old == text.as_bytes() => {
+        match read_opt(&root.join(t.path))? {
+            Some(old) if old == text.as_bytes() => {
                 changes.push(json!({"path": t.path, "action": "unchanged"}));
             }
-            Ok(_) => changes.push(json!({
+            Some(_) => changes.push(json!({
                 "path": t.path, "action": "kept",
                 "fix": format!("{} exists and differs from bosun's version; edit it by hand, or delete it and rerun `bosun adopt`", t.path),
             })),
-            Err(_) => {
+            None => {
                 changes.push(json!({"path": t.path, "action": "create"}));
-                manifest.set_file(t.path, fnv1a_hex(text.as_bytes()));
                 writes.push((t, text));
             }
         }
     }
 
-    // GitHub.
+    // GitHub. What was created is recorded even when a later step fails.
     let (mut labels, mut registry_out) = (Vec::new(), json!({"action": "skipped"}));
+    let mut last = old_manifest.clone();
     if !a.no_remote {
         let r = repo.as_ref().expect("checked above");
-        let gh = LiveGithub::new(&r.owner, &r.name)?;
-        remote(
-            &gh,
-            a.dry_run,
-            &mut manifest,
-            &mut labels,
-            &mut registry_out,
-        )?;
+        match LiveGithub::new(&r.owner, &r.name) {
+            Ok(gh) => {
+                let res = remote(
+                    &gh,
+                    a.dry_run,
+                    &mut manifest,
+                    &mut labels,
+                    &mut registry_out,
+                );
+                if !a.dry_run {
+                    persist(&root, &manifest, &mut last)?;
+                }
+                res?;
+            }
+            Err(e) if a.dry_run => {
+                labels = labels_wanted()
+                    .iter()
+                    .map(|(n, _, _)| json!({"name": n, "action": "unknown"}))
+                    .collect();
+                registry_out = json!({"action": "unknown", "reason": e.message});
+            }
+            Err(e) => return Err(e),
+        }
     }
-
-    // The manifest, last of the changes.
-    let text = manifest.to_toml();
-    let manifest_action = match std::fs::read_to_string(root.join(MANIFEST_PATH)) {
-        Ok(old) if old == text => "unchanged",
-        Ok(_) => "update",
-        Err(_) => "create",
-    };
-    changes.push(json!({"path": MANIFEST_PATH, "action": manifest_action}));
 
     if !a.dry_run {
         for (t, text) in &writes {
             write_file(&root.join(t.path), text, t.exec)?;
-        }
-        if manifest_action != "unchanged" {
-            write_file(&root.join(MANIFEST_PATH), &text, false)?;
+            manifest.set_file(t.path, fnv1a_hex(text.as_bytes()));
+            persist(&root, &manifest, &mut last)?;
         }
     }
+    // The manifest, last of the changes.
+    let mut planned = manifest.clone();
+    for (t, text) in &writes {
+        planned.set_file(t.path, fnv1a_hex(text.as_bytes()));
+    }
+    let manifest_action = match &old_manifest {
+        Some(old) if *old == planned.to_toml() => "unchanged",
+        Some(_) => "update",
+        None => "create",
+    };
+    changes.push(json!({"path": MANIFEST_PATH, "action": manifest_action}));
     Ok(Outcome::data(json!({
         "stacks": stacks,
         "dry_run": a.dry_run,
         "changes": changes,
         "labels": labels,
         "registry": registry_out,
-        "owner_steps": OWNER_STEPS,
+        "owner_steps": owner_steps(own_ci),
     })))
+}
+
+/// Write the manifest when its text differs from what is on disk (`last`).
+fn persist(root: &Path, m: &Manifest, last: &mut Option<String>) -> Result<()> {
+    let text = m.to_toml();
+    if last.as_deref() != Some(text.as_str()) {
+        write_file(&root.join(MANIFEST_PATH), &text, false)?;
+        *last = Some(text);
+    }
+    Ok(())
 }
 
 fn write_file(path: &Path, text: &str, exec: bool) -> Result<()> {

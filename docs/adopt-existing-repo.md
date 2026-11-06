@@ -188,8 +188,9 @@ changes work exits 4 until you close it.
 
 **Adopted with `bosun adopt`:** run `bosun uninstall --dry-run`, then `bosun uninstall`. It deletes
 the files in `.bosun/adopt.toml` whose bytes are still the ones adopt wrote, keeps the ones you edited
-(`kept`), removes the directories it emptied and the manifest last. `--labels` also deletes the
-labels adopt created and closes the registry issue it opened. Commit the deletions in a gated PR,
+(`kept`) and removes the directories it emptied. The manifest stays while labels or the registry
+issue are left; `bosun uninstall --labels` deletes the labels adopt created (not one still on an open
+issue, which is `in-use`) and closes the registry issue it opened, then removes the manifest. Commit the deletions in a gated PR,
 and remove the required checks `risk-check`, `review-verdict`, `main-open` (and `ci-ok` if it was
 bosun's) from the branch rules. Without `.bosun/adopt.toml` it exits 1: nothing was adopted here.
 

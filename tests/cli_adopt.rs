@@ -287,3 +287,77 @@ fn every_template_renders_for_each_stack_set() {
         }
     }
 }
+
+#[test]
+fn bad_bosun_version_is_a_usage_error() {
+    let fake = FakeGithub::start();
+    let t = tempfile::tempdir().unwrap();
+    let (code, v) = adopt(&fake, t.path(), &["--bosun-version", "1.2", "--dry-run"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn a_remote_failure_still_records_what_was_created() {
+    let fake = FakeGithub::start();
+    let t = tempfile::tempdir().unwrap();
+    fake.fail_path("issues", 500);
+    let (code, _) = adopt(&fake, t.path(), &["--stack", "rust"]);
+    assert_eq!(code, 1);
+    let m = Manifest::parse(&read(t.path(), ".bosun/adopt.toml")).unwrap();
+    assert!(m.labels.contains(&"bosun:halt".to_string()), "{m:?}");
+}
+
+#[test]
+fn owner_steps_name_the_right_required_check() {
+    let fake = FakeGithub::start();
+    let t = tempfile::tempdir().unwrap();
+    let (_, v) = adopt(&fake, t.path(), &["--dry-run"]);
+    let steps = v["data"]["owner_steps"].to_string();
+    assert!(
+        steps.contains("ci-ok") && !steps.contains("bosun-ok"),
+        "{steps}"
+    );
+    write(
+        t.path(),
+        ".github/workflows/ci.yml",
+        "jobs:\n  ci-ok:\n    runs-on: x\n",
+    );
+    let (_, v) = adopt(&fake, t.path(), &["--dry-run"]);
+    assert!(v["data"]["owner_steps"].to_string().contains("bosun-ok"));
+}
+
+#[test]
+fn dry_run_without_a_token_lists_files_and_marks_remote_unknown() {
+    let t = tempfile::tempdir().unwrap();
+    let out = bosun()
+        .env_remove("GITHUB_TOKEN")
+        .args(["-C", t.path().to_str().unwrap(), "adopt", "--dry-run"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(action(&v, ".bosun/version"), "create");
+    assert_eq!(v["data"]["registry"]["action"], "unknown");
+    assert!(
+        v["data"]["labels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|l| l["action"] == "unknown")
+    );
+}
+
+#[test]
+fn an_unreadable_file_is_an_error_not_absent() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join(".bosun/version")).unwrap();
+    let out = bosun()
+        .env_remove("GITHUB_TOKEN")
+        .args(["-C", t.path().to_str().unwrap(), "adopt", "--no-remote"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+}

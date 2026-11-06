@@ -95,9 +95,9 @@ files. Flags: `--stack rust|ts-pnpm|other` (repeatable; default detected from `C
 (no token; no labels or registry issue). Unless `--no-remote`, it creates the missing labels
 (`bosun:halt`, `bosun:registry`, the task state labels) and the registry issue; `--dry-run` only reads.
 
+`--bosun-version` must be X.Y.Z (else exit 2). `--dry-run` without a token still lists the files; labels and registry then read `unknown`. An unreadable file is an error, never "absent". The owner step names `bosun-ok` as the required check when the repo has its own `ci-ok` job.
+
 `.bosun/adopt.toml` records the bosun version, each written file with its FNV-1a 64 hash, the labels
-adopt created and the registry issue it opened. A rerun merges into it, so a second run is all
-`unchanged`. `bosun uninstall` reads it: a file whose hash still matches is deleted, a modified one is
-`kept`, a missing one is `gone`; emptied directories go too, the manifest last, and nothing outside the
-manifest is touched. `--labels` also deletes the labels adopt created and closes its registry issue;
-`--dry-run` lists only. Without a manifest it exits 1 and points to `docs/adopt-existing-repo.md`.
+adopt created and the registry issue it opened. It is rewritten after the GitHub step and after each file, so a failure midway still leaves a record. A rerun merges into it, so a second run is all
+`unchanged`. `bosun uninstall` reads it and acts only on the paths adopt can write (never an absolute path, a `..` path, or one under a symlink; those are `kept` with a fix hint): a file whose hash still matches is deleted, a modified one is
+`kept`, a missing one is `gone`; emptied directories go too. The manifest stays, holding only the labels and the registry issue, until they are dealt with, and goes last. `--labels` deletes the labels adopt created and closes its registry issue, but a label still on an open issue is `in-use` and stays (rerun later); `--dry-run` lists only. Without a manifest it exits 1 and points to `docs/adopt-existing-repo.md`.

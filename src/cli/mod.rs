@@ -962,7 +962,7 @@ pub struct AdoptArgs {
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    /// Also delete the labels adopt created and close the registry issue it opened.
+    /// Also delete the labels adopt created (not those still on an open issue) and close the registry issue it opened.
     #[arg(long)]
     pub labels: bool,
     /// List what would change; touch nothing.
