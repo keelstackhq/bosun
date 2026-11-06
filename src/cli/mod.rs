@@ -43,6 +43,7 @@ pub mod spawn;
 pub mod spawn_relay;
 pub mod stamps;
 pub mod status;
+pub mod trailers;
 pub mod verdict;
 pub mod wait;
 pub mod wave;
@@ -158,6 +159,8 @@ pub enum Command {
     Init(InitArgs),
     /// Open a kind/mainfix PR that reverts a merged PR.
     Revert(RevertArgs),
+    /// Commit trailers: stamp (commit-msg hook), install the hook, list a session's commits.
+    Trailers(TrailersArgs),
     /// Open a kind/plan issue that asks for a plan amendment (the only way new work enters).
     Intake(IntakeArgs),
     /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
@@ -210,6 +213,7 @@ pub const COMMANDS: &[&str] = &[
     "main-triage",
     "init",
     "revert",
+    "trailers",
     "intake",
     "main-health",
     "review-ci",
@@ -272,6 +276,7 @@ impl Command {
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
             Command::Revert(_) => "revert",
+            Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {
                 None => "intake",
                 Some(IntakeCmd::Check(_)) => "intake check",
@@ -974,6 +979,28 @@ pub struct UninstallArgs {
     /// List what would change; touch nothing.
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct TrailersArgs {
+    #[command(subcommand)]
+    pub cmd: TrailersCmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TrailersCmd {
+    /// Append the missing trailers to a commit message file (the commit-msg hook calls this).
+    Stamp {
+        /// The message file git passes to the hook.
+        file: std::path::PathBuf,
+    },
+    /// Write `.git/hooks/commit-msg` so every commit here is stamped (idempotent).
+    Install,
+    /// List the commits of one session, newest first, with a rollback recipe.
+    List {
+        /// The session id (the `Bosun-Session` trailer value).
+        session: String,
+    },
 }
 
 #[derive(Debug, Args)]
