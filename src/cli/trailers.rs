@@ -264,7 +264,7 @@ pub fn check_local(dir: &Path, base: &str, require: bool) -> Result<(), BosunErr
             bad.len(),
             bad.join(", ")
         ),
-        "run `bosun trailers install`, redo the commits stamped on a new branch (`git switch -c <new> origin/main && git merge --squash <old> && git commit`), push it and rerun `bosun pr` (never force-push)",
+        "run `git fetch origin` (a stale origin/main counts commits that are already merged), `bosun trailers install`, then redo the commits stamped on a new branch (`git switch -c <new> origin/main && git merge --squash <old> && git commit`), push it and rerun `bosun pr` (never force-push)",
     )
     .with_data(json!({"trailers": {"missing": bad}})))
 }

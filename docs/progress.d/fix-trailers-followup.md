@@ -1,1 +1,1 @@
-- 2026-11-06 · commit trailers follow-up · pre-create check, case-insensitive keys, #123 body, spec note · PR #TBD
+- 2026-11-06 · commit trailers follow-up · pre-create check, case-insensitive keys, #123 body, spec note · PR #431

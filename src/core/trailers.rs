@@ -9,9 +9,10 @@ pub const REQUIRED: [&str; 2] = [SESSION, TASK];
 
 /// `line` is the trailer `key: value`, ignoring the key's case (git matches that way).
 fn has_key(line: &str, key: &str) -> bool {
-    let n = key.len() + 2;
-    line.get(..n)
-        .is_some_and(|h| h[..key.len()].eq_ignore_ascii_case(key) && h.ends_with(": "))
+    // Bytes, not str slices: a multibyte char may straddle the key's end.
+    let (k, b) = (key.as_bytes(), line.as_bytes());
+    b.get(..k.len()).is_some_and(|p| p.eq_ignore_ascii_case(k))
+        && b[k.len()..].starts_with(b": ")
         && is_trailer(line)
 }
 
@@ -175,6 +176,14 @@ mod tests {
         let c = "x\n\nbosun-session: s\nBOSUN-TASK: 3\n";
         assert!(missing(c).is_empty());
         assert_eq!(stamp(c, &want()), c);
+    }
+
+    #[test]
+    fn multibyte_text_near_a_key_does_not_panic() {
+        assert_eq!(missing("x\n\nBosun-Sessio\u{20ac}: x\n"), [SESSION, TASK]);
+        let m = "Fixes the \u{1f600} bug\n";
+        assert!(stamp(m, &want()).contains("Bosun-Task: 7"));
+        assert_eq!(missing("a\n\nBosun-Sessi\u{1f600}: x\n"), [SESSION, TASK]);
     }
 
     #[test]
