@@ -26,6 +26,7 @@ use crate::core::risk::{
 use crate::core::touch::{Changed, outside};
 use crate::core::weaken;
 use crate::ctx::RepoId;
+use crate::gates::{adapters, ts};
 use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
@@ -99,15 +100,29 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
 const PENDING: &str = "risk-check is judging this head";
 const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run the risk workflow";
 
-/// R-weaken evidence (spec §8): gate files compared at base and head. Deduplicated, in file order.
+/// R-weaken evidence (spec §8): gate files compared at base and head, diffs, deleted or thinned
+/// tests. Deduplicated, in file order.
 fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
     base: &str,
     head: &str,
 ) -> Result<Vec<String>> {
+    let patches = || {
+        pr_files
+            .iter()
+            .filter_map(|f| Some((&f.filename, f.patch.as_deref()?)))
+    };
+    let added: Vec<String> = patches()
+        .flat_map(|(n, p)| weaken::ci_commands(n, p).1)
+        .collect();
     let mut out = Vec::new();
     for f in pr_files {
+        let p = f.patch.as_deref();
+        out.extend(
+            p.map(|p| weaken::patch_findings(&f.filename, p, &added))
+                .unwrap_or_default(),
+        );
         // Each side of a rename on its own: the path left behind falls back to its built-in (or
         // nothing), the new path is judged against what it replaces, never the moved file.
         let prev = f.previous_filename.as_deref().filter(|p| *p != f.filename);
@@ -130,6 +145,7 @@ fn weaken_findings(
             out.extend(weaken::text_findings(path, old.as_deref(), new.as_deref()));
         }
     }
+    out.extend(test_findings(pr_files));
     let mut seen = std::collections::HashSet::new();
     out.retain(|s| seen.insert(s.clone()));
     Ok(out)
@@ -144,6 +160,59 @@ fn builtin_base(path: &str) -> Option<&'static str> {
         .strip_prefix(".bosun/profiles/")?
         .strip_suffix(".toml")?;
     crate::gates::profile::builtin(name)
+}
+
+/// Tests, skips and assertions counted over the diffs of all Rust and TS/JS files (moving tests
+/// between files is no loss, inline `#[test]` counts), deleted test files, and removed CI or code
+/// files whose diff GitHub did not give.
+fn test_findings(files: &[PrFile]) -> Vec<String> {
+    let (mut out, mut c) = (Vec::new(), [[0usize; 3]; 2]);
+    for f in files {
+        let n = &f.filename;
+        let code = [
+            ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
+        ]
+        .iter()
+        .any(|e| n.to_ascii_lowercase().ends_with(e));
+        if f.status == "removed" && code && risk::test_path(n) {
+            out.push(format!("{n}: test file present → (deleted)"));
+        }
+        let Some(patch) = f.patch.as_deref().filter(|_| code) else {
+            if f.status == "removed" && (code || weaken::is_ci(n)) {
+                out.push(format!("{n}: diff unavailable"));
+            }
+            continue;
+        };
+        let (del, ins) = weaken::split_patch(patch);
+        for (side, lines) in [del, ins].iter().enumerate() {
+            let text = lines.join("\n");
+            let r = if n.ends_with(".rs") {
+                [
+                    adapters::test_count(&text),
+                    adapters::pending_markers(&text).len(),
+                    adapters::assertions(&text),
+                ]
+            } else {
+                [
+                    ts::test_count(&text),
+                    ts::pending_markers(&text).len(),
+                    ts::assertions(&text),
+                ]
+            };
+            (0..3).for_each(|i| c[side][i] += r[i]);
+        }
+    }
+    let [[t0, s0, a0], [t1, s1, a1]] = c;
+    for (what, o, n, bad) in [
+        ("tests", t0, t1, t1 < t0),
+        ("skips", s0, s1, s1 > s0),
+        ("assertions", a0, a1, a1 < a0),
+    ] {
+        if bad {
+            out.push(format!("{what} (all files) {o} → {n}"));
+        }
+    }
+    out
 }
 
 fn judge(app: &App, pull: Pull) -> CmdResult {

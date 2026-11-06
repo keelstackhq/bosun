@@ -59,6 +59,36 @@ fn a_raised_cap_is_high_and_needs_the_owner() {
 }
 
 #[test]
+fn continue_on_error_in_a_workflow_is_a_weakening() {
+    let fake = pr();
+    let patch = "@@ -1,2 +1,3 @@\n   test:\n+    continue-on-error: true\n     runs-on: x";
+    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, Some(patch));
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["matches"][0]["rule"], "R-weaken");
+}
+
+#[test]
+fn a_deleted_test_file_is_a_weakening() {
+    let fake = pr();
+    fake.pull_file(
+        1,
+        "tests/cli_a.rs",
+        "removed",
+        0,
+        9,
+        Some("@@ -1,1 +0,0 @@\n-#[test]"),
+    );
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    let evidence = v["data"]["matches"][0]["evidence"].to_string();
+    assert!(
+        evidence.contains("test file present → (deleted)"),
+        "{evidence}"
+    );
+}
+
+#[test]
 fn a_lowered_cap_is_normal() {
     let fake = pr();
     budget(&fake, 300, 150);
@@ -124,4 +154,36 @@ fn a_file_renamed_into_a_gate_path_is_judged_against_the_builtin() {
         e.contains(".bosun/profiles/rust.toml: gates.fmt.cmd"),
         "{e}"
     );
+}
+
+#[test]
+fn tests_moved_between_files_are_no_weakening_but_a_dropped_inline_test_is() {
+    let fake = pr();
+    fake.pull_file(
+        1,
+        "tests/a.rs",
+        "modified",
+        0,
+        1,
+        Some("@@\n-#[test]\n-assert!(x);"),
+    );
+    fake.pull_file(
+        1,
+        "tests/b.rs",
+        "modified",
+        1,
+        0,
+        Some("@@\n+#[test]\n+assert!(x);"),
+    );
+    let (code, v) = check(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        !v["data"]["matches"].to_string().contains("R-weaken"),
+        "{v}"
+    );
+
+    let fake = pr();
+    fake.pull_file(1, "src/a.rs", "modified", 0, 1, Some("@@\n-#[test]"));
+    let e = evidence(&fake);
+    assert!(e.contains("tests (all files) 1 → 0"), "{e}");
 }

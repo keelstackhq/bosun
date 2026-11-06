@@ -1,7 +1,10 @@
-//! R-weaken (spec §8): findings for a PR that loosens a gate, from gate files at base and head.
+//! R-weaken (spec §8): findings for a PR that loosens a gate, from base/head file text and diffs.
 //! Pure functions; a finding reads `{file}: {key} {old} → {new}`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
+
+use regex::Regex;
 use toml::Value;
 
 pub const CAPABILITY: &str = "weaken";
@@ -268,12 +271,242 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
     out
 }
 
+/// The `-` and `+` lines of a unified diff, without the marker; `---`/`+++` file headers are
+/// skipped only before the first hunk (GitHub patches have none, so a later `--x` is content).
+pub fn split_patch(patch: &str) -> (Vec<&str>, Vec<&str>) {
+    let (mut del, mut ins, mut hunk) = (Vec::new(), Vec::new(), false);
+    for l in patch.lines() {
+        hunk |= l.starts_with("@@");
+        if !hunk && (l.starts_with("---") || l.starts_with("+++")) {
+            continue;
+        }
+        if let Some(r) = l.strip_prefix('-') {
+            del.push(r);
+        } else if let Some(r) = l.strip_prefix('+') {
+            ins.push(r);
+        }
+    }
+    (del, ins)
+}
+
+static COVERAGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)\b(fail[-_]under(?:[-_]lines)?|[\w-]*threshold[\w-]*|min[-_]coverage|coverage[-_]min)\b["']?\s*[=: ]\s*["']?(\d+(?:\.\d+)?)"#).unwrap()
+});
+static CONST: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bconst\s+([A-Z][A-Z0-9_]*)\s*:[^=]+=\s*(-?\d[\d_]*(?:\.\d+)?)").unwrap()
+});
+
+type Vals = Vec<(String, Vec<f64>)>;
+
+/// Every value per key over the lines, keys in first-seen order.
+fn all_values(re: &Regex, lines: &[&str], lower: bool) -> Vals {
+    let mut out = Vals::new();
+    for c in lines.iter().filter_map(|l| re.captures(l)) {
+        let k = if lower {
+            c[1].to_lowercase()
+        } else {
+            c[1].to_string()
+        };
+        let v = c[2].replace('_', "").parse().unwrap_or(0.0);
+        match out.iter_mut().find(|(n, _)| *n == k) {
+            Some((_, vs)) => vs.push(v),
+            None => out.push((k, vec![v])),
+        }
+    }
+    out
+}
+
+fn extreme(v: &[f64], max: bool) -> f64 {
+    v.iter()
+        .copied()
+        .reduce(if max { f64::max } else { f64::min })
+        .unwrap_or(0.0)
+}
+
+fn count(lines: &[&str], f: impl Fn(&str) -> bool) -> usize {
+    lines.iter().filter(|l| f(l)).count()
+}
+
+fn grows(
+    path: &str,
+    what: &str,
+    del: &[&str],
+    ins: &[&str],
+    f: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let (r, a) = (count(del, &f), count(ins, &f));
+    (a > r).then(|| format!("{path}: {what} {r} → {a}"))
+}
+
+fn cmd_of(line: &str) -> String {
+    let t = line.trim();
+    let t = t.strip_prefix("- ").unwrap_or(t).trim();
+    let t = t.strip_prefix("run:").unwrap_or(t).trim();
+    t.trim_matches(['"', '\'']).trim().to_string()
+}
+
+pub fn is_ci(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or_default();
+    [".github/workflows/", ".github/actions/", ".circleci/"]
+        .iter()
+        .any(|p| lower.starts_with(p))
+        || name == "action.yml"
+        || name == "action.yaml"
+}
+
+/// `key: value` of a YAML line with spaces, quotes and a trailing ` #` comment dropped.
+fn kv(line: &str) -> Option<(String, String)> {
+    let (k, v) = line.trim().trim_start_matches("- ").split_once(':')?;
+    let v = v.split(" #").next().unwrap_or_default();
+    let v = v
+        .chars()
+        .filter(|c| !c.is_whitespace() && !"'\"".contains(*c));
+    Some((k.trim().into(), v.collect()))
+}
+
+/// CI command lines of a diff: (removed `run:`/tool lines, all added ones). Names and comments
+/// are no commands. Compare removed with added over the whole PR: folding moves steps.
+pub fn ci_commands(path: &str, patch: &str) -> (Vec<String>, Vec<String>) {
+    if !is_ci(path) {
+        return Default::default();
+    }
+    let (del, ins) = split_patch(patch);
+    let cmd = |l: &&str| -> bool {
+        let t = l.trim();
+        !(t.starts_with("name:") || t.starts_with('#') || t.starts_with("- name:"))
+    };
+    let removed = del.iter().copied().filter(|l| cmd(l)).filter_map(|l| {
+        let run = l.trim().trim_start_matches("- ").starts_with("run:");
+        let tool = ["cargo ", "bosun ", "npm ", "pnpm ", "npx "]
+            .iter()
+            .any(|t| l.contains(t));
+        let c = cmd_of(l);
+        ((run || tool) && !c.is_empty() && c != "|" && c != ">").then_some(c)
+    });
+    (
+        removed.collect(),
+        ins.iter().copied().filter(|l| cmd(l)).map(cmd_of).collect(),
+    )
+}
+
+/// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
+/// switches and Rust threshold constants.
+pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> {
+    let lower = path.to_ascii_lowercase();
+    let name = lower.rsplit('/').next().unwrap_or_default();
+    let ext = |es: &[&str]| es.iter().any(|e| lower.ends_with(e));
+    let js = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
+    let (del, ins) = split_patch(patch);
+    let mut out = Vec::new();
+    if is_ci(path) {
+        let coe = |l: &str| {
+            kv(l)
+                .is_some_and(|(k, v)| k == "continue-on-error" && (v == "true" || v == "${{true}}"))
+        };
+        out.extend(grows(path, "continue-on-error: true", &del, &ins, coe));
+        let never = |l: &str| {
+            kv(l).is_some_and(|(k, v)| {
+                k == "if"
+                    && (["false", "${{false}}", "${{!true}}"].contains(&v.as_str())
+                        || v.contains("0==1"))
+            })
+        };
+        if ins.iter().any(|l| never(l)) {
+            out.push(format!("{path}: if (none) → false"));
+        }
+        for c in ci_commands(path, patch)
+            .0
+            .iter()
+            .filter(|c| !added.contains(c))
+        {
+            out.push(format!("{path}: step \"{c}\" present → (removed)"));
+        }
+    }
+    if lower.ends_with(".rs") {
+        let allow = |l: &str| {
+            let t = l.trim();
+            (t.starts_with("#[") || t.starts_with("#!["))
+                && (t.contains("allow(") || t.contains("expect("))
+        };
+        out.extend(grows(path, "lint allow/expect", &del, &ins, allow));
+        let strict =
+            |l: &str| l.trim().starts_with("#![forbid(") || l.trim().starts_with("#![deny(");
+        let (r, a) = (count(&del, strict), count(&ins, strict));
+        if r > a {
+            out.push(format!("{path}: #![forbid/deny] {r} → {a}"));
+        }
+    }
+    if ["oxlint", "eslintrc", "eslint.config"]
+        .iter()
+        .any(|n| name.contains(n))
+    {
+        let has = |ps: [&'static str; 2]| move |l: &str| ps.iter().any(|p| l.contains(p));
+        let (off, warn) = (has(["\"off\"", "'off'"]), has(["\"warn\"", "'warn'"]));
+        out.extend(grows(path, "\"off\"", &del, &ins, off));
+        out.extend(grows(path, "\"warn\"", &del, &ins, warn));
+    }
+    if ext(&js) {
+        let dis = |l: &str| l.contains("oxlint-disable") || l.contains("eslint-disable");
+        out.extend(grows(path, "lint disable", &del, &ins, dis));
+    }
+    let cfg = [
+        ".toml",
+        ".yml",
+        ".yaml",
+        ".json",
+        ".cfg",
+        ".ini",
+        ".conf",
+        ".xml",
+        ".coveragerc",
+    ];
+    let (cd, ci) = (
+        all_values(&COVERAGE, &del, true),
+        all_values(&COVERAGE, &ins, true),
+    );
+    for (k, o) in cd.iter().filter(|_| ext(&cfg) && name != "clippy.toml") {
+        let old = extreme(o, false);
+        match ci.iter().find(|(n, _)| n == k) {
+            None => out.push(format!("{path}: {k} {old} → (removed)")),
+            Some((_, n)) if extreme(n, false) < old => {
+                out.push(format!("{path}: {k} {old} → {}", extreme(n, false)));
+            }
+            _ => {}
+        }
+    }
+    if lower.ends_with(".rs") {
+        let new = all_values(&CONST, &ins, false);
+        for (k, o) in all_values(&CONST, &del, false) {
+            let Some((_, n)) = new.iter().find(|(n, _)| *n == k) else {
+                continue;
+            };
+            let has = |w: &[&str]| k.split('_').any(|s| w.contains(&s));
+            let max = if has(&["MIN", "THRESHOLD", "NEEDED", "REQUIRED"]) {
+                false
+            } else if has(&["MAX", "LIMIT", "CAP", "BUDGET"]) {
+                true
+            } else {
+                continue;
+            };
+            let (old, new) = (extreme(&o, max), extreme(n, max));
+            if (new > old) == max && new != old {
+                out.push(format!("{path}: {k} {old} → {new}"));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn t(path: &str, base: &str, head: &str) -> Vec<String> {
         text_findings(path, Some(base), Some(head))
+    }
+    fn p(path: &str, patch: &str) -> Vec<String> {
+        patch_findings(path, patch, &ci_commands(path, patch).1)
     }
 
     #[test]
@@ -480,5 +713,145 @@ mod tests {
             ["profiles/rust.toml: toml parses → (unparseable)"]
         );
         assert!(!reads_text("src/main.rs") && reads_text("a/Cargo.toml"));
+    }
+
+    #[test]
+    fn ci_steps() {
+        let w = ".github/workflows/ci.yml";
+        let got = p(
+            w,
+            "@@\n-      - run: cargo clippy -D warnings\n+      - run: cargo fmt\n-        continue-on-error: false\n+        continue-on-error: true\n+        if: false\n",
+        );
+        let got = got.join("\n");
+        assert!(got.contains("continue-on-error: true 0 → 1"), "{got}");
+        assert!(got.contains("ci.yml: if (none) → false"), "{got}");
+        assert!(
+            got.contains("step \"cargo clippy -D warnings\" present → (removed)"),
+            "{got}"
+        );
+        // A moved step is not removed; a non-CI file is not read for steps.
+        assert!(
+            p(
+                w,
+                "@@\n-  - run: cargo test\n+  - run: cargo test\n+  - run: cargo fmt\n"
+            )
+            .is_empty()
+        );
+        assert!(p("README.md", "@@\n-cargo test\n").is_empty());
+        assert_eq!(p(w, "@@\n-        cargo nextest run\n").len(), 1);
+        assert_eq!(p(w, "@@\n+  if: ${{ false }}\n").len(), 1);
+    }
+
+    #[test]
+    fn coverage_lint_and_consts() {
+        assert_eq!(
+            p("ci.cfg", "@@\n-fail-under = 90\n+fail-under = 80\n"),
+            ["ci.cfg: fail-under 90 → 80"]
+        );
+        assert_eq!(p("a.json", "@@\n-  \"threshold\": 80\n").len(), 1);
+        assert!(p("ci.cfg", "@@\n-fail-under = 80\n+fail-under = 90\n").is_empty());
+        assert_eq!(
+            p("src/a.rs", "@@\n+#[allow(clippy::x)]\n"),
+            ["src/a.rs: lint allow/expect 0 → 1"]
+        );
+        assert!(p("src/a.rs", "@@\n-#[allow(clippy::x)]\n+fn a() {}\n").is_empty());
+        assert_eq!(p(".oxlintrc.json", "@@\n+  \"a\": \"off\"\n").len(), 1);
+        assert_eq!(p("web/a.ts", "@@\n+// eslint-disable-next-line\n").len(), 1);
+        let c = p(
+            "src/core/risk.rs",
+            "@@\n-const VERDICT_MIN_CONFIDENCE: f64 = 0.9;\n+const VERDICT_MIN_CONFIDENCE: f64 = 0.8;\n-const MAX_N: usize = 3;\n+const MAX_N: usize = 5;\n",
+        );
+        assert_eq!(
+            c,
+            [
+                "src/core/risk.rs: VERDICT_MIN_CONFIDENCE 0.9 → 0.8",
+                "src/core/risk.rs: MAX_N 3 → 5"
+            ]
+        );
+        assert!(
+            p(
+                "src/a.rs",
+                "@@\n-const IDLE_MINUTES: u8 = 9;\n+const IDLE_MINUTES: u8 = 1;\n"
+            )
+            .is_empty()
+        );
+        assert!(p("src/a.rs", "@@\n-const MIN_X: u8 = 3;\n+const MIN_X: u8 = 4;\n-const MAX_X: u8 = 3;\n+const MAX_X: u8 = 2;\n").is_empty());
+    }
+
+    #[test]
+    fn review_fixes() {
+        // Decoy lines do not hide the real value: all values compared.
+        assert_eq!(
+            p(
+                "ci.toml",
+                "@@\n-fail-under = 90\n+fail-under = 95\n+fail-under = 70\n"
+            )
+            .len(),
+            1
+        );
+        assert!(
+            p(
+                "a.toml",
+                "@@\n-fail-under = 90\n-fail-under = 50\n+fail-under = 50\n"
+            )
+            .is_empty()
+        );
+        let c = "@@\n-const MAX_N: u8 = 3;\n+const MAX_N: u8 = 1;\n+const MAX_N: u8 = 9;\n";
+        assert_eq!(p("src/a.rs", c).len(), 1);
+        // Coverage only in config files; removed only when no added value.
+        assert!(p("src/a.rs", "@@\n-fail-under = 90\n").is_empty());
+        assert!(p("README.md", "@@\n-fail-under = 90\n").is_empty());
+        assert!(
+            p(
+                "clippy.toml",
+                "@@\n-cognitive-complexity-threshold = 9\n+cognitive-complexity-threshold = 30\n"
+            )
+            .is_empty()
+        );
+        let w = ".github/workflows/ci.yml";
+        for v in ["true", "\"true\"", "'true'", "${{ true }}", "true # why"] {
+            assert_eq!(
+                p(w, &format!("@@\n+  continue-on-error: {v}\n")).len(),
+                1,
+                "{v}"
+            );
+        }
+        for v in ["false", "${{false}}", "${{ !true }}", "${{ 0 == 1 }}"] {
+            assert_eq!(p(w, &format!("@@\n+  if: {v}\n")).len(), 1, "{v}");
+        }
+        assert!(
+            p(
+                w,
+                "@@\n+  if: github.ref == 'x'\n+  continue-on-error: false\n"
+            )
+            .is_empty()
+        );
+        // Rust lint attributes.
+        assert_eq!(p("src/a.rs", "@@\n+#[expect(clippy::x)]\n").len(), 1);
+        assert_eq!(p("src/a.rs", "@@\n+#![allow(unused)]\n").len(), 1);
+        assert_eq!(
+            p("src/lib.rs", "@@\n-#![forbid(unsafe_code)]\n"),
+            ["src/lib.rs: #![forbid/deny] 1 → 0"]
+        );
+        assert!(p("src/lib.rs", "@@\n-#![deny(x)]\n+#![forbid(x)]\n").is_empty());
+        // eslint flat config and warn.
+        assert_eq!(p("eslint.config.mjs", "@@\n+  'a': 'off',\n").len(), 1);
+        assert_eq!(
+            p(
+                ".eslintrc.json",
+                "@@\n-\"a\": \"error\"\n+\"a\": \"warn\"\n"
+            )
+            .len(),
+            1
+        );
+        assert_eq!(p("a.mts", "@@\n+// oxlint-disable-next-line\n").len(), 1);
+        // Only headers before the first hunk are skipped.
+        assert_eq!(split_patch("@@ -1 +1 @@\n--x\n++y").0, ["-x"]);
+        assert_eq!(split_patch("--- a\n+++ b\n@@\n-x").1.len(), 0);
+        // A step moved to another workflow is not removed; names and comments are no steps.
+        let gone = "@@\n-      - run: cargo test\n-      # cargo fmt\n-      - name: cargo build\n";
+        let moved = vec!["cargo test".to_string()];
+        assert!(patch_findings(w, gone, &moved).is_empty());
+        assert_eq!(patch_findings(w, gone, &[]).len(), 1);
     }
 }
