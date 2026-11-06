@@ -1,0 +1,1 @@
+- R-gate also covers the gate stamps, gate records and the CI-minutes gate.

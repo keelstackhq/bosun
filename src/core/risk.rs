@@ -1271,6 +1271,12 @@ mod tests {
             "src/cli/pr_bundle.rs",
             "src/cli/plan.rs",
             "src/hooks/pre_tool_use.rs",
+            // The gate stamps, their records and the CI-minutes gate decide what passes too.
+            "src/core/ci_minutes.rs",
+            "src/cli/ci_minutes.rs",
+            "src/core/stamps.rs",
+            "src/cli/stamps.rs",
+            "src/core/gate_record.rs",
         ] {
             assert!(ids(&eval(&[file(p, &[])])).contains(&"R-gate"), "{p}");
         }
