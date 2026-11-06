@@ -770,7 +770,7 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
     assert!(yaml.contains("  ci-ok:\n    needs: [ci]\n    if: always()\n"));
     assert!(yaml.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
     assert!(yaml.contains("::error::draft: CI not run, mark ready for review"));
-    assert!(yaml.contains("for g in ${ONLY:-test-integrity deps fmt lint test}; do"));
+    assert!(yaml.contains("for g in ${ONLY:-test-integrity ci-minutes deps fmt lint test}; do"));
     // The plan step under the runner's shell.
     let plan = step_text(&yaml, "      - id: plan");
     let script = run_scripts(plan).remove(0);

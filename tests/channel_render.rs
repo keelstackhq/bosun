@@ -382,7 +382,14 @@ fn yaml_json(text: &str) -> Option<serde_json::Value> {
 
 /// In run order: the gates that run no PR code first, then lint (build.rs, proc macros) and test,
 /// so PR code on the one runner cannot change what test-integrity, deps or fmt report.
-const ALL_GATES: [&str; 5] = ["test-integrity", "deps", "fmt", "lint", "test"];
+const ALL_GATES: [&str; 6] = [
+    "test-integrity",
+    "ci-minutes",
+    "deps",
+    "fmt",
+    "lint",
+    "test",
+];
 const BOSUN_YML: &str = ".github/workflows/bosun.yml";
 
 #[test]
@@ -574,7 +581,7 @@ fn own_ci_gates_are_test_integrity_unless_opted_in() {
             expr.contains("github.event_name != 'pull_request'"),
             "{expr}"
         );
-        assert!(expr.contains("|| 'test-integrity' }}"), "{expr}");
+        assert!(expr.contains("|| 'test-integrity ci-minutes' }}"), "{expr}");
         assert!(
             expr.contains(&format!("'{}'", ALL_GATES.join(" "))),
             "{expr}"

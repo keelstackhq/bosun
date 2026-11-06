@@ -261,7 +261,7 @@ jobs:
           # The gates that run no PR code first: lint (build.rs, proc macros) and test run PR
           # code on this runner. The first failed gate stops the job, so no PR code runs after
           # a failure it could hide (with the runner's sudo).
-          for g in ${ONLY:-test-integrity deps fmt lint test}; do
+          for g in ${ONLY:-test-integrity ci-minutes deps fmt lint test}; do
             echo "::group::bosun gate $g"
             # Defence in depth: the base's bosun, unchanged since step binhash.
             echo "$BOSUN_SHA256  $BOSUN" | sha256sum -c --quiet || { echo "::error::$BOSUN changed"; exit 1; }
