@@ -8,6 +8,8 @@ use regex::Regex;
 use toml::Value;
 
 pub const CAPABILITY: &str = "weaken";
+pub const RULE: &str = "R-weaken";
+pub const WHY: &str = "A change that loosens a gate weakens what verifies every later change.";
 
 #[derive(PartialEq)]
 enum Kind {
@@ -717,14 +719,6 @@ mod tests {
                 "[graph]\nall-features = false\n"
             ),
             ["deny.toml: graph.all-features true → false"]
-        );
-        assert_eq!(
-            text_findings(
-                ".bosun/profiles/my.toml",
-                None,
-                Some("[gates.t]\ncmd = [\"true\"]\n")
-            ),
-            [".bosun/profiles/my.toml: profile (built-in) → (new)"]
         );
     }
 

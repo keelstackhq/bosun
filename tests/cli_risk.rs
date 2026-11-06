@@ -77,7 +77,8 @@ fn pr_that_weakens_the_rules_is_judged_by_the_base_rules() {
     let (code, v) = check(&fake);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["level"], "high");
-    assert_eq!(rule_ids(&v), ["R-gov"]);
+    // Deleting the rule is a weakening too (built-in R-weaken).
+    assert_eq!(rule_ids(&v), ["R-gov", "R-weaken"]);
     let fix = v["error"]["fix"].as_str().unwrap();
     assert!(
         fix.contains(HEAD) && fix.contains("form in the Claude Code chat"),
