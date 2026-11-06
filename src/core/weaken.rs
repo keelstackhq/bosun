@@ -439,110 +439,6 @@ pub fn ci_commands(path: &str, patch: &str) -> (Vec<String>, Vec<String>) {
     )
 }
 
-/// Rust text with `/* */` comments (nested too) blanked, line breaks kept.
-pub fn strip_block_comments(text: &str) -> String {
-    let c: Vec<char> = text.chars().collect();
-    let (mut out, mut depth, mut i) = (String::new(), 0usize, 0);
-    let at = |i: usize, s: &str| s.chars().enumerate().all(|(k, x)| c.get(i + k) == Some(&x));
-    while i < c.len() {
-        let start = i;
-        if depth > 0 {
-            depth = if at(i, "/*") {
-                depth + 1
-            } else if at(i, "*/") {
-                depth - 1
-            } else {
-                depth
-            };
-            i += if at(i, "/*") || at(i, "*/") { 2 } else { 1 };
-            out.extend(c[start..i].iter().filter(|x| **x == '\n'));
-            continue;
-        }
-        if at(i, "/*") {
-            (depth, i) = (1, i + 2);
-            continue;
-        }
-        // Code that cannot open a comment: a line comment, a string, a raw string, a char.
-        if at(i, "//") {
-            while i < c.len() && c[i] != '\n' {
-                i += 1;
-            }
-        } else if c[i] == '"' || (c[i] == 'r' && matches!(c.get(i + 1), Some('"' | '#'))) {
-            let hashes = c[i..]
-                .iter()
-                .skip(usize::from(c[i] == 'r'))
-                .take_while(|x| **x == '#')
-                .count();
-            let close: String = std::iter::once('"')
-                .chain("#".repeat(hashes).chars())
-                .collect();
-            i += usize::from(c[i] == 'r') + hashes + 1;
-            while i < c.len() && !at(i, &close) {
-                i += if c[i] == '\\' && hashes == 0 { 2 } else { 1 };
-            }
-            i = (i + close.len()).min(c.len());
-        } else if c[i] == '\'' && c.get(i + 2) == Some(&'\'') || at(i, "'\\") {
-            i += 1 + c[i + 1..]
-                .iter()
-                .skip(1)
-                .position(|x| *x == '\'')
-                .map_or(0, |p| p + 2);
-        } else {
-            i += 1;
-        }
-        out.extend(&c[start..i.max(start + 1).min(c.len())]);
-        i = i.max(start + 1);
-    }
-    out
-}
-
-/// A `#[cfg(..)]` line that never holds: `any()`, `not(all())`, or a bare name rustc does not
-/// set (`false`, `FALSE`, a typo). A `key = ".."` pair is fine.
-pub fn cfg_off(line: &str) -> bool {
-    const KNOWN: [&str; 10] = [
-        "test",
-        "debug_assertions",
-        "unix",
-        "windows",
-        "doc",
-        "doctest",
-        "miri",
-        "not",
-        "all",
-        "any",
-    ];
-    let l: String = (line.split("//").next().unwrap_or_default().chars())
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    let Some(inner) = l.strip_prefix("#[cfg(").or(l.strip_prefix("#![cfg(")) else {
-        return false;
-    };
-    if inner.contains("any()") || inner.contains("not(all())") {
-        return true;
-    }
-    let mut rest = inner;
-    while let Some(i) = rest.find(|c: char| c.is_alphanumeric() || c == '_') {
-        let r = &rest[i..];
-        let end = r
-            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .unwrap_or(r.len());
-        let (name, after) = r.split_at(end);
-        if after.starts_with('=') {
-            // Skip the value.
-            rest = after
-                .split_once(['"'])
-                .and_then(|(_, v)| v.split_once('"'))
-                .map_or("", |x| x.1);
-            continue;
-        }
-        if !KNOWN.contains(&name) {
-            return true;
-        }
-        rest = after;
-    }
-    false
-}
-
 /// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
 /// switches and Rust threshold constants.
 pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> {
@@ -669,34 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn block_comments_skip_strings_and_chars() {
-        let t = "let a = \"src/**\";\n#[test]\nfn x() {}\nlet b = '\"'; // /* no\nlet r = r#\"/*\"#;\n#[test]\n";
-        assert_eq!(strip_block_comments(t), t);
-        assert_eq!(strip_block_comments("a /* \"*/ b"), "a  b");
-    }
-
-    #[test]
-    fn cfg_switch_offs() {
-        for on in [
-            "#[cfg(test)]",
-            "#[cfg(all(unix, feature = \"x-y\"))]",
-            "#[cfg(not(windows))]",
-        ] {
-            assert!(!cfg_off(on), "{on}");
-        }
-        for off in [
-            "#[cfg(any())]",
-            "#[cfg(FALSE)]",
-            "#[cfg(false)]",
-            "#[cfg(tset)]",
-            "#[cfg(not(all()))]",
-        ] {
-            assert!(cfg_off(off), "{off}");
-        }
-    }
-
-    #[test]
-    fn version_bumps_and_block_comments() {
+    fn version_bumps() {
         let w = ".github/workflows/ci.yml";
         let bump = ["cargo install cargo-deny@0.16.2".to_string()];
         assert!(
@@ -707,7 +576,6 @@ mod tests {
             )
             .is_empty()
         );
-        assert_eq!(strip_block_comments("a/* x\n/* y */ */b\n"), "a\nb\n");
     }
 
     #[test]

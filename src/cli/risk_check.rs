@@ -26,7 +26,6 @@ use crate::core::risk::{
 use crate::core::touch::{Changed, outside};
 use crate::core::weaken;
 use crate::ctx::RepoId;
-use crate::gates::{adapters, ts};
 use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
@@ -145,7 +144,6 @@ fn weaken_findings(
             out.extend(weaken::text_findings(path, old.as_deref(), new.as_deref()));
         }
     }
-    out.extend(test_findings(gh, pr_files, base, head)?);
     let mut seen = std::collections::HashSet::new();
     out.retain(|s| seen.insert(s.clone()));
     Ok(out)
@@ -160,97 +158,6 @@ fn builtin_base(path: &str) -> Option<&'static str> {
         .strip_prefix(".bosun/profiles/")?
         .strip_suffix(".toml")?;
     crate::gates::profile::builtin(name)
-}
-
-/// Test counts over whole files at base and head, totalled over the PR so moving tests between
-/// files is no loss: tests, assertions, skips, `.only` and `cfg` switch-offs, as test-integrity
-/// counts them. A file counts only where it runs: a Rust test file under a `src/` or `tests/`
-/// root, a TS/JS test file. Also every deleted test file.
-fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
-    let (mut out, mut c) = (Vec::new(), [[0usize; 5]; 2]);
-    // A cap on reads: past it the owner judges, no quota is burnt and nothing errors.
-    let many = files.iter().filter(|f| code_file(&f.filename)).count();
-    if many > 100 {
-        return Ok(vec![format!(
-            "tests not counted: {many} code files; the owner judges"
-        )]);
-    }
-    for f in files {
-        let n = &f.filename;
-        let prev = f.previous_filename.as_deref().unwrap_or(n);
-        if f.status == "removed" && code_file(n) && risk::test_path(n) {
-            out.push(format!("{n}: test file present → (deleted)"));
-        }
-        let sides = [
-            (prev, base, f.status != "added"),
-            (n.as_str(), head, f.status != "removed"),
-        ];
-        for (side, (path, at, exists)) in sides.into_iter().enumerate() {
-            if !exists || !code_file(path) {
-                continue;
-            }
-            match gh.file_at(path, at) {
-                Ok(Some(t)) if t.len() <= 1 << 20 => {
-                    let r = test_counts(path, &t);
-                    (0..5).for_each(|i| c[side][i] += r[i]);
-                }
-                Ok(None) => {}
-                _ => out.push(format!(
-                    "{path}: tests not counted (unreadable or over 1 MB); the owner judges"
-                )),
-            }
-        }
-    }
-    let names = ["tests", "assertions", "skips", "only", "cfg switch-offs"];
-    for (i, what) in names.iter().enumerate() {
-        let (o, n) = (c[0][i], c[1][i]);
-        if if i < 2 { n < o } else { n > o } {
-            out.push(format!("{what} (all files) {o} → {n}"));
-        }
-    }
-    Ok(out)
-}
-
-fn code_file(path: &str) -> bool {
-    let p = path.to_ascii_lowercase();
-    let exts = [
-        ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
-    ];
-    exts.iter().any(|e| p.ends_with(e))
-}
-
-/// `[tests, assertions, skips, only, cfg switch-offs]` of a file that runs, else zeros.
-fn test_counts(path: &str, text: &str) -> [usize; 5] {
-    let p = path.to_ascii_lowercase();
-    if p.ends_with(".rs") {
-        // What Cargo builds: inline tests under `src/`, `tests/*.rs` and `tests/<dir>/main.rs`.
-        let segs: Vec<&str> = p.split('/').collect();
-        let built = segs.contains(&"src")
-            || (segs.iter().rposition(|s| *s == "tests"))
-                .is_some_and(|i| matches!(&segs[i + 1..], [_] | [_, "main.rs"]));
-        let text = weaken::strip_block_comments(text);
-        if !built || !adapters::is_test_file(&p, &text) {
-            return [0; 5];
-        }
-        let off = text.lines().filter(|l| weaken::cfg_off(l)).count();
-        return [
-            adapters::test_count(&text),
-            adapters::assertions(&text),
-            adapters::pending_markers(&text).len(),
-            0,
-            off,
-        ];
-    }
-    if !ts::is_test_file(&p) {
-        return [0; 5];
-    }
-    [
-        ts::test_count(text),
-        ts::assertions(text),
-        ts::pending_markers(text).len(),
-        ts::only_count(text),
-        0,
-    ]
 }
 
 fn judge(app: &App, pull: Pull) -> CmdResult {

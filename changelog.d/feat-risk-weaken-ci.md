@@ -1,1 +1,1 @@
-- R-weaken also reads diffs: CI steps removed or `continue-on-error`, coverage floors lowered, lint disables added, Rust MIN/MAX consts loosened, tests deleted, thinned or skipped.
+- R-weaken also reads diffs: CI steps removed or `continue-on-error`, coverage floors lowered, lint disables added, Rust MIN/MAX consts loosened.
