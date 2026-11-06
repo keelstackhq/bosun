@@ -17,7 +17,10 @@ fn is_trailer(line: &str) -> bool {
 
 /// Lines before the trailing comment/blank lines git leaves in an editor message.
 fn body_end(lines: &[&str]) -> usize {
-    let mut end = lines.len();
+    let mut end = lines
+        .iter()
+        .position(|l| l.starts_with("# ------------------------ >8"))
+        .unwrap_or(lines.len());
     while end > 0 && (lines[end - 1].starts_with('#') || lines[end - 1].trim().is_empty()) {
         end -= 1;
     }
@@ -131,6 +134,18 @@ mod tests {
             stamp(m, &want()),
             "feat: x\n\nBosun-Session: s1\nBosun-Task: 7\n\n# Please enter\n# more\n"
         );
+    }
+
+    #[test]
+    fn scissors_tail_is_kept_below_and_empty_values_are_filled() {
+        let m =
+            "feat: x\n\n# ------------------------ >8 ------------------------\ndiff --git a b\n";
+        assert_eq!(
+            stamp(m, &want()),
+            "feat: x\n\nBosun-Session: s1\nBosun-Task: 7\n\n# ------------------------ >8 ------------------------\ndiff --git a b\n"
+        );
+        let e = "x\n\nBosun-Session: \n";
+        assert!(stamp(e, &want()).contains("Bosun-Session: s1\nBosun-Task: 7\n"));
     }
 
     #[test]

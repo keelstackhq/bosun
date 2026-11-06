@@ -35,19 +35,20 @@ fn stamp_file(dir: &Path, file: &Path) -> CmdResult {
             "pass the commit message file git gives the commit-msg hook",
         )
     })?;
-    let session = session_id(
-        env("BOSUN_SESSION").as_deref(),
-        env("CLAUDE_CODE_REMOTE_SESSION_ID").as_deref(),
-        "unknown",
-    );
-    let now = Timestamp(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64),
-    );
+    // No session id known (a human commit): leave the trailer out.
+    let session =
+        if env("BOSUN_SESSION").is_some() || env("CLAUDE_CODE_REMOTE_SESSION_ID").is_some() {
+            session_id(
+                env("BOSUN_SESSION").as_deref(),
+                env("CLAUDE_CODE_REMOTE_SESSION_ID").as_deref(),
+                "unknown",
+            )
+        } else {
+            String::new()
+        };
     let now = env("BOSUN_NOW")
         .and_then(|v| crate::time::parse_rfc3339(&v))
-        .unwrap_or(now);
+        .unwrap_or_else(Timestamp::now);
     // The task: BOSUN_TASK, else the issue of this session's cached lease (offline).
     let task = env("BOSUN_TASK")
         .or_else(|| cache::cached_issue(dir, &session, now).map(|n| n.to_string()))
@@ -79,13 +80,16 @@ pub fn install(dir: &Path) -> Result<serde_json::Value, BosunError> {
                 "run `bosun trailers install` inside the checkout",
             )
         })?;
-    if let Ok(old) = std::fs::read_to_string(&path)
-        && !old.contains(MARK)
-    {
-        return Err(BosunError::conflict(
-            format!("{} is another hook", path.display()),
-            "add the line `bosun trailers stamp \"$1\" || true` to it, or move it away and rerun",
-        ));
+    match std::fs::read_to_string(&path) {
+        Ok(old) if old == HOOK => return Ok(json!({"hook": path.display().to_string()})),
+        Ok(old) if old.contains(MARK) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        _ => {
+            return Err(BosunError::conflict(
+                format!("{} is another hook", path.display()),
+                "add the line `bosun trailers stamp \"$1\" || true` to it, or move it away and rerun",
+            ));
+        }
     }
     let io = |e: std::io::Error| {
         BosunError::error(
@@ -110,12 +114,19 @@ fn list(dir: &Path, session: &str) -> CmdResult {
         dir,
         &[
             "log",
+            "--all",
             "--fixed-strings",
             &format!("--grep={SESSION}: {session}"),
             "--format=%H%x1f%s%x1f%B%x1e",
         ],
     )
     .unwrap_or_default();
+    if git_out(dir, &["rev-parse", "--git-dir"]).is_none() {
+        return Err(BosunError::error(
+            "not in a git repository",
+            "run `bosun trailers list` inside the checkout",
+        ));
+    }
     let line = format!("{SESSION}: {session}");
     let prefix = format!("{line}/");
     let mut commits = Vec::new();
@@ -132,7 +143,14 @@ fn list(dir: &Path, session: &str) -> CmdResult {
     let recipe = (!shas.is_empty()).then(|| {
         format!(
             "git switch -c revert/{} origin/main && git revert --no-edit {}",
-            session.replace('/', "-"),
+            session
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
+                    c
+                } else {
+                    '-'
+                })
+                .collect::<String>(),
             shas.join(" ")
         )
     });
@@ -173,15 +191,24 @@ pub fn check_pr(
         }
     }
     let data = json!({"checked": checked, "unread": unread, "required": require, "missing": gaps});
-    if require && !gaps.is_empty() {
+    if require && (!gaps.is_empty() || unread > 0) {
         let shas: Vec<&str> = gaps.iter().filter_map(|g| g["sha"].as_str()).collect();
+        if shas.is_empty() {
+            return Err(BosunError::error(
+                format!(
+                    "PR #{pr}: {unread} commit(s) could not be read, so trailers cannot be checked"
+                ),
+                "rerun `bosun pr` in a minute, or set `[trailers] require = false`",
+            )
+            .with_data(json!({"pr": pr, "trailers": data})));
+        }
         return Err(BosunError::error(
             format!(
                 "PR #{pr} has {} commit(s) without Bosun-Session/Bosun-Task trailers: {}",
                 shas.len(),
                 shas.join(", ")
             ),
-            "run `bosun trailers install`, then redo those commits stamped: squash them on a fresh branch (`git reset --soft origin/main && git commit`) and push it (never force-push); or set `[trailers] require = false`",
+            "run `bosun trailers install`, then redo those commits stamped: squash them on a new branch (`git switch -c <new> && git reset --soft origin/main && git commit`), push it, open a new PR and close this one (never force-push); or set `[trailers] require = false`",
         )
         .with_data(json!({"pr": pr, "trailers": data})));
     }

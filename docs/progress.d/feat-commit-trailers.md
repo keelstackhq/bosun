@@ -1,1 +1,1 @@
-- 2026-11-06 · commit trailers · Bosun-Session/Task/Model stamped by hook, checked by `bosun pr`, `bosun trailers list` for rollback · PR #TBD
+- 2026-11-06 · commit trailers · Bosun-Session/Task/Model stamped by hook, checked by `bosun pr`, `bosun trailers list` for rollback · PR #427

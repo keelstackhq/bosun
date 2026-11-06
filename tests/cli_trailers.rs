@@ -137,3 +137,24 @@ fn install_will_not_replace_another_hook() {
         "#!/bin/sh\necho mine\n"
     );
 }
+
+#[test]
+fn list_matches_the_session_exactly_or_its_wave_agents() {
+    let dir = repo();
+    for (sess, n) in [("s1", "a"), ("s10", "b"), ("s1/t9", "c")] {
+        let msg = format!("feat: {n}\n\nBosun-Session: {sess}\n");
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", &msg],
+            &[],
+        );
+    }
+    let (_, v) = run(dir.path(), &[], &["list", "s1"]);
+    let subjects: Vec<&str> = v["data"]["commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["subject"].as_str().unwrap())
+        .collect();
+    assert_eq!(subjects, ["feat: c", "feat: a"], "{v}");
+}

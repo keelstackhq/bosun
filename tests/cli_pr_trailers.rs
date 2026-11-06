@@ -21,7 +21,7 @@ fn run_pr(shas: &[(&str, &str)], config: Option<&str>) -> (i32, Value) {
     fake.pull(3, "t", BRANCH, "Closes #7");
     let names: Vec<&str> = shas.iter().map(|(s, _)| *s).collect();
     fake.pull_commit_shas(3, &names);
-    for (sha, msg) in shas {
+    for (sha, msg) in shas.iter().filter(|(_, m)| *m != "UNREADABLE") {
         fake.git_commit_message(sha, msg);
     }
     let dir = tempfile::tempdir().unwrap();
@@ -98,4 +98,21 @@ fn require_refuses_with_a_fix() {
 fn require_passes_when_all_are_stamped() {
     let (code, v) = run_pr(&[("a1", GOOD)], Some("[trailers]\nrequire = true\n"));
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn require_fails_closed_on_an_unreadable_commit() {
+    let cfg = Some("[trailers]\nrequire = true\n");
+    let (code, v) = run_pr(&[("a1", GOOD), ("c3", "UNREADABLE")], cfg);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("could not be read"),
+        "{v}"
+    );
+    let (code, v) = run_pr(&[("c3", "UNREADABLE")], None);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["trailers"]["unread"], 1);
 }
