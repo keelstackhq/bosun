@@ -3,6 +3,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Where a Claude Tag session sits: a channel's top level or one thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SlackSeat {
+    /// `channel` or `thread`.
+    pub role: String,
+    pub channel: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_ts: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "bosun", rename_all = "kebab-case")]
 pub enum Record {
@@ -28,6 +38,9 @@ pub enum Record {
         parent: Option<String>,
         depth: u32,
         expires: String,
+        /// The Claude Tag seat of this session (`bosun join --slack-channel`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slack: Option<SlackSeat>,
     },
     /// A session left the registry (released, reaped, or done).
     Leave { session: String, reason: String },

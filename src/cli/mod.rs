@@ -323,6 +323,12 @@ pub struct JoinArgs {
     /// Depth of this session (root is 1).
     #[arg(long)]
     pub depth: Option<u32>,
+    /// Claude Tag seat: the Slack channel id (needs --origin slack; must be `[slack] channel`).
+    #[arg(long, value_name = "C...")]
+    pub slack_channel: Option<String>,
+    /// Claude Tag seat: the thread ts (needs --slack-channel).
+    #[arg(long, value_name = "TS")]
+    pub slack_thread: Option<String>,
 }
 
 #[derive(Debug, Args)]

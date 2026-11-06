@@ -3,7 +3,7 @@
 
 use crate::app::{App, Result, notes};
 use crate::core::lease::{Member, members};
-use crate::core::records::{Note, Record, replace_record};
+use crate::core::records::{Note, Record, SlackSeat, replace_record};
 use crate::ctx::Origin;
 use crate::github::{Github, IssueState};
 use crate::output::BosunError;
@@ -38,6 +38,7 @@ pub struct JoinSpec {
     pub area: Option<String>,
     pub parent: Option<String>,
     pub depth: Option<u32>,
+    pub slack: Option<SlackSeat>,
 }
 
 /// Post this session's `join` record, or edit its existing one in place. Returns the registry
@@ -70,9 +71,30 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             .find(|m| m.session == p && m.expires > app.ctx.now)
             .map_or(prior.map_or(1, |m| m.depth), |m| m.depth + 1),
     };
+    // A child or routine session cannot relabel itself as Slack.
+    if spec.origin == Some(Origin::Slack)
+        && let Some(o) = prior
+            .map(|m| m.origin.as_str())
+            .filter(|o| matches!(*o, "spawned" | "routine"))
+    {
+        return Err(BosunError::needs_human(
+            format!("this session's join record says origin {o}; it cannot join as slack"),
+            "join without --origin slack; only a Claude Tag session joins as slack",
+        ));
+    }
+    // A plain re-join of a slack session keeps origin slack; the seat survives only there.
+    let origin = match (spec.origin, prior) {
+        (Some(o), _) => o.as_str().to_string(),
+        (None, Some(m)) if m.origin == "slack" => m.origin.clone(),
+        (None, _) => app.ctx.origin.as_str().to_string(),
+    };
+    let slack = spec
+        .slack
+        .or_else(|| prior.and_then(|m| m.slack.clone()))
+        .filter(|_| origin == "slack");
     let member = Member {
         session: session.clone(),
-        origin: spec.origin.unwrap_or(app.ctx.origin).as_str().to_string(),
+        origin,
         area: spec.area.or_else(|| prior.and_then(|m| m.area.clone())),
         // The parent is fixed at the first join (`spawn --record` writes it). A later `--depth`
         // sets the depth, but never below its parent's depth + 1 (1 for a root), so a root that
@@ -84,6 +106,7 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             (None, None) => 1.max(floor),
         },
         expires,
+        slack,
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     let comment_id = write(app.gh.as_ref(), issue, &notes, prior, &member)?;
@@ -126,6 +149,7 @@ fn record_of(m: &Member) -> Record {
         parent: m.parent.clone(),
         depth: m.depth,
         expires: m.expires.to_string(),
+        slack: m.slack.clone(),
     }
 }
 

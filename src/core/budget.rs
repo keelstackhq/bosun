@@ -78,6 +78,7 @@ mod tests {
             parent: None,
             depth: 1,
             expires: Timestamp(expires),
+            slack: None,
             comment_id: 1,
         }
     }

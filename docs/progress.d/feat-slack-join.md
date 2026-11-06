@@ -1,0 +1,1 @@
+- 2026-11-06 · Claude Tag seats · `bosun join --origin slack --slack-channel/--slack-thread`, spec §10 Claude Tag sessions

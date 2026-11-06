@@ -307,6 +307,32 @@ fn record_registers_the_child_and_moves_the_lease() {
 }
 
 #[test]
+fn a_spawned_record_over_a_seated_one_has_no_seat() {
+    let fake = setup();
+    spawn(&fake, &[]);
+    fake.comment(
+        1,
+        &format!(
+            r#"{{"bosun":"join","session":"session_child","origin":"slack","depth":1,"expires":"{LATER}","slack":{{"role":"channel","channel":"C0123ABCD"}}}}"#
+        ),
+    );
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["spawn", "10", "--record", "--from", "-"])
+        .write_stdin(r#"{"id":"session_child"}"#)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let last = fake
+        .comments_of(1)
+        .into_iter()
+        .rfind(|c| c.body.contains(r#""session":"session_child""#))
+        .unwrap();
+    assert!(last.body.contains(r#""origin":"spawned""#), "{}", last.body);
+    assert!(!last.body.contains("slack"), "{}", last.body);
+}
+
+#[test]
 fn record_without_an_id_exits_1_with_a_fix() {
     let fake = setup();
     let out = common::bosun()
