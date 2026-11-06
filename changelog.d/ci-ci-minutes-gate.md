@@ -1,1 +1,0 @@
-- CI (bosun's ci.yml and the channel's bosun.yml) and the local pre-push loop run `bosun gate ci-minutes` after test-integrity; the channel skips it when the pinned bosun is older than 0.7.0.

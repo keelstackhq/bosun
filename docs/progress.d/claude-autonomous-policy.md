@@ -1,1 +1,0 @@
-- 2026-11-06 · autonomous approval policy (D-017) · `policy = "autonomous"` in risk-check and `approve --bootstrap`, spec §8

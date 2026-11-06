@@ -326,3 +326,13 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-05 · secrets · allow integrity hashes; check pr title · PR #407
 - 2026-11-04 · feedback · claim renews an own lapsed lease on an active task · PR (fix-claim-expired-own)
 - 2026-11-04 · feedback · plan check warns on src without tests in touch · PR (fix-plan-touch-tests)
+- 2026-11-06 · pin bosun 0.7.0 (.bosun/version, setup script, KNOWN lists)
+- 2026-11-06 · ci-minutes in CI · gate loop in ci.yml, channel bosun.yml and AGENTS.md
+- 2026-11-06 · autonomous approval policy (D-017) · `policy = "autonomous"` in risk-check and `approve --bootstrap`, spec §8
+- 2026-11-06 · bosun adopt + uninstall (no splice path), core::render, Github::delete_label
+- 2026-11-06 · docs: adopt-existing-repo guide (bosun-only, cloud, Claude Tag gaps); README at 0.7.0
+- 2026-11-06 · R-gate covers the approval path and hooks; bootstrap window refuses R-gov and R-prod-write (operating model items 1, 2)
+- 2026-11-06 · R-gate covers stamps, gate_record and ci_minutes
+- 2026-11-06 · operating model · docs/operating-model.md: principle → mechanism → status table and enforcement candidates · PR #421
+- 2026-11-06 · Claude Tag seats · `bosun join --origin slack --slack-channel/--slack-thread`, spec §10 Claude Tag sessions
+- 2026-11-06 · Claude Tag routing · notify seat routing and thread asks, doctor `claude-tag` and PAT warning, spec §10
