@@ -1,1 +1,0 @@
-- `bosun plan check` warns when a task touches a crate's `src/` but none of its `tests/` (list the tests in `touch:`).

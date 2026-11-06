@@ -324,3 +324,5 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-05 · ci-log · head + middle error lines kept besides the tail (`core::text::squash_log`) · PR #402
 - 2026-11-05 · refuse secrets in text · `secret_kind` in core/text.rs; lesson add, handoff, msg, fail refuse tokens/keys/PEM (exit 2)
 - 2026-11-05 · secrets · allow integrity hashes; check pr title · PR #407
+- 2026-11-04 · feedback · claim renews an own lapsed lease on an active task · PR (fix-claim-expired-own)
+- 2026-11-04 · feedback · plan check warns on src without tests in touch · PR (fix-plan-touch-tests)
