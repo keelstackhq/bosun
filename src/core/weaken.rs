@@ -356,17 +356,38 @@ fn cmd_of(line: &str) -> String {
     let t = line.trim();
     let t = t.strip_prefix("- ").unwrap_or(t).trim();
     let t = t.strip_prefix("run:").unwrap_or(t).trim();
-    t.trim_matches(['"', '\'']).trim().to_string()
+    let t = t.trim_matches(['"', '\'']).trim();
+    // An action by name, so a version bump is no removal.
+    match t.strip_prefix("uses:") {
+        Some(u) => format!("uses: {}", u.trim().split('@').next().unwrap_or_default()),
+        None => t.to_string(),
+    }
 }
 
 pub fn is_ci(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or_default();
-    [".github/workflows/", ".github/actions/", ".circleci/"]
-        .iter()
-        .any(|p| lower.starts_with(p))
-        || name == "action.yml"
-        || name == "action.yaml"
+    [
+        ".github/workflows/",
+        ".github/actions/",
+        ".circleci/",
+        ".gitlab/ci/",
+        ".buildkite/",
+    ]
+    .iter()
+    .any(|p| lower.starts_with(p))
+        || [
+            "action.yml",
+            "action.yaml",
+            ".gitlab-ci.yml",
+            "jenkinsfile",
+            "azure-pipelines.yml",
+            "azure-pipelines.yaml",
+            "bitbucket-pipelines.yml",
+            ".travis.yml",
+            ".drone.yml",
+        ]
+        .contains(&name)
 }
 
 /// `key: value` of a YAML line with spaces, quotes and a trailing ` #` comment dropped.
@@ -391,12 +412,14 @@ pub fn ci_commands(path: &str, patch: &str) -> (Vec<String>, Vec<String>) {
         !(t.starts_with("name:") || t.starts_with('#') || t.starts_with("- name:"))
     };
     let removed = del.iter().copied().filter(|l| cmd(l)).filter_map(|l| {
-        let run = l.trim().trim_start_matches("- ").starts_with("run:");
+        let t = l.trim().trim_start_matches("- ");
+        let run = t.starts_with("run:") || t.starts_with("uses:");
         let tool = ["cargo ", "bosun ", "npm ", "pnpm ", "npx "]
             .iter()
             .any(|t| l.contains(t));
         let c = cmd_of(l);
-        ((run || tool) && !c.is_empty() && c != "|" && c != ">").then_some(c)
+        let header = ["|", "|-", "|+", ">", ">-", ">+"].contains(&c.as_str());
+        ((run || tool) && !c.is_empty() && !header).then_some(c)
     });
     (
         removed.collect(),
@@ -492,15 +515,16 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
     if lower.ends_with(".rs") {
         let new = all_values(&CONST, &ins, false);
         for (k, o) in all_values(&CONST, &del, false) {
-            let Some((_, n)) = new.iter().find(|(n, _)| *n == k) else {
-                continue;
-            };
             let has = |w: &[&str]| k.split('_').any(|s| w.contains(&s));
             let max = if has(&["MIN", "THRESHOLD", "NEEDED", "REQUIRED"]) {
                 false
             } else if has(&["MAX", "LIMIT", "CAP", "BUDGET"]) {
                 true
             } else {
+                continue;
+            };
+            let Some((_, n)) = new.iter().find(|(n, _)| *n == k) else {
+                out.push(format!("{path}: {k} {} → (removed)", extreme(&o, max)));
                 continue;
             };
             let (old, new) = (extreme(&o, max), extreme(n, max));
@@ -521,6 +545,32 @@ mod tests {
     }
     fn p(path: &str, patch: &str) -> Vec<String> {
         patch_findings(path, patch, &ci_commands(path, patch).1)
+    }
+
+    #[test]
+    fn review_round_three_diffs() {
+        let w = ".github/workflows/ci.yml";
+        let patch = "@@\n-      - uses: EmbarkStudios/cargo-deny-action@v1\n-        run: |-\n";
+        assert_eq!(
+            patch_findings(w, patch, &[]),
+            [
+                ".github/workflows/ci.yml: step \"uses: EmbarkStudios/cargo-deny-action\" present → (removed)"
+            ]
+        );
+        let bump = ["uses: EmbarkStudios/cargo-deny-action".to_string()];
+        assert!(
+            patch_findings(
+                w,
+                "@@\n-  - uses: EmbarkStudios/cargo-deny-action@v1\n",
+                &bump
+            )
+            .is_empty()
+        );
+        assert!(is_ci(".gitlab-ci.yml") && is_ci("ci/Jenkinsfile"));
+        assert_eq!(
+            patch_findings("src/a.rs", "@@\n-const MIN_X: u8 = 3;\n", &[]),
+            ["src/a.rs: MIN_X 3 → (removed)"]
+        );
     }
 
     #[test]

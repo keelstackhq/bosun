@@ -187,3 +187,37 @@ fn tests_moved_between_files_are_no_weakening_but_a_dropped_inline_test_is() {
     let e = evidence(&fake);
     assert!(e.contains("tests (all files) 1 → 0"), "{e}");
 }
+
+#[test]
+fn test_counts_cover_skips_assertions_ts_and_unseen_removals() {
+    let case = |name: &str, status: &str, patch: Option<&str>, want: &str| {
+        let fake = pr();
+        fake.pull_file(1, name, status, 1, 1, patch);
+        let e = evidence(&fake);
+        assert!(e.contains(want), "{name}: {e}");
+    };
+    case(
+        "tests/a.rs",
+        "modified",
+        Some("@@\n #[test]\n+#[ignore]"),
+        "skips (all files) 0 → 1",
+    );
+    case(
+        "tests/a.rs",
+        "modified",
+        Some("@@\n-assert!(x);\n+let _ = x;"),
+        "assertions (all files) 1 → 0",
+    );
+    case(
+        "web/a.test.ts",
+        "modified",
+        Some("@@\n-it('a', () => {});"),
+        "tests (all files) 1 → 0",
+    );
+    case(
+        "src/big.rs",
+        "removed",
+        None,
+        "src/big.rs: diff unavailable",
+    );
+}
