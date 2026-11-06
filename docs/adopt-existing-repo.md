@@ -218,8 +218,14 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
 
 Support is thin. What works today:
 
-- **Origin.** A session with `BOSUN_ORIGIN=slack` (or `bosun join --origin slack`) counts as a
-  Slack thread. Only `slack` and `local` sessions may start work from Slack.
+- **Origin.** `bosun join --origin slack` labels a Claude Tag session; no `BOSUN_ORIGIN` and no
+  environment of its own are needed. Only `slack` and `local` sessions may start work from Slack.
+- **Seat.** `bosun join --origin slack --slack-channel C… [--slack-thread <ts>]` records where the
+  session sits (channel or thread). A plain re-join keeps the seat.
+- **Routing.** `bosun notify` reads the seat: a channel seat sends thread posts with
+  `send_message` (`to: thread`), a thread seat lists its own thread and the channel posts and
+  answers its thread with `thread_reply`. An owner question on a thread task goes to that thread.
+  `bosun doctor` (step `claude-tag`) checks the seat and warns about a PAT in a cloud session.
 - **Start work from a thread.** `bosun spawn [epic] --slack-thread <ts> --slack-user <U…>`
   runs the 7 spawn checks; the user must be an owner's `slack` ID in `governance/owners.toml`.
   Without an epic, `--request` sends the ask to intake. The thread ts is kept on the lease.
@@ -238,10 +244,6 @@ Gaps:
 - bosun cannot check the channel facts or the Slack user ID itself; it trusts the caller.
 - `bosun ask` itself mentions you on GitHub; the Slack post comes only through `bosun notify`
   (owner-question), so it needs the notify Routine or a live thread.
-- bosun knows nothing of Claude Tag's standing or channel sessions, or of `send_message` to a
-  Slack thread or parent; Slack posts go only through the `slack_post` items of `bosun notify`.
-- `BOSUN_ORIGIN=slack` is an environment variable, so Claude Tag needs its own cloud environment;
-  in the shared one, web sessions would count as Slack too.
-- `docs/PROGRESS.md` (Blocked, item 8) still says the Claude Tag environment needs a
-  `GITHUB_TOKEN` with write access, which clashes with "no PAT in the environment". Not yet
-  checked against a live Claude Tag session.
+- The `send_message` `to`/`thread_ts` routing is known only from the session tool schema, and
+  whether Claude Tag sets `CLAUDE_CODE_CHILD_SESSION` is not checkable from a session.
+- A Slack approval form does not exist; approvals never come from Slack.
