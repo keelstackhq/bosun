@@ -66,8 +66,10 @@ admins/customize). GitHub goes through the Claude GitHub App and the proxy, so n
   `channel`. Channel `^[CG][A-Z0-9]{2,}$`, ts `^[0-9]+\.[0-9]+$`; `--slack-thread` needs
   `--slack-channel`, and both need `--origin slack` (else exit 2). The channel must be
   `[slack] channel` (no `[slack]` or another channel is exit 5). `--origin slack` is exit 5 when
-  the session resolves to origin spawned or routine (a child cannot relabel itself). A later
-  join without these flags keeps the seat. `data.slack` echoes it.
+  the session resolves to origin spawned or routine, or its existing join record says spawned
+  or routine (a child cannot relabel itself). A plain re-join (no flags, also `resume` and the
+  SessionStart hook) keeps origin slack and the seat; another `--origin` drops the seat. A
+  spawned record never carries a seat. `data.slack` echoes it.
 - Origin: thread spawn accepts origin slack or local, so a Claude Tag session needs no
   `BOSUN_ORIGIN` and no environment of its own; `bosun join --origin slack` labels it.
 - Gaps (not in the docs, not checkable from a session): whether Claude Tag sets

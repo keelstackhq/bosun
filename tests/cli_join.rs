@@ -303,3 +303,70 @@ fn join_seat_needs_matching_slack_config_and_non_child_origin() {
     assert_eq!(code, 5, "routine: {v}");
     assert!(registry_bodies(&fake).is_empty(), "nothing written");
 }
+
+fn seat_args() -> [&'static str; 4] {
+    ["--origin", "slack", "--slack-channel", "C0123ABCD"]
+}
+
+#[test]
+fn a_plain_rejoin_keeps_origin_slack_and_the_seat_and_another_origin_drops_it() {
+    let fake = FakeGithub::start();
+    let d = slack_dir(SLACK_CFG);
+    let (code, v) = seat_run(&fake, d.path(), &[], &seat_args());
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = seat_run(&fake, d.path(), &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["origin"], "slack");
+    assert_eq!(v["data"]["slack"]["channel"], "C0123ABCD");
+    let (code, v) = seat_run(&fake, d.path(), &[], &["--origin", "local"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["origin"], "local");
+    assert!(v["data"]["slack"].is_null());
+    assert!(!registry_bodies(&fake)[0].contains("\"slack\""));
+}
+
+#[test]
+fn heartbeat_and_resume_keep_the_seat_and_origin() {
+    let fake = FakeGithub::start();
+    let d = slack_dir(SLACK_CFG);
+    seat_run(&fake, d.path(), &[], &seat_args());
+    for cmd in ["heartbeat", "resume"] {
+        let mut c = common::bosun();
+        let out = c
+            .current_dir(d.path())
+            .env("BOSUN_GITHUB_API", fake.url())
+            .env("BOSUN_SESSION", "session_tag")
+            .env("BOSUN_NOW", T1)
+            .arg(cmd)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{cmd}");
+        let b = &registry_bodies(&fake)[0];
+        assert!(b.contains(r#""origin":"slack""#), "{cmd}: {b}");
+        assert!(b.contains(r#""channel":"C0123ABCD""#), "{cmd}: {b}");
+        assert!(b.contains("2026-10-22T10:40:00Z"), "{cmd}: {b}");
+    }
+}
+
+#[test]
+fn a_spawned_or_routine_record_cannot_join_as_slack() {
+    for origin in ["spawned", "routine"] {
+        let fake = FakeGithub::start();
+        fake.issue(1, "bosun registry", &["bosun:registry"], "");
+        fake.comment(
+            1,
+            &format!(
+                r#"{{"bosun":"join","session":"session_tag","origin":"{origin}","depth":2,"parent":"p","expires":"2026-10-22T10:20:00Z"}}"#
+            ),
+        );
+        let d = slack_dir(SLACK_CFG);
+        let (code, v) = seat_run(&fake, d.path(), &[], &seat_args());
+        assert_eq!(code, 5, "{origin}: {v}");
+        let b = registry_bodies(&fake);
+        assert_eq!(b.len(), 1);
+        assert!(
+            !b[0].contains("\"slack\"") && b[0].contains(origin),
+            "{b:?}"
+        );
+    }
+}
