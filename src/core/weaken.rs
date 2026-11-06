@@ -437,6 +437,21 @@ pub fn ci_commands(path: &str, patch: &str) -> (Vec<String>, Vec<String>) {
     )
 }
 
+/// Rust text with `/* */` comments (nested too) blanked, line breaks kept.
+pub fn strip_block_comments(text: &str) -> String {
+    let (mut out, mut depth, mut it) = (String::new(), 0usize, text.chars().peekable());
+    while let Some(c) = it.next() {
+        match (c, it.peek()) {
+            ('/', Some('*')) => (depth, _) = (depth + 1, it.next()),
+            ('*', Some('/')) if depth > 0 => (depth, _) = (depth - 1, it.next()),
+            ('\n', _) => out.push('\n'),
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
 /// switches and Rust threshold constants.
 pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> {
@@ -464,11 +479,14 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
         if ins.iter().any(|l| never(l)) {
             out.push(format!("{path}: if (none) → false"));
         }
-        for c in ci_commands(path, patch)
-            .0
-            .iter()
-            .filter(|c| !added.contains(c))
-        {
+        // Digits masked: a version bump (`tool@1.2` → `tool@1.3`) is an edit, not a removal.
+        let mask = |c: &str| -> String {
+            c.chars()
+                .map(|x| if x.is_ascii_digit() { '0' } else { x })
+                .collect()
+        };
+        let kept: Vec<String> = added.iter().map(|a| mask(a)).collect();
+        for c in (ci_commands(path, patch).0.iter()).filter(|c| !kept.contains(&mask(c))) {
             out.push(format!("{path}: step \"{c}\" present → (removed)"));
         }
     }
@@ -557,6 +575,21 @@ mod tests {
     }
     fn p(path: &str, patch: &str) -> Vec<String> {
         patch_findings(path, patch, &ci_commands(path, patch).1)
+    }
+
+    #[test]
+    fn version_bumps_and_block_comments() {
+        let w = ".github/workflows/ci.yml";
+        let bump = ["cargo install cargo-deny@0.16.2".to_string()];
+        assert!(
+            patch_findings(
+                w,
+                "@@\n-      - run: cargo install cargo-deny@0.14.1\n",
+                &bump
+            )
+            .is_empty()
+        );
+        assert_eq!(strip_block_comments("a/* x\n/* y */ */b\n"), "a\nb\n");
     }
 
     #[test]

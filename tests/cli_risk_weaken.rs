@@ -156,70 +156,92 @@ fn a_file_renamed_into_a_gate_path_is_judged_against_the_builtin() {
     );
 }
 
-#[test]
-fn tests_moved_between_files_are_no_weakening_but_a_dropped_inline_test_is() {
-    let fake = pr();
-    fake.pull_file(
-        1,
-        "tests/a.rs",
-        "modified",
-        0,
-        1,
-        Some("@@\n-#[test]\n-assert!(x);"),
-    );
-    fake.pull_file(
-        1,
-        "tests/b.rs",
-        "modified",
-        1,
-        0,
-        Some("@@\n+#[test]\n+assert!(x);"),
-    );
-    let (code, v) = check(&fake);
+/// A PR changing `path` from `old` to `new` (None: added or removed).
+fn file(fake: &FakeGithub, path: &str, old: Option<&str>, new: Option<&str>) {
+    let status = match (old, new) {
+        (None, _) => "added",
+        (_, None) => "removed",
+        _ => "modified",
+    };
+    fake.pull_file(1, path, status, 1, 1, Some("@@\n+x"));
+    if let Some(t) = old {
+        fake.content(path, BASE, t);
+    }
+    if let Some(t) = new {
+        fake.content(path, HEAD, t);
+    }
+}
+
+const T: &str = "#[test]\nfn a() { assert!(x); }\n";
+
+fn no_weakening(fake: &FakeGithub) {
+    let (code, v) = check(fake);
     assert_eq!(code, 0, "{v}");
     assert!(
         !v["data"]["matches"].to_string().contains("R-weaken"),
         "{v}"
     );
-
-    let fake = pr();
-    fake.pull_file(1, "src/a.rs", "modified", 0, 1, Some("@@\n-#[test]"));
-    let e = evidence(&fake);
-    assert!(e.contains("tests (all files) 1 → 0"), "{e}");
 }
 
 #[test]
-fn test_counts_cover_skips_assertions_ts_and_unseen_removals() {
-    let case = |name: &str, status: &str, patch: Option<&str>, want: &str| {
+fn tests_moved_between_files_are_no_weakening_but_a_dropped_inline_test_is() {
+    let fake = pr();
+    file(&fake, "tests/a.rs", Some(T), Some(""));
+    file(&fake, "tests/b.rs", Some(""), Some(T));
+    no_weakening(&fake);
+
+    let fake = pr();
+    file(&fake, "src/a.rs", Some(T), Some("fn a() {}\n"));
+    assert!(evidence(&fake).contains("tests (all files) 1 → 0"));
+}
+
+#[test]
+fn whole_file_counts_catch_switched_off_tests() {
+    let fake = pr();
+    fake.pull_file(1, "junk/a.rs", "renamed", 0, 0, None);
+    fake.renamed_from(1, "tests/a.rs");
+    fake.content("tests/a.rs", BASE, T);
+    fake.content("junk/a.rs", HEAD, T);
+    assert!(evidence(&fake).contains("tests (all files) 1 → 0"));
+
+    let cases = [
+        (
+            "tests/a.rs",
+            format!("#[cfg(any())]\nmod t {{\n{T}}}\n"),
+            "cfg switch-offs (all files) 0 → 1",
+        ),
+        (
+            "tests/a.rs",
+            format!("/*\n{T}*/\n"),
+            "tests (all files) 1 → 0",
+        ),
+        (
+            "tests/a.rs",
+            format!("{T}#[test]\n#[ignore]\nfn b() {{ assert!(y); }}\n"),
+            "skips (all files) 0 → 1",
+        ),
+        (
+            "web/a.test.ts",
+            "it.only('a', () => { expect(1); });\n".into(),
+            "only (all files) 0 → 1",
+        ),
+        (
+            "web/b.test.ts",
+            "/*\nit('a', () => { expect(1); });\n".into(),
+            "tests (all files) 1 → 0",
+        ),
+    ];
+    for (path, new, want) in cases {
         let fake = pr();
-        fake.pull_file(1, name, status, 1, 1, patch);
+        let old = if path.ends_with(".ts") {
+            "it('a', () => { expect(1); });\n"
+        } else {
+            T
+        };
+        file(&fake, path, Some(old), Some(&new));
         let e = evidence(&fake);
-        assert!(e.contains(want), "{name}: {e}");
-    };
-    case(
-        "tests/a.rs",
-        "modified",
-        Some("@@\n #[test]\n+#[ignore]"),
-        "skips (all files) 0 → 1",
-    );
-    case(
-        "tests/a.rs",
-        "modified",
-        Some("@@\n-assert!(x);\n+let _ = x;"),
-        "assertions (all files) 1 → 0",
-    );
-    case(
-        "web/a.test.ts",
-        "modified",
-        Some("@@\n-it('a', () => {});"),
-        "tests (all files) 1 → 0",
-    );
-    case(
-        "src/big.rs",
-        "removed",
-        None,
-        "src/big.rs: diff unavailable",
-    );
+        assert!(e.contains(want), "{path}: {e}");
+    }
 }
 
 #[test]

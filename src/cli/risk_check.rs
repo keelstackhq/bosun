@@ -145,7 +145,7 @@ fn weaken_findings(
             out.extend(weaken::text_findings(path, old.as_deref(), new.as_deref()));
         }
     }
-    out.extend(test_findings(pr_files));
+    out.extend(test_findings(gh, pr_files, base, head)?);
     let mut seen = std::collections::HashSet::new();
     out.retain(|s| seen.insert(s.clone()));
     Ok(out)
@@ -162,57 +162,85 @@ fn builtin_base(path: &str) -> Option<&'static str> {
     crate::gates::profile::builtin(name)
 }
 
-/// Tests, skips and assertions counted over the diffs of all Rust and TS/JS files (moving tests
-/// between files is no loss, inline `#[test]` counts), deleted test files, and removed CI or code
-/// files whose diff GitHub did not give.
-fn test_findings(files: &[PrFile]) -> Vec<String> {
-    let (mut out, mut c) = (Vec::new(), [[0usize; 3]; 2]);
+/// Test counts over whole files at base and head, totalled over the PR so moving tests between
+/// files is no loss: tests, assertions, skips, `.only` and `cfg` switch-offs, as test-integrity
+/// counts them. A file counts only where it runs: a Rust test file under a `src/` or `tests/`
+/// root, a TS/JS test file. Also every deleted test file.
+fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
+    let (mut out, mut c) = (Vec::new(), [[0usize; 5]; 2]);
     for f in files {
         let n = &f.filename;
-        let code = [
-            ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
-        ]
-        .iter()
-        .any(|e| n.to_ascii_lowercase().ends_with(e));
-        if f.status == "removed" && code && risk::test_path(n) {
+        let prev = f.previous_filename.as_deref().unwrap_or(n);
+        if f.status == "removed" && code_file(n) && risk::test_path(n) {
             out.push(format!("{n}: test file present → (deleted)"));
         }
-        let Some(patch) = f.patch.as_deref().filter(|_| code) else {
-            if f.status == "removed" && f.patch.is_none() && (code || weaken::is_ci(n)) {
-                out.push(format!("{n}: diff unavailable"));
+        let sides = [
+            (prev, base, f.status != "added"),
+            (n.as_str(), head, f.status != "removed"),
+        ];
+        for (side, (path, at, exists)) in sides.into_iter().enumerate() {
+            if !exists || !code_file(path) {
+                continue;
             }
-            continue;
-        };
-        let (del, ins) = weaken::split_patch(patch);
-        for (side, lines) in [del, ins].iter().enumerate() {
-            let text = lines.join("\n");
-            let r = if n.ends_with(".rs") {
-                [
-                    adapters::test_count(&text),
-                    adapters::pending_markers(&text).len(),
-                    adapters::assertions(&text),
-                ]
-            } else {
-                [
-                    ts::test_count(&text),
-                    ts::pending_markers(&text).len(),
-                    ts::assertions(&text),
-                ]
-            };
-            (0..3).for_each(|i| c[side][i] += r[i]);
+            if let Some(text) = gh.file_at(path, at)? {
+                let r = test_counts(path, &text);
+                (0..5).for_each(|i| c[side][i] += r[i]);
+            }
         }
     }
-    let [[t0, s0, a0], [t1, s1, a1]] = c;
-    for (what, o, n, bad) in [
-        ("tests", t0, t1, t1 < t0),
-        ("skips", s0, s1, s1 > s0),
-        ("assertions", a0, a1, a1 < a0),
-    ] {
-        if bad {
+    let names = ["tests", "assertions", "skips", "only", "cfg switch-offs"];
+    for (i, what) in names.iter().enumerate() {
+        let (o, n) = (c[0][i], c[1][i]);
+        if if i < 2 { n < o } else { n > o } {
             out.push(format!("{what} (all files) {o} → {n}"));
         }
     }
-    out
+    Ok(out)
+}
+
+fn code_file(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    let exts = [
+        ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
+    ];
+    exts.iter().any(|e| p.ends_with(e))
+}
+
+/// `[tests, assertions, skips, only, cfg switch-offs]` of a file that runs, else zeros.
+fn test_counts(path: &str, text: &str) -> [usize; 5] {
+    let p = path.to_ascii_lowercase();
+    if p.ends_with(".rs") {
+        let root = |d: &str| p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/"));
+        let text = weaken::strip_block_comments(text);
+        if !(root("src") || root("tests")) || !adapters::is_test_file(&p, &text) {
+            return [0; 5];
+        }
+        let off = (text.lines())
+            .map(|l| l.split("//").next().unwrap_or_default().replace(' ', ""))
+            .filter(|l| {
+                ["cfg(any())", "cfg(not(all()))", "cfg(false)"]
+                    .iter()
+                    .any(|x| l.contains(x))
+            })
+            .count();
+        return [
+            adapters::test_count(&text),
+            adapters::assertions(&text),
+            adapters::pending_markers(&text).len(),
+            0,
+            off,
+        ];
+    }
+    if !ts::is_test_file(&p) {
+        return [0; 5];
+    }
+    [
+        ts::test_count(text),
+        ts::assertions(text),
+        ts::pending_markers(text).len(),
+        ts::only_count(text),
+        0,
+    ]
 }
 
 fn judge(app: &App, pull: Pull) -> CmdResult {
