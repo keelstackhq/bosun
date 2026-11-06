@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
 use crate::core::checks;
-use crate::core::lease::members;
 use crate::github::{EnvBranches, Github, IssueState, Live};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -1130,18 +1129,13 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     if let Some(slack) = ctx.config.slack.as_ref() {
-        let seat = match &reg {
-            Ok(Some((_, notes))) => members(notes)
-                .into_iter()
-                .find(|m| m.session == ctx.session)
-                .and_then(|m| m.slack),
-            _ => None,
-        };
+        let seat = registry::seat_of(gh, &ctx.session, ctx.now);
+        let seat_ok = seat.as_ref().ok().cloned().flatten();
         let mut tag = item(
             15,
             "claude-tag",
             None,
-            match &seat {
+            match &seat_ok {
                 Some(s) => format!(
                     "this session ({}) sits in {} as the {} seat{}",
                     ctx.session,
@@ -1155,19 +1149,18 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             },
             "",
         );
-        if seat.is_none() {
+        if seat_ok.is_none() {
             tag["status"] = json!("warn");
-            tag["detail"] = json!(format!(
-                "this session ({}) has no Claude Tag seat in the registry; Slack posts stay plain slack_post",
-                ctx.session
-            ));
+            tag["detail"] = json!(match &seat {
+                Err(e) => format!("the registry could not be read: {}", e.message),
+                Ok(_) => format!(
+                    "this session ({}) has no live Claude Tag seat in the registry; Slack posts stay plain slack_post",
+                    ctx.session
+                ),
+            });
             tag["fix"] = json!(format!(
-                "in a Claude Tag session run `bosun join --origin slack --slack-channel {} [--slack-thread <ts>]` (use the channel ID C…)",
-                if slack.channel.starts_with('C') {
-                    slack.channel.as_str()
-                } else {
-                    "C…"
-                }
+                "in a Claude Tag session run `bosun join --origin slack --slack-channel {} [--slack-thread <ts>]`",
+                slack.channel.trim()
             ));
         }
         items.push(tag);

@@ -13,7 +13,6 @@ use super::spawn::valid_ts;
 use crate::app::{App, HALT_LABEL, default_ref, limits_from_default, main_red};
 use crate::cli::risk_check::owner_logins;
 use crate::core::budget::{Level, level};
-use crate::core::lease::members;
 use crate::core::records::{Record, SlackSeat, parse_record, spend_total};
 use crate::core::state::State;
 use crate::github::{Github, IssueState, Variable};
@@ -310,6 +309,13 @@ fn collect(
                     }
                 }
                 if let Some((id, question, thread_ts)) = ask {
+                    // A thread seat takes only its own thread's asks, before the cap.
+                    if keep_channel
+                        && let Some(t) = only_thread
+                        && thread_ts.as_deref().is_some_and(|x| x != t)
+                    {
+                        continue;
+                    }
                     let key = format!("ask:{}:{id}", i.number);
                     if done.contains(&key) {
                         continue;
@@ -585,12 +591,8 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) ->
 /// This session's own Claude Tag seat from the registry. Read-only: a failing read goes to
 /// `errors` and changes nothing.
 fn own_seat(app: &App, errors: &mut Vec<Value>) -> Option<SlackSeat> {
-    match registry::load(app.gh.as_ref()) {
-        Ok(Some((_, notes))) => members(&notes)
-            .into_iter()
-            .find(|m| m.session == app.ctx.session)
-            .and_then(|m| m.slack),
-        Ok(None) => None,
+    match registry::seat_of(app.gh.as_ref(), &app.ctx.session, app.ctx.now) {
+        Ok(seat) => seat,
         Err(e) => {
             errors.push(json!({"kind": "seat", "message": e.message}));
             None

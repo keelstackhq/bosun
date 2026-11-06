@@ -73,13 +73,17 @@ admins/customize). GitHub goes through the Claude GitHub App and the proxy, so n
   as written; a forged newer join record for this session id can refuse its slack join (exit 5).
 - Origin: thread spawn accepts origin slack or local, so a Claude Tag session needs no
   `BOSUN_ORIGIN` and no environment of its own; `bosun join --origin slack` labels it.
-- Routing: an owner-question (`bosun ask`) on a task whose newest trusted lease carries a
-  `thread_ts` is posted to that thread (`thread_ts` in its `slack_post` args). For a session
+- Routing: an owner-question (`bosun ask`) on a task whose newest trusted lease (a writer's,
+  with a valid `thread_ts`, written before the ask) carries a `thread_ts` is posted to that thread (`thread_ts` in its `slack_post` args). For a session
   with a seat, `bosun notify` puts each post for a thread into `next` as
   `{"tool":"send_message","args":{"to":"thread","thread_ts","message"}}` when the seat is
   `channel`, and as `{"tool":"thread_reply","args":{"thread_ts","text"}}` (say it in this
-  session's own reply) when it is the seat's own thread; other posts stay `slack_post`. A
-  `thread` seat lists only its own thread's posts and the channel posts, as `--thread`.
+  session's own reply) when it is the seat's own thread; other posts stay `slack_post`. The
+  seat is read from `join` records by users with write access, and only while live (not
+  expired); a failing read goes to `data.errors` (kind `seat`) and changes nothing. A `thread`
+  seat lists its own thread's results and asks plus the channel posts (halt, main-red,
+  budget-halt, asks with no thread); other threads' asks are dropped before the cap of 5.
+  `--thread TS` given explicitly wins: it lists that thread's results only, as `slack_post`.
 - Approvals never come from Slack (Rules). A gated PR's child posts a needs-human result,
   which reaches the thread as a `thread-result`; the owner approves by chat form or GitHub.
 - `bosun doctor` (step `claude-tag`, with `[slack]`) reports this session's seat and warns when a

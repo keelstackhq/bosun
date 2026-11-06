@@ -614,15 +614,21 @@ fn threaded_ask(e: &Env, n: u64, ts: &str) -> String {
     format!("ask:{n}:{id}")
 }
 
-/// This session (`session_test`) joined with a Claude Tag seat.
-fn seat(e: &Env, seat: Value) {
+/// A join record for `session_test` with a Claude Tag seat, by `user`, expiring at `expires`.
+fn seat_by(e: &Env, user: &str, expires: &str, seat: Value) {
     e.registry();
-    e.fake.comment(
+    e.fake.comment_by(
         1,
+        user,
         &json!({"bosun": "join", "session": "session_test", "origin": "slack", "depth": 1,
-            "expires": "2026-10-22T10:30:00Z", "slack": seat})
+            "expires": expires, "slack": seat})
         .to_string(),
     );
+}
+
+/// This session (`session_test`) joined with a Claude Tag seat.
+fn seat(e: &Env, seat: Value) {
+    seat_by(e, "ada", "2026-10-22T10:30:00Z", seat);
 }
 
 #[test]
@@ -715,4 +721,121 @@ fn an_unreadable_registry_leaves_the_posts_alone() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["seat"], Value::Null);
     assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn a_seat_written_by_a_non_writer_is_ignored() {
+    let e = env();
+    e.fake.permission("mallory", "none");
+    threaded_ask(&e, 4, TS);
+    seat_by(
+        &e,
+        "mallory",
+        "2026-10-22T10:30:00Z",
+        json!({"role": "channel", "channel": "C1"}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"], Value::Null);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn an_expired_seat_is_ignored() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    seat_by(
+        &e,
+        "ada",
+        "2026-10-22T09:00:00Z",
+        json!({"role": "channel", "channel": "C1"}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"], Value::Null);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn a_thread_seats_ask_is_not_cut_by_other_threads_asks() {
+    let e = env();
+    for n in 4..=8 {
+        threaded_ask(&e, n, TS2);
+    }
+    let own = threaded_ask(&e, 9, TS);
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [own]);
+    assert_eq!(v["next"][0]["tool"], "thread_reply");
+}
+
+#[test]
+fn an_unreadable_registry_is_reported_as_a_seat_error() {
+    let e = env();
+    e.registry();
+    e.halt();
+    e.fake.fail_path("/issues/1/comments", 500);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    let errors = v["data"]["errors"].as_array().unwrap();
+    assert!(errors.iter().any(|x| x["kind"] == "seat"), "{v}");
+    assert_eq!(Env::keys(&v), ["halt:2"]);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["data"]["seat"], Value::Null);
+}
+
+#[test]
+fn an_explicit_thread_posts_plainly_even_with_a_thread_seat() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    e.fake.comment(
+        4,
+        &json!({"bosun": "result", "session": "s", "outcome": "merged", "pr": 7}).to_string(),
+    );
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS2}),
+    );
+    let (code, v) = e.run(&["notify", "--channel-info", "-", "--thread", TS], GOOD);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["next"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["next"][0]["args"]["thread_ts"], TS);
+}
+
+#[test]
+fn a_lease_by_a_non_writer_gives_an_ask_no_thread() {
+    let e = env();
+    e.fake.permission("mallory", "none");
+    e.fake.issue(4, "task", NEEDS, "");
+    e.fake.comment_by(
+        4,
+        "mallory",
+        &json!({"bosun": "lease", "session": "s", "origin": "slack",
+            "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": TS})
+        .to_string(),
+    );
+    ask_by(&e, 4, "ada", "q?");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"][0]["thread_ts"], Value::Null);
+    assert!(v["next"][0]["args"].get("thread_ts").is_none());
+}
+
+#[test]
+fn a_routed_key_can_be_acked() {
+    let e = env();
+    let key = threaded_ask(&e, 4, TS);
+    seat(&e, json!({"role": "channel", "channel": "C1"}));
+    let (_, v) = e.notify();
+    assert_eq!(v["next"][0]["tool"], "send_message");
+    let (code, v) = e.run(&["notify", "--ack", &key], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], false);
+    let (_, v) = e.run(&["notify"], "");
+    assert_eq!(v["data"]["pending"], json!([]));
 }

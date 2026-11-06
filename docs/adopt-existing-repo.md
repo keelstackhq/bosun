@@ -223,8 +223,9 @@ Support is thin. What works today:
 - **Seat.** `bosun join --origin slack --slack-channel C… [--slack-thread <ts>]` records where the
   session sits (channel or thread). A plain re-join keeps the seat.
 - **Routing.** `bosun notify` reads the seat: a channel seat sends thread posts with
-  `send_message` (`to: thread`), a thread seat lists its own thread and the channel posts and
-  answers its thread with `thread_reply`. An owner question on a thread task goes to that thread.
+  `send_message` (`to: thread`), a thread seat lists its own thread's results and asks plus the channel posts
+  (halt, main-red, budget-halt, unthreaded asks) and answers its thread with `thread_reply`.
+  Only a writer's live `join` record counts as a seat. An owner question on a thread task goes to that thread.
   `bosun doctor` (step `claude-tag`) checks the seat and warns about a PAT in a cloud session.
 - **Start work from a thread.** `bosun spawn [epic] --slack-thread <ts> --slack-user <U…>`
   runs the 7 spawn checks; the user must be an owner's `slack` ID in `governance/owners.toml`.

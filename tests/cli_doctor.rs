@@ -673,28 +673,39 @@ fn unpublished_packages_leave_release_skipped() {
     assert_eq!(v["data"]["items"][9]["status"], "skipped", "{v}");
 }
 
+fn join_line(seat: &str, expires: &str) -> String {
+    format!(
+        r#"{{"bosun":"join","session":"session_test","origin":"slack","depth":1,"expires":"{expires}","slack":{seat}}}"#
+    )
+}
+
 fn tag_doctor(
     extra_env: &[(&str, &str)],
     slack: bool,
     joined: Option<&str>,
 ) -> (i32, Value, String) {
+    tag_doctor_with(extra_env, slack.then_some("C1"), |fake| {
+        if let Some(seat) = joined {
+            fake.issue(1, "bosun registry", &["bosun:registry"], "");
+            fake.comment(1, &join_line(seat, "2026-10-22T10:30:00Z"));
+        }
+    })
+}
+
+fn tag_doctor_with(
+    extra_env: &[(&str, &str)],
+    channel: Option<&str>,
+    setup: impl Fn(&FakeGithub),
+) -> (i32, Value, String) {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
-    if slack {
+    if let Some(c) = channel {
         write(
             tmp.path(),
             ".bosun/bosun.toml",
-            "[slack]\nchannel = \"C1\"\n",
+            &format!("[slack]\nchannel = \"{c}\"\n"),
         );
     }
-    if let Some(seat) = joined {
-        fake.issue(1, "bosun registry", &["bosun:registry"], "");
-        fake.comment(
-            1,
-            &format!(
-                r#"{{"bosun":"join","session":"session_test","origin":"slack","depth":1,"expires":"2026-10-22T10:30:00Z","slack":{seat}}}"#
-            ),
-        );
-    }
+    setup(&fake);
     let mut cmd = bosun();
     cmd.env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_NOW", T0)
@@ -783,4 +794,37 @@ fn a_pat_in_a_cloud_session_warns_without_printing_it_or_failing() {
     ];
     let (_, v, _) = tag_doctor(&both, false, None);
     assert!(item_named(&v, "github-token").is_some());
+}
+
+#[test]
+fn claude_tag_ignores_forged_and_expired_seats_and_shows_read_errors() {
+    let seat = r#"{"role":"channel","channel":"C1"}"#;
+    let (_, v, _) = tag_doctor_with(&[], Some("G9"), |f| {
+        f.permission("mallory", "none");
+        f.issue(1, "bosun registry", &["bosun:registry"], "");
+        f.comment_by(1, "mallory", &join_line(seat, "2026-10-22T10:30:00Z"));
+    });
+    let it = item_named(&v, "claude-tag").unwrap();
+    assert_eq!(it["status"], "warn", "{it}");
+    assert!(
+        it["fix"].as_str().unwrap().contains("--slack-channel G9 "),
+        "{it}"
+    );
+
+    let (_, v, _) = tag_doctor_with(&[], Some("C1"), |f| {
+        f.issue(1, "bosun registry", &["bosun:registry"], "");
+        f.comment(1, &join_line(seat, "2026-10-22T09:00:00Z"));
+    });
+    assert_eq!(item_named(&v, "claude-tag").unwrap()["status"], "warn");
+
+    let (_, v, _) = tag_doctor_with(&[], Some("C1"), |f| {
+        f.issue(1, "bosun registry", &["bosun:registry"], "");
+        f.fail_path_message("/issues/1/comments", 500, "boom-registry");
+    });
+    let it = item_named(&v, "claude-tag").unwrap();
+    assert_eq!(it["status"], "warn", "{it}");
+    assert!(
+        it["detail"].as_str().unwrap().contains("boom-registry"),
+        "{it}"
+    );
 }
