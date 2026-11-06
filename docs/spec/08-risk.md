@@ -233,8 +233,8 @@ High-risk PRs:
   verdict or signature is `high risk, autonomous mode (D-017): clean verdict and orchestrator
   signature needed`, which does not start with the owner-wait text, so `bosun approve --list`
   leaves it off the owner board. `data.autonomous_verdicts` lists the counted sessions. It
-  carries over a clean merge of main (design C7). `bosun approve --bootstrap` refuses (exit 1)
-  on an excluded path (it cannot see R-secrets), and unless a counting verdict on the head comes
+  carries over a clean merge of main (design C7); a rejection on the new head then blocks the merge through `review-verdict`, not risk-check. `bosun approve --bootstrap` refuses (exit 1)
+  on an excluded path (it cannot see R-secrets or R-prod-write), and unless a counting verdict on the head comes
   from a session that is neither a lease holder nor the signer. Known limits: a session id is
   self-declared (`<!-- bosun:session -->` comes from `BOSUN_SESSION`) and cloud sessions have no
   verifiable identity, so reviewer independence holds only against honest agents; the signer key

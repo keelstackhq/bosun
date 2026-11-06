@@ -535,23 +535,23 @@ pub fn autonomous_excluded(files: &[(&str, Option<&str>)], matches: &[Match]) ->
 
 /// The sessions whose clean verdict on `head` lets the orchestrator approve on its own (D-017):
 /// `(author, body, unedited)` comments oldest first. As [`clean_verdicts`], but an edited comment
-/// never counts, and any unedited verdict by [`VERDICT_AUTHOR`] on `head` that does not approve,
+/// never counts, and any verdict by [`VERDICT_AUTHOR`] on `head` that does not approve (edited too),
 /// from any session and in any order, leaves nothing.
 pub fn autonomous_verdicts<'a>(
     comments: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
     head: &str,
     excluded: &[String],
 ) -> Vec<String> {
-    let kept: Vec<_> = (comments.into_iter())
-        .filter_map(|(a, b, unedited)| unedited.then_some((a, b)))
-        .collect();
-    let refused = kept.iter().any(|(a, b)| {
+    let all: Vec<_> = comments.into_iter().collect();
+    // A rejection blocks even when edited: an edit can only make it count less (fail closed).
+    let refused = all.iter().any(|(a, b, _)| {
         a.eq_ignore_ascii_case(VERDICT_AUTHOR)
             && matches!(apply_record(b), Some(Record::Verdict { head_sha, approved: false, .. }) if head_sha == head)
     });
     if refused {
         return Vec::new();
     }
+    let kept = (all.into_iter()).filter_map(|(a, b, unedited)| unedited.then_some((a, b)));
     clean_verdicts(kept, head, excluded)
 }
 
@@ -1175,9 +1175,10 @@ mod tests {
         assert!(run(&[(bot, b, true), (bot, a, true)], &[]).is_empty());
         assert!(run(&[(bot, a, true), (bot, b, true)], &[]).is_empty());
         assert!(run(&[(bot, a, true), (bot, b, true)], &["b".into()]).is_empty());
-        // An edited rejection, one on another head and one by someone else do not block.
-        let c = [(bot, a, true), (bot, b, false), (bot, other, true)];
-        assert_eq!(run(&c, &[]), ["a"]);
+        // An edited rejection still blocks (fail closed); one on another head or by someone
+        // else does not.
+        assert!(run(&[(bot, a, true), (bot, b, false)], &[]).is_empty());
+        assert_eq!(run(&[(bot, a, true), (bot, other, true)], &[]), ["a"]);
         assert_eq!(run(&[("mallory", b, true), (bot, a, true)], &[]), ["a"]);
         assert_eq!(
             run(&[(bot, a, true), (bot, bad, true)], &["d".into()]),

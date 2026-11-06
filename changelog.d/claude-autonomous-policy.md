@@ -1,1 +1,1 @@
-- `[approvals] policy = "autonomous"` (D-017): the orchestrator approves gated PRs too, with a clean independent verdict on the head; release workflows, secrets config, environments and trust files stay with the owner.
+- `[approvals] policy = "autonomous"` (D-017): the orchestrator approves gated PRs itself when the head has a clean, unedited verdict from an independent session on a leased task and an autonomous-form signature; only `src/`, `tests/`, `docs/`, `changelog.d/` paths qualify, everything else (workflows, `.bosun`, `channel`, root files) stays with the owner.
