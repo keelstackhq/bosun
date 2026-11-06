@@ -57,7 +57,8 @@ pub fn stamp(msg: &str, want: &[(&str, String)]) -> String {
     let add: Vec<String> = want
         .iter()
         .filter(|(k, v)| {
-            !v.trim().is_empty() && !block.iter().any(|l| l.starts_with(&format!("{k}: ")))
+            let p = format!("{k}: ");
+            !v.trim().is_empty() && !block.iter().any(|l| l.starts_with(&p) && is_trailer(l))
         })
         .map(|(k, v)| format!("{k}: {}", v.trim()))
         .collect();
@@ -145,7 +146,11 @@ mod tests {
             "feat: x\n\nBosun-Session: s1\nBosun-Task: 7\n\n# ------------------------ >8 ------------------------\ndiff --git a b\n"
         );
         let e = "x\n\nBosun-Session: \n";
-        assert!(stamp(e, &want()).contains("Bosun-Session: s1\nBosun-Task: 7\n"));
+        let got = stamp(e, &want());
+        assert!(
+            got.contains("Bosun-Session: s1\nBosun-Task: 7\n"),
+            "{got:?}"
+        );
     }
 
     #[test]
