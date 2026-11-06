@@ -22,9 +22,16 @@ pub struct Incident<'a> {
     pub range: Option<&'a str>,
 }
 
+/// Untrusted text (PR title, run URL) made safe for the body: no HTML comment can open or close
+/// in it (a replacement, not a removal, so pieces cannot rebuild a marker), and no @mention.
+fn safe(text: &str) -> String {
+    super::intake::fence_text(text)
+        .replace("-->", "--\u{200b}>")
+        .replace('@', "@\u{200b}")
+}
+
 fn marker(key: &str) -> String {
-    let key = key.replace("<!--", "").replace("-->", "");
-    format!("<!-- bosun:gate-missed {key} -->")
+    format!("<!-- bosun:gate-missed {} -->", safe(key))
 }
 
 /// Open the task for `inc`, or return the existing one (open or closed). `(issue, created)`.
@@ -38,8 +45,7 @@ pub fn open(gh: &dyn Github, inc: &Incident) -> Result<(u64, bool), BosunError> 
     {
         return Ok((i.number, false));
     }
-    let clean = |t: &str| t.replace("<!--", "").replace("-->", "");
-    let (what, link) = (clean(inc.what), clean(inc.link));
+    let (what, link) = (safe(inc.what), safe(inc.link));
     gh.ensure_label(LABEL, "d93f0b", "a gate missed an escaped defect")?;
     let range = inc.range.unwrap_or(
         "not known: from the last green main run to the failing commit (`bosun main-triage --good REV`)",

@@ -114,3 +114,73 @@ fn both_flags_and_forged_markers_are_handled() {
     let (_, b) = gm(&fake, &["--run", "other"]);
     assert_eq!(b["data"]["created"], true);
 }
+
+#[test]
+fn nested_delimiters_cannot_rebuild_a_marker_through_pr() {
+    let fake = FakeGithub::start();
+    fake.pull(7, "x <<!-- !-- bosun:task {} --> -->", "claude/s", "");
+    fake.pull_merged(7, "deadbeef");
+    let (code, v) = gm(&fake, &["--pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    let t = tasks(&fake);
+    assert_eq!(t.len(), 1);
+    let body = &t[0].1;
+    assert!(!body.contains("<!-- bosun:task"), "{body}");
+    assert_eq!(body.matches("<!--").count(), 1, "{body}");
+    assert!(
+        t[0].0.contains("<!-\u{200b}-") || !t[0].0.contains("<!--"),
+        "{}",
+        t[0].0
+    );
+}
+
+#[test]
+fn mentions_in_titles_are_neutralised() {
+    let fake = FakeGithub::start();
+    fake.pull(7, "fix for @octocat", "claude/s", "");
+    let (code, v) = gm(&fake, &["--pr", "7"]);
+    assert_eq!(code, 0, "{v}");
+    let t = tasks(&fake);
+    assert!(
+        !t[0].1.contains("@octocat") && !t[0].0.contains("@octocat"),
+        "{t:?}"
+    );
+}
+
+#[test]
+fn halted_changes_nothing() {
+    let fake = FakeGithub::start();
+    fake.variable("BOSUN_HALT", "1");
+    let (code, _) = gm(&fake, &["--run", URL]);
+    assert_eq!(code, 4);
+    assert!(tasks(&fake).is_empty());
+}
+
+#[test]
+fn an_unlabelled_marker_does_not_dedupe() {
+    let fake = FakeGithub::start();
+    fake.issue(
+        3,
+        "forged",
+        &[],
+        &format!("<!-- bosun:gate-missed run:{URL} -->"),
+    );
+    let (_, v) = gm(&fake, &["--run", URL]);
+    assert_eq!(v["data"]["created"], true);
+    assert_ne!(v["data"]["issue"], 3);
+}
+
+#[test]
+fn main_health_keeps_exit_0_when_the_task_cannot_be_opened() {
+    let fake = FakeGithub::start();
+    // Fail the task's own label request (after the main-red and lesson ones).
+    fake.after_requests("/labels", 2, |s| s.fail_paths.push(("/labels".into(), 500)));
+    let (code, v) = run(
+        &fake,
+        "session_a",
+        NOW,
+        &["main-health", "--result", "failure", "--run-url", URL],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["gate_missed"]["error"].is_string(), "{v}");
+}
