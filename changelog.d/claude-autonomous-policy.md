@@ -1,0 +1,1 @@
+- `[approvals] policy = "autonomous"` (D-017): the orchestrator approves gated PRs too, with a clean independent verdict on the head; release workflows, secrets config, environments and trust files stay with the owner.

@@ -341,6 +341,9 @@ pub fn bootstrap_line(until: &str) -> String {
     format!("Signed in bootstrap mode (D-012, until {until})")
 }
 
+/// The note line of an autonomous-mode signature (D-017).
+pub const AUTONOMOUS_LINE: &str = "Signed in autonomous mode (D-017), not an owner answer";
+
 /// `[approvals] policy`: who may approve gated PRs once bootstrap mode (D-012) is over (D-014).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -352,6 +355,9 @@ pub enum Policy {
     OwnerGated,
     /// The orchestrator approves everything the exclusions leave to a signature.
     Orchestrator,
+    /// As `Orchestrator`, gated PRs included, but only with a clean independent verdict on the
+    /// head (D-017); releases, environments and secrets stay with the owner.
+    Autonomous,
 }
 
 impl Policy {
@@ -360,6 +366,7 @@ impl Policy {
             Policy::Owner => "owner",
             Policy::OwnerGated => "owner-gated",
             Policy::Orchestrator => "orchestrator",
+            Policy::Autonomous => "autonomous",
         }
     }
 }
@@ -400,10 +407,22 @@ pub struct OrchestratorCase<'a> {
     pub rules: &'a [&'a str],
     /// Changed paths (previous names too) in [`WORKFLOW_PATHS`].
     pub workflows: &'a [String],
+    /// `risk::autonomous_excluded` output: owner-only under [`Policy::Autonomous`].
+    pub autonomous_excluded: &'a [String],
 }
 
 /// `Ok(label for the status)` when an orchestrator approval can count, else `Err(why)`.
 pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
+    // D-017 decides first: its own exclusions only, and risk-check adds the verdict condition.
+    if c.policy == Policy::Autonomous {
+        if c.autonomous_excluded.is_empty() {
+            return Ok("autonomous mode, D-017".into());
+        }
+        return Err(format!(
+            "autonomous mode (D-017) never covers {}: the owner approves",
+            c.autonomous_excluded.join(", ")
+        ));
+    }
     if c.requirement != "owner" {
         return Err(format!(
             "the PR needs {}, not the owner class",
@@ -433,6 +452,7 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
     let label = |p: Policy| Ok(format!("policy {}, D-014", p.name()));
     match c.policy {
         Policy::Orchestrator => label(c.policy),
+        Policy::Autonomous => unreachable!("decided above"),
         Policy::Owner => Err(format!(
             "approval policy owner: only the owner approves ({window})"
         )),
@@ -515,7 +535,40 @@ mod tests {
             excluded: &[],
             rules: &["R-ci"],
             workflows: &[],
+            autonomous_excluded: &[],
         }
+    }
+
+    #[test]
+    fn autonomous_decides_first_and_only_the_exclusions_stop_it() {
+        let w = vec![".github/workflows/ci.yml".to_string()];
+        let mut c = case(Policy::Autonomous, None, "2027-01-01");
+        c.requirement = "two-verdicts";
+        c.excluded = &w;
+        c.workflows = &w;
+        assert_eq!(orchestrator_counts(&c).unwrap(), "autonomous mode, D-017");
+        let x = vec!["hoist.toml".to_string(), "R-secrets".to_string()];
+        c.autonomous_excluded = &x;
+        let why = orchestrator_counts(&c).unwrap_err();
+        assert!(
+            why.contains("D-017") && why.contains("hoist.toml, R-secrets"),
+            "{why}"
+        );
+        // Other policies ignore the field.
+        let mut c = case(Policy::Orchestrator, None, "2027-01-01");
+        c.autonomous_excluded = &x;
+        assert_eq!(
+            orchestrator_counts(&c).unwrap(),
+            "policy orchestrator, D-014"
+        );
+        assert_eq!(Policy::Autonomous.name(), "autonomous");
+    }
+
+    #[test]
+    fn an_autonomous_waiting_status_is_not_an_owner_wait() {
+        let mut s = base();
+        s[0].description = "high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed: R-ci".into();
+        assert_eq!(readiness(&s, &[]), Readiness::NotWaiting);
     }
 
     #[test]

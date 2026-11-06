@@ -466,8 +466,37 @@ pub fn bootstrap_excluded(
     } else {
         &[]
     };
-    let globs: Vec<Glob> = (BOOTSTRAP_EXCLUDED.iter().chain(code))
-        .map(|g| Glob::parse(g).expect("built-in bootstrap glob"))
+    excluded_in(files, matches, BOOTSTRAP_EXCLUDED.iter().chain(code))
+}
+
+/// What an autonomous-mode approval (D-017) never covers: release workflows, the secrets
+/// config, a workflow whose diff names `environment:` or is not shown, and an R-secrets match.
+/// Trust files are not listed: they make signed approvals not count at all.
+pub const AUTONOMOUS_EXCLUDED: [&str; 6] = [
+    "**/workflows/release*.yml",
+    "**/workflows/release*.yaml",
+    "**/hoist.toml",
+    "**/.sops.yaml",
+    "**/secrets.toml",
+    "**/access.toml",
+];
+
+/// The excluded paths among `(path, previous path, patch)` for autonomous mode; see
+/// [`AUTONOMOUS_EXCLUDED`]. Empty: it can count.
+pub fn autonomous_excluded(
+    files: &[(&str, Option<&str>, Option<&str>)],
+    matches: &[Match],
+) -> Vec<String> {
+    excluded_in(files, matches, AUTONOMOUS_EXCLUDED.iter())
+}
+
+fn excluded_in<'a>(
+    files: &[(&str, Option<&str>, Option<&str>)],
+    matches: &[Match],
+    globs: impl Iterator<Item = &'a &'a str>,
+) -> Vec<String> {
+    let globs: Vec<Glob> = globs
+        .map(|g| Glob::parse(g).expect("built-in approval glob"))
         .collect();
     let environment = |patch: Option<&str>| {
         patch.is_none_or(|p| {
@@ -1037,6 +1066,37 @@ mod tests {
                 "{g} in a consumer repo"
             );
         }
+    }
+
+    #[test]
+    fn autonomous_excludes_releases_secrets_environments_and_unseen_workflows() {
+        let some = Some("@@\n+x");
+        let env = Some("@@\n+    environment: prod");
+        for p in [
+            ".github/workflows/release.yml",
+            ".github/workflows/release-npm.yaml",
+            "hoist.toml",
+            "sub/hoist.toml",
+            ".sops.yaml",
+            "secrets.toml",
+            "x/access.toml",
+        ] {
+            let f = [(p, None, some)];
+            assert_eq!(autonomous_excluded(&f, &[]), [p], "{p}");
+        }
+        let f = [(".github/workflows/ci.yml", None, env)];
+        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
+        let f = [(".github/workflows/ci.yml", None, None)];
+        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
+        let f = [(".github/workflows/old.yml", None, some)];
+        assert!(autonomous_excluded(&f, &[]).is_empty());
+        let f = [(".github/workflows/ci.yml", Some("hoist.toml"), some)];
+        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
+        let f = [
+            (".bosun/risk.toml", None, some),
+            ("src/cli/approve.rs", None, some),
+        ];
+        assert!(autonomous_excluded(&f, &[]).is_empty());
     }
 
     fn file(path: &str, added: &[&str]) -> ChangedFile {

@@ -238,7 +238,7 @@ pub fn parse(src: &str) -> Result<Intake, IntakeError> {
     if publish.len() > 1 && publish.iter().any(|p| p == "none") {
         return Err(bad("publish", "\"none\" stands alone"));
     }
-    let a = ["owner", "owner-gated", "orchestrator"];
+    let a = ["owner", "owner-gated", "orchestrator", "autonomous"];
     let approvals = choice(
         "approvals",
         t.get("approvals"),

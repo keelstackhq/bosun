@@ -15,14 +15,16 @@ use super::ApproveArgs;
 use crate::app::App;
 use crate::app::{Result, default_ref, kill_switch, main_red};
 use crate::cli::risk_check::{
-    decisive_review, dismissed_review, enrolled_keys, owner_comment, owner_logins,
+    decisive_review, dismissed_review, enrolled_keys, owner_comment, owner_logins, verdict_inputs,
 };
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
-    APPROVERS_PATH, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat, api_url_ok,
-    approve_command, batch_message, bootstrap_line, in_cloud, only_r_ci, parse_target, policy_line,
-    readiness, signed_comment, signed_message, signed_message_bootstrap, signed_message_v2,
+    APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
+    api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud, only_r_ci, parse_target,
+    policy_line, readiness, signed_comment, signed_message, signed_message_bootstrap,
+    signed_message_v2,
 };
+use crate::core::meta::linked_issues_in;
 use crate::core::records::{PrHead, Record};
 use crate::core::risk;
 use crate::ctx::Ctx;
@@ -523,12 +525,7 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
                 "drop --as delegate, or drop --bootstrap",
             ));
         }
-        true => Some(bootstrap_mode(
-            gh,
-            &app.ctx.now.to_string()[..10],
-            pr,
-            &head,
-        )?),
+        true => Some(bootstrap_mode(&app, &app.ctx.now.to_string()[..10], &pull)?),
         false => None,
     };
     // A request for changes, and any withdrawal for a delegate, cannot be signed away. After a
@@ -639,18 +636,19 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
 /// How `--bootstrap` may sign for the PR at `head` today: the last day of the window (D-012)
 /// and its note line, or (after it) the note line of the approval policy (D-014) and no date. The
 /// setting is read on the default branch, which risk-check reads at the PR's base.
-fn bootstrap_mode(
-    gh: &dyn Github,
-    today: &str,
-    pr: u64,
-    head: &str,
-) -> Result<(Option<String>, String, Policy)> {
+fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<(Option<String>, String, Policy)> {
+    let gh = app.gh.as_ref();
+    let (pr, head) = (pull.number, pull.head_sha.as_str());
     let text = gh.file_at(CONFIG_FILE, &default_ref(gh)?)?;
     let approvals = match text {
         Some(t) => Config::parse(&t, CONFIG_FILE)?.approvals,
         None => Default::default(),
     };
     let policy = approvals.policy();
+    if policy == Policy::Autonomous {
+        autonomous_ok(app, pull)?;
+        return Ok((None, AUTONOMOUS_LINE.into(), policy));
+    }
     let end = approvals
         .bootstrap_until
         .map(|u| u.min(BOOTSTRAP_END.to_string()));
@@ -666,7 +664,7 @@ fn bootstrap_mode(
     let fix = "nothing was signed: ask the owner with a form in the Claude Code chat and sign without --bootstrap on their answer (D-012)";
     let refuse = |why: String| Err(BosunError::error(format!("{why}; {window}"), fix));
     let ok = match policy {
-        Policy::Orchestrator => true,
+        Policy::Orchestrator | Policy::Autonomous => true,
         Policy::Owner => return refuse("approval policy owner: only the owner approves".into()),
         Policy::OwnerGated => {
             let stats: Vec<Stat> = (gh.statuses(head)?.into_iter())
@@ -688,6 +686,57 @@ fn bootstrap_mode(
         return refuse("approval policy owner-gated: only R-ci changes outside workflows are signed; the owner approves this PR".into());
     }
     Ok((None, policy_line(policy), policy))
+}
+
+/// D-017: signs only when no excluded path changed and a reviewer other than the task's leaseholders
+/// and this signer has a clean verdict on the head. risk-check cannot see the signer's session, so
+/// this is where signer != reviewer is enforced.
+fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
+    let gh = app.gh.as_ref();
+    let fix = "nothing was signed: ask the owner with a form in the Claude Code chat and sign without --bootstrap on their answer";
+    let files = gh.pull_files(pull.number)?;
+    let plain: Vec<_> = (files.iter())
+        .map(|f| {
+            (
+                &*f.filename,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            )
+        })
+        .collect();
+    let hit = risk::autonomous_excluded(&plain, &[]);
+    if !hit.is_empty() {
+        return Err(BosunError::error(
+            format!(
+                "autonomous mode (D-017) never covers {}: the owner approves",
+                hit.join(", ")
+            ),
+            fix,
+        ));
+    }
+    let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
+    let (comments, mut excluded) = verdict_inputs(gh, pull.number, &linked)?;
+    excluded.push(app.ctx.session.clone());
+    let clean = risk::clean_verdicts(
+        comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
+        &pull.head_sha,
+        &excluded,
+    );
+    if linked.is_empty() || clean.is_empty() {
+        return Err(BosunError::error(
+            format!(
+                "autonomous mode (D-017) needs a clean verdict on head {} from a reviewer who is neither the author (a task lease holder) nor this session{}",
+                pull.head_sha,
+                if linked.is_empty() {
+                    "; the PR links no task (`Closes #N`)"
+                } else {
+                    ""
+                }
+            ),
+            "get one independent clean verdict (approve, confidence >= min, no major finding) with `bosun verdict comment --from -` in a reviewer session, then sign again",
+        ));
+    }
+    Ok(())
 }
 
 /// An ed25519 key from a PKCS#8 PEM (`openssl genpkey -algorithm ed25519`). Errors name the

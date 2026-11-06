@@ -211,6 +211,26 @@ High-risk PRs:
   owner approves, asked with a chat form). `data.policy` names the policy of `--print` and posted
   approvals. Release ordering: the pinned release rejects unknown keys, so set `policy` only after
   a release that reads it is pinned and `KNOWN_APPROVALS` in `tests/pinned_config.rs` lists it.
+- Autonomous policy (D-017). `[approvals] policy = "autonomous"` lets the orchestrator approve
+  every PR, gated ones included (workflows, `.bosun`, governance, approval code), signed in the
+  bootstrap form with the note line `Signed in autonomous mode (D-017), not an owner answer`
+  (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
+  bootstrap window and whatever the requirement: only `risk::autonomous_excluded` stops it
+  (release workflows `**/workflows/release*.y*ml`, `hoist.toml`, `.sops.yaml`, `secrets.toml`,
+  `access.toml`, a workflow whose diff names `environment:` or is not shown, an `R-secrets`
+  match); the owner approves those (the status keeps the `high risk, owner approval needed`
+  text). Trust files (`approvers.toml`, owners, CODEOWNERS) and an unseen diff still make
+  signatures not count at all. A signature counts in risk-check only with a clean verdict on the
+  head (approve, confidence >= min, no major finding) from a session that holds no lease on a
+  linked task; a PR that links no task gets no autonomous approval (fail closed). Waiting for
+  that is `high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed`,
+  which does not start with the owner-wait text, so `bosun approve --list` leaves it off the
+  owner board. `data.autonomous_verdicts` lists the counted sessions. `bosun approve --bootstrap`
+  refuses (exit 1) on an excluded path, and unless a clean verdict on the head comes from a
+  session that is neither a lease holder nor the signer. Gap: risk-check cannot see the
+  signer's session (only the leases), so only `approve` enforces signer != reviewer. Never
+  covered: release environments, secrets, tags. Set the key only after a release that reads it
+  is pinned.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate
