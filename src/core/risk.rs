@@ -473,13 +473,15 @@ pub fn bootstrap_excluded(
 /// too), the secrets config, the rules and workflows that run the check (so no autonomous PR can
 /// reopen them), a workflow whose diff may reach an environment or is not shown, and an R-secrets
 /// or R-prod-write match. Trust files are not listed: signed approvals never count on them.
-pub const AUTONOMOUS_EXCLUDED: [&str; 9] = [
+pub const AUTONOMOUS_EXCLUDED: [&str; 10] = [
     "**/workflows/release*",
     "**/hoist.toml",
     "**/.sops.yaml",
     "**/secrets.toml",
     "**/access.toml",
     "**/.bosun/risk.toml",
+    // `.bosun/version` picks the binary that runs the check.
+    "**/.bosun/version*",
     "**/workflows/risk.y*ml*",
     "**/workflows/verdict.y*ml*",
     "**/workflows/bosun.y*ml*",
@@ -502,7 +504,20 @@ pub fn autonomous_excluded(
 /// `environment :` and flow maps too), a `\u`/`\x` escape that could spell it, or a call of
 /// another workflow file, which may name one itself. A false hit only sends the PR to the owner.
 pub fn may_reach_environment(text: &str) -> bool {
-    let t = text.to_ascii_lowercase();
+    // A YAML escaped line break (`\` at the end of a line in a quoted scalar) joins the next
+    // line without its indentation, so `"envir\` + newline + `onment"` spells the key.
+    let (low, mut t, mut join) = (text.to_ascii_lowercase(), String::new(), false);
+    for l in low.lines() {
+        let l = if join { l.trim_start() } else { l };
+        join = l.ends_with('\\');
+        match l.strip_suffix('\\') {
+            Some(head) => t.push_str(head),
+            None => {
+                t.push_str(l);
+                t.push('\n');
+            }
+        }
+    }
     ["environment", "\\u", "\\x", ".github/workflows/"]
         .iter()
         .any(|w| t.contains(w))
@@ -1103,6 +1118,8 @@ mod tests {
             // The rules and workflows that run the check cannot reopen themselves.
             ".bosun/risk.toml",
             "channel/pieces/core/files/.bosun/risk.toml",
+            ".bosun/version",
+            "channel/pieces/core/files/.bosun/version.jinja",
             ".github/workflows/risk.yml",
             "channel/pieces/core/files/.github/workflows/verdict.yml.jinja",
             "channel/pieces/core/files/.github/workflows/release.yml.jinja",
@@ -1116,6 +1133,8 @@ mod tests {
         for t in [
             "\"envir\\u006fnment\": x",
             "uses: ./.github/workflows/x.yml",
+            "? \"envir\\\n      onment\"\n    : production",
+            "? \"ENVIR\\\r\n onment\": x",
         ] {
             assert!(may_reach_environment(t), "{t}");
         }

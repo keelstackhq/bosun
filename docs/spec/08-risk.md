@@ -217,7 +217,7 @@ High-risk PRs:
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
   bootstrap window and whatever the requirement: only `risk::autonomous_excluded` stops it
   (release workflows `**/workflows/release*` (`.jinja` copies too), `hoist.toml`, `.sops.yaml`, `secrets.toml`,
-  `access.toml`, the rules and workflows that run the check (`.bosun/risk.toml`, `risk.yml`, `verdict.yml`, `bosun.yml`, channel copies too, so no autonomous PR can reopen them), a workflow (root or channel copy) whose diff may reach an environment or is not shown, an `R-secrets` or
+  `access.toml`, the rules and workflows that run the check (`.bosun/risk.toml`, `.bosun/version` (it picks the binary that runs the check), `risk.yml`, `verdict.yml`, `bosun.yml`, channel copies too, so no autonomous PR can reopen them), a workflow (root or channel copy) whose diff may reach an environment or is not shown, an `R-secrets` or
   `R-prod-write` match); the owner approves those (the status keeps the `high risk, owner approval needed`
   text). Trust files (`approvers.toml`, owners, CODEOWNERS) and an unseen diff still make
   signatures not count at all. A signature counts in risk-check only with a clean verdict on the
@@ -238,7 +238,7 @@ High-risk PRs:
   that same issue must carry a lease record (any, also an ended one: it names the author); a decoy `Closes #N` leaves the owner path (status keeps
   the owner-wait text; `approve` exits 1). Under this policy a changed `.github/workflows/**` file
   (path or previous path) is also excluded when its content at the PR head or at base contains
-  anything that may reach an environment (`risk::may_reach_environment`: the word `environment` in any case, a `\u` or `\x` escape, or a call of another workflow file; changed
+  anything that may reach an environment (`risk::may_reach_environment`: the word `environment` in any case, a `\u` or `\x` escape, an escaped line break (`\` at a line end) joined first, or a call of another workflow file; changed
   line or not) or cannot be read. Gap: lease records are read from any commenter on the task.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,

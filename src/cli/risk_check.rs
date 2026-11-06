@@ -856,7 +856,6 @@ pub(crate) fn autonomous_inputs(
 }
 /// D-017: the changed workflow files that may reach an environment at the head or at base
 /// (`risk::may_reach_environment`; a changed line is not needed), or cannot be read: the owner.
-/// line is not needed), or that cannot be read: the owner approves those.
 pub(crate) fn environment_workflows(
     gh: &dyn Github,
     files: &[PrFile],
