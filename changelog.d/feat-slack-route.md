@@ -1,0 +1,1 @@
+- `bosun notify` routes Claude Tag posts to threads (`send_message`, `thread_reply`) from the session seat, owner questions go to their task's thread; `bosun doctor` checks the seat (`claude-tag`) and warns about a PAT in a cloud session.

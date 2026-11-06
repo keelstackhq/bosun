@@ -114,7 +114,15 @@ fn a_fully_set_up_repo_is_ok() {
     let d = tmp.path();
     let (code, v) = doctor(&fake, d, true);
     assert_eq!(code, 0, "{v}");
-    assert!(statuses(&v).iter().all(|s| s == "ok"));
+    // The only warning is the Claude Tag seat: this session has not joined with one.
+    for it in v["data"]["items"].as_array().unwrap() {
+        let want = if it["name"] == "claude-tag" {
+            "warn"
+        } else {
+            "ok"
+        };
+        assert_eq!(it["status"], want, "{it}");
+    }
     // Without the Routines confirmation, only step 11 is missing.
     let (code, v) = doctor(&fake, d, false);
     assert_eq!(code, 5);
@@ -663,4 +671,116 @@ fn unpublished_packages_leave_release_skipped() {
     write(d, "package.json", "{\"name\": \"x\", \"private\": true}");
     let (_, v) = doctor(&fake, d, false);
     assert_eq!(v["data"]["items"][9]["status"], "skipped", "{v}");
+}
+
+fn tag_doctor(
+    extra_env: &[(&str, &str)],
+    slack: bool,
+    joined: Option<&str>,
+) -> (i32, Value, String) {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    if slack {
+        write(
+            tmp.path(),
+            ".bosun/bosun.toml",
+            "[slack]\nchannel = \"C1\"\n",
+        );
+    }
+    if let Some(seat) = joined {
+        fake.issue(1, "bosun registry", &["bosun:registry"], "");
+        fake.comment(
+            1,
+            &format!(
+                r#"{{"bosun":"join","session":"session_test","origin":"slack","depth":1,"expires":"2026-10-22T10:30:00Z","slack":{seat}}}"#
+            ),
+        );
+    }
+    let mut cmd = bosun();
+    cmd.env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_NOW", T0)
+        .env("CLAUDE_CONFIG_DIR", tmp.path().join(".test-claude"))
+        .arg("-C")
+        .arg(tmp.path())
+        .arg("doctor");
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().unwrap();
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code().unwrap(), one_object(&out.stdout), all)
+}
+
+fn item_named<'a>(v: &'a Value, name: &str) -> Option<&'a Value> {
+    v["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == name)
+}
+
+#[test]
+fn claude_tag_step_names_the_seat_or_the_join_command() {
+    let (_, v, _) = tag_doctor(&[], false, None);
+    assert!(item_named(&v, "claude-tag").is_none(), "{v}");
+
+    let (_, v, _) = tag_doctor(&[], true, None);
+    let it = item_named(&v, "claude-tag").unwrap();
+    assert_eq!(it["status"], "warn", "{it}");
+    assert!(
+        it["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bosun join --origin slack --slack-channel C"),
+        "{it}"
+    );
+
+    let seat = r#"{"role":"thread","channel":"C1","thread_ts":"1700000000.000200"}"#;
+    let (_, v, _) = tag_doctor(&[], true, Some(seat));
+    let it = item_named(&v, "claude-tag").unwrap();
+    assert_eq!(it["status"], "ok", "{it}");
+    let d = it["detail"].as_str().unwrap();
+    assert!(
+        d.contains("thread") && d.contains("1700000000.000200"),
+        "{d}"
+    );
+}
+
+#[test]
+fn a_pat_in_a_cloud_session_warns_without_printing_it_or_failing() {
+    let cloud = [
+        ("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default"),
+        ("GITHUB_TOKEN", "ghp_secretvalue"),
+    ];
+    let (code, v, all) = tag_doctor(&cloud, false, None);
+    let it = item_named(&v, "github-token").unwrap();
+    assert_eq!(it["status"], "warn", "{it}");
+    assert!(
+        it["detail"]
+            .as_str()
+            .unwrap()
+            .contains("personal access token")
+    );
+    assert!(!all.contains("secretvalue"), "token leaked");
+    let (code0, _, _) = tag_doctor(&[], false, None);
+    assert_eq!(code, code0, "warn must not change the exit code");
+
+    let fine = [
+        ("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default"),
+        ("GITHUB_TOKEN", "ghs_app"),
+    ];
+    let (_, v, _) = tag_doctor(&fine, false, None);
+    assert!(item_named(&v, "github-token").is_none());
+    let local = [("GH_TOKEN", "github_pat_x")];
+    let (_, v, _) = tag_doctor(&local, false, None);
+    assert!(item_named(&v, "github-token").is_none());
+    let both = [
+        ("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default"),
+        ("GH_TOKEN", "github_pat_x"),
+    ];
+    let (_, v, _) = tag_doctor(&both, false, None);
+    assert!(item_named(&v, "github-token").is_some());
 }

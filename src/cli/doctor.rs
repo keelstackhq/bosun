@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, HALT_LABEL, halt_reason};
 use crate::core::checks;
+use crate::core::lease::members;
 use crate::github::{EnvBranches, Github, IssueState, Live};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -1127,6 +1128,74 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             |f| format!("{}; `bosun gate ci-minutes` lists every finding", f.fix),
         ),
     ));
+
+    if let Some(slack) = ctx.config.slack.as_ref() {
+        let seat = match &reg {
+            Ok(Some((_, notes))) => members(notes)
+                .into_iter()
+                .find(|m| m.session == ctx.session)
+                .and_then(|m| m.slack),
+            _ => None,
+        };
+        let mut tag = item(
+            15,
+            "claude-tag",
+            None,
+            match &seat {
+                Some(s) => format!(
+                    "this session ({}) sits in {} as the {} seat{}",
+                    ctx.session,
+                    s.channel,
+                    s.role,
+                    s.thread_ts
+                        .as_ref()
+                        .map_or(String::new(), |t| format!(" of thread {t}"))
+                ),
+                None => String::new(),
+            },
+            "",
+        );
+        if seat.is_none() {
+            tag["status"] = json!("warn");
+            tag["detail"] = json!(format!(
+                "this session ({}) has no Claude Tag seat in the registry; Slack posts stay plain slack_post",
+                ctx.session
+            ));
+            tag["fix"] = json!(format!(
+                "in a Claude Tag session run `bosun join --origin slack --slack-channel {} [--slack-thread <ts>]` (use the channel ID C…)",
+                if slack.channel.starts_with('C') {
+                    slack.channel.as_str()
+                } else {
+                    "C…"
+                }
+            ));
+        }
+        items.push(tag);
+    }
+    let pat = ["GITHUB_TOKEN", "GH_TOKEN"].iter().any(|k| {
+        std::env::var(k)
+            .is_ok_and(|v| v.trim().starts_with("ghp_") || v.trim().starts_with("github_pat_"))
+    });
+    let cloud = crate::core::approve::in_cloud(
+        std::env::var("CCR_AGENT_PROXY_ENABLED").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
+            .ok()
+            .as_deref(),
+    );
+    if pat && cloud {
+        let mut it = item(
+            16,
+            "github-token",
+            None,
+            String::new(),
+            "unset GITHUB_TOKEN and GH_TOKEN in the environment's settings; the session needs no token",
+        );
+        it["status"] = json!("warn");
+        it["detail"] = json!(
+            "a personal access token is in the environment; remove it: cloud and Claude Tag sessions reach GitHub through the Claude GitHub App proxy"
+        );
+        items.push(it);
+    }
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));

@@ -597,3 +597,122 @@ fn without_a_slack_section_notify_is_skipped_not_an_error() {
     assert_eq!(v["data"]["pending"], json!([]));
     assert_eq!(v["next"], json!([]));
 }
+
+const TS: &str = "1700000000.000200";
+const TS2: &str = "1700000000.000300";
+
+/// A needs-human task whose newest lease came from thread `ts`, with an ask; returns the key.
+fn threaded_ask(e: &Env, n: u64, ts: &str) -> String {
+    e.fake.issue(n, "task", NEEDS, "");
+    e.fake.comment(
+        n,
+        &json!({"bosun": "lease", "session": "s", "origin": "slack",
+            "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": ts})
+        .to_string(),
+    );
+    let id = ask_by(e, n, "ada", "which way?");
+    format!("ask:{n}:{id}")
+}
+
+/// This session (`session_test`) joined with a Claude Tag seat.
+fn seat(e: &Env, seat: Value) {
+    e.registry();
+    e.fake.comment(
+        1,
+        &json!({"bosun": "join", "session": "session_test", "origin": "slack", "depth": 1,
+            "expires": "2026-10-22T10:30:00Z", "slack": seat})
+        .to_string(),
+    );
+}
+
+#[test]
+fn an_ask_on_a_thread_task_is_posted_into_its_thread() {
+    let e = env();
+    let key = threaded_ask(&e, 4, TS);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [key]);
+    assert_eq!(v["data"]["pending"][0]["thread_ts"], TS);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["next"][0]["args"]["thread_ts"], TS);
+    assert_eq!(v["data"]["seat"], Value::Null);
+}
+
+#[test]
+fn a_channel_seat_routes_thread_posts_through_send_message() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    e.fake.issue(5, "plain", NEEDS, "");
+    ask_by(&e, 5, "ada", "plain?");
+    seat(&e, json!({"role": "channel", "channel": "C1"}));
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"]["role"], "channel");
+    let next = v["next"].as_array().unwrap();
+    assert_eq!(next.len(), 2);
+    assert_eq!(next[0]["tool"], "send_message");
+    assert_eq!(next[0]["args"]["to"], "thread");
+    assert_eq!(next[0]["args"]["thread_ts"], TS);
+    assert!(
+        next[0]["args"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("which way?")
+    );
+    assert_eq!(next[1]["tool"], "slack_post");
+    assert!(next[1]["args"].get("thread_ts").is_none());
+}
+
+#[test]
+fn a_thread_seat_lists_its_thread_and_channel_posts_only() {
+    let e = env();
+    e.halt();
+    threaded_ask(&e, 4, TS);
+    threaded_ask(&e, 5, TS2);
+    e.fake.issue(6, "plain", NEEDS, "");
+    ask_by(&e, 6, "ada", "plain?");
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"]["thread_ts"], TS);
+    let tools: Vec<(&str, &Value)> = v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| (n["tool"].as_str().unwrap(), &n["args"]))
+        .collect();
+    assert_eq!(tools.len(), 3, "{v}");
+    assert_eq!(tools[0].0, "slack_post"); // halt
+    let reply = tools.iter().find(|t| t.0 == "thread_reply").unwrap();
+    assert_eq!(reply.1["thread_ts"], TS);
+    assert!(reply.1["text"].as_str().unwrap().contains("which way?"));
+    assert_eq!(tools.iter().filter(|t| t.0 == "slack_post").count(), 2);
+    assert!(!v.to_string().contains("#5:"), "{v}");
+}
+
+#[test]
+fn an_explicit_thread_beats_the_thread_seat() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS2}),
+    );
+    let (code, v) = e.run(&["notify", "--channel-info", "-", "--thread", TS], GOOD);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"]["role"], "thread");
+}
+
+#[test]
+fn an_unreadable_registry_leaves_the_posts_alone() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    // No registry issue: no seat, no error, plain slack_post.
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"], Value::Null);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}

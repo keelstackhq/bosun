@@ -13,7 +13,8 @@ use super::spawn::valid_ts;
 use crate::app::{App, HALT_LABEL, default_ref, limits_from_default, main_red};
 use crate::cli::risk_check::owner_logins;
 use crate::core::budget::{Level, level};
-use crate::core::records::{Record, parse_record, spend_total};
+use crate::core::lease::members;
+use crate::core::records::{Record, SlackSeat, parse_record, spend_total};
 use crate::core::state::State;
 use crate::github::{Github, IssueState, Variable};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -81,7 +82,7 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
         Some(n) => Results::Issue(n),
         None => Results::Off,
     };
-    let found = collect(&app, None, mode)?;
+    let found = collect(&app, None, false, mode)?;
     if found.done.iter().any(|k| k == key) {
         return Ok(Outcome::data(json!({"acked": key, "already": true})));
     }
@@ -150,13 +151,22 @@ fn push(pending: &mut Vec<Pending>, key: String, kind: &'static str, text: Strin
 
 /// The pending posts. Halt and main-red come first; a later section that fails is reported in
 /// `errors` and does not hide them. A `notified`, `ask`, `result` or thread-carrying lease record
-/// counts only from a writer. With `only_thread`, only the thread-results of that thread.
-fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Found, BosunError> {
+/// counts only from a writer. With `only_thread`, only the thread-results of that thread, and
+/// the channel posts too when `keep_channel` is set (a thread seat).
+fn collect(
+    app: &App,
+    only_thread: Option<&str>,
+    keep_channel: bool,
+    results: Results,
+) -> Result<Found, BosunError> {
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     let slack = ctx.config.slack.clone().unwrap_or_default();
     let listed = |kind: &str| slack.notify.is_empty() || slack.notify.iter().any(|k| k == kind);
-    let wants =
-        |kind: &str| only_thread.is_none() && !matches!(results, Results::Issue(_)) && listed(kind);
+    let wants = |kind: &str| {
+        (only_thread.is_none() || keep_channel)
+            && !matches!(results, Results::Issue(_))
+            && listed(kind)
+    };
     let url = |n: u64| {
         format!(
             "https://github.com/{}/{}/issues/{n}",
@@ -284,25 +294,39 @@ fn collect(app: &App, only_thread: Option<&str>, results: Results) -> Result<Fou
                 if count >= MAX_ASKS {
                     break;
                 }
-                // The latest ask by a writer; anyone else's ask is not an owner question.
-                for c in gh.list_comments(i.number)?.into_iter().rev() {
-                    if let Some(Record::Ask { question, .. }) = parse_record(&c.body)
-                        && trust.ok(&c.user)?
-                    {
-                        let key = format!("ask:{}:{}", i.number, c.id);
-                        if done.contains(&key) {
-                            break;
+                // The latest ask by a writer; anyone else's ask is not an owner question. Its
+                // thread is that of the newest writer lease before it.
+                let mut lease: Option<String> = None;
+                let mut ask: Option<(u64, String, Option<String>)> = None;
+                for c in gh.list_comments(i.number)? {
+                    match parse_record(&c.body) {
+                        Some(Record::Lease { thread_ts, .. }) if trust.ok(&c.user)? => {
+                            lease = thread_ts.filter(|t| valid_ts(t));
                         }
-                        let text = format!(
-                            "question for the owner on #{}: {} {}",
-                            i.number,
-                            neutralise(&question),
-                            url(i.number)
-                        );
-                        push(&mut pending, key, "owner-question", text);
-                        count += 1;
-                        break;
+                        Some(Record::Ask { question, .. }) if trust.ok(&c.user)? => {
+                            ask = Some((c.id, question, lease.clone()));
+                        }
+                        _ => {}
                     }
+                }
+                if let Some((id, question, thread_ts)) = ask {
+                    let key = format!("ask:{}:{id}", i.number);
+                    if done.contains(&key) {
+                        continue;
+                    }
+                    let text = format!(
+                        "question for the owner on #{}: {} {}",
+                        i.number,
+                        neutralise(&question),
+                        url(i.number)
+                    );
+                    pending.push(Pending {
+                        key,
+                        kind: "owner-question",
+                        text,
+                        thread_ts,
+                    });
+                    count += 1;
                 }
             }
             Ok(())
@@ -468,9 +492,24 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) ->
             "set [slack] channel in .bosun/bosun.toml",
         ));
     }
+    let mut errors_seat = Vec::new();
+    let seat = own_seat(&app, &mut errors_seat);
+    // A thread seat lists its own thread's results unless `--thread` names another.
+    let own_thread = match &seat {
+        Some(s) if s.role == "thread" && thread.is_none() => s.thread_ts.as_deref(),
+        _ => None,
+    };
+    let only = thread.or(own_thread);
     let Found {
-        pending, errors, ..
-    } = collect(&app, thread, Results::Scan)?;
+        mut pending,
+        mut errors,
+        ..
+    } = collect(&app, only, own_thread.is_some(), Results::Scan)?;
+    errors.extend(errors_seat);
+    if own_thread.is_some() {
+        // Owner questions of other threads are theirs; channel posts and ours stay.
+        pending.retain(|p| p.thread_ts.as_deref().is_none_or(|t| Some(t) == own_thread));
+    }
 
     if !pending.is_empty() {
         let keys: Vec<&str> = pending.iter().map(|p| p.key.as_str()).collect();
@@ -512,6 +551,7 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) ->
 
     let mut out = Outcome::data(json!({
         "channel": channel,
+        "seat": seat.as_ref().map(|s| json!({"role": s.role, "channel": s.channel, "thread_ts": s.thread_ts})),
         "errors": errors,
         "pending": pending.iter().map(|p| json!({
             "key": p.key, "kind": p.kind, "text": p.text, "thread_ts": p.thread_ts,
@@ -519,6 +559,20 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) ->
         })).collect::<Vec<Value>>(),
     }));
     for p in &pending {
+        let route = match (&p.thread_ts, seat.as_ref().map(|s| s.role.as_str())) {
+            (Some(ts), Some("channel")) => Some((
+                "send_message",
+                json!({"to": "thread", "thread_ts": ts, "message": p.text}),
+            )),
+            (Some(ts), Some("thread")) if Some(ts.as_str()) == own_thread => {
+                Some(("thread_reply", json!({"thread_ts": ts, "text": p.text})))
+            }
+            _ => None,
+        };
+        if let Some((tool, args)) = route {
+            out = out.with_next(tool, args);
+            continue;
+        }
         let mut args = json!({"channel": channel, "text": p.text});
         if let Some(ts) = &p.thread_ts {
             args["thread_ts"] = json!(ts);
@@ -526,4 +580,20 @@ fn list(dir: Option<&Path>, channel_info: Option<&str>, thread: Option<&str>) ->
         out = out.with_next("slack_post", args);
     }
     Ok(out)
+}
+
+/// This session's own Claude Tag seat from the registry. Read-only: a failing read goes to
+/// `errors` and changes nothing.
+fn own_seat(app: &App, errors: &mut Vec<Value>) -> Option<SlackSeat> {
+    match registry::load(app.gh.as_ref()) {
+        Ok(Some((_, notes))) => members(&notes)
+            .into_iter()
+            .find(|m| m.session == app.ctx.session)
+            .and_then(|m| m.slack),
+        Ok(None) => None,
+        Err(e) => {
+            errors.push(json!({"kind": "seat", "message": e.message}));
+            None
+        }
+    }
 }

@@ -1,0 +1,1 @@
+- 2026-11-06 · Claude Tag routing · notify seat routing and thread asks, doctor `claude-tag` and PAT warning, spec §10

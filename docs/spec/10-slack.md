@@ -73,6 +73,17 @@ admins/customize). GitHub goes through the Claude GitHub App and the proxy, so n
   as written; a forged newer join record for this session id can refuse its slack join (exit 5).
 - Origin: thread spawn accepts origin slack or local, so a Claude Tag session needs no
   `BOSUN_ORIGIN` and no environment of its own; `bosun join --origin slack` labels it.
+- Routing: an owner-question (`bosun ask`) on a task whose newest trusted lease carries a
+  `thread_ts` is posted to that thread (`thread_ts` in its `slack_post` args). For a session
+  with a seat, `bosun notify` puts each post for a thread into `next` as
+  `{"tool":"send_message","args":{"to":"thread","thread_ts","message"}}` when the seat is
+  `channel`, and as `{"tool":"thread_reply","args":{"thread_ts","text"}}` (say it in this
+  session's own reply) when it is the seat's own thread; other posts stay `slack_post`. A
+  `thread` seat lists only its own thread's posts and the channel posts, as `--thread`.
+- Approvals never come from Slack (Rules). A gated PR's child posts a needs-human result,
+  which reaches the thread as a `thread-result`; the owner approves by chat form or GitHub.
+- `bosun doctor` (step `claude-tag`, with `[slack]`) reports this session's seat and warns when a
+  cloud session holds a PAT (`ghp_` or `github_pat_` token; the value is never printed).
 - Gaps (not in the docs, not checkable from a session): whether Claude Tag sets
   `CLAUDE_CODE_CHILD_SESSION`; the `send_message` `to`/`thread_ts` routing (seen only in the
   session tool schema); the requester's Slack user ID and the channel facts (shared, guests),
