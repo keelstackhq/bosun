@@ -146,6 +146,8 @@ conflict to resolve. Cut the plan by file ownership:
 - List every file a task edits in its `touch:`, including the spec section it updates
   (`docs/spec/NN-<section>.md`), module registries (`mod.rs`, `lib.rs`) and the test files it
   changes. The claim, wave and edit-hook checks only see what `touch:` names.
+  `bosun plan check` warns when a task touches a crate's `src/` but none of that crate's `tests/`
+  (`crates/x/src/..` needs `crates/x/tests/..`; at the repo root, `tests/..`).
 - Put new tests in a new file (`tests/<command>_<topic>.rs`), not at the end of a shared one:
   two PRs that append to the same file conflict.
 - Append-only lists live as one file per PR: CHANGELOG and PROGRESS entries are fragments in
