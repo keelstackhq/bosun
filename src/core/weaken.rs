@@ -246,6 +246,15 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
                     _ => {}
                 }
             }
+            // A key added to what exists (`manifest`, `when_no_package`, `each_package`) can
+            // narrow a gate; a whole new gate cannot.
+            let gate = |k: &str| k.split('.').take(2).collect::<Vec<_>>().join(".");
+            for (k, new) in fh.iter().filter(|(k, _)| !fb.contains_key(*k)) {
+                let fresh = k.starts_with("gates.") && !fb.keys().any(|b| gate(b) == gate(k));
+                if !fb.is_empty() && !fresh {
+                    add(k, "(none)", &show(new));
+                }
+            }
         }
         Kind::Rules => {
             let rules = |v: &Value| -> Vec<(String, Value)> {
@@ -519,7 +528,8 @@ pub fn cfg_off(line: &str) -> bool {
     let Some(inner) = l.strip_prefix("#[cfg(").or(l.strip_prefix("#![cfg(")) else {
         return false;
     };
-    if inner.contains("any()") || inner.contains("not(all())") {
+    let off = ["any()", "not(all())", "not(test)", "feature=\"never\""];
+    if off.iter().any(|o| inner.contains(o)) {
         return true;
     }
     let mut rest = inner;
@@ -678,6 +688,31 @@ mod tests {
     }
 
     #[test]
+    fn added_profile_keys_narrow_a_gate() {
+        let base = "[gates.test]\ncmd = [\"cargo\", \"test\"]\n";
+        let got = t(
+            "profiles/rust.toml",
+            base,
+            &format!("manifest = \"x\"\n{base}when_no_package = \"skip\"\n"),
+        );
+        assert_eq!(
+            got,
+            [
+                "profiles/rust.toml: gates.test.when_no_package (none) → skip",
+                "profiles/rust.toml: manifest (none) → x"
+            ]
+        );
+        assert!(
+            t(
+                "profiles/rust.toml",
+                base,
+                &format!("{base}[gates.more]\ncmd = [\"y\"]\nall = [\"z\"]\n")
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn cfg_switch_offs() {
         for on in [
             "#[cfg(test)]",
@@ -691,6 +726,8 @@ mod tests {
             "#[cfg(FALSE)]",
             "#[cfg(false)]",
             "#[cfg(tset)]",
+            "#[cfg(not(test))]",
+            "#[cfg(feature = \"never\")]",
             "#[cfg(not(all()))]",
         ] {
             assert!(cfg_off(off), "{off}");

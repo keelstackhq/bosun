@@ -225,7 +225,14 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
     if p.ends_with(".rs") {
         // What Cargo builds: inline tests under `src/`, `tests/*.rs` and `tests/<dir>/main.rs`.
         let segs: Vec<&str> = p.split('/').collect();
-        let built = segs.contains(&"src")
+        // `src/` of a crate, not one under tests, examples, fixtures or vendored code.
+        let src = segs.iter().position(|s| *s == "src").is_some_and(|i| {
+            let not = [
+                "tests", "examples", "benches", "fixtures", "vendor", "target", "docs",
+            ];
+            !segs[..i].iter().any(|s| not.contains(s))
+        });
+        let built = src
             || (segs.iter().rposition(|s| *s == "tests"))
                 .is_some_and(|i| matches!(&segs[i + 1..], [_] | [_, "main.rs"]));
         let text = weaken::strip_block_comments(text);
@@ -315,11 +322,17 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
     // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
     // rule with the `weaken` capability only adds its own match, made owner-class too).
+    let mut findings = findings;
     for m in &mut matches {
         let weakens = (rules.rules.iter())
             .any(|r| r.id == m.rule && r.capability.as_deref() == Some(weaken::CAPABILITY));
         if weakens || m.rule == weaken::RULE {
             m.approval = Approval::Owner;
+        }
+        // A repo rule with the capability under another id also counts as R-weaken, so no
+        // signature that keys on the id can pass it.
+        if weakens && m.rule != weaken::RULE && findings.is_empty() {
+            findings.extend(m.evidence.iter().map(|e| format!("{}: {e}", m.rule)));
         }
     }
     if !findings.is_empty() {

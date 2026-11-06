@@ -300,3 +300,30 @@ fn a_new_profile_override_is_compared_with_the_builtin() {
         "{e}"
     );
 }
+
+#[test]
+fn a_repo_rule_with_the_weaken_capability_counts_as_r_weaken() {
+    let fake = pr();
+    let rules = "[[rule]]\nid = \"R-mine\"\nwhy = \"w\"\ncapability = \"weaken\"\n";
+    fake.content(".bosun/risk.toml", BASE, rules);
+    fake.pull_file(1, "README.md", "modified", 1, 0, Some("@@\n+x"));
+    fake.pull_set(
+        1,
+        "labels",
+        serde_json::json!([{"name": "bosun:capability/weaken"}]),
+    );
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    let ids = v["data"]["matches"].to_string();
+    assert!(
+        ids.contains("R-mine") && ids.contains("\"R-weaken\""),
+        "{v}"
+    );
+}
+
+#[test]
+fn src_under_fixtures_is_not_built() {
+    let fake = pr();
+    file(&fake, "tests/fixtures/src/a.rs", Some(T), Some(""));
+    no_weakening(&fake);
+}
