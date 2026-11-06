@@ -80,3 +80,24 @@ Seed steps (the seed plan in `docs/superpowers/plans/` splits each into PRs):
   reports each checklist step as ok or missing.
 - S10: governance files, CI, AGENTS.md, REVIEW.md, plan. Done when CI is green on the S10 PR with
   the gates run by bosun.
+
+### Adopt and uninstall (no splice)
+
+`bosun adopt` is the path for a repo without hull, splice or hoist. It writes the channel's core
+files into the worktree (`.bosun/{bosun.toml,version,limits.toml,risk.toml,session-rules.toml,approvers.toml,fold-fragments.sh}`,
+`governance/owners.toml` with `--owner`, the five bosun workflows, `.claude/settings.json`) from templates
+embedded in the binary, rendered by `core::render` (the Jinja subset the templates use). It never
+overwrites: an existing file with the same bytes is `unchanged`, one with other bytes is `kept`
+with a fix hint. It does not commit, push or open a PR, and it does not write splice.yml,
+hoist.toml, CODEOWNERS, `docs/setup-script.sh`, the AGENTS/REVIEW/CLAUDE sections or the stack seed
+files. Flags: `--stack rust|ts-pnpm|other` (repeatable; default detected from `Cargo.toml` and
+`package.json` + `pnpm-lock.yaml`), `--owner`, `--bosun-version`, `--dry-run`, `--no-remote`
+(no token; no labels or registry issue). Unless `--no-remote`, it creates the missing labels
+(`bosun:halt`, `bosun:registry`, the task state labels) and the registry issue; `--dry-run` only reads.
+
+`.bosun/adopt.toml` records the bosun version, each written file with its FNV-1a 64 hash, the labels
+adopt created and the registry issue it opened. A rerun merges into it, so a second run is all
+`unchanged`. `bosun uninstall` reads it: a file whose hash still matches is deleted, a modified one is
+`kept`, a missing one is `gone`; emptied directories go too, the manifest last, and nothing outside the
+manifest is touched. `--labels` also deletes the labels adopt created and closes its registry issue;
+`--dry-run` lists only. Without a manifest it exits 1 and points to `docs/adopt-existing-repo.md`.

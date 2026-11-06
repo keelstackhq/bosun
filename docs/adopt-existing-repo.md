@@ -34,7 +34,23 @@ Do these on a computer first; the phone steps come after.
    `bosun:kind/*` and others). Make the kill-switch label yourself:
    `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
 
-## 2. Run `bosun init`
+## 2. Run `bosun adopt` (no splice) or `bosun init`
+
+**Without hull, splice or hoist:** `bosun adopt` writes the bosun files into your worktree and
+creates the labels and the registry issue. It commits nothing; you commit and open the setup PR.
+
+```bash
+bosun adopt --dry-run                          # see what would change; writes nothing
+bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
+git add .bosun .github .claude governance && git commit -m "chore: set up bosun"
+```
+
+Existing files are never overwritten (`kept` in `data.changes`). `--no-remote` needs no token and
+skips the labels and the registry issue. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
+no-op. `data.owner_steps` lists what is left for you. Undo it with `bosun uninstall` (section 7).
+The rest of this section is the splice path.
+
+### With splice: `bosun init`
 
 From a clean checkout of the default branch:
 
@@ -170,7 +186,14 @@ changes work exits 4 until you close it.
 
 ## 7. Undo
 
-bosun has no uninstall command. To remove it:
+**Adopted with `bosun adopt`:** run `bosun uninstall --dry-run`, then `bosun uninstall`. It deletes
+the files in `.bosun/adopt.toml` whose bytes are still the ones adopt wrote, keeps the ones you edited
+(`kept`), removes the directories it emptied and the manifest last. `--labels` also deletes the
+labels adopt created and closes the registry issue it opened. Commit the deletions in a gated PR,
+and remove the required checks `risk-check`, `review-verdict`, `main-open` (and `ci-ok` if it was
+bosun's) from the branch rules. Without `.bosun/adopt.toml` it exits 1: nothing was adopted here.
+
+**Installed with `bosun init` (splice):** there is no uninstall command. To remove it:
 
 1. Open a PR that deletes the files the setup PR added (see its file list; keep files you had
    before, such as your own CODEOWNERS or hoist.toml), the bosun sections of `AGENTS.md`,
