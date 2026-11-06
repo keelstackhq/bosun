@@ -59,6 +59,16 @@ fn a_raised_cap_is_high_and_needs_the_owner() {
 }
 
 #[test]
+fn continue_on_error_in_a_workflow_is_a_weakening() {
+    let fake = pr();
+    let patch = "@@ -1,2 +1,3 @@\n   test:\n+    continue-on-error: true\n     runs-on: x";
+    fake.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, Some(patch));
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["matches"][0]["rule"], "R-weaken");
+}
+
+#[test]
 fn a_lowered_cap_is_normal() {
     let fake = pr();
     budget(&fake, 300, 150);
@@ -136,4 +146,24 @@ fn a_weakening_needs_the_owner_even_if_the_rules_delegate_it() {
         assert_eq!(code, 5, "{v}");
         assert_eq!(v["data"]["requirement"], "owner", "{class}: {v}");
     }
+}
+
+#[test]
+fn a_new_profile_override_is_compared_with_the_builtin() {
+    let fake = pr();
+    let text = include_str!("../profiles/rust.toml").replace("\"--check\"", "\"--all\"");
+    fake.pull_file(
+        1,
+        ".bosun/profiles/rust.toml",
+        "added",
+        1,
+        0,
+        Some("@@\n+x"),
+    );
+    fake.content(".bosun/profiles/rust.toml", HEAD, &text);
+    let e = evidence(&fake);
+    assert!(
+        e.contains(".bosun/profiles/rust.toml: gates.fmt.cmd"),
+        "{e}"
+    );
 }

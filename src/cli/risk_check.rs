@@ -99,15 +99,29 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
 const PENDING: &str = "risk-check is judging this head";
 const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run the risk workflow";
 
-/// R-weaken evidence (spec §8): gate files compared at base and head. Deduplicated, in file order.
+/// R-weaken evidence (spec §8): gate files compared at base and head, diffs, deleted or thinned
+/// tests. Deduplicated, in file order.
 fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
     base: &str,
     head: &str,
 ) -> Result<Vec<String>> {
+    let patches = || {
+        pr_files
+            .iter()
+            .filter_map(|f| Some((&f.filename, f.patch.as_deref()?)))
+    };
+    let added: Vec<String> = patches()
+        .flat_map(|(n, p)| weaken::ci_commands(n, p).1)
+        .collect();
     let mut out = Vec::new();
     for f in pr_files {
+        let p = f.patch.as_deref();
+        out.extend(
+            p.map(|p| weaken::patch_findings(&f.filename, p, &added))
+                .unwrap_or_default(),
+        );
         // Each side of a rename on its own: the path left behind falls back to its built-in (or
         // nothing), the new path is judged against what it replaces, never the moved file.
         let prev = f.previous_filename.as_deref().filter(|p| *p != f.filename);
@@ -135,9 +149,15 @@ fn weaken_findings(
     Ok(out)
 }
 
-/// The built-in file a new `.bosun/risk.toml` replaces.
+/// The built-in file a new `.bosun/risk.toml` or `.bosun/profiles/<name>.toml` replaces.
 fn builtin_base(path: &str) -> Option<&'static str> {
-    (path == RULES_PATH).then_some(risk::DEFAULT_RULES)
+    if path == RULES_PATH {
+        return Some(risk::DEFAULT_RULES);
+    }
+    let name = path
+        .strip_prefix(".bosun/profiles/")?
+        .strip_suffix(".toml")?;
+    crate::gates::profile::builtin(name)
 }
 
 fn judge(app: &App, pull: Pull) -> CmdResult {
