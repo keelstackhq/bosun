@@ -125,3 +125,19 @@ fn a_file_renamed_into_a_gate_path_is_judged_against_the_builtin() {
         "{e}"
     );
 }
+
+#[test]
+fn a_weakening_needs_the_owner_even_if_the_rules_delegate_it() {
+    for class in ["delegate", "two-verdicts"] {
+        let fake = pr();
+        fake.content(
+            ".bosun/risk.toml",
+            BASE,
+            &format!("[[rule]]\nid = \"R-weaken\"\nwhy = \"w\"\ncapability = \"weaken\"\napproval = \"{class}\"\n"),
+        );
+        budget(&fake, 150, 300);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{v}");
+        assert_eq!(v["data"]["requirement"], "owner", "{class}: {v}");
+    }
+}
