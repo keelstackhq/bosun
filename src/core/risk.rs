@@ -494,6 +494,12 @@ pub fn autonomous_excluded(
     why
 }
 
+/// Whether `text` may name a GitHub environment. A plain word test: quoted keys, `environment :`
+/// and flow maps count too, and a false hit only sends the PR to the owner (fail closed).
+pub fn names_environment(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("environment")
+}
+
 fn excluded_in<'a>(
     files: &[(&str, Option<&str>, Option<&str>)],
     matches: &[Match],
@@ -504,10 +510,8 @@ fn excluded_in<'a>(
         .collect();
     let environment = |patch: Option<&str>| {
         patch.is_none_or(|p| {
-            p.lines().any(|l| {
-                (l.starts_with('+') || l.starts_with('-'))
-                    && l.to_ascii_lowercase().contains("environment:")
-            })
+            p.lines()
+                .any(|l| (l.starts_with('+') || l.starts_with('-')) && names_environment(l))
         })
     };
     let mut why: Vec<String> = (files.iter())

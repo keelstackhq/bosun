@@ -289,15 +289,20 @@ fn decoy(k: &Key, body: &str) -> FakeGithub {
 
 #[test]
 fn a_decoy_link_leaves_the_owner_path_and_approve_refuses() {
-    for body in ["Closes #8", "Closes #9"] {
+    // The task and its lease must be the same issue: a lease on a non-task decoy (#8) does not
+    // stand in for the missing lease on the task (#9).
+    for body in ["Closes #8", "Closes #9", "Closes #8\nCloses #9"] {
         let k = key();
         let fake = decoy(&k, body);
+        let note = lease_note("session_x", "2026-12-06T12:00:00Z", "src/**");
+        fake.comment(8, &note);
         post_sig(&fake, &k);
         let (code, v) = check(&fake);
         assert_eq!(code, 5, "{body}: {v}");
         assert!(description(&fake).starts_with(WAITING), "{body}");
         assert!(v["data"].get("autonomous_verdicts").is_none());
         let fake = decoy(&k, body);
+        fake.comment(8, &note);
         let (code, v) = sign(&fake, &k, "session_o");
         assert_eq!(code, 1, "{body}: {v}");
     }
@@ -305,8 +310,14 @@ fn a_decoy_link_leaves_the_owner_path_and_approve_refuses() {
 
 #[test]
 fn an_unchanged_environment_line_in_a_workflow_stays_with_the_owner() {
-    let yml = "jobs:\n  x:\n    environment: prod\n    steps: []\n";
-    for r in [HEAD, BASE] {
+    // Quoted keys and a space before the colon are valid YAML too.
+    let ymls = [
+        "jobs:\n  x:\n    environment: prod\n    steps: []\n",
+        "jobs:\n  x:\n    \"environment\": prod\n",
+        "jobs:\n  x:\n    'Environment' : prod\n",
+        "jobs: {x: {environment : prod}}\n",
+    ];
+    for (r, yml) in [HEAD, BASE].into_iter().flat_map(|r| ymls.map(|y| (r, y))) {
         let k = key();
         let fake = auto(&k, ".github/workflows/ci.yml", PLAIN);
         fake.content(".github/workflows/ci.yml", r, yml);

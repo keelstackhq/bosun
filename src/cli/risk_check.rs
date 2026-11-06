@@ -840,9 +840,16 @@ pub(crate) fn autonomous_inputs(
     n: u64,
     ls: &[u64],
 ) -> Result<Option<(Vec<Comment>, Vec<String>)>> {
+    // The task and the lease on it must be the same issue.
     let mut task = false;
     for i in ls {
-        task |= gh.get_issue(*i)?.is_some_and(|x| task_meta(&x).is_some());
+        if task {
+            break;
+        }
+        if gh.get_issue(*i)?.is_some_and(|x| task_meta(&x).is_some()) {
+            let notes = gh.list_comments(*i)?;
+            task = !lease_sessions(notes.iter().map(|c| c.body.as_str())).is_empty();
+        }
     }
     let (comments, excluded) = verdict_inputs(gh, n, ls)?;
     Ok((task && !excluded.is_empty()).then_some((comments, excluded)))
@@ -858,7 +865,7 @@ pub(crate) fn environment_workflows(
 ) -> Vec<String> {
     let wf = |p: &str| p.to_ascii_lowercase().starts_with(".github/workflows/");
     let named = |(p, r): (&str, &str)| match gh.file_at(p, r) {
-        Ok(t) => t.is_some_and(|t| t.to_ascii_lowercase().contains("environment:")),
+        Ok(t) => t.is_some_and(|t| risk::names_environment(&t)),
         Err(_) => true,
     };
     (files.iter())

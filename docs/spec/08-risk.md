@@ -217,7 +217,7 @@ High-risk PRs:
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
   bootstrap window and whatever the requirement: only `risk::autonomous_excluded` stops it
   (release workflows `**/workflows/release*.y*ml`, `hoist.toml`, `.sops.yaml`, `secrets.toml`,
-  `access.toml`, a workflow whose diff names `environment:` or is not shown, an `R-secrets` or
+  `access.toml`, a workflow whose diff names `environment` or is not shown, an `R-secrets` or
   `R-prod-write` match); the owner approves those (the status keeps the `high risk, owner approval needed`
   text). Trust files (`approvers.toml`, owners, CODEOWNERS) and an unseen diff still make
   signatures not count at all. A signature counts in risk-check only with a clean verdict on the
@@ -235,10 +235,11 @@ High-risk PRs:
   covered: release environments, secrets, tags. `policy = "autonomous"` under a pinned release older
   than this one is a parse error, so it fails closed (signatures do not count). Set it only after
   pinning a release that knows it. A linked issue must be a task (carries the task marker) and
-  some session must hold a lease on it; a decoy `Closes #N` leaves the owner path (status keeps
+  that same issue must carry a lease record (any, also an ended one: it names the author); a decoy `Closes #N` leaves the owner path (status keeps
   the owner-wait text; `approve` exits 1). Under this policy a changed `.github/workflows/**` file
   (path or previous path) is also excluded when its content at the PR head or at base contains
-  `environment:` (case-insensitive, changed line or not) or cannot be read.
+  the word `environment` (any case, quoted or spaced keys too; `risk::names_environment`, changed
+  line or not) or cannot be read. Gap: lease records are read from any commenter on the task.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate
