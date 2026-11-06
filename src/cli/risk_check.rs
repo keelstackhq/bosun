@@ -135,15 +135,9 @@ fn weaken_findings(
     Ok(out)
 }
 
-/// The built-in file a new `.bosun/risk.toml` or `.bosun/profiles/<name>.toml` replaces.
+/// The built-in file a new `.bosun/risk.toml` replaces.
 fn builtin_base(path: &str) -> Option<&'static str> {
-    if path == RULES_PATH {
-        return Some(risk::DEFAULT_RULES);
-    }
-    let name = path
-        .strip_prefix(".bosun/profiles/")?
-        .strip_suffix(".toml")?;
-    crate::gates::profile::builtin(name)
+    (path == RULES_PATH).then_some(risk::DEFAULT_RULES)
 }
 
 fn judge(app: &App, pull: Pull) -> CmdResult {
@@ -206,18 +200,23 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     }
 
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
+    // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
+    // rule with the `weaken` capability only adds its own match, made owner-class too).
     for m in &mut matches {
         let weakens = (rules.rules.iter())
             .any(|r| r.id == m.rule && r.capability.as_deref() == Some(weaken::CAPABILITY));
-        if weakens {
-            // Only the owner approves a weakening, whatever the repo's rules say.
+        if weakens || m.rule == weaken::RULE {
             m.approval = Approval::Owner;
         }
-        if weakens && !findings.is_empty() {
-            m.evidence
-                .retain(|e| *e != format!("capability {}", weaken::CAPABILITY));
-            m.evidence.extend(findings.iter().cloned());
-        }
+    }
+    if !findings.is_empty() {
+        matches.retain(|m| m.rule != weaken::RULE);
+        matches.push(risk::Match {
+            rule: weaken::RULE.into(),
+            why: weaken::WHY.into(),
+            approval: Approval::Owner,
+            evidence: findings.clone(),
+        });
     }
     let views: Vec<FileView> = pr_files
         .iter()

@@ -92,37 +92,33 @@ fn a_gate_file_renamed_away_counts_as_removed() {
 }
 
 #[test]
-fn a_new_profile_override_is_compared_with_the_builtin() {
+fn a_file_renamed_into_a_gate_path_is_judged_against_the_builtin() {
     let fake = pr();
-    let text = include_str!("../profiles/rust.toml").replace("\"--check\"", "\"--all\"");
-    fake.pull_file(
-        1,
-        ".bosun/profiles/rust.toml",
-        "added",
-        1,
-        0,
-        Some("@@\n+x"),
-    );
-    fake.content(".bosun/profiles/rust.toml", HEAD, &text);
+    let weak = "[[rule]]\nid = \"R-gov\"\nwhy = \"w\"\npaths = [\"x\"]\n";
+    fake.pull_file(1, ".bosun/risk.toml", "renamed", 0, 0, None);
+    fake.renamed_from(1, "docs/weak.toml");
+    fake.content("docs/weak.toml", BASE, weak);
+    fake.content(".bosun/risk.toml", HEAD, weak);
     let e = evidence(&fake);
     assert!(
-        e.contains(".bosun/profiles/rust.toml: gates.fmt.cmd"),
+        e.contains(".bosun/risk.toml: R-secrets rule present → (removed)"),
         "{e}"
     );
 }
 
 #[test]
-fn a_file_renamed_into_a_gate_path_is_judged_against_the_builtin() {
+fn repo_rules_without_r_weaken_still_send_a_weakening_to_the_owner() {
     let fake = pr();
-    let text = include_str!("../profiles/rust.toml").replace("\"--check\"", "\"--all\"");
-    fake.pull_file(1, ".bosun/profiles/rust.toml", "renamed", 0, 0, None);
-    fake.renamed_from(1, "docs/weak.toml");
-    fake.content("docs/weak.toml", BASE, &text);
-    fake.content(".bosun/profiles/rust.toml", HEAD, &text);
-    let e = evidence(&fake);
+    let rules = "[[rule]]\nid = \"R-x\"\nwhy = \"w\"\npaths = [\"nothing/**\"]\n";
+    fake.content(".bosun/risk.toml", BASE, rules);
+    budget(&fake, 150, 300);
+    let (code, v) = check(&fake);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["requirement"], "owner", "{v}");
+    let m = v["data"]["matches"].to_string();
     assert!(
-        e.contains(".bosun/profiles/rust.toml: gates.fmt.cmd"),
-        "{e}"
+        m.contains("R-weaken") && m.contains("daily_usd 150 → 300"),
+        "{v}"
     );
 }
 

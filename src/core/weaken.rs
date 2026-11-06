@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use toml::Value;
 
 pub const CAPABILITY: &str = "weaken";
+pub const RULE: &str = "R-weaken";
+pub const WHY: &str = "A change that loosens a gate weakens what verifies every later change.";
 
 #[derive(PartialEq)]
 enum Kind {
@@ -13,7 +15,6 @@ enum Kind {
     Rules,
     Deny,
     Cargo,
-    Profile,
 }
 
 fn kind(path: &str) -> Option<Kind> {
@@ -38,8 +39,6 @@ fn kind(path: &str) -> Option<Kind> {
             Kind::Deny
         } else if name == "cargo.toml" {
             Kind::Cargo
-        } else if toml && format!("/{lower}").contains("/profiles/") {
-            Kind::Profile
         } else {
             return None;
         },
@@ -228,20 +227,6 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
                 }
             }
         }
-        // Any key changed or removed: a profile replaces the built-in one whole, and `manifest`,
-        // `adapters`, `when_no_package` or a `cmd` argument each decide what a gate checks.
-        Kind::Profile => {
-            if fb.is_empty() && !fh.is_empty() {
-                add("profile", "(built-in)", "(new)");
-            }
-            for (k, old) in &fb {
-                match fh.get(k) {
-                    None => add(k, &show(old), "(removed)"),
-                    Some(new) if new != old => add(k, &show(old), &show(new)),
-                    _ => {}
-                }
-            }
-        }
         Kind::Rules => {
             let rules = |v: &Value| -> Vec<(String, Value)> {
                 let all = v.get("rule").and_then(Value::as_array);
@@ -405,14 +390,6 @@ mod tests {
             ),
             ["deny.toml: graph.all-features true → false"]
         );
-        assert_eq!(
-            text_findings(
-                ".bosun/profiles/my.toml",
-                None,
-                Some("[gates.t]\ncmd = [\"true\"]\n")
-            ),
-            [".bosun/profiles/my.toml: profile (built-in) → (new)"]
-        );
     }
 
     #[test]
@@ -521,35 +498,5 @@ mod tests {
             )
             .is_empty()
         );
-    }
-
-    #[test]
-    fn profiles() {
-        let base = "manifest = \"Cargo.toml\"\n[gates.fmt]\ncmd = [\"cargo\", \"fmt\", \"--check\"]\n[gates.lint]\ncmd = [\"x\"]\n";
-        let head = "manifest = \"no.toml\"\n[gates.fmt]\ncmd = [\"cargo\", \"fmt\"]\n";
-        let got = t("profiles/rust.toml", base, head);
-        assert_eq!(
-            got,
-            [
-                "profiles/rust.toml: gates.fmt.cmd [\"cargo\", \"fmt\", \"--check\"] → [\"cargo\", \"fmt\"]",
-                "profiles/rust.toml: gates.lint.cmd [\"x\"] → (removed)",
-                "profiles/rust.toml: manifest Cargo.toml → no.toml"
-            ]
-        );
-        assert_eq!(t(".bosun/profiles/x.toml", base, head).len(), 3);
-        // A new gate is no weakening.
-        assert!(
-            t(
-                "profiles/rust.toml",
-                base,
-                &format!("{base}[gates.more]\ncmd = [\"y\"]\n")
-            )
-            .is_empty()
-        );
-        assert_eq!(
-            t("profiles/rust.toml", base, "manifest = ["),
-            ["profiles/rust.toml: toml parses → (unparseable)"]
-        );
-        assert!(!reads_text("src/main.rs") && reads_text("a/Cargo.toml"));
     }
 }
