@@ -14,7 +14,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.
 4. Test first. Before every push run what CI runs, locally:
-   `for g in fmt lint test deps test-integrity; do bosun gate "$g" || break; done`
+   `for g in fmt lint test deps test-integrity ci-minutes; do bosun gate "$g" || break; done`
    (a passing gate leaves a stamp for the tree it ran on; step 8 needs them).
    CI minutes are scarce: push once per PR, when it is done and green locally; do review
    rounds locally (step 6) and push their fixes together. Do not edit the PR body or title
