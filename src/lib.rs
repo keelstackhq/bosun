@@ -61,6 +61,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Trailers(a) => cli::trailers::run(dir, a),
         Command::Intake(a) => cli::intake::run(dir, a),
         Command::MainHealth(a) => cli::main_health::run(dir, a),
+        Command::GateMissed(a) => cli::gate_missed::run(dir, a),
         Command::ReviewCi(a) => cli::review_ci::run(dir, a),
         Command::Notify(a) => cli::notify::run(dir, a),
         Command::Prereqs(a) => cli::prereqs::run(dir, a),

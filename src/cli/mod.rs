@@ -51,6 +51,7 @@ use std::path::PathBuf;
 
 pub mod ci_minutes;
 pub mod gate;
+pub mod gate_missed;
 pub mod main_health;
 pub mod review_ci;
 pub mod stop;
@@ -165,6 +166,8 @@ pub enum Command {
     Intake(IntakeArgs),
     /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
     MainHealth(MainHealthArgs),
+    /// Open (or reuse) the "Which gate missed this?" task for an escaped defect (spec §9).
+    GateMissed(GateMissedArgs),
     /// Review mode b: ask the Anthropic API for the verdict of a PR and record it (no session).
     ReviewCi(ReviewCiArgs),
     /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
@@ -216,6 +219,7 @@ pub const COMMANDS: &[&str] = &[
     "trailers",
     "intake",
     "main-health",
+    "gate-missed",
     "review-ci",
     "notify",
     "answer",
@@ -284,6 +288,7 @@ impl Command {
                 Some(IntakeCmd::Verify(_)) => "intake verify",
             },
             Command::MainHealth(_) => "main-health",
+            Command::GateMissed(_) => "gate-missed",
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
             Command::Prereqs(_) => "prereqs",
@@ -1017,6 +1022,19 @@ pub struct MainHealthArgs {
     /// The URL of the run, for the issue and the comment.
     #[arg(long)]
     pub run_url: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct GateMissedArgs {
+    /// The reverted or escaped PR.
+    #[arg(long)]
+    pub pr: Option<u64>,
+    /// The URL of the failing run.
+    #[arg(long)]
+    pub run: Option<String>,
+    /// The commit range of the incident, `GOOD..BAD`.
+    #[arg(long)]
+    pub range: Option<String>,
 }
 
 #[derive(Debug, Args)]
