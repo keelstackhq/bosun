@@ -255,7 +255,7 @@ fn the_circleci_job_runs_the_gates_of_bosun_yml() {
             );
             let mut want = vec![ALL_GATES.join(" ")];
             if !own_ci.is_empty() {
-                want.insert(0, "test-integrity".to_string());
+                want.insert(0, "test-integrity ci-minutes".to_string());
             }
             assert_eq!(gh, want, "{stack:?} own_ci={own_ci:?}");
             assert_eq!(ci, gh, "{stack:?} own_ci={own_ci:?}");
@@ -338,7 +338,7 @@ fn ci_repo(main: &str, head: &str) -> (tempfile::TempDir, String) {
     fs::create_dir_all(d.join("home/.bosun-ci")).unwrap();
     fs::create_dir_all(d.join("repo")).unwrap();
     let bin = d.join("home/.bosun-ci/bosun");
-    let fake = "#!/bin/sh\necho \"$* $(cat package.json 2>/dev/null)\" >> \"$HOME/log\"\n[ \"$2\" != \"$FAIL\" ]\n";
+    let fake = "#!/bin/sh\n[ \"$1\" = --version ] && { echo \"bosun 0.7.0\"; exit 0; }\necho \"$* $(cat package.json 2>/dev/null)\" >> \"$HOME/log\"\n[ \"$2\" != \"$FAIL\" ]\n";
     fs::write(&bin, fake).unwrap();
     let sum = git_in(
         d,
@@ -392,7 +392,7 @@ fn the_circleci_gates_run_what_the_branch_needs_and_stop_at_a_failure() {
         let pr = if own_ci.is_empty() {
             five("")
         } else {
-            "gate test-integrity \n".into()
+            "gate test-integrity \ngate ci-minutes \n".into()
         };
         assert_eq!(log, pr, "own_ci={own_ci:?}");
         for branch in ["main", "gh-readonly-queue/main/pr-1-ab"] {
@@ -413,7 +413,7 @@ fn the_circleci_gates_run_what_the_branch_needs_and_stop_at_a_failure() {
         );
         assert!(!ok, "a failed gate fails the job");
         assert_eq!(
-            log, "gate test-integrity \ngate deps \n",
+            log, "gate test-integrity \ngate ci-minutes \ngate deps \n",
             "no gate after a failure"
         );
     }
@@ -462,7 +462,7 @@ fn circleci_deps_audits_with_the_bases_manifests_and_the_rest_sees_the_prs() {
     let (d, sum) = ci_repo(&main, &pr);
     let (ok, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", "pr")]);
     assert!(ok, "{log}");
-    let want = "gate test-integrity pr\ngate deps base\ngate fmt pr\ngate lint pr\ngate test pr\n";
+    let want = "gate test-integrity pr\ngate ci-minutes pr\ngate deps base\ngate fmt pr\ngate lint pr\ngate test pr\n";
     assert_eq!(log, want);
     assert!(
         !d.path().join("repo/pnpm-workspace.yaml").exists(),
@@ -475,7 +475,10 @@ fn circleci_deps_audits_with_the_bases_manifests_and_the_rest_sees_the_prs() {
     let (d, sum) = ci_repo(&main, &pr);
     let (ok, log) = run_step(d.path(), &sum, &step, &[("CIRCLE_BRANCH", "pr")]);
     assert!(!ok, "{log}");
-    assert_eq!(log, "gate test-integrity \n", "deps never ran");
+    assert_eq!(
+        log, "gate test-integrity \ngate ci-minutes \n",
+        "deps never ran"
+    );
     assert!(d.path().join("out/package.json").exists());
 }
 

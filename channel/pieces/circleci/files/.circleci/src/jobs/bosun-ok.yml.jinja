@@ -156,14 +156,14 @@ environment:
   - run:
       name: bosun gates
       environment:
-        GATES: test-integrity deps fmt lint test
+        GATES: test-integrity ci-minutes deps fmt lint test
         # No project or context variable may allow test-integrity findings. CircleCI has no PR body,
         # so a `snapshot-change:` line cannot apply here: such a change fails closed.
         BOSUN_INTEGRITY_ALLOW: ""
         BOSUN_PR_BODY: ""
-{% if own_ci %}        # Beside hull's ci-ok a pull request runs only this; the project env var BOSUN_ALL_GATES=1
-        # runs all five there too. The default branch and the merge queue run all five.
-        PR_GATES: test-integrity
+{% if own_ci %}        # Beside hull's ci-ok a pull request runs only these (both unique to bosun); the project env
+        # var BOSUN_ALL_GATES=1 runs every gate there too. The default branch and the merge queue run all.
+        PR_GATES: test-integrity ci-minutes
 {% endif %}      command: |
         bosun="$HOME/.bosun-ci/bosun"
 {% if own_ci %}        case "${CIRCLE_BRANCH:-}" in
@@ -173,7 +173,7 @@ environment:
 {% endif %}        # An empty diff (HEAD is the merge-base: a fresh branch, main itself) runs every gate on all.
         all=""
         if [ "$(git rev-parse HEAD)" = "$(git merge-base HEAD "origin/$DEFAULT_BRANCH")" ]; then
-          all="--all"; GATES="test-integrity deps fmt lint test"
+          all="--all"; GATES="test-integrity ci-minutes deps fmt lint test"
         fi
 {% if "ts-pnpm" in pieces %}        # deps (pnpm audit) reads every package.json and pnpm-workspace.yaml from the base, as in
         # bosun-trusted; the PR's come back (base-only ones go) before the install runs PR code.
@@ -196,8 +196,16 @@ environment:
           fi
         }
 {% endif %}        for g in $GATES; do
+          # ci-minutes came with bosun 0.7.0: a repo that pins an older release skips it.
+          if [ "$g" = ci-minutes ]; then
+            v="$("$bosun" --version | cut -d' ' -f2)"
+            if [ "$(printf '%s\n' 0.7.0 "$v" | sort -V | head -n1)" != 0.7.0 ]; then
+              echo "bosun $v has no ci-minutes gate; skipped"
+              continue
+            fi
+          fi
 {% if "ts-pnpm" in pieces %}          case "$g" in
-            test-integrity) ;;
+            test-integrity|ci-minutes) ;;
             deps) swap "$BOSUN_BASE" || exit 1; swapped=1 ;;
             *)
               if [ -n "${swapped:-}" ]; then swap HEAD || exit 1; swapped=""; fi

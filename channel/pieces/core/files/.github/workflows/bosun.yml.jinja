@@ -387,13 +387,13 @@ jobs:
         id: gates
         env:
 {% endraw %}{% if own_ci %}{% raw %}          # The repo's own ci.yml already runs fmt, lint, test and deps; only test-integrity is
-          # unique to bosun. So a pull request runs just that and relies on the repo's own ci-ok
+          # unique to bosun (with ci-minutes). So a pull request runs just those and relies on the repo's own ci-ok
           # for the rest; if that CI lacks one (cargo-deny, say), set the repo variable
-          # BOSUN_ALL_GATES to '1' to run all five on pull requests too. Every other event (push
+          # BOSUN_ALL_GATES to '1' to run all of them on pull requests too. Every other event (push
           # to main, merge queue, the weekly run main-health calls, where github.event_name is
-          # the caller's, e.g. schedule) runs all five gates.
-          GATES: ${{ (vars.BOSUN_ALL_GATES == '1' || github.event_name != 'pull_request') && 'test-integrity deps fmt lint test' || 'test-integrity' }}
-{% endraw %}{% else %}{% raw %}          GATES: test-integrity deps fmt lint test
+          # the caller's, e.g. schedule) runs every gate.
+          GATES: ${{ (vars.BOSUN_ALL_GATES == '1' || github.event_name != 'pull_request') && 'test-integrity ci-minutes deps fmt lint test' || 'test-integrity ci-minutes' }}
+{% endraw %}{% else %}{% raw %}          GATES: test-integrity ci-minutes deps fmt lint test
 {% endraw %}{% endif %}{% raw %}          # An edit after a success runs test-integrity only (see the edit step).
           ONLY: ${{ steps.plan.outputs.only }}
           BOSUN_SHA256: ${{ steps.bin.outputs.sha256 }}
@@ -412,7 +412,15 @@ jobs:
           case "$BASE" in ""|0000000000000000000000000000000000000000) BASE="$GITHUB_SHA";; esac
           later=""
 {% endif %}{% raw %}          for g in $GATES; do
-{% endraw %}{% if "ts-pnpm" in pieces %}            case "$g" in test-integrity|deps) ;; *) later="$later $g"; continue ;; esac
+            # ci-minutes came with bosun 0.7.0: a repo that pins an older release skips it.
+            if [ "$g" = ci-minutes ]; then
+              v="$("$bosun" --version | cut -d' ' -f2)"
+              if [ "$(printf '%s\n' 0.7.0 "$v" | sort -V | head -n1)" != 0.7.0 ]; then
+                echo "::notice::bosun $v has no ci-minutes gate; skipped"
+                continue
+              fi
+            fi
+{% endraw %}{% if "ts-pnpm" in pieces %}            case "$g" in test-integrity|ci-minutes|deps) ;; *) later="$later $g"; continue ;; esac
             # test-integrity has read the PR's manifests. From here pnpm reads only the base's
             # config: `pnpm audit` reads the PR's pnpm-lock.yaml as data, and every package.json
             # and pnpm-workspace.yaml (where a PR could name a pnpmfile, config dependencies or

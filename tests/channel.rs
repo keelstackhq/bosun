@@ -206,7 +206,7 @@ fn one_job_carries_the_required_check() {
     assert!(body.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
     assert!(body.contains("::error::draft: CI not run, mark ready for review"));
     // The gates that run no PR code first (lint and test run build.rs and tests).
-    assert!(body.contains("GATES: test-integrity deps fmt lint test\n"));
+    assert!(body.contains("GATES: test-integrity ci-minutes deps fmt lint test\n"));
     assert!(ci.contains("types: [opened, synchronize, reopened, edited, ready_for_review]"));
     // The first failed gate stops the job: no PR code (lint, test) runs after a failure.
     assert!(body.contains(
