@@ -51,9 +51,9 @@ Until 2026-11-30 (`[approvals] bootstrap_until` in `.bosun/bosun.toml`, hard cap
 in `src/core/approve.rs`) the orchestrator may sign gated approvals itself after green checks and
 an independent agent review (D-012). `BOOTSTRAP_EXCLUDED` (`src/core/risk.rs`) keeps `.bosun/**`,
 `governance/**`, CODEOWNERS, `hoist.toml`, the risk, verdict, release and splice workflows and the
-approval code owner-only. It does not cover the rest of R-gov (`.claude/**` with the hook
-settings, `REVIEW.md`, plans, `docs/agents/**`, agent and Claude instruction files) or R-prod-write.
-So during the window the orchestrator can approve those. This trades the rule "agent agreement is
+approval code owner-only, and `orchestrator_counts` refuses the window on any R-gov or R-prod-write
+match (the rest of R-gov: `.claude/**` with the hook settings, `REVIEW.md`, plans,
+`docs/agents/**`, agent and Claude instruction files). This trades the rule "agent agreement is
 not independent evidence" for speed. It is a mode the owner chose and ends by removing the key or
 by the date. The org's later autonomous mode (D-017) is not in bosun yet: no decision text in this
 repo's snapshot, no config key.
@@ -64,7 +64,7 @@ repo's snapshot, no config key.
 | --- | --- | --- |
 | Structure keeps growth healthy | `tests/core_is_pure.rs` (no I/O in `src/core`); fmt, lint, test, deps gates from `profiles/*.toml` | enforced |
 | Humans own the edges | R-gov paths; `bosun ask`, `answer`, `prereqs`; owners in `governance/owners.toml`; bootstrap mode lets the orchestrator approve part of R-gov | partial |
-| Risk by blast radius | `.bosun/risk.toml` rules, read from the PR's base SHA, only escalate; owner, delegate or two-verdict approval; R-unseen (GitHub hid part of the diff) always owner; bootstrap gaps above | partial |
+| Risk by blast radius | `.bosun/risk.toml` rules, read from the PR's base SHA, only escalate; owner, delegate or two-verdict approval; R-unseen (GitHub hid part of the diff) always owner; bootstrap window never covers R-gov or R-prod-write | partial |
 | Retire mitigations | Lessons only: mechanize or drop at the 40-entry cap (`bosun lesson add` exit 6) | partial |
 | Nested loops | local `bosun gate` → `ci.yml` → `main-health.yml` (after `ci` on main + weekly) → `main-open` fails non-mainfix PRs while main is red | enforced |
 | Escaped defect → tighter loop | `main-triage` bisects, `revert` opens a mainfix PR, main-red opens a lesson; `lesson triage --as mechanizable` opens a process-fix task (manual) | partial |
@@ -84,7 +84,7 @@ repo's snapshot, no config key.
 | Self-repair needs a mandate and limits | budgets and stop rules apply; no per-loop mandate; no "which gate missed this" follow-up | partial |
 | Human channels are untrusted | intake fence; `trusted_notes` takes records only from write users; Slack thread role `may_build = false`; `--slack-user` not verified | partial |
 | Close the loop with the reporter | `bosun notify` returns thread posts in `next` for the caller; it posts nothing itself, and the notify routine is a Blocked human step | partial |
-| Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are on no risk path, and label-lock is not a sandbox | partial |
+| Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are R-gate; label-lock is not a sandbox | partial |
 | Autonomy earned per change class | static delegate class; not earned from escape or revert rates; no automatic narrowing after an incident | partial |
 | Challenge in proportion | two levels only (`normal`, `high`) | partial |
 | Cost per outcome | `bosun progress`: cost per merged task; budget refuses new work at 80 % (exit 6) and returns stop actions for the caller; not per outcome that holds; no human minutes | partial |
@@ -109,8 +109,8 @@ candidates are gated in practice.
 
 | # | Candidate | Mechanism | Est. lines | Gated |
 | --- | --- | --- | --- | --- |
-| 1 | Put the hooks on a risk path | add `src/core/guard.rs`, `src/hooks/**` to R-gate | 10 | yes (R-gov) |
-| 2 | Close the bootstrap gaps | add the rest of R-gov to `BOOTSTRAP_EXCLUDED`; refuse bootstrap approval on R-prod-write | 30 | yes (R-gate) |
+| 1 | Put the hooks on a risk path | add `src/core/guard.rs`, `src/hooks/**` to R-gate | 10 | yes (R-gov) — done |
+| 2 | Close the bootstrap gaps | add the rest of R-gov to `BOOTSTRAP_EXCLUDED`; refuse bootstrap approval on R-prod-write | 30 | yes (R-gate) — done (window refuses R-gov, R-prod-write) |
 | 3 | Flag PRs that weaken a gate: lower limits, profiles, `deny.toml`, removed `ci.yml` gate steps | risk rule with a base/head value compare | 250 | yes (R-gov, R-ci, R-gate) |
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298) | 200 | yes (R-gate) |
 | 5 | Commit trailers `Bosun-Session`, `Bosun-Model`, `Bosun-Task` | `bosun pr` checks commits; hook warns on a missing trailer | 150 | probably |

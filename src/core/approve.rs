@@ -424,6 +424,17 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
     }
     let end = c.bootstrap_until.map(|u| u.min(BOOTSTRAP_END));
     if end.is_some_and(|e| c.today <= e) {
+        // The rest of R-gov (hook settings, REVIEW.md, plans, agent instructions) and production
+        // writes are not `BOOTSTRAP_EXCLUDED` paths, yet the window never covers them either.
+        let gated: Vec<&str> = (c.rules.iter().copied())
+            .filter(|r| ["R-gov", "R-prod-write"].contains(r))
+            .collect();
+        if !gated.is_empty() {
+            return Err(format!(
+                "bootstrap mode (D-012) never covers {}: the owner approves",
+                gated.join(", ")
+            ));
+        }
         return Ok("bootstrap mode, D-012".into());
     }
     let window = match end {
@@ -530,6 +541,21 @@ mod tests {
         assert!(why.contains("2026-11-30") && why.contains("D-012"), "{why}");
         let c = case(Policy::Owner, None, "2026-11-10");
         assert!(orchestrator_counts(&c).unwrap_err().contains("is off"));
+    }
+
+    #[test]
+    fn the_window_never_covers_the_rest_of_r_gov_or_production_writes() {
+        for r in ["R-gov", "R-prod-write"] {
+            let mut c = case(Policy::Owner, Some("2026-11-30"), "2026-11-10");
+            let rules = ["R-ci", r];
+            c.rules = &rules;
+            let why = orchestrator_counts(&c).unwrap_err();
+            assert!(why.contains(r) && why.contains("D-012"), "{why}");
+            // After the window the policy decides, as before.
+            let mut c = case(Policy::Orchestrator, None, "2026-12-01");
+            c.rules = &rules;
+            assert!(orchestrator_counts(&c).is_ok(), "{r}");
+        }
     }
 
     #[test]

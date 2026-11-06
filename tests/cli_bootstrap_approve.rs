@@ -61,9 +61,9 @@ fn pr(k: &Key, file: &str, patch: &str, config: Option<&str>) -> FakeGithub {
     fake
 }
 
-/// `.claude/**` is R-gov: the owner class, no excluded path.
+/// `deny.toml` is R-ci: the owner class, no excluded path (the window never covers R-gov).
 fn owner_pr(k: &Key, config: Option<&str>) -> FakeGithub {
-    pr(k, ".claude/settings.json", PLAIN, config)
+    pr(k, "deny.toml", PLAIN, config)
 }
 
 /// `bosun approve 1@HEAD --sign-key <pem> --bootstrap --print` at `now`.

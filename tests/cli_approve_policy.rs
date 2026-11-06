@@ -123,11 +123,11 @@ fn owner_gated_counts_on_r_ci_outside_workflows_only() {
 
 #[test]
 fn policy_owner_ends_with_the_window() {
-    for file in ["deny.toml", ".claude/settings.json"] {
-        let cfg = config(Some("owner"), Some("2026-11-30"));
-        assert!(counts(file, PLAIN, &cfg, IN), "{file} in the window");
-        assert!(!counts(file, PLAIN, &cfg, AFTER), "{file} after it");
-    }
+    let cfg = config(Some("owner"), Some("2026-11-30"));
+    assert!(counts("deny.toml", PLAIN, &cfg, IN), "in the window");
+    assert!(!counts("deny.toml", PLAIN, &cfg, AFTER), "after it");
+    // The window never covers the rest of R-gov (D-012 gap closed).
+    assert!(!counts(".claude/settings.json", PLAIN, &cfg, IN));
     // The window is capped at D-012's last day.
     let cfg = config(Some("owner"), Some("2027-06-30"));
     assert!(counts("deny.toml", PLAIN, &cfg, "2026-11-30T12:00:00Z"));
