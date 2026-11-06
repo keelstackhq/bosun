@@ -1,0 +1,1 @@
+- 2026-11-06 · R-gate covers the approval path and hooks; bootstrap window refuses R-gov and R-prod-write (operating model items 1, 2)
