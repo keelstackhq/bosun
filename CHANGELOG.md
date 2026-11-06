@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.7.0 (2026-11-06)
+
 - risk-check R-bundle and `bosun pr` bundle checks count closing refs in the PR title and commit messages too, failing closed at the commit cap.
 - main-open judges a draft when the mainfix label changes; `bosun gate ci-minutes` accepts `draft != true` and a fail-fast job of any name.
 - PreToolUse hook: destructive-lock (rm -rf /, mkfs, dd to a device, terraform destroy, DROP DATABASE, fork bomb) and repeat-lock (same Bash command warns at 3, denied at 5).
