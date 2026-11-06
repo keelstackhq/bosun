@@ -80,3 +80,26 @@ Seed steps (the seed plan in `docs/superpowers/plans/` splits each into PRs):
   reports each checklist step as ok or missing.
 - S10: governance files, CI, AGENTS.md, REVIEW.md, plan. Done when CI is green on the S10 PR with
   the gates run by bosun.
+
+### Adopt and uninstall (no splice)
+
+`bosun adopt` is the path for a repo without hull, splice or hoist. It writes the channel's core
+files into the worktree (`.bosun/{bosun.toml,version,limits.toml,risk.toml,session-rules.toml,approvers.toml,fold-fragments.sh}`,
+`governance/owners.toml` with `--owner`, the five bosun workflows, `.claude/settings.json`) from templates
+embedded in the binary, rendered by `core::render` (the Jinja subset the templates use). It never
+overwrites: an existing file with the same bytes is `unchanged`, one with other bytes is `kept`
+with a fix hint. It does not commit, push or open a PR, and it does not write splice.yml,
+hoist.toml, CODEOWNERS, `docs/setup-script.sh`, the AGENTS/REVIEW/CLAUDE sections or the stack seed
+files. Flags: `--stack rust|ts-pnpm|other` (repeatable; default detected from `Cargo.toml` and
+`package.json` + `pnpm-lock.yaml`), `--owner`, `--bosun-version`, `--dry-run`, `--no-remote`
+(no token; no labels or registry issue). Unless `--no-remote`, it creates the missing labels
+(`bosun:halt`, `bosun:registry`, the task state labels) and the registry issue; `--dry-run` only reads.
+
+`--bosun-version` must be X.Y.Z (else exit 2). `--dry-run` without a token still lists the files; labels and registry then read `unknown`. An unreadable file is an error, never "absent". The owner step names `bosun-ok` as the required check when the repo has its own `ci-ok` job.
+
+`.bosun/adopt.toml` records the bosun version, each written file with its FNV-1a 64 hash, the labels
+adopt created and the registry issue it opened. It is rewritten after the GitHub step and after each file, so a failure midway still leaves a record. A rerun merges into it, so a second run is all
+`unchanged`. `bosun uninstall` reads it and acts only on the paths adopt can write (never an absolute path, a `..` path, or one under a symlink; those are `kept` with a fix hint): a file whose hash still matches is deleted, a modified one is
+`kept`, a missing one is `gone`; emptied directories go too. The manifest stays, holding only the labels and the registry issue, until they are dealt with, and goes last. `--labels` deletes the labels adopt created and closes its registry issue, but a label still on an open issue is `in-use` and stays (rerun later); `--dry-run` lists only. Without a manifest it exits 1 and points to `docs/adopt-existing-repo.md`.
+
+bosun never reads, writes or deletes through a symlink: adopt reports a file whose path (or a parent) is a symlink as `kept` with a fix hint, and exits 1 when the manifest path is under one; uninstall does the same. The manifest also lists `dirs`, the directories adopt created; uninstall removes only those, and only when empty. `uninstall --labels --dry-run` reads open issues, so it reports `in-use` like a real run (without a token it previews `delete`).

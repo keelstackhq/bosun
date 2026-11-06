@@ -92,6 +92,8 @@ pub trait Github {
     fn label_exists(&self, name: &str) -> Result<bool>;
     /// Whether the branch exists on GitHub (is pushed).
     fn branch_exists(&self, name: &str) -> Result<bool>;
+    /// Delete the label from the repository; one that does not exist is fine.
+    fn delete_label(&self, name: &str) -> Result<()>;
     /// Create the label; one that already exists is fine.
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()>;
     fn list_comments(&self, number: u64) -> Result<Vec<Comment>>;
@@ -446,6 +448,13 @@ impl Github for LiveGithub {
     fn branch_exists(&self, name: &str) -> Result<bool> {
         let path = self.path(&format!("/branches/{}", enc(name)));
         Ok(self.http.get_json(&path)?.is_some())
+    }
+
+    fn delete_label(&self, name: &str) -> Result<()> {
+        let path = self.path(&format!("/labels/{}", enc(name)));
+        self.http
+            .send_accepting("DELETE", &path, &Value::Null, &[404])?;
+        Ok(())
     }
 
     fn ensure_label(&self, name: &str, color: &str, description: &str) -> Result<()> {
