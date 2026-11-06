@@ -221,3 +221,19 @@ fn test_counts_cover_skips_assertions_ts_and_unseen_removals() {
         "src/big.rs: diff unavailable",
     );
 }
+
+#[test]
+fn a_weakening_needs_the_owner_even_if_the_rules_delegate_it() {
+    for class in ["delegate", "two-verdicts"] {
+        let fake = pr();
+        fake.content(
+            ".bosun/risk.toml",
+            BASE,
+            &format!("[[rule]]\nid = \"R-weaken\"\nwhy = \"w\"\ncapability = \"weaken\"\napproval = \"{class}\"\n"),
+        );
+        budget(&fake, 150, 300);
+        let (code, v) = check(&fake);
+        assert_eq!(code, 5, "{v}");
+        assert_eq!(v["data"]["requirement"], "owner", "{class}: {v}");
+    }
+}

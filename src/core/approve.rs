@@ -423,6 +423,10 @@ pub struct OrchestratorCase<'a> {
 
 /// `Ok(label for the status)` when an orchestrator approval can count, else `Err(why)`.
 pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
+    // A weakened gate is the owner's under every policy and in the window (owner decision).
+    if c.rules.contains(&"R-weaken") {
+        return Err("a PR that weakens a gate (R-weaken) always needs the owner".into());
+    }
     // D-017 decides first: its own exclusions only, and risk-check adds the verdict condition.
     if c.policy == Policy::Autonomous {
         if c.autonomous_excluded.is_empty() {
@@ -591,6 +595,24 @@ mod tests {
         let mut s = base();
         s[0].description = "high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed: R-ci".into();
         assert_eq!(readiness(&s, &[]), Readiness::NotWaiting);
+    }
+
+    #[test]
+    fn r_weaken_never_counts_for_the_orchestrator() {
+        let rules = ["R-ci", "R-weaken"];
+        for p in [
+            Policy::Owner,
+            Policy::OwnerGated,
+            Policy::Orchestrator,
+            Policy::Autonomous,
+        ] {
+            for (until, today) in [(Some("2026-11-30"), "2026-11-10"), (None, "2026-12-01")] {
+                let mut c = case(p, until, today);
+                c.rules = &rules;
+                let why = orchestrator_counts(&c).unwrap_err();
+                assert!(why.contains("R-weaken"), "{p:?} {until:?}: {why}");
+            }
+        }
     }
 
     #[test]
