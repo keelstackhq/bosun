@@ -764,6 +764,15 @@ impl FakeGithub {
             .collect()
     }
 
+    /// A repository label that exists before the command runs.
+    pub fn add_label(&self, name: &str, color: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .labels
+            .push((name.into(), color.into()));
+    }
+
     pub fn label_names(&self) -> Vec<String> {
         self.state
             .lock()
@@ -1169,6 +1178,14 @@ fn route(
             Some(l) => ok(json!({"name": l.0, "color": l.1})),
             None => msg(404, "Not Found"),
         },
+        ("DELETE", ["labels", name]) => {
+            let before = s.labels.len();
+            s.labels.retain(|l| l.0 != *name);
+            if s.labels.len() == before {
+                return msg(404, "Not Found");
+            }
+            (204, Value::Null, vec![])
+        }
         ("POST", ["labels"]) => {
             let name = body["name"].as_str().unwrap_or("").to_string();
             if s.labels.iter().any(|l| l.0 == name) {

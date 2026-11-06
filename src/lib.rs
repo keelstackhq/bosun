@@ -63,5 +63,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::ReviewCi(a) => cli::review_ci::run(dir, a),
         Command::Notify(a) => cli::notify::run(dir, a),
         Command::Prereqs(a) => cli::prereqs::run(dir, a),
+        Command::Adopt(a) => cli::adopt::run(dir, a),
+        Command::Uninstall(a) => cli::uninstall::run(dir, a),
     }
 }

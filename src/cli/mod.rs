@@ -3,6 +3,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
+pub mod adopt;
 pub mod answer;
 pub mod approve;
 pub mod ask;
@@ -53,6 +54,7 @@ pub mod main_health;
 pub mod review_ci;
 pub mod stop;
 pub mod test_integrity;
+pub mod uninstall;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -166,6 +168,10 @@ pub enum Command {
     Notify(NotifyArgs),
     /// List the human steps a plan needs up front (and its approvals); --post opens the checklist issue.
     Prereqs(PrereqsArgs),
+    /// Write bosun's files into this worktree without splice, hull or hoist; no commit, no PR.
+    Adopt(AdoptArgs),
+    /// Take back what `bosun adopt` wrote (only files whose bytes are still adopt's).
+    Uninstall(UninstallArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -210,6 +216,8 @@ pub const COMMANDS: &[&str] = &[
     "notify",
     "answer",
     "prereqs",
+    "adopt",
+    "uninstall",
 ];
 
 impl Command {
@@ -261,6 +269,8 @@ impl Command {
             Command::Result(_) => "result",
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
+            Command::Adopt(_) => "adopt",
+            Command::Uninstall(_) => "uninstall",
             Command::Revert(_) => "revert",
             Command::Intake(a) => match a.cmd {
                 None => "intake",
@@ -929,6 +939,35 @@ pub struct InitArgs {
     /// Commit on the branch but do not push or open a PR; returns pr_title and pr_body.
     #[arg(long)]
     pub no_pr: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AdoptArgs {
+    /// A stack (repeatable): rust, ts-pnpm or other. Default: detected from the repo root.
+    #[arg(long = "stack", value_parser = ["rust", "ts-pnpm", "other"])]
+    pub stack: Vec<String>,
+    /// The owner's GitHub login, seeded into governance/owners.toml.
+    #[arg(long, value_name = "LOGIN")]
+    pub owner: Option<String>,
+    /// Pin .bosun/version to this X.Y.Z (default: this binary's version).
+    #[arg(long, value_name = "X.Y.Z")]
+    pub bosun_version: Option<String>,
+    /// Show what would change; write nothing and change nothing on GitHub.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Skip the labels and the registry issue; needs no token and no GitHub repo.
+    #[arg(long)]
+    pub no_remote: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct UninstallArgs {
+    /// Also delete the labels adopt created and close the registry issue it opened.
+    #[arg(long)]
+    pub labels: bool,
+    /// List what would change; touch nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
