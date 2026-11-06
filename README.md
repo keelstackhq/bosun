@@ -32,6 +32,7 @@ bosun wave plan 7                      # tasks that can run in parallel now
 bosun pr 42                            # open the PR as a draft: no CI runs on it yet
 for g in fmt lint test deps test-integrity; do bosun gate $g || break; done   # local, stamped
 bosun pr 42 --ready                    # ready + auto-merge; GitHub merges on green (bosun never merges)
+bosun gate-missed --pr 41              # "Which gate missed this?" issue for an escaped defect (main-red and revert open it too)
 ```
 
 The loop is draft first: `bosun pr`, local gates, then `bosun pr --ready`. A draft costs no CI

@@ -6,6 +6,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::MainHealthArgs;
+use super::gate_missed::{self, Incident};
 use super::lesson::capture_lesson;
 use crate::app::{App, MAIN_RED_LABEL, notes, trusted_notes};
 use crate::core::meta::linked_issues;
@@ -28,6 +29,7 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
     let url = a.run_url.as_deref().unwrap_or("(no run URL given)");
     let is_red = matches!(result, "failure" | "timed_out" | "startup_failure");
     let (mut opened, mut closed, mut lesson) = (false, false, Value::Null);
+    let mut gate_missed = Value::Null;
     let mut open = open_reds(gh)?;
     let mut red = open.first().copied();
     if is_red && open.is_empty() {
@@ -61,6 +63,18 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
                 Some(mine),
             )?;
             lesson = json!({"issue": c.issue, "created": c.created, "hits": c.hits});
+            // Housekeeping: a failure here is reported and never changes the exit code.
+            let key = format!("main-red:#{mine}");
+            let inc = Incident {
+                key: &key,
+                what: "main went red",
+                link: url,
+                range: None,
+            };
+            gate_missed = match gate_missed::open(gh, &inc) {
+                Ok((issue, created)) => json!({"issue": issue, "created": created}),
+                Err(e) => json!({"error": e.message}),
+            };
         }
     } else if result == "success" {
         for n in open {
@@ -90,7 +104,7 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
     }
     let data = json!({
         "result": result, "changed": changed, "main_red": red, "opened": opened,
-        "closed": closed, "lesson": lesson, "rejudged": rejudged, "rejudge_errors": errors,
+        "closed": closed, "lesson": lesson, "gate_missed": gate_missed, "rejudged": rejudged, "rejudge_errors": errors,
         "conflicts": cf.flagged, "skipped_unknown": cf.skipped, "conflict_errors": cf.errors,
         "note": "main-health reports health; it checks no kill switch and starts no work",
     });

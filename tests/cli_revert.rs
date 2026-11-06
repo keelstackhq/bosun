@@ -213,3 +213,20 @@ fn a_pr_with_many_commits_and_a_single_parent_merge_commit_warns() {
     assert_eq!(code, 0, "{v}");
     assert!(v["data"]["warning"].as_str().unwrap().contains("3 commits"));
 }
+
+#[test]
+fn revert_opens_the_which_gate_missed_task_once() {
+    let r = repos();
+    let fake = merged_fake(&r);
+    let (code, v) = run(&fake, &r.clone);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["gate_missed"]["created"], true, "{v}");
+    let s = fake.state.lock().unwrap();
+    let t: Vec<_> = s
+        .issues
+        .iter()
+        .filter(|i| i.labels.iter().any(|l| l == "bosun:process-fix"))
+        .collect();
+    assert_eq!(t.len(), 1);
+    assert!(t[0].body.contains("#5"), "{}", t[0].body);
+}

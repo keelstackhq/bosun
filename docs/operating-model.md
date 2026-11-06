@@ -67,7 +67,7 @@ repo's snapshot, no config key.
 | Risk by blast radius | `.bosun/risk.toml` rules, read from the PR's base SHA, only escalate; owner, delegate or two-verdict approval; R-unseen (GitHub hid part of the diff) always owner; bootstrap window never covers R-gov or R-prod-write | partial |
 | Retire mitigations | Lessons only: mechanize or drop at the 40-entry cap (`bosun lesson add` exit 6) | partial |
 | Nested loops | local `bosun gate` → `ci.yml` → `main-health.yml` (after `ci` on main + weekly) → `main-open` fails non-mainfix PRs while main is red | enforced |
-| Escaped defect → tighter loop | `main-triage` bisects, `revert` opens a mainfix PR, main-red opens a lesson; `lesson triage --as mechanizable` opens a process-fix task (manual) | partial |
+| Escaped defect → tighter loop | `main-triage` bisects, `revert` opens a mainfix PR, main-red opens a lesson; `lesson triage --as mechanizable` opens a process-fix task (manual); main-red, `revert` and `gate-missed` open a "Which gate missed this?" task | enforced |
 | No flaky tests | `flake` task kind and intake source exist; no detector, no refusal | partial |
 | Production telemetry as a test | — | missing |
 | Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate and two-verdict counts | partial |
@@ -114,7 +114,7 @@ candidates are gated in practice.
 | 3 | Flag PRs that weaken a gate: lower limits, profiles, `deny.toml`, removed `ci.yml` gate steps | risk rule with a base/head value compare | 250 | yes (R-gov, R-ci, R-gate) |
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298) | 200 | yes (R-gate) |
 | 5 | Commit trailers `Bosun-Session`, `Bosun-Model`, `Bosun-Task` | `bosun pr` checks commits; hook warns on a missing trailer | 150 | probably |
-| 6 | Self-repair opens "which gate missed this?" | `main-health` / `revert` open a process-fix task linked to the main-red lesson | 120 | probably |
+| 6 | Self-repair opens "which gate missed this?" | `main-health` / `revert` open a process-fix task linked to the main-red lesson | 120 | yes (R-gate: `mod.rs`) — done (`gate-missed`, `bosun:process-fix`, spec §9) |
 | 7 | Autonomy earned per change class | revert and escape rate per rule id; delegate only while under a limit in `limits.toml` | 350 | yes (R-gate) |
 | 8 | New model resets trust | record model per verdict; delegate counts only verdicts from the enrolled model | 200 | yes (R-gate) |
 | 9 | Cost per outcome that holds | `bosun progress`: merged tasks not reverted within N days; owner minutes from ask and approve times | 200 | probably |
