@@ -84,7 +84,13 @@ pub fn install(dir: &Path) -> Result<serde_json::Value, BosunError> {
         Ok(old) if old == HOOK => return Ok(json!({"hook": path.display().to_string()})),
         Ok(old) if old.contains(MARK) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        _ => {
+        Err(e) => {
+            return Err(BosunError::error(
+                format!("cannot read {}: {e}", path.display()),
+                "check the hooks directory permissions, then rerun",
+            ));
+        }
+        Ok(_) => {
             return Err(BosunError::conflict(
                 format!("{} is another hook", path.display()),
                 "add the line `bosun trailers stamp \"$1\" || true` to it, or move it away and rerun",
@@ -110,11 +116,17 @@ pub fn install(dir: &Path) -> Result<serde_json::Value, BosunError> {
 }
 
 fn list(dir: &Path, session: &str) -> CmdResult {
+    // The recipe reverts onto origin/main, so search what main has (HEAD when there is no remote).
+    let base = if git_out(dir, &["rev-parse", "--verify", "-q", "origin/main"]).is_some() {
+        "origin/main".to_string()
+    } else {
+        "HEAD".to_string()
+    };
     let raw = git_out(
         dir,
         &[
             "log",
-            "--all",
+            &base,
             "--fixed-strings",
             &format!("--grep={SESSION}: {session}"),
             "--format=%H%x1f%s%x1f%B%x1e",
@@ -177,6 +189,14 @@ pub fn check_pr(
         }
         Err(e) => return Err(e),
     };
+    if require && shas.len() >= 250 {
+        return Err(BosunError::error(
+            format!(
+                "PR #{pr} has 250 or more commits, more than can be listed, so trailers cannot be fully checked"
+            ),
+            "split the work into smaller PRs",
+        ));
+    }
     for sha in shas {
         match gh.commit(&sha) {
             Ok(Some(c)) if c.parents.len() < 2 => {
@@ -208,7 +228,7 @@ pub fn check_pr(
                 shas.len(),
                 shas.join(", ")
             ),
-            "run `bosun trailers install`, then redo those commits stamped: squash them on a new branch (`git switch -c <new> && git reset --soft origin/main && git commit`), push it, open a new PR and close this one (never force-push); or set `[trailers] require = false`",
+            "close this PR, run `bosun trailers install`, redo the commits stamped on a new branch (`git switch -c <new> origin/main && git merge --squash <old> && git commit`), push it and run `bosun pr` from it (never force-push)",
         )
         .with_data(json!({"pr": pr, "trailers": data})));
     }
