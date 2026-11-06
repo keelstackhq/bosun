@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.8.0 (2026-11-06)
+
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.7.0 with its npm sha512 values; KNOWN lists gain 0.7.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
 - CI (bosun's ci.yml and the channel's bosun.yml) and the local pre-push loop run `bosun gate ci-minutes` after test-integrity; the channel skips it when the pinned bosun is older than 0.7.0.
 - `[approvals] policy = "autonomous"` (D-017): the orchestrator approves gated PRs itself when the head has a clean, unedited verdict from an independent session on a leased task and an autonomous-form signature; only `src/`, `tests/`, `docs/`, `changelog.d/` paths qualify (not R-gate code, module roots or `#[path]` changes), everything else (workflows, `.bosun`, `channel`, root files) stays with the owner.
