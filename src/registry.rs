@@ -1,7 +1,7 @@
 //! The registry: the one open issue labelled `bosun:registry`; each session has one `join`
 //! comment there that heartbeats edit in place (spec §4).
 
-use crate::app::{App, Result, notes};
+use crate::app::{App, Result, notes, trusted_notes};
 use crate::core::lease::{Member, members};
 use crate::core::records::{Note, Record, SlackSeat, replace_record};
 use crate::ctx::Origin;
@@ -157,4 +157,24 @@ fn record_of(m: &Member) -> Record {
 pub fn rewrite(gh: &dyn Github, m: &Member, body: &str) -> Result<()> {
     gh.update_comment(m.comment_id, &replace_record(body, &record_of(m)))?;
     Ok(())
+}
+
+/// The live Claude Tag seat of `session`, from join records written by users with write access
+/// only; an expired or forged join gives none. Read-only.
+pub fn seat_of(
+    gh: &dyn Github,
+    session: &str,
+    now: crate::time::Timestamp,
+) -> Result<Option<SlackSeat>> {
+    let Some(issue) = gh
+        .list_issues(&[LABEL], IssueState::Open)?
+        .first()
+        .map(|i| i.number)
+    else {
+        return Ok(None);
+    };
+    Ok(members(&trusted_notes(gh, issue)?)
+        .into_iter()
+        .find(|m| m.session == session && m.expires > now)
+        .and_then(|m| m.slack))
 }

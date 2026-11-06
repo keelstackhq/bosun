@@ -1128,6 +1128,67 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         ),
     ));
 
+    if let Some(slack) = ctx.config.slack.as_ref() {
+        let seat = registry::seat_of(gh, &ctx.session, ctx.now);
+        let seat_ok = seat.as_ref().ok().cloned().flatten();
+        let mut tag = item(
+            15,
+            "claude-tag",
+            None,
+            match &seat_ok {
+                Some(s) => format!(
+                    "this session ({}) sits in {} as the {} seat{}",
+                    ctx.session,
+                    s.channel,
+                    s.role,
+                    s.thread_ts
+                        .as_ref()
+                        .map_or(String::new(), |t| format!(" of thread {t}"))
+                ),
+                None => String::new(),
+            },
+            "",
+        );
+        if seat_ok.is_none() {
+            // No seat is normal for a session outside Claude Tag: skipped, not a warning. A
+            // failed registry read is a warning.
+            tag["status"] = json!(if seat.is_err() { "warn" } else { "skipped" });
+            tag["detail"] = json!(match &seat {
+                Err(e) => format!("the registry could not be read: {}", e.message),
+                Ok(_) => "no Claude Tag seat for this session".to_string(),
+            });
+            tag["fix"] = json!(format!(
+                "in a Claude Tag session run `bosun join --origin slack --slack-channel {} [--slack-thread <ts>]`",
+                slack.channel.trim()
+            ));
+        }
+        items.push(tag);
+    }
+    let pat = ["GITHUB_TOKEN", "GH_TOKEN"].iter().any(|k| {
+        std::env::var(k)
+            .is_ok_and(|v| v.trim().starts_with("ghp_") || v.trim().starts_with("github_pat_"))
+    });
+    let cloud = crate::core::approve::in_cloud(
+        std::env::var("CCR_AGENT_PROXY_ENABLED").ok().as_deref(),
+        std::env::var("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
+            .ok()
+            .as_deref(),
+    );
+    if pat && cloud {
+        let mut it = item(
+            16,
+            "github-token",
+            None,
+            String::new(),
+            "unset GITHUB_TOKEN and GH_TOKEN in the environment's settings; the session needs no token",
+        );
+        it["status"] = json!("warn");
+        it["detail"] = json!(
+            "a personal access token is in the environment; remove it: cloud and Claude Tag sessions reach GitHub through the Claude GitHub App proxy"
+        );
+        items.push(it);
+    }
+
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();

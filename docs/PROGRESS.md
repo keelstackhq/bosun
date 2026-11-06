@@ -93,8 +93,10 @@ Human-only items, in order. Each has the exact action.
      has no guests. bosun refuses to post when the caller's channel facts say otherwise, but it
      cannot prove them (accepted residual, spec §10).
    - Connect Claude Tag (Claude in Slack) to the workspace and invite it to that channel. Its
-     cloud environment needs the setup script, a `GITHUB_TOKEN` with write access (records from
-     other authors are ignored) and `BOSUN_ORIGIN=slack` (thread spawn needs origin slack).
+     cloud environment needs the setup script. No PAT and no `BOSUN_ORIGIN`: GitHub comes
+     through the Claude GitHub App (grant the repo to Claude Tag). Each session runs
+     `bosun join --origin slack --slack-channel C… [--slack-thread <ts>]`; `bosun doctor`
+     step `claude-tag` checks it and warns about a PAT in the environment.
    - Set `[slack] channel = "C…"` in `.bosun/bosun.toml` with an R-gov PR. The defaults are
      `spawners = "owners"` and `may_spawn = true`; set `may_spawn = false` if threads must not
      spawn, and `notify = [...]` to post only some kinds (empty means all).

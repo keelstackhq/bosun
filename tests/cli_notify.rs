@@ -597,3 +597,271 @@ fn without_a_slack_section_notify_is_skipped_not_an_error() {
     assert_eq!(v["data"]["pending"], json!([]));
     assert_eq!(v["next"], json!([]));
 }
+
+const TS: &str = "1700000000.000200";
+const TS2: &str = "1700000000.000300";
+
+/// A needs-human task whose newest lease came from thread `ts`, with an ask; returns the key.
+fn threaded_ask(e: &Env, n: u64, ts: &str) -> String {
+    e.fake.issue(n, "task", NEEDS, "");
+    e.fake.comment(
+        n,
+        &json!({"bosun": "lease", "session": "s", "origin": "slack",
+            "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": ts})
+        .to_string(),
+    );
+    let id = ask_by(e, n, "ada", "which way?");
+    format!("ask:{n}:{id}")
+}
+
+/// A join record for `session_test` with a Claude Tag seat, by `user`, expiring at `expires`.
+fn seat_by(e: &Env, user: &str, expires: &str, seat: Value) {
+    e.registry();
+    e.fake.comment_by(
+        1,
+        user,
+        &json!({"bosun": "join", "session": "session_test", "origin": "slack", "depth": 1,
+            "expires": expires, "slack": seat})
+        .to_string(),
+    );
+}
+
+/// This session (`session_test`) joined with a Claude Tag seat.
+fn seat(e: &Env, seat: Value) {
+    seat_by(e, "ada", "2026-10-22T10:30:00Z", seat);
+}
+
+#[test]
+fn an_ask_on_a_thread_task_is_posted_into_its_thread() {
+    let e = env();
+    let key = threaded_ask(&e, 4, TS);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [key]);
+    assert_eq!(v["data"]["pending"][0]["thread_ts"], TS);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["next"][0]["args"]["thread_ts"], TS);
+    assert_eq!(v["data"]["seat"], Value::Null);
+}
+
+#[test]
+fn a_channel_seat_routes_thread_posts_through_send_message() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    e.fake.issue(5, "plain", NEEDS, "");
+    ask_by(&e, 5, "ada", "plain?");
+    seat(&e, json!({"role": "channel", "channel": "C1"}));
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"]["role"], "channel");
+    let next = v["next"].as_array().unwrap();
+    assert_eq!(next.len(), 2);
+    assert_eq!(next[0]["tool"], "send_message");
+    assert_eq!(next[0]["args"]["to"], "thread");
+    assert_eq!(next[0]["args"]["thread_ts"], TS);
+    assert!(
+        next[0]["args"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("which way?")
+    );
+    assert_eq!(next[1]["tool"], "slack_post");
+    assert!(next[1]["args"].get("thread_ts").is_none());
+}
+
+#[test]
+fn a_thread_seat_lists_its_thread_and_channel_posts_only() {
+    let e = env();
+    e.halt();
+    threaded_ask(&e, 4, TS);
+    threaded_ask(&e, 5, TS2);
+    e.fake.issue(6, "plain", NEEDS, "");
+    ask_by(&e, 6, "ada", "plain?");
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"]["thread_ts"], TS);
+    let tools: Vec<(&str, &Value)> = v["next"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| (n["tool"].as_str().unwrap(), &n["args"]))
+        .collect();
+    assert_eq!(tools.len(), 3, "{v}");
+    assert_eq!(tools[0].0, "slack_post"); // halt
+    let reply = tools.iter().find(|t| t.0 == "thread_reply").unwrap();
+    assert_eq!(reply.1["thread_ts"], TS);
+    assert!(reply.1["text"].as_str().unwrap().contains("which way?"));
+    assert_eq!(tools.iter().filter(|t| t.0 == "slack_post").count(), 2);
+    assert!(!v.to_string().contains("#5:"), "{v}");
+}
+
+#[test]
+fn an_explicit_thread_beats_the_thread_seat() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    e.fake.comment(
+        4,
+        &json!({"bosun": "result", "session": "s", "outcome": "merged"}).to_string(),
+    );
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS2}),
+    );
+    let (code, v) = e.run(&["notify", "--channel-info", "-", "--thread", TS], GOOD);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"]["role"], "thread");
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn a_missing_registry_leaves_the_posts_alone() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    // No registry issue: no seat, no error, plain slack_post.
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"], Value::Null);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn a_seat_written_by_a_non_writer_is_ignored() {
+    let e = env();
+    e.fake.permission("mallory", "none");
+    threaded_ask(&e, 4, TS);
+    seat_by(
+        &e,
+        "mallory",
+        "2026-10-22T10:30:00Z",
+        json!({"role": "channel", "channel": "C1"}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"], Value::Null);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn an_expired_seat_is_ignored() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    seat_by(
+        &e,
+        "ada",
+        "2026-10-22T09:00:00Z",
+        json!({"role": "channel", "channel": "C1"}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["seat"], Value::Null);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+}
+
+#[test]
+fn a_thread_seats_ask_is_not_cut_by_other_threads_asks() {
+    let e = env();
+    for n in 4..=8 {
+        threaded_ask(&e, n, TS2);
+    }
+    let own = threaded_ask(&e, 9, TS);
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), [own]);
+    assert_eq!(v["next"][0]["tool"], "thread_reply");
+}
+
+#[test]
+fn an_unreadable_registry_is_reported_as_a_seat_error() {
+    let e = env();
+    e.registry();
+    e.halt();
+    e.fake.fail_path("/issues/1/comments", 500);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    let errors = v["data"]["errors"].as_array().unwrap();
+    assert!(errors.iter().any(|x| x["kind"] == "seat"), "{v}");
+    assert_eq!(Env::keys(&v), ["halt:2"]);
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["data"]["seat"], Value::Null);
+}
+
+#[test]
+fn an_explicit_thread_posts_plainly_even_with_a_thread_seat() {
+    let e = env();
+    threaded_ask(&e, 4, TS);
+    e.fake.comment(
+        4,
+        &json!({"bosun": "result", "session": "s", "outcome": "merged", "pr": 7}).to_string(),
+    );
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS2}),
+    );
+    let (code, v) = e.run(&["notify", "--channel-info", "-", "--thread", TS], GOOD);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["next"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["next"][0]["tool"], "slack_post");
+    assert_eq!(v["next"][0]["args"]["thread_ts"], TS);
+}
+
+#[test]
+fn a_lease_by_a_non_writer_gives_an_ask_no_thread() {
+    let e = env();
+    e.fake.permission("mallory", "none");
+    e.fake.issue(4, "task", NEEDS, "");
+    e.fake.comment_by(
+        4,
+        "mallory",
+        &json!({"bosun": "lease", "session": "s", "origin": "slack",
+            "expires": "2026-10-22T09:00:00Z", "touch": [], "thread_ts": TS})
+        .to_string(),
+    );
+    ask_by(&e, 4, "ada", "q?");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pending"][0]["thread_ts"], Value::Null);
+    assert!(v["next"][0]["args"].get("thread_ts").is_none());
+}
+
+#[test]
+fn a_routed_key_can_be_acked() {
+    let e = env();
+    let key = threaded_ask(&e, 4, TS);
+    seat(&e, json!({"role": "channel", "channel": "C1"}));
+    let (_, v) = e.notify();
+    assert_eq!(v["next"][0]["tool"], "send_message");
+    let (code, v) = e.run(&["notify", "--ack", &key], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], false);
+    let (_, v) = e.run(&["notify"], "");
+    assert_eq!(v["data"]["pending"], json!([]));
+}
+
+#[test]
+fn an_over_cap_own_ask_can_be_acked() {
+    let e = env();
+    for n in 4..=8 {
+        threaded_ask(&e, n, TS2);
+    }
+    let own = threaded_ask(&e, 9, TS);
+    seat(
+        &e,
+        json!({"role": "thread", "channel": "C1", "thread_ts": TS}),
+    );
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), std::slice::from_ref(&own));
+    let (code, v) = e.run(&["notify", "--ack", &own], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], false);
+    let (_, v) = e.notify();
+    assert_eq!(Env::keys(&v), Vec::<String>::new());
+}
