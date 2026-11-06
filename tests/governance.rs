@@ -69,27 +69,16 @@ fn repo_rules_parse_with_the_pinned_release() {
 fn risk_rules_cover_the_defaults() {
     let rules = Rules::parse(&read(".bosun/risk.toml")).unwrap();
     let ids = |r: &Rules| r.rules.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
-    // CI tests with the base's .bosun/: before the R-weaken PR lands it has no R-weaken rule,
-    // which risk-check adds built in anyway. remove after #428 merges
-    let mut want = ids(&Rules::defaults());
-    if !ids(&rules).iter().any(|i| i == "R-weaken") {
-        want.retain(|i| i != "R-weaken");
-    }
-    assert_eq!(ids(&rules), want);
+    assert_eq!(ids(&rules), ids(&Rules::defaults()));
 }
 
 #[test]
 fn shipped_rules_have_the_decided_approval_class() {
-    for (rules, repo) in [
-        (Rules::parse(&read(".bosun/risk.toml")).unwrap(), true),
-        (Rules::defaults(), false),
+    for rules in [
+        Rules::parse(&read(".bosun/risk.toml")).unwrap(),
+        Rules::defaults(),
     ] {
-        let mut ids: Vec<&str> = rules.rules.iter().map(|r| r.id.as_str()).collect();
-        // A base .bosun/ from before R-weaken (built in anyway); the defaults stay strict.
-        // remove after #428 merges
-        if repo && !ids.contains(&"R-weaken") {
-            ids.push("R-weaken");
-        }
+        let ids: Vec<&str> = rules.rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             ids,
             [

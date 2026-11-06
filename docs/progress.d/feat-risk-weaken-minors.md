@@ -1,0 +1,1 @@
+- 2026-11-06 · operating-model #3 · R-weaken review minors (capability id, profile keys, cfg, src paths)
