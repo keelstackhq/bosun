@@ -818,7 +818,8 @@ mod tests {
         chk("touch: src/b.rs", "touch: ", 17, "no `touch:`");
         // D-016: no line cap, no size warning.
         for size in ["size: 401", "size: 1501", "size: 90000"] {
-            let p = parse(&w("size: 100", size)).expect("no cap");
+            let tested = w("size: 100", size).replace("touch: src/b.rs", "touch: src/b.rs, tests/b.rs");
+            let p = parse(&tested).expect("no cap");
             assert!(p.warnings.is_empty(), "{:?}", p.warnings);
         }
         chk("size: 100", "size: ten", 16, "not an integer");
