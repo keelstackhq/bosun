@@ -82,10 +82,10 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             "join without --origin slack; only a Claude Tag session joins as slack",
         ));
     }
-    // A plain re-join of a seated session keeps origin slack; the seat survives only there.
+    // A plain re-join of a slack session keeps origin slack; the seat survives only there.
     let origin = match (spec.origin, prior) {
         (Some(o), _) => o.as_str().to_string(),
-        (None, Some(m)) if m.slack.is_some() => m.origin.clone(),
+        (None, Some(m)) if m.origin == "slack" => m.origin.clone(),
         (None, _) => app.ctx.origin.as_str().to_string(),
     };
     let slack = spec

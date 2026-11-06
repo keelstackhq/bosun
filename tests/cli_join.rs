@@ -370,3 +370,14 @@ fn a_spawned_or_routine_record_cannot_join_as_slack() {
         );
     }
 }
+
+#[test]
+fn a_plain_rejoin_keeps_origin_slack_without_a_seat() {
+    let fake = FakeGithub::start();
+    let d = slack_dir(SLACK_CFG);
+    let (code, v) = seat_run(&fake, d.path(), &[], &["--origin", "slack"]);
+    assert_eq!(code, 0, "{v}");
+    let (code, v) = seat_run(&fake, d.path(), &[], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["origin"], "slack");
+}
