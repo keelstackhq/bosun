@@ -8,11 +8,13 @@ checks, review verdicts, lessons and cost. A Claude Code session calls `bosun <c
 on the one JSON object it prints. GitHub issues, labels, comments and PRs are the only shared
 state.
 
-Status: seed done; v0.1.0 is prepared (see `CHANGELOG.md`, `docs/PROGRESS.md`).
+Status: bosun 0.7.0 is released and pinned in `.bosun/version` (see `CHANGELOG.md`,
+`docs/PROGRESS.md`). To set it up on a repo you already have, read
+[docs/adopt-existing-repo.md](docs/adopt-existing-repo.md).
 
 ## Install
 
-After the first release (see `docs/releasing.md`; until then build from source):
+Releases: see `docs/releasing.md`.
 
 ```bash
 npm i -g @keelstackhq/bosun     # launcher; the binary comes from a platform package
@@ -25,12 +27,15 @@ From source (Rust 1.97): `cargo install --path .` (package `keel-bosun`, binary 
 ## Use
 
 ```text
-bosun claim 42 --touch 'src/core/**'   # exit 3 if a live lease overlaps
+bosun claim 42                         # lease the task's paths; exit 3 if a live lease overlaps
 bosun wave plan 7                      # tasks that can run in parallel now
-bosun gate test                        # runs the profile's test command on affected packages
-bosun pr 42                           # opens the PR as a draft (no CI runs on it)
-bosun pr 42 --ready                   # after local gates: ready + auto-merge; GitHub merges on green
+bosun pr 42                            # open the PR as a draft: no CI runs on it yet
+for g in fmt lint test deps test-integrity; do bosun gate $g || break; done   # local, stamped
+bosun pr 42 --ready                    # ready + auto-merge; GitHub merges on green (bosun never merges)
 ```
+
+The loop is draft first: `bosun pr`, local gates, then `bosun pr --ready`. A draft costs no CI
+minutes; see [docs/ci-minutes.md](docs/ci-minutes.md). `--auto-merge` is an old alias of `--ready`.
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit.
 
@@ -71,6 +76,8 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
   Every command that starts or changes work exits 4 until you close the issue. The repo variable
   `BOSUN_HALT=1` also halts, where the token can read it.
 
+- Adopt bosun on an existing repo (also cloud sessions and Claude Tag): [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md)
+- CI minutes: [docs/ci-minutes.md](docs/ci-minutes.md)
 - Design: [docs/spec.md](docs/spec.md)
 - Default values and their evidence: [docs/defaults.md](docs/defaults.md)
 - Plan format: [docs/plan-format.md](docs/plan-format.md)

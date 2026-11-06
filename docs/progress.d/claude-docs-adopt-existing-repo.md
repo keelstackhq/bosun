@@ -1,0 +1,1 @@
+- 2026-11-06 · docs: adopt-existing-repo guide (bosun-only, cloud, Claude Tag gaps); README at 0.7.0
