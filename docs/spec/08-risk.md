@@ -190,7 +190,7 @@ High-risk PRs:
   `[approvals]`, since its release may reject the key (`tests/channel_render.rs`). A consumer
   drops the key to opt out.
 - Approval policy (D-014 draft, spec B6). `[approvals] policy = "owner" | "owner-gated" |
-  "orchestrator"` (default `owner`, fail safe: intake writes the policy explicitly for new and
+  "orchestrator"` (or `"autonomous"`, next bullet; default `owner`, fail safe: intake writes the policy explicitly for new and
   adopted repos; another value is a parse error) says when an orchestrator approval (the
   bootstrap-form signature above, format unchanged) counts. Checks, in order, first failure wins
   (`orchestrator_counts` in `src/core/approve.rs`): the requirement is `owner`; no
@@ -211,6 +211,51 @@ High-risk PRs:
   owner approves, asked with a chat form). `data.policy` names the policy of `--print` and posted
   approvals. Release ordering: the pinned release rejects unknown keys, so set `policy` only after
   a release that reads it is pinned and `KNOWN_APPROVALS` in `tests/pinned_config.rs` lists it.
+- Autonomous policy (D-017). `[approvals] policy = "autonomous"` lets the orchestrator approve
+  gated PRs inside the allowlist below, signed in its own form
+  (first line `/bosun approve <head> autonomous`, message `bosun-autonomous v1 <o>/<r>#<pr> <head>`, owner keys only; under this policy a bootstrap-form signature does not count, and an autonomous one never counts under another policy or as an owner approval) with the note line `Signed in autonomous mode (D-017), not an owner answer`
+  (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
+  bootstrap window and whatever the requirement, and only by an allowlist
+  (`risk::autonomous_excluded`): every changed path (previous name too, any case) must be under
+  `src/**`, `tests/**`, `docs/**` or `changelog.d/**` (`AUTONOMOUS_ALLOWED`) and outside
+  `docs/setup-script.sh`, `docs/agents/**`, `docs/lessons.toml`, `**/plans/**`, `**/*.jinja` and
+  `**/build.rs` (`AUTONOMOUS_DENIED`). Everything else is the owner's: workflows, `.github/**`,
+  `.bosun/**`, `channel/**`, `.circleci/**`, actions, root files (`Cargo.toml`, `deny.toml`,
+  `hoist.toml`, ...), and an `R-secrets` or `R-prod-write` match (the status keeps the `high
+  risk, owner approval needed` text). Trust files and an unseen diff still make signatures not
+  count at all. A signature counts in risk-check only with a counting verdict on the head
+  (`risk::autonomous_verdicts`): approve, confidence >= min, no major finding, from a session
+  that holds no lease on a linked issue, on an unedited comment by the verdict author; any
+  unedited non-approving verdict record on the head, from any session and in any order, leaves
+  nothing. The PR must close (`Closes`, `Fixes`, `Resolves`; the `bosun:task-pr` marker does not
+  count) an issue that is open, not a PR, not the PR itself, carries task meta and has a lease
+  record written by the PR author; else it fails closed to the owner path. Waiting for the
+  verdict or signature is `high risk, autonomous mode (D-017): clean verdict and orchestrator
+  signature needed`, which does not start with the owner-wait text, so `bosun approve --list`
+  leaves it off the owner board. `data.autonomous_verdicts` lists the counted sessions. It
+  carries over a clean merge of main (design C7); a rejection on the new head then blocks the merge through `review-verdict`, not risk-check. `bosun approve --bootstrap` refuses (exit 1)
+  on an excluded path (it cannot see R-secrets or R-prod-write), and unless a counting verdict on the head comes
+  from a session that is neither a lease holder nor the signer. Known limits: a session id is
+  self-declared (`<!-- bosun:session -->` comes from `BOSUN_SESSION`) and cloud sessions have no
+  verifiable identity, so reviewer independence holds only against honest agents; the signer key
+  is the trust root. risk-check cannot see the signer's session, so only `approve` enforces
+  signer != reviewer. The task link binds the PR author's login, not a session: agents that
+  share one login can close another session's task and review their own PR, which is within
+  the honest-agent limit. The session that holds an owner key must never build or run bosun code
+  from an autonomous PR (it would run unreviewed code next to the key). Gate code always goes to
+  the owner: any path the base branch's R-gate rule matches (`AUTONOMOUS_DENIED_RULES`, with
+  R-secrets and R-prod-write; a unit test walks every default R-gate path), the module roots
+  `src/lib.rs`, `src/main.rs` and `src/**/mod.rs`, and any Rust file whose diff is not shown or
+  changes a line that may set `#[path]` (`path = "`, spaces dropped, `cfg_attr` too;
+  `risk::path_attributes`). R-gate is the trust boundary: every module risk-check and `approve` import is on it today
+  (app, github, output and the approval path included); a new module on that path is gate code
+  only once the rule names it, and `tests/governance.rs` keeps both rule files equal. `bosun approve` sees paths and
+  `#[path]` only, not R-gate, so it may sign a PR risk-check then refuses. Any verdict record on the head that would not count (a rejection,
+  majors, a low or missing confidence), edited or not, blocks autonomous approval. The verdict
+  record carries no `escalate_risk`, so an escalation is seen only as its verdict. Never
+  covered: release environments, secrets, tags. `policy =
+  "autonomous"` under an older pinned release is a parse error (fails closed); set it only after
+  pinning a release that knows it.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

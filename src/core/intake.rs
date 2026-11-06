@@ -238,7 +238,7 @@ pub fn parse(src: &str) -> Result<Intake, IntakeError> {
     if publish.len() > 1 && publish.iter().any(|p| p == "none") {
         return Err(bad("publish", "\"none\" stands alone"));
     }
-    let a = ["owner", "owner-gated", "orchestrator"];
+    let a = ["owner", "owner-gated", "orchestrator", "autonomous"];
     let approvals = choice(
         "approvals",
         t.get("approvals"),
@@ -428,6 +428,8 @@ slack_channel = ""
         assert_bad(&edit("[\"crates\"]", "[\"pypi\"]"), "publish");
         assert_bad(&edit("[\"crates\"]", "[\"crates\", \"none\"]"), "publish");
         assert_bad(&edit("\"orchestrator\"", "\"nobody\""), "approvals");
+        let auto = parse(&edit("\"orchestrator\"", "\"autonomous\"")).unwrap();
+        assert_eq!(auto.approvals, "autonomous");
         assert_bad(&edit("\"chat\"", "\"email\""), "notify");
         assert_bad(
             &edit("slack_channel = \"\"", "slack_channel = \"x\""),

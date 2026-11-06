@@ -11,12 +11,12 @@ use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
-    APPROVERS_PATH, ApproverKey, Form, OrchestratorCase, Role, orchestrator_counts,
-    parse_approvers, signature_lines, signed_message, signed_message_bootstrap, signed_message_v2,
-    trust_files_changed, verify_ed25519,
+    APPROVERS_PATH, ApproverKey, Form, OrchestratorCase, Policy, Role, orchestrator_counts,
+    parse_approvers, signature_lines, signed_message, signed_message_autonomous,
+    signed_message_bootstrap, signed_message_v2, trust_files_changed, verify_ed25519,
 };
 use crate::core::lease::leases_of;
-use crate::core::meta::linked_issues_in;
+use crate::core::meta::{closing_issues_in, linked_issues_in};
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
@@ -25,7 +25,7 @@ use crate::core::risk::{
 };
 use crate::core::touch::{Changed, outside};
 use crate::ctx::RepoId;
-use crate::github::{Comment, Github, PrFile, Pull, Review, b64};
+use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
 
@@ -229,17 +229,31 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     }
     let signed_ok = trust.is_empty() && !unseen;
     let requirement = requirement(&matches);
-    let bootstrap = if high && signed_ok {
+    let (mut bootstrap, autonomous) = if high && signed_ok {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
         orchestrator_window(gh, base, &today[..10], pr, &excluded)?
     } else {
-        Err("signed approvals do not count on this PR".into())
+        (
+            Err("signed approvals do not count on this PR".into()),
+            false,
+        )
     };
-    let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
-    // Without a linked task there is no lease to check the reviewers against: fail closed.
+    let repo = app.ctx.repo.to_string();
+    let linked = linked_issues_in(&pull.body, &repo);
+    // D-017: the signature counts only with a clean verdict and a task the author leased.
+    let auto = if autonomous && bootstrap.is_ok() {
+        autonomous_inputs(gh, &pull, &repo)?
+    } else {
+        None
+    };
+    if autonomous && bootstrap.is_ok() && auto.is_none() {
+        bootstrap =
+            Err("autonomous mode (D-017) needs an open linked task leased by the author".into());
+    }
+    let autonomous = auto.is_some();
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
     let need = Need {
@@ -252,6 +266,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         requirement,
         linked: &linked,
         unlinked,
+        autonomous: auto.as_ref(),
     };
     let found = if high {
         approval_on(gh, &need, head)?
@@ -276,6 +291,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         mut verdicts,
         mut delegate_verdicts,
         delegate_blocked,
+        autonomous_verdicts,
     } = found;
     let carried_from = carried.as_ref().map(|(h, ..)| h.clone());
     if let Some((_, who, counted)) = carried {
@@ -300,6 +316,10 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
             "high risk ({}), approved by two verdicts: {}",
             ids.join(", "),
             verdicts.join(", ")
+        ),
+        (None, _) if autonomous => format!(
+            "high risk, autonomous mode (D-017): clean verdict and orchestrator signature needed: {}",
+            ids.join(", ")
         ),
         (None, _) if unlinked => format!(
             "high risk, owner approval needed (links no task, so verdicts cannot count): {}",
@@ -341,6 +361,10 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         if !critical.is_empty() {
             data["critical"] = json!(critical);
         }
+        if autonomous {
+            data["policy"] = json!("autonomous");
+            data["autonomous_verdicts"] = json!(autonomous_verdicts);
+        }
     }
     if passed {
         return Ok(Outcome::data(data));
@@ -360,7 +384,12 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         }
         _ => String::new(),
     };
-    let fix = if unlinked {
+    let fix = if autonomous {
+        format!(
+            "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
+            risk::VERDICT_MIN_CONFIDENCE
+        )
+    } else if unlinked {
         format!(
             "the PR links no task (`Closes #N`), so verdicts cannot be checked for independence: link the task, or get an owner approval: {owner_fix}"
         )
@@ -400,6 +429,9 @@ struct Need<'a> {
     requirement: Approval,
     linked: &'a [u64],
     unlinked: bool,
+    /// Autonomous policy (D-017), nothing excluded: the PR comments and the lease sessions the
+    /// signature's clean verdict is judged by.
+    autonomous: Option<&'a (Vec<Comment>, Vec<String>)>,
 }
 
 /// How a head is approved: by an owner or delegate (`approved_by`), or by two verdicts.
@@ -409,6 +441,7 @@ pub(crate) struct Found {
     pub(crate) verdicts: Vec<String>,
     delegate_verdicts: Vec<String>,
     delegate_blocked: Option<String>,
+    autonomous_verdicts: Vec<String>,
 }
 
 impl Found {
@@ -432,10 +465,22 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     let Need {
         repo, pr, owners, ..
     } = *need;
-    let mut found = Found {
-        approved_by: approver(gh, repo, pr, sha, owners, need.signed_ok, need.bootstrap)?,
-        ..Found::default()
+    let mut found = Found::default();
+    let mut bootstrap = need.bootstrap;
+    if let Some((comments, excluded)) = need.autonomous {
+        found.autonomous_verdicts = autonomous_clean(comments, sha, excluded);
+        if found.autonomous_verdicts.is_empty() {
+            bootstrap = None;
+        }
+    }
+    // Under the autonomous policy only its own form counts, else only the bootstrap form.
+    let form = if need.autonomous.is_some() {
+        Form::Autonomous
+    } else {
+        Form::Bootstrap
     };
+    let bootstrap = bootstrap.map(|l| (l, form));
+    found.approved_by = approver(gh, repo, pr, sha, owners, need.signed_ok, bootstrap)?;
     let open = found.approved_by.is_none() && !need.unlinked;
     // Two verdicts only matter when the owner has not approved and the class allows them.
     if open && need.requirement == Approval::TwoVerdicts {
@@ -629,7 +674,7 @@ fn approver(
     head: &str,
     owners: &[String],
     signed_ok: bool,
-    bootstrap: Option<&str>,
+    bootstrap: Option<(&str, Form)>,
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let state = |o: &str| decisive_review(&reviews, o, head);
@@ -673,13 +718,14 @@ fn approver(
         .collect();
     // A bootstrap-mode signature never clears a dismissal.
     if ids.is_empty() {
-        if let Some(id) = sign(&|f| f != Form::Bootstrap)? {
+        // Bootstrap and autonomous signatures are not owner approvals.
+        if let Some(id) = sign(&|f| matches!(f, Form::V1 | Form::V2(_)))? {
             return Ok(Some(format!("key {id}")));
         }
-        let Some(label) = bootstrap else {
+        let Some((label, form)) = bootstrap else {
             return Ok(None);
         };
-        let boot = sign(&|f| f == Form::Bootstrap)?;
+        let boot = sign(&|f| f == form)?;
         return Ok(boot.map(|id| format!("key {id} ({label})")));
     }
     let mut by = None;
@@ -796,6 +842,44 @@ pub fn verdict_inputs(gh: &dyn Github, n: u64, ls: &[u64]) -> Result<(Vec<Commen
     Ok((comments, excluded))
 }
 
+/// D-017: the PR's comments and the sessions that cannot review it, only when the PR closes an
+/// open task issue (not a PR, not itself, with task meta) on which the PR author wrote a lease
+/// record; else no reviewer can be shown independent of the author (a decoy link fails closed).
+/// The excluded sessions are every lease session on any linked issue.
+pub(crate) fn autonomous_inputs(
+    gh: &dyn Github,
+    pull: &Pull,
+    repo: &str,
+) -> Result<Option<(Vec<Comment>, Vec<String>)>> {
+    let mut task = false;
+    for i in closing_issues_in(&pull.body, Some(repo)) {
+        let open = |x: &Issue| x.state == "open" && !x.pull_request && task_meta(x).is_some();
+        if i != pull.number && gh.get_issue(i)?.is_some_and(|x| open(&x)) {
+            let notes = gh.list_comments(i)?;
+            let by = |c: &&Comment| c.user.eq_ignore_ascii_case(&pull.user);
+            let bodies = notes.iter().filter(by).map(|c| c.body.as_str());
+            task |= !lease_sessions(bodies).is_empty();
+        }
+    }
+    let linked = linked_issues_in(&pull.body, repo);
+    let (comments, excluded) = verdict_inputs(gh, pull.number, &linked)?;
+    Ok(task.then_some((comments, excluded)))
+}
+
+/// D-017: the sessions with a counting verdict on `head` ([`risk::autonomous_verdicts`]).
+pub(crate) fn autonomous_clean(
+    comments: &[Comment],
+    head: &str,
+    excluded: &[String],
+) -> Vec<String> {
+    let c = comments.iter();
+    risk::autonomous_verdicts(
+        c.map(|c| (c.user.as_str(), c.body.as_str(), c.unedited())),
+        head,
+        excluded,
+    )
+}
+
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed
 /// approvals); `accept` takes the comment's form. Only an owner key signs v2 and bootstrap.
 /// The keys come from the default branch only, so a PR cannot enroll its own. Any author and app
@@ -834,6 +918,7 @@ fn signed_approver(
             (Form::V1, _) => signed_message(role, o, r, pr, head),
             (Form::V2(v), Role::Owner) => signed_message_v2(o, r, pr, head, v),
             (Form::Bootstrap, Role::Owner) => signed_message_bootstrap(o, r, pr, head),
+            (Form::Autonomous, Role::Owner) => signed_message_autonomous(o, r, pr, head),
             _ => continue,
         };
         if !accept(form) {
@@ -873,12 +958,12 @@ fn orchestrator_window(
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
     excluded: &[String],
-) -> Result<std::result::Result<String, String>> {
+) -> Result<(std::result::Result<String, String>, bool)> {
     let (files, matches, requirement) = pr;
     let approvals = match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => match Config::parse(&t, CONFIG_FILE) {
             Ok(c) => c.approvals,
-            Err(e) => return Ok(Err(format!("bootstrap mode is off: {}", e.message))),
+            Err(e) => return Ok((Err(format!("bootstrap mode is off: {}", e.message)), false)),
         },
         None => Default::default(),
     };
@@ -887,7 +972,12 @@ fn orchestrator_window(
         .collect();
     let workflows = risk::workflow_files(&paths);
     let rules: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
-    Ok(orchestrator_counts(&OrchestratorCase {
+    let mut autonomous_excluded = risk::autonomous_excluded(&paths, matches);
+    let patches: Vec<_> = (files.iter())
+        .map(|f| (&*f.filename, f.patch.as_deref()))
+        .collect();
+    autonomous_excluded.extend(risk::path_attributes(&patches));
+    let counts = orchestrator_counts(&OrchestratorCase {
         policy: approvals.policy(),
         bootstrap_until: approvals.bootstrap_until.as_deref(),
         today,
@@ -895,7 +985,9 @@ fn orchestrator_window(
         excluded,
         rules: &rules,
         workflows: &workflows,
-    }))
+        autonomous_excluded: &autonomous_excluded,
+    });
+    Ok((counts, approvals.policy() == Policy::Autonomous))
 }
 
 /// The paths and rules of the PR that a bootstrap-mode approval never covers.
@@ -915,8 +1007,10 @@ fn bootstrap_excluded(files: &[PrFile], matches: &[risk::Match], bosun_code: boo
 /// Whether a comment on the PR has a bootstrap-mode signature line for `head`, valid or not.
 fn bootstrap_signed(gh: &dyn Github, pr: u64, head: &str) -> Result<bool> {
     let comments = gh.list_comments(pr)?;
-    Ok((comments.iter())
-        .any(|c| (signature_lines(&c.body, head).iter()).any(|(f, ..)| *f == Form::Bootstrap)))
+    Ok((comments.iter()).any(|c| {
+        (signature_lines(&c.body, head).iter())
+            .any(|(f, ..)| matches!(f, Form::Bootstrap | Form::Autonomous))
+    }))
 }
 
 /// The keys of `.bosun/approvers.toml` on the default branch, read at `refs/heads/<branch>` so

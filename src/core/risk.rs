@@ -493,6 +493,97 @@ pub fn bootstrap_excluded(
     why
 }
 
+/// Autonomous mode (D-017) covers only these paths; every other changed path is the owner's.
+pub const AUTONOMOUS_ALLOWED: [&str; 4] = ["src/**", "tests/**", "docs/**", "changelog.d/**"];
+
+/// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
+/// and the files the review and the plans trust.
+pub const AUTONOMOUS_DENIED: [&str; 9] = [
+    "docs/setup-script.sh",
+    "docs/agents/**",
+    "docs/lessons.toml",
+    "**/plans/**",
+    "**/*.jinja",
+    "**/build.rs",
+    // Module roots: a `mod` line there can swap a gated module for another file.
+    "src/lib.rs",
+    "src/main.rs",
+    "src/**/mod.rs",
+];
+
+/// The rules whose match autonomous mode never covers: secrets, production writes and the gate
+/// code (R-gate at base: what decides approvals, so the deny set follows the rule).
+pub const AUTONOMOUS_DENIED_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-gate"];
+
+/// The Rust files among `(path, patch)` whose diff is not shown or changes a line that may set a
+/// `#[path]` (also inside `cfg_attr`, over several lines): `path` then `=` and a quote, spaces
+/// dropped. A false hit (`let path = "x"`) only sends the PR to the owner.
+pub fn path_attributes(files: &[(&str, Option<&str>)]) -> Vec<String> {
+    let attr = |l: &str| {
+        let t: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+        (l.starts_with('+') || l.starts_with('-'))
+            && (t.contains("path=\"") || t.contains("path=r"))
+    };
+    (files.iter())
+        .filter(|(p, patch)| {
+            p.to_ascii_lowercase().ends_with(".rs") && patch.is_none_or(|d| d.lines().any(attr))
+        })
+        .map(|(p, _)| p.to_string())
+        .collect()
+}
+
+/// What an autonomous-mode approval never covers among `(path, previous path)`: every path
+/// outside [`AUTONOMOUS_ALLOWED`] or inside [`AUTONOMOUS_DENIED`] (a rename counts on both sides,
+/// any case; a `..` segment too), and a match of [`AUTONOMOUS_DENIED_RULES`]. Empty: it can count.
+pub fn autonomous_excluded(files: &[(&str, Option<&str>)], matches: &[Match]) -> Vec<String> {
+    let globs = |l: &[&str]| -> Vec<Glob> {
+        (l.iter())
+            .map(|g| Glob::parse(g).expect("built-in autonomous glob"))
+            .collect()
+    };
+    let (allow, deny) = (globs(&AUTONOMOUS_ALLOWED), globs(&AUTONOMOUS_DENIED));
+    let any = |gs: &[Glob], p: &str| gs.iter().any(|g| matches_any_case(g, p));
+    let mut why: Vec<String> = (files.iter())
+        .filter(|(path, prev)| {
+            (std::iter::once(path).chain(prev))
+                .any(|p| p.split('/').any(|s| s == "..") || !any(&allow, p) || any(&deny, p))
+        })
+        .map(|(path, _)| path.to_string())
+        .collect();
+    for rule in AUTONOMOUS_DENIED_RULES {
+        if matches.iter().any(|m| m.rule == rule) {
+            why.push(rule.into());
+        }
+    }
+    why
+}
+
+/// The sessions whose clean verdict on `head` lets the orchestrator approve on its own (D-017):
+/// `(author, body, unedited)` comments oldest first. As [`clean_verdicts`], but an edited comment
+/// never counts, and any verdict by [`VERDICT_AUTHOR`] on `head` that would not count (edited too),
+/// from any session and in any order, leaves nothing.
+pub fn autonomous_verdicts<'a>(
+    comments: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
+    head: &str,
+    excluded: &[String],
+) -> Vec<String> {
+    let all: Vec<_> = comments.into_iter().collect();
+    // Any verdict on the head that would not count blocks, edited too (an edit can only make it
+    // count less): a rejection, majors, a low or missing confidence. Only all-clean passes.
+    let refused = all.iter().any(|(a, b, _)| {
+        a.eq_ignore_ascii_case(VERDICT_AUTHOR)
+            && matches!(apply_record(b), Some(Record::Verdict { head_sha, approved, confidence, major, .. })
+                if head_sha == head
+                    && !(approved && major == Some(0)
+                        && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE)))
+    });
+    if refused {
+        return Vec::new();
+    }
+    let kept = (all.into_iter()).filter_map(|(a, b, unedited)| unedited.then_some((a, b)));
+    clean_verdicts(kept, head, excluded)
+}
+
 /// The changed paths among `(path, previous path)` pairs that are CI workflow files
 /// ([`WORKFLOW_PATHS`](super::approve::WORKFLOW_PATHS)); a rename counts on both sides.
 pub fn workflow_files(files: &[(&str, Option<&str>)]) -> Vec<String> {
@@ -1035,6 +1126,132 @@ mod tests {
             assert!(
                 bootstrap_excluded(&f, &[], false).is_empty(),
                 "{g} in a consumer repo"
+            );
+        }
+    }
+
+    #[test]
+    fn autonomous_covers_only_the_allowlist_minus_the_denied() {
+        let ok = [
+            "src/cli/claim.rs",
+            "tests/cli_x.rs",
+            "docs/spec/08-risk.md",
+            "changelog.d/x.md",
+        ];
+        let no = [
+            ".github/workflows/ci.yml",
+            ".github/actions/x/action.yml",
+            ".bosun/risk.toml",
+            "channel/pieces/core/files/src/a.rs",
+            ".circleci/config.yml",
+            "Cargo.toml",
+            "build.rs",
+            "deny.toml",
+            "hoist.toml",
+            "src/x/build.rs",
+            "src/a/b.rs.jinja",
+            "docs/agents/org-decisions.md",
+            "docs/lessons.toml",
+            "docs/setup-script.sh",
+            "docs/superpowers/plans/p.md",
+            "SRC/Build.RS",
+            "Docs/Agents/X.md",
+            // Module roots can swap a gated module for another file.
+            "src/lib.rs",
+            "src/main.rs",
+            "src/cli/mod.rs",
+        ];
+        for p in ok {
+            assert!(autonomous_excluded(&[(p, None)], &[]).is_empty(), "{p}");
+        }
+        for p in no {
+            assert_eq!(autonomous_excluded(&[(p, None)], &[]), [p], "{p}");
+        }
+        // Gate code goes to the owner: every path of the default R-gate rule is a match that
+        // autonomous mode refuses, so the deny set follows R-gate.
+        let gate = Rules::defaults()
+            .rules
+            .into_iter()
+            .find(|r| r.id == "R-gate");
+        let gate = gate.expect("R-gate");
+        assert!(!gate.paths.is_empty());
+        for g in &gate.paths {
+            let p = g.as_str().replace("**", "x.rs");
+            let m = eval(&[file(&p, &[])]);
+            assert!(
+                autonomous_excluded(&[(&p, None)], &m).contains(&"R-gate".to_string()),
+                "{p}"
+            );
+        }
+        // A rename counts on both sides.
+        let f = [("src/a.rs", Some(".github/workflows/ci.yml"))];
+        assert_eq!(autonomous_excluded(&f, &[]), ["src/a.rs"]);
+        let f = [(".bosun/x.toml", Some("src/a.rs"))];
+        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
+        let m = |rule: &str| Match {
+            rule: rule.into(),
+            why: String::new(),
+            approval: Approval::Owner,
+            evidence: Vec::new(),
+        };
+        let f = [("src/a.rs", None)];
+        assert_eq!(autonomous_excluded(&f, &[m("R-secrets")]), ["R-secrets"]);
+        assert_eq!(
+            autonomous_excluded(&f, &[m("R-prod-write")]),
+            ["R-prod-write"]
+        );
+        assert!(autonomous_excluded(&f, &[m("R-gov")]).is_empty());
+        // A `#[path]` attribute in a changed Rust line, or an unseen Rust diff, goes to the owner.
+        let some = Some("@@\n+fn a() {}");
+        let attr = Some("@@\n+#[cfg_attr(x,\n+   path = \"other.rs\")]\n+mod risk;");
+        assert!(path_attributes(&[("src/a.rs", some)]).is_empty());
+        assert!(path_attributes(&[("docs/a.md", None)]).is_empty());
+        assert_eq!(path_attributes(&[("src/a.rs", attr)]), ["src/a.rs"]);
+        assert_eq!(path_attributes(&[("src/a.RS", None)]), ["src/a.RS"]);
+        let attr = Some("@@\n-#[path = \"x.rs\"]");
+        assert_eq!(path_attributes(&[("src/a.rs", attr)]).len(), 1);
+    }
+
+    #[test]
+    fn autonomous_verdicts_skip_edits_and_stop_at_any_request_for_changes() {
+        let h = "a".repeat(40);
+        let v = |s: &str, head: &str, approved: bool| {
+            let r = serde_json::json!({"bosun": "verdict", "session": s, "head_sha": head,
+                "approved": approved, "confidence": 0.95, "major": 0});
+            format!("Review verdict: approve 0.95, 0 blocker.\n\n{r}")
+        };
+        let (a, b) = (v("a", &h, true), v("b", &h, false));
+        let (other, bad) = (v("c", &"b".repeat(40), false), v("d", &h, true));
+        let (a, b, other, bad) = (a.as_str(), b.as_str(), other.as_str(), bad.as_str());
+        let run = |c: &[(&str, &str, bool)], ex: &[String]| {
+            autonomous_verdicts(c.iter().copied(), &h, ex)
+        };
+        let bot = VERDICT_AUTHOR;
+        assert_eq!(run(&[(bot, a, true)], &[]), ["a"]);
+        assert!(run(&[(bot, a, false)], &[]).is_empty());
+        // A rejection from any session, before or after, or from an excluded one.
+        assert!(run(&[(bot, b, true), (bot, a, true)], &[]).is_empty());
+        assert!(run(&[(bot, a, true), (bot, b, true)], &[]).is_empty());
+        assert!(run(&[(bot, a, true), (bot, b, true)], &["b".into()]).is_empty());
+        // An edited rejection still blocks (fail closed); one on another head or by someone
+        // else does not.
+        assert!(run(&[(bot, a, true), (bot, b, false)], &[]).is_empty());
+        assert_eq!(run(&[(bot, a, true), (bot, other, true)], &[]), ["a"]);
+        assert_eq!(run(&[("mallory", b, true), (bot, a, true)], &[]), ["a"]);
+        assert_eq!(
+            run(&[(bot, a, true), (bot, bad, true)], &["d".into()]),
+            ["a"]
+        );
+        // An approval that would not count blocks too: majors or low confidence.
+        let weak = |c: f64, m: u32| {
+            let r = serde_json::json!({"bosun": "verdict", "session": "e", "head_sha": &h,
+                "approved": true, "confidence": c, "major": m});
+            format!("Review verdict: approve.\n\n{r}")
+        };
+        for w in [weak(0.95, 1), weak(0.1, 0)] {
+            assert!(
+                run(&[(bot, a, true), (bot, &w, true)], &[]).is_empty(),
+                "{w}"
             );
         }
     }
