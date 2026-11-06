@@ -4,6 +4,17 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.7.0 with its npm sha512 values; KNOWN lists gain 0.7.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
+- CI (bosun's ci.yml and the channel's bosun.yml) and the local pre-push loop run `bosun gate ci-minutes` after test-integrity; the channel skips it when the pinned bosun is older than 0.7.0.
+- `[approvals] policy = "autonomous"` (D-017): the orchestrator approves gated PRs itself when the head has a clean, unedited verdict from an independent session on a leased task and an autonomous-form signature; only `src/`, `tests/`, `docs/`, `changelog.d/` paths qualify (not R-gate code, module roots or `#[path]` changes), everything else (workflows, `.bosun`, `channel`, root files) stays with the owner.
+- `bosun adopt` writes bosun's files into a plain repo (no hull, splice or hoist) and `bosun uninstall` takes back exactly what it wrote, tracked in `.bosun/adopt.toml`.
+- Docs: add docs/adopt-existing-repo.md (bosun-only setup, cloud sessions, Claude Tag gaps) and bring README.md to 0.7.0 and the draft-first loop.
+- R-gate covers the approval path (carry-over, PR bundles, touch, text, shape, plan, lock-merge) and the hooks with their guard and repeat logic; the bootstrap window (D-012) never covers R-gov or R-prod-write.
+- R-gate also covers the gate stamps, gate records and the CI-minutes gate.
+- `docs/operating-model.md`: how to work with agents in a bosun repo, which principles bosun enforces today, and ranked candidates to enforce next.
+- `bosun join --origin slack --slack-channel C… [--slack-thread TS]` maps a Claude Tag channel or thread session to a seat on its registry record; a spawned or routine session cannot join as slack.
+- `bosun notify` routes Claude Tag posts to threads (`send_message`, `thread_reply`) from the session seat, owner questions go to their task's thread; `bosun doctor` checks the seat (`claude-tag`) and warns about a PAT in a cloud session.
+
 ## 0.7.0 (2026-11-06)
 
 - `bosun claim` lets a session re-claim its own task in an active state (queued, review, ...) after its lease lapsed and before reap: the lease is renewed in place, with the overlap check on its touch.

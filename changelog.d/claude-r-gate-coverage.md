@@ -1,1 +1,0 @@
-- R-gate covers the approval path (carry-over, PR bundles, touch, text, shape, plan, lock-merge) and the hooks with their guard and repeat logic; the bootstrap window (D-012) never covers R-gov or R-prod-write.

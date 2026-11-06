@@ -1,1 +1,0 @@
-- Docs: add docs/adopt-existing-repo.md (bosun-only setup, cloud sessions, Claude Tag gaps) and bring README.md to 0.7.0 and the draft-first loop.

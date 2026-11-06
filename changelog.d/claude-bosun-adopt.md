@@ -1,1 +1,0 @@
-- `bosun adopt` writes bosun's files into a plain repo (no hull, splice or hoist) and `bosun uninstall` takes back exactly what it wrote, tracked in `.bosun/adopt.toml`.

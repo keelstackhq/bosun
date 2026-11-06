@@ -1,1 +1,0 @@
-- 2026-11-06 · ci-minutes in CI · gate loop in ci.yml, channel bosun.yml and AGENTS.md
