@@ -1,1 +1,0 @@
-- `bosun claim` lets a session re-claim its own task in an active state (queued, review, ...) after its lease lapsed and before reap: the lease is renewed in place, with the overlap check on its touch.
