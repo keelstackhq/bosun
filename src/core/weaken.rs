@@ -106,7 +106,13 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
     match kind {
         Kind::Caps => {
             for (k, old) in &fb {
-                let Some(o) = num(old) else { continue };
+                // A non-number (`[models]`): any change, as a weaker model reviews less.
+                let Some(o) = num(old) else {
+                    if fh.get(k) != Some(old) {
+                        add(k, &show(old), &fh.get(k).map_or("(removed)".into(), show));
+                    }
+                    continue;
+                };
                 match fh.get(k) {
                     None => add(k, &show(old), "(removed)"),
                     // NaN, a string or a bool is no cap.
@@ -122,7 +128,12 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             }
         }
         Kind::Config => {
-            let gated = |k: &str| k == "stack" || k.starts_with("approvals.");
+            let gated = |k: &str| {
+                k == "stack"
+                    || ["approvals.", "prices.", "review."]
+                        .iter()
+                        .any(|p| k.starts_with(p))
+            };
             for (k, old) in fb.iter().filter(|(k, _)| gated(k)) {
                 match fh.get(k) {
                     None => add(k, &show(old), "(removed)"),
@@ -157,7 +168,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
                     if new.and_then(|n| rank(n, &LEVELS)).is_none_or(|n| n < r) {
                         add(k, &show(old), &new.map_or("(removed)".into(), show));
                     }
-                } else if last == "deny" || org || ADDS.contains(&last) {
+                } else if old.is_array() && (last == "deny" || org || ADDS.contains(&last)) {
                     let (o, n) = (items(old), new.map(items).unwrap_or_default());
                     if last == "deny" {
                         o.iter()
@@ -173,12 +184,15 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
                     add(k, &show(old), &new.map_or("(removed)".into(), show));
                 }
             }
-            // Keys new at head: allow-lists that start out non-empty, levels set to allow.
+            // Keys new at head: allow-list items, any other setting but a `deny`.
             for (k, new) in fh.iter().filter(|(k, _)| !fb.contains_key(*k)) {
                 let last = k.rsplit('.').next().unwrap_or_default();
-                if ADDS.contains(&last) || k.split('.').any(|s| s == "allow-org") {
+                if new.is_array()
+                    && (ADDS.contains(&last) || k.split('.').any(|s| s == "allow-org"))
+                {
                     items(new).iter().for_each(|i| add(k, "(none)", i));
-                } else if rank(new, &LEVELS) == Some(0) {
+                } else if last != "deny" && rank(new, &LEVELS) != Some(2) {
+                    // Any new setting may narrow what is checked; only a new `deny` tightens.
                     add(k, "(none)", &show(new));
                 }
             }
@@ -396,6 +410,40 @@ mod tests {
                 Some("[gates.t]\ncmd = [\"true\"]\n")
             ),
             [".bosun/profiles/my.toml: profile (built-in) → (new)"]
+        );
+    }
+
+    #[test]
+    fn review_round_three() {
+        let d = "deny.toml";
+        let g = "[graph]\nall-features = true\n";
+        assert_eq!(
+            t(d, g, &format!("{g}exclude = [\"x\"]\n")),
+            ["deny.toml: graph.exclude (none) → [\"x\"]"]
+        );
+        assert!(t(d, g, &format!("{g}[bans]\ndeny = [\"y\"]\n")).is_empty());
+        let p = "[licenses.private]\nignore = false\n";
+        assert_eq!(
+            t(d, p, &p.replace("false", "true")),
+            ["deny.toml: licenses.private.ignore false → true"]
+        );
+        let l = ".bosun/limits.toml";
+        assert_eq!(
+            t(
+                l,
+                "[models]\nreview = \"sonnet\"\n",
+                "[models]\nreview = \"haiku\"\n"
+            ),
+            [".bosun/limits.toml: models.review sonnet → haiku"]
+        );
+        let c = ".bosun/bosun.toml";
+        assert_eq!(
+            t(
+                c,
+                "[review]\nmode = \"ci\"\n",
+                "[review]\nmode = \"subagent\"\n"
+            ),
+            [".bosun/bosun.toml: review.mode ci → subagent"]
         );
     }
 
