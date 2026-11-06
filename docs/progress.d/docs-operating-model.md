@@ -1,1 +1,1 @@
-- 2026-11-06 · operating model · docs/operating-model.md: principle → mechanism → status table and enforcement candidates · PR #TBD
+- 2026-11-06 · operating model · docs/operating-model.md: principle → mechanism → status table and enforcement candidates · PR #421
