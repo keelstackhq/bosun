@@ -1,0 +1,1 @@
+- tests/pinned_config.rs also checks the `[approvals] policy` value against the pinned release (`autonomous` from 0.8.0).

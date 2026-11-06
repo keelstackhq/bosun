@@ -197,6 +197,23 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
     ("0.8.0", &["bootstrap_until", "policy"]),
 ];
 
+/// The `[approvals] policy` values each pinned release accepts (`autonomous` from 0.8.0).
+const KNOWN_POLICIES: &[(&str, &[&str])] = &[
+    ("0.5.0", &["owner", "owner-gated", "orchestrator"]),
+    ("0.6.0", &["owner", "owner-gated", "orchestrator"]),
+    ("0.7.0", &["owner", "owner-gated", "orchestrator"]),
+    (
+        "0.8.0",
+        &["owner", "owner-gated", "orchestrator", "autonomous"],
+    ),
+];
+
+/// Whether release `version` accepts `[approvals] policy = value`; `None` for an unlisted release.
+fn policy_known(version: &str, value: &str) -> Option<bool> {
+    let (_, values) = KNOWN_POLICIES.iter().find(|(v, _)| *v == version)?;
+    Some(values.contains(&value))
+}
+
 /// `path` as committed at HEAD: CI swaps the base branch's `.bosun/` into the checkout.
 fn committed(path: &str) -> String {
     let out = std::process::Command::new("git")
@@ -271,4 +288,32 @@ fn approvals_uses_only_keys_the_pinned_release_knows() {
             "`approvals.{key}` in .bosun/bosun.toml is unknown to the pinned release {version}: the gates on main would fail; set it in the pin PR of a release that reads it"
         );
     }
+}
+
+#[test]
+fn approvals_policy_uses_only_values_the_pinned_release_knows() {
+    let version = committed(".bosun/version").trim().to_string();
+    let config: toml::Table = committed(".bosun/bosun.toml").parse().expect("bosun.toml");
+    let Some(policy) = config
+        .get("approvals")
+        .and_then(|a| a.get("policy"))
+        .and_then(|p| p.as_str())
+    else {
+        return;
+    };
+    let known = policy_known(&version, policy).unwrap_or_else(|| {
+        panic!("add the `[approvals] policy` values release {version} accepts to KNOWN_POLICIES in tests/pinned_config.rs")
+    });
+    assert!(
+        known,
+        "`approvals.policy = \"{policy}\"` in .bosun/bosun.toml is unknown to the pinned release {version}: the gates on main would fail; set it in the pin PR of a release that reads it"
+    );
+}
+
+#[test]
+fn policy_known_follows_the_release_table() {
+    assert_eq!(policy_known("0.7.0", "autonomous"), Some(false));
+    assert_eq!(policy_known("0.8.0", "autonomous"), Some(true));
+    assert_eq!(policy_known("0.7.0", "owner-gated"), Some(true));
+    assert_eq!(policy_known("0.4.0", "owner"), None);
 }
