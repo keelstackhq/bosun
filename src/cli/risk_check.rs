@@ -168,6 +168,13 @@ fn builtin_base(path: &str) -> Option<&'static str> {
 /// root, a TS/JS test file. Also every deleted test file.
 fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
     let (mut out, mut c) = (Vec::new(), [[0usize; 5]; 2]);
+    // A cap on reads: past it the owner judges, no quota is burnt and nothing errors.
+    let many = files.iter().filter(|f| code_file(&f.filename)).count();
+    if many > 100 {
+        return Ok(vec![format!(
+            "tests not counted: {many} code files; the owner judges"
+        )]);
+    }
     for f in files {
         let n = &f.filename;
         let prev = f.previous_filename.as_deref().unwrap_or(n);
@@ -182,9 +189,15 @@ fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> R
             if !exists || !code_file(path) {
                 continue;
             }
-            if let Some(text) = gh.file_at(path, at)? {
-                let r = test_counts(path, &text);
-                (0..5).for_each(|i| c[side][i] += r[i]);
+            match gh.file_at(path, at) {
+                Ok(Some(t)) if t.len() <= 1 << 20 => {
+                    let r = test_counts(path, &t);
+                    (0..5).for_each(|i| c[side][i] += r[i]);
+                }
+                Ok(None) => {}
+                _ => out.push(format!(
+                    "{path}: tests not counted (unreadable or over 1 MB); the owner judges"
+                )),
             }
         }
     }
@@ -210,19 +223,16 @@ fn code_file(path: &str) -> bool {
 fn test_counts(path: &str, text: &str) -> [usize; 5] {
     let p = path.to_ascii_lowercase();
     if p.ends_with(".rs") {
-        let root = |d: &str| p.starts_with(&format!("{d}/")) || p.contains(&format!("/{d}/"));
+        // What Cargo builds: inline tests under `src/`, `tests/*.rs` and `tests/<dir>/main.rs`.
+        let segs: Vec<&str> = p.split('/').collect();
+        let built = segs.contains(&"src")
+            || (segs.iter().rposition(|s| *s == "tests"))
+                .is_some_and(|i| matches!(&segs[i + 1..], [_] | [_, "main.rs"]));
         let text = weaken::strip_block_comments(text);
-        if !(root("src") || root("tests")) || !adapters::is_test_file(&p, &text) {
+        if !built || !adapters::is_test_file(&p, &text) {
             return [0; 5];
         }
-        let off = (text.lines())
-            .map(|l| l.split("//").next().unwrap_or_default().replace(' ', ""))
-            .filter(|l| {
-                ["cfg(any())", "cfg(not(all()))", "cfg(false)"]
-                    .iter()
-                    .any(|x| l.contains(x))
-            })
-            .count();
+        let off = text.lines().filter(|l| weaken::cfg_off(l)).count();
         return [
             adapters::test_count(&text),
             adapters::assertions(&text),

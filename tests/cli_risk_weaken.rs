@@ -259,3 +259,28 @@ fn a_weakening_needs_the_owner_even_if_the_rules_delegate_it() {
         assert_eq!(v["data"]["requirement"], "owner", "{class}: {v}");
     }
 }
+
+#[test]
+fn only_built_test_files_count_and_reads_are_capped() {
+    let fake = pr();
+    fake.pull_file(1, "tests/sub/a.rs", "renamed", 0, 0, None);
+    fake.renamed_from(1, "tests/a.rs");
+    fake.content("tests/a.rs", BASE, T);
+    fake.content("tests/sub/a.rs", HEAD, T);
+    assert!(evidence(&fake).contains("tests (all files) 1 → 0"));
+
+    let fake = pr();
+    file(
+        &fake,
+        "tests/big/main.rs",
+        Some(T),
+        Some(&format!("{T}{}", " ".repeat(1 << 21))),
+    );
+    assert!(evidence(&fake).contains("tests/big/main.rs: tests not counted"));
+
+    let fake = pr();
+    for i in 0..101 {
+        fake.pull_file(1, &format!("src/f{i}.rs"), "modified", 1, 1, Some("@@\n+x"));
+    }
+    assert!(evidence(&fake).contains("tests not counted: 101 code files"));
+}
