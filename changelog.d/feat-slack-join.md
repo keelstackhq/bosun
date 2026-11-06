@@ -1,0 +1,1 @@
+- `bosun join --origin slack --slack-channel C… [--slack-thread TS]` maps a Claude Tag channel or thread session to a seat on its registry record; a spawned or routine session cannot join as slack.

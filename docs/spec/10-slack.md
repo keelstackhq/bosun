@@ -54,6 +54,27 @@ notify = ["owner-question", "main-red", "budget-halt", "halt", "thread-result"]
   enrolled owner key (else exit 1, nothing signed) and returns the chat form in `data.chat`;
   it posts nothing. The key is read and never printed as for `bosun approve --sign-key`.
 
+### Claude Tag sessions
+
+Claude Tag runs one session for a channel's top level and one per thread, each in its own cloud
+sandbox, on the environment chosen for that channel (Claude Tag docs, concepts/how-it-works and
+admins/customize). GitHub goes through the Claude GitHub App and the proxy, so no PAT is needed
+(admins/configure-github).
+
+- `bosun join --origin slack --slack-channel C… [--slack-thread TS]` maps the session: a seat
+  `{role, channel, thread_ts}` on its `join` record, role `thread` with `--slack-thread`, else
+  `channel`. Channel `^[CG][A-Z0-9]{2,}$`, ts `^[0-9]+\.[0-9]+$`; `--slack-thread` needs
+  `--slack-channel`, and both need `--origin slack` (else exit 2). The channel must be
+  `[slack] channel` (no `[slack]` or another channel is exit 5). `--origin slack` is exit 5 when
+  the session resolves to origin spawned or routine (a child cannot relabel itself). A later
+  join without these flags keeps the seat. `data.slack` echoes it.
+- Origin: thread spawn accepts origin slack or local, so a Claude Tag session needs no
+  `BOSUN_ORIGIN` and no environment of its own; `bosun join --origin slack` labels it.
+- Gaps (not in the docs, not checkable from a session): whether Claude Tag sets
+  `CLAUDE_CODE_CHILD_SESSION`; the `send_message` `to`/`thread_ts` routing (seen only in the
+  session tool schema); the requester's Slack user ID and the channel facts (shared, guests),
+  which the caller still passes; a Slack approval form.
+
 Intents:
 - ask: `bosun status`, explain, `bosun progress`.
 - request: `bosun intake`.
