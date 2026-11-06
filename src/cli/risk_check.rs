@@ -854,8 +854,8 @@ pub(crate) fn autonomous_inputs(
     let (comments, excluded) = verdict_inputs(gh, n, ls)?;
     Ok((task && !excluded.is_empty()).then_some((comments, excluded)))
 }
-
-/// D-017: the changed workflow files that name `environment:` at the head or at base (a changed
+/// D-017: the changed workflow files that may reach an environment at the head or at base
+/// (`risk::may_reach_environment`; a changed line is not needed), or cannot be read: the owner.
 /// line is not needed), or that cannot be read: the owner approves those.
 pub(crate) fn environment_workflows(
     gh: &dyn Github,
@@ -863,9 +863,9 @@ pub(crate) fn environment_workflows(
     base: &str,
     head: &str,
 ) -> Vec<String> {
-    let wf = |p: &str| p.to_ascii_lowercase().starts_with(".github/workflows/");
+    let wf = risk::is_workflow;
     let named = |(p, r): (&str, &str)| match gh.file_at(p, r) {
-        Ok(t) => t.is_some_and(|t| risk::names_environment(&t)),
+        Ok(t) => t.is_some_and(|t| risk::may_reach_environment(&t)),
         Err(_) => true,
     };
     (files.iter())

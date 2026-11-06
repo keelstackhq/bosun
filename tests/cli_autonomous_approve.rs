@@ -316,6 +316,10 @@ fn an_unchanged_environment_line_in_a_workflow_stays_with_the_owner() {
         "jobs:\n  x:\n    \"environment\": prod\n",
         "jobs:\n  x:\n    'Environment' : prod\n",
         "jobs: {x: {environment : prod}}\n",
+        // An escaped key, and reusable workflows that may name one themselves.
+        "jobs:\n  x:\n    \"envir\\u006fnment\": prod\n",
+        "jobs:\n  d:\n    uses: ./.github/workflows/x.yml\n",
+        "jobs:\n  d:\n    uses: o/r/.github/workflows/x.yml@v1\n",
     ];
     for (r, yml) in [HEAD, BASE].into_iter().flat_map(|r| ymls.map(|y| (r, y))) {
         let k = key();

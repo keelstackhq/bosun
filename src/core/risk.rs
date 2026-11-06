@@ -454,7 +454,7 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
 ];
 
 /// Why a bootstrap-mode approval cannot count: the excluded paths among `(path, previous path,
-/// patch)` (a rename counts on both sides), a workflow whose diff names `environment:` or is not
+/// patch)` (a rename counts on both sides), a workflow whose diff may reach an environment or is not
 /// shown, and an R-secrets match. `bosun_code` adds [`APPROVAL_CODE_PATHS`]. Empty: it can count.
 pub fn bootstrap_excluded(
     files: &[(&str, Option<&str>, Option<&str>)],
@@ -469,16 +469,20 @@ pub fn bootstrap_excluded(
     excluded_in(files, matches, BOOTSTRAP_EXCLUDED.iter().chain(code))
 }
 
-/// What an autonomous-mode approval (D-017) never covers: release workflows, the secrets
-/// config, a workflow whose diff names `environment:` or is not shown, and an R-secrets or
-/// R-prod-write match. Trust files are not listed: they make signed approvals not count at all.
-pub const AUTONOMOUS_EXCLUDED: [&str; 6] = [
-    "**/workflows/release*.yml",
-    "**/workflows/release*.yaml",
+/// What an autonomous-mode approval (D-017) never covers: release workflows (`.jinja` copies
+/// too), the secrets config, the rules and workflows that run the check (so no autonomous PR can
+/// reopen them), a workflow whose diff may reach an environment or is not shown, and an R-secrets
+/// or R-prod-write match. Trust files are not listed: signed approvals never count on them.
+pub const AUTONOMOUS_EXCLUDED: [&str; 9] = [
+    "**/workflows/release*",
     "**/hoist.toml",
     "**/.sops.yaml",
     "**/secrets.toml",
     "**/access.toml",
+    "**/.bosun/risk.toml",
+    "**/workflows/risk.y*ml*",
+    "**/workflows/verdict.y*ml*",
+    "**/workflows/bosun.y*ml*",
 ];
 
 /// The excluded paths among `(path, previous path, patch)` for autonomous mode; see
@@ -494,10 +498,19 @@ pub fn autonomous_excluded(
     why
 }
 
-/// Whether `text` may name a GitHub environment. A plain word test: quoted keys, `environment :`
-/// and flow maps count too, and a false hit only sends the PR to the owner (fail closed).
-pub fn names_environment(text: &str) -> bool {
-    text.to_ascii_lowercase().contains("environment")
+/// Whether workflow `text` may reach a GitHub environment: the word `environment` (quoted keys,
+/// `environment :` and flow maps too), a `\u`/`\x` escape that could spell it, or a call of
+/// another workflow file, which may name one itself. A false hit only sends the PR to the owner.
+pub fn may_reach_environment(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    ["environment", "\\u", "\\x", ".github/workflows/"]
+        .iter()
+        .any(|w| t.contains(w))
+}
+
+/// A workflow file, root or a copy (channel pieces, `.jinja`).
+pub fn is_workflow(path: &str) -> bool {
+    path.to_ascii_lowercase().contains(".github/workflows/")
 }
 
 fn excluded_in<'a>(
@@ -511,7 +524,7 @@ fn excluded_in<'a>(
     let environment = |patch: Option<&str>| {
         patch.is_none_or(|p| {
             p.lines()
-                .any(|l| (l.starts_with('+') || l.starts_with('-')) && names_environment(l))
+                .any(|l| (l.starts_with('+') || l.starts_with('-')) && may_reach_environment(l))
         })
     };
     let mut why: Vec<String> = (files.iter())
@@ -519,8 +532,7 @@ fn excluded_in<'a>(
             let mut both = std::iter::once(*path).chain(*prev);
             both.clone()
                 .any(|p| globs.iter().any(|g| matches_any_case(g, p)))
-                || (both.any(|p| p.to_ascii_lowercase().starts_with(".github/workflows/"))
-                    && environment(*patch))
+                || (both.any(is_workflow) && environment(*patch))
         })
         .map(|(path, ..)| path.to_string())
         .collect();
@@ -1088,10 +1100,26 @@ mod tests {
             ".sops.yaml",
             "secrets.toml",
             "x/access.toml",
+            // The rules and workflows that run the check cannot reopen themselves.
+            ".bosun/risk.toml",
+            "channel/pieces/core/files/.bosun/risk.toml",
+            ".github/workflows/risk.yml",
+            "channel/pieces/core/files/.github/workflows/verdict.yml.jinja",
+            "channel/pieces/core/files/.github/workflows/release.yml.jinja",
         ] {
             let f = [(p, None, some)];
             assert_eq!(autonomous_excluded(&f, &[]), [p], "{p}");
         }
+        // Channel copies are workflows too.
+        let f = [("channel/x/files/.github/workflows/ci.yml", None, env)];
+        assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
+        for t in [
+            "\"envir\\u006fnment\": x",
+            "uses: ./.github/workflows/x.yml",
+        ] {
+            assert!(may_reach_environment(t), "{t}");
+        }
+        assert!(!may_reach_environment("steps:\n  - run: cargo test\n"));
         let f = [(".github/workflows/ci.yml", None, env)];
         assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
         let f = [(".github/workflows/ci.yml", None, None)];
@@ -1101,7 +1129,7 @@ mod tests {
         let f = [(".github/workflows/ci.yml", Some("hoist.toml"), some)];
         assert_eq!(autonomous_excluded(&f, &[]).len(), 1);
         let f = [
-            (".bosun/risk.toml", None, some),
+            (".bosun/limits.toml", None, some),
             ("src/cli/approve.rs", None, some),
         ];
         assert!(autonomous_excluded(&f, &[]).is_empty());

@@ -179,8 +179,8 @@ High-risk PRs:
   `Cargo.lock`, `build.rs` in any directory, `.cargo/**`, `npm/**`: the code of the check and of
   signature verification, derived from the same list so the two never drift), the channel's
   `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow
-  (root and channel copies), nor a `.github/workflows/**` file whose diff adds or removes a line
-  naming `environment:` (or is not shown), nor matches R-secrets. The list is separate from
+  (root and channel copies), nor a workflow file (root or channel copy) whose diff adds or removes a line
+  that may reach an environment (`risk::may_reach_environment`, or is not shown), nor matches R-secrets. The list is separate from
   `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
   bootstrap signature counts for nothing, and the error message and fix start with `a
   bootstrap-mode approval (D-012) does not count: <why>`, naming the end date where it is set.
@@ -216,8 +216,8 @@ High-risk PRs:
   bootstrap form with the note line `Signed in autonomous mode (D-017), not an owner answer`
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
   bootstrap window and whatever the requirement: only `risk::autonomous_excluded` stops it
-  (release workflows `**/workflows/release*.y*ml`, `hoist.toml`, `.sops.yaml`, `secrets.toml`,
-  `access.toml`, a workflow whose diff names `environment` or is not shown, an `R-secrets` or
+  (release workflows `**/workflows/release*` (`.jinja` copies too), `hoist.toml`, `.sops.yaml`, `secrets.toml`,
+  `access.toml`, the rules and workflows that run the check (`.bosun/risk.toml`, `risk.yml`, `verdict.yml`, `bosun.yml`, channel copies too, so no autonomous PR can reopen them), a workflow (root or channel copy) whose diff may reach an environment or is not shown, an `R-secrets` or
   `R-prod-write` match); the owner approves those (the status keeps the `high risk, owner approval needed`
   text). Trust files (`approvers.toml`, owners, CODEOWNERS) and an unseen diff still make
   signatures not count at all. A signature counts in risk-check only with a clean verdict on the
@@ -238,7 +238,7 @@ High-risk PRs:
   that same issue must carry a lease record (any, also an ended one: it names the author); a decoy `Closes #N` leaves the owner path (status keeps
   the owner-wait text; `approve` exits 1). Under this policy a changed `.github/workflows/**` file
   (path or previous path) is also excluded when its content at the PR head or at base contains
-  the word `environment` (any case, quoted or spaced keys too; `risk::names_environment`, changed
+  anything that may reach an environment (`risk::may_reach_environment`: the word `environment` in any case, a `\u` or `\x` escape, or a call of another workflow file; changed
   line or not) or cannot be read. Gap: lease records are read from any commenter on the task.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
