@@ -86,8 +86,9 @@ admins/customize). GitHub goes through the Claude GitHub App and the proxy, so n
   `--thread TS` given explicitly wins: it lists that thread's results only, as `slack_post`.
 - Approvals never come from Slack (Rules). A gated PR's child posts a needs-human result,
   which reaches the thread as a `thread-result`; the owner approves by chat form or GitHub.
-- `bosun doctor` (step `claude-tag`, with `[slack]`) reports this session's seat and warns when a
-  cloud session holds a PAT (`ghp_` or `github_pat_` token; the value is never printed).
+- `bosun doctor`: step `claude-tag` (only with `[slack]`) reports this session's live seat and
+  warns with the join command when there is none; step `github-token` warns when a cloud session
+  holds a PAT (`ghp_` or `github_pat_` token; the value is never printed). Warnings keep exit 0.
 - Gaps (not in the docs, not checkable from a session): whether Claude Tag sets
   `CLAUDE_CODE_CHILD_SESSION`; the `send_message` `to`/`thread_ts` routing (seen only in the
   session tool schema); the requester's Slack user ID and the channel facts (shared, guests),
