@@ -480,6 +480,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             (gh.create_pull(&title, &branch, &base, &body, true)?, true)
         }
     };
+    let trailers = super::trailers::check_pr(gh, pull.number, app.ctx.config.trailers.require)?;
     let mut state = state_of(&issue.labels);
     // A PR exists only after the branch is pushed: claimed -> building is "first commit pushed".
     let mut issue = issue;
@@ -625,7 +626,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,
         "draft": pull.draft, "ready": !pull.draft,
         "auto_merge": args.ready, "auto_merge_route": route, "task_state": state.map(State::name),
-        "touch_check": touch, "enforced_checks": enforced,
+        "touch_check": touch, "enforced_checks": enforced, "trailers": trailers,
         "gates": gates.iter().map(|(c, s)| json!({"context": c, "state": s})).collect::<Vec<_>>(),
         "pending_checks": pending.iter().map(|(c, s)| json!({"context": c, "state": s}))
             .collect::<Vec<_>>(),
