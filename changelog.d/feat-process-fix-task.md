@@ -1,0 +1,1 @@
+- `bosun gate-missed` and the main-health and revert hooks open a "Which gate missed this?" issue (`bosun:process-fix`) per escaped defect, deduped per incident.

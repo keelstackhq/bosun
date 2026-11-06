@@ -32,6 +32,7 @@ bosun wave plan 7                      # tasks that can run in parallel now
 bosun pr 42                            # open the PR as a draft: no CI runs on it yet
 for g in fmt lint test deps test-integrity; do bosun gate $g || break; done   # local, stamped
 bosun pr 42 --ready                    # ready + auto-merge; GitHub merges on green (bosun never merges)
+bosun gate-missed --pr 41              # "Which gate missed this?" issue for an escaped defect (main-red and revert open it too)
 ```
 
 The loop is draft first: `bosun pr`, local gates, then `bosun pr --ready`. A draft costs no CI
@@ -70,6 +71,11 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit
   `.bosun/approvers.toml` in a PR you approve.
 - **Review verdicts from cloud sessions.** A reviewer runs `bosun verdict comment --from -`;
   the `verdict` workflow checks the comment and posts the `review-verdict` status.
+- **Trace and roll back one session.** Every agent commit carries `Bosun-Session`, `Bosun-Task`
+  and `Bosun-Model` trailers, stamped by a commit-msg hook (`bosun trailers install`; the
+  SessionStart hook runs it). `bosun pr` notes commits without them; `[trailers] require = true`
+  in `.bosun/bosun.toml` makes that an error. To undo one session without the agent:
+  `bosun trailers list <session>` prints its commits and a `git revert` recipe (spec §4).
 - **Stop all work.** Create the label once:
   `gh label create bosun:halt --repo keelstackhq/bosun --color B60205`. Then open an issue with
   that label: `gh issue create --repo keelstackhq/bosun --label bosun:halt --title halt --body "<why>"`.

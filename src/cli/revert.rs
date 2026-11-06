@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use serde_json::json;
 
 use super::RevertArgs;
+use super::gate_missed::{self, Incident};
 use crate::app::{App, default_branch, kill_switch, main_red};
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -110,7 +111,22 @@ pub fn run(dir: Option<&Path>, args: &RevertArgs) -> CmdResult {
     let created = gh.create_pull(&title, &branch, &base, &body, false)?;
     gh.ensure_label(MAINFIX, "b60205", "A fix for a red main")?;
     gh.add_labels(created.number, &[MAINFIX])?;
+    // Housekeeping: a failure here is reported and never fails the revert.
+    let key = format!("pr:{n}");
+    let what = format!("#{n} {}", pull.title);
+    let link = format!("revert PR #{}", created.number);
+    let inc = Incident {
+        key: &key,
+        what: &what,
+        link: &link,
+        range: None,
+    };
+    let gate_missed = match gate_missed::open(gh, &inc) {
+        Ok((issue, created)) => json!({"issue": issue, "created": created}),
+        Err(e) => json!({"error": e.message}),
+    };
     Ok(Outcome::data(json!({
+        "gate_missed": gate_missed,
         "pr": n, "revert_pr": created.number, "branch": branch, "base": base,
         "reverted_sha": sha, "main_red": red, "warning": warning,
     })))

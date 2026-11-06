@@ -55,6 +55,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 
 ## Rules
 
+- Every commit carries `Bosun-Session`, `Bosun-Task` and `Bosun-Model` trailers: `bosun trailers install` sets the hook up (the SessionStart hook does it). `bosun trailers list <session>` finds a session's commits for rollback.
 - Change `bosun:state/*` labels only through bosun commands.
 - Never append to CHANGELOG.md or the Done list of docs/PROGRESS.md in a PR: add a one-line
   fragment `changelog.d/<name>.md` or `docs/progress.d/<name>.md` instead (name: the branch with

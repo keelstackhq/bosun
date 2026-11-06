@@ -43,6 +43,7 @@ pub mod spawn;
 pub mod spawn_relay;
 pub mod stamps;
 pub mod status;
+pub mod trailers;
 pub mod verdict;
 pub mod wait;
 pub mod wave;
@@ -50,6 +51,7 @@ use std::path::PathBuf;
 
 pub mod ci_minutes;
 pub mod gate;
+pub mod gate_missed;
 pub mod main_health;
 pub mod review_ci;
 pub mod stop;
@@ -158,10 +160,14 @@ pub enum Command {
     Init(InitArgs),
     /// Open a kind/mainfix PR that reverts a merged PR.
     Revert(RevertArgs),
+    /// Commit trailers: stamp (commit-msg hook), install the hook, list a session's commits.
+    Trailers(TrailersArgs),
     /// Open a kind/plan issue that asks for a plan amendment (the only way new work enters).
     Intake(IntakeArgs),
     /// Open or close the main-red issue from a CI result; re-judge the open PRs (spec §9).
     MainHealth(MainHealthArgs),
+    /// Open (or reuse) the "Which gate missed this?" task for an escaped defect (spec §9).
+    GateMissed(GateMissedArgs),
     /// Review mode b: ask the Anthropic API for the verdict of a PR and record it (no session).
     ReviewCi(ReviewCiArgs),
     /// List the Slack posts that are due (channel check first); `--ack KEY` records a post.
@@ -210,8 +216,10 @@ pub const COMMANDS: &[&str] = &[
     "main-triage",
     "init",
     "revert",
+    "trailers",
     "intake",
     "main-health",
+    "gate-missed",
     "review-ci",
     "notify",
     "answer",
@@ -272,6 +280,7 @@ impl Command {
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
             Command::Revert(_) => "revert",
+            Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {
                 None => "intake",
                 Some(IntakeCmd::Check(_)) => "intake check",
@@ -279,6 +288,7 @@ impl Command {
                 Some(IntakeCmd::Verify(_)) => "intake verify",
             },
             Command::MainHealth(_) => "main-health",
+            Command::GateMissed(_) => "gate-missed",
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
             Command::Prereqs(_) => "prereqs",
@@ -977,6 +987,28 @@ pub struct UninstallArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct TrailersArgs {
+    #[command(subcommand)]
+    pub cmd: TrailersCmd,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TrailersCmd {
+    /// Append the missing trailers to a commit message file (the commit-msg hook calls this).
+    Stamp {
+        /// The message file git passes to the hook.
+        file: std::path::PathBuf,
+    },
+    /// Write `.git/hooks/commit-msg` so every commit here is stamped (idempotent).
+    Install,
+    /// List the commits of one session, newest first, with a rollback recipe.
+    List {
+        /// The session id (the `Bosun-Session` trailer value).
+        session: String,
+    },
+}
+
+#[derive(Debug, Args)]
 pub struct RevertArgs {
     /// The merged PR to revert.
     pub pr: u64,
@@ -990,6 +1022,19 @@ pub struct MainHealthArgs {
     /// The URL of the run, for the issue and the comment.
     #[arg(long)]
     pub run_url: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct GateMissedArgs {
+    /// The reverted or escaped PR.
+    #[arg(long)]
+    pub pr: Option<u64>,
+    /// The URL of the failing run.
+    #[arg(long)]
+    pub run: Option<String>,
+    /// The commit range of the incident, `GOOD..BAD`.
+    #[arg(long)]
+    pub range: Option<String>,
 }
 
 #[derive(Debug, Args)]
