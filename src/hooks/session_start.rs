@@ -21,6 +21,11 @@ pub fn run(cwd: Option<&Path>) -> String {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
+    if let Some(d) = dir.as_deref()
+        && let Err(e) = crate::cli::trailers::install(d)
+    {
+        eprintln!("bosun: trailers hook: {}", e.message);
+    }
     let lessons = lessons_block(dir.as_deref());
     match context(dir.as_deref()) {
         Ok(text) => output(&format!(

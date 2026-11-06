@@ -65,6 +65,16 @@ fn write(file: &Path, now: Timestamp, leases: &[Lease]) -> std::io::Result<()> {
     std::fs::rename(&tmp, file)
 }
 
+/// The issue of `session`'s newest live lease in the cache, offline; `None` when unknown.
+pub fn cached_issue(dir: &Path, session: &str, now: Timestamp) -> Option<u64> {
+    let (_, leases) = read(&path(dir)?)?;
+    leases
+        .iter()
+        .filter(|l| l.session == session && l.is_live(now))
+        .max_by_key(|l| l.expires.0)
+        .map(|l| l.issue)
+}
+
 /// Read the live leases from GitHub and store them in the cache (when there is one).
 pub fn refresh(app: &App, file: Option<&Path>) -> Result<Vec<Lease>> {
     let issues: Vec<_> = active_issues(app.gh.as_ref())?
