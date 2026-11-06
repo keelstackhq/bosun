@@ -84,10 +84,10 @@ area: core
   touch: .github/workflows/ci.yml
   size: 30
 - T2: a
-  touch: src/a.rs
+  touch: src/a.rs, tests/a.rs
   size: 5000
 - T3: b
-  touch: src/b.rs
+  touch: src/b.rs, tests/b.rs
   size: 5000
 
 ### Done when

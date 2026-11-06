@@ -1,0 +1,1 @@
+- 2026-11-04 · feedback · plan check warns on src without tests in touch · PR (fix-plan-touch-tests)

@@ -61,6 +61,36 @@ pub fn companions(globs: &[String]) -> Vec<String> {
     out
 }
 
+/// The crate roots (`""` for the repo root, else `dir/`) whose `src/` the globs touch while none
+/// of the globs touches that crate's `tests/`. A glob that starts with `tests/` or `**` counts
+/// for the root; `<dir>/tests/..` for `<dir>/`. Order kept, deduped.
+pub fn src_without_tests(globs: &[String]) -> Vec<String> {
+    let root = |g: &str, dir: &str| -> Option<String> {
+        let at = if g.starts_with(dir) {
+            Some(0)
+        } else {
+            g.find(&format!("/{dir}")).map(|i| i + 1)
+        };
+        at.map(|i| g[..i].to_string())
+    };
+    let mut srcs: Vec<String> = Vec::new();
+    for g in globs {
+        if let Some(r) = root(g, "src/")
+            && !srcs.contains(&r)
+        {
+            srcs.push(r);
+        }
+    }
+    srcs.retain(|r| {
+        !globs.iter().any(|g| {
+            root(g, "tests/").as_deref() == Some(r)
+                || (r.is_empty() && g.starts_with("**"))
+                || g.starts_with(&format!("{r}**"))
+        })
+    });
+    srcs
+}
+
 /// A changed file as a PR lists it: its status and, for a rename, the old name.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Changed {
