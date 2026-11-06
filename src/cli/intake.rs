@@ -41,6 +41,8 @@ pub fn run(dir: Option<&Path>, a: &IntakeArgs) -> CmdResult {
 
 /// Required in the old form; clap cannot say so next to the subcommands.
 fn args_ok(a: &IntakeArgs) -> Result<(), BosunError> {
+    super::refuse_secret("the intake text", &a.text)?;
+    super::refuse_secret("--title", a.title.as_deref().unwrap_or(""))?;
     let (what, fix) = if a.text.trim().is_empty() {
         (
             "the intake text is empty",
@@ -102,6 +104,8 @@ pub(crate) fn open(app: &App, a: &IntakeArgs) -> CmdResult {
         risk: "normal".into(),
         allow: vec!["skip".into()],
         capabilities: vec![],
+        gated: false,
+        size: None,
     };
     // The metadata marker comes first and the request text cannot carry a marker or close its
     // fence; readers also take the last marker (core::meta).

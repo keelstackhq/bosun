@@ -139,17 +139,73 @@ fn builtin_rules_equal_the_repo_rules() {
 }
 
 #[test]
+fn repo_session_rules_cover_the_own_task_loop() {
+    // CI puts the base's .bosun/ over the checkout: read what this commit has.
+    let rules =
+        bosun::hooks::session_rules::parse(&committed(".bosun/session-rules.toml")).unwrap();
+    for (role, text) in [
+        ("orchestrator", &rules.orchestrator),
+        ("worker", &rules.worker),
+    ] {
+        assert!(text.contains("auto-merge"), "{role}: {text}");
+        assert!(text.contains("owner approval"), "{role}: {text}");
+    }
+}
+
+#[test]
 fn owners_name_the_repo_owner() {
     let owners = parse_owners(&read("governance/owners.toml")).unwrap();
     assert_eq!(owners[0].github, "urbanisierung");
     assert!(read(".github/CODEOWNERS").contains("/.bosun/ "));
 }
 
+/// A Stop hook that exits non-zero blocks, so an old bosun (usage error, exit 2) must not.
+const STOP_WRAPPER: &str = "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0";
+
+fn sh_with_bosun(dir: &Path) -> std::process::Output {
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::process::Command::new("sh")
+        .args(["-c", STOP_WRAPPER])
+        .env("PATH", path)
+        .output()
+        .unwrap()
+}
+
+fn stub(body: &str) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("bosun");
+    fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(&f, fs::Permissions::from_mode(0o755)).unwrap();
+    dir
+}
+
+fn stop_wrapper_fails_open_on_an_old_binary() {
+    let old = stub("echo '{\"ok\":false}'; exit 2");
+    let out = sh_with_bosun(old.path());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+}
+
+fn stop_wrapper_passes_the_hook_output_through() {
+    let new = stub("echo '{\"decision\":\"block\"}'");
+    let out = sh_with_bosun(new.path());
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "{\"decision\":\"block\"}\n"
+    );
+}
+
 #[test]
 fn settings_hooks_run_bosun_hook_commands() {
     let settings: Value = serde_json::from_str(&read(".claude/settings.json")).unwrap();
     let mut commands = Vec::new();
-    for event in ["SessionStart", "PreToolUse"] {
+    for event in ["SessionStart", "Stop", "PreToolUse"] {
         for group in settings["hooks"][event].as_array().unwrap() {
             for h in group["hooks"].as_array().unwrap() {
                 commands.push(h["command"].as_str().unwrap().to_string());
@@ -158,12 +214,22 @@ fn settings_hooks_run_bosun_hook_commands() {
     }
     assert_eq!(
         commands,
-        vec!["bosun hook session-start", "bosun hook pre-tool-use"]
+        vec![
+            "bosun hook session-start",
+            STOP_WRAPPER,
+            "bosun hook pre-tool-use"
+        ]
     );
+    assert_eq!(
+        read("channel/pieces/core/files/.claude/settings.json"),
+        read(".claude/settings.json")
+    );
+    stop_wrapper_fails_open_on_an_old_binary();
+    stop_wrapper_passes_the_hook_output_through();
     // A merge through Bash is refused by the configured PreToolUse command.
     let input = json!({"session_id": "x", "tool_name": "Bash",
         "tool_input": {"command": "gh pr merge 3"}, "cwd": "/"});
-    let args: Vec<&str> = commands[1].split_whitespace().skip(1).collect();
+    let args: Vec<&str> = commands[2].split_whitespace().skip(1).collect();
     let out = bosun()
         .current_dir(std::env::temp_dir())
         .args(&args)
@@ -227,6 +293,14 @@ fn review_inputs_and_legacy_toolchain_name_are_covered() {
             .map(|r| r.id.clone())
     };
     assert_eq!(id_of("docs/lessons.toml").as_deref(), Some("R-gov"));
+    for f in [
+        "src/core/session_rules.rs",
+        "src/hooks/session_rules.rs",
+        ".bosun/session-rules.toml",
+        ".claude-plugin/marketplace.json",
+    ] {
+        assert_eq!(id_of(f).as_deref(), Some("R-gov"), "{f}");
+    }
     assert_eq!(id_of("rust-toolchain").as_deref(), Some("R-ci"));
     assert_eq!(id_of("rust-toolchain.toml").as_deref(), Some("R-ci"));
     assert_eq!(id_of("Cargo.toml").as_deref(), Some("R-gate"));

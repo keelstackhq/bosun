@@ -19,7 +19,7 @@ confidence >= 0.85 and no blocker finding (bosun spec §7).
 1. Each UC of the task has a test that is not pending and passes.
 2. The diff stays inside the task's touch paths.
 3. New dependencies are pinned exactly and are in the plan's tech stack.
-4. Nothing merges, tags or force-pushes; auto-merge only through `bosun pr --auto-merge`.
+4. Nothing merges, tags or force-pushes; auto-merge only through `bosun pr --ready`.
 
 Each finding names the file and line, the claim, and the evidence (a quote, a failing input or
 a test). Set `escalate_risk` when the change touches governance, CI, secrets, dependencies or

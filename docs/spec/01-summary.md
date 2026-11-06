@@ -18,7 +18,7 @@ through bosun commands, GitHub issues and PRs, and CI.
 | D10 | Seed | Seed A: a human checklist plus agent seed PRs (see D22). |
 | D11 | Slack | Through Claude Tag only. Threads may start sessions with the same checks as any spawn. |
 | D12 | Generated files | No reference to the source playbook in generated files. Each comment states its own reason. The evidence for the defaults is in `docs/defaults.md`. |
-| D13 | Merging and tags (A1) | Agents never merge, tag or force-push. Merges go through the GitHub merge queue or auto-merge, which `bosun pr --auto-merge` turns on as soon as the PR exists and the task is in review; GitHub merges on green. A PR that is already clean cannot get auto-merge, so the owner merges it. Releases run through `hoist release` in a workflow; tags come from workflows only. |
+| D13 | Merging and tags (A1) | Agents never merge, tag or force-push. Merges go through the GitHub merge queue or auto-merge, which `bosun pr --auto-merge` turns on as soon as the PR exists and the task is in review; GitHub merges on green. A PR that is already clean cannot get auto-merge, so the orchestrator merges it (D-008). Releases run through `hoist release` in a workflow; tags come from workflows only. |
 | D14 | Waiting (A2) | `bosun wait` polls GitHub state with backoff inside one call. It never depends on send_later or send_message. Child-to-parent results go through issue comments. |
 | D15 | Required checks (A3) | `ci-ok` passes only when every gate passed (the org convention; the channel's bosun.yml runs them in one job of that name, or, with a ts-pnpm stack, in that job after `bosun-trusted`, §3). `risk-check`, `review-verdict` and `main-open` stay separate required checks. In a repo whose own ci.yml already has `ci-ok` (a hull template), bosun's gates aggregate as `bosun-ok`, a fifth required check. |
 | D16 | Init and upgrade (A4) | `bosun init` runs `splice channel add gh:keelstackhq/bosun//channel` (pieces `core`, `rust`, `ts-pnpm`). There is no `bosun upgrade`: the splice update bot (`keelstackhq/splice/action@v1`) keeps the channel fresh. |
@@ -71,6 +71,6 @@ commands are the one exception: their stdout follows the Claude Code hook protoc
 ```
 
 - `data` is the command's result. Its shape is per command and documented in `--help`.
-- `error` is `null` when `ok` is true. `kind` is the exit-code name of §1.1. `fix` is never empty.
+- `error` is `null` when `ok` is true. `kind` is the exit-code name of §1.1, except `upstream` (exit 1) for a GitHub 5xx that outlived the 3 attempts: retry the same command. `fix` is never empty.
 - `next` lists the tool calls the session must make (D29): `{"tool":"create_session","args":{..}}`.
 - The npm launcher (`@keelstackhq/bosun`, `npm/bosun`) keeps this contract when it cannot start the binary: it prints one envelope with `exit_code` 1 and a `fix`, and the message on stderr. That holds for `hook` commands too; Claude Code treats a hook's exit 1 as a non-blocking error.

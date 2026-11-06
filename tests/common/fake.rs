@@ -120,6 +120,8 @@ pub struct State {
     pub git_commits: HashMap<String, Value>,
     /// Tree sha -> `GET /git/trees/{sha}`; unset answers 404.
     pub git_trees: HashMap<String, Value>,
+    /// `GET /git/trees/main` answers 404 instead of an empty tree.
+    pub main_tree_missing: bool,
     /// PR number -> shas of its commits; unset, a PR has every sha named in `compares`.
     pub pull_commits: HashMap<u64, Vec<String>>,
     /// Commit sha -> first parent (`GET /commits/{sha}`); unset, the commit answers 422 as GitHub does.
@@ -266,7 +268,43 @@ impl FakeGithub {
     pub fn pull(&self, number: u64, title: &str, head_ref: &str, body: &str) {
         let mut s = self.state.lock().unwrap();
         s.pulls
-            .push(pull_json(number, title, head_ref, "main", body));
+            .push(pull_json(number, title, head_ref, "main", body, false));
+    }
+
+    /// Whether the pull request is a draft.
+    pub fn pull_is_draft(&self, number: u64) -> bool {
+        let s = self.state.lock().unwrap();
+        let p = s.pulls.iter().find(|p| p["number"] == number);
+        p.unwrap_or_else(|| panic!("no pull {number}"))["draft"] == true
+    }
+
+    /// The head sha of the pull request.
+    pub fn pull_head(&self, number: u64) -> String {
+        let s = self.state.lock().unwrap();
+        let p = s.pulls.iter().find(|p| p["number"] == number);
+        let p = p.unwrap_or_else(|| panic!("no pull {number}"));
+        p["head"]["sha"].as_str().unwrap_or("").to_string()
+    }
+
+    /// Give the pull request this head sha (default `sha<number>`); the statuses and check runs
+    /// of the old head move with it.
+    pub fn pull_head_sha(&self, number: u64, sha: &str) {
+        let mut s = self.state.lock().unwrap();
+        let p = s.pulls.iter_mut().find(|p| p["number"] == number);
+        let p = p.unwrap_or_else(|| panic!("no pull {number}"));
+        let old = p["head"]["sha"].as_str().unwrap_or("").to_string();
+        p["head"]["sha"] = json!(sha);
+        if old != sha {
+            if let Some(list) = s.statuses.remove(&old) {
+                s.statuses.insert(sha.into(), list);
+            }
+            if let Some(mut list) = s.check_runs.remove(&old) {
+                for run in &mut list {
+                    run["head_sha"] = json!(sha);
+                }
+                s.check_runs.insert(sha.into(), list);
+            }
+        }
     }
 
     /// Set a top-level field of a pull request (`draft`, `merged`, `state`, `labels`, ...).
@@ -354,6 +392,15 @@ impl FakeGithub {
         );
     }
 
+    /// A git commit with only a message (`GET /git/commits/{sha}`).
+    pub fn git_commit_message(&self, sha: &str, message: &str) {
+        let mut s = self.state.lock().unwrap();
+        s.git_commits.insert(
+            sha.into(),
+            json!({"sha": sha, "tree": {"sha": "t"}, "parents": [], "message": message}),
+        );
+    }
+
     /// A tree (`GET /git/trees/{sha}`); entries are `(path, mode, type, sha)`.
     pub fn git_tree(&self, sha: &str, entries: &[(&str, &str, &str, &str)], truncated: bool) {
         let tree: Vec<Value> = entries
@@ -367,6 +414,11 @@ impl FakeGithub {
             sha.into(),
             json!({"sha": sha, "tree": tree, "truncated": truncated}),
         );
+    }
+
+    /// Make the default branch's tree unreadable (404).
+    pub fn no_main_tree(&self) {
+        self.state.lock().unwrap().main_tree_missing = true;
     }
 
     /// A raw JSON body for tree `sha`, to test malformed answers.
@@ -766,11 +818,19 @@ fn issue_json(i: &FakeIssue) -> Value {
     v
 }
 
-fn pull_json(number: u64, title: &str, head_ref: &str, base_ref: &str, body: &str) -> Value {
+fn pull_json(
+    number: u64,
+    title: &str,
+    head_ref: &str,
+    base_ref: &str,
+    body: &str,
+    draft: bool,
+) -> Value {
     json!({"number": number, "node_id": format!("PR_node{number}"), "title": title,
-        "body": body, "state": "open", "merged": false, "draft": false, "labels": [],
+        "body": body, "state": "open", "merged": false, "draft": draft, "labels": [],
         "user": {"login": "octocat"},
-        "head": {"sha": format!("sha{number}"), "ref": head_ref, "label": format!("acme:{head_ref}")},
+        "head": {"sha": format!("sha{number}"), "ref": head_ref, "label": format!("acme:{head_ref}"),
+            "repo": {"full_name": "acme/widget"}},
         "base": {"sha": "base0000", "ref": base_ref}})
 }
 
@@ -1202,6 +1262,7 @@ fn route(
                 branch,
                 body["base"].as_str().unwrap_or("main"),
                 body["body"].as_str().unwrap_or(""),
+                body["draft"].as_bool().unwrap_or(false),
             );
             s.pulls.push(p.clone());
             (201, p, vec![])
@@ -1254,6 +1315,12 @@ fn route(
         },
         ("GET", ["git", "commits", sha]) => match s.git_commits.get(*sha) {
             Some(c) => ok(c.clone()),
+            // A sha only a compare names (the PR-commits fallback): a bare commit, no message.
+            None if !s.pull_commits.values().any(|v| v.iter().any(|x| x == sha))
+                && s.compares.keys().any(|k| k.split("...").any(|x| x == *sha)) =>
+            {
+                ok(json!({"sha": sha, "tree": {"sha": "t"}, "parents": []}))
+            }
             None => msg(404, "Not Found"),
         },
         ("GET", ["git", "trees", _]) if query.get("recursive").map(String::as_str) != Some("1") => {
@@ -1261,6 +1328,10 @@ fn route(
         }
         ("GET", ["git", "trees", sha]) => match s.git_trees.get(*sha) {
             Some(t) => ok(t.clone()),
+            // The default branch's tree is empty unless a test says otherwise (`no_main_tree`).
+            None if *sha == "main" && !s.main_tree_missing => {
+                ok(json!({"sha": "main", "tree": [], "truncated": false}))
+            }
             None => msg(404, "Not Found"),
         },
         ("GET", ["pulls", n, "reviews"]) => {
@@ -1442,6 +1513,23 @@ fn graphql(s: &mut State, body: &Value) -> Reply {
     let error = |m: &str| ok(json!({"data": null, "errors": [{"message": m}]}));
     if let Some(m) = s.graphql_error.clone() {
         return error(&m);
+    }
+    let query = body["query"].as_str().unwrap_or("");
+    for (mutation, draft) in [
+        ("convertPullRequestToDraft", true),
+        ("markPullRequestReadyForReview", false),
+    ] {
+        if query.contains(mutation) {
+            let id = body["variables"]["id"].as_str().unwrap_or("");
+            let Some(p) = s.pulls.iter_mut().find(|p| p["node_id"] == id) else {
+                return error(&format!(
+                    "Could not resolve to a node with the global id of '{id}'"
+                ));
+            };
+            p["draft"] = json!(draft);
+            let n = p["number"].clone();
+            return ok(json!({"data": {mutation: {"pullRequest": {"number": n}}}}));
+        }
     }
     if s.already_clean {
         return error("Pull request is in clean status");

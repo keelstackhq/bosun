@@ -26,6 +26,7 @@ on:
 permissions:
   contents: read
 
+# ci-minutes: allow concurrency a release run is never cancelled, the next one waits for it
 concurrency:
   group: release
   cancel-in-progress: false

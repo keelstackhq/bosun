@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::core::glob;
 use crate::core::lease::{Conflict, Lease};
+use crate::core::meta::OPEN;
 
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates";
@@ -186,9 +187,15 @@ pub fn tool_rules(
 /// The marker syntax bosun's parsers read (owner checklist `bosun:prereq|prereqs`, task and epic
 /// metadata): an HTML comment opener, then the name, then a space, `{` or the comment end.
 /// Prose that only mentions `bosun:task`, and `bosun:task-pr`, are not markers.
-static MARKER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<!--\s*bosun:(?:prereqs?|task|epic)(?:[\s{]|-->|$)").expect("marker regex")
-});
+static MARKER: LazyLock<Regex> = LazyLock::new(|| marker_re(&format!("{NOT_TASK}|task")));
+
+/// The marker names a registered child may not write; [`MARKER`] is these plus `task`, so the
+/// two cannot drift.
+const NOT_TASK: &str = "prereqs?|epic";
+
+fn marker_re(names: &str) -> Regex {
+    Regex::new(&format!(r"<!--\s*bosun:(?:{names})(?:[\s{{]|-->|$)")).expect("marker regex")
+}
 
 /// MCP tools that write an issue body or comment, and the input fields that hold the text.
 const ISSUE_TEXT_TOOLS: [&str; 4] = [
@@ -198,8 +205,122 @@ const ISSUE_TEXT_TOOLS: [&str; 4] = [
     "update_issue_comment",
 ];
 
-fn has_marker(text: &str) -> bool {
-    MARKER.is_match(text)
+/// The same without `task`: what a registered child may not write either.
+static MARKER_NOT_TASK: LazyLock<Regex> = LazyLock::new(|| marker_re(NOT_TASK));
+
+/// `task_ok`: the `task` marker does not count (a registered child may write it).
+fn has_marker(text: &str, task_ok: bool) -> bool {
+    if task_ok { &MARKER_NOT_TASK } else { &MARKER }.is_match(text)
+}
+
+/// What a registered child may write: one new issue carrying one `task` marker.
+#[derive(Debug, PartialEq)]
+pub struct ChildTask {
+    /// The epic the marker names; the child must hold its spawn lease.
+    pub epic: u64,
+    /// The `(owner, repo)` an MCP call targets; `None` for `gh issue create` (this repo).
+    pub repo: Option<(String, String)>,
+}
+
+/// Metadata keys a child may set. `allow` and `capabilities` widen what the gates let the task
+/// do (test-integrity grants, the prod-write floor), so only a plan PR may set them.
+const CHILD_KEYS: [&str; 7] = ["item", "task", "epic", "touch", "depends", "kind", "risk"];
+
+/// Is `write` a registered child's creation of ONE new issue with ONE well-formed `task`
+/// marker? Only `gh issue create` without `-R/--repo` (no nested shell, no other issue write in
+/// the command) and the MCP `issue_write` with method `create` qualify; edits, comments, API
+/// calls and other repos never do. The marker must be JSON with only [`CHILD_KEYS`] and an
+/// `epic`; the caller checks that the child's spawn lease is on that epic.
+pub fn child_task_create(tool: &str, input: &Value) -> Result<ChildTask, String> {
+    let (text, repo) = match tool {
+        "mcp__github__issue_write" => {
+            let create = input.get("method").and_then(Value::as_str) == Some("create")
+                && input.get("issue_number").is_none();
+            if !create {
+                return Err("a child may only create a new issue with the task marker".into());
+            }
+            let field = |k: &str| input.get(k).and_then(Value::as_str).map(String::from);
+            let repo = field("owner").zip(field("repo"));
+            (
+                field("body").unwrap_or_default(),
+                Some(repo.ok_or("the call names no owner/repo")?),
+            )
+        }
+        "Bash" => {
+            let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+            if !nested(command).is_empty() {
+                return Err("a child may not write the marker through a nested shell".into());
+            }
+            let words = shell_words(command);
+            // The whole command is the one `gh issue create`: no `cd dir &&` or other segment
+            // that could change which repo `gh` acts on, and no `$` or backtick that expands to
+            // text the checks below never see (`$'\x3c'`, `$VAR`).
+            let segs: Vec<&[String]> = words.split(|w| w == SEP).collect();
+            let [seg] = segs.as_slice() else {
+                return Err("a child's command is the single `gh issue create`".into());
+            };
+            if !writes_issue_text(seg) {
+                return Err("a child may only run `gh issue create` with the marker".into());
+            }
+            if seg.iter().any(|w| w.contains('$') || w.contains('`')) {
+                return Err("a child's `gh issue create` may not use `$` or backticks".into());
+            }
+            // `gh` itself must open the command: not `./gh` or a path, and no variable prefix
+            // (`GH_REPO=evil/x gh ...`, `GH_HOST=`) or wrapper that redirects it.
+            let at = seg.first().filter(|w| w.as_str() == "gh").map(|_| 0);
+            let ok = at.is_some_and(|at| {
+                seg.get(at + 1).map(String::as_str) == Some("issue")
+                    && seg.get(at + 2).map(String::as_str) == Some("create")
+            });
+            if !ok {
+                return Err("a child may only run `gh issue create` with the marker".into());
+            }
+            if seg
+                .iter()
+                .any(|a| a == "-R" || a.starts_with("-R") || a.starts_with("--repo"))
+            {
+                return Err("a child may only create issues in this repo (no -R/--repo)".into());
+            }
+            (seg.join(" "), None)
+        }
+        _ => return Err("a child may only create an issue with the task marker".into()),
+    };
+    if MARKER_NOT_TASK.is_match(&text) || MARKER.find_iter(&text).count() != 1 {
+        return Err("a child may write exactly one task marker and no other".into());
+    }
+    // The marker bosun itself reads (`core::meta::parse_task_meta`): the last `OPEN`, up to the
+    // next `-->`. Prose that merely names `bosun:task` cannot stand in for it, and a second
+    // `OPEN` is refused, so the JSON checked here is the JSON bosun parses.
+    if text.matches(OPEN).count() != 1 {
+        return Err("a child may write exactly one `<!-- bosun:task {...} -->` marker".into());
+    }
+    let after = text
+        .rfind(OPEN)
+        .map(|i| &text[i + OPEN.len()..])
+        .and_then(|r| r.find("-->").map(|e| r[..e].trim()))
+        .ok_or("the task marker has no closing -->")?;
+    let meta: Value = serde_json::from_str(after).map_err(|e| format!("task marker JSON: {e}"))?;
+    let obj = meta
+        .as_object()
+        .ok_or("the task marker is not a JSON object")?;
+    if let Some(k) = obj.keys().find(|k| !CHILD_KEYS.contains(&k.as_str())) {
+        return Err(format!(
+            "a child may not set `{k}` in the task marker (allow and capabilities come from a plan PR)"
+        ));
+    }
+    // Kinds with a lighter gate path (a main fix, a process fix) are for a plan PR to grant.
+    if let Some(kind) = obj.get("kind").and_then(Value::as_str)
+        && !["feature", "bookkeeping", "flake"].contains(&kind)
+    {
+        return Err(format!(
+            "a child may not set kind `{kind}` (only feature, bookkeeping or flake)"
+        ));
+    }
+    let epic = obj
+        .get("epic")
+        .and_then(Value::as_u64)
+        .ok_or("the task marker needs the `epic` you were spawned for")?;
+    Ok(ChildTask { epic, repo })
 }
 
 /// Does one simple command (words, quotes removed) write an issue body or comment through
@@ -263,12 +384,14 @@ fn writes_issue_text(words: &[String]) -> bool {
 
 /// Does `command`, or a command nested in it (`bash -c`, `eval`, `$( )`, groups), write issue
 /// text that carries a marker?
-fn writes_marker(command: &str, depth: usize) -> bool {
+fn writes_marker(command: &str, depth: usize, task_ok: bool) -> bool {
     depth <= MAX_DEPTH
         && (shell_words(command)
             .split(|w| w == SEP)
-            .any(|seg| writes_issue_text(seg) && has_marker(&seg.join(" ")))
-            || nested(command).iter().any(|n| writes_marker(n, depth + 1)))
+            .any(|seg| writes_issue_text(seg) && has_marker(&seg.join(" "), task_ok))
+            || nested(command)
+                .iter()
+                .any(|n| writes_marker(n, depth + 1, task_ok)))
 }
 
 /// Markers-lock (design F4): refuses a write of an issue body or comment that carries a bosun
@@ -285,17 +408,25 @@ fn writes_marker(command: &str, depth: usize) -> bool {
 /// httpie and python urllib. The real guarantees are elsewhere: bosun re-reads the checklist and
 /// trusts only its own writes.
 pub fn prereqs_lock(tool: &str, input: &Value) -> Option<String> {
+    prereqs_lock_for(tool, input, false)
+}
+
+/// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
+/// session, spec §4): the checklist and epic markers stay refused.
+pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<String> {
     let hit = match tool.strip_prefix("mcp__github__") {
         Some(name) => {
             ISSUE_TEXT_TOOLS.contains(&name)
                 && ["body", "comment"]
                     .iter()
                     .filter_map(|k| input.get(k).and_then(Value::as_str))
-                    .any(has_marker)
+                    .any(|t| has_marker(t, task_ok))
         }
         None if tool == "Bash" => {
             let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-            has_marker(command) && !read_only(command, 0) && writes_marker(command, 0)
+            has_marker(command, task_ok)
+                && !read_only(command, 0)
+                && writes_marker(command, 0, task_ok)
         }
         None => false,
     };
@@ -351,6 +482,7 @@ fn too_deep() -> String {
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
     decrypt_rule(command, 0)
+        .or_else(|| destructive_rule(command, 0))
         .or_else(|| check(command, branch_at, default_branch, 0))
         .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
 }
@@ -948,6 +1080,13 @@ fn nested(command: &str) -> Vec<String> {
     if let Some(start) = tick {
         out.push(chars[start + 1..].iter().collect());
     }
+    out.extend(word_scripts(command));
+    out
+}
+
+/// The scripts of `env -S`, `eval` and `sh|bash|zsh|dash|ksh -c` in a command.
+fn word_scripts(command: &str) -> Vec<String> {
+    let mut out = Vec::new();
     let words = shell_words(command);
     for (i, w) in words.iter().enumerate() {
         let name = w.rsplit('/').next().unwrap_or(w);
@@ -1298,6 +1437,206 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
+}
+
+fn destructive(what: &str) -> String {
+    format!("destructive-lock: `{what}` can wipe a machine or a database; ask the owner to run it")
+}
+
+fn base(word: &str) -> &str {
+    word.rsplit('/').next().unwrap_or(word)
+}
+
+/// A client whose arguments, stdin or heredoc are SQL.
+fn sql_client(word: &str) -> bool {
+    let clients = "psql pgcli mysql mariadb mycli sqlite3 duckdb usql cockroach clickhouse sqlcmd \
+        clickhouse-client";
+    clients.split_whitespace().any(|c| base(word) == c)
+}
+
+/// Destructive-lock (spec §4): the command word of every segment after wrappers and runners,
+/// and of every nested command; quoted text, other arguments and heredoc bodies are data.
+fn destructive_rule(command: &str, depth: usize) -> Option<String> {
+    if depth > MAX_DEPTH {
+        return Some(too_deep());
+    }
+    let (code, subs) = split_heredocs(command);
+    let inner = subs.into_iter().chain(substitutions(&code, false));
+    if let Some(why) = inner
+        .chain(word_scripts(&code))
+        .find_map(|s| destructive_rule(&s, depth + 1))
+    {
+        return Some(why);
+    }
+    let words = shell_words(&code);
+    // The fork bomb `:(){ :|:& };:` as words (quoted, it is one word: data).
+    if words.concat().contains(":(){:\0:\0}\0:") {
+        return Some(destructive("fork bomb"));
+    }
+    let segments: Vec<&[String]> = words
+        .split(|w| w == SEP)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut client = None;
+    for (i, segment) in segments.iter().enumerate() {
+        if disk_redirect(segment) {
+            return Some(destructive("redirect into a disk device"));
+        }
+        let all: Vec<&str> = segment.iter().map(String::as_str).collect();
+        let mut cmd = all.as_slice();
+        loop {
+            let runs = |w: &str| RUNNERS.iter().any(|r| r.0 == base(w));
+            let skip = (cmd.iter())
+                .take_while(|w| assigned(w).is_some() || WRAPPERS.contains(w) && !runs(w))
+                .count();
+            let (rest, _, shell) = unwrap_runners(&cmd[skip..]);
+            if shell && let Some(why) = destructive_rule(&rest.join(" "), depth + 1) {
+                return Some(why);
+            }
+            if rest.len() == cmd.len() {
+                break;
+            }
+            cmd = rest;
+        }
+        let (name, args) = cmd.split_first().unwrap_or((&"", &[]));
+        if wipes(base(name), args) {
+            return Some(destructive(&segment.join(" ")));
+        }
+        // SQL is what a client reads: its arguments, a pipe into it, its heredoc.
+        let remote = ["docker", "podman", "kubectl", "ssh"].contains(&base(name));
+        let mut named = cmd.iter().take(if remote { cmd.len() } else { 1 });
+        if named.any(|w| sql_client(w)) {
+            client.get_or_insert(i);
+        }
+    }
+    let sql = segments[client?.saturating_sub(1)..].concat().join(" ");
+    let sql: Vec<&str> = sql.split_whitespace().collect();
+    let sql = sql.join(" ").to_ascii_lowercase();
+    ["drop database", "drop schema"]
+        .into_iter()
+        .find(|d| sql.contains(d))
+        .map(destructive)
+}
+
+/// A redirect (`>`, `>>`, `&>`, `2>|`, glued or not) into a disk device.
+fn disk_redirect(segment: &[String]) -> bool {
+    segment.iter().enumerate().any(|(i, w)| {
+        let w = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        let glued = w.trim_start_matches(['>', '|', '&']);
+        let next = segment.get(i + 1).map_or("", String::as_str);
+        let dev = (if glued.is_empty() { next } else { glued }).strip_prefix("/dev/");
+        w.starts_with('>') && dev.is_some_and(|d| DISKS.iter().any(|k| d.starts_with(k)))
+    })
+}
+
+const DISKS: &[&str] = &["sd", "nvme", "disk", "hd", "vd"];
+
+/// `/`, `~` or `$HOME` (in any spelling) alone or with `/`, `/*` or `/.`.
+fn wipe_target(a: &str) -> bool {
+    let home = ["~", "$HOME", "${HOME}", "${HOME:?}"]
+        .iter()
+        .find_map(|h| a.strip_prefix(h));
+    ["/", "/*", "/."].contains(&a) || home.is_some_and(|r| ["", "/", "/*", "/."].contains(&r))
+}
+
+/// Whether the command `name ARGS` wipes a machine, a disk or an infrastructure.
+fn wipes(name: &str, args: &[&str]) -> bool {
+    let flag = |long: &str, short: &[char]| {
+        let short = |a: &&str| a.starts_with('-') && !a.starts_with("--") && a.contains(short);
+        args.iter().any(|a| *a == long || short(a))
+    };
+    let aimed = args.iter().any(|a| wipe_target(a));
+    match name {
+        "rm" => {
+            args.contains(&"--no-preserve-root")
+                || (flag("--recursive", &['r', 'R']) || flag("--force", &['f'])) && aimed
+        }
+        "chmod" | "chown" | "chgrp" => flag("--recursive", &['R']) && aimed,
+        "dd" => (args.iter().filter_map(|a| a.strip_prefix("of=/dev/")))
+            .any(|t| !["null", "stdout", "stderr", "tty"].contains(&t) && !t.starts_with("fd/")),
+        "shred" | "wipefs" => args.iter().any(|a| a.starts_with("/dev/")),
+        "terraform" | "tofu" => match args.iter().find(|a| !a.starts_with('-')) {
+            Some(&"destroy") => true,
+            Some(&"apply") => args.iter().any(|a| a.trim_start_matches('-') == "destroy"),
+            _ => false,
+        },
+        n => n == "mke2fs" || n.starts_with("mkfs"),
+    }
+}
+
+/// The command without its heredoc bodies (data, unless a shell or a SQL client on the opening
+/// line reads it), and the substitutions in unquoted bodies (they run).
+fn split_heredocs(command: &str) -> (String, Vec<String>) {
+    let (mut code, mut subs) = (String::new(), Vec::new());
+    let mut skip: Option<(String, bool, bool)> = None;
+    for line in command.split_inclusive('\n') {
+        if let Some((delim, dash, quoted)) = &skip {
+            let l = line.trim_end_matches('\n');
+            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+                skip = None;
+                code.push_str(line);
+            } else if !quoted {
+                subs.extend(substitutions(line, true));
+            }
+            continue;
+        }
+        code.push_str(line);
+        let Some(at) = heredoc_at(line) else { continue };
+        let dash = line[at + 2..].starts_with('-');
+        let spec = line[at + 2..].trim_start_matches('-').trim_start();
+        let quote = spec.chars().next().filter(|c| matches!(c, '\'' | '"'));
+        let delim = match quote {
+            Some(q) => spec[1..].find(q).map(|end| spec[1..=end].to_string()),
+            None => Some(
+                (spec.chars())
+                    .take_while(|c| !c.is_whitespace() && !";|&<>()".contains(*c))
+                    .filter(|c| *c != '\\')
+                    .collect(),
+            ),
+        };
+        let reads = shell_words(line)
+            .iter()
+            .any(|w| SHELLS.contains(&base(w)) || sql_client(w));
+        if let Some(delim) = delim.filter(|d| !d.is_empty() && !reads) {
+            skip = Some((delim, dash, quote.is_some()));
+        }
+    }
+    (code, subs)
+}
+
+/// The `$( )`, backtick and (outside quotes) `( )` spans of a command line, quote-aware; in a
+/// heredoc `body` quotes are text and only `$( )` and backticks run.
+fn substitutions(text: &str, body: bool) -> Vec<String> {
+    let c: Vec<char> = text.chars().collect();
+    let (mut out, mut quote, mut i) = (Vec::new(), None, 0);
+    while i < c.len() {
+        match (quote, c[i]) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => i += 1,
+            (None, '\'' | '"') if !body => quote = Some(c[i]),
+            (_, '`') => {
+                let end = (i + 1..c.len()).find(|&j| c[j] == '`' && c[j - 1] != '\\');
+                let end = end.unwrap_or(c.len());
+                out.push(c[i + 1..end].iter().collect());
+                i = end;
+            }
+            (q, '(') if (q.is_none() && !body) || (i > 0 && c[i - 1] == '$') => {
+                let (mut level, mut j) = (1, i + 1);
+                while j < c.len() && level > 0 {
+                    level += i32::from(c[j] == '(') - i32::from(c[j] == ')');
+                    j += 1;
+                }
+                let end = if level == 0 { j - 1 } else { j };
+                out.push(c[i + 1..end].iter().collect());
+                i = j;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
 }
 
 const DECRYPT_FIX: &str = "secrets stay encrypted; the owner runs `hoist secrets edit`, CI \
@@ -2402,6 +2741,225 @@ mod tests {
             &|_| Some(branch.into()),
             "main",
         )
+    }
+
+    #[test]
+    fn destructive_lock_denies_the_wipe_commands() {
+        for cmd in [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -fr ~",
+            "rm -rfv ~/",
+            "rm -r -f ~/*",
+            "rm --recursive --force /",
+            "rm -rf $HOME",
+            "rm -rf \"$HOME\"",
+            "rm -rf ${HOME}",
+            "rm -rf /.",
+            "rm -rf --no-preserve-root x",
+            "sudo rm -rf /",
+            "cd x && rm -rf ~",
+            "echo hi; rm -rf /",
+            "bash -c 'rm -rf /'",
+            "sudo bash -c \"cd / && rm -rf /\"",
+            "echo x | xargs rm -rf /",
+            "env X=1 rm -rf ~",
+            "mkfs.ext4 /dev/sda1",
+            "mkfs /dev/sda1",
+            "mke2fs /dev/sda1",
+            "dd if=x of=/dev/sda bs=1M",
+            "shred -n3 /dev/sda",
+            "wipefs -a /dev/nvme0n1",
+            "cat x > /dev/sda",
+            "echo x >/dev/nvme0n1p1",
+            "cat x >> /dev/disk2",
+            "terraform destroy",
+            "terraform apply -destroy",
+            "tofu destroy -auto-approve",
+            "psql -c 'DROP DATABASE prod'",
+            "psql -c \"drop   schema public cascade\"",
+            ":(){ :|:& };:",
+            "chmod -R 777 /",
+            "chown -R me ~",
+            "timeout 5 rm -rf /",
+            "nice -n 5 rm -rf ~",
+            "doas rm -rf /",
+            "sudo -u root rm -rf /",
+            "command rm -rf /",
+            "\\rm -rf /",
+            "/bin/rm -rf /",
+            "X=1 rm -rf /",
+            "(rm -rf /)",
+            "echo $(rm -rf /)",
+            "echo `rm -rf ~`",
+            "git commit -m \"$(rm -rf /)\"",
+            "eval 'rm -rf /'",
+            "sh -c \"bash -c 'rm -rf ~'\"",
+            "bash <<'EOF'\nrm -rf /\nEOF",
+            "cat > f <<EOF\n$(rm -rf /)\nEOF",
+            "terraform -chdir=infra destroy",
+            "echo 'DROP DATABASE x' | psql",
+            "mysql -e \"DROP DATABASE x\"",
+            "docker exec db psql -c 'drop database x'",
+            "psql <<'EOF'\nDROP DATABASE prod;\nEOF",
+            "echo x &>/dev/sda",
+            "echo hi; :(){ :|:& };:",
+            "psql -c \"DROP DATABASE x\"",
+            "rm -rf ~/.",
+            "rm -rf ${HOME:?}",
+            "rm -rf ${HOME:?}/",
+            "rm -rf \"${HOME}\"/",
+            "rm -rf $HOME/.",
+            "rm -rf \"$HOME/\"",
+            "sudo -u postgres psql -c 'DROP DATABASE x'",
+            "PGPASSWORD=x /usr/bin/psql -h db -c 'drop schema s cascade'",
+            "kubectl exec -it db -- psql -c \"DROP DATABASE x\"",
+            "clickhouse-client -q 'DROP DATABASE x'",
+            "docker compose exec db mysql -e 'drop database x'",
+            "echo 'DROP DATABASE x' | sudo -u postgres psql",
+            "echo 'DROP DATABASE x' > d.sql && psql -f d.sql",
+            "rm -rf ~/*",
+            "rm -rf ${HOME}/.",
+            "chmod -R 000 ~/.",
+            "terraform apply --destroy",
+            ":(){:|:&};:",
+            ":(){ :|: & };:",
+        ] {
+            let why = bash(cmd, "feat").unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(why.starts_with("destructive-lock"), "{cmd}: {why}");
+        }
+    }
+
+    #[test]
+    fn destructive_lock_allows_the_everyday_commands() {
+        for cmd in [
+            "rm -rf ./target",
+            "rm -rf target /tmp/x",
+            "rm file",
+            "rm -rf /tmp/x",
+            "rm -rf ~/proj/target",
+            "dd if=x of=y.img",
+            "dd if=/dev/zero of=/dev/null",
+            "cat x > /dev/null",
+            "terraform plan",
+            "chmod -R 755 ./dist",
+            "cargo build 2>&1 | tail",
+            "mkdir -p out",
+            "grep mkfs docs.md",
+            "git commit -m \"fix rm -rf / handling\"",
+            "git commit -m \"guard: a; rm -rf / is refused\"",
+            "git commit -m \"the lock (rm -rf ~) case\"",
+            "git commit -m \"DROP DATABASE and drop schema are refused\"",
+            "cargo nextest run rm",
+            "cargo test destroy mkfs",
+            "grep -rn \"dd of=/dev\" src",
+            "gh pr create --title t --body \"refuses terraform destroy, mkfs and DROP DATABASE\"",
+            "cat > f <<'EOF'\nrm -rf /\nDROP DATABASE x\nmkfs /dev/sda\nEOF",
+            "cat > f <<EOF\nrm -rf ~\nterraform destroy\nEOF",
+            "bosun lessons add \"never rm -rf ~\"",
+            "git log --grep 'rm -rf /'",
+            "psql -c 'select 1'",
+            "git commit -m ':(){ :|:& };:'",
+            "echo \"DROP DATABASE x\"",
+            "dd if=x of=/dev/stdout",
+            "dd if=x of=/dev/stderr",
+            "dd if=x of=/dev/fd/3",
+            "dd if=x of=/dev/tty",
+            "grep -rn \"DROP DATABASE\" src | grep psql",
+            "rg -n psql docs && echo 'drop schema is refused'",
+            "git commit -m \"$(cat <<'EOF'\nfix: refuse psql -c 'DROP DATABASE x', rm -rf / and :(){ :|:& };:\n\nCo-Authored-By: C <c@x>\nEOF\n)\"",
+            "gh pr create --title t --body \"$(cat <<'EOF'\n- (rm -rf ~) is refused\n- dd of=/dev/sda\nEOF\n)\"",
+            "cat > notes.md <<'EOF'\npsql -c 'DROP DATABASE x'\nEOF",
+            "cargo nextest run --locked 2>&1 | tail -5",
+            "grep -n 'rm -rf /' src/core/guard.rs",
+            "ls psql && git diff -- 'drop database'",
+            "git log -S 'DROP SCHEMA' -- src/psql",
+            "echo \":(){ :|:& };:\" >> notes.md",
+            "gh pr create --title \"psql guard\" --body-file - <<'EOF'\nrm -rf ~\nEOF",
+        ] {
+            assert_eq!(bash(cmd, "feat"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_registered_child_may_only_create_one_task_issue() {
+        let task = r#"<!-- bosun:task {"item":"M1","task":"T9","epic":5,"touch":["src/a.rs"]} -->"#;
+        let sh = |cmd: &str| child_task_create("Bash", &json!({ "command": cmd }));
+        let create = |body: &str| format!("gh issue create --title t --body '{body}'");
+        assert_eq!(sh(&create(task)).unwrap().epic, 5);
+        let mcp = |m: Value| child_task_create("mcp__github__issue_write", &m);
+        let ok = mcp(json!({"method":"create","owner":"o","repo":"r","body":task})).unwrap();
+        assert_eq!(ok.repo, Some(("o".into(), "r".into())));
+        // Not a creation, or not this repo, or not one plain command.
+        for cmd in [
+            format!("gh issue edit 5 --body '{task}'"),
+            format!("gh issue comment 5 --body '{task}'"),
+            format!("gh api -X PATCH repos/o/r/issues/5 -f body='{task}'"),
+            format!("gh issue create -R evil/other --title t --body '{task}'"),
+            format!("gh issue create --repo=evil/other --title t --body '{task}'"),
+            format!("bash -c \"{}\"", create(task)),
+            format!("{} && {}", create(task), create(task)),
+        ] {
+            assert!(sh(&cmd).is_err(), "{cmd}");
+        }
+        assert!(
+            mcp(json!({"method":"update","issue_number":5,"owner":"o","repo":"r","body":task}))
+                .is_err()
+        );
+        assert!(
+            mcp(json!({"method":"create","issue_number":5,"owner":"o","repo":"r","body":task}))
+                .is_err()
+        );
+        assert!(
+            child_task_create("mcp__github__add_issue_comment", &json!({"body": task})).is_err()
+        );
+        // Prose that names the marker is no decoy for the real one bosun reads, and a variable
+        // prefix cannot redirect `gh`.
+        let decoy =
+            r#"see bosun:task {"epic":5} --> then <!-- bosun:task {"epic":5,"allow":["skip"]} -->"#;
+        assert!(sh(&create(decoy)).is_err());
+        let decoy2 = r#"x bosun:task {"epic":5,"allow":[]} --> <!-- bosun:task {"epic":5,"capabilities":[]} -->"#;
+        assert!(sh(&create(decoy2)).is_err());
+        // `$` and backticks can hide a marker; `./gh` and a `cd` prefix change what runs.
+        for cmd in [
+            create(task).replace("<!--", "$'\\x3c'!--"),
+            create(task).replace("src/a.rs", "$HOME/a.rs"),
+            create(task).replace("--title t", "--title `id`"),
+            create(task).replacen("gh issue", "./gh issue", 1),
+            create(task).replacen("gh issue", "/tmp/gh issue", 1),
+            format!("cd /tmp/other && {}", create(task)),
+            format!("{}; echo hi", create(task)),
+        ] {
+            assert!(sh(&cmd).is_err(), "{cmd}");
+        }
+        // Kinds with a lighter gate path are not for a child.
+        for kind in ["mainfix", "process-fix", "plan", "nonsense"] {
+            let meta = format!(r#"<!-- bosun:task {{"epic":5,"kind":"{kind}"}} -->"#);
+            assert!(sh(&create(&meta)).is_err(), "{kind}");
+        }
+        for kind in ["feature", "bookkeeping", "flake"] {
+            let meta = format!(r#"<!-- bosun:task {{"epic":5,"kind":"{kind}"}} -->"#);
+            assert!(sh(&create(&meta)).is_ok(), "{kind}");
+        }
+        for cmd in [
+            create(task).replacen("gh issue", "GH_REPO=evil/x gh issue", 1),
+            create(task).replacen("gh issue", "GH_HOST=evil.example gh issue", 1),
+            create(task).replacen("gh issue", "command gh issue", 1),
+        ] {
+            assert!(sh(&cmd).is_err(), "{cmd}");
+        }
+        // The marker: no allow or capabilities, an epic, one marker, nothing else, valid JSON.
+        for body in [
+            r#"<!-- bosun:task {"epic":5,"allow":["skip"]} -->"#,
+            r#"<!-- bosun:task {"epic":5,"capabilities":[]} -->"#,
+            r#"<!-- bosun:task {"item":"M1"} -->"#,
+            r#"<!-- bosun:task {"epic":5} --> <!-- bosun:task {"epic":6} -->"#,
+            r#"<!-- bosun:task {"epic":5} --> <!-- bosun:epic 3 -->"#,
+            "<!-- bosun:task not json -->",
+            "<!-- bosun:task {\"epic\":5}",
+        ] {
+            assert!(sh(&create(body)).is_err(), "{body}");
+        }
     }
 
     #[test]

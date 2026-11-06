@@ -1,0 +1,1 @@
+- 2026-11-05 · draft-first CI · bosun pr drafts and --ready with gate stamps, hold/ask back to draft, heavy jobs skip drafts, `bosun gate ci-minutes` and doctor step 14

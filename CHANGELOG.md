@@ -4,6 +4,31 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.6.0 (2026-11-05)
+
+- `docs/setup-script.sh` (and the channel copy) prewarms superpowers and caveman from the `keelstack` marketplace and warns when an installed commit is off its pin; it never fails.
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.5.0 with its npm sha512 values; bosun's own config sets `waves.relay_waves`, `[cloud] environment_id` (the shared keelstack environment) and `[approvals] policy = "owner-gated"`. After it merges, paste `docs/setup-script.sh` into the cloud environments again.
+- The setup scripts pin splice 0.4.0 and hoist 0.4.0, each with its npm integrity; both `splice.yml` move to splice 0.4.0 and pin `keelstackhq/splice/action` at v0.4.0's commit. berth stays 0.1.0 (the newest). After it merges, paste `docs/setup-script.sh` into the cloud environments again.
+- Breaking: `review-pack` `lessons` is now an array of strings `"<id> <scope> <rule>"` (was objects; read the string); `lesson add` needs `--evidence #N` and a rule of at most 160 characters (also `lesson triage --as advice --rule`; a duplicate rule records a hit and merges scope and evidence, so shorten long rules and pass evidence); `claim` returns `data.lessons`; session start prints global lessons.
+- `bosun status` and `bosun reap` add `next` `archive_session` for children of the caller whose newest result is final (merged, blocked, needs-human) and who have not joined or leased again.
+- `bosun doctor` step 13 `plugins` fails on drift from the keelstack marketplace pins (settings source and ref, setup-script pins, installed plugins) (R4).
+- `.claude-plugin/marketplace.json`: the `keelstack` plugin marketplace, superpowers and caveman pinned to commits (Claude Code verifies the sha on install).
+- `.claude/settings.json` (bosun and the channel core) enable superpowers and caveman from the `keelstack` marketplace, from bosun main (plugin commits pinned by sha in `.claude-plugin/marketplace.json`).
+- Fragment fold writes Done to `docs/progress-done.md` (refuses while `docs/PROGRESS.md` still has `## Done`: move it once); tests set their own TMPDIR.
+- `bosun hook session-start` adds role rules (worker if spawned, else orchestrator; built-in text, `.bosun/session-rules.toml` overrides), also without GitHub (R1).
+- `.bosun/session-rules.toml` seed (role rules text for SessionStart) in bosun and the channel core; R-gov covers `src/core/session_rules*`, `src/hooks/session_rules*` and `.claude-plugin/**`.
+- `bosun handoff-pr <pr> [--to SESSION]` returns a `send_message` call to the parent with the PR, head SHA, risk paths and review minors.
+- The edit hook lets a registered child (a trusted live `spawned` lease with empty touch on its epic) create one new issue with a task marker for that epic; edits, comments, other repos and the `allow` and `capabilities` keys stay refused. Spec §4 says any session may run `bosun intake`.
+- Plan task field `done-by: #N`: `plan import` and `plan amend` make the task merged when PR N is merged.
+- `bosun pr --auto-merge` prints the gates it relies on (`risk-check`, `review-verdict` and their states) on stderr and in `data.gates` before it turns auto-merge on.
+- `bosun pr <issue>` (and `--auto-merge`) works from any branch: with no open PR on the current branch it uses the open PR carrying the `bosun:task-pr` marker of the task.
+- `bosun result` moves every task of the epic whose own PR (task-pr record, else bosun marker) merged to merged, and `bosun reap` does so for tasks with a merged recorded PR, even when the task issue stayed open.
+- The default spawn prompt gains working notes: one CARGO_TARGET_DIR per worktree (share dependencies with sccache), delete only build caches when the disk is full, and background waits default to 30 minutes so children also message the parent.
+- `spawn` (and the root relay) `create_session` call in `next` includes `source_url` and `source_revision` (the default branch).
+- `bosun verdict comment` fences the verdict with more backticks than any run in the payload, and `verdict apply` reads any fence of three or more, so backticks in evidence no longer break the block.
+- `bosun wait --pr` says `"no checks yet"` in `checks` while nothing has reported for the head, instead of an empty map.
+- A GitHub 5xx now ends any command with exit 1 and `error.kind` `upstream` (retry hint), so `bosun wait` never returns 0 without data.
+
 ## 0.5.0 (2026-11-03)
 
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.4.0 with its npm sha512 values. After it merges, paste `docs/setup-script.sh` into the cloud environments again.

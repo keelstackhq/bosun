@@ -12,6 +12,7 @@ pub mod ci_log;
 pub mod claim;
 pub mod doctor;
 pub mod handoff;
+pub mod handoff_pr;
 pub mod heartbeat;
 pub mod hold;
 pub mod init;
@@ -26,6 +27,7 @@ pub mod notify;
 pub mod plan;
 pub mod plan_pr;
 pub mod pr;
+mod pr_bundle;
 pub mod prereqs;
 pub mod prereqs_gate;
 pub mod progress;
@@ -38,12 +40,14 @@ pub mod review_pack;
 pub mod risk_check;
 pub mod spawn;
 pub mod spawn_relay;
+pub mod stamps;
 pub mod status;
 pub mod verdict;
 pub mod wait;
 pub mod wave;
 use std::path::PathBuf;
 
+pub mod ci_minutes;
 pub mod gate;
 pub mod main_health;
 pub mod review_ci;
@@ -139,6 +143,9 @@ pub enum Command {
     Resume(ResumeArgs),
     /// Write this root's handoff (at most 40 lines) to the registry for the next root.
     Handoff(HandoffArgs),
+    /// Return a send_message call telling your parent that PR N is ready (head SHA, risk paths, review minors).
+    #[command(name = "handoff-pr")]
+    HandoffPr(HandoffPrArgs),
     /// Cost per merged task over the last N days (read-only).
     Progress(ProgressArgs),
     /// Post this session's result on its epic, end its lease and leave the registry.
@@ -191,6 +198,7 @@ pub const COMMANDS: &[&str] = &[
     "fail",
     "resume",
     "handoff",
+    "handoff-pr",
     "progress",
     "result",
     "main-triage",
@@ -237,6 +245,7 @@ impl Command {
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
+            Command::Hook(HookCmd::Stop) => "hook stop",
             Command::Doctor(_) => "doctor",
             Command::Budget(BudgetCmd::Record(_)) => "budget record",
             Command::Plan(PlanCmd::Check(_)) => "plan check",
@@ -246,6 +255,7 @@ impl Command {
             Command::Fail(_) => "fail",
             Command::Resume(_) => "resume",
             Command::Handoff(_) => "handoff",
+            Command::HandoffPr(_) => "handoff-pr",
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
             Command::Result(_) => "result",
@@ -278,6 +288,15 @@ pub struct HandoffArgs {
     /// File with the `<kind>: <text>` lines (wave, pr, lease, next, blocker), or `-` for stdin.
     #[arg(long, value_name = "FILE")]
     pub from: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct HandoffPrArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// The parent session; default: the parent of your `bosun join` record, else the orchestrator of a `<id>/T*` id.
+    #[arg(long, value_name = "SESSION")]
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -319,7 +338,7 @@ pub struct ResultArgs {
     /// The epic issue number.
     pub epic: u64,
     /// How the work ended (`partial`: some tasks merged, the rest goes back to the parent).
-    #[arg(long, value_parser = ["merged", "partial", "blocked", "needs-human"])]
+    #[arg(long, value_parser = RESULT_OUTCOMES)]
     pub outcome: String,
     /// The PR of the work.
     #[arg(long)]
@@ -380,7 +399,7 @@ pub struct WaitArgs {
     #[arg(long, group = "target", value_name = "SESSION")]
     pub child: Option<String>,
     /// Give up after this many seconds (exit 0, changed: false).
-    #[arg(long, default_value_t = 1800)]
+    #[arg(long, default_value_t = WAIT_TIMEOUT_SECS)]
     pub timeout: u64,
 }
 
@@ -395,7 +414,9 @@ pub struct MsgArgs {
 
 #[derive(Debug, Args)]
 pub struct GateArgs {
-    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, main-open, ...
+    /// fmt, lint, types, test, deps, mutants, snapshots, test-integrity, ci-minutes, main-open, ...
+    /// `ci-minutes` is built in: it checks `.github/workflows` for the CI-minute rules (drafts skip,
+    /// `ready_for_review`, cancelling concurrency, `paths` on heavy PR jobs).
     pub name: String,
     /// Base ref for the diff (default: the PR base or origin/main).
     #[arg(long)]
@@ -489,14 +510,23 @@ pub struct PrArgs {
     pub issue: u64,
     #[arg(long)]
     pub title: Option<String>,
-    /// Turn on auto-merge once every required check is green (bosun never merges).
-    #[arg(long)]
-    pub auto_merge: bool,
+    /// Mark the draft PR ready for review (it needs the local HEAD pushed and every ready gate
+    /// stamped by `bosun gate`) and turn on auto-merge (bosun never merges). `--auto-merge` is
+    /// the same flag.
+    #[arg(long, alias = "auto-merge")]
+    pub ready: bool,
+    /// Another issue of the lead's single-shape bundle (repeatable): the PR closes it too.
+    #[arg(long = "bundle", value_name = "ISSUE")]
+    pub bundle: Vec<u64>,
 }
 
 #[derive(Debug, Args)]
 pub struct CiLogArgs {
     pub pr: u64,
+    /// Lines kept from the start of each log.
+    #[arg(long, default_value_t = 20)]
+    pub head: usize,
+    /// Lines kept from the end of each log.
     #[arg(long, default_value_t = 80)]
     pub tail: usize,
 }
@@ -561,11 +591,13 @@ pub enum LessonCmd {
 
 #[derive(Debug, Args)]
 pub struct LessonAddArgs {
+    /// The rule, at most 160 characters; the same rule as an entry records a hit on it.
     pub text: String,
     #[arg(long = "scope", value_name = "GLOB")]
     pub scope: Vec<String>,
     #[arg(long)]
     pub why: Option<String>,
+    /// The PR or issue that proved it (`#N`); required unless --upstream.
     #[arg(long = "evidence", value_name = "REF")]
     pub evidence: Vec<String>,
     /// File the lesson on keelstackhq/bosun (it is about bosun itself); no local change.
@@ -623,6 +655,8 @@ pub enum HookCmd {
     PreToolUse,
     /// SessionStart: join and print the session context.
     SessionStart,
+    /// Stop: block once while the lease has no result or handoff; warn on a stale gate.
+    Stop,
 }
 
 #[derive(Debug, Subcommand)]
@@ -753,6 +787,26 @@ pub struct IntakeArgs {
     /// The plan file to amend (default plans/<project>.md).
     #[arg(long, value_name = "FILE")]
     pub plan: Option<String>,
+}
+
+/// Refuse text that looks like a secret (exit 2). The error names the kind and `field`, never
+/// the matched text (spec §6).
+pub(crate) fn refuse_secret(field: &str, text: &str) -> Result<(), crate::output::BosunError> {
+    match crate::core::text::secret_kind(text) {
+        None => Ok(()),
+        Some(kind) => Err(crate::output::BosunError::usage(
+            format!("{field} looks like a secret ({kind}); bosun does not store or post it"),
+            "redact the secret (replace it with <redacted>) and run again; never put tokens, keys or PEM in bosun text",
+        )),
+    }
+}
+
+/// [`refuse_secret`] for every value of a repeatable option.
+pub(crate) fn refuse_secrets(
+    field: &str,
+    items: &[String],
+) -> Result<(), crate::output::BosunError> {
+    items.iter().try_for_each(|t| refuse_secret(field, t))
 }
 
 /// `text` and `--source` default to empty; `intake::args_ok` refuses an empty one.
@@ -908,3 +962,8 @@ pub struct NotifyArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+/// The outcomes `bosun result` accepts.
+pub const RESULT_OUTCOMES: [&str; 4] = ["merged", "partial", "blocked", "needs-human"];
+/// Default `bosun wait --timeout` in seconds.
+pub const WAIT_TIMEOUT_SECS: u64 = 1800;

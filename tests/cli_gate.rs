@@ -84,6 +84,10 @@ impl Repo {
     }
 
     fn gate(&self, args: &[&str], exit: &str) -> (i32, Value, String) {
+        self.gate_in(&self.root, args, exit)
+    }
+
+    fn gate_in(&self, dir: &Path, args: &[&str], exit: &str) -> (i32, Value, String) {
         let path = format!(
             "{}:{}",
             self.bin.display(),
@@ -93,8 +97,9 @@ impl Repo {
             .env("PATH", path)
             .env("FAKE_CARGO_EXIT", exit)
             .env_remove("GITHUB_BASE_REF")
+            .env_remove("CI")
             .arg("-C")
-            .arg(&self.root)
+            .arg(dir)
             .arg("gate")
             .args(args)
             .output()
@@ -429,4 +434,44 @@ fn deleting_the_required_file_still_runs_the_gate() {
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["data"]["skipped"], false);
     assert_eq!(r.calls(), vec!["deny check", "deny check"]);
+}
+
+fn head(dir: &Path) -> String {
+    let out = Command::new("git")
+        .current_dir(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn a_passing_local_run_records_the_tree_and_a_failing_one_clears_it() {
+    let r = repo();
+    r.change("a/src/lib.rs");
+    let file = r.root.join(".git/bosun/gate.json");
+    let (code, v, _) = r.gate(&["fmt", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    let rec: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(rec["head"], head(&r.root));
+    assert_eq!(rec["fingerprint"].as_str().unwrap().len(), 64);
+    // A later gate that fails on the same tree must not leave the fmt record to vouch for it.
+    let (code, _, _) = r.gate(&["test", "--base", "main"], "3");
+    assert_eq!(code, 1);
+    assert!(!file.exists());
+}
+
+#[test]
+fn each_worktree_keeps_its_own_gate_record() {
+    let r = repo();
+    r.change("a/src/lib.rs");
+    let wt = r.root.parent().unwrap().join("wt");
+    git(
+        &r.root,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "w2"],
+    );
+    let (code, v, _) = r.gate_in(&wt, &["fmt", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert!(r.root.join(".git/worktrees/wt/bosun/gate.json").exists());
+    assert!(!r.root.join(".git/bosun/gate.json").exists());
 }

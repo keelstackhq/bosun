@@ -9,14 +9,17 @@ use crate::app::{
     App, active_issues, kill_switch, limits_from_default, main_red, notes, set_state, settle_race,
     task_meta,
 };
+use crate::cli::lesson;
 use crate::cli::status::process_red;
 use crate::core::budget::{BUDGET_STOP, no_new_work};
 use crate::core::glob::{self, Glob};
 use crate::core::lease::{
     Lease, TTL_SECS, conflicts, leases_of, members, orchestrator_of, race_winner,
 };
+use crate::core::lessons;
 use crate::core::meta::area_of;
 use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::shape::{meta_gated, touch_gated_in};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -24,6 +27,7 @@ use crate::registry;
 use crate::time::Timestamp;
 
 pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
+    super::refuse_secrets("--touch", &args.touch)?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let (n, session, now) = (args.issue, &app.ctx.session, app.ctx.now);
@@ -73,10 +77,12 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
                 }
             }
             if !added.is_empty() {
+                refuse_gated_touch(gh, &meta, &added)?;
                 return grow(&app, n, &l, &added, &cur);
             }
             let exp = l.expires.to_string();
             let mut data = lease_data(n, session, &exp, &l.touch, l.comment_id);
+            add_lessons(&mut data, &app.ctx.dir, &l.touch);
             if !args.touch.is_empty() {
                 data["added"] = json!([]);
             }
@@ -111,6 +117,8 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     }
 
     super::prereqs_gate::refuse_if_held(gh, n, &meta)?;
+    refuse_if_bundled(gh, n, &meta)?;
+    refuse_gated_touch(gh, &meta, &args.touch)?;
     let touch_raw = if args.touch.is_empty() {
         meta.map(|m| m.touch).unwrap_or_default()
     } else {
@@ -191,9 +199,9 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         }
         return Err(e);
     }
-    Ok(Outcome::data(lease_data(
-        n, session, &expires, &touch_raw, comment.id,
-    )))
+    let mut data = lease_data(n, session, &expires, &touch_raw, comment.id);
+    add_lessons(&mut data, &app.ctx.dir, &touch_raw);
+    Ok(Outcome::data(data))
 }
 
 /// After a lost race: the task was ready before this claim, so put it back, but only while it is
@@ -230,6 +238,19 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
 fn lease_data(issue: u64, session: &str, expires: &str, touch: &[String], id: u64) -> Value {
     json!({"issue": issue, "comment_id": id,
         "lease": {"session": session, "expires": expires, "touch": touch}})
+}
+
+/// `data.lessons`: the repo's global lessons and those scoped to `touch`, as one line each. Advice
+/// only: a missing or unreadable `docs/lessons.toml` gives an empty list and never fails the claim.
+fn add_lessons(data: &mut Value, root: &Path, touch: &[String]) {
+    let lines: Vec<String> = match (lesson::load(root), glob::parse_all(touch)) {
+        (Ok(store), Ok(globs)) => lessons::relevant(&store, &globs)
+            .into_iter()
+            .map(lessons::line)
+            .collect(),
+        _ => Vec::new(),
+    };
+    data["lessons"] = json!(lines);
 }
 
 /// Refuse (exit 3, naming the holder) when `touch` overlaps a live lease of another issue.
@@ -351,5 +372,88 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
     }
     let mut data = lease_data(n, session, &expires, &touch, comment.id);
     data["added"] = json!(added);
+    add_lessons(&mut data, &app.ctx.dir, &touch);
     Ok(Outcome::data(data))
+}
+
+/// D-016: in a single-shape epic the lead's PR closes the bundled issues, so while another
+/// non-gated task of the epic is active, a non-gated `n` is not claimable.
+fn refuse_if_bundled(
+    gh: &dyn Github,
+    n: u64,
+    meta: &Option<crate::core::meta::TaskMeta>,
+) -> Result<(), BosunError> {
+    let Some((m, epic)) = meta.as_ref().and_then(|m| m.epic.map(|e| (m, e))) else {
+        return Ok(());
+    };
+    let shape = gh
+        .get_issue(epic)?
+        .and_then(|e| super::plan::epic_shape(e.body_text()));
+    if shape.as_deref() != Some("single") {
+        return Ok(());
+    }
+    // Judge gated as `wave plan` does (default-branch rules and tree), not by the stored flag.
+    let globs = crate::app::gated_from_default(gh)?;
+    let base = crate::app::base_files(gh)?;
+    let gated = |m: &crate::core::meta::TaskMeta| meta_gated(m, &globs, base.as_deref());
+    if gated(m) {
+        return Ok(());
+    }
+    let lead = active_issues(gh)?
+        .into_iter()
+        .filter(|(i, _)| i.number != n)
+        .filter(|(i, _)| task_meta(i).is_some_and(|t| t.epic == Some(epic) && !gated(&t)))
+        .map(|(i, _)| i.number)
+        .min();
+    match lead {
+        Some(lead) => Err(BosunError::conflict(
+            format!("#{n} is bundled into #{lead}'s PR"),
+            format!("work in #{lead}'s bundle: its PR closes #{n}"),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// D-016: a non-gated task of a single-shape epic runs inside the bundle, so a `--touch` glob on a
+/// gated path (default-branch rules) that its own touch does not already cover is refused.
+fn refuse_gated_touch(
+    gh: &dyn Github,
+    meta: &Option<crate::core::meta::TaskMeta>,
+    touch: &[String],
+) -> Result<(), BosunError> {
+    let Some(m) = meta.as_ref().filter(|_| !touch.is_empty()) else {
+        return Ok(());
+    };
+    let single = m
+        .epic
+        .and_then(|e| gh.get_issue(e).transpose())
+        .transpose()?
+        .and_then(|e| super::plan::epic_shape(e.body_text()))
+        .as_deref()
+        == Some("single");
+    if !single {
+        return Ok(());
+    }
+    // Judge the task as `wave plan` does: one gated by the rules or the tree runs alone.
+    let globs = crate::app::gated_from_default(gh)?;
+    // The default branch's tree, read once: it judges the task and resolves wildcard touches.
+    let files = crate::app::base_files(gh)?;
+    if meta_gated(m, &globs, files.as_deref()) {
+        return Ok(());
+    }
+    for g in touch {
+        match touch_gated_in(std::slice::from_ref(g), &globs, files.as_deref()) {
+            Ok(false) => {}
+            Ok(true) => {
+                return Err(BosunError::conflict(
+                    format!(
+                        "--touch {g} is a gated path: gated work runs as its own task, not inside the bundle"
+                    ),
+                    "drop the gated path and plan it as its own task (plan amend)",
+                ));
+            }
+            Err(e) => return Err(BosunError::conflict(e, "narrow --touch to explicit paths")),
+        }
+    }
+    Ok(())
 }

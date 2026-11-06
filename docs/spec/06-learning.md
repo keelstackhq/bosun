@@ -7,6 +7,17 @@ Capture:
 - Automatic: bosun opens a lesson issue on a stop rule, a blocked task, a flake, a review ask that
   repeats, or a task over its budget.
 - Manual: `bosun lesson add "<text>"`, or Slack intake with `--kind lesson`.
+- `lesson add` needs `--evidence #N` (the PR or issue that proved it; exit 2 without). The core
+  `lessons::add` enforces the rest for every caller (`lesson add`, `lesson triage --as advice
+  --rule`, `hold`): a rule of at most 160 characters (exit 2 above, nothing written) and no
+  duplicate. A rule equal to an existing one (lowercase, whitespace collapsed, trailing `.`
+  ignored) records a hit on that entry instead, also at a cap: exit 0, `data.dup` and `data.id`
+  are its id. The new scope globs and evidence refs are merged into the existing entry without
+  repeats; a global entry (no scope) stays global, because adding a scope would narrow it.
+  `--upstream` is unchanged.
+- The compact lesson line (pack, claim, session start) drops control characters, collapses
+  whitespace and cuts the rule to 160 characters, ending with `…`, so hand-written entries
+  cannot swell the output.
 - Duplicates: a lesson with the same signature adds a hit to the existing issue; it does not open
   a new one.
 - Lesson issue: label `bosun:lesson`, title `lesson: <title>`, and the marker
@@ -29,7 +40,8 @@ Triage (curator Routine, daily, Sonnet):
 - advice only: adds an entry to `docs/lessons.toml`.
 The lesson issue closes when its mechanism merges.
 
-Store `docs/lessons.toml`:
+Store `docs/lessons.toml`. The first `lesson add` creates the file; a missing file is an empty
+store (the file is absent until then, so there is nothing to add by hand):
 
 ```toml
 [[lesson]]
@@ -43,6 +55,32 @@ last_hit = "2026-11-10"
 hits = 3
 ```
 
+- A rule is at most 160 characters. A pack or claim shows a lesson as one line
+  `L-012 src/gates/** Run cargo metadata once per gate run.` (id, scopes joined by `,` or `*`
+  when global, rule; no why or evidence). `review-pack` `lessons` is an array of these lines.
+- Secrets: `lesson add` (the rule and `--why`), `handoff` (each line of the `--from` input), `msg`
+  (the text) and `fail` (`--signature`) refuse text that looks like a secret (GitHub, `sk-`, AWS
+  and Slack tokens, `Bearer` values, PEM headers, or a 32+ character high-entropy word) with exit 2.
+  The error names the kind and the field, never the matched text; nothing is written. Fix: replace
+  the secret with `<redacted>` and run again. Words are split on characters outside
+  `A-Za-z0-9+/_=-`. A high-entropy word has 32+ characters, letters and digits, and Shannon
+  entropy of at least 4.0 bits per character; hex words of 32+ characters need entropy of at
+  least 3.0 and are exempt when exactly 40 or 64 long (git shas), and JWTs (`eyJ` with three dot parts) are refused.
+  Exempt: ids starting `session_` or `cse_`, `sha1-`/`sha256-`/`sha384-`/`sha512-` integrity
+  values (the whole word is the prefix plus a base64 digest of 28, 44, 64 or 88 characters; extra
+  text voids it), the same digest after `NAME=` when NAME, split on `_`/`-`/`.`, has a whole segment
+  SHA1/SHA256/SHA384/SHA512 and the value has that algorithm's exact length (base64 or hex), or a
+  segment HASH/DIGEST/CHECKSUM/INTEGRITY and the value is a `shaN-` integrity value; any segment
+  SECRET, TOKEN, KEY, PASS, PASSWORD, PWD, AUTH, CRED, CREDENTIAL(S), JWT, SIGN, SIGNING,
+  PRIVATE, OAUTH, BEARER, SESSION, API, SALT, HMAC or CLIENT voids it (prefix rules
+  still win), snake or kebab phrases of 3+ lowercase words, and slash paths that are not mixed case.
+  `sk-` needs a digit or at most 2 hyphens; `Bearer` needs a digit and a letter.
+  Covered inputs: `lesson add` (text, `--why`, `--scope`, `--evidence`), `lesson capture`
+  (failure text, `--title`), `lesson triage` (`--rule`, `--scope`, `--touch`, `--area`),
+  `handoff`, `msg`, `fail --signature`, `ask`, `hold`, `answer` (plain text; a relayed `--chat`
+  form carries a signature and is verified instead), `intake`, `bosun pr` (the PR title) and `plan-pr` and `spawn --request`
+  (text, `--title`), and `claim --touch`. Not covered: identifiers, enums and numbers (issue
+  numbers, session ids, Slack ids, refs, URLs, `--outcome`) and the `bosun pr` title.
 - Caps: at most 40 entries, at most 8 global (no scope).
 - A context pack includes only the lessons whose scope matches the paths of the task, plus the
   global ones. AGENTS.md has no lessons.

@@ -8,11 +8,11 @@ use crate::cli::risk_check::owner_logins;
 use crate::config::{LIMITS_FILE, Limits};
 use crate::core::glob::Glob;
 use crate::core::lease::{Lease, leases_of, race_winner};
-use crate::core::meta::{TaskMeta, parse_task_meta};
+use crate::core::meta::{TaskMeta, closing_issues_in, parse_task_meta};
 use crate::core::records::{Note, Record, parse_record, replace_record};
 use crate::core::state::{State, labels_to_remove, state_of, transition_allowed};
 use crate::ctx::Ctx;
-use crate::github::{Github, Issue, IssueState, LiveGithub, Variable};
+use crate::github::{Github, Issue, IssueState, LiveGithub, Pull, Variable};
 use crate::output::BosunError;
 use crate::time::{Timestamp, parse_rfc3339};
 use serde_json::json;
@@ -166,6 +166,41 @@ pub fn limits_from_default(gh: &dyn Github, ctx: &Ctx) -> Result<Limits> {
     Ok(limits)
 }
 
+/// The gated path globs (risk-rule paths) of `.bosun/risk.toml` on the default branch, or of the
+/// built-in rules when it is absent there. The working tree copy is not trusted.
+pub fn gated_from_default(gh: &dyn Github) -> Result<Vec<Glob>> {
+    let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
+    let rules = match gh.file_at(".bosun/risk.toml", &branch)? {
+        Some(text) => crate::core::risk::Rules::parse(&text).map_err(|e| {
+            BosunError::error(
+                format!(".bosun/risk.toml on {branch}: {e}"),
+                "fix .bosun/risk.toml on the default branch, or remove it to use the built-in rules",
+            )
+        })?,
+        None => crate::core::risk::Rules::defaults(),
+    };
+    Ok(crate::core::shape::gated_globs(&rules))
+}
+
+/// The blob paths of the default branch's tree, for resolving wildcard touches against gated
+/// paths. `None` when the tree is unreadable or GitHub cut it short (`truncated`). One read; the
+/// caller keeps the answer for the whole command.
+pub fn base_files(gh: &dyn Github) -> Result<Option<Vec<String>>> {
+    let branch = default_branch(gh).unwrap_or_else(|_| "main".to_string());
+    // GitHub's tree endpoint takes a branch name as well as a tree sha.
+    // Any read error is "not available" (fail closed in the callers), not a failed command.
+    let tree = gh.tree(&branch).unwrap_or_else(|e| {
+        eprintln!("bosun: cannot read the tree of {branch}: {}", e.message);
+        None
+    });
+    Ok(tree.filter(|t| !t.truncated).map(|t| {
+        (t.entries.into_iter())
+            .filter(|e| e.kind == "blob")
+            .map(|e| e.path)
+            .collect()
+    }))
+}
+
 /// The comments of an issue, oldest first.
 pub fn notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
     Ok(gh
@@ -305,6 +340,73 @@ pub fn renew_lease(
 /// PR merges into the default branch; an open issue means the work is not done).
 pub fn merge_counts(issue: &Issue) -> bool {
     state_of(&issue.labels) == Some(State::Queued) || issue.state == "closed"
+}
+
+/// Whether `user` has write or admin permission on the repo.
+pub fn is_writer(gh: &dyn Github, user: &str) -> Result<bool> {
+    Ok(matches!(
+        gh.permission(user)?.unwrap_or_default().as_str(),
+        "admin" | "write"
+    ))
+}
+
+/// Whether the PR a task names as its own merged into `base`. The PR must close the task
+/// (`Closes #N` in its body), whoever names it: the newest `task-pr` record of a trusted writer
+/// (`trusted_notes`), else (with `scan`) a PR found in `pulls` (listed once, on first use) that
+/// closes the task and was opened by a writer. An open such PR means not merged. Without a
+/// usable record and without `scan`, no PR list is read.
+pub fn task_pr_merged(
+    gh: &dyn Github,
+    repo: &str,
+    base: &str,
+    number: u64,
+    pulls: &mut Option<Vec<Pull>>,
+    scan: bool,
+) -> Result<bool> {
+    let recorded =
+        trusted_notes(gh, number)?
+            .iter()
+            .rev()
+            .find_map(|n| match parse_record(&n.body) {
+                Some(Record::TaskPr { pr, .. }) => Some(pr),
+                _ => None,
+            });
+    if let Some(pr) = recorded
+        && let Some(p) = gh.get_pull(pr)?
+        && closing_issues_in(&p.body, Some(repo)).contains(&number)
+    {
+        match (p.state.as_str(), p.merged && p.base_ref == base) {
+            ("open", _) => return Ok(false),
+            (_, true) => return Ok(true),
+            _ => {}
+        }
+    }
+    if !scan {
+        return Ok(false);
+    }
+    let all = match pulls {
+        Some(p) => p,
+        None => pulls.insert(gh.list_pulls(None, IssueState::All)?),
+    };
+    let mut ours: Vec<&Pull> = Vec::new();
+    for p in all
+        .iter()
+        .filter(|p| closing_issues_in(&p.body, Some(repo)).contains(&number))
+    {
+        if is_writer(gh, &p.user)? {
+            ours.push(p);
+        }
+    }
+    if ours.iter().any(|p| p.state == "open") {
+        return Ok(false);
+    }
+    for p in ours.iter().filter(|p| p.base_ref == base) {
+        // Lists do not say `merged`; read the closed PR.
+        if gh.get_pull(p.number)?.is_some_and(|f| f.merged) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The PR of `number` merged (auto-merge, or a human): move a `building`, `review`, `fixing` or

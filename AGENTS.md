@@ -10,23 +10,38 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
 1. `bosun status` — see sessions, leases, halt and main-red.
 2. `bosun claim <issue>` — exit 3 means another session holds an overlapping lease; pick
    another task (`bosun wave plan <epic>`).
+   When the run entry has a `bundle`, the whole item is one PR: claim the lead issue with
+   `bosun claim <lead>` and one `--touch <glob>` per glob of the entry's `touch`, do every task
+   of the bundle, then open the PR with `bosun pr <lead> --bundle <issue> ... --auto-merge` (one
+   `--bundle` per other issue in `closes`): its body gets a `Closes #N` line for each and the
+   marker; run it again later and it reuses the PR (by branch, or by the marker with `Closes
+   #<lead>`; a PR made by hand needs a `Closes` per bundled issue). Gated tasks (`risk: high`
+   or touching a risk path) run alone in their own entry and are never bundled; a bundled
+   issue is not claimable while the lead holds the bundle, and `--touch` never adds a risk path to it.
 3. Work in your own workspace (`berth up <task>`) with `BOSUN_SESSION=<session>/<task>` set, so
    your lease is told apart from your orchestrator's and from other wave agents'. Run `bosun heartbeat` at least every
    20 minutes while you work.
 4. Test first. Before every push run what CI runs, locally:
-   `for g in fmt lint test deps test-integrity; do bosun gate "$g" || break; done`.
+   `for g in fmt lint test deps test-integrity; do bosun gate "$g" || break; done`
+   (a passing gate leaves a stamp for the tree it ran on; step 8 needs them).
    CI minutes are scarce: push once per PR, when it is done and green locally; do review
    rounds locally (step 6) and push their fixes together. Do not edit the PR body or title
    just to retry CI.
-5. `bosun pr <issue>` — opens or reuses the PR and moves the task to review.
-6. Review: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON; post it
+5. `bosun pr <issue>` — right after the push it opens or reuses the PR as a draft (no CI runs
+   on a draft) and moves the task to review.
+6. Review locally: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON, listing
+   every chunk number of the pack in `chunks_reviewed` (a missing one is refused); post it
    with `bosun verdict post --from -` (in a cloud session, which cannot write statuses:
    `bosun verdict comment --from -`). Fix request-changes findings, then review again.
 7. `bosun risk-check <pr>` runs in CI. A high-risk PR waits for an owner; ask with
    `bosun ask <issue> "<question>"`.
-8. `bosun pr <issue> --auto-merge` as soon as the PR is in review; do not wait for the checks.
-   GitHub merges it when the required checks are green. If bosun exits 5 with `already_clean`,
-   the PR was already mergeable: the owner merges it. You never merge, tag or force-push (the
+8. `bosun pr <issue> --ready` once the gates are green locally on the pushed head and the
+   review is clean: it marks the draft ready and turns on auto-merge; do not wait for the
+   checks. GitHub merges it when the required checks are green. Missing gates (exit 1,
+   `missing_gates`) or an unpushed head (exit 3) change nothing: run what the fix says. If
+   `data.ready` is `pending`, make the `next` call (`mcp__github__update_pull_request`) and
+   rerun. If bosun exits 5 with `already_clean`, the PR was already mergeable: hand it to the
+   orchestrator, which merges it (D-008). `bosun hold` and `bosun ask` put the task's PR back to draft. You never merge, tag or force-push (the
    hooks refuse it).
 9. `bosun release <issue>` if you stop before the task is done.
 
@@ -65,3 +80,6 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   comment; their own `/bosun approve <sha>` comment is only a fallback.
 - Orchestrators relay approvals in batches: `bosun approve --list` gives `data.message`; keep its
   `data.message_pairs`, only the latest message is answerable, numbers come only from the owner.
+- The PreToolUse hook refuses destructive commands (`rm -rf /` or `~`, `mkfs`, `dd` to a device,
+  `terraform destroy`, `DROP DATABASE`) and the same Bash command 5 times in a row (it warns at 3):
+  change the approach instead of retrying.

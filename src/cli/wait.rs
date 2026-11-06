@@ -41,6 +41,10 @@ pub fn run(dir: Option<&Path>, args: &WaitArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
+    let marker_dir = dir
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    let _marker = marker_dir.map(|d| crate::hooks::stop::WaitMarker::start(&d, &app.ctx.session));
     let base = std::env::var("BOSUN_WAIT_BASE_MS")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
@@ -171,7 +175,13 @@ fn snapshot(gh: &dyn Github, target: &Target) -> Result<Value, BosunError> {
                 .into_iter()
                 .map(|s| (s.context, s.state))
                 .collect();
-            let checks = newest_checks(gh.check_runs(&pr.head_sha)?);
+            let runs = newest_checks(gh.check_runs(&pr.head_sha)?);
+            // Nothing has reported for this head yet: say so, not an empty map.
+            let checks = if runs.is_empty() && statuses.is_empty() {
+                json!("no checks yet")
+            } else {
+                json!(runs)
+            };
             Ok(
                 json!({"state": pr.state, "merged": pr.merged, "head_sha": pr.head_sha,
                 "statuses": statuses, "checks": checks}),

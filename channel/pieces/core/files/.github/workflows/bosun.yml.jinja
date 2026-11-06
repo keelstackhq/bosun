@@ -8,8 +8,9 @@
 # rounded up to a whole minute, so a rust stack runs everything in ONE job that carries the
 # required check's name. A ts-pnpm (or mixed) stack runs two: bosun-trusted runs the gates that
 # run no PR code, and the required check's job installs and runs the PR's code only after that
-# passed (see bosun-trusted). A draft fails at once (ready_for_review runs the gates), and after a
-# PR body or title edit only test-integrity (which reads the body) runs again on a head that
+# passed (see bosun-trusted). A draft PR skips the heavy jobs (job-level `if:`) and fails the
+# required check at once, never skipped (a skipped required check counts as passed);
+# `ready_for_review` runs everything. After a PR body or title edit only test-integrity (which reads the body) runs again on a head that
 # passed. Run the same gates locally first: AGENTS.md has the one command.
 on:
   pull_request:
@@ -57,6 +58,8 @@ jobs:
   # required check's job below runs fmt, lint and test (PR code) only after this job passed.
   # Read-only token, no secrets (both jobs).
   bosun-trusted:
+    # Not for a draft: no runner starts (CI minutes); `ready_for_review` runs it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -76,7 +79,8 @@ jobs:
       rust_file: ${{ steps.toolchain.outputs.file }}
 {% endraw %}{% endif %}{% else %}{% raw %}  # The required CI check (spec D15). It fails unless the pin check and every gate succeeded.
   # Beside a repo's own ci.yml and its ci-ok, it is called bosun-ok. A draft PR fails it in a few
-  # seconds (never skipped: a skipped required check counts as passed); marking it ready runs it.
+  # seconds, before any heavy step (never skipped: a skipped required check counts as passed);
+  # marking it ready runs it.
 {% endraw %}{% if own_ci %}  bosun-ok:
 {% else %}  ci-ok:
 {% endif %}{% raw %}    runs-on: ubuntu-latest
@@ -144,7 +148,7 @@ jobs:
           DOCS_ONLY: ${{ steps.diff.outputs.docs_only }}
           MODE: ${{ steps.edit.outputs.mode || 'run' }}
         run: |
-          if [ "$DRAFT" = true ]; then echo "::error::draft: not checked; mark it ready to run the gates"; exit 1; fi
+          if [ "$DRAFT" = true ]; then echo "::error::draft: CI not run, mark ready for review"; exit 1; fi
           if [ "$DOCS_ONLY" = true ]; then
             echo "work=false" >> "$GITHUB_OUTPUT"; echo "docs only: no gate runs"
           elif [ "$MODE" = integrity ]; then
@@ -451,8 +455,9 @@ jobs:
 {% endraw %}{% if "ts-pnpm" in pieces %}          echo "pr_gates=${later# }" >> "$GITHUB_OUTPUT"
 {% endif %}{% if "ts-pnpm" in pieces %}{% raw %}
   # The required CI check (spec D15). Beside a repo's own ci.yml and its ci-ok, it is called
-  # bosun-ok. It needs bosun-trusted and fails at once unless that passed (a draft, a failed
-  # gate, a cancel, a timeout): never skipped, since a skipped required check counts as passed.
+  # bosun-ok. It needs bosun-trusted and fails at once unless that passed (a failed gate, a
+  # cancel, a timeout) or on a draft (bosun-trusted is skipped then): never skipped, since a
+  # skipped required check counts as passed.
   # Then it installs the PR's dependencies and runs the gates that run PR code (fmt, lint,
   # test). Nothing it does reaches bosun-trusted, which finished first and restores no cache
   # this job saves.
@@ -460,7 +465,7 @@ jobs:
 {% else %}  ci-ok:
 {% endif %}{% raw %}    needs: bosun-trusted
     # always(), not !cancelled(): a cancelled run would skip this job, and a skipped required
-    # check counts as passed. The first step fails unless bosun-trusted succeeded.
+    # check counts as passed. The first step fails on a draft and unless bosun-trusted succeeded.
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -473,7 +478,9 @@ jobs:
         env:
           RESULT: ${{ needs.bosun-trusted.result }}
           PR_GATES: ${{ needs.bosun-trusted.outputs.pr_gates }}
+          DRAFT: ${{ github.event.pull_request.draft || false }}
         run: |
+          if [ "$DRAFT" = true ]; then echo "::error::draft: CI not run, mark ready for review"; exit 1; fi
           echo "bosun-trusted: $RESULT; gates here: ${PR_GATES:-none}"
           test "$RESULT" = success
       - if: needs.bosun-trusted.outputs.pr_gates != ''

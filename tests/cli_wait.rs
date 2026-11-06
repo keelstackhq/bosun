@@ -136,3 +136,33 @@ fn the_target_is_required_and_unique() {
     let (code, _) = wait(&fake, &["--pr", "1", "--issue", "2"]);
     assert_eq!(code, 2);
 }
+
+#[test]
+fn a_pr_with_no_checks_yet_says_so() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "Work", "claude/work", "");
+    let (code, v) = wait(&fake, &["--pr", "5", "--timeout", "0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["before"]["checks"], "no checks yet", "{v}");
+    assert_eq!(v["data"]["after"]["checks"], "no checks yet", "{v}");
+}
+
+#[test]
+fn a_github_5xx_exits_1_with_kind_upstream_and_a_retry_hint() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "Work", "claude/work", "");
+    fake.fail_path("/pulls/5", 503);
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_WAIT_BASE_MS", "20")
+        .env("BOSUN_HTTP_MAX_SLEEP_MS", "0")
+        .args(["wait", "--pr", "5", "--timeout", "5"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{v}");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["error"]["kind"], "upstream", "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("retry"), "{v}");
+    assert_eq!(v["data"], json!({}));
+}

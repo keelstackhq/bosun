@@ -1,0 +1,1 @@
+- `bosun ci-log` keeps the head (`--head`, default 20), the tail and up to 20 error lines from the middle of each failed job log, with `… N lines cut …` markers; before, only the tail.

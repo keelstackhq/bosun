@@ -11,7 +11,8 @@ use crate::app::{App, kill_switch, set_state};
 use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
-    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_json, comment_session, effective,
+    COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
+    comment_session, effective,
 };
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -42,11 +43,13 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
         VerdictCmd::Post(FromArg { from }) => {
             let verdict = parse(&read_input(from)?)?;
             let pull = current_pull(gh, &verdict)?;
+            require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
             record(&app, &pull, &verdict, &app.ctx.session)
         }
         VerdictCmd::Comment(FromArg { from }) => {
             let verdict = parse(&read_input(from)?)?;
             current_pull(gh, &verdict)?;
+            require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
             let c = gh.add_comment(verdict.pr, &comment_body(&verdict, &app.ctx.session))?;
             Ok(Outcome::data(
                 json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
@@ -112,7 +115,10 @@ fn apply(app: &App, id: u64) -> CmdResult {
             c.user
         )));
     }
-    let verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
+    let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
+    if verdict.chunks_reviewed.is_empty() {
+        verdict.chunks_reviewed = comment_chunks(&c.body);
+    }
     if !c.issue_url.ends_with(&format!("/issues/{}", verdict.pr)) {
         return Err(refuse(format!("it is not on PR #{}", verdict.pr)));
     }
@@ -134,7 +140,34 @@ fn apply(app: &App, id: u64) -> CmdResult {
             verdict.head_sha
         )));
     }
+    require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
     record(app, &pull, &verdict, session)
+}
+
+/// A review of a PR with several chunks must list every chunk (1-based, as in the pack).
+/// Only an approval needs it: a request-changes verdict never turns green, and may stop at the
+/// first blocker.
+fn require_all_chunks(gh: &dyn Github, repo: &str, verdict: &Verdict) -> Result<(), BosunError> {
+    if verdict.verdict != "approve" {
+        return Ok(());
+    }
+    let pack = super::review_pack::build(gh, repo, verdict.pr, false)?;
+    let count = pack["chunks"].as_array().map_or(0, Vec::len);
+    if count <= 1 {
+        return Ok(());
+    }
+    let missing: Vec<usize> = (1..=count)
+        .filter(|k| !verdict.chunks_reviewed.iter().any(|c| *c as usize == *k))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut listed = verdict.chunks_reviewed.clone();
+    listed.sort_unstable();
+    Err(BosunError::error(
+        format!("verdict lists chunks {listed:?} of {count}; missing {missing:?}"),
+        "review every chunk of `bosun review-pack <pr>` and list each number in `chunks_reviewed`",
+    ))
 }
 
 /// Post the review-verdict status and the verdict record, and move the linked task.

@@ -45,7 +45,7 @@ pub(crate) fn routines(slack: bool) -> Value {
     let mut all = json!([
         {"name": "janitor", "schedule": "every hour", "model": "haiku", "prompt": janitor},
         {"name": "curator", "schedule": "daily", "model": "sonnet",
-         "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add`; at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
+         "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add \"<rule, at most 160 characters>\" --evidence #<issue>` (the lesson issue or PR that proved it); at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
         {"name": "notify", "schedule": "every hour", "model": "haiku",
          "prompt": "Run `bosun notify --channel-info -` with the channel facts read by your Slack tool (conversations.info; guests are the members whose users.info has is_restricted or is_ultra_restricted) as JSON on stdin: {\"id\", \"is_ext_shared\", \"is_org_shared\", \"is_shared\", \"guests\"}. Post each `slack_post` in `next` with `args.text` verbatim (into args.thread_ts when it is set), then run `bosun notify --ack <key>` only after that post succeeded. Report data.errors when it is not empty. On exit 5, post nothing and report data.reason."},
     ]);
@@ -583,6 +583,226 @@ fn apply_hoist(items: &mut [Value], root: &Path, release: bool, release_step: Va
     json!({"exit_code": exit_json, "drift": drift, "unknown": unknown, "notes": notes, "skipped": skipped, "release_inferred": inferred})
 }
 
+/// The plugins bosun's repos enable: (plugin name, pin name in the setup script). Both come from
+/// the bosun-hosted marketplace `keelstack`, which pins each plugin's source commit.
+const PLUGINS: [(&str, &str); 2] = [
+    ("superpowers", "SUPERPOWERS_SHA"),
+    ("caveman", "CAVEMAN_SHA"),
+];
+const MARKET: &str = "keelstack";
+const MARKET_PIN: &str = "KEELSTACK_MARKETPLACE_REF";
+const SWITCH: &str = "switch to the keelstack marketplace (`@keelstack`; hull repos render it)";
+
+fn script_pin(script: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    script
+        .lines()
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .map(|v| {
+            let v = v.trim();
+            match v.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                Some(q) => v[1..].split(q).next().unwrap_or("").to_string(),
+                None => v.split(" #").next().unwrap_or("").trim().to_string(),
+            }
+        })
+        .filter(|v| !v.is_empty())
+}
+
+fn is_sha(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Compare the plugin settings, the setup script's pins, the installed plugins and (when the repo
+/// hosts it) the marketplace file. Pure: returns (problem, fix) pairs; every drift is a problem.
+/// `settings` is `.claude/settings.json`, `script` the setup script text, `installed` the
+/// installed_plugins.json (None = absent), `marketplace` `.claude-plugin/marketplace.json`.
+fn plugin_findings(
+    settings: Option<&Value>,
+    script: Option<&str>,
+    installed: Option<&Value>,
+    marketplace: Option<&Value>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut add = |p: String, f: String| out.push((p, f));
+    let pin_of = |name: &str| script.and_then(|s| script_pin(s, name));
+    let settings_fix = format!(
+        ".claude/settings.json: set extraKnownMarketplaces.{MARKET}.source to {{\"source\":\"github\",\"repo\":\"keelstackhq/bosun\",\"ref\":\"<{MARKET_PIN}>\"}} and enable superpowers@{MARKET} and caveman@{MARKET} in enabledPlugins; {SWITCH}"
+    );
+    let mut mref = None;
+    match settings {
+        None => add(
+            ".claude/settings.json is missing or not JSON".into(),
+            settings_fix.clone(),
+        ),
+        Some(s) => {
+            let src = &s["extraKnownMarketplaces"][MARKET]["source"];
+            if !src.is_null()
+                && (src["source"] != "github"
+                    || !src["repo"]
+                        .as_str()
+                        .is_some_and(|r| r.eq_ignore_ascii_case("keelstackhq/bosun")))
+            {
+                add(
+                    format!("marketplace {MARKET} source is not github keelstackhq/bosun"),
+                    settings_fix.clone(),
+                );
+            }
+            match src["ref"].as_str() {
+                None => add(
+                    format!(".claude/settings.json has no {MARKET} marketplace ref"),
+                    settings_fix.clone(),
+                ),
+                // Claude Code clones a marketplace with `--branch`: a sha (or nothing) fails.
+                Some(r) if r.is_empty() || is_sha(r) => add(
+                    format!("marketplace {MARKET} ref {r:?} is not a branch or tag"),
+                    format!(
+                        ".claude/settings.json: set extraKnownMarketplaces.{MARKET}.source.ref to {MARKET_PIN} of docs/setup-script.sh (a branch or tag, e.g. main)"
+                    ),
+                ),
+                Some(r) => mref = Some(r),
+            }
+            for (name, _) in PLUGINS {
+                if s["enabledPlugins"][format!("{name}@{MARKET}")] != true {
+                    add(
+                        format!("{name}@{MARKET} is not enabled in .claude/settings.json"),
+                        format!(
+                            ".claude/settings.json: set enabledPlugins.\"{name}@{MARKET}\" to true; {SWITCH}"
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    for pin in [MARKET_PIN, PLUGINS[0].1, PLUGINS[1].1] {
+        if pin_of(pin).is_none() {
+            let value = if pin == MARKET_PIN {
+                "<branch, e.g. main>"
+            } else {
+                "<40 hex commit>"
+            };
+            add(
+                format!("docs/setup-script.sh has no {pin}"),
+                format!("docs/setup-script.sh: add a line {pin}={value}"),
+            );
+        }
+    }
+    if let (Some(r), Some(pin)) = (mref, pin_of(MARKET_PIN))
+        && r != pin
+    {
+        add(
+            format!("marketplace {MARKET} ref is {r} but {MARKET_PIN} is {pin}"),
+            format!(
+                ".claude/settings.json: set extraKnownMarketplaces.{MARKET}.source.ref to {pin}, or move {MARKET_PIN} in docs/setup-script.sh in a PR"
+            ),
+        );
+    }
+    match installed {
+        None => add(
+            "installed_plugins.json is missing ($CLAUDE_CONFIG_DIR or $HOME/.claude/plugins)"
+                .into(),
+            format!(
+                "run the setup script (docs/setup-script.sh) so `claude plugin install superpowers@{MARKET} caveman@{MARKET}` writes installed_plugins.json"
+            ),
+        ),
+        Some(inst) => {
+            for (name, ppin) in PLUGINS {
+                let id = format!("{name}@{MARKET}");
+                let entry = &inst["plugins"][id.as_str()];
+                let sha = entry[0]["gitCommitSha"]
+                    .as_str()
+                    .or_else(|| entry["gitCommitSha"].as_str());
+                match (sha, pin_of(ppin)) {
+                    (None, _) => add(
+                        format!("{id} is not installed"),
+                        format!(
+                            "run `claude plugin install {id} --scope user` (docs/setup-script.sh does it); old entries such as {name}@superpowers-marketplace do not count: {SWITCH}"
+                        ),
+                    ),
+                    (Some(sha), Some(pin)) if sha != pin => add(
+                        format!("installed {id} is at {sha} but {ppin} is {pin}"),
+                        format!(
+                            "run `claude plugin update {id}` until it is at {pin}, or move {ppin} in docs/setup-script.sh in a PR"
+                        ),
+                    ),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(m) = marketplace {
+        for (name, ppin) in PLUGINS {
+            let src = m["plugins"]
+                .as_array()
+                .and_then(|a| a.iter().find(|p| p["name"] == name))
+                .and_then(|p| p["source"]["sha"].as_str());
+            if let (Some(sha), Some(pin)) = (src, pin_of(ppin))
+                && sha != pin
+            {
+                add(
+                    format!(
+                        ".claude-plugin/marketplace.json pins {name} at {sha} but {ppin} is {pin}"
+                    ),
+                    format!(
+                        ".claude-plugin/marketplace.json: set the {name} source.sha to {pin}, or move {ppin} in docs/setup-script.sh to {sha}"
+                    ),
+                );
+            }
+        }
+    }
+    out
+}
+
+/// Step 13: the plugin settings, the setup script's pins, the installed plugins and the
+/// marketplace file agree. Local only: no network.
+fn plugins_item(root: &Path, script: Option<&str>) -> Value {
+    let json_of = |t: String| serde_json::from_str::<Value>(&t).ok();
+    let settings = read(root, ".claude/settings.json").and_then(json_of);
+    let marketplace = read(root, ".claude-plugin/marketplace.json").and_then(json_of);
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".claude")));
+    let installed = config
+        .and_then(|c| std::fs::read_to_string(c.join("plugins/installed_plugins.json")).ok())
+        .and_then(json_of);
+    // The setup script text may be absent or rejected by step 6; its pins are read from disk.
+    let raw = script
+        .map(str::to_string)
+        .or_else(|| read(root, "docs/setup-script.sh"));
+    let found = plugin_findings(
+        settings.as_ref(),
+        raw.as_deref(),
+        installed.as_ref(),
+        marketplace.as_ref(),
+    );
+    let problem = (!found.is_empty()).then(|| {
+        found
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    });
+    let fix = if found.is_empty() {
+        format!(
+            "keep .claude/settings.json, docs/setup-script.sh and the installed plugins on the {MARKET} pins"
+        )
+    } else {
+        found
+            .iter()
+            .map(|(_, f)| f.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    item(
+        13,
+        "plugins",
+        problem,
+        format!(
+            "the {MARKET} marketplace, its plugins, the setup script pins and the installed plugins agree"
+        ),
+        &fix,
+    )
+}
+
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
@@ -882,6 +1102,32 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
     ));
 
+    items.push(plugins_item(root, script.as_deref()));
+
+    // Step 14: the CI-minute rules (docs/ci-minutes.md), the same check as `bosun gate ci-minutes`.
+    let (_, minutes) = crate::cli::ci_minutes::scan(root);
+    items.push(item(
+        14,
+        "CI minutes",
+        minutes.first().map(|f| {
+            format!(
+                "{} CI-minute finding(s); first: {} {}{}",
+                minutes.len(),
+                f.file,
+                f.rule,
+                f.job
+                    .as_ref()
+                    .map_or(String::new(), |j| format!(" (job {j})"))
+            )
+        }),
+        "every pull_request workflow skips drafts, runs on ready_for_review and cancels older runs"
+            .into(),
+        &minutes.first().map_or_else(
+            || "run `bosun gate ci-minutes`".to_string(),
+            |f| format!("{}; `bosun gate ci-minutes` lists every finding", f.fix),
+        ),
+    ));
+
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
@@ -903,4 +1149,210 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .with_data(data));
     }
     Ok(Outcome::data(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const M1: &str = "main";
+    const P1: &str = "22f0b463e7a5e579904dd6211a520321035526f7";
+    const C: &str = "a9cc1f7b82598852e8c6b8e599dde6ac2491b26e";
+
+    fn script() -> String {
+        format!("KEELSTACK_MARKETPLACE_REF={M1}\nSUPERPOWERS_SHA={P1}\nCAVEMAN_SHA={C}\n")
+    }
+
+    fn settings(r: &str, caveman_on: bool) -> Value {
+        json!({
+            "extraKnownMarketplaces": {"keelstack": {"source": {"source": "github", "repo": "keelstackhq/bosun", "ref": r}}},
+            "enabledPlugins": {"superpowers@keelstack": true, "caveman@keelstack": caveman_on}
+        })
+    }
+
+    fn installed(sp: &str, cv: &str) -> Value {
+        json!({"plugins": {
+            "superpowers@keelstack": [{"gitCommitSha": sp}],
+            "caveman@keelstack": [{"gitCommitSha": cv}]
+        }})
+    }
+
+    fn market(sp: &str, cv: &str) -> Value {
+        json!({"plugins": [
+            {"name": "superpowers", "source": {"source": "github", "repo": "obra/superpowers", "sha": sp}},
+            {"name": "caveman", "source": {"source": "github", "repo": "akramsystems/caveman", "sha": cv}}
+        ]})
+    }
+
+    fn run(s: Option<&Value>, sc: Option<&str>, i: Option<&Value>, m: Option<&Value>) -> String {
+        plugin_findings(s, sc, i, m)
+            .iter()
+            .map(|(p, f)| format!("{p} => {f}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn agreeing_settings_script_install_and_marketplace_have_no_problem() {
+        let out = run(
+            Some(&settings(M1, true)),
+            Some(&script()),
+            Some(&installed(P1, C)),
+            Some(&market(P1, C)),
+        );
+        assert_eq!(out, "");
+        // The marketplace file is optional.
+        let out = run(
+            Some(&settings(M1, true)),
+            Some(&script()),
+            Some(&installed(P1, C)),
+            None,
+        );
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn a_missing_install_is_a_problem() {
+        let out = run(Some(&settings(M1, true)), Some(&script()), None, None);
+        assert!(out.contains("installed_plugins.json is missing"), "{out}");
+    }
+
+    #[test]
+    fn an_old_marketplace_entry_does_not_count() {
+        let old = json!({"plugins": {"superpowers@superpowers-marketplace": [{"gitCommitSha": P1}],
+            "caveman@keelstack": [{"gitCommitSha": C}]}});
+        let out = run(Some(&settings(M1, true)), Some(&script()), Some(&old), None);
+        assert!(
+            out.contains("superpowers@keelstack is not installed"),
+            "{out}"
+        );
+        assert!(out.contains("@keelstack"), "{out}");
+    }
+
+    #[test]
+    fn a_disabled_plugin_is_a_problem() {
+        let out = run(
+            Some(&settings(M1, false)),
+            Some(&script()),
+            Some(&installed(P1, C)),
+            None,
+        );
+        assert!(out.contains("caveman@keelstack is not enabled"), "{out}");
+        assert!(out.contains(".claude/settings.json"), "{out}");
+    }
+
+    #[test]
+    fn a_missing_marketplace_or_a_bad_ref_is_a_problem() {
+        let out = run(
+            Some(&json!({})),
+            Some(&script()),
+            Some(&installed(P1, C)),
+            None,
+        );
+        assert!(out.contains("no keelstack marketplace ref"), "{out}");
+        for bad in ["5c9072877417873fee42be1805aa776a453ec394", ""] {
+            let out = run(
+                Some(&settings(bad, true)),
+                Some(&script()),
+                Some(&installed(P1, C)),
+                None,
+            );
+            assert!(out.contains("branch or tag"), "{out}");
+        }
+        let out = run(None, Some(&script()), Some(&installed(P1, C)), None);
+        assert!(out.contains("settings.json is missing"), "{out}");
+    }
+
+    #[test]
+    fn a_ref_off_the_script_pin_is_a_problem() {
+        let other = "release";
+        let out = run(
+            Some(&settings(other, true)),
+            Some(&script()),
+            Some(&installed(P1, C)),
+            None,
+        );
+        assert!(out.contains("KEELSTACK_MARKETPLACE_REF"), "{out}");
+        assert!(out.contains(M1), "{out}");
+    }
+
+    #[test]
+    fn a_foreign_marketplace_source_is_a_problem() {
+        let want = "keelstackhq/bosun";
+        for src in [
+            json!({"source": "github", "repo": "evil/fork", "ref": M1}),
+            json!({"source": "url", "url": "https://x.test/y.git", "ref": M1}),
+            json!({"source": "git", "url": "https://x.test/y.git", "ref": M1}),
+        ] {
+            let mut s = settings(M1, true);
+            s["extraKnownMarketplaces"]["keelstack"]["source"] = src;
+            let out = run(Some(&s), Some(&script()), Some(&installed(P1, C)), None);
+            assert!(out.contains("not github keelstackhq/bosun"), "{out}");
+            assert!(out.contains(want), "{out}");
+        }
+        let mut s = settings(M1, true);
+        s["extraKnownMarketplaces"]["keelstack"]["source"]["repo"] = json!("KeelstackHQ/Bosun");
+        assert_eq!(
+            run(Some(&s), Some(&script()), Some(&installed(P1, C)), None),
+            ""
+        );
+    }
+
+    #[test]
+    fn script_pin_strips_comments_and_quotes() {
+        let sc = "CAVEMAN_SHA=abc # note\nA=\"def\" # x\nB='ghi'\nC=\"j#k\"\n";
+        assert_eq!(script_pin(sc, "CAVEMAN_SHA").as_deref(), Some("abc"));
+        assert_eq!(script_pin(sc, "A").as_deref(), Some("def"));
+        assert_eq!(script_pin(sc, "B").as_deref(), Some("ghi"));
+        assert_eq!(script_pin(sc, "C").as_deref(), Some("j#k"));
+    }
+
+    #[test]
+    fn a_missing_script_pin_is_a_problem() {
+        let sc = format!("KEELSTACK_MARKETPLACE_REF={M1}\nSUPERPOWERS_SHA={P1}\n");
+        let out = run(
+            Some(&settings(M1, true)),
+            Some(&sc),
+            Some(&installed(P1, C)),
+            None,
+        );
+        assert!(out.contains("no CAVEMAN_SHA"), "{out}");
+        let out = run(
+            Some(&settings(M1, true)),
+            None,
+            Some(&installed(P1, C)),
+            None,
+        );
+        assert_eq!(
+            out.matches("docs/setup-script.sh has no").count(),
+            3,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_installed_commit_off_its_pin_is_a_problem() {
+        let out = run(
+            Some(&settings(M1, true)),
+            Some(&script()),
+            Some(&installed("abc", C)),
+            None,
+        );
+        assert!(out.contains("SUPERPOWERS_SHA"), "{out}");
+    }
+
+    #[test]
+    fn a_marketplace_file_sha_off_the_script_pin_is_a_problem() {
+        let other = "c".repeat(40);
+        let out = run(
+            Some(&settings(M1, true)),
+            Some(&script()),
+            Some(&installed(P1, C)),
+            Some(&market(P1, &other)),
+        );
+        assert!(
+            out.contains(".claude-plugin/marketplace.json pins caveman"),
+            "{out}"
+        );
+    }
 }

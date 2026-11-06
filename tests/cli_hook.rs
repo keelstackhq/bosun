@@ -56,9 +56,22 @@ fn hook_as(
     sub: &str,
     input: &Value,
 ) -> Out {
+    hook_with(session, "local", fake, repo, now, sub, input)
+}
+
+fn hook_with(
+    session: &str,
+    origin: &str,
+    fake: Option<&FakeGithub>,
+    repo: &Path,
+    now: &str,
+    sub: &str,
+    input: &Value,
+) -> Out {
     let mut cmd = bosun();
     cmd.current_dir(repo)
         .env("BOSUN_SESSION", session)
+        .env("BOSUN_ORIGIN", origin)
         .env("BOSUN_NOW", now)
         .args(["hook", sub])
         .write_stdin(input.to_string());
@@ -335,4 +348,529 @@ fn commit_in_a_feature_worktree_is_allowed_from_a_main_checkout() {
     // The main checkout itself, and a directory the hook cannot read, stay refused.
     denied(&bash("git commit -m x"));
     denied(&bash("cd $WT && git commit -m x"));
+}
+
+fn rules_start_text(
+    fake: Option<&FakeGithub>,
+    repo: &Path,
+    env: &[(&str, &str)],
+) -> (String, String) {
+    let mut cmd = bosun();
+    cmd.current_dir(repo)
+        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_NOW", T0)
+        .args(["hook", "session-start"])
+        .write_stdin(json!({"cwd": repo.to_str().unwrap()}).to_string());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    if let Some(f) = fake {
+        cmd.env("BOSUN_GITHUB_API", f.url());
+    }
+    let out = cmd.output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"].as_str();
+    (
+        text.unwrap().to_string(),
+        String::from_utf8_lossy(&out.stderr).into(),
+    )
+}
+
+#[test]
+fn session_start_rules_follow_the_origin() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    let (local, _) = rules_start_text(Some(&fake), tmp.path(), &[]);
+    assert!(
+        local.contains("Session rules (orchestrator): Split work"),
+        "{local}"
+    );
+    assert!(local.contains("Caveman style everywhere"), "{local}");
+    let (spawned, _) = rules_start_text(
+        Some(&fake),
+        tmp.path(),
+        &[("CLAUDE_CODE_CHILD_SESSION", "1")],
+    );
+    assert!(
+        spawned.contains("Session rules (worker): Use superpowers"),
+        "{spawned}"
+    );
+    let (bad, _) = rules_start_text(Some(&fake), tmp.path(), &[("BOSUN_ORIGIN", "bogus")]);
+    assert!(bad.contains("Session rules (orchestrator)"), "{bad}");
+    let (bad_child, _) = rules_start_text(
+        Some(&fake),
+        tmp.path(),
+        &[
+            ("BOSUN_ORIGIN", "bogus"),
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+        ],
+    );
+    assert!(bad_child.contains("Session rules (worker)"), "{bad_child}");
+}
+
+#[test]
+fn session_start_rules_come_from_the_file_and_survive_no_github() {
+    let tmp = repo();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/session-rules.toml"),
+        "worker = \"custom worker rule\"\n",
+    )
+    .unwrap();
+    let env = [("BOSUN_ORIGIN", "spawned")];
+    let (text, _) = rules_start_text(None, tmp.path(), &env);
+    assert!(text.contains("could not reach GitHub"), "{text}");
+    assert!(
+        text.contains("Session rules (worker): custom worker rule Caveman"),
+        "{text}"
+    );
+    std::fs::write(tmp.path().join(".bosun/session-rules.toml"), "bogus = 1\n").unwrap();
+    let (text, err) = rules_start_text(None, tmp.path(), &env);
+    assert!(text.contains("Use superpowers"), "{text}");
+    assert!(text.contains(".bosun/session-rules.toml ignored"), "{text}");
+    assert!(err.contains("session-rules.toml"), "{err}");
+}
+
+const LESSONS: &str = "[[lesson]]\nid = \"L1\"\nrule = \"keep it small\"\nevidence = [\"e\"]\n\n\
+    [[lesson]]\nid = \"L2\"\nrule = \"scoped rule\"\nscope = [\"src/**\"]\nevidence = [\"e\"]\n";
+
+fn start_text(fake: Option<&FakeGithub>, tmp: &Path) -> String {
+    let input = json!({"cwd": tmp.to_str().unwrap()});
+    let o = hook(fake, tmp, T0, "session-start", &input);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn session_start_prints_the_global_lessons_in_both_texts() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), LESSONS).unwrap();
+    for fake in [None, Some(&fake)] {
+        let text = start_text(fake, tmp.path());
+        assert!(text.contains("\nLessons:\nL1 * keep it small"), "{text}");
+        assert!(!text.contains("scoped rule"), "{text}");
+    }
+}
+
+#[test]
+fn session_start_without_usable_lessons_prints_no_block() {
+    let tmp = repo();
+    assert!(!start_text(None, tmp.path()).contains("Lessons:"));
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), "[[lesson\n").unwrap();
+    assert!(!start_text(None, tmp.path()).contains("Lessons:"));
+}
+
+#[test]
+fn session_start_prints_at_most_eight_lessons() {
+    let tmp = repo();
+    let many: String = (1..=10)
+        .map(|i| format!("[[lesson]]\nid = \"L{i}\"\nrule = \"rule {i}\"\nevidence = [\"e\"]\n\n"))
+        .collect();
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), many).unwrap();
+    let text = start_text(None, tmp.path());
+    let after = text.split("Lessons:\n").nth(1).expect("a block");
+    // The session rules follow the lessons block on their own line.
+    let lessons = after
+        .lines()
+        .take_while(|l| !l.starts_with("Session rules"));
+    assert_eq!(lessons.count(), 8, "{text}");
+}
+
+#[test]
+fn session_start_from_a_subdirectory_reads_the_repo_root_lessons() {
+    let tmp = repo();
+    std::fs::create_dir(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/lessons.toml"), LESSONS).unwrap();
+    let sub = tmp.path().join("src/deep");
+    std::fs::create_dir_all(&sub).unwrap();
+    let text = start_text(None, &sub);
+    assert!(text.contains("\nLessons:\nL1 * keep it small"), "{text}");
+}
+
+/// The Stop hook as a spawned child (the session it blocks).
+fn stop(fake: Option<&FakeGithub>, repo: &Path, input: Value) -> Out {
+    stop_as("spawned", fake, repo, input)
+}
+
+fn stop_as(origin: &str, fake: Option<&FakeGithub>, repo: &Path, input: Value) -> Out {
+    hook_with("session_me", origin, fake, repo, T1, "stop", &input)
+}
+
+fn blocked(o: &Out) -> String {
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).expect("one JSON object");
+    assert_eq!(v["decision"], "block", "{v}");
+    v["reason"].as_str().unwrap().to_string()
+}
+
+fn stop_in(repo: &Path) -> Value {
+    json!({"session_id": "s", "cwd": repo.to_str().unwrap(), "stop_hook_active": false})
+}
+
+fn git_text(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+fn silent(o: &Out) {
+    assert_eq!((o.code, o.stdout.as_str()), (0, ""), "{}", o.stderr);
+}
+
+#[test]
+fn stop_hook_active_allows_without_looking() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let mut input = stop_in(tmp.path());
+    input["stop_hook_active"] = json!(true);
+    silent(&stop(Some(&fake), tmp.path(), input));
+}
+
+#[test]
+fn stop_blocks_a_live_lease_without_result_or_handoff() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let o = stop(Some(&fake), tmp.path(), stop_in(tmp.path()));
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert_eq!(v["decision"], "block");
+    let reason = v["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("#5") && reason.contains("bosun result"),
+        "{reason}"
+    );
+    assert!(
+        reason.contains("merged|partial|blocked|needs-human"),
+        "{reason}"
+    );
+    assert!(
+        !reason.contains("abandoned") && !reason.contains("failed"),
+        "{reason}"
+    );
+}
+
+fn wait_marker(repo: &Path, name: &str, pid: u32, session: &str) {
+    let git_dir = git_text(repo, &["rev-parse", "--absolute-git-dir"]);
+    let dir = Path::new(git_dir.trim()).join("bosun").join("wait");
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = json!({"pid": pid, "session": session, "started": 1});
+    std::fs::write(dir.join(format!("{name}.json")), body.to_string()).unwrap();
+}
+
+#[test]
+fn stop_skips_the_block_while_a_wait_of_this_session_runs() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    wait_marker(tmp.path(), "live", std::process::id(), "session_me");
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_blocks_with_a_dead_wait_marker_and_removes_it() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    wait_marker(tmp.path(), "dead", pid, "session_me");
+    blocked(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+    let git_dir = git_text(tmp.path(), &["rev-parse", "--absolute-git-dir"]);
+    let marker = Path::new(git_dir.trim()).join("bosun/wait/dead.json");
+    assert!(!marker.exists());
+}
+
+#[test]
+fn stop_still_blocks_when_the_live_wait_belongs_to_another_session() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    wait_marker(tmp.path(), "other", std::process::id(), "session_other");
+    blocked(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_allows_after_a_handoff_note() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let note =
+        r#"{"bosun":"handoff","session":"session_me","at":"2026-10-22T10:01:00Z","lines":["x"]}"#;
+    fake.comment(5, note);
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_allows_after_a_result_note() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let note = r#"{"bosun":"result","session":"session_me","outcome":"merged"}"#;
+    fake.comment(5, note);
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_allows_without_an_own_lease() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    fake.issue(4, "other", &["bosun:state/claimed"], "x");
+    fake.comment(4, &lease_note("session_other", LIVE, "src/core/**"));
+    silent(&stop(Some(&fake), tmp.path(), stop_in(tmp.path())));
+}
+
+#[test]
+fn stop_warns_when_the_gate_record_is_stale_and_stays_silent_when_it_matches() {
+    let tmp = repo();
+    let dir = tmp.path();
+    let fake = FakeGithub::start();
+    std::fs::write(dir.join("a.txt"), "1").unwrap();
+    git(dir, &["add", "-A"]);
+    let who = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    let mut commit = who.to_vec();
+    commit.extend(["commit", "-qm", "c"]);
+    git(dir, &commit);
+    // No record, clean tree: silent.
+    silent(&stop(Some(&fake), dir, stop_in(dir)));
+    // No record, dirty tree: warn, never block.
+    std::fs::write(dir.join("a.txt"), "2").unwrap();
+    let o = stop(Some(&fake), dir, stop_in(dir));
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    assert!(v["systemMessage"].as_str().unwrap().contains("bosun gate"));
+    assert!(v.get("decision").is_none());
+    // A record of this very tree: silent.
+    let head = git_text(dir, &["rev-parse", "HEAD"]);
+    let fp = bosun::core::gate_record::fingerprint(
+        &git_text(dir, &["status", "--porcelain=v1"]),
+        &git_text(dir, &["diff", "HEAD"]),
+    );
+    let file = dir.join(".git/bosun/gate.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        json!({"head": head.trim(), "fingerprint": fp}).to_string(),
+    )
+    .unwrap();
+    silent(&stop(Some(&fake), dir, stop_in(dir)));
+    // The tree moves on: warn again.
+    std::fs::write(dir.join("a.txt"), "3").unwrap();
+    let o = stop(Some(&fake), dir, stop_in(dir));
+    assert!(o.stdout.contains("systemMessage"), "{}", o.stdout);
+}
+
+#[test]
+fn stop_never_blocks_a_session_a_human_answers() {
+    for origin in ["local", "slack"] {
+        let tmp = repo();
+        let fake = FakeGithub::start();
+        leased(&fake);
+        silent(&stop_as(
+            origin,
+            Some(&fake),
+            tmp.path(),
+            stop_in(tmp.path()),
+        ));
+        // Not even a GitHub read: a turn end of an interactive session costs nothing.
+        assert!(
+            fake.requests().is_empty(),
+            "{origin}: {:?}",
+            fake.requests()
+        );
+    }
+}
+
+#[test]
+fn stop_blocks_a_routine_root_without_result_or_handoff() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    leased(&fake);
+    let reason = blocked(&stop_as(
+        "routine",
+        Some(&fake),
+        tmp.path(),
+        stop_in(tmp.path()),
+    ));
+    assert!(
+        reason.contains("#5") && reason.contains("bosun handoff"),
+        "{reason}"
+    );
+}
+
+const HANDOFF: &str =
+    r#"{"bosun":"handoff","session":"session_me","at":"2026-10-22T10:01:00Z","lines":["x"]}"#;
+
+#[test]
+fn stop_allows_a_root_after_its_handoff_on_the_registry() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    leased(&fake);
+    fake.comment(1, HANDOFF);
+    silent(&stop_as(
+        "routine",
+        Some(&fake),
+        tmp.path(),
+        stop_in(tmp.path()),
+    ));
+}
+
+#[test]
+fn stop_ignores_a_registry_handoff_older_than_the_lease_or_by_another_session() {
+    let tmp = repo();
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.comment(1, HANDOFF);
+    leased(&fake);
+    fake.comment(1, &HANDOFF.replace("session_me", "session_other"));
+    blocked(&stop_as(
+        "routine",
+        Some(&fake),
+        tmp.path(),
+        stop_in(tmp.path()),
+    ));
+}
+
+#[test]
+fn stop_allows_when_github_is_down() {
+    let tmp = repo();
+    silent(&stop(None, tmp.path(), stop_in(tmp.path())));
+}
+
+fn bash_in(repo: &Path, session: &str, cmd: &str) -> Out {
+    let mut input = call(repo, "Bash", json!({ "command": cmd }));
+    input["session_id"] = json!(session);
+    hook(None, repo, T0, "pre-tool-use", &input)
+}
+
+#[test]
+fn repeat_lock_warns_at_three_and_denies_at_five() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+    let third = bash_in(r, "s1", " cargo test ");
+    assert_eq!(third.code, 0, "{}", third.stderr);
+    let v: Value = serde_json::from_str(&third.stdout).unwrap();
+    let h = &v["hookSpecificOutput"];
+    assert_eq!(h["hookEventName"], "PreToolUse");
+    assert!(h.get("permissionDecision").is_none());
+    let note = h["additionalContext"].as_str().unwrap();
+    assert!(note.starts_with("repeat-lock"), "{note}");
+    allowed(&bash_in(r, "s1", "cargo test"));
+    let why = denied(&bash_in(r, "s1", "cargo test"));
+    assert!(why.starts_with("repeat-lock"), "{why}");
+}
+
+#[test]
+fn repeat_lock_skips_read_only_polls_and_keeps_the_count() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..6 {
+        let out = bash_in(r, "s1", "bosun wait --child S");
+        assert_eq!(out.stdout.trim(), "", "{}", out.stdout);
+    }
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s1", "bosun wait --child S"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    let third = bash_in(r, "s1", "cargo test");
+    assert!(third.stdout.contains("repeat-lock"), "{}", third.stdout);
+}
+
+#[test]
+fn repeat_lock_resets_on_another_command_or_session() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+    allowed(&bash_in(r, "s1", "cargo build"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s1", "cargo test"));
+    allowed(&bash_in(r, "s2", "cargo test"));
+    allowed(&bash_in(r, "s2", "cargo test"));
+}
+
+#[test]
+fn destructive_lock_denies_through_the_hook() {
+    let tmp = repo();
+    let why = denied(&bash_in(tmp.path(), "s1", "sudo rm -rf /"));
+    assert!(why.starts_with("destructive-lock"), "{why}");
+}
+
+#[test]
+fn repeat_lock_counts_each_session_on_its_own() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+        allowed(&bash_in(r, "s2", "cargo build"));
+    }
+    let v: Value = serde_json::from_str(&bash_in(r, "s1", "cargo test").stdout).unwrap();
+    assert!(
+        v["hookSpecificOutput"]["additionalContext"].is_string(),
+        "{v}"
+    );
+}
+
+#[test]
+fn repeat_lock_restarts_after_an_edit() {
+    let tmp = repo();
+    let r = tmp.path();
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+    let mut edit = call(
+        r,
+        "Edit",
+        json!({"file_path": r.join("a.rs").to_str().unwrap()}),
+    );
+    edit["session_id"] = json!("s1");
+    hook(None, r, T0, "pre-tool-use", &edit);
+    for _ in 0..2 {
+        allowed(&bash_in(r, "s1", "cargo test"));
+    }
+}
+
+#[test]
+fn repeat_lock_needs_a_session_id() {
+    let tmp = repo();
+    let r = tmp.path();
+    let input = json!({"tool_name": "Bash", "tool_input": {"command": "ls"}});
+    for _ in 0..5 {
+        let mut cmd = bosun();
+        cmd.current_dir(r)
+            .env_remove("BOSUN_SESSION")
+            .env("BOSUN_NOW", T0)
+            .args(["hook", "pre-tool-use"])
+            .write_stdin(input.to_string());
+        let out = cmd.output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "", "{out:?}");
+    }
+}
+
+#[test]
+fn repeat_lock_fails_open_when_it_cannot_write() {
+    let tmp = repo();
+    let r = tmp.path();
+    std::fs::create_dir_all(r.join(".git/bosun")).unwrap();
+    std::fs::write(r.join(".git/bosun/repeat"), "not a dir").unwrap();
+    for _ in 0..5 {
+        let out = bash_in(r, "s1", "cargo test");
+        allowed(&out);
+        assert!(out.stderr.contains("repeat-lock skipped"), "{}", out.stderr);
+    }
 }

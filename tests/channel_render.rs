@@ -274,6 +274,9 @@ fn every_variant_renders_to_files_that_parse() {
                         serde_json::from_str::<serde_json::Value>(text)
                             .unwrap_or_else(|e| panic!("{at}: {name}: {e}"));
                     } else if name.ends_with(".yml") || name.ends_with(".yaml") {
+                        // The CI-minute rules (docs/ci-minutes.md) hold for every rendered workflow.
+                        let found = bosun::core::ci_minutes::check(name, text);
+                        assert!(found.is_empty(), "{at}: {found:?}");
                         let dir = tmp.path().join(format!("{variant}-{own_ci}-{owner}"));
                         let path = dir.join(name);
                         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1096,6 +1099,9 @@ fn the_plan_skips_gates_only_on_docs_and_drafts_fail() {
             assert_eq!(plan(own_ci, "true", "false", mode), None);
             assert_eq!(plan(own_ci, "true", "true", mode), None);
         }
+        assert!(
+            file(&files, BOSUN_YML).contains("::error::draft: CI not run, mark ready for review")
+        );
         // Only the stack setup waits for `setup`; the gates step takes `only`.
         let j = yaml_json(file(&variant(&["rust", "ts-pnpm"], own_ci), BOSUN_YML)).unwrap();
         let steps = steps(&j, own_ci);
@@ -1176,11 +1182,16 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
             );
             // The edit step looks up the required check's earlier result, not its own job's.
             assert_eq!(step(&a, "id", "edit")["env"]["CHECK"], check);
-            // The required check: after bosun-trusted, also when it failed (never skipped), with
-            // a read-only token.
+            // The required check: after bosun-trusted, also when it failed (never skipped, also on
+            // a draft, where bosun-trusted is skipped and its first step fails), with a read-only
+            // token.
             let job = &j["jobs"][check];
             assert_eq!(job["needs"], TRUSTED);
             assert_eq!(job["if"], "${{ always() }}", "also after a cancel");
+            assert_eq!(
+                j["jobs"][TRUSTED]["if"],
+                "github.event_name != 'pull_request' || github.event.pull_request.draft == false"
+            );
             assert_eq!(job["permissions"], serde_json::json!({"contents": "read"}));
             let b = check_steps(&j, own_ci);
             assert_eq!(b[0]["name"], "bosun-trusted passed");
@@ -1859,5 +1870,38 @@ fn setup_scripts_never_replace_node_with_another_old_node() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "v22.3.0\n", "{name}");
         assert!(!sb.path("link/node").exists(), "{name}");
         assert!(!sb.path("profile.sh").exists(), "{name}");
+    }
+}
+
+/// A draft PR starts no heavy job in any variant (CI minutes): `bosun-trusted` skips it, the
+/// single job of a rust stack fails at once in its plan step, and the required check is never
+/// skipped. The CI-minute rules find nothing in the rendered workflow.
+#[test]
+fn drafts_skip_the_heavy_jobs_and_fail_the_required_check() {
+    for stack in [&["rust"][..], &["ts-pnpm"], &["rust", "ts-pnpm"]] {
+        for own_ci in ["", "1"] {
+            let files = variant(stack, own_ci);
+            let wf = file(&files, BOSUN_YML);
+            let found = bosun::core::ci_minutes::check(BOSUN_YML, wf);
+            assert!(found.is_empty(), "{stack:?} {own_ci:?}: {found:?}");
+            assert!(
+                wf.contains("types: [opened, synchronize, reopened, edited, ready_for_review]")
+            );
+            let Some(j) = yaml_json(wf) else { continue };
+            let jobs = j["jobs"].as_object().unwrap();
+            let check = check_name(own_ci);
+            for (id, job) in jobs {
+                let cond = job["if"].as_str().unwrap_or_default();
+                if id == check {
+                    assert!(
+                        !cond.contains("draft"),
+                        "{id}: the required check is never skipped on a draft: {cond}"
+                    );
+                } else {
+                    assert!(cond.contains("pull_request.draft == false"), "{id}: {cond}");
+                }
+            }
+            assert!(wf.contains("::error::draft: CI not run, mark ready for review"));
+        }
     }
 }

@@ -5,8 +5,10 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ResultArgs;
+use super::reap::{EpicScope, close_done_epics};
 use crate::app::{
     App, default_branch, end_lease, halt_reason, merge_counts, notes, set_state, sync_merged,
+    task_pr_merged,
 };
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::{linked_issues, parse_task_meta};
@@ -57,13 +59,23 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         },
         _ => None,
     };
+    // A late outcome on an epic that already closed (or any refused move) is never dropped
+    // silently: the comment above records it and `data.state_skipped` says why it did not apply.
+    let mut state_skipped = None;
     if let Some(to) = to
         && state != Some(to)
-        && state.is_none_or(|from| transition_allowed(from, to))
     {
-        set_state(gh, n, &epic, to)?;
-        state = Some(to);
+        if state.is_none_or(|from| transition_allowed(from, to)) {
+            set_state(gh, n, &epic, to)?;
+            state = Some(to);
+        } else {
+            let from = state.map_or("none".into(), |s| s.to_string());
+            let why = format!("#{n} is {from}; {} cannot move it to {to}", args.outcome);
+            eprintln!("result: {why}");
+            state_skipped = Some(why);
+        }
     }
+    let epic_already_closed = epic.state == "closed";
 
     // A merged PR moves the tasks it closes (the merge moves state, D13); an unmerged one is a report.
     let mut tasks_merged = Vec::new();
@@ -78,6 +90,32 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
                 && sync_merged(gh, task, &issue, Some(session))?
             {
                 tasks_merged.push(task);
+            }
+        }
+    }
+    // Every unfinished task of the epic whose own PR (task-pr record, else bosun marker) merged
+    // moves to merged, so the parent sees the merge without waiting for `reap`.
+    let base = default_branch(gh)?;
+    let mut pulls = None;
+    for st in [State::Building, State::Review, State::Fixing, State::Queued] {
+        for task in gh.list_issues(&[&st.label()], IssueState::All)? {
+            if task.pull_request
+                || task.number == n
+                || !parse_task_meta(task.body_text()).is_some_and(|m| m.epic == Some(n))
+                || tasks_merged.contains(&task.number)
+            {
+                continue;
+            }
+            if task_pr_merged(
+                gh,
+                &app.ctx.repo.to_string(),
+                &base,
+                task.number,
+                &mut pulls,
+                true,
+            )? && sync_merged(gh, task.number, &task, None)?
+            {
+                tasks_merged.push(task.number);
             }
         }
     }
@@ -110,12 +148,30 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         gh.add_comment(number, &leave.to_line())?;
         left = true;
     }
-    Ok(Outcome::data(json!({
+
+    // Closing the epic is housekeeping after the comment: a failure is reported, never fatal.
+    let mut closed = Vec::new();
+    let scope = EpicScope {
+        only: Some(n),
+        quiet: false,
+        own_session: Some(session),
+        own_spawned_blocks: false,
+        done: &tasks_merged,
+    };
+    let epic_error = close_done_epics(gh, app.ctx.now, scope, &mut closed).err();
+    let mut data = json!({
         "epic": n, "outcome": args.outcome, "pr": args.pr,
         "comment_id": comment_id, "lease_ended": lease_ended, "left": left,
         "task_state": state.map(State::name), "tasks_merged": tasks_merged,
-        "partial_skipped": partial_skipped,
-    })))
+        "partial_skipped": partial_skipped, "state_skipped": state_skipped,
+        "epic_already_closed": epic_already_closed,
+        "epic_closed": !closed.is_empty(),
+    });
+    if let Some(e) = epic_error {
+        eprintln!("result: closing the epic failed: {e}");
+        data["epic_error"] = json!(e.to_string());
+    }
+    Ok(Outcome::data(data))
 }
 
 /// Why `partial` must not move epic `n` back to ready (the result is still recorded): only the

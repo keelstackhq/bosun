@@ -1,0 +1,1 @@
+- `bosun pr` no longer closes a spawned child's epic before its `result` (its own lease and a pending child lease block the close); `bosun result` reports an outcome it could not apply as `data.state_skipped` and `data.epic_already_closed` (#400).

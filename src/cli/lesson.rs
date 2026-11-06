@@ -68,12 +68,22 @@ pub(super) fn today(ctx: &Ctx) -> String {
 }
 
 fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
+    super::refuse_secret("the lesson text", &a.text)?;
+    super::refuse_secret("--why", a.why.as_deref().unwrap_or(""))?;
+    super::refuse_secrets("--scope", &a.scope)?;
+    super::refuse_secrets("--evidence", &a.evidence)?;
     if a.upstream {
         return upstream(dir, a);
     }
+    if a.evidence.is_empty() {
+        return Err(BosunError::usage(
+            "a lesson needs evidence",
+            "pass --evidence #N, the PR or issue that proved it",
+        ));
+    }
     let ctx = Ctx::load(dir)?;
     let mut store = load(&ctx.dir)?;
-    let id = lessons::add(
+    let added = lessons::add(
         &mut store,
         &a.text,
         a.scope.clone(),
@@ -81,11 +91,14 @@ fn add(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
         a.evidence.clone(),
         &today(&ctx),
     )
-    .map_err(cap_error)?;
+    .map_err(add_error)?;
     save(&ctx.dir, &store)?;
-    Ok(Outcome::data(
-        json!({"id": id, "count": store.lesson.len(), "global_count": store.global_count()}),
-    ))
+    let mut data =
+        json!({"id": added.id, "count": store.lesson.len(), "global_count": store.global_count()});
+    if added.dup {
+        data["dup"] = json!(added.id);
+    }
+    Ok(Outcome::data(data))
 }
 
 /// Repository that owns bosun itself (`lesson add --upstream`).
@@ -120,8 +133,20 @@ fn upstream(dir: Option<&Path>, a: &LessonAddArgs) -> CmdResult {
     ))
 }
 
-/// The exit-6 error of a store at a cap.
-pub(super) fn cap_error(cap: lessons::CapError) -> BosunError {
+/// The error of a refused add: usage (exit 2) for a long rule, exit 6 at a cap.
+pub(super) fn add_error(e: lessons::AddError) -> BosunError {
+    let cap = match e {
+        lessons::AddError::TooLong => {
+            return BosunError::usage(
+                format!("the rule is longer than {} characters", lessons::MAX_RULE),
+                format!(
+                    "shorten the rule to at most {} characters; put detail in --why",
+                    lessons::MAX_RULE
+                ),
+            );
+        }
+        lessons::AddError::Cap(c) => c,
+    };
     let (n, what) = if cap.global {
         (lessons::MAX_GLOBAL, "global lessons")
     } else {
@@ -178,6 +203,8 @@ fn capture(dir: Option<&Path>, a: &LessonCaptureArgs) -> CmdResult {
             "pass the failure text on stdin or with --from FILE",
         )
     })?;
+    super::refuse_secret("the failure text", &text)?;
+    super::refuse_secret("--title", a.title.as_deref().unwrap_or(""))?;
     let Some(first) = text.lines().map(str::trim).find(|l| !l.is_empty()) else {
         return Err(BosunError::usage(
             "the failure text is empty",

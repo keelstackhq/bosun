@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::LessonTriageArgs;
-use super::lesson::{FILE, LESSON_LABEL, cap_error, load, save, today};
+use super::lesson::{FILE, LESSON_LABEL, add_error, load, save, today};
 use super::status::PROCESS_RED_LABEL;
 use crate::app::{App, kill_switch};
 use crate::core::lessons;
@@ -20,6 +20,10 @@ fn label(kind: &str) -> String {
 }
 
 pub fn run(dir: Option<&Path>, a: &LessonTriageArgs) -> CmdResult {
+    super::refuse_secret("--rule", a.rule.as_deref().unwrap_or(""))?;
+    super::refuse_secrets("--scope", &a.scope)?;
+    super::refuse_secrets("--touch", &a.touch)?;
+    super::refuse_secret("--area", a.area.as_deref().unwrap_or(""))?;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     kill_switch(gh)?;
@@ -81,6 +85,8 @@ pub fn run(dir: Option<&Path>, a: &LessonTriageArgs) -> CmdResult {
                 risk: "normal".into(),
                 allow: vec![],
                 capabilities: vec![],
+                gated: false,
+                size: None,
             };
             let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
             let json = serde_json::to_string(&meta).expect("meta serializes");
@@ -127,7 +133,8 @@ pub fn run(dir: Option<&Path>, a: &LessonTriageArgs) -> CmdResult {
                 vec![format!("#{n}")],
                 &today(&app.ctx),
             )
-            .map_err(cap_error)?;
+            .map_err(add_error)?
+            .id;
             comment = format!(
                 "Triaged as advice: {id} in {FILE}; the store PR closes this issue (`Closes #{n}`)."
             );

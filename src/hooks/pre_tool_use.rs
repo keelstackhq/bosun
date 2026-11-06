@@ -5,8 +5,13 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{cache, git_out};
-use crate::app::App;
-use crate::core::guard::{edit_lock, edited_path, foreign_lock, prereqs_lock, tool_rules};
+use crate::app::{App, trusted_notes};
+use crate::core::guard::{
+    ChildTask, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
+    prereqs_lock_for, tool_rules,
+};
+use crate::core::lease::leases_of;
+use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -65,7 +70,22 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         return Some(deny(&why));
     }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
-        return Some(deny(&why));
+        // A registered child may create a new issue with a task marker for its own epic, and
+        // nothing else: not edits, comments, other markers, other repos or the allow and
+        // capabilities keys.
+        let child_ok = prereqs_lock_for(tool, &tool_input, true).is_none()
+            && child_task_create(tool, &tool_input)
+                .is_ok_and(|write| registered_child(&dir, &write));
+        if !child_ok {
+            return Some(deny(&why));
+        }
+    }
+    if tool == "Bash" {
+        return repeat_lock(&dir, input, &tool_input);
+    }
+    if let Some(file) = repeat_file(&dir, input) {
+        // Another tool call (an edit between test runs) ends the run of repeats.
+        let _ = std::fs::remove_file(file);
     }
     let path = edited_path(tool, &tool_input)?;
     match edit_reason(&dir, &path) {
@@ -75,6 +95,69 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             None
         }
     }
+}
+
+/// `<git common dir>/bosun/repeat/<key>.json` of the session, agent and directory; `None`
+/// without a session or a git repo.
+fn repeat_file(dir: &Path, input: &Value) -> Option<std::path::PathBuf> {
+    let text = |k: &str| input.get(k).and_then(Value::as_str).map(String::from);
+    let session = text("session_id").or_else(|| std::env::var("BOSUN_SESSION").ok());
+    let session = session.filter(|s| !s.trim().is_empty())?;
+    let agent = text("agent_id").unwrap_or_default();
+    let key = repeat_key(&session, &agent, &dir.to_string_lossy());
+    let common = git_out(dir, &["rev-parse", "--git-common-dir"])?;
+    Some(dir.join(common).join(format!("bosun/repeat/{key}.json")))
+}
+
+/// repeat-lock: count a Bash call that is not a poll (written atomically); a warning at the
+/// third run in a row, a deny from the fifth. Any I/O failure skips the lock.
+fn repeat_lock(dir: &Path, input: &Value, tool_input: &Value) -> Option<String> {
+    let command = tool_input.get("command").and_then(Value::as_str)?;
+    let file = (!is_poll(command))
+        .then(|| repeat_file(dir, input))
+        .flatten()?;
+    let prev = serde_json::from_slice(&std::fs::read(&file).unwrap_or_default()).ok();
+    let step = repeat_step(prev, command);
+    let tmp = file.with_extension(format!("json.tmp{}", std::process::id()));
+    let wrote = (file.parent().map_or(Ok(()), std::fs::create_dir_all))
+        .and_then(|()| std::fs::write(&tmp, serde_json::to_vec(&step)?))
+        .and_then(|()| std::fs::rename(&tmp, &file));
+    if let Err(e) = wrote {
+        eprintln!("bosun: warning: repeat-lock skipped: {e}");
+        return None;
+    }
+    match repeat_verdict(step.count)? {
+        Verdict::Deny(why) => Some(deny(&why)),
+        Verdict::Warn(why) => Some(
+            json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": why}})
+                .to_string(),
+        ),
+    }
+}
+
+/// Whether this session is a registered child for `write.epic`: the epic carries a live lease
+/// for this session with origin `spawned` and an empty touch, which only `bosun spawn --record`
+/// writes (a claim has touch paths), in a comment of a repo writer (`trusted_notes`, not any
+/// comment). An MCP call must also target this repo. Any doubt (no repo, no GitHub) is no.
+fn registered_child(dir: &Path, write: &ChildTask) -> bool {
+    let Ok(app) = App::load(Some(dir)) else {
+        return false;
+    };
+    if let Some((owner, name)) = &write.repo
+        && !(owner.eq_ignore_ascii_case(&app.ctx.repo.owner)
+            && name.eq_ignore_ascii_case(&app.ctx.repo.name))
+    {
+        return false;
+    }
+    let Ok(notes) = trusted_notes(app.gh.as_ref(), write.epic) else {
+        return false;
+    };
+    leases_of(write.epic, &notes).iter().any(|l| {
+        l.session == app.ctx.session
+            && l.origin == "spawned"
+            && l.touch.is_empty()
+            && l.is_live(app.ctx.now)
+    })
 }
 
 fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {

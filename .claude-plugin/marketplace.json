@@ -1,0 +1,19 @@
+{
+  "name": "keelstack",
+  "owner": { "name": "keelstackhq" },
+  "metadata": {
+    "description": "Plugins every keelstack session loads, each pinned to a commit. Move a pin with a PR (R-gov) and move the setup script's pin with it."
+  },
+  "plugins": [
+    {
+      "name": "superpowers",
+      "description": "Skills: brainstorm, plan, TDD, subagent-driven development.",
+      "source": { "source": "github", "repo": "obra/superpowers", "sha": "22f0b463e7a5e579904dd6211a520321035526f7" }
+    },
+    {
+      "name": "caveman",
+      "description": "Short words, short sentences, no fluff.",
+      "source": { "source": "github", "repo": "akramsystems/caveman", "sha": "a9cc1f7b82598852e8c6b8e599dde6ac2491b26e" }
+    }
+  ]
+}

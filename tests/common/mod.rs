@@ -79,6 +79,7 @@ pub fn lease_note(session: &str, expires: &str, touch: &str) -> String {
 }
 
 pub mod fake;
+pub mod stamps;
 
 /// One empty directory per test process (not a git repo, no .bosun/).
 pub fn empty_dir() -> std::path::PathBuf {

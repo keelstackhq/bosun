@@ -1,6 +1,6 @@
 ## 12. Implementation plan
 
-Each milestone is one item of `plans/bosun.md`, so one epic. Tasks are at most 400 lines. "Done
+Each milestone is one item of `plans/bosun.md`, so one epic. Each item picks its PR shape (D-016, docs/plan-format.md); tasks have no line cap. "Done
 when" lines become UCs. A milestone that ships changes the bosun binary and is released by the
 release workflow (`hoist release`); the pin moves with an R-gov PR.
 

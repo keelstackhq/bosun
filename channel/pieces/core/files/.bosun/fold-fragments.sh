@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Folds one-line fragments into CHANGELOG.md and docs/PROGRESS.md, then deletes them.
+# Folds one-line fragments into CHANGELOG.md and docs/progress-done.md, then deletes them.
 #
-# A PR never appends to CHANGELOG.md or the Done list of docs/PROGRESS.md: two PRs that both
+# A PR never appends to CHANGELOG.md or the Done history (docs/progress-done.md): two PRs that both
 # append a line there conflict, and every merge of main costs a re-review. Instead a PR adds a
 # new file, named after its branch with "/" as "-" (claude/foo -> claude-foo.md):
 #   changelog.d/<name>.md       one line "- <entry>", for "## Unreleased" in CHANGELOG.md
-#   docs/progress.d/<name>.md   one line "- <date> · <task> · <what> · <PR>", for "## Done"
+#   docs/progress.d/<name>.md   one line "- <date> · <task> · <what> · <PR>", for "## Done" in docs/progress-done.md
+#                               (agents never read that file; it is created with a header when missing)
 # Fold on main before a release (a docs PR that runs this script), so the release PR then
 # moves the entries from "## Unreleased" under the new version.
 #
@@ -14,7 +15,8 @@
 #   one line "- <text>" (LF only, a final newline is optional); README.md is not a fragment and
 #   must start with a "# " heading; any other entry in the directory (a subdirectory, a .txt
 #   file, a link, a name with a space, tab or newline) is an error, never skipped;
-# - the target file exists and has its heading exactly once;
+# - the target file exists (docs/progress-done.md is created when missing) and has its heading
+#   exactly once;
 # - no target, fragment directory or fragment is a symlink, or lies under one.
 # Deterministic: fragments fold in byte order of their file names (LC_ALL=C), at the end of
 # their section, with one blank line before the next heading. Without fragments it changes
@@ -48,10 +50,10 @@ tmps=()
 cleanup() { if [ "${#tmps[@]}" -gt 0 ]; then rm -f "${tmps[@]}"; fi; }
 trap cleanup EXIT
 
-# plan <target> <heading> <dir>: checks everything and writes the folded text to a temp file
+# plan <target> <heading> <dir> [header]: with a header text, a missing target starts from it. Checks everything and writes the folded text to a temp file
 # next to the target. It runs in this shell (never in $(...)), so `die` stops the script.
 plan() {
-  local target="$1" heading="$2" dir="$3"
+  local target="$1" heading="$2" dir="$3" header="${4:-}" src legacy
   if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then return 0; fi
   real "$dir" && [ -d "$dir" ] || die "$dir must be a directory in the repo, not a symlink"
   local frags=() e base
@@ -70,9 +72,21 @@ plan() {
     frags+=("$e")
   done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 | sort -z)
   [ "${#frags[@]}" -gt 0 ] || return 0
-  [ -f "$target" ] || die "$target is missing, but $dir/ has fragments"
-  real "$target" || die "$target must be a file in the repo, not a symlink"
-  [ "$(grep -cxF -- "$heading" "$target" || true)" = 1 ] ||
+  src="$target"
+  if [ -z "$header" ] || [ -e "$target" ] || [ -L "$target" ]; then
+    [ -f "$target" ] || die "$target is missing, but $dir/ has fragments"
+    real "$target" || die "$target must be a file in the repo, not a symlink"
+  else
+    real "$(dirname "$target")" || die "$(dirname "$target") must be a directory in the repo, not a symlink"
+    legacy="$(dirname "$target")/PROGRESS.md"
+    if [ -f "$legacy" ] && grep -qxF -- "$heading" "$legacy"; then
+      die "$legacy still has '$heading': do the one-time move first (move that section to $target)"
+    fi
+    src="$(mktemp "$target.seed.XXXXXX")"
+    tmps+=("$src")
+    printf '%s\n' "$header" > "$src"
+  fi
+  [ "$(grep -cxF -- "$heading" "$src" || true)" = 1 ] ||
     die "$target must have the line '$heading' exactly once"
   local lines="" f n line
   for f in "${frags[@]}"; do
@@ -111,7 +125,7 @@ plan() {
     insec { for (i = 0; i < blank; i++) print ""; blank = 0; content = 1; print; next }
     { print }
     END { flush(); for (i = 0; i < blank; i++) print "" }
-  ' "$target" > "$tmp"
+  ' "$src" > "$tmp"
   targets+=("$target")
   outs+=("$tmp")
   first+=("${#frags_all[@]}")
@@ -121,7 +135,7 @@ plan() {
 
 # Phase 1: plan both folds; any error stops here, with nothing written.
 plan CHANGELOG.md "## Unreleased" changelog.d
-plan docs/PROGRESS.md "## Done" docs/progress.d
+plan docs/progress-done.md "## Done" docs/progress.d "$(printf '# Progress: Done\n\nOne line per landed task, oldest first. Agents never read this file.\n\n## Done\n')"
 
 # Phase 2: write. `cat >` keeps the target's mode and inode.
 for i in "${!targets[@]}"; do

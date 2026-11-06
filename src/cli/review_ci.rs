@@ -51,7 +51,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
         ));
     }
     budget_guard(&app)?;
-    let mut pack = build(gh, n, dry)?;
+    let mut pack = build(gh, &app.ctx.repo.to_string(), n, dry)?;
     let head_sha = pack["head_sha"].as_str().unwrap_or_default().to_string();
 
     // Fail closed: a diff the model cannot see is never approved.
@@ -136,7 +136,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
         record_spend(&app, usd, task)
     };
 
-    let verdict = match parse(&reply.text, n, &head_sha) {
+    let mut verdict = match parse(&reply.text, n, &head_sha) {
         Ok(v) => v,
         Err(why) => {
             let why: String = why.chars().take(MAX_REASON).collect();
@@ -157,6 +157,9 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
                 "usage": usage_json, "spend": spend})));
         }
     };
+    // The one model call saw the whole pack, so it reviewed every chunk.
+    let chunk_count = pack["chunks"].as_array().map_or(0, Vec::len) as u32;
+    verdict.chunks_reviewed = (1..=chunk_count).collect();
     if dry {
         let approved = approved(&verdict);
         return Ok(Outcome::data(

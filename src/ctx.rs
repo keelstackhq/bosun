@@ -116,7 +116,7 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn git_out(dir: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)

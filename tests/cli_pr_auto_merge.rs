@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::fake::FakeGithub;
+use common::stamps;
 use common::{bosun, one_object};
 use serde_json::{Value, json};
 
@@ -40,6 +41,8 @@ fn repo() -> tempfile::TempDir {
 }
 
 fn run(fake: &FakeGithub, dir: &Path) -> (i32, Value) {
+    // `--ready` asks for the pushed head and the local gate stamps.
+    stamps::ready_all(fake, dir);
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .arg("-C")
@@ -105,10 +108,12 @@ fn assert_clean_refusal(fake: &FakeGithub, code: i32, v: &Value) {
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["already_clean"], true, "{v}");
     assert_eq!(v["data"]["pr"], 20);
-    assert_eq!(v["data"]["head_sha"], "sha20");
+    assert_eq!(v["data"]["head_sha"], fake.pull_head(20).as_str());
     let msg = v["error"]["message"].as_str().unwrap();
     assert!(msg.contains("PR #20 is already mergeable"), "{msg}");
-    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("orchestrator"), "{fix}");
+    assert!(!fix.contains("owner merges"), "{fix}");
     assert_eq!(fake.auto_merge_enabled(20), None);
     assert_eq!(merge_calls(fake), 0);
     let labels = fake.labels_of(7);
@@ -117,7 +122,7 @@ fn assert_clean_refusal(fake: &FakeGithub, code: i32, v: &Value) {
 }
 
 #[test]
-fn a_graphql_clean_answer_needs_the_owner_and_merges_nothing() {
+fn a_graphql_clean_answer_goes_to_the_orchestrator_and_merges_nothing() {
     let (fake, dir) = setup(&ALL);
     fake.already_clean();
     let (code, v) = run(&fake, dir.path());
@@ -125,7 +130,7 @@ fn a_graphql_clean_answer_needs_the_owner_and_merges_nothing() {
 }
 
 #[test]
-fn a_ccr_clean_answer_needs_the_owner_and_merges_nothing() {
+fn a_ccr_clean_answer_goes_to_the_orchestrator_and_merges_nothing() {
     let (fake, dir) = setup(&ALL);
     fake.graphql_status(403, CCR_MSG);
     fake.already_clean();

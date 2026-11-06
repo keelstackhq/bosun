@@ -28,7 +28,8 @@ From source (Rust 1.97): `cargo install --path .` (package `keel-bosun`, binary 
 bosun claim 42 --touch 'src/core/**'   # exit 3 if a live lease overlaps
 bosun wave plan 7                      # tasks that can run in parallel now
 bosun gate test                        # runs the profile's test command on affected packages
-bosun pr --auto-merge                  # turns on auto-merge now; GitHub merges on green
+bosun pr 42                           # opens the PR as a draft (no CI runs on it)
+bosun pr 42 --ready                   # after local gates: ready + auto-merge; GitHub merges on green
 ```
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit.

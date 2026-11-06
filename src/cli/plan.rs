@@ -11,10 +11,13 @@ use super::prereqs::Env;
 use super::prereqs_gate::{Held, blockers};
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
+use crate::core::glob::Glob;
 use crate::core::lease::leases_of;
-use crate::core::meta::{TaskMeta, linked_issues, parse_task_meta};
+use crate::core::meta::{TaskMeta, closing_issues_in, linked_issues, parse_task_meta};
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::prereqs as pq;
+use crate::core::risk::Rules;
+use crate::core::shape;
 use crate::core::state::{State, labels_to_remove, state_of};
 use crate::github::{Github, Issue, IssuePatch, IssueState, PatchState, Probe};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -27,6 +30,28 @@ pub fn run(dir: Option<&Path>, cmd: &PlanCmd) -> CmdResult {
         PlanCmd::Amend(a) => amend(dir, a),
         PlanCmd::Pr(a) => super::plan_pr::run(dir, a),
     }
+}
+
+/// The risk-rule path globs of `.bosun/risk.toml` under `root` (else the built-in rules): a task
+/// touching one is gated. Advisory: `plan check` works without GitHub, so it reads the working
+/// tree; import and amend use the default branch (`app::gated_from_default`).
+fn gated_rules(root: &Path) -> Result<Vec<Glob>> {
+    let rules = match std::fs::read_to_string(root.join(".bosun/risk.toml")) {
+        Ok(t) => Rules::parse(&t).map_err(|e| {
+            BosunError::error(
+                format!(".bosun/risk.toml: {e}"),
+                "fix .bosun/risk.toml, or remove it to use the built-in rules",
+            )
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Rules::defaults(),
+        Err(e) => {
+            return Err(BosunError::error(
+                format!("cannot read .bosun/risk.toml: {e}"),
+                "make .bosun/risk.toml readable, or remove it to use the built-in rules",
+            ));
+        }
+    };
+    Ok(shape::gated_globs(&rules))
 }
 
 fn read_plan(dir: Option<&Path>, file: &str) -> Result<Plan> {
@@ -89,12 +114,19 @@ pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
 
 fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
     let p = read_plan(dir, &a.file)?;
+    let gated = gated_rules(dir.unwrap_or_else(|| Path::new(".")))?;
+    let errs = shape::gated_size_errors(&p.items, &gated);
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
     let items: Vec<Value> = p
         .items
         .iter()
         .map(|i| {
+            let d = shape::effective(i, &gated);
             json!({"id": i.id, "title": i.title, "area": i.area,
-                "tasks": i.tasks.len(), "ucs": i.ucs.len()})
+                "tasks": i.tasks.len(), "ucs": i.ucs.len(), "shape": d.shape,
+                "shape_reasons": d.reasons, "gated": d.gated, "size": d.total})
         })
         .collect();
     Ok(Outcome::data(json!({"file": a.file, "title": p.title,
@@ -188,7 +220,10 @@ struct Importer<'a> {
     epics: Vec<Slot>,
     tasks: Vec<Slot>,
     warnings: Vec<String>,
+    /// `done-by` fields that were refused: the import still runs, then it exits 1.
+    refused: Vec<String>,
     dir: PathBuf,
+    repo: String,
     promoted: Vec<String>,
     /// Open owner-checklist items of the plan being imported, and what they hold back.
     open_items: Vec<Held>,
@@ -201,6 +236,8 @@ struct Importer<'a> {
     local_text: String,
     /// `allow:` per task id of the plan file on the default branch, read once when a task has one.
     main_tasks: Option<HashMap<String, Task>>,
+    /// Path globs of the risk rules: a task touching one is gated (D-016).
+    gated: shape::Gated,
     /// `plan amend`: a new item counts as merged only through an intake (F5 is import only).
     amend: bool,
     /// The plan path as stored in epics: relative to the repo root.
@@ -443,7 +480,7 @@ fn labels(kind: &str, area: &str, state: &str) -> Vec<String> {
     ]
 }
 
-fn epic_body(item: &Item, file: &str) -> String {
+fn epic_body(item: &Item, file: &str, gated: &shape::Gated) -> String {
     let tasks: String = item
         .tasks
         .iter()
@@ -456,7 +493,8 @@ fn epic_body(item: &Item, file: &str) -> String {
         .collect();
     let ids: Vec<&str> = item.ucs.iter().map(|u| u.id.as_str()).collect();
     let meta = json!({"item": item.id, "area": item.area, "plan": file,
-        "depends": item.depends, "ucs": ids});
+        "depends": item.depends, "ucs": ids,
+        "shape": shape::effective_by(item, &|i, t| gated.is(i, t)).shape});
     format!(
         "{}\n{}\n\n{tasks}\n{ucs}\n<!-- bosun:epic {meta} -->",
         marker(&item.id),
@@ -480,10 +518,18 @@ fn plan_task_meta(item: &Item, plan_path: &str, epic: Option<u64>) -> TaskMeta {
         risk: "normal".into(),
         allow: vec![],
         capabilities: vec![],
+        gated: false,
+        size: None,
     }
 }
 
-fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>, allow: Vec<String>) -> TaskMeta {
+fn task_meta_of(
+    item: &Item,
+    t: &Task,
+    epic: Option<u64>,
+    allow: Vec<String>,
+    gated: &shape::Gated,
+) -> TaskMeta {
     TaskMeta {
         item: item.id.clone(),
         task: t.id.clone(),
@@ -494,6 +540,8 @@ fn task_meta_of(item: &Item, t: &Task, epic: Option<u64>, allow: Vec<String>) ->
         risk: t.risk.clone(),
         allow,
         capabilities: vec![],
+        gated: gated.is(&item.id, t),
+        size: t.size,
     }
 }
 
@@ -542,6 +590,17 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     }
     let base = std::fs::canonicalize(dir.unwrap_or_else(|| Path::new(".")))
         .unwrap_or_else(|_| dir.unwrap_or_else(|| Path::new(".")).to_path_buf());
+    let globs = crate::app::gated_from_default(app.gh.as_ref())?;
+    // Wildcard touches are resolved against the default branch's tree (one read).
+    let files = crate::app::base_files(app.gh.as_ref())?;
+    let (resolved, mut errs) = shape::resolve_gated(&p.items, &globs, files.as_deref());
+    let gated = shape::Gated { globs, resolved };
+    errs.extend(shape::gated_size_errors_by(&p.items, &|i, t| {
+        gated.is(i, t)
+    }));
+    if !errs.is_empty() {
+        return Err(plan_errors(&a.file, &errs));
+    }
     let mut roots = vec![app.ctx.dir.clone()];
     roots.extend(std::fs::canonicalize(&app.ctx.dir).ok());
     let mut imp = Importer {
@@ -552,7 +611,9 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         epics: vec![],
         tasks: vec![],
         warnings: vec![],
+        refused: vec![],
         dir: app.ctx.dir.clone(),
+        repo: app.ctx.repo.to_string(),
         promoted: vec![],
         open_items: vec![],
         held: vec![],
@@ -560,6 +621,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         on_default_open: vec![],
         local_text: text.clone(),
         main_tasks: None,
+        gated,
         amend,
         plan_path: plan_key(&a.file, &base, &roots),
         roots,
@@ -615,6 +677,14 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         all.extend(epics.iter().map(|id| json!(id)));
         data[key] = Value::Array(all);
     }
+    data["warnings"] = json!(imp.warnings);
+    if !imp.refused.is_empty() {
+        return Err(BosunError::error(
+            imp.refused.join("; "),
+            "merge the PR and name the task in it (`Closes #<issue>` or its plan id), or remove `done-by:` from the plan; the rest of the import was done",
+        )
+        .with_data(data));
+    }
     Ok(Outcome::data(data))
 }
 
@@ -645,6 +715,13 @@ pub(crate) fn epic_plan(body: &str) -> Option<String> {
     let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
     let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
     v["plan"].as_str().map(str::to_string)
+}
+
+/// The `shape` (`single` or `split`) named in the metadata of an epic body.
+pub(crate) fn epic_shape(body: &str) -> Option<String> {
+    let rest = &body[body.find("<!-- bosun:epic")? + "<!-- bosun:epic".len()..];
+    let v: Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
+    v["shape"].as_str().map(str::to_string)
 }
 
 /// Replace the task metadata comment of `body`, keeping every other byte.
@@ -877,6 +954,7 @@ fn reconcile(imp: &mut Importer, p: &Plan) -> Result<Changes> {
         (new.touch, new.depends) = (t.touch.clone(), t.depends.clone());
         (new.kind, new.risk) = (t.kind.clone(), t.risk.clone());
         new.allow = imp.allowed(&id, t);
+        (new.gated, new.size) = (imp.gated.is(&meta.item, t), t.size);
         if new == meta && title == i.title {
             continue;
         }
@@ -1058,6 +1136,91 @@ fn has_plan_task(issues: &[Issue], pid: &str) -> bool {
     issues.iter().any(|i| i.body_text().contains(&m))
 }
 
+/// Why PR `pr` cannot vouch for task `tid` (`number`: its issue when it exists), or `None` when
+/// it can: it must be merged into the default branch and link the task, by `Closes #<issue>` or by
+/// naming the plan id (`M1/T2`) in its title or body. A PR the author merged for other work does
+/// not close a task.
+fn done_by_refusal(
+    imp: &Importer,
+    tid: &str,
+    number: Option<u64>,
+    pr: u64,
+) -> Result<Option<String>> {
+    let base = default_branch(imp.gh)?;
+    let Some(p) = imp.gh.get_pull(pr)? else {
+        return Ok(Some(format!("#{pr} is not a pull request")));
+    };
+    if !p.merged || p.base_ref != base {
+        return Ok(Some(format!("PR #{pr} is not merged into {base}")));
+    }
+    let text = format!("{}\n{}", p.title, p.body);
+    let named = regex::Regex::new(&format!(
+        r"(?:^|[^A-Za-z0-9/]){}(?:[^A-Za-z0-9/]|$)",
+        regex::escape(tid)
+    ))
+    .is_ok_and(|re| re.is_match(&text));
+    let closes = number.is_some_and(|n| closing_issues_in(&p.body, Some(&imp.repo)).contains(&n));
+    Ok((!named && !closes).then(|| format!("PR #{pr} does not close {tid} or name it")))
+}
+
+/// A task whose `done-by` PR merged: one just made (already labelled merged) or an open
+/// planned/ready one is closed as completed with a note; anything else is left alone.
+fn finish_done_by(imp: &mut Importer, slot: &mut Slot, pr: u64) -> Result<()> {
+    let made = matches!(slot.action, "created" | "would-create");
+    let open_early = !made
+        && slot.issue.is_some_and(|n| {
+            imp.issues.iter().any(|i| {
+                i.number == n
+                    && i.state == "open"
+                    && matches!(state_of(&i.labels), Some(State::Planned | State::Ready))
+            })
+        });
+    if !made && !open_early {
+        return Ok(());
+    }
+    if let (false, Some(n)) = (imp.dry, slot.issue) {
+        imp.gh.add_comment(
+            n,
+            &format!(
+                "Done by PR #{pr}, merged into the default branch. Closed by `bosun plan import`."
+            ),
+        )?;
+        if open_early {
+            // By hand, not `set_state`: planned or ready -> merged is no transition of the state
+            // machine; the work landed outside bosun.
+            let labels = imp
+                .issues
+                .iter()
+                .find(|i| i.number == n)
+                .map(|i| i.labels.clone())
+                .unwrap_or_default();
+            imp.gh
+                .ensure_label(&State::Merged.label(), "ededed", "bosun task state")?;
+            for l in labels_to_remove(&labels, State::Merged) {
+                imp.gh.remove_label(n, &l)?;
+            }
+            imp.gh.add_labels(n, &[&State::Merged.label()])?;
+        }
+        imp.gh.update_issue(
+            n,
+            IssuePatch {
+                state: Some(PatchState::Closed),
+                state_reason: Some("completed".into()),
+                ..IssuePatch::default()
+            },
+        )?;
+    }
+    slot.merged = true;
+    slot.closed = !imp.dry;
+    slot.state = Some("merged".into());
+    if let Some(kept) = imp.tasks.iter_mut().rev().find(|t| t.id == slot.id) {
+        kept.merged = true;
+        kept.closed = slot.closed;
+        kept.state = slot.state.clone();
+    }
+    Ok(())
+}
+
 fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> {
     let plan_path = imp.plan_path.clone();
     let mut added: Option<HashMap<String, (u64, u64)>> = None;
@@ -1070,10 +1233,11 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         .iter()
         .filter(|i| a.item.is_empty() || a.item.contains(&i.id))
     {
+        let gated = imp.gated.clone();
         let epic = imp.slot(&item.id, (&item.id, None), || {
             (
                 format!("{}: {}", item.id, item.title),
-                epic_body(item, &plan_path),
+                epic_body(item, &plan_path, &gated),
                 labels("feature", &item.area, "planned"),
             )
         })?;
@@ -1212,15 +1376,45 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         for t in &item.tasks {
             let tid = t.plan_id(&item.id);
             // Vetted only for a task that does not exist yet (the slot makes it).
-            let known = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]).is_some();
+            let existing = lookup(&imp.issues, &tid, &item.id, Some(&t.id), &mut vec![]);
+            let known = existing.is_some();
             let allow = if known { vec![] } else { imp.allowed(&tid, t) };
-            slots.push(imp.slot(&tid, (&item.id, Some(&t.id)), || {
+            // `done-by: #N`: PR N, merged and linking the task, already did it. Only a new task
+            // or an open planned or ready one can be finished this way.
+            let open_early = existing.as_ref().is_some_and(|(i, _)| {
+                i.state == "open"
+                    && matches!(state_of(&i.labels), Some(State::Planned | State::Ready))
+            });
+            let done = match t.done_by {
+                Some(pr) if !known || open_early => {
+                    let number = existing.as_ref().map(|(i, _)| i.number);
+                    match done_by_refusal(imp, &tid, number, pr)? {
+                        None => Some(pr),
+                        Some(why) => {
+                            let msg = format!(
+                                "{tid}: done-by #{pr} refused: {why}; merge the PR and link {tid} in it, or remove done-by"
+                            );
+                            imp.warnings.push(msg.clone());
+                            imp.refused.push(msg);
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+            let gated = imp.gated.clone();
+            let state = if done.is_some() { "merged" } else { "planned" };
+            let mut slot = imp.slot(&tid, (&item.id, Some(&t.id)), || {
                 (
                     format!("{tid}: {}", t.title),
-                    task_body(&tid, "", &task_meta_of(item, t, epic.issue, allow)),
-                    labels(&t.kind, &item.area, "planned"),
+                    task_body(&tid, "", &task_meta_of(item, t, epic.issue, allow, &gated)),
+                    labels(&t.kind, &item.area, state),
                 )
-            })?);
+            })?;
+            if let Some(pr) = done {
+                finish_done_by(imp, &mut slot, pr)?;
+            }
+            slots.push(slot);
         }
         imp.promote(&epic, &pslot, &slots)?;
     }

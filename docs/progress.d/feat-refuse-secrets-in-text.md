@@ -1,0 +1,1 @@
+- 2026-11-05 · refuse secrets in text · `secret_kind` in core/text.rs; lesson add, handoff, msg, fail refuse tokens/keys/PEM (exit 2)

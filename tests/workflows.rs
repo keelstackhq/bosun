@@ -679,8 +679,8 @@ fn step_text<'a>(yaml: &'a str, from: &str) -> &'a str {
     &rest[..end]
 }
 
-/// CI minutes (docs/ci-minutes.md): one job does the work, `ci-ok` aggregates it; a draft fails
-/// at once; an edit keeps the file checks of a passed head and reruns test-integrity, with the
+/// CI minutes (docs/ci-minutes.md): one job does the work, `ci-ok` aggregates it; a draft starts
+/// no job; an edit keeps the file checks of a passed head and reruns test-integrity, with the
 /// same edit step as the channel's bosun.yml; the pin check and the gates that run no PR code
 /// come before lint and test.
 #[test]
@@ -763,9 +763,13 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
         !yaml.contains("!cancelled()"),
         "nothing runs after a failure"
     );
-    // Drafts: only the plan step reads the flag; no `if` may skip a draft.
-    assert_eq!(yaml.matches("pull_request.draft").count(), 1);
+    // Drafts: the work job `ci` skips them at job level (no runner starts); `ci-ok` keeps
+    // always() and fails on a draft (a skipped required check counts as passed).
+    let skip = "github.event_name != 'pull_request' || github.event.pull_request.draft == false";
+    assert!(yaml.contains(&format!("  ci:\n    if: {skip}\n")));
+    assert!(yaml.contains("  ci-ok:\n    needs: [ci]\n    if: always()\n"));
     assert!(yaml.contains("DRAFT: ${{ github.event.pull_request.draft || false }}"));
+    assert!(yaml.contains("::error::draft: CI not run, mark ready for review"));
     assert!(yaml.contains("for g in ${ONLY:-test-integrity deps fmt lint test}; do"));
     // The plan step under the runner's shell.
     let plan = step_text(&yaml, "      - id: plan");
@@ -775,29 +779,23 @@ fn ci_is_one_work_job_with_the_channels_edit_rule() {
         .skip(1)
         .map(|l| format!("{}\n", l.get(10..).unwrap_or("")))
         .collect();
-    let run = |draft: &str, mode: &str| {
+    let run = |mode: &str| {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out");
         let ok = std::process::Command::new("bash")
             .args(["-eo", "pipefail", "-c", &script])
             .env("GITHUB_OUTPUT", &out)
-            .env("DRAFT", draft)
             .env("MODE", mode)
             .status()
             .unwrap()
             .success();
         ok.then(|| fs::read_to_string(out).unwrap())
     };
+    assert_eq!(run("run").as_deref(), Some("work=true\nsetup=true\n"));
     assert_eq!(
-        run("false", "run").as_deref(),
-        Some("work=true\nsetup=true\n")
-    );
-    assert_eq!(
-        run("false", "integrity").as_deref(),
+        run("integrity").as_deref(),
         Some("work=true\nsetup=false\nonly=test-integrity\n")
     );
-    assert_eq!(run("true", "run"), None, "a draft fails");
-    assert_eq!(run("true", "integrity"), None, "a draft fails");
 }
 
 /// The script of the step that puts the base's config over the checkout, dedented.
@@ -1399,4 +1397,30 @@ fn the_secret_scan_catches_each_form_of_secret_use() {
     let called = "name: x\non:\n  workflow_call:\n    secrets:\n      TOKEN:\n        required: true\n\njobs:\n  a:\n    steps:\n      - run: echo hi\n";
     let got = secret_problems("x", called);
     assert!(got.is_empty(), "{got:?}");
+}
+
+/// A mainfix label event on a draft is skipped, so the verdict must be recomputed when the PR
+/// leaves draft: `ready_for_review` is a trigger type and the label filter spares it.
+#[test]
+fn main_open_rejudges_when_a_draft_becomes_ready() {
+    for rel in [
+        ".github/workflows/main-open.yml",
+        "channel/pieces/core/files/.github/workflows/main-open.yml",
+    ] {
+        let path = format!("{}/{rel}", env!("CARGO_MANIFEST_DIR"));
+        let yaml = fs::read_to_string(path).unwrap();
+        let types = yaml.lines().find(|l| l.contains("types:")).unwrap();
+        assert!(types.contains("ready_for_review"), "{rel}: {types}");
+        // The label filter applies to label actions only; every other action reaches the job.
+        assert!(
+            yaml.contains(
+                "github.event.action != 'labeled' && github.event.action != 'unlabeled') ||"
+            ),
+            "{rel}"
+        );
+        assert!(
+            yaml.contains("github.event.pull_request.draft == false &&"),
+            "{rel}"
+        );
+    }
 }

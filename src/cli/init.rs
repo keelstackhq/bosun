@@ -13,10 +13,11 @@ use crate::core::intake::{INTAKE_PATH, Intake};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 /// Files the channel seeds (written once, never overwritten); init excludes those that exist.
-const SEEDS: [&str; 10] = [
+const SEEDS: [&str; 11] = [
     ".bosun/limits.toml",
     ".bosun/intake.toml",
     ".bosun/risk.toml",
+    ".bosun/session-rules.toml",
     "governance/owners.toml",
     ".github/CODEOWNERS",
     ".github/workflows/splice.yml",
@@ -950,7 +951,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     if let Some((app, base)) = &github {
         let pull = app
             .gh
-            .create_pull(PR_TITLE, branch, base, &body)
+            .create_pull(PR_TITLE, branch, base, &body, false)
             .map_err(|e| BosunError {
                 fix: format!(
                     "{branch} is pushed: open its PR by hand with \
