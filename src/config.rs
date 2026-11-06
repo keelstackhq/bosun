@@ -28,6 +28,9 @@ pub struct Config {
     /// pins a release that reads it (0.5.0 or later, which is also added to KNOWN in
     /// tests/pinned_config.rs). Bosun's own `.bosun/bosun.toml` therefore does not set it yet.
     pub intake: bool,
+    /// `[trailers]`: commit trailers for traceability (spec §4). Release ordering as for `intake`:
+    /// set it only once `.bosun/version` pins a release that reads it.
+    pub trailers: Trailers,
 }
 
 impl Default for Config {
@@ -41,6 +44,7 @@ impl Default for Config {
             prices: BTreeMap::new(),
             approvals: Approvals::default(),
             intake: false,
+            trailers: Trailers::default(),
         }
     }
 }
@@ -135,6 +139,14 @@ impl Approvals {
     pub fn policy(&self) -> Policy {
         self.policy.unwrap_or_default()
     }
+}
+
+/// `[trailers] require`: when true, `bosun pr` refuses a PR with a commit lacking
+/// `Bosun-Session` or `Bosun-Task`; when false (default) it only notes them in `data`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Trailers {
+    pub require: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]

@@ -36,5 +36,6 @@ pub mod stop;
 pub mod text;
 pub mod title;
 pub mod touch;
+pub mod trailers;
 pub mod verdict;
 pub mod wave;
