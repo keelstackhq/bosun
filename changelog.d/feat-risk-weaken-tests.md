@@ -1,0 +1,1 @@
+- R-weaken counts tests in whole files at base and head: fewer tests or assertions, more skips, `.only` or `cfg` switch-offs, deleted test files.
