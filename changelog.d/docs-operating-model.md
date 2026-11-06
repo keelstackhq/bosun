@@ -1,0 +1,1 @@
+- `docs/operating-model.md`: how to work with agents in a bosun repo, which principles bosun enforces today, and ranked candidates to enforce next.

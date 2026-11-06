@@ -1256,6 +1256,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_approval_path_and_the_hooks_are_gate_code() {
+        for p in [
+            "src/core/carry.rs",
+            "src/core/lockmerge.rs",
+            "src/core/touch.rs",
+            "src/core/text.rs",
+            "src/core/shape.rs",
+            "src/core/plan.rs",
+            "src/core/guard.rs",
+            "src/core/repeat.rs",
+            "src/cli/carry_over.rs",
+            "src/cli/pr_bundle.rs",
+            "src/cli/plan.rs",
+            "src/hooks/pre_tool_use.rs",
+        ] {
+            assert!(ids(&eval(&[file(p, &[])])).contains(&"R-gate"), "{p}");
+        }
+    }
+
     fn file(path: &str, added: &[&str]) -> ChangedFile {
         ChangedFile {
             path: path.into(),
