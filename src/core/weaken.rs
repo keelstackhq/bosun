@@ -411,14 +411,24 @@ pub fn ci_commands(path: &str, patch: &str) -> (Vec<String>, Vec<String>) {
         let t = l.trim();
         !(t.starts_with("name:") || t.starts_with('#') || t.starts_with("- name:"))
     };
+    // Lines of a removed `run: |` block are commands too.
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let mut block: Option<usize> = None;
     let removed = del.iter().copied().filter(|l| cmd(l)).filter_map(|l| {
         let t = l.trim().trim_start_matches("- ");
-        let run = t.starts_with("run:") || t.starts_with("uses:");
+        let inside = block.is_some_and(|i| indent(l) > i && !t.is_empty());
+        if !inside {
+            block = None;
+        }
+        let run = t.starts_with("run:") || t.starts_with("uses:") || inside;
         let tool = ["cargo ", "bosun ", "npm ", "pnpm ", "npx "]
             .iter()
             .any(|t| l.contains(t));
         let c = cmd_of(l);
         let header = ["|", "|-", "|+", ">", ">-", ">+"].contains(&c.as_str());
+        if header {
+            block = Some(indent(l));
+        }
         ((run || tool) && !c.is_empty() && !header).then_some(c)
     });
     (
@@ -438,8 +448,10 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
     let mut out = Vec::new();
     if is_ci(path) {
         let coe = |l: &str| {
-            kv(l)
-                .is_some_and(|(k, v)| k == "continue-on-error" && (v == "true" || v == "${{true}}"))
+            kv(l).is_some_and(|(k, v)| {
+                k == "continue-on-error"
+                    && ["true", "${{true}}"].contains(&v.to_lowercase().as_str())
+            })
         };
         out.extend(grows(path, "continue-on-error: true", &del, &ins, coe));
         let never = |l: &str| {
@@ -550,11 +562,12 @@ mod tests {
     #[test]
     fn review_round_three_diffs() {
         let w = ".github/workflows/ci.yml";
-        let patch = "@@\n-      - uses: EmbarkStudios/cargo-deny-action@v1\n-        run: |-\n";
+        let patch = "@@\n-      - uses: EmbarkStudios/cargo-deny-action@v1\n-        run: |-\n-          make test\n";
         assert_eq!(
             patch_findings(w, patch, &[]),
             [
-                ".github/workflows/ci.yml: step \"uses: EmbarkStudios/cargo-deny-action\" present → (removed)"
+                ".github/workflows/ci.yml: step \"uses: EmbarkStudios/cargo-deny-action\" present → (removed)",
+                ".github/workflows/ci.yml: step \"make test\" present → (removed)"
             ]
         );
         let bump = ["uses: EmbarkStudios/cargo-deny-action".to_string()];

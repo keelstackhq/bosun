@@ -178,7 +178,7 @@ fn test_findings(files: &[PrFile]) -> Vec<String> {
             out.push(format!("{n}: test file present → (deleted)"));
         }
         let Some(patch) = f.patch.as_deref().filter(|_| code) else {
-            if f.status == "removed" && (code || weaken::is_ci(n)) {
+            if f.status == "removed" && f.patch.is_none() && (code || weaken::is_ci(n)) {
                 out.push(format!("{n}: diff unavailable"));
             }
             continue;
