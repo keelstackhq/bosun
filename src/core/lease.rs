@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use crate::core::glob::{self, Glob};
-use crate::core::records::{Note, Record, parse_record};
+use crate::core::records::{Note, Record, SlackSeat, parse_record};
 use crate::time::{Timestamp, parse_rfc3339};
 
 /// Lease time to live (spec §4): 30 minutes.
@@ -243,6 +243,7 @@ pub struct Member {
     pub parent: Option<String>,
     pub depth: u32,
     pub expires: Timestamp,
+    pub slack: Option<SlackSeat>,
     pub comment_id: u64,
 }
 
@@ -259,6 +260,7 @@ pub fn members(notes: &[Note]) -> Vec<Member> {
                 parent,
                 depth,
                 expires,
+                slack,
             }) => {
                 let expires = parse_rfc3339(&expires).unwrap_or(Timestamp(0));
                 by_session.insert(
@@ -270,6 +272,7 @@ pub fn members(notes: &[Note]) -> Vec<Member> {
                         parent,
                         depth,
                         expires,
+                        slack,
                         comment_id: note.id,
                     },
                 );
@@ -536,6 +539,7 @@ mod tests {
             parent: Some("root".into()),
             depth: 2,
             expires: "2026-10-22T10:30:00Z".into(),
+            slack: None,
         };
         let notes = vec![
             note(1, join("a", Some("lifecycle"))),

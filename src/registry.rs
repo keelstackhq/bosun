@@ -3,7 +3,7 @@
 
 use crate::app::{App, Result, notes};
 use crate::core::lease::{Member, members};
-use crate::core::records::{Note, Record, replace_record};
+use crate::core::records::{Note, Record, SlackSeat, replace_record};
 use crate::ctx::Origin;
 use crate::github::{Github, IssueState};
 use crate::output::BosunError;
@@ -38,6 +38,7 @@ pub struct JoinSpec {
     pub area: Option<String>,
     pub parent: Option<String>,
     pub depth: Option<u32>,
+    pub slack: Option<SlackSeat>,
 }
 
 /// Post this session's `join` record, or edit its existing one in place. Returns the registry
@@ -84,6 +85,7 @@ pub fn join(app: &App, spec: JoinSpec) -> Result<(u64, Member)> {
             (None, None) => 1.max(floor),
         },
         expires,
+        slack: spec.slack.or_else(|| prior.and_then(|m| m.slack.clone())),
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     let comment_id = write(app.gh.as_ref(), issue, &notes, prior, &member)?;
@@ -126,6 +128,7 @@ fn record_of(m: &Member) -> Record {
         parent: m.parent.clone(),
         depth: m.depth,
         expires: m.expires.to_string(),
+        slack: m.slack.clone(),
     }
 }
 

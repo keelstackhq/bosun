@@ -142,6 +142,7 @@ fn record(app: &App, args: &SpawnArgs) -> CmdResult {
         parent: None,
         depth: 1,
         expires: now.plus_secs(TTL_SECS),
+        slack: None,
         comment_id: 0,
     };
     registry::write(gh, reg, &notes, None, &member)?;

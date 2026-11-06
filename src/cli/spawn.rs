@@ -572,6 +572,7 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         parent: Some(me.clone()),
         depth,
         expires,
+        slack: prior.and_then(|m| m.slack.clone()),
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
