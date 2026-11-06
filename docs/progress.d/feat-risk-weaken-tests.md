@@ -1,0 +1,1 @@
+- 2026-11-06 · operating-model #3 · R-weaken test counts (whole files, test-integrity counters) · stacked on R-weaken diffs
