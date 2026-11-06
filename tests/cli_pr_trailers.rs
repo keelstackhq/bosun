@@ -116,3 +116,49 @@ fn require_fails_closed_on_an_unreadable_commit() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["trailers"]["unread"], 1);
 }
+
+#[test]
+fn require_checks_local_commits_before_the_pr_is_created() {
+    let fake = FakeGithub::start();
+    fake.issue(7, "the task", &[BUILDING], "Do it.");
+    fake.comment(7, LEASE);
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let st = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    };
+    git(&["init", "-q", "-b", BRANCH]);
+    git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+    git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "feat: no trailers"]);
+    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
+    std::fs::write(
+        dir.path().join(".bosun/bosun.toml"),
+        "[trailers]\nrequire = true\n",
+    )
+    .unwrap();
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(dir.path())
+        .args(["pr", "7"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code().unwrap(), 1, "{v}");
+    let m = v["error"]["message"].as_str().unwrap();
+    assert!(m.contains("no PR is created"), "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bosun trailers install"),
+        "{v}"
+    );
+}
