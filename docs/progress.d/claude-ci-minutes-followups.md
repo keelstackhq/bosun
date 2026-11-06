@@ -1,1 +1,0 @@
-- 2026-11-05 · ci-minutes follow-ups · main-open mainfix label on drafts, `draft != true` and named fail-fast jobs in ci-minutes

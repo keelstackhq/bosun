@@ -1,1 +1,0 @@
-- R-bundle counts closing refs in title and commit messages (fail closed at the cap).

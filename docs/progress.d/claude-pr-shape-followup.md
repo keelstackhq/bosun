@@ -1,1 +1,0 @@
-- 2026-11-05 · pr-shape-followup · closing refs in all forms, R-bundle in risk-check, `bosun pr --bundle`, review-pack bundle_tasks (D-016) · PR (claude/pr-shape-followup)

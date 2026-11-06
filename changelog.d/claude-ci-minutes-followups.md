@@ -1,1 +1,0 @@
-- main-open judges a draft when the mainfix label changes; `bosun gate ci-minutes` accepts `draft != true` and a fail-fast job of any name.
