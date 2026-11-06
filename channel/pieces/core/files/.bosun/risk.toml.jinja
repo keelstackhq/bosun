@@ -33,3 +33,10 @@ new_dependency = true
 id = "R-prod-write"
 why = "A write to production cannot be undone by a revert."
 capability = "prod-write"
+
+[[rule]]
+id = "R-weaken"
+why = "A change that loosens a gate weakens what verifies every later change."
+# risk-check adds the `weaken` capability when a base/head compare finds a loosened gate
+# (spec §8); its findings are the evidence.
+capability = "weaken"

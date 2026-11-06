@@ -24,6 +24,7 @@ use crate::core::risk::{
     unseen_diff,
 };
 use crate::core::touch::{Changed, outside};
+use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
@@ -98,6 +99,47 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
 const PENDING: &str = "risk-check is judging this head";
 const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run the risk workflow";
 
+/// R-weaken evidence (spec §8): gate files compared at base and head. Deduplicated, in file order.
+fn weaken_findings(
+    gh: &dyn Github,
+    pr_files: &[PrFile],
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for f in pr_files {
+        // Each side of a rename on its own: the path left behind falls back to its built-in (or
+        // nothing), the new path is judged against what it replaces, never the moved file.
+        let prev = f.previous_filename.as_deref().filter(|p| *p != f.filename);
+        for (path, here) in [
+            (f.filename.as_str(), true),
+            (prev.unwrap_or_default(), false),
+        ] {
+            if path.is_empty() || !weaken::reads_text(path) {
+                continue;
+            }
+            let at_base = f.status != "added" && !(here && prev.is_some());
+            let old = match at_base {
+                true => gh.file_at(path, base)?,
+                false => builtin_base(path).map(str::to_string),
+            };
+            let new = match here && f.status != "removed" {
+                true => gh.file_at(path, head)?,
+                false => builtin_base(path).map(str::to_string),
+            };
+            out.extend(weaken::text_findings(path, old.as_deref(), new.as_deref()));
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|s| seen.insert(s.clone()));
+    Ok(out)
+}
+
+/// The built-in file a new `.bosun/risk.toml` replaces.
+fn builtin_base(path: &str) -> Option<&'static str> {
+    (path == RULES_PATH).then_some(risk::DEFAULT_RULES)
+}
+
 fn judge(app: &App, pull: Pull) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = pull.number;
@@ -139,8 +181,12 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         manifests.push((f.filename.clone(), old, new));
     }
     let new_deps = new_dependencies(&manifests);
+    let findings = weaken_findings(gh, &pr_files, base, head)?;
 
     let mut capabilities = capability_labels(&pull.labels);
+    if !findings.is_empty() {
+        capabilities.push(weaken::CAPABILITY.into());
+    }
     // Every linked issue counts: the agent writes the PR body, so a decoy first link must not
     // hide the real task's capabilities.
     let mut task = None;
@@ -154,6 +200,24 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     }
 
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
+    // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
+    // rule with the `weaken` capability only adds its own match, made owner-class too).
+    for m in &mut matches {
+        let weakens = (rules.rules.iter())
+            .any(|r| r.id == m.rule && r.capability.as_deref() == Some(weaken::CAPABILITY));
+        if weakens || m.rule == weaken::RULE {
+            m.approval = Approval::Owner;
+        }
+    }
+    if !findings.is_empty() {
+        matches.retain(|m| m.rule != weaken::RULE);
+        matches.push(risk::Match {
+            rule: weaken::RULE.into(),
+            why: weaken::WHY.into(),
+            approval: Approval::Owner,
+            evidence: findings.clone(),
+        });
+    }
     let views: Vec<FileView> = pr_files
         .iter()
         .map(|f| FileView {

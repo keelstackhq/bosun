@@ -39,3 +39,4 @@ pub mod touch;
 pub mod trailers;
 pub mod verdict;
 pub mod wave;
+pub mod weaken;
