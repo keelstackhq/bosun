@@ -1,1 +1,1 @@
-- 2026-11-06 · operating-model #3 · R-weaken diff detectors (CI steps, coverage, lints, consts, tests) · stacked on R-weaken
+- 2026-11-06 · operating-model #3 · R-weaken diff detectors (CI steps, coverage, lints, consts) · stacked on R-weaken
