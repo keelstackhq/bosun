@@ -498,13 +498,28 @@ pub const AUTONOMOUS_ALLOWED: [&str; 4] = ["src/**", "tests/**", "docs/**", "cha
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
 /// and the files the review and the plans trust.
-pub const AUTONOMOUS_DENIED: [&str; 6] = [
+pub const AUTONOMOUS_DENIED: [&str; 20] = [
     "docs/setup-script.sh",
     "docs/agents/**",
     "docs/lessons.toml",
     "**/plans/**",
     "**/*.jinja",
     "**/build.rs",
+    // The code that judges approvals, verdicts and gates: a change to it goes to the owner.
+    "src/core/approve.rs",
+    "src/core/risk.rs",
+    "src/core/risk_default.toml",
+    "src/core/signature.rs",
+    "src/core/verdict.rs",
+    "src/core/records.rs",
+    "src/core/guard.rs",
+    "src/cli/approve.rs",
+    "src/cli/risk_check.rs",
+    "src/cli/carry_over.rs",
+    "src/cli/verdict.rs",
+    "src/cli/gate.rs",
+    "src/hooks/**",
+    "src/gates/**",
 ];
 
 /// What an autonomous-mode approval never covers among `(path, previous path)`: every path
@@ -535,7 +550,7 @@ pub fn autonomous_excluded(files: &[(&str, Option<&str>)], matches: &[Match]) ->
 
 /// The sessions whose clean verdict on `head` lets the orchestrator approve on its own (D-017):
 /// `(author, body, unedited)` comments oldest first. As [`clean_verdicts`], but an edited comment
-/// never counts, and any verdict by [`VERDICT_AUTHOR`] on `head` that does not approve (edited too),
+/// never counts, and any verdict by [`VERDICT_AUTHOR`] on `head` that would not count (edited too),
 /// from any session and in any order, leaves nothing.
 pub fn autonomous_verdicts<'a>(
     comments: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
@@ -543,10 +558,14 @@ pub fn autonomous_verdicts<'a>(
     excluded: &[String],
 ) -> Vec<String> {
     let all: Vec<_> = comments.into_iter().collect();
-    // A rejection blocks even when edited: an edit can only make it count less (fail closed).
+    // Any verdict on the head that would not count blocks, edited too (an edit can only make it
+    // count less): a rejection, majors, a low or missing confidence. Only all-clean passes.
     let refused = all.iter().any(|(a, b, _)| {
         a.eq_ignore_ascii_case(VERDICT_AUTHOR)
-            && matches!(apply_record(b), Some(Record::Verdict { head_sha, approved: false, .. }) if head_sha == head)
+            && matches!(apply_record(b), Some(Record::Verdict { head_sha, approved, confidence, major, .. })
+                if head_sha == head
+                    && !(approved && major == Some(0)
+                        && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE)))
     });
     if refused {
         return Vec::new();
@@ -1104,7 +1123,7 @@ mod tests {
     #[test]
     fn autonomous_covers_only_the_allowlist_minus_the_denied() {
         let ok = [
-            "src/cli/approve.rs",
+            "src/cli/claim.rs",
             "tests/cli_x.rs",
             "docs/spec/08-risk.md",
             "changelog.d/x.md",
@@ -1127,6 +1146,12 @@ mod tests {
             "docs/superpowers/plans/p.md",
             "SRC/Build.RS",
             "Docs/Agents/X.md",
+            // Approval and gate code goes to the owner.
+            "src/core/approve.rs",
+            "src/core/guard.rs",
+            "src/cli/risk_check.rs",
+            "src/hooks/pre_tool_use.rs",
+            "src/gates/integrity.rs",
         ];
         for p in ok {
             assert!(autonomous_excluded(&[(p, None)], &[]).is_empty(), "{p}");
@@ -1184,6 +1209,18 @@ mod tests {
             run(&[(bot, a, true), (bot, bad, true)], &["d".into()]),
             ["a"]
         );
+        // An approval that would not count blocks too: majors or low confidence.
+        let weak = |c: f64, m: u32| {
+            let r = serde_json::json!({"bosun": "verdict", "session": "e", "head_sha": &h,
+                "approved": true, "confidence": c, "major": m});
+            format!("Review verdict: approve.\n\n{r}")
+        };
+        for w in [weak(0.95, 1), weak(0.1, 0)] {
+            assert!(
+                run(&[(bot, a, true), (bot, &w, true)], &[]).is_empty(),
+                "{w}"
+            );
+        }
     }
 
     fn file(path: &str, added: &[&str]) -> ChangedFile {

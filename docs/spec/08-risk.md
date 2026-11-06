@@ -239,7 +239,16 @@ High-risk PRs:
   self-declared (`<!-- bosun:session -->` comes from `BOSUN_SESSION`) and cloud sessions have no
   verifiable identity, so reviewer independence holds only against honest agents; the signer key
   is the trust root. risk-check cannot see the signer's session, so only `approve` enforces
-  signer != reviewer. Never covered: release environments, secrets, tags. `policy =
+  signer != reviewer. The task link binds the PR author's login, not a session: agents that
+  share one login can close another session's task and review their own PR, which is within
+  the honest-agent limit. The session that holds an owner key must never build or run bosun code
+  from an autonomous PR (it would run unreviewed code next to the key). Approval and gate code
+  (`AUTONOMOUS_DENIED`: `src/core/{approve,risk,signature,verdict,records,guard}.rs`, the
+  approve, risk-check, carry-over, verdict and gate commands, `src/hooks/**`, `src/gates/**`)
+  always goes to the owner. Any verdict record on the head that would not count (a rejection,
+  majors, a low or missing confidence), edited or not, blocks autonomous approval. The verdict
+  record carries no `escalate_risk`, so an escalation is seen only as its verdict. Never
+  covered: release environments, secrets, tags. `policy =
   "autonomous"` under an older pinned release is a parse error (fails closed); set it only after
   pinning a release that knows it.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical

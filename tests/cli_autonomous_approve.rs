@@ -15,7 +15,7 @@ const OTHER: &str = "89abcdef0123456789abcdef0123456789abcdef";
 const MAIN: &str = "refs/heads/main";
 const NOW: &str = "2026-12-05T10:00:00Z";
 const PLAIN: &str = "@@ -0,0 +1,1 @@\n+x";
-const GATE: &str = "src/core/risk.rs";
+const GATE: &str = "src/core/meta.rs";
 const WAITING: &str = "high risk, owner approval needed";
 const AUTO: &str = "high risk, autonomous mode (D-017)";
 
@@ -206,6 +206,8 @@ fn releases_secrets_environments_and_trust_files_stay_with_the_owner() {
         (".github/workflows/release.yml", PLAIN),
         (".github/workflows/ci.yml", PLAIN),
         ("Cargo.toml", PLAIN),
+        ("src/core/approve.rs", PLAIN),
+        ("src/cli/risk_check.rs", PLAIN),
         (".bosun/limits.toml", PLAIN),
         ("docs/agents/org-decisions.md", PLAIN),
         ("hoist.toml", PLAIN),
