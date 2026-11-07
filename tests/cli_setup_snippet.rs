@@ -182,27 +182,33 @@ if [ "$1" = install ]; then
   printf '{"packages":{"":{},"node_modules/@keelstackhq/bosun":{"version":"9.9.9","integrity":"sha512-q83v"},"node_modules/@keelstackhq/bosun-darwin-x64":{"version":"9.9.9","integrity":"sha512-AAAA"}}}' >"$3/package-lock.json"
 fi"#;
 
-/// A fake attestations endpoint: one SLSA statement for digest abcdef (`q83v`) built by `repo`.
-fn curl_stub(bin: &Path, repo: &str) {
-    let payload = format!(
-        r#"{{"subject":[{{"digest":{{"sha512":"abcdef"}}}}],"predicate":{{"buildDefinition":{{"externalParameters":{{"workflow":{{"repository":"{repo}","path":".github/workflows/release.yml"}}}}}}}}}}"#
-    );
-    stub(
-        bin,
-        "curl",
-        &format!(
-            "echo \"curl $*\" >>\"$LOG\"\np=$(printf '%s' '{payload}' | base64 -w0)\nprintf '{{\"attestations\":[{{\"predicateType\":\"https://slsa.dev/provenance/v1\",\"bundle\":{{\"dsseEnvelope\":{{\"payload\":\"%s\"}}}}}}]}}' \"$p\""
+/// A fake attestations endpoint: serves a fixture (a signed statement for digest abcdef, `q83v`,
+/// whose payload names keelstackhq/bosun), or fails like `curl -f` on a 404.
+fn curl_stub(bin: &Path, fixture: Option<&str>) {
+    let body = match fixture {
+        Some(f) => format!(
+            "cat '{}'",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/bootstrap")
+                .join(f)
+                .display()
         ),
-    );
+        None => "exit 22".into(),
+    };
+    stub(bin, "curl", &format!("echo \"curl $*\" >>\"$LOG\"\n{body}"));
 }
 
 #[test]
 fn without_a_repo_script_the_latest_bosun_is_kept_only_with_signatures_and_bosun_provenance() {
-    let good = "https://github.com/keelstackhq/bosun";
-    for (audit, repo, kept) in [
-        ("exit 0", good, true),
-        ("exit 1", good, false),
-        ("exit 0", "https://github.com/evil/bosun", false),
+    let good = Some("attestations-good.json");
+    // (audit, attestations, lockfile integrity, kept)
+    for (audit, att, integrity, kept) in [
+        ("exit 0", good, "q83v", true),
+        ("exit 1", good, "q83v", false),
+        // The payload names keelstackhq/bosun, but the signing certificate is another repo's.
+        ("exit 0", Some("attestations-evil-san.json"), "q83v", false),
+        ("exit 0", good, "q83w", false),
+        ("exit 0", None, "q83v", false),
     ] {
         let tmp = tempfile::tempdir().unwrap();
         let (work, bin, log) = (
@@ -213,32 +219,34 @@ fn without_a_repo_script_the_latest_bosun_is_kept_only_with_signatures_and_bosun
         fs::create_dir_all(&work).unwrap();
         fs::create_dir_all(&bin).unwrap();
         tools(&bin);
+        let npm = NPM_OK.replace("sha512-q83v", &format!("sha512-{integrity}"));
         stub(
             &bin,
             "npm",
-            &format!("{NPM_OK}\n[ \"$1\" = audit ] && {audit}\nexit 0"),
+            &format!("{npm}\n[ \"$1\" = audit ] && {audit}\nexit 0"),
         );
-        curl_stub(&bin, repo);
+        curl_stub(&bin, att);
         let (code, err, l) = boot(&work, &bin, &log);
-        assert_eq!(code, 0, "{err}");
+        let case = format!("{audit} {att:?} {integrity}");
+        assert_eq!(code, 0, "{case}: {err}");
         assert!(
             l.contains("@keelstackhq/bosun@latest") && l.contains("npm audit signatures"),
             "{l}"
         );
-        assert_eq!(bin.join("bosun").exists(), kept, "{repo} {audit}: {err}");
-        assert_eq!(work.join("prefix").exists(), kept);
+        assert_eq!(bin.join("bosun").exists(), kept, "{case}: {err}");
+        assert_eq!(work.join("prefix").exists(), kept, "{case}");
         assert!(
             err.contains(if kept {
                 "verified"
             } else {
                 "no verified bosun"
             }),
-            "{err}"
+            "{case}: {err}"
         );
         if audit == "exit 0" {
-            // Only the installed package is checked, not the other platforms in the lockfile.
+            // Only the installed package is checked, with a time limit, at registry.npmjs.org.
             assert!(
-                l.contains("attestations/%40keelstackhq%2Fbosun@9.9.9"),
+                l.contains("-m 30 https://registry.npmjs.org/-/npm/v1/attestations/%40keelstackhq%2Fbosun@9.9.9"),
                 "{l}"
             );
             assert!(!l.contains("darwin"), "{l}");

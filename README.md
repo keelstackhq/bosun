@@ -51,12 +51,15 @@ for d in . ./*/; do
 done
 # No repo script and no bosun: the latest bosun, kept only when npm verifies its registry
 # signatures and attestations (that needs the host tuf-repo-cdn.sigstore.dev) and each installed
-# package has a provenance statement for its digest from keelstackhq/bosun's release workflow.
-prov='const x=require("child_process").execFileSync,d=process.argv[1],l=require(d+"/package-lock.json").packages;let n=0
+# package has a provenance statement for its digest, signed by a certificate whose identity is
+# keelstackhq/bosun's release workflow on main.
+prov='const c=require("crypto"),x=require("child_process").execFileSync,d=process.argv[1],l=require(d+"/package-lock.json").packages,
+id="URI:https://github.com/keelstackhq/bosun/.github/workflows/release.yml@refs/heads/main";let n=0
 for(const[k,v]of Object.entries(l)){if(!k.includes("@keelstackhq/")||!require("fs").existsSync(d+"/"+k))continue;n++;const h=Buffer.from(v.integrity.slice(7),"base64").toString("hex")
-const a=JSON.parse(x("curl",["-fsS","https://registry.npmjs.org/-/npm/v1/attestations/"+encodeURIComponent(k.split("node_modules/").pop())+"@"+v.version])).attestations
-if(!a.some(t=>{const s=JSON.parse(Buffer.from(t.bundle.dsseEnvelope.payload,"base64")),f=((s.predicate||{}).buildDefinition||{}).externalParameters||{}
-return t.predicateType==="https://slsa.dev/provenance/v1"&&(f.workflow||{}).repository==="https://github.com/keelstackhq/bosun"&&f.workflow.path===".github/workflows/release.yml"&&s.subject.some(u=>u.digest.sha512===h)}))process.exit(1)}process.exit(n?0:1)'
+const a=JSON.parse(x("curl",["-fsS","-m","30","https://registry.npmjs.org/-/npm/v1/attestations/"+encodeURIComponent(k.split("node_modules/").pop())+"@"+v.version])).attestations
+if(!a.some(t=>{const m=t.bundle.verificationMaterial,r=(m.certificate||(m.x509CertificateChain||{certificates:[]}).certificates[0]||{}).rawBytes
+if(t.predicateType!=="https://slsa.dev/provenance/v1"||!r)return false;const z=new c.X509Certificate(Buffer.from(r,"base64")),e=t.bundle.dsseEnvelope,p=Buffer.from(e.payload,"base64"),y=e.payloadType
+return z.subjectAltName===id&&c.verify("sha256",Buffer.concat([Buffer.from(`DSSEv1 ${Buffer.byteLength(y)} ${y} ${p.length} `),p]),z.publicKey,Buffer.from(e.signatures[0].sig,"base64"))&&JSON.parse(p).subject.some(u=>u.digest.sha512===h)}))process.exit(1)}process.exit(n?0:1)'
 p="${BOSUN_BOOTSTRAP_PREFIX:-/usr/local/lib/bosun-latest}"
 if [ "$found" = 0 ] && ! command -v bosun >/dev/null 2>&1; then
   if command -v npm >/dev/null 2>&1 && rm -rf "$p" &&
