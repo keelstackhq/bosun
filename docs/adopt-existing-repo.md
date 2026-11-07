@@ -214,11 +214,15 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
 
 ## 9. Cloud sessions (Claude Code on the web)
 
-1. **Setup script.** Paste `docs/setup-script.sh` into the cloud environment's setup script
-   (claude.ai → environment settings). It installs pinned Node, pnpm, splice, hoist, berth, bosun,
-   the Rust toolchain of `rust-toolchain.toml` and the superpowers and caveman plugins.
-   `bosun doctor` step 6 prints the script, so you can paste it without opening the file. Paste
-   it again after each bosun upgrade.
+1. **Setup script: paste once.** Paste the bootstrap from the README ("Cloud sessions: paste
+   once"), or the `data.script` of `bosun setup-snippet`, into the cloud environment's setup
+   script (claude.ai → environment settings). You never paste again: before each session it runs
+   every checkout's own `docs/setup-script.sh`, which installs pinned Node, pnpm, splice, hoist,
+   berth, bosun, the Rust toolchain of `rust-toolchain.toml` and the superpowers and caveman
+   plugins. A bosun upgrade is a PR that moves the pins in that file. One line to send a client
+   with it: "Paste this script once as the setup script of your Claude Code cloud environment
+   (claude.ai/code > Environments > Setup script). You never change it again: each repo's own
+   docs/setup-script.sh pins its tools."
 2. **No PAT in the environment.** The session reaches GitHub through the Claude GitHub App and
    the agent proxy. The proxy rewrites every GitHub write (app attribution, a Claude footer), so a
    PAT there would not count as you anyway: `bosun approve` with `BOSUN_OWNER_TOKEN` refuses in a

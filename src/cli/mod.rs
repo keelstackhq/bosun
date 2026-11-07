@@ -55,6 +55,7 @@ pub mod gate;
 pub mod gate_missed;
 pub mod main_health;
 pub mod review_ci;
+pub mod setup_snippet;
 pub mod stop;
 pub mod test_integrity;
 pub mod uninstall;
@@ -181,6 +182,8 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Move the tool pins (setup script, .bosun/version, channel template) to the newest verified npm release.
     Pin(PinArgs),
+    /// Print the bootstrap to paste once as a cloud environment's setup script.
+    SetupSnippet,
 }
 
 /// Top-level command names, in `--help` order.
@@ -230,6 +233,7 @@ pub const COMMANDS: &[&str] = &[
     "adopt",
     "uninstall",
     "pin",
+    "setup-snippet",
 ];
 
 impl Command {
@@ -284,6 +288,7 @@ impl Command {
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
             Command::Pin(_) => "pin",
+            Command::SetupSnippet => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {

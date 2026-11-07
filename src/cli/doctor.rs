@@ -970,9 +970,10 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             "docs/setup-script.sh exists (content below) for the shared cloud environment \"keelstack\"; .bosun/version is {}",
             version.clone().unwrap_or_default()
         ),
-        "paste docs/setup-script.sh (the content field) as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments), no secrets; keep .bosun/version",
+        "paste the bootstrap field (`bosun setup-snippet`) once as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments); it runs each checkout's docs/setup-script.sh (the content field), so keep that file and .bosun/version",
     );
     setup["environment"] = json!("keelstack");
+    setup["bootstrap"] = json!(super::setup_snippet::BOOTSTRAP);
     setup["content"] = json!(script);
     items.push(setup);
 

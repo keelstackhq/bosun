@@ -45,6 +45,7 @@ const CALLS: &[&[&str]] = &[
     &["pin"],
     &["notify"],
     &["answer", "4", "--slack-user", "U1"],
+    &["setup-snippet"],
 ];
 
 #[test]

@@ -30,8 +30,9 @@ Human-only items, in order. Each has the exact action.
    B60205` (an owner's open issue with it halts bosun). `BOSUN_HALT` is optional; a token that
    cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
-   settings → setup script: paste `docs/setup-script.sh` (again after each pin bump: it now
-   installs `@keelstackhq/bosun@0.3.0` from npm), in every environment, the owner's included.
+   settings → setup script: paste the bootstrap (`bosun setup-snippet`, or the README) once in
+   every environment, the owner's included; it runs each checkout's `docs/setup-script.sh`, so
+   a pin bump needs no new paste.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every hour, Haiku), curator (daily, Sonnet), notify (every
    hour, Haiku; only with `[slack]`). Create them in claude.ai → Routines.
