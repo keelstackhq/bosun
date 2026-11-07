@@ -97,6 +97,7 @@ fn templates() -> Vec<Tpl> {
             true
         ),
         tpl!(".claude/settings.json", ".claude/settings.json", false),
+        tpl!("docs/setup-script.sh", "docs/setup-script.sh.jinja", true),
     ]
 }
 

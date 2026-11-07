@@ -6,9 +6,11 @@ pub fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
     let mut it = s.split('.');
     let mut part = || {
         let p = it.next()?;
-        (!p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-            .then(|| p.parse().ok())
-            .flatten()
+        (!p.is_empty()
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && (p == "0" || !p.starts_with('0')))
+        .then(|| p.parse().ok())
+        .flatten()
     };
     let v = (part()?, part()?, part()?);
     it.next().is_none().then_some(v)

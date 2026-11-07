@@ -83,17 +83,17 @@ Seed steps (the seed plan in `docs/superpowers/plans/` splits each into PRs):
 
 ### Pin (tool pins)
 
-`bosun pin --latest [--tool splice|hoist|berth|bosun]... [--check]` (D35) reads `$BOSUN_NPM_REGISTRY` (default `https://registry.npmjs.org`): `@keelstackhq/<tool>/latest` for the version, then each of `<tool>`, `<tool>-linux-x64`, `<tool>-linux-arm64` is downloaded and its sha512 checked against `dist.integrity` (a tarball URL outside the registry, a non-`sha512-` integrity or a mismatch is exit 1). Versions are `X.Y.Z` only; equal is `unchanged`, older than the pin is exit 3. All checks run before anything is written. It rewrites the `<TOOL>_VERSION`, `_SHA512`, `_LINUX_X64_SHA512`, `_LINUX_ARM64_SHA512` lines of `docs/setup-script.sh` (each must exist once), `.bosun/version` (bosun) and the same lines of the channel template (splice, hoist, berth). `--check` fetches only the `latest` metadata and lists `data.behind`. `data` is `{changed, unchanged, files, branch: "bosun/pin", title}`. A repo with `.splice/channels/bosun.toml` is exit 1 (`splice update --channel bosun`).
+`bosun pin --latest [--tool splice|hoist|berth|bosun]... [--check]` (D35) reads `$BOSUN_NPM_REGISTRY` (default `https://registry.npmjs.org`; https only, or http to 127.0.0.1 or localhost, else exit 1): `@keelstackhq/<tool>/latest` for the version, then each of `<tool>`, `<tool>-linux-x64`, `<tool>-linux-arm64` is downloaded and its sha512 checked against `dist.integrity` (a tarball URL outside the registry, a non-`sha512-` integrity or a mismatch is exit 1). Versions are `X.Y.Z` only, without leading zeros; equal is `unchanged`, older than the pin is exit 3. All checks run before anything is written. It rewrites the `<TOOL>_VERSION`, `_SHA512`, `_LINUX_X64_SHA512`, `_LINUX_ARM64_SHA512` lines of `docs/setup-script.sh` (each must exist once), `.bosun/version` (bosun) and the same lines of the channel template (splice, hoist, berth). `--check` fetches only the `latest` metadata and lists `data.behind`. `data` is `{changed, unchanged, files, branch: "bosun/pin", title}`. A repo with `.splice/channels/bosun.toml` is exit 1 (`splice update --channel bosun`).
 
 ### Adopt and uninstall (no splice)
 
 `bosun adopt` is the path for a repo without hull, splice or hoist. It writes the channel's core
 files into the worktree (`.bosun/{bosun.toml,version,limits.toml,risk.toml,session-rules.toml,approvers.toml,fold-fragments.sh}`,
-`governance/owners.toml` with `--owner`, the five bosun workflows, `.claude/settings.json`) from templates
+`governance/owners.toml` with `--owner`, the five bosun workflows, `.claude/settings.json`, `docs/setup-script.sh`) from templates
 embedded in the binary, rendered by `core::render` (the Jinja subset the templates use). It never
 overwrites: an existing file with the same bytes is `unchanged`, one with other bytes is `kept`
 with a fix hint. It does not commit, push or open a PR, and it does not write splice.yml,
-hoist.toml, CODEOWNERS, `docs/setup-script.sh`, the AGENTS/REVIEW/CLAUDE sections or the stack seed
+hoist.toml, CODEOWNERS, the AGENTS/REVIEW/CLAUDE sections or the stack seed
 files. Flags: `--stack rust|ts-pnpm|other` (repeatable; default detected from `Cargo.toml` and
 `package.json` + `pnpm-lock.yaml`), `--owner`, `--bosun-version`, `--dry-run`, `--no-remote`
 (no token; no labels or registry issue). Unless `--no-remote`, it creates the missing labels

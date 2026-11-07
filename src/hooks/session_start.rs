@@ -26,7 +26,11 @@ pub fn run(cwd: Option<&Path>) -> String {
     {
         eprintln!("bosun: trailers hook: {}", e.message);
     }
-    let lessons = lessons_block(dir.as_deref());
+    let lessons = format!(
+        "{}{}",
+        lessons_block(dir.as_deref()),
+        pin_block(dir.as_deref())
+    );
     match context(dir.as_deref()) {
         Ok(text) => output(&format!(
             "{text}{lessons}\n{}",
@@ -63,6 +67,20 @@ fn lessons_block(dir: Option<&Path>) -> String {
         String::new()
     } else {
         format!("\nLessons:\n{}", lines.join("\n"))
+    }
+}
+
+/// One line when a tool pin is behind npm (spec D35); empty otherwise, any error goes to stderr.
+fn pin_block(dir: Option<&Path>) -> String {
+    let Some(dir) = dir else {
+        return String::new();
+    };
+    match crate::cli::pin::session_notice(dir) {
+        Ok(line) => line.map(|l| format!("\n{l}")).unwrap_or_default(),
+        Err(e) => {
+            eprintln!("bosun: warning: pin check: {}", e.message);
+            String::new()
+        }
     }
 }
 

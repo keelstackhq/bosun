@@ -1,0 +1,1 @@
+- `bosun pin --latest` keeps one pin PR per repo (branch `bosun/pin`, refresh or one `next` create call) and SessionStart notes pins that are behind; `BOSUN_PIN_CHECK=0` opts out (spec D35).

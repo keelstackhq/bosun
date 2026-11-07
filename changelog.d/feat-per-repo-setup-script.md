@@ -1,0 +1,1 @@
+- `docs/setup-script.sh` and the channel copy are now the per-repo script run from inside each checkout by the bosun bootstrap: they skip a tool only when the sha256 fingerprint of its install equals the one recorded at its verified install (pnpm: at its pinned version); `bosun adopt` now writes `docs/setup-script.sh`; header and D23 updated.

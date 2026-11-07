@@ -1,0 +1,1 @@
+- 2026-11-07 · pin PR dedupe + SessionStart pin notice (PR2 of tool pin automation), D35 · `tests/cli_pin_pr.rs` 3/3, `tests/cli_hook_pin.rs` 3/3
