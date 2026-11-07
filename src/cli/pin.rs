@@ -2,24 +2,15 @@
 //! hoist, berth and bosun, after checking every tarball against npm's `dist.integrity` (spec D35).
 
 use std::path::{Path, PathBuf};
-<<<<<<< HEAD
 use std::time::{Duration, Instant};
-=======
-use std::time::Duration;
->>>>>>> origin/main
 
 use serde_json::{Value, json};
 
 use super::PinArgs;
-<<<<<<< HEAD
 use crate::app::{App, default_branch};
 use crate::core::pin::{Pins, apply, get_line, keys, parse_semver, sha512_of};
 use crate::ctx::{RepoId, git_out};
 use crate::github::IssueState;
-=======
-use crate::core::pin::{Pins, apply, get_line, keys, parse_semver, sha512_of};
-use crate::ctx::git_out;
->>>>>>> origin/main
 use crate::github::b64;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -28,10 +19,7 @@ const SCRIPT: &str = "docs/setup-script.sh";
 const TEMPLATE: &str = "channel/pieces/core/files/docs/setup-script.sh.jinja";
 const VERSION_FILE: &str = ".bosun/version";
 const CHANNEL: &str = ".splice/channels/bosun.toml";
-<<<<<<< HEAD
 const BRANCH: &str = "bosun/pin";
-=======
->>>>>>> origin/main
 
 /// What npm says about one package version.
 struct Meta {
@@ -43,19 +31,12 @@ struct Meta {
 struct Npm {
     base: String,
     agent: ureq::Agent,
-<<<<<<< HEAD
     /// Every request must end before this; `None` leaves each request its own 120 s.
     deadline: Option<Instant>,
 }
 
 impl Npm {
     fn new(total: Option<Duration>) -> Npm {
-=======
-}
-
-impl Npm {
-    fn new() -> Npm {
->>>>>>> origin/main
         let base = std::env::var("BOSUN_NPM_REGISTRY").unwrap_or_else(|_| DEFAULT_REGISTRY.into());
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .max_redirects(0)
@@ -72,10 +53,7 @@ impl Npm {
         Npm {
             base: base.trim_end_matches('/').into(),
             agent,
-<<<<<<< HEAD
             deadline: total.map(|t| Instant::now() + t),
-=======
->>>>>>> origin/main
         }
     }
 
@@ -86,7 +64,6 @@ impl Npm {
                 "check the network and BOSUN_NPM_REGISTRY, then run `bosun pin --latest` again",
             )
         };
-<<<<<<< HEAD
         let req = self.agent.get(url);
         let resp = match self.deadline {
             Some(d) => {
@@ -99,13 +76,6 @@ impl Npm {
             None => req.call(),
         };
         let mut resp = resp.map_err(|e| fail(e.to_string()))?;
-=======
-        let mut resp = self
-            .agent
-            .get(url)
-            .call()
-            .map_err(|e| fail(e.to_string()))?;
->>>>>>> origin/main
         if resp.status().as_u16() != 200 {
             return Err(fail(format!("HTTP {}", resp.status().as_u16())));
         }
@@ -172,22 +142,12 @@ fn io_err(what: &str, p: &Path, e: std::io::Error) -> BosunError {
     )
 }
 
-<<<<<<< HEAD
 /// What `inspect` found: the script text, the tools behind, the tools current, and npm's metadata
 /// for those behind.
 type Found<'a> = (String, Vec<Value>, Vec<Value>, Vec<(&'a str, Meta)>);
 
 /// Read the pins of `root` and compare them with npm latest (nothing is written or downloaded).
 fn inspect<'a>(root: &Path, only: &'a [String], npm: &Npm) -> Result<Found<'a>, BosunError> {
-=======
-pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
-    let start = match dir {
-        Some(d) => d.to_path_buf(),
-        None => std::env::current_dir().map_err(|e| io_err("read", Path::new("."), e))?,
-    };
-    let root: PathBuf =
-        git_out(&start, &["rev-parse", "--show-toplevel"]).map_or(start, PathBuf::from);
->>>>>>> origin/main
     if root.join(CHANNEL).exists() {
         return Err(BosunError::error(
             "the bosun channel owns the tool pins in this repo",
@@ -198,15 +158,8 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         .map_err(|e| io_err("read", &root.join(SCRIPT), e))?;
     let tools: Vec<&str> = ["splice", "hoist", "berth", "bosun"]
         .into_iter()
-<<<<<<< HEAD
         .filter(|t| only.is_empty() || only.iter().any(|x| x == t))
         .collect();
-=======
-        .filter(|t| a.tool.is_empty() || a.tool.iter().any(|x| x == t))
-        .collect();
-    let npm = Npm::new();
-
->>>>>>> origin/main
     // Compare every tool first; any refusal happens before a tarball is fetched or a file written.
     let (mut changed, mut unchanged, mut latest) = (Vec::new(), Vec::new(), Vec::new());
     for t in &tools {
@@ -240,7 +193,6 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
             latest.push((*t, m));
         }
     }
-<<<<<<< HEAD
     Ok((script, changed, unchanged, latest))
 }
 
@@ -253,8 +205,6 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         git_out(&start, &["rev-parse", "--show-toplevel"]).map_or(start, PathBuf::from);
     let npm = Npm::new(None);
     let (script, changed, unchanged, latest) = inspect(&root, &a.tool, &npm)?;
-=======
->>>>>>> origin/main
     if a.check {
         return Ok(Outcome::data(
             json!({"behind": changed, "unchanged": unchanged}),
@@ -329,7 +279,6 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
     } else {
         format!("chore: pin {}", list.join(", "))
     };
-<<<<<<< HEAD
     let mut data = json!({
         "changed": changed, "unchanged": unchanged, "files": files, "branch": BRANCH, "title": title,
     });
@@ -427,9 +376,4 @@ pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
             moves.join(", ")
         )
     }))
-=======
-    Ok(Outcome::data(json!({
-        "changed": changed, "unchanged": unchanged, "files": files, "branch": "bosun/pin", "title": title,
-    })))
->>>>>>> origin/main
 }
