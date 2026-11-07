@@ -21,6 +21,7 @@ pub fn bosun() -> Command {
         .env("GITHUB_TOKEN", TOKEN_CANARY)
         .env("BOSUN_GITHUB_API", "http://127.0.0.1:9")
         .env("BOSUN_REPO", "acme/widget")
+        .env("BOSUN_PIN_CHECK", "0")
         .env("BOSUN_SESSION", "session_test")
         .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
         .env_remove("ANTHROPIC_API_KEY")
@@ -79,6 +80,7 @@ pub fn lease_note(session: &str, expires: &str, touch: &str) -> String {
 }
 
 pub mod fake;
+pub mod npm;
 pub mod stamps;
 
 /// One empty directory per test process (not a git repo, no .bosun/).
