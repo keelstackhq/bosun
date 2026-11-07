@@ -1746,7 +1746,7 @@ fn setup_scripts() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// The checkout does not exist when the setup script runs, so there is no toolchain file: the
+/// A checkout without a toolchain file (the script runs inside it): the
 /// cargo tools still install (with rustup's stable), and a failing tool never fails the script.
 #[test]
 fn setup_scripts_install_the_cargo_tools_without_a_toolchain_file() {
@@ -1910,5 +1910,78 @@ fn drafts_skip_the_heavy_jobs_and_fail_the_required_check() {
             }
             assert!(wf.contains("::error::draft: CI not run, mark ready for review"));
         }
+    }
+}
+
+/// Run `body` under bash with stub `npm`, `splice` and `pnpm` on PATH; return the npm call log.
+fn run_with_stubs(body: &str, tool_version: &str, pnpm_version: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let stub = |name: &str, text: String| {
+        fs::write(d.join(name), text).unwrap();
+        fs::set_permissions(d.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    stub(
+        "npm",
+        "#!/bin/sh\necho \"$*\" >> \"$LOG\"\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; root) echo /nonexistent ;; esac\n"
+            .into(),
+    );
+    stub(
+        "splice",
+        format!("#!/bin/sh\necho 'splice {tool_version}'\n"),
+    );
+    stub("pnpm", format!("#!/bin/sh\necho '{pnpm_version}'\n"));
+    let log = d.join("log");
+    let o = std::process::Command::new("bash")
+        .args(["-euo", "pipefail", "-c", body])
+        .current_dir(d)
+        .env(
+            "PATH",
+            format!("{}:{}", d.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("LOG", &log)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    fs::read_to_string(log).unwrap_or_default()
+}
+
+/// The bootstrap runs the script once per checkout, also on warm containers: a tool already at
+/// its pinned version and a pnpm already at PNPM_VERSION are not downloaded again.
+#[test]
+fn setup_scripts_skip_tools_already_at_their_pinned_version() {
+    let pnpm_files = variant(&["rust", "ts-pnpm"], "");
+    let mut scripts = setup_scripts();
+    scripts.push((
+        "channel+pnpm",
+        file(&pnpm_files, "docs/setup-script.sh").to_string(),
+    ));
+    for (name, script) in scripts {
+        let start = script.find("tool_pack() {").unwrap();
+        let end = script[start..].find("\n}\ninstall_tool ").unwrap();
+        let funcs = &script[start..start + end + 3];
+        let call = "install_tool splice 0.4.0 a b c";
+        let same = run_with_stubs(&format!("{funcs}{call}"), "0.4.0", "0");
+        assert!(same.is_empty(), "{name}: pinned version re-fetched: {same}");
+        for other in ["0.4.0-rc.1", "10.4.0", "0.4.01", "0.3.0"] {
+            let log = run_with_stubs(&format!("{funcs}{call}"), other, "0");
+            assert!(
+                log.contains("pack --silent @keelstackhq/splice@0.4.0"),
+                "{name} {other}: {log}"
+            );
+        }
+        if name == "channel" {
+            continue; // no ts-pnpm piece: no pnpm install
+        }
+        let p = script
+            .find("if [ \"$(pnpm --version")
+            .unwrap_or_else(|| panic!("{name}: no pnpm guard"));
+        let blk = &script[p..p + script[p..].find("\nfi\n").unwrap() + 4];
+        let body = format!("PNPM_VERSION=12.15.0\n{blk}");
+        let same = run_with_stubs(&body, "0", "12.15.0");
+        assert!(same.is_empty(), "{name}: pnpm re-installed: {same}");
+        let log = run_with_stubs(&body, "0", "12.14.0");
+        assert!(log.contains("install -g pnpm@12.15.0"), "{name}: {log}");
     }
 }

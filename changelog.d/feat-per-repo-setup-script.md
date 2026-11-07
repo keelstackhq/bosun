@@ -1,0 +1,1 @@
+- `docs/setup-script.sh` and the channel copy are now the per-repo script run from inside each checkout by the bosun bootstrap: they skip tools and pnpm already at their pinned version; header and D23 updated.

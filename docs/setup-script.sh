@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Setup script for the Claude Code cloud environment of bosun and of repos that use it
-# (spec D23). Paste it into the environment's setup script; it runs as root before a session.
+# Per-repo setup script of bosun's Claude Code cloud environment (spec D23). Not pasted by hand:
+# the bosun bootstrap (`bosun setup-snippet`, pasted once into the environment) runs it as root
+# before a session, from inside each checkout, possibly on a warm container. Pins move only by
+# reviewed PRs that edit this file (R-ci reviews it).
 set -euo pipefail
 
-# Pinned tool versions. Move a pin with a PR that edits this file (R-ci reviews it).
+# Pinned tool versions.
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
 SPLICE_VERSION=0.4.0
@@ -85,12 +87,14 @@ if ! node_major_ok "$(command -v node || echo node)"; then
 fi
 
 # pnpm 12 ships a native binary; its install.js puts it in place.
-npm install -g "pnpm@${PNPM_VERSION}"
-(cd "$(npm root -g)/pnpm" && node install.js) || true
+if [ "$(pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
+  npm install -g "pnpm@${PNPM_VERSION}"
+  (cd "$(npm root -g)/pnpm" && node install.js) || true
+fi
 
 # Rust (the version read above) and the cargo tools the gates run.
-# Without a toolchain file (the checkout does not exist yet when this runs) rustup's stable default
-# serves the tools, and rustup installs the checkout's pinned toolchain on first cargo use there.
+# Without a toolchain file in the checkout rustup's stable default serves the tools, and rustup
+# installs the checkout's pinned toolchain on first cargo use there.
 # A failed step warns and the script goes on: a failing setup script blocks every session.
 if [ -n "$RUST_VERSION" ]; then
   { rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy &&
@@ -119,6 +123,9 @@ tool_pack() {
 }
 # install_tool <name> <version> <launcher sha512> <linux-x64 sha512> <linux-arm64 sha512>
 install_tool() {
+  # Warm container or a second checkout: a tool already at its pinned version is not fetched again.
+  out="$("$1" --version 2>/dev/null || true)"
+  case "$out" in *" $2" | *" $2 "*) return 0 ;; esac
   case "$(uname -m)" in aarch64 | arm64) a=arm64 s="$5" ;; *) a=x64 s="$4" ;; esac
   t="$(mktemp -d)"
   if l="$(tool_pack "@keelstackhq/$1@$2" "$t" "$3")" && b="$(tool_pack "@keelstackhq/$1-linux-$a@$2" "$t" "$s")"; then
