@@ -50,7 +50,7 @@ fn a_behind_pin_adds_one_line_unless_opted_out() {
     for setting in [None, Some("1")] {
         let (text, _) = start(d.path(), &reg, setting);
         assert!(
-            text.contains("tool pins behind: hoist 0.4.0 → 0.4.1. The orchestrator moves them"),
+            text.contains("tool pins behind: hoist 0.4.0 -> 0.4.1. The orchestrator moves them"),
             "{text}"
         );
     }
@@ -77,6 +77,36 @@ fn an_npm_error_adds_nothing_and_logs_to_stderr() {
         ..registry("0.4.0")
     };
     let (text, err) = start(d.path(), &reg, None);
+    assert!(!text.contains("tool pins behind"), "{text}");
+    assert!(err.contains("pin check"), "{err}");
+}
+
+#[test]
+fn a_stalled_registry_is_cut_off_by_the_deadline() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let base = format!(
+        "http://127.0.0.1:{}",
+        server.server_addr().to_ip().unwrap().port()
+    );
+    // Accept every request and never answer.
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for req in server.incoming_requests() {
+            held.push(req);
+        }
+    });
+    let d = repo();
+    let reg = Registry {
+        base,
+        ..registry("0.4.0")
+    };
+    let t = std::time::Instant::now();
+    let (text, err) = start(d.path(), &reg, None);
+    assert!(
+        t.elapsed() < std::time::Duration::from_secs(20),
+        "{:?}",
+        t.elapsed()
+    );
     assert!(!text.contains("tool pins behind"), "{text}");
     assert!(err.contains("pin check"), "{err}");
 }

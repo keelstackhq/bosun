@@ -337,8 +337,12 @@ fn open_pin_pr(root: &Path) -> Result<(RepoId, Option<u64>, String), BosunError>
     let app = App::load(Some(root))?;
     let head = format!("{}:{BRANCH}", app.ctx.repo.owner);
     let open = app.gh.list_pulls(Some(&head), IssueState::Open)?;
+    // An open PR needs no base: a failing base lookup must not hide it.
+    if let Some(p) = open.first() {
+        return Ok((app.ctx.repo.clone(), Some(p.number), String::new()));
+    }
     let base = default_branch(app.gh.as_ref())?;
-    Ok((app.ctx.repo.clone(), open.first().map(|p| p.number), base))
+    Ok((app.ctx.repo.clone(), None, base))
 }
 
 /// The SessionStart notice (spec D35): `Some(line)` when a tool pin is behind npm latest; `None`
@@ -358,7 +362,7 @@ pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
         .iter()
         .map(|c| {
             format!(
-                "{} {} → {}",
+                "{} {} -> {}",
                 c["tool"].as_str().unwrap_or(""),
                 c["from"],
                 c["to"]
@@ -368,7 +372,7 @@ pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
         .collect();
     Ok((!moves.is_empty()).then(|| {
         format!(
-            "tool pins behind: {}. The orchestrator moves them: on branch {BRANCH} run `bosun pin --latest`, commit, push, and make the `next` call (one pin PR per repo).",
+            "tool pins behind: {}. The orchestrator moves them: on branch {BRANCH} run `bosun pin --latest`, commit, push, then make its `next` call or refresh the open pin PR it names (one pin PR per repo).",
             moves.join(", ")
         )
     }))
