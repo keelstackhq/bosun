@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.10.0 (2026-11-07)
+
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.9.0 with its npm sha512 values; KNOWN lists gain 0.9.0 (`trailers`). After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
 - The setup bootstrap runs only bosun checkouts (with `.bosun/version`), kills a hung repo script 10 s after its timeout, and keeps the `@latest` fallback only with keelstackhq/bosun release provenance, identity taken from the signing certificate.
 - `docs/setup-script.sh` and the channel copy are now the per-repo script run from inside each checkout by the bosun bootstrap: they skip a tool only when the sha256 fingerprint of its install equals the one recorded at its verified install (pnpm: at its pinned version); `bosun adopt` now writes `docs/setup-script.sh`; header and D23 updated.
