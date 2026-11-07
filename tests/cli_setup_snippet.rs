@@ -208,6 +208,8 @@ fn without_a_repo_script_the_latest_bosun_is_kept_only_with_signatures_and_bosun
         // The payload names keelstackhq/bosun, but the signing certificate is another repo's.
         ("exit 0", Some("attestations-evil-san.json"), "q83v", false),
         ("exit 0", good, "q83w", false),
+        // The right certificate, but the payload changed after signing.
+        ("exit 0", Some("attestations-bad-sig.json"), "q83v", false),
         ("exit 0", None, "q83v", false),
     ] {
         let tmp = tempfile::tempdir().unwrap();
