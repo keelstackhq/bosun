@@ -57,3 +57,12 @@ fn apply_rewrites_four_lines() {
     );
     assert!(apply(t, "splice", &p).is_err());
 }
+
+#[test]
+fn semver_rejects_leading_zeros() {
+    assert_eq!(parse_semver("0.0.0"), Some((0, 0, 0)));
+    assert_eq!(parse_semver("10.20.30"), Some((10, 20, 30)));
+    for bad in ["01.2.3", "1.02.3", "1.2.03", "00.1.1"] {
+        assert_eq!(parse_semver(bad), None, "{bad}");
+    }
+}

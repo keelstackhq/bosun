@@ -72,6 +72,13 @@ impl Npm {
 
     /// Metadata of `pkg` at `version` (`latest` or X.Y.Z).
     fn meta(&self, pkg: &str, version: &str) -> Result<Meta, BosunError> {
+        // Every fetch starts here; tarballs must sit under this base.
+        if !crate::anthropic::https_or_loopback(&self.base) {
+            return Err(BosunError::error(
+                "BOSUN_NPM_REGISTRY must be an https:// URL (http:// only for 127.0.0.1 or localhost)",
+                "unset BOSUN_NPM_REGISTRY to use https://registry.npmjs.org, or set an https:// URL",
+            ));
+        }
         let what = format!("@keelstackhq/{pkg}@{version}");
         let url = format!("{}/@keelstackhq/{pkg}/{version}", self.base);
         let v: Value = serde_json::from_slice(&self.get(&url, &what, 1 << 22)?)

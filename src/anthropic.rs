@@ -152,19 +152,7 @@ impl Anthropic {
 
 /// The key travels in a header: the base must be https, or http on this machine.
 fn check_base(base: &str) -> Result<(), BosunError> {
-    let host = base.strip_prefix("http://").map(|r| {
-        let end = r.find(['/', '?', '#']).unwrap_or(r.len());
-        let auth = &r[..end];
-        let auth = auth.rsplit('@').next().unwrap_or(auth);
-        // "[::1]:80" is not a loopback name we accept; host is what precedes the port.
-        auth.split(':').next().unwrap_or(auth).to_string()
-    });
-    let ok = base.starts_with("https://")
-        || host
-            .as_deref()
-            .is_some_and(|h| h == "127.0.0.1" || h == "localhost")
-            && !base.contains('@');
-    if ok {
+    if https_or_loopback(base) {
         Ok(())
     } else {
         Err(BosunError::error(
@@ -172,6 +160,22 @@ fn check_base(base: &str) -> Result<(), BosunError> {
             "unset BOSUN_ANTHROPIC_API to use https://api.anthropic.com, or set an https:// URL",
         ))
     }
+}
+
+/// `base` is https, or http to 127.0.0.1 or localhost (no userinfo).
+pub(crate) fn https_or_loopback(base: &str) -> bool {
+    let host = base.strip_prefix("http://").map(|r| {
+        let end = r.find(['/', '?', '#']).unwrap_or(r.len());
+        let auth = &r[..end];
+        let auth = auth.rsplit('@').next().unwrap_or(auth);
+        // "[::1]:80" is not a loopback name we accept; host is what precedes the port.
+        auth.split(':').next().unwrap_or(auth).to_string()
+    });
+    base.starts_with("https://")
+        || host
+            .as_deref()
+            .is_some_and(|h| h == "127.0.0.1" || h == "localhost")
+            && !base.contains('@')
 }
 
 #[cfg(test)]
