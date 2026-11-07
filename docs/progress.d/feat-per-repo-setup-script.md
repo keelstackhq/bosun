@@ -1,1 +1,0 @@
-- 2026-11-07 · per-repo setup script · run from the bootstrap inside the checkout; warm runs skip pinned tools

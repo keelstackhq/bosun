@@ -1,1 +1,0 @@
-- `bosun setup-snippet` prints a bootstrap to paste once as a cloud environment setup script: it runs each checkout's own `docs/setup-script.sh`, so a release needs no new paste; doctor step 6 returns it as `bootstrap`.

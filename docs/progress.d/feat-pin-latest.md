@@ -1,1 +1,0 @@
-- 2026-11-07 · `bosun pin --latest` (PR1 of tool pin automation): verified npm pins, `--check`, D35 · `tests/cli_pin.rs` 7/7

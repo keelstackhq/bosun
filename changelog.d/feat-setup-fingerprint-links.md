@@ -1,1 +1,0 @@
-- The setup script fingerprint also covers symlinks and sorts by bytes (LC_ALL=C).
