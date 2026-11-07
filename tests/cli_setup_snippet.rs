@@ -50,12 +50,17 @@ fn stub(dir: &Path, name: &str, body: &str) {
 
 /// A PATH with only the tools the bootstrap needs, so no real bosun or npm leaks in.
 fn tools(dir: &Path) {
-    for t in ["bash", "timeout", "rm", "ln", "cat", "pwd", "mkdir"] {
-        let real = ["/usr/bin", "/bin"]
-            .iter()
-            .map(|d| Path::new(d).join(t))
-            .find(|p| p.exists());
-        std::os::unix::fs::symlink(real.unwrap(), dir.join(t)).unwrap();
+    for t in [
+        "bash", "timeout", "rm", "ln", "cat", "pwd", "mkdir", "node", "base64", "printf",
+    ] {
+        // From the host PATH: runners keep node outside /usr/bin (e.g. a tool cache).
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let real = std::env::split_paths(&path)
+            .chain(["/usr/bin".into(), "/bin".into()])
+            .map(|d| d.join(t))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("{t} is not on PATH"));
+        std::os::unix::fs::symlink(real, dir.join(t)).unwrap();
     }
     stub(dir, "uname", "echo x86_64");
 }
@@ -65,6 +70,8 @@ fn checkout(root: &Path, name: &str, git: bool, script: Option<&str>) {
     fs::create_dir_all(d.join("docs")).unwrap();
     if git {
         fs::create_dir_all(d.join(".git")).unwrap();
+        fs::create_dir_all(d.join(".bosun")).unwrap();
+        fs::write(d.join(".bosun/version"), "0.9.0\n").unwrap();
     }
     if let Some(s) = script {
         fs::write(d.join("docs/setup-script.sh"), s).unwrap();
@@ -112,6 +119,8 @@ fn each_checkout_runs_its_own_script_and_a_failure_only_warns() {
     checkout(&work, "b", true, Some("echo b >>\"$LOG\"; exit 7"));
     checkout(&work, "c", true, None);
     checkout(&work, "d", false, Some("echo d >>\"$LOG\""));
+    checkout(&work, "e", true, Some("echo e >>\"$LOG\""));
+    fs::remove_file(work.join("e/.bosun/version")).unwrap();
     let (code, err, l) = boot(&work, &bin, &log);
     assert_eq!(code, 0, "{err}");
     assert!(
@@ -121,6 +130,10 @@ fn each_checkout_runs_its_own_script_and_a_failure_only_warns() {
     assert!(
         l.contains("b\n") && !l.contains("d\n") && !l.contains("stdin"),
         "{l}"
+    );
+    assert!(
+        !l.contains("e\n"),
+        "no .bosun/version: not a bosun checkout\n{l}"
     );
     assert!(
         err.contains("b/docs/setup-script.sh failed (exit 7)"),
@@ -166,11 +179,42 @@ fn the_current_dir_counts_as_a_checkout() {
 }
 
 const NPM_OK: &str = r#"echo "npm $*" >>"$LOG"
-if [ "$1" = install ]; then mkdir -p "$3/node_modules/.bin"; printf '#!/bin/bash\necho bosun 9.9.9\n' >"$3/node_modules/.bin/bosun"; chmod +x "$3/node_modules/.bin/bosun"; fi"#;
+if [ "$1" = install ]; then
+  m="$3/node_modules"; mkdir -p "$m/.bin" "$m/@keelstackhq/bosun"
+  printf '#!/bin/bash\necho bosun 9.9.9\n' >"$m/.bin/bosun"; chmod +x "$m/.bin/bosun"
+  printf '{"packages":{"":{},"node_modules/@keelstackhq/bosun":{"version":"9.9.9","integrity":"sha512-q83v"},"node_modules/@keelstackhq/bosun-darwin-x64":{"version":"9.9.9","integrity":"sha512-AAAA"}}}' >"$3/package-lock.json"
+fi"#;
+
+/// A fake attestations endpoint: serves a fixture (a signed statement for digest abcdef, `q83v`,
+/// whose payload names keelstackhq/bosun), or fails like `curl -f` on a 404.
+fn curl_stub(bin: &Path, fixture: Option<&str>) {
+    let body = match fixture {
+        Some(f) => format!(
+            "cat '{}'",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/bootstrap")
+                .join(f)
+                .display()
+        ),
+        None => "exit 22".into(),
+    };
+    stub(bin, "curl", &format!("echo \"curl $*\" >>\"$LOG\"\n{body}"));
+}
 
 #[test]
-fn without_a_repo_script_the_latest_bosun_is_kept_only_when_npm_verifies_it() {
-    for (audit, kept) in [("exit 0", true), ("exit 1", false)] {
+fn without_a_repo_script_the_latest_bosun_is_kept_only_with_signatures_and_bosun_provenance() {
+    let good = Some("attestations-good.json");
+    // (audit, attestations, lockfile integrity, kept)
+    for (audit, att, integrity, kept) in [
+        ("exit 0", good, "q83v", true),
+        ("exit 1", good, "q83v", false),
+        // The payload names keelstackhq/bosun, but the signing certificate is another repo's.
+        ("exit 0", Some("attestations-evil-san.json"), "q83v", false),
+        ("exit 0", good, "q83w", false),
+        // The right certificate, but the payload changed after signing.
+        ("exit 0", Some("attestations-bad-sig.json"), "q83v", false),
+        ("exit 0", None, "q83v", false),
+    ] {
         let tmp = tempfile::tempdir().unwrap();
         let (work, bin, log) = (
             tmp.path().join("w"),
@@ -180,28 +224,45 @@ fn without_a_repo_script_the_latest_bosun_is_kept_only_when_npm_verifies_it() {
         fs::create_dir_all(&work).unwrap();
         fs::create_dir_all(&bin).unwrap();
         tools(&bin);
+        let npm = NPM_OK.replace("sha512-q83v", &format!("sha512-{integrity}"));
         stub(
             &bin,
             "npm",
-            &format!("{NPM_OK}\n[ \"$1\" = audit ] && {audit}\nexit 0"),
+            &format!("{npm}\n[ \"$1\" = audit ] && {audit}\nexit 0"),
         );
+        curl_stub(&bin, att);
         let (code, err, l) = boot(&work, &bin, &log);
-        assert_eq!(code, 0, "{err}");
+        let case = format!("{audit} {att:?} {integrity}");
+        assert_eq!(code, 0, "{case}: {err}");
         assert!(
             l.contains("@keelstackhq/bosun@latest") && l.contains("npm audit signatures"),
             "{l}"
         );
-        assert_eq!(bin.join("bosun").exists(), kept, "{err}");
-        assert_eq!(work.join("prefix").exists(), kept);
+        assert_eq!(bin.join("bosun").exists(), kept, "{case}: {err}");
+        assert_eq!(work.join("prefix").exists(), kept, "{case}");
         assert!(
             err.contains(if kept {
                 "verified"
             } else {
                 "no verified bosun"
             }),
-            "{err}"
+            "{case}: {err}"
         );
+        if audit == "exit 0" {
+            // Only the installed package is checked, with a time limit, at registry.npmjs.org.
+            assert!(
+                l.contains("-m 30 https://registry.npmjs.org/-/npm/v1/attestations/%40keelstackhq%2Fbosun@9.9.9"),
+                "{l}"
+            );
+            assert!(!l.contains("darwin"), "{l}");
+        }
     }
+}
+
+#[test]
+fn a_hung_repo_script_is_killed_after_the_grace() {
+    let s = snippet();
+    assert!(s.contains("timeout -k 10 1800 "), "{s}");
 }
 
 #[test]

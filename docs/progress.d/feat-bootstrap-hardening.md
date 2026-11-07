@@ -1,0 +1,1 @@
+- 2026-11-07 · bootstrap hardening: bosun checkouts only, provenance for @latest, timeout -k
