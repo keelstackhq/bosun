@@ -128,12 +128,15 @@ tool_pack() {
 # version is trusted.
 SETUP_STATE_DIR="${SETUP_STATE_DIR:-/var/lib/bosun-setup}"
 tool_arch() { case "$(uname -m)" in aarch64 | arm64) echo arm64 ;; *) echo x64 ;; esac; }
-# tool_fp <name> <arch>: sha256 over the resolved command's real path and every file of the tool's
-# launcher and linux packages; fails when PATH resolves to anything outside the launcher package.
+# tool_fp <name> <arch>: sha256 over the resolved command's real path and every file and symlink of
+# the tool's launcher and linux packages; fails when PATH resolves to anything outside the launcher package.
 tool_fp() {
   r="$(npm root -g 2>/dev/null)" && p="$(readlink -f "$(command -v "$1")" 2>/dev/null)" || return 1
   case "$p" in "$r/@keelstackhq/$1/"*) ;; *) return 1 ;; esac
-  { echo "$p"; { find "$r/@keelstackhq/$1" "$r/@keelstackhq/$1-linux-$2" -type f -print0 2>/dev/null || true; } | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1
+  set -- "$r/@keelstackhq/$1" "$r/@keelstackhq/$1-linux-$2"
+  # Symlinks count by name and target (a planted one can win Node's module lookup); byte order.
+  { echo "$p"; { find "$@" -type l -printf '%p -> %l\0' 2>/dev/null || true; } | LC_ALL=C sort -z | tr '\0' '\n'
+    { find "$@" -type f -print0 2>/dev/null || true; } | LC_ALL=C sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1
 }
 # tool_warm <name> <arch> <record>: true when the installed tool matches its recorded fingerprint.
 tool_warm() { [ -f "$3" ] && fp="$(tool_fp "$1" "$2")" && [ "$fp" = "$(cat "$3")" ]; }
