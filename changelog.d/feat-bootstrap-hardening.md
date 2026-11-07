@@ -1,0 +1,1 @@
+- The setup bootstrap runs only bosun checkouts (with `.bosun/version`), kills a hung repo script 10 s after its timeout, and keeps the `@latest` fallback only with keelstackhq/bosun release provenance.
