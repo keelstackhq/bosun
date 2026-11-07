@@ -25,6 +25,7 @@ pub mod lesson_triage;
 pub mod main_triage;
 pub mod msg;
 pub mod notify;
+pub mod pin;
 pub mod plan;
 pub mod plan_pr;
 pub mod pr;
@@ -178,6 +179,8 @@ pub enum Command {
     Adopt(AdoptArgs),
     /// Take back what `bosun adopt` wrote (only files whose bytes are still adopt's).
     Uninstall(UninstallArgs),
+    /// Move the tool pins (setup script, .bosun/version, channel template) to the newest verified npm release.
+    Pin(PinArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -226,6 +229,7 @@ pub const COMMANDS: &[&str] = &[
     "prereqs",
     "adopt",
     "uninstall",
+    "pin",
 ];
 
 impl Command {
@@ -279,6 +283,7 @@ impl Command {
             Command::Init(_) => "init",
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
+            Command::Pin(_) => "pin",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {
@@ -1057,3 +1062,16 @@ pub struct NotifyArgs {
 pub const RESULT_OUTCOMES: [&str; 4] = ["merged", "partial", "blocked", "needs-human"];
 /// Default `bosun wait --timeout` in seconds.
 pub const WAIT_TIMEOUT_SECS: u64 = 1800;
+
+#[derive(Debug, Args)]
+pub struct PinArgs {
+    /// Move the tool pins to the newest npm release (required; the only mode).
+    #[arg(long, required = true)]
+    pub latest: bool,
+    /// Only this tool (repeatable); default: splice, hoist, berth and bosun.
+    #[arg(long, value_name = "TOOL", value_parser = ["splice", "hoist", "berth", "bosun"])]
+    pub tool: Vec<String>,
+    /// List the tools that are behind; download no tarball, write nothing.
+    #[arg(long)]
+    pub check: bool,
+}
