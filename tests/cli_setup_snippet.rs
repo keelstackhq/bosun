@@ -53,11 +53,14 @@ fn tools(dir: &Path) {
     for t in [
         "bash", "timeout", "rm", "ln", "cat", "pwd", "mkdir", "node", "base64", "printf",
     ] {
-        let real = ["/usr/bin", "/bin"]
-            .iter()
-            .map(|d| Path::new(d).join(t))
-            .find(|p| p.exists());
-        std::os::unix::fs::symlink(real.unwrap(), dir.join(t)).unwrap();
+        // From the host PATH: runners keep node outside /usr/bin (e.g. a tool cache).
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let real = std::env::split_paths(&path)
+            .chain(["/usr/bin".into(), "/bin".into()])
+            .map(|d| d.join(t))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("{t} is not on PATH"));
+        std::os::unix::fs::symlink(real, dir.join(t)).unwrap();
     }
     stub(dir, "uname", "echo x86_64");
 }
