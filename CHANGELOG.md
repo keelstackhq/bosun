@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.9.0 (2026-11-07)
+
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.8.0 with its npm sha512 values; KNOWN lists gain 0.8.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
 - Commit trailers `Bosun-Session`/`Bosun-Task`/`Bosun-Model`: `bosun trailers stamp|install|list`, a `bosun pr` check (`[trailers] require`), and a rollback recipe.
 - `bosun gate-missed` and the main-health and revert hooks open a "Which gate missed this?" issue (`bosun:process-fix`) per escaped defect, deduped per incident.
