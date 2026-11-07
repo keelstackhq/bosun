@@ -1,0 +1,1 @@
+- 2026-11-07 · paste-once setup bootstrap (`bosun setup-snippet`, README, adopt doc §9)

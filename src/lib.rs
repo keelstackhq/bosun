@@ -67,5 +67,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Prereqs(a) => cli::prereqs::run(dir, a),
         Command::Adopt(a) => cli::adopt::run(dir, a),
         Command::Uninstall(a) => cli::uninstall::run(dir, a),
+        Command::Pin(a) => cli::pin::run(dir, a),
+        Command::SetupSnippet => cli::setup_snippet::run(),
     }
 }
