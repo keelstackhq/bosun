@@ -54,6 +54,7 @@ pub mod gate;
 pub mod gate_missed;
 pub mod main_health;
 pub mod review_ci;
+pub mod setup_snippet;
 pub mod stop;
 pub mod test_integrity;
 pub mod uninstall;
@@ -178,6 +179,8 @@ pub enum Command {
     Adopt(AdoptArgs),
     /// Take back what `bosun adopt` wrote (only files whose bytes are still adopt's).
     Uninstall(UninstallArgs),
+    /// Print the bootstrap to paste once as a cloud environment's setup script.
+    SetupSnippet,
 }
 
 /// Top-level command names, in `--help` order.
@@ -226,6 +229,7 @@ pub const COMMANDS: &[&str] = &[
     "prereqs",
     "adopt",
     "uninstall",
+    "setup-snippet",
 ];
 
 impl Command {
@@ -279,6 +283,7 @@ impl Command {
             Command::Init(_) => "init",
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
+            Command::SetupSnippet => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {

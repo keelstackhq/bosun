@@ -44,6 +44,7 @@ const CALLS: &[&[&str]] = &[
     &["review-ci", "3"],
     &["notify"],
     &["answer", "4", "--slack-user", "U1"],
+    &["setup-snippet"],
 ];
 
 #[test]
