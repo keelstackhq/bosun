@@ -213,13 +213,27 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
 
     // Verify and rewrite in memory; write only when everything passed.
     let tpl_path = root.join(TEMPLATE);
-    let mut tpl = std::fs::read_to_string(&tpl_path).ok();
+    let mut tpl = match std::fs::read_to_string(&tpl_path) {
+        Ok(t) => Some(t),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(io_err("read", &tpl_path, e)),
+    };
     let (mut script_new, mut version_new) = (script.clone(), None);
     for (t, m) in &latest {
         let launcher = npm.verified(t, m)?;
         let arch = |suffix: &str| -> Result<String, BosunError> {
             let pkg = format!("{t}-linux-{suffix}");
-            npm.verified(&pkg, &npm.meta(&pkg, &m.version)?)
+            let am = npm.meta(&pkg, &m.version)?;
+            if am.version != m.version {
+                return Err(BosunError::error(
+                    format!(
+                        "npm @keelstackhq/{pkg}@{}: answered version {}",
+                        m.version, am.version
+                    ),
+                    "do not pin this release; tell the owner, then rerun later",
+                ));
+            }
+            npm.verified(&pkg, &am)
         };
         let pins = Pins {
             version: m.version.clone(),
