@@ -4,6 +4,16 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.8.0 with its npm sha512 values; KNOWN lists gain 0.8.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
+- Commit trailers `Bosun-Session`/`Bosun-Task`/`Bosun-Model`: `bosun trailers stamp|install|list`, a `bosun pr` check (`[trailers] require`), and a rollback recipe.
+- `bosun gate-missed` and the main-health and revert hooks open a "Which gate missed this?" issue (`bosun:process-fix`) per escaped defect, deduped per incident.
+- R-weaken also compares gate profiles and reads diffs: CI steps removed or `continue-on-error`, coverage floors lowered, lint disables added, Rust MIN/MAX consts loosened.
+- R-weaken also counts a repo rule with the `weaken` capability as R-weaken, compares keys added to gate profiles, and counts `cfg(not(test))` and `feature = "never"` switch-offs.
+- R-weaken counts tests in whole files at base and head: fewer tests or assertions, more skips, `.only` or `cfg` switch-offs, deleted test files.
+- `bosun risk-check` flags a PR that loosens a gate config (raised cap, loosened risk rule, lowered deny or lint level, approval settings) as built-in R-weaken; only the owner approves it.
+- `bosun pr` with `[trailers] require` checks local commits before it creates the PR; trailer keys match without case; `#123` is body text.
+- tests/pinned_config.rs also checks the `[approvals] policy` value against the pinned release (`autonomous` from 0.8.0).
+
 ## 0.8.0 (2026-11-06)
 
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.7.0 with its npm sha512 values; KNOWN lists gain 0.7.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.

@@ -1,1 +1,0 @@
-- `bosun pr` with `[trailers] require` checks local commits before it creates the PR; trailer keys match without case; `#123` is body text.

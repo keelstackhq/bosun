@@ -336,3 +336,12 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-06 · operating model · docs/operating-model.md: principle → mechanism → status table and enforcement candidates · PR #421
 - 2026-11-06 · Claude Tag seats · `bosun join --origin slack --slack-channel/--slack-thread`, spec §10 Claude Tag sessions
 - 2026-11-06 · Claude Tag routing · notify seat routing and thread asks, doctor `claude-tag` and PAT warning, spec §10
+- 2026-11-06 · pin bosun 0.8.0 (.bosun/version, setup script, KNOWN lists)
+- 2026-11-06 · commit trailers · Bosun-Session/Task/Model stamped by hook, checked by `bosun pr`, `bosun trailers list` for rollback · PR #427
+- 2026-11-06 · operating-model #6 · Which-gate-missed task on main-red and revert, `bosun gate-missed` · PR #426
+- 2026-11-06 · operating-model #3 · R-weaken diff detectors (CI steps, coverage, lints, consts) · stacked on R-weaken
+- 2026-11-06 · operating-model #3 · R-weaken review minors (capability id, profile keys, cfg, src paths)
+- 2026-11-06 · operating-model #3 · R-weaken test counts (whole files, test-integrity counters) · stacked on R-weaken diffs
+- 2026-11-06 · operating-model #3 · R-weaken risk rule (base/head compare, capability weaken) · PR #428
+- 2026-11-06 · commit trailers follow-up · pre-create check, case-insensitive keys, #123 body, spec note · PR #431
+- 2026-11-06 · test: KNOWN_POLICIES in tests/pinned_config.rs lists `[approvals] policy` values per pinned release

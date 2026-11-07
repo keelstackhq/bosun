@@ -1,1 +1,0 @@
-- Commit trailers `Bosun-Session`/`Bosun-Task`/`Bosun-Model`: `bosun trailers stamp|install|list`, a `bosun pr` check (`[trailers] require`), and a rollback recipe.

@@ -1,1 +1,0 @@
-- R-weaken also counts a repo rule with the `weaken` capability as R-weaken, compares keys added to gate profiles, and counts `cfg(not(test))` and `feature = "never"` switch-offs.

@@ -1,1 +1,0 @@
-- 2026-11-06 · test: KNOWN_POLICIES in tests/pinned_config.rs lists `[approvals] policy` values per pinned release
