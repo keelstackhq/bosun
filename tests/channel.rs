@@ -480,7 +480,8 @@ fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_inte
         4,
         "BOSUN_VERSION and 3 sums"
     );
-    let bosun_ch = "npm install -g --ignore-scripts \"@keelstackhq/bosun@${BOSUN_VERSION}\"";
+    let bosun_ch =
+        "  *) npm install -g --ignore-scripts \"@keelstackhq/bosun@${BOSUN_VERSION}\" ;;";
     for (t, tools, want) in [
         (&own, &["splice", "hoist", "berth", "bosun"][..], &[][..]),
         (&ch, &["splice", "hoist", "berth"], &[bosun_ch][..]),

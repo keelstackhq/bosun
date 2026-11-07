@@ -87,7 +87,8 @@ if ! node_major_ok "$(command -v node || echo node)"; then
 fi
 
 # pnpm 12 ships a native binary; its install.js puts it in place.
-if [ "$(pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
+# From /: inside the checkout pnpm may follow package.json `packageManager` instead.
+if [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
   npm install -g "pnpm@${PNPM_VERSION}"
   (cd "$(npm root -g)/pnpm" && node install.js) || true
 fi

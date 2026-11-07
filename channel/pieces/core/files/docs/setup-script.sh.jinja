@@ -91,7 +91,8 @@ if ! node_major_ok "$(command -v node || echo node)"; then
 fi
 {% if "ts-pnpm" in pieces %}
 # pnpm 12 ships a native binary; its install.js puts it in place.
-if [ "$(pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
+# From /: inside the checkout pnpm may follow package.json `packageManager` instead.
+if [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
   npm install -g "pnpm@${PNPM_VERSION}"
   (cd "$(npm root -g)/pnpm" && node install.js) || true
 fi
@@ -143,7 +144,10 @@ install_tool hoist "$HOIST_VERSION" "$HOIST_SHA512" "$HOIST_LINUX_X64_SHA512" "$
 install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$BERTH_LINUX_ARM64_SHA512"
 # bosun's integrity is not known when the channel is written (the pin is the channel's release
 # or bosun_version), so bosun installs by version and npm checks the registry's integrity.
-npm install -g --ignore-scripts "@keelstackhq/bosun@${BOSUN_VERSION}"
+case "$(bosun --version 2>/dev/null || true)" in
+  *" $BOSUN_VERSION" | *" $BOSUN_VERSION "*) ;;
+  *) npm install -g --ignore-scripts "@keelstackhq/bosun@${BOSUN_VERSION}" ;;
+esac
 
 bosun --version
 

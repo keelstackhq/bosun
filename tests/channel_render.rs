@@ -1932,6 +1932,7 @@ fn run_with_stubs(body: &str, tool_version: &str, pnpm_version: &str) -> String 
         format!("#!/bin/sh\necho 'splice {tool_version}'\n"),
     );
     stub("pnpm", format!("#!/bin/sh\necho '{pnpm_version}'\n"));
+    stub("bosun", format!("#!/bin/sh\necho 'bosun {tool_version}'\n"));
     let log = d.join("log");
     let o = std::process::Command::new("bash")
         .args(["-euo", "pipefail", "-c", body])
@@ -1971,11 +1972,21 @@ fn setup_scripts_skip_tools_already_at_their_pinned_version() {
                 "{name} {other}: {log}"
             );
         }
+        // The channel installs bosun by version (no pinned integrity): it skips at the pin too.
+        if let Some(p) = script.find("case \"$(bosun --version") {
+            let blk = &script[p..p + script[p..].find("\nesac\n").unwrap() + 6];
+            let body = format!("BOSUN_VERSION=0.9.0\n{blk}");
+            assert!(run_with_stubs(&body, "0.9.0", "0").is_empty(), "{name}");
+            let log = run_with_stubs(&body, "0.9.0-rc.1", "0");
+            assert!(log.contains("@keelstackhq/bosun@0.9.0"), "{name}: {log}");
+        } else {
+            assert_eq!(name, "bosun", "the channel script skips bosun at its pin");
+        }
         if name == "channel" {
             continue; // no ts-pnpm piece: no pnpm install
         }
         let p = script
-            .find("if [ \"$(pnpm --version")
+            .find("if [ \"$(cd / && pnpm --version")
             .unwrap_or_else(|| panic!("{name}: no pnpm guard"));
         let blk = &script[p..p + script[p..].find("\nfi\n").unwrap() + 4];
         let body = format!("PNPM_VERSION=12.15.0\n{blk}");
