@@ -90,6 +90,7 @@ if ! node_major_ok "$(command -v node || echo node)"; then
   fi
 fi
 {% if "ts-pnpm" in pieces %}
+# pnpm is not integrity-pinned (npm installs it by version), so its warm skip stays a version check.
 # pnpm 12 ships a native binary; its install.js puts it in place.
 # From /: inside the checkout pnpm may follow package.json `packageManager` instead.
 if [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
@@ -126,28 +127,55 @@ tool_pack() {
   if [ "$got" != "$3" ]; then echo "setup-script: $1 does not match its pinned sha512; skipping it" >&2; return 1; fi
   echo "$2/$f"
 }
+# Where a verified install leaves its fingerprint. A later run skips a tool only when the current
+# fingerprint equals the record for that tool@pin, so no other program that prints the pinned
+# version is trusted.
+SETUP_STATE_DIR="${SETUP_STATE_DIR:-/var/lib/bosun-setup}"
+tool_arch() { case "$(uname -m)" in aarch64 | arm64) echo arm64 ;; *) echo x64 ;; esac; }
+# tool_fp <name> <arch>: sha256 over the resolved command's real path and every file of the tool's
+# launcher and linux packages; fails when PATH resolves to anything outside the launcher package.
+tool_fp() {
+  r="$(npm root -g 2>/dev/null)" && p="$(readlink -f "$(command -v "$1")" 2>/dev/null)" || return 1
+  case "$p" in "$r/@keelstackhq/$1/"*) ;; *) return 1 ;; esac
+  { echo "$p"; { find "$r/@keelstackhq/$1" "$r/@keelstackhq/$1-linux-$2" -type f -print0 2>/dev/null || true; } | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1
+}
+# tool_warm <name> <arch> <record>: true when the installed tool matches its recorded fingerprint.
+tool_warm() { [ -f "$3" ] && fp="$(tool_fp "$1" "$2")" && [ "$fp" = "$(cat "$3")" ]; }
+# tool_record <name> <arch> <record>: after a verified install; never fails the script.
+tool_record() {
+  if fp="$(tool_fp "$1" "$2")" && mkdir -p "$SETUP_STATE_DIR" && printf '%s\n' "$fp" >"$3"; then :; else
+    echo "setup-script: could not record the fingerprint of $1; it installs again on the next run" >&2
+  fi
+}
 # install_tool <name> <version> <launcher sha512> <linux-x64 sha512> <linux-arm64 sha512>
 install_tool() {
-  # Warm container or a second checkout: a tool already at its pinned version is not fetched again.
-  out="$("$1" --version 2>/dev/null || true)"
-  case "$out" in *" $2" | *" $2 "*) return 0 ;; esac
   case "$(uname -m)" in aarch64 | arm64) a=arm64 s="$5" ;; *) a=x64 s="$4" ;; esac
+  rec="$SETUP_STATE_DIR/$1@$2.sha256"
+  # Warm container or a second checkout: skip only a tool whose fingerprint equals the one recorded
+  # at its verified install.
+  if tool_warm "$1" "$a" "$rec"; then return 0; fi
   t="$(mktemp -d)"
   if l="$(tool_pack "@keelstackhq/$1@$2" "$t" "$3")" && b="$(tool_pack "@keelstackhq/$1-linux-$a@$2" "$t" "$s")"; then
     # npm still reads the optional packages' metadata: a registry error must not stop the script.
-    npm install -g --ignore-scripts --omit=optional "$l" "$b" ||
+    if npm install -g --ignore-scripts --omit=optional "$l" "$b"; then
+      tool_record "$1" "$a" "$rec"
+    else
       echo "setup-script: $1 install failed; skipping $1" >&2
+    fi
   fi
 }
 install_tool splice "$SPLICE_VERSION" "$SPLICE_SHA512" "$SPLICE_LINUX_X64_SHA512" "$SPLICE_LINUX_ARM64_SHA512"
 install_tool hoist "$HOIST_VERSION" "$HOIST_SHA512" "$HOIST_LINUX_X64_SHA512" "$HOIST_LINUX_ARM64_SHA512"
 install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$BERTH_LINUX_ARM64_SHA512"
 # bosun's integrity is not known when the channel is written (the pin is the channel's release
-# or bosun_version), so bosun installs by version and npm checks the registry's integrity.
-case "$(bosun --version 2>/dev/null || true)" in
-  *" $BOSUN_VERSION" | *" $BOSUN_VERSION "*) ;;
-  *) npm install -g --ignore-scripts "@keelstackhq/bosun@${BOSUN_VERSION}" ;;
-esac
+# or bosun_version), so bosun installs by version and npm checks the registry's integrity. It is
+# skipped only at its recorded fingerprint, like the other tools.
+a="$(tool_arch)"
+rec="$SETUP_STATE_DIR/bosun@${BOSUN_VERSION}.sha256"
+if ! tool_warm bosun "$a" "$rec"; then
+  npm install -g --ignore-scripts "@keelstackhq/bosun@${BOSUN_VERSION}"
+  tool_record bosun "$a" "$rec"
+fi
 
 bosun --version
 

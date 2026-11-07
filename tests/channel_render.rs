@@ -1913,8 +1913,8 @@ fn drafts_skip_the_heavy_jobs_and_fail_the_required_check() {
     }
 }
 
-/// Run `body` under bash with stub `npm`, `splice` and `pnpm` on PATH; return the npm call log.
-fn run_with_stubs(body: &str, tool_version: &str, pnpm_version: &str) -> String {
+/// Run `body` under bash with stub `npm` and `pnpm` on PATH; return the npm call log.
+fn run_with_stubs(body: &str, pnpm_version: &str) -> String {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
@@ -1927,12 +1927,7 @@ fn run_with_stubs(body: &str, tool_version: &str, pnpm_version: &str) -> String 
         "#!/bin/sh\necho \"$*\" >> \"$LOG\"\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; root) echo /nonexistent ;; esac\n"
             .into(),
     );
-    stub(
-        "splice",
-        format!("#!/bin/sh\necho 'splice {tool_version}'\n"),
-    );
     stub("pnpm", format!("#!/bin/sh\necho '{pnpm_version}'\n"));
-    stub("bosun", format!("#!/bin/sh\necho 'bosun {tool_version}'\n"));
     let log = d.join("log");
     let o = std::process::Command::new("bash")
         .args(["-euo", "pipefail", "-c", body])
@@ -1948,51 +1943,138 @@ fn run_with_stubs(body: &str, tool_version: &str, pnpm_version: &str) -> String 
     fs::read_to_string(log).unwrap_or_default()
 }
 
-/// The bootstrap runs the script once per checkout, also on warm containers: a tool already at
-/// its pinned version and a pnpm already at PNPM_VERSION are not downloaded again.
+/// A fake global npm tree: `npm root -g` prints $ROOT, whose @keelstackhq/<name> holds the
+/// launcher (bin/<name>.js, the file PATH links to) and @keelstackhq/<name>-linux-<arch> the
+/// binary. `body` runs with $A (arch), $ROOT, $D, $REC (the record file) set; returns the npm log.
+fn run_with_tool_tree(name: &str, version: &str, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let exe = |p: &Path, text: &str| {
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, text).unwrap();
+        fs::set_permissions(p, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let root = d.join("gr/lib/node_modules");
+    let prog = format!("#!/bin/sh\necho '{name} {version}'\n");
+    let launcher = root.join(format!("@keelstackhq/{name}/bin/{name}.js"));
+    exe(&launcher, &prog);
+    exe(
+        &root.join(format!("@keelstackhq/{name}-linux-{arch}/bin/{name}")),
+        "bin",
+    );
+    fs::create_dir_all(d.join("bin")).unwrap();
+    std::os::unix::fs::symlink(&launcher, d.join("bin").join(name)).unwrap();
+    // Another program of the same name that prints the pinned version, for the wrapper case.
+    exe(&d.join("wrap").join(name), &prog);
+    exe(
+        &d.join("fakebin/npm"),
+        "#!/bin/sh\n[ \"$1\" = root ] && { echo \"$ROOT\"; exit 0; }\necho \"$*\" >> \"$LOG\"\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; esac\n",
+    );
+    let log = d.join("log");
+    let path = format!(
+        "{}:{}:{}",
+        d.join("fakebin").display(),
+        d.join("bin").display(),
+        std::env::var("PATH").unwrap()
+    );
+    let o = std::process::Command::new("bash")
+        .args(["-euo", "pipefail", "-c", body])
+        .current_dir(d)
+        .env("PATH", path)
+        .env("LOG", &log)
+        .env("ROOT", &root)
+        .env("D", d)
+        .env("A", arch)
+        .env("SETUP_STATE_DIR", d.join("state"))
+        .env("REC", d.join(format!("state/{name}@{version}.sha256")))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    fs::read_to_string(log).unwrap_or_default()
+}
+
+/// The bootstrap runs the script once per checkout, also on warm containers. A tool is skipped
+/// only when the fingerprint (sha256 over the resolved command path and every file of its
+/// launcher and linux packages) equals the one recorded at its verified install; a printed
+/// version, a changed file or another program of the same name earlier in PATH re-installs it.
 #[test]
-fn setup_scripts_skip_tools_already_at_their_pinned_version() {
+fn setup_scripts_skip_tools_only_at_their_recorded_fingerprint() {
     let pnpm_files = variant(&["rust", "ts-pnpm"], "");
     let mut scripts = setup_scripts();
     scripts.push((
         "channel+pnpm",
         file(&pnpm_files, "docs/setup-script.sh").to_string(),
     ));
+    let packed = "pack --silent @keelstackhq/splice@0.4.0";
     for (name, script) in scripts {
         let start = script.find("tool_pack() {").unwrap();
         let end = script[start..].find("\n}\ninstall_tool ").unwrap();
-        let funcs = &script[start..start + end + 3];
+        let funcs = format!("{}\n", &script[start..start + end + 3]);
         let call = "install_tool splice 0.4.0 a b c";
-        let same = run_with_stubs(&format!("{funcs}{call}"), "0.4.0", "0");
-        assert!(same.is_empty(), "{name}: pinned version re-fetched: {same}");
-        for other in ["0.4.0-rc.1", "10.4.0", "0.4.01", "0.3.0"] {
-            let log = run_with_stubs(&format!("{funcs}{call}"), other, "0");
-            assert!(
-                log.contains("pack --silent @keelstackhq/splice@0.4.0"),
-                "{name} {other}: {log}"
-            );
+        let rec = "mkdir -p \"$SETUP_STATE_DIR\"; tool_fp splice \"$A\" >\"$REC\"; : >\"$LOG\"; ";
+        let run =
+            |extra: &str| run_with_tool_tree("splice", "0.4.0", &format!("{funcs}{extra}{call}"));
+        let log = run("");
+        assert!(log.contains(packed), "{name}: no record: {log}");
+        let log = run(rec);
+        assert!(log.is_empty(), "{name}: recorded install re-fetched: {log}");
+        for change in [
+            "echo x >>\"$ROOT/@keelstackhq/splice-linux-$A/bin/splice\"",
+            "echo x >>\"$ROOT/@keelstackhq/splice/bin/splice.js\"",
+            "rm \"$ROOT/@keelstackhq/splice-linux-$A/bin/splice\"",
+            "export PATH=\"$D/wrap:$PATH\"",
+        ] {
+            let log = run(&format!("{rec}{change}; "));
+            assert!(log.contains(packed), "{name} {change}: {log}");
         }
-        // The channel installs bosun by version (no pinned integrity): it skips at the pin too.
-        if let Some(p) = script.find("case \"$(bosun --version") {
-            let blk = &script[p..p + script[p..].find("\nesac\n").unwrap() + 6];
-            let body = format!("BOSUN_VERSION=0.9.0\n{blk}");
-            assert!(run_with_stubs(&body, "0.9.0", "0").is_empty(), "{name}");
-            let log = run_with_stubs(&body, "0.9.0-rc.1", "0");
-            assert!(log.contains("@keelstackhq/bosun@0.9.0"), "{name}: {log}");
+        // The channel installs bosun by version (no pinned integrity): same fingerprint rule.
+        if let Some(p) = script.find("# bosun's integrity is not known") {
+            let blk = &script[p..p + script[p..].find("\nbosun --version").unwrap()];
+            let brec =
+                "mkdir -p \"$SETUP_STATE_DIR\"; tool_fp bosun \"$A\" >\"$REC\"; : >\"$LOG\"; ";
+            let brun = |extra: &str, tail: &str| {
+                let body = format!("{funcs}BOSUN_VERSION=0.9.0\n{extra}{blk}\n{tail}");
+                run_with_tool_tree("bosun", "0.9.0", &body)
+            };
+            let want = "install -g --ignore-scripts @keelstackhq/bosun@0.9.0";
+            assert!(brun("", "").contains(want), "{name}: bosun, no record");
+            assert!(
+                brun(brec, "").is_empty(),
+                "{name}: recorded bosun re-fetched"
+            );
+            for change in [
+                "echo x >>\"$ROOT/@keelstackhq/bosun/bin/bosun.js\"",
+                "export PATH=\"$D/wrap:$PATH\"",
+            ] {
+                let log = brun(&format!("{brec}{change}; "), "");
+                assert!(log.contains(want), "{name} {change}: {log}");
+            }
+            // A successful install records the fingerprint for the next run.
+            brun("", "test -s \"$REC\"");
         } else {
-            assert_eq!(name, "bosun", "the channel script skips bosun at its pin");
+            assert_eq!(
+                name, "bosun",
+                "the channel script skips bosun at its fingerprint"
+            );
         }
         if name == "channel" {
             continue; // no ts-pnpm piece: no pnpm install
         }
+        // pnpm is not integrity-pinned (npm installs it by version): its guard stays a version check.
         let p = script
             .find("if [ \"$(cd / && pnpm --version")
             .unwrap_or_else(|| panic!("{name}: no pnpm guard"));
         let blk = &script[p..p + script[p..].find("\nfi\n").unwrap() + 4];
         let body = format!("PNPM_VERSION=12.15.0\n{blk}");
-        let same = run_with_stubs(&body, "0", "12.15.0");
+        let same = run_with_stubs(&body, "12.15.0");
         assert!(same.is_empty(), "{name}: pnpm re-installed: {same}");
-        let log = run_with_stubs(&body, "0", "12.14.0");
+        let log = run_with_stubs(&body, "12.14.0");
         assert!(log.contains("install -g pnpm@12.15.0"), "{name}: {log}");
     }
 }
