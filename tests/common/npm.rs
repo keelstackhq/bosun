@@ -1,5 +1,4 @@
 //! A fake npm registry and a repo with tool pins, shared by the pin tests.
-#![allow(dead_code)]
 
 use serde_json::json;
 use std::collections::HashMap;
