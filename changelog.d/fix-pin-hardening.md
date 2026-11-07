@@ -1,0 +1,1 @@
+- `bosun pin` refuses a plain-http `BOSUN_NPM_REGISTRY` off this machine and versions with leading zeros (spec D35).
