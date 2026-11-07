@@ -1,1 +1,0 @@
-- 2026-11-07 · setup fingerprint: symlinks, LC_ALL=C; D23 boundary note

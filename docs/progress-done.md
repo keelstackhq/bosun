@@ -345,3 +345,11 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-06 · operating-model #3 · R-weaken risk rule (base/head compare, capability weaken) · PR #428
 - 2026-11-06 · commit trailers follow-up · pre-create check, case-insensitive keys, #123 body, spec note · PR #431
 - 2026-11-06 · test: KNOWN_POLICIES in tests/pinned_config.rs lists `[approvals] policy` values per pinned release
+- 2026-11-07 · pin bosun 0.9.0 (.bosun/version, setup script, KNOWN lists)
+- 2026-11-07 · bootstrap hardening: bosun checkouts only, provenance for @latest, timeout -k
+- 2026-11-07 · per-repo setup script · run from the bootstrap inside the checkout; warm runs skip pinned tools
+- 2026-11-07 · `bosun pin --latest` (PR1 of tool pin automation): verified npm pins, `--check`, D35 · `tests/cli_pin.rs` 7/7
+- 2026-11-07 · pin PR dedupe + SessionStart pin notice (PR2 of tool pin automation), D35 · `tests/cli_pin_pr.rs` 3/3, `tests/cli_hook_pin.rs` 3/3
+- 2026-11-07 · paste-once setup bootstrap (`bosun setup-snippet`, README, adopt doc §9)
+- 2026-11-07 · setup fingerprint: symlinks, LC_ALL=C; D23 boundary note
+- 2026-11-07 · pin hardening: https-only `BOSUN_NPM_REGISTRY`, no leading zeros (D35) · `tests/cli_pin_registry.rs`

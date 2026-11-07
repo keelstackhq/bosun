@@ -1,1 +1,0 @@
-- 2026-11-07 · pin hardening: https-only `BOSUN_NPM_REGISTRY`, no leading zeros (D35) · `tests/cli_pin_registry.rs`
