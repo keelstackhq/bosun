@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Setup script for the Claude Code cloud environment of bosun and of repos that use it
-# (spec D23). Paste it into the environment's setup script; it runs as root before a session.
+# Per-repo setup script of bosun's Claude Code cloud environment (spec D23). Not pasted by hand:
+# the bosun bootstrap (`bosun setup-snippet`, pasted once into the environment) runs it as root
+# before a session, from inside each checkout, possibly on a warm container. Pins move only by
+# reviewed PRs that edit this file (R-ci reviews it).
 set -euo pipefail
 
-# Pinned tool versions. Move a pin with a PR that edits this file (R-ci reviews it).
+# Pinned tool versions.
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
 SPLICE_VERSION=0.4.0
@@ -84,13 +86,17 @@ if ! node_major_ok "$(command -v node || echo node)"; then
   fi
 fi
 
+# pnpm is not integrity-pinned (npm installs it by version), so its warm skip stays a version check.
 # pnpm 12 ships a native binary; its install.js puts it in place.
-npm install -g "pnpm@${PNPM_VERSION}"
-(cd "$(npm root -g)/pnpm" && node install.js) || true
+# From /: inside the checkout pnpm may follow package.json `packageManager` instead.
+if [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
+  npm install -g "pnpm@${PNPM_VERSION}"
+  (cd "$(npm root -g)/pnpm" && node install.js) || true
+fi
 
 # Rust (the version read above) and the cargo tools the gates run.
-# Without a toolchain file (the checkout does not exist yet when this runs) rustup's stable default
-# serves the tools, and rustup installs the checkout's pinned toolchain on first cargo use there.
+# Without a toolchain file in the checkout rustup's stable default serves the tools, and rustup
+# installs the checkout's pinned toolchain on first cargo use there.
 # A failed step warns and the script goes on: a failing setup script blocks every session.
 if [ -n "$RUST_VERSION" ]; then
   { rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy &&
@@ -117,14 +123,41 @@ tool_pack() {
   if [ "$got" != "$3" ]; then echo "setup-script: $1 does not match its pinned sha512; skipping it" >&2; return 1; fi
   echo "$2/$f"
 }
+# Where a verified install leaves its fingerprint. A later run skips a tool only when the current
+# fingerprint equals the record for that tool@pin, so no other program that prints the pinned
+# version is trusted.
+SETUP_STATE_DIR="${SETUP_STATE_DIR:-/var/lib/bosun-setup}"
+tool_arch() { case "$(uname -m)" in aarch64 | arm64) echo arm64 ;; *) echo x64 ;; esac; }
+# tool_fp <name> <arch>: sha256 over the resolved command's real path and every file of the tool's
+# launcher and linux packages; fails when PATH resolves to anything outside the launcher package.
+tool_fp() {
+  r="$(npm root -g 2>/dev/null)" && p="$(readlink -f "$(command -v "$1")" 2>/dev/null)" || return 1
+  case "$p" in "$r/@keelstackhq/$1/"*) ;; *) return 1 ;; esac
+  { echo "$p"; { find "$r/@keelstackhq/$1" "$r/@keelstackhq/$1-linux-$2" -type f -print0 2>/dev/null || true; } | sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1
+}
+# tool_warm <name> <arch> <record>: true when the installed tool matches its recorded fingerprint.
+tool_warm() { [ -f "$3" ] && fp="$(tool_fp "$1" "$2")" && [ "$fp" = "$(cat "$3")" ]; }
+# tool_record <name> <arch> <record>: after a verified install; never fails the script.
+tool_record() {
+  if fp="$(tool_fp "$1" "$2")" && mkdir -p "$SETUP_STATE_DIR" && printf '%s\n' "$fp" >"$3"; then :; else
+    echo "setup-script: could not record the fingerprint of $1; it installs again on the next run" >&2
+  fi
+}
 # install_tool <name> <version> <launcher sha512> <linux-x64 sha512> <linux-arm64 sha512>
 install_tool() {
   case "$(uname -m)" in aarch64 | arm64) a=arm64 s="$5" ;; *) a=x64 s="$4" ;; esac
+  rec="$SETUP_STATE_DIR/$1@$2.sha256"
+  # Warm container or a second checkout: skip only a tool whose fingerprint equals the one recorded
+  # at its verified install.
+  if tool_warm "$1" "$a" "$rec"; then return 0; fi
   t="$(mktemp -d)"
   if l="$(tool_pack "@keelstackhq/$1@$2" "$t" "$3")" && b="$(tool_pack "@keelstackhq/$1-linux-$a@$2" "$t" "$s")"; then
     # npm still reads the optional packages' metadata: a registry error must not stop the script.
-    npm install -g --ignore-scripts --omit=optional "$l" "$b" ||
+    if npm install -g --ignore-scripts --omit=optional "$l" "$b"; then
+      tool_record "$1" "$a" "$rec"
+    else
       echo "setup-script: $1 install failed; skipping $1" >&2
+    fi
   fi
 }
 install_tool splice "$SPLICE_VERSION" "$SPLICE_SHA512" "$SPLICE_LINUX_X64_SHA512" "$SPLICE_LINUX_ARM64_SHA512"
