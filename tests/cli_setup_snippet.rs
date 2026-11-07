@@ -133,6 +133,24 @@ fn each_checkout_runs_its_own_script_and_a_failure_only_warns() {
 }
 
 #[test]
+fn odd_checkout_names_still_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (work, bin, log) = (
+        tmp.path().join("w"),
+        tmp.path().join("bin"),
+        tmp.path().join("log"),
+    );
+    fs::create_dir_all(&bin).unwrap();
+    tools(&bin);
+    checkout(&work, "-x", true, Some("echo dash >>\"$LOG\""));
+    checkout(&work, "a b", true, Some("echo space >>\"$LOG\""));
+    let (code, err, l) = boot(&work, &bin, &log);
+    assert_eq!(code, 0);
+    assert!(l.contains("dash\n") && l.contains("space\n"), "{l}{err}");
+    assert!(!err.contains("failed"), "{err}");
+}
+
+#[test]
 fn the_current_dir_counts_as_a_checkout() {
     let tmp = tempfile::tempdir().unwrap();
     let (work, bin, log) = (
