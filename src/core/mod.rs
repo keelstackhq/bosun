@@ -20,6 +20,7 @@ pub mod lease;
 pub mod lessons;
 pub mod lockmerge;
 pub mod meta;
+pub mod pin;
 pub mod plan;
 pub mod prereqs;
 pub mod records;

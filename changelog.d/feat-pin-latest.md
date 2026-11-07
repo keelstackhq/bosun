@@ -1,0 +1,1 @@
+- `bosun pin --latest [--tool T] [--check]` moves the splice/hoist/berth/bosun pins (setup script, `.bosun/version`, channel template) to the newest npm release after checking every tarball against `dist.integrity`; refuses in a channel consumer (spec D35).
