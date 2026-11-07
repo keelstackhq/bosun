@@ -65,6 +65,20 @@ const KNOWN: &[(&str, &[&str])] = &[
             "intake",
         ],
     ),
+    (
+        "0.9.0",
+        &[
+            "project",
+            "stack",
+            "review",
+            "slack",
+            "cloud",
+            "prices",
+            "approvals",
+            "intake",
+            "trailers",
+        ],
+    ),
 ];
 
 /// The `.bosun/limits.toml` keys (`table.key`) each pinned release accepts.
@@ -168,6 +182,26 @@ const KNOWN_LIMITS: &[(&str, &[&str])] = &[
             "budget.per_task_usd",
         ],
     ),
+    (
+        "0.9.0",
+        &[
+            "sessions.max_depth",
+            "sessions.max_live_sessions",
+            "sessions.max_children",
+            "waves.max_parallel",
+            "waves.relay_waves",
+            "turns.build",
+            "turns.build_cap",
+            "turns.review",
+            "turns.fix_round",
+            "models.read",
+            "models.build",
+            "models.review",
+            "models.hard",
+            "budget.daily_usd",
+            "budget.per_task_usd",
+        ],
+    ),
 ];
 
 /// The `table.key` names of a limits file that `known` does not list.
@@ -195,6 +229,7 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
     ("0.6.0", &["bootstrap_until", "policy"]),
     ("0.7.0", &["bootstrap_until", "policy"]),
     ("0.8.0", &["bootstrap_until", "policy"]),
+    ("0.9.0", &["bootstrap_until", "policy"]),
 ];
 
 /// The `[approvals] policy` values each pinned release accepts (`autonomous` from 0.8.0).
@@ -204,6 +239,10 @@ const KNOWN_POLICIES: &[(&str, &[&str])] = &[
     ("0.7.0", &["owner", "owner-gated", "orchestrator"]),
     (
         "0.8.0",
+        &["owner", "owner-gated", "orchestrator", "autonomous"],
+    ),
+    (
+        "0.9.0",
         &["owner", "owner-gated", "orchestrator", "autonomous"],
     ),
 ];
