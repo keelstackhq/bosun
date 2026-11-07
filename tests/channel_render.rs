@@ -2024,11 +2024,19 @@ fn setup_scripts_skip_tools_only_at_their_recorded_fingerprint() {
         assert!(log.contains(packed), "{name}: no record: {log}");
         let log = run(rec);
         assert!(log.is_empty(), "{name}: recorded install re-fetched: {log}");
+        let log = run(&format!(
+            "{rec}export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8; "
+        ));
+        assert!(log.is_empty(), "{name}: another locale re-fetched: {log}");
+        assert!(script.contains("LC_ALL=C sort -z"), "{name}: sort by bytes");
         for change in [
             "echo x >>\"$ROOT/@keelstackhq/splice-linux-$A/bin/splice\"",
             "echo x >>\"$ROOT/@keelstackhq/splice/bin/splice.js\"",
             "rm \"$ROOT/@keelstackhq/splice-linux-$A/bin/splice\"",
             "export PATH=\"$D/wrap:$PATH\"",
+            // A planted symlink (no regular file changes) can win Node's module lookup.
+            "mkdir -p \"$ROOT/@keelstackhq/splice/node_modules\"; ln -s /tmp \"$ROOT/@keelstackhq/splice/node_modules/x\"",
+            "ln -s /tmp \"$ROOT/@keelstackhq/splice-linux-$A/y\"",
         ] {
             let log = run(&format!("{rec}{change}; "));
             assert!(log.contains(packed), "{name} {change}: {log}");
