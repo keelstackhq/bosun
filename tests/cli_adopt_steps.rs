@@ -69,11 +69,27 @@ fn existing_owner_and_key_leave_neither_step() {
 fn git_add_lists_what_adopt_wrote() {
     let t = tempfile::tempdir().unwrap();
     let c = commands(&adopt(t.path(), &["--owner", "alice"]));
-    assert_eq!(c[0], "git checkout -b bosun-setup");
     assert_eq!(
-        c[1],
-        "git add .bosun .claude .github docs/setup-script.sh governance"
+        c[0],
+        "git switch bosun-setup 2>/dev/null || git switch -c bosun-setup"
     );
+    let add: Vec<&str> = c[1].strip_prefix("git add ").unwrap().split(' ').collect();
+    for p in [
+        ".bosun/adopt.toml",
+        ".bosun/approvers.toml",
+        "docs/setup-script.sh",
+        "governance/owners.toml",
+    ] {
+        assert!(add.contains(&p), "{p} in {add:?}");
+    }
+    assert!(
+        add.iter().all(|p| p.contains('.') || p.contains('/')),
+        "{add:?}"
+    );
+    assert!(!add.contains(&".bosun"), "{add:?}");
+    let mut sorted = add.clone();
+    sorted.sort_unstable();
+    assert_eq!(add, sorted);
     assert_eq!(c[2], "git commit -m \"chore: set up bosun\"");
     assert_eq!(c[3], "git push -u origin bosun-setup");
     assert_eq!(c[4], "bosun doctor");
@@ -143,4 +159,22 @@ fn a_kept_owners_file_without_an_owner_says_to_edit_it() {
     let s = steps(&adopt(t.path(), &["--owner", "alice"]));
     assert!(!s.contains("Rerun with"), "{s}");
     assert!(s.contains("github = \\\"alice\\\""), "{s}");
+}
+
+#[test]
+fn dry_run_has_no_commands_and_steps_name_the_setup_snippet() {
+    let t = tempfile::tempdir().unwrap();
+    let v = adopt(t.path(), &["--owner", "alice", "--dry-run"]);
+    assert_eq!(v["data"]["commands"], serde_json::json!([]));
+    assert!(steps(&v).contains("bosun setup-snippet"), "{}", steps(&v));
+}
+
+#[test]
+fn an_owners_file_without_owner_gets_the_edit_step_on_the_first_run() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("governance")).unwrap();
+    std::fs::write(t.path().join("governance/owners.toml"), "# none yet\n").unwrap();
+    let s = steps(&adopt(t.path(), &[]));
+    assert!(!s.contains("Rerun with"), "{s}");
+    assert!(s.contains("<your-github-login>"), "{s}");
 }

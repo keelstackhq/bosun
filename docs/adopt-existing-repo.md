@@ -44,7 +44,7 @@ bosun adopt --dry-run                          # see what would change; writes n
 bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
 ```
 
-The JSON gives the exact commands in `data.commands`: `git checkout -b bosun-setup`, a `git add`
+The JSON gives the exact commands in `data.commands`: `git switch bosun-setup 2>/dev/null || git switch -c bosun-setup`, a `git add`
 of the paths adopt wrote, `git commit -m "chore: set up bosun"`, `git push -u origin bosun-setup`,
 then `bosun doctor`.
 

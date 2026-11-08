@@ -172,7 +172,7 @@ fn labels_wanted() -> Vec<(String, &'static str, &'static str)> {
 }
 
 /// What the owner still has to do. `owner_listed`: governance/owners.toml names a login (just
-/// written, or already there); `kept_owners`: the file existed and adopt kept it (with the
+/// written, or already there); `kept_owners`: the file exists but names nobody (with the
 /// `--owner` login, maybe empty); `has_key`: .bosun/approvers.toml holds a `[[key]]`.
 fn owner_steps(
     own_ci: bool,
@@ -202,23 +202,20 @@ fn owner_steps(
         |u| format!("the default branch at {u}"),
     );
     v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    v.push("Cloud sessions: paste `bosun setup-snippet` once as the setup script of your Claude Code environment (claude.ai/code > Environments); it never needs a change.".to_string());
     v.push("Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string());
     v.push("Run `bosun doctor --remote` to see what is still missing.".to_string());
     v
 }
 
-/// The shell commands that publish the setup branch; `git add` lists what adopt wrote.
+/// The shell commands that publish the setup branch; `git add` lists exactly the paths adopt
+/// wrote (a dry run wrote nothing, so it gets none).
 fn commands(changes: &[Value]) -> Vec<String> {
     let mut add: Vec<String> = changes
         .iter()
         .filter(|c| matches!(c["action"].as_str(), Some("create" | "update")))
         .filter_map(|c| c["path"].as_str())
-        .map(|p| match p.split_once('/') {
-            Some((d, _)) if [".bosun", ".github", ".claude", "governance"].contains(&d) => {
-                d.to_string()
-            }
-            _ => p.to_string(),
-        })
+        .map(str::to_string)
         .collect();
     add.sort();
     add.dedup();
@@ -227,7 +224,7 @@ fn commands(changes: &[Value]) -> Vec<String> {
         return vec!["bosun doctor".to_string()];
     }
     vec![
-        "git checkout -b bosun-setup".to_string(),
+        "git switch bosun-setup 2>/dev/null || git switch -c bosun-setup".to_string(),
         format!("git add {}", add.join(" ")),
         r#"git commit -m "chore: set up bosun""#.to_string(),
         "git push -u origin bosun-setup".to_string(),
@@ -463,7 +460,8 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     };
     let owner_listed = (!owner.is_empty() && action_of(&changes, OWNERS.path) == "create")
         || listed(OWNERS.path, "owner");
-    let owners_file = (action_of(&changes, OWNERS.path) == "kept").then_some(owner.as_str());
+    // An owners file that exists but names nobody: adopt never overwrites it, so edit it.
+    let owners_file = (!owner_listed && root.join(OWNERS.path).exists()).then_some(owner.as_str());
     let has_key = listed(".bosun/approvers.toml", "key");
     let settings_url = git_out(&root, &["remote", "get-url", "origin"])
         .filter(|u| u.contains("github.com"))
@@ -480,7 +478,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         "changes": changes,
         "labels": labels,
         "registry": registry_out,
-        "commands": commands(&changes),
+        "commands": if a.dry_run { Vec::new() } else { commands(&changes) },
         "owner_steps": owner_steps(own_ci, owner_listed, owners_file, has_key, settings_url.as_deref()),
     })))
 }
