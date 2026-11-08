@@ -237,7 +237,7 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             )
         })?;
     let token = token.trim().to_string();
-    let api = std::env::var("BOSUN_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into());
+    let api = crate::github::http::api_base();
     if !api_url_ok(&api) {
         return Err(BosunError::error(
             "BOSUN_GITHUB_API is not https://, so the owner token is not sent",
@@ -489,7 +489,7 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             "run `bosun approve --list` (it works in the cloud), confirm the head with the owner, then `bosun approve <pr>@<head> --sign-key <pem>`",
         )
     })?;
-    let api = std::env::var("BOSUN_GITHUB_API").unwrap_or_else(|_| "https://api.github.com".into());
+    let api = crate::github::http::api_base();
     if !api_url_ok(&api) {
         return Err(BosunError::error(
             "BOSUN_GITHUB_API is not https://, so the head it reports is not trusted for signing",
