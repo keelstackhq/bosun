@@ -42,12 +42,15 @@ creates the labels and the registry issue. It commits nothing; you commit and op
 ```bash
 bosun adopt --dry-run                          # see what would change; writes nothing
 bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
-git add .bosun .github .claude governance && git commit -m "chore: set up bosun"
 ```
+
+The JSON gives the exact commands in `data.commands`: `git switch bosun-setup 2>/dev/null || git switch -c bosun-setup`, a `git add`
+of the paths adopt wrote, `git commit -m "chore: set up bosun"`, `git push -u origin bosun-setup`,
+then `bosun doctor`.
 
 Existing files are never overwritten (`kept` in `data.changes`). `--no-remote` needs no token and
 skips the labels and the registry issue. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
-no-op. `data.owner_steps` lists what is left for you. Undo it with `bosun uninstall` (section 7).
+no-op. `data.owner_steps` lists only the steps still left for you (no owners step once `--owner` wrote the file; no key step once `.bosun/approvers.toml` has a key). Undo it with `bosun uninstall` (section 7).
 The rest of this section is the splice path.
 
 ### With splice: `bosun init`
