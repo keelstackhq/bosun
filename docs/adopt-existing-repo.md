@@ -20,16 +20,18 @@ Do these on a computer first; the phone steps come after.
 2. **Claude GitHub App.** Install it on the repo (GitHub → Settings → GitHub Apps). Cloud
    sessions reach GitHub through it.
 3. **Approval key.** Signed approvals need an ed25519 key. It signs for you, but the
-   orchestrator session that posts approvals holds it: make it in that session's container (or
-   copy the PEM there), never in the repo:
+   orchestrator session that posts approvals holds it: run this in that session's container
+   (the key goes to `~/.bosun/approver.pem`, mode 0600, never inside the repo):
 
    ```bash
-   openssl genpkey -algorithm ed25519 -out owner.pem
-   openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64   # the public key
+   bosun keygen --enroll   # makes the key and adds its public half to .bosun/approvers.toml
    ```
 
-   You put the public key in `.bosun/approvers.toml` (section 3). Without a key, you approve with
-   your own GitHub comment instead (section 6).
+   Commit `.bosun/approvers.toml` in the setup PR (section 3) and approve that PR yourself. To
+   do it by hand instead: `openssl genpkey -algorithm ed25519 -out owner.pem`, then
+   `openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64` gives the public key.
+   By hand, you put the public key in `.bosun/approvers.toml` (section 3). Without a key, you
+   approve with your own GitHub comment instead (section 6).
 4. **Labels.** bosun makes its own labels on first use (`bosun:state/*`, `bosun:registry`,
    `bosun:kind/*` and others). Make the kill-switch label yourself:
    `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
@@ -42,12 +44,15 @@ creates the labels and the registry issue. It commits nothing; you commit and op
 ```bash
 bosun adopt --dry-run                          # see what would change; writes nothing
 bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
-git add .bosun .github .claude governance && git commit -m "chore: set up bosun"
 ```
+
+The JSON gives the exact commands in `data.commands`: `git switch bosun-setup 2>/dev/null || git switch -c bosun-setup`, a `git add`
+of the paths adopt wrote, `git commit -m "chore: set up bosun"`, `git push -u origin bosun-setup`,
+then `bosun doctor`.
 
 Existing files are never overwritten (`kept` in `data.changes`). `--no-remote` needs no token and
 skips the labels and the registry issue. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
-no-op. `data.owner_steps` lists what is left for you. Undo it with `bosun uninstall` (section 7).
+no-op. `data.owner_steps` lists only the steps still left for you (no owners step once `--owner` wrote the file; no key step once `.bosun/approvers.toml` has a key). Undo it with `bosun uninstall` (section 7).
 The rest of this section is the splice path.
 
 ### With splice: `bosun init`
@@ -143,7 +148,8 @@ All but `splice.yml` run the release pinned in `.bosun/version`, never code from
 5. Optional: the Routines (janitor hourly, curator daily). `bosun doctor` prints their prompts.
 
 Check the result with `bosun doctor` (add `--remote` to also run `hoist check`). It lists each
-step as ok, warn, skipped or missing.
+step as ok, warn, skipped or missing. Without `GITHUB_TOKEN` it still runs the local checks and marks the GitHub ones skipped;
+`data.next_step` names the first missing step.
 
 ## 6. The first plan and the task loop
 

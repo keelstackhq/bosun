@@ -23,6 +23,11 @@ pub fn per_task(total: f64, count: usize) -> Option<f64> {
     (count > 0).then(|| round_usd(total / count as f64))
 }
 
+/// The PR number a `bosun revert` branch (`bosun/revert-<n>`) reverts.
+pub fn revert_target(head_ref: &str) -> Option<u64> {
+    head_ref.strip_prefix("bosun/revert-")?.parse().ok()
+}
+
 /// Mean of the task costs, `None` when there are none.
 pub fn mean(costs: &[f64]) -> Option<f64> {
     per_task(costs.iter().sum(), costs.len())
@@ -48,6 +53,13 @@ mod tests {
         assert_eq!(mean(&[]), None);
         assert_eq!(per_task(9.0, 2), Some(4.5));
         assert_eq!(mean(&[1.0, 2.0, 3.0]), Some(2.0));
+    }
+
+    #[test]
+    fn revert_target_reads_the_bosun_revert_branch() {
+        assert_eq!(revert_target("bosun/revert-30"), Some(30));
+        assert_eq!(revert_target("bosun/revert-x"), None);
+        assert_eq!(revert_target("feat/revert-30"), None);
     }
 
     #[test]

@@ -1,0 +1,1 @@
+- A pinned release with no entry in `tests/pinned_config.rs` is checked against the newest older entry, so a pin bump needs no hand-added `KNOWN` entry.

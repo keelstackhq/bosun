@@ -1,0 +1,1 @@
+- `bosun adopt` prints only the owner steps still left, the exact setup commands in `data.commands`, and the branch-protection settings link.

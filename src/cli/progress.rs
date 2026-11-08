@@ -7,7 +7,7 @@ use serde_json::json;
 use super::ProgressArgs;
 use crate::app::{App, notes, task_meta};
 use crate::cli::lesson::LESSON_LABEL;
-use crate::core::cost::{in_window, mean, per_task, round_usd, window_start};
+use crate::core::cost::{in_window, mean, per_task, revert_target, round_usd, window_start};
 use crate::core::lessons::{hits_by_week, is_mechanized};
 use crate::core::records::{Record, parse_record, spend_total};
 use crate::github::{Issue, IssueState};
@@ -24,6 +24,8 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
     let since = window_start(now, args.days);
     // (issue, title, closed_at, usd) of the task issues merged in the window.
     let mut tasks: Vec<(u64, String, String, f64)> = Vec::new();
+    // PR numbers of the task PRs, by task; a task whose PR a merged revert PR undid is reverted.
+    let mut task_prs: Vec<(u64, u64)> = Vec::new();
     for issue in gh.list_issues(&[], IssueState::All)? {
         if task_meta(&issue).is_none() {
             continue;
@@ -40,10 +42,33 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
         if !parse_rfc3339(&closed_at).is_some_and(|t| in_window(t, since, now)) {
             continue;
         }
-        let usd = spend_total(&notes(gh, issue.number)?, None);
+        let notes = notes(gh, issue.number)?;
+        let pr = notes
+            .iter()
+            .rev()
+            .find_map(|n| match parse_record(&n.body) {
+                Some(Record::TaskPr { pr, .. }) => Some(pr),
+                _ => None,
+            });
+        task_prs.extend(pr.map(|pr| (issue.number, pr)));
+        let usd = spend_total(&notes, None);
         tasks.push((issue.number, issue.title, closed_at, round_usd(usd)));
     }
     tasks.sort_by_key(|t| t.0);
+    // Lists do not say `merged`, so each closed revert-branch PR is fetched.
+    let mut undone: Vec<u64> = Vec::new();
+    if !task_prs.is_empty() {
+        for p in gh.list_pulls(None, IssueState::Closed)? {
+            let Some(target) = revert_target(&p.head_ref) else {
+                continue;
+            };
+            if gh.get_pull(p.number)?.is_some_and(|p| p.merged) {
+                undone.push(target);
+            }
+        }
+    }
+    let reverted = task_prs.iter().filter(|t| undone.contains(&t.1)).count();
+    let held = tasks.len() - reverted;
     let spend_usd = match registry::load(gh)? {
         // Records in [since, now]: a record stamped after now (clock skew) is left out.
         Some((_, n)) => {
@@ -64,6 +89,9 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
         "merged": tasks.len(),
         "spend_usd": spend_usd,
         "cost_per_merged_task_usd": per_task(spend_usd, tasks.len()),
+        "reverted": reverted,
+        "held": held,
+        "cost_per_held_task_usd": per_task(spend_usd, held),
         "task_cost_avg_usd": mean(&costs),
         "tasks": list,
     })))
