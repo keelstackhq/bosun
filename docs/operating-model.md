@@ -92,7 +92,7 @@ table).
 | Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are R-gate; label-lock is not a sandbox | partial |
 | Autonomy earned per change class | static delegate class; not earned from escape or revert rates; no automatic narrowing after an incident | partial |
 | Challenge in proportion | two levels only (`normal`, `high`) | partial |
-| Cost per outcome | `bosun progress`: cost per merged task; budget refuses new work at 80 % (exit 6) and returns stop actions for the caller; not per outcome that holds; no human minutes | partial |
+| Cost per outcome | `bosun progress`: cost per merged task; budget refuses new work at 80 % (exit 6) and returns stop actions for the caller; `held` and `cost_per_held_task_usd` leave out tasks whose PR was reverted; no human minutes | partial |
 | Approval on exact commit, with identity | head-SHA approvals; signing keys from default-branch `approvers.toml` | enforced |
 | Preview and cancel | `--dry-run` (some commands), `bosun hold`, halt issue | partial |
 | Rubber-stamp approvals | stale-head rule only | partial |
@@ -122,7 +122,7 @@ candidates are gated in practice.
 | 15 | Review-pack delta shows the PR's own changes | after a merge of main the delta is cut to the PR's files, with the PR's patches | 30 | yes (R-gate) — building |
 | 10 | Mark untrusted text everywhere | the pack names its untrusted fields and tells the reviewer they are data; every spawn prompt says so | 30 | yes (R-gate) — building |
 | 16 | bosun's own pin without a hand-added `KNOWN` entry | `tests/pinned_config.rs` falls back to the newest older release: it only knows fewer keys | 10 (test) | no — done |
-| 9 | Cost per outcome that holds | `bosun progress`: a merged task whose PR was reverted is not a held outcome | 60 | no — building |
+| 9 | Cost per outcome that holds | `bosun progress`: a merged task whose PR was reverted is not a held outcome | 60 | no — done |
 | 8 | New model resets trust | record the model per verdict; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval | 150 | yes (R-gate) — building |
 | 17 | Plugin marketplace SHAs by `bosun pin --latest` | pin the superpowers and caveman SHAs in `.claude-plugin/marketplace.json` and the setup script from the plugin repos' heads | 80 | no (writes R-gov files, so the pin PR is gated) — next |
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298); ends self-declared reviewer sessions and models | 200 | yes (R-gate, workflow: owner) — deferred: needs the owner's verdict workflow change |
