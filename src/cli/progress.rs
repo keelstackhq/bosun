@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ProgressArgs;
-use crate::app::{App, notes, task_meta};
+use crate::app::{App, notes, task_meta, trusted_notes};
 use crate::cli::lesson::LESSON_LABEL;
 use crate::core::cost::{in_window, mean, per_task, revert_target, round_usd, window_start};
 use crate::core::lessons::{hits_by_week, is_mechanized};
@@ -43,27 +43,29 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
             continue;
         }
         let notes = notes(gh, issue.number)?;
-        let pr = notes
-            .iter()
-            .rev()
-            .find_map(|n| match parse_record(&n.body) {
+        // The task's PR only from writers' records: a reader cannot mark a task reverted.
+        let pr = trusted_notes(gh, issue.number)?.iter().rev().find_map(|n| {
+            match parse_record(&n.body) {
                 Some(Record::TaskPr { pr, .. }) => Some(pr),
                 _ => None,
-            });
+            }
+        });
         task_prs.extend(pr.map(|pr| (issue.number, pr)));
         let usd = spend_total(&notes, None);
         tasks.push((issue.number, issue.title, closed_at, round_usd(usd)));
     }
     tasks.sort_by_key(|t| t.0);
-    // Lists do not say `merged`, so each closed revert-branch PR is fetched.
+    // `bosun revert <pr>` opens its PR from `bosun/revert-<pr>` in this repo: one lookup by that
+    // head per task PR (a fork's branch has another owner). Lists do not say `merged`.
     let mut undone: Vec<u64> = Vec::new();
-    if !task_prs.is_empty() {
-        for p in gh.list_pulls(None, IssueState::Closed)? {
-            let Some(target) = revert_target(&p.head_ref) else {
-                continue;
-            };
-            if gh.get_pull(p.number)?.is_some_and(|p| p.merged) {
-                undone.push(target);
+    for (_, pr) in &task_prs {
+        let head = format!("{}:bosun/revert-{pr}", app.ctx.repo.owner);
+        for p in gh.list_pulls(Some(&head), IssueState::Closed)? {
+            if revert_target(&p.head_ref) == Some(*pr)
+                && gh.get_pull(p.number)?.is_some_and(|p| p.merged)
+            {
+                undone.push(*pr);
+                break;
             }
         }
     }
