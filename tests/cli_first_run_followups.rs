@@ -37,6 +37,13 @@ fn keyless_repo() -> tempfile::TempDir {
 #[test]
 fn a_kept_keyless_approvers_file_is_still_added() {
     let t = keyless_repo();
+    let ok = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(t.path())
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
     let c = commands(&adopt(t.path(), &["--owner", "alice"]));
     let add: Vec<&str> = c[1].strip_prefix("git add ").unwrap().split(' ').collect();
     assert_eq!(
@@ -52,12 +59,37 @@ fn a_kept_keyless_approvers_file_is_still_added() {
 }
 
 #[test]
-fn a_noop_rerun_with_the_key_step_still_commits_the_approvers_file() {
+fn a_noop_rerun_adds_the_approvers_file_only_when_git_shows_it_changed() {
     let t = keyless_repo();
+    let git = |a: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(t.path())
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(a)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "{a:?}");
+    };
+    git(&["init", "-q"]);
     adopt(t.path(), &["--owner", "alice"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "setup", "--no-verify"]);
+    // Committed and unchanged: nothing to commit, so only the check is left.
     let v = adopt(t.path(), &["--owner", "alice"]);
     assert!(v["data"]["owner_steps"].to_string().contains("keygen"));
-    let c = commands(&v);
+    assert_eq!(commands(&v), vec!["bosun doctor".to_string()]);
+    // Changed after the commit (as `bosun keygen --enroll` does): commit it.
+    std::fs::write(t.path().join(".bosun/approvers.toml"), "# edited\n").unwrap();
+    let c = commands(&adopt(t.path(), &["--owner", "alice"]));
     assert_eq!(c[1], "git add .bosun/approvers.toml", "{c:?}");
     assert_eq!(c.last().unwrap(), "bosun doctor");
 }

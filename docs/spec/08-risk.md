@@ -118,7 +118,7 @@ High-risk PRs:
   delegate key, on a PR that changes or renames away `.bosun/approvers.toml`,
   `governance/owners.toml` or a `CODEOWNERS` file (root, `.github/`, `docs/`; `TRUST_FILES` in
   `src/core/approve.rs`), or on a PR whose diff bosun could not see whole (R-unseen: it may hide
-  one), so a compromised key cannot enroll keys or owners; risk-check logs why to stderr. A removed key stops counting once that PR merges. `bosun keygen [--out PEM] [--id ID] [--role owner|delegate] [--enroll]` makes the key (PKCS#8 PEM, mode 0600, default `~/.bosun/approver.pem`, refused inside any git worktree, never overwritten) and prints or, with `--enroll`, appends its block. By hand, make a key with A bare-repo dotfiles setup (`git --git-dir=~/.cfg --work-tree=~`) has no `.git` entry and is not detected, so keep `~/.bosun` out of it.
+  one), so a compromised key cannot enroll keys or owners; risk-check logs why to stderr. A removed key stops counting once that PR merges. `bosun keygen [--out PEM] [--id ID] [--role owner|delegate] [--enroll]` makes the key (PKCS#8 PEM, mode 0600, default `~/.bosun/approver.pem`, refused inside any git worktree, never overwritten) and prints or, with `--enroll`, appends its block. A bare-repo dotfiles setup (`git --git-dir=~/.cfg --work-tree=~`) has no `.git` entry and is not detected, so keep `~/.bosun` out of it. By hand, make a key with
   `openssl genpkey -algorithm ed25519 -out key.pem`; its public key is
   `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64`. risk.yml runs the
   release pinned in `.bosun/version`, so signed approvals count in CI once that pin is a

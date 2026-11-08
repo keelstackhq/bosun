@@ -234,6 +234,15 @@ fn commands(changes: &[Value], enroll_target: Option<&str>) -> Vec<String> {
     ]
 }
 
+/// `rel` when git shows it new or changed (e.g. after `bosun keygen --enroll`); `None` when it
+/// is committed and clean, absent, or the root is not a git repo.
+fn uncommitted<'a>(root: &Path, rel: &'a str) -> Option<&'a str> {
+    if !root.join(rel).exists() {
+        return None;
+    }
+    git_out(root, &["status", "--porcelain", "--", rel]).map(|_| rel)
+}
+
 /// Every path adopt can write; `bosun uninstall` deletes nothing else.
 pub fn known_paths() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = templates().iter().map(|t| t.path).collect();
@@ -480,7 +489,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         "changes": changes,
         "labels": labels,
         "registry": registry_out,
-        "commands": if a.dry_run { Vec::new() } else { commands(&changes, (!has_key).then_some(".bosun/approvers.toml").filter(|p| root.join(p).exists())) },
+        "commands": if a.dry_run { Vec::new() } else { commands(&changes, uncommitted(&root, ".bosun/approvers.toml")) },
         "owner_steps": owner_steps(own_ci, owner_listed, owners_file, has_key, settings_url.as_deref()),
     })))
 }

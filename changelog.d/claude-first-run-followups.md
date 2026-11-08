@@ -1,1 +1,1 @@
-- `bosun adopt` adds `.bosun/approvers.toml` to `data.commands` while the keygen step shows; `bosun doctor` names a malformed `BOSUN_GITHUB_API` instead of blaming the token.
+- `bosun adopt` adds `.bosun/approvers.toml` to `data.commands` when git shows it new or changed (after `bosun keygen --enroll`); `bosun doctor` names a malformed `BOSUN_GITHUB_API`.
