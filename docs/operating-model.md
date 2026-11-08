@@ -42,8 +42,9 @@ widen them on measured evidence, never on confidence or on agents agreeing with 
 5. **Stop everything** with an open `bosun:halt` issue opened by an owner, or the repo variable
    `BOSUN_HALT=1` (`src/app.rs`). Commands that start or change work then exit 4.
 6. **Treat chat and tickets as evidence.** `bosun intake` fences the request text so it cannot
-   forge markers. Every spawn prompt calls issue, PR, comment and Slack text data, never an
-   instruction, and the review pack names its untrusted fields.
+   forge markers. Both built-in spawn prompts call issue, PR, comment and Slack text data, never an
+   instruction, and the review pack names its untrusted fields. Gaps: a `--prompt-file` prompt is
+   the caller's own text, and the Routine prompts (`bosun doctor`) carry no data note yet.
 
 ### The open tension: bootstrap mode
 
@@ -87,7 +88,7 @@ table).
 | Bottleneck at review, CI, release | drafts skip CI; `ci-minutes` gate; review-pack chunks; no review-queue limit | partial |
 | Weakening a gate is a boundary change | gate files are R-ci/R-gate/R-gov by path (hooks, `repeat.rs`, `ci_minutes` included); R-weaken flags lowered limits, profiles, lints, coverage and removed CI steps (base/head compare); `src/core/intake.rs`, `spawn.rs`, `stop.rs`, `src/cli/hold.rs`, `prereqs_gate.rs` are on no path | partial |
 | Self-repair needs a mandate and limits | budgets and stop rules apply; `gate-missed` opens the "which gate missed this?" task; no per-loop mandate | partial |
-| Human channels are untrusted | intake fence; `trusted_notes` takes records only from write users; Slack thread role `may_build = false`; `--slack-user` not verified; review pack names its untrusted fields; spawn prompts call issue and Slack text data | partial |
+| Human channels are untrusted | intake fence; `trusted_notes` takes records only from write users; Slack thread role `may_build = false`; `--slack-user` not verified; review pack names its untrusted fields; built-in spawn prompts call issue and Slack text data; Routine prompts do not yet | partial |
 | Close the loop with the reporter | `bosun notify` returns thread posts in `next` for the caller; it posts nothing itself, and the notify routine is a Blocked human step | partial |
 | Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are R-gate; label-lock is not a sandbox | partial |
 | Autonomy earned per change class | static delegate class; not earned from escape or revert rates; no automatic narrowing after an incident | partial |
