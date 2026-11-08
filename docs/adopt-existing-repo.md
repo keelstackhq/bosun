@@ -32,6 +32,8 @@ Do these on a computer first; the phone steps come after.
    `openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64` gives the public key.
    By hand, you put the public key in `.bosun/approvers.toml` (section 3). Without a key, you
    approve with your own GitHub comment instead (section 6).
+   A bare-repo dotfiles setup (`git --git-dir=~/.cfg --work-tree=~`) has no `.git` entry in the
+   home directory and is not detected, so keep `~/.bosun` out of it.
 4. **Labels.** bosun makes its own labels on first use (`bosun:state/*`, `bosun:registry`,
    `bosun:kind/*` and others). Make the kill-switch label yourself:
    `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
