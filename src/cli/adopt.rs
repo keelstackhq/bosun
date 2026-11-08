@@ -172,17 +172,26 @@ fn labels_wanted() -> Vec<(String, &'static str, &'static str)> {
 }
 
 /// What the owner still has to do. `owner_listed`: governance/owners.toml names a login (just
-/// written, or already there); `has_key`: .bosun/approvers.toml holds a `[[key]]`.
+/// written, or already there); `kept_owners`: the file existed and adopt kept it (with the
+/// `--owner` login, maybe empty); `has_key`: .bosun/approvers.toml holds a `[[key]]`.
 fn owner_steps(
     own_ci: bool,
     owner_listed: bool,
+    kept_owners: Option<&str>,
     has_key: bool,
     settings_url: Option<&str>,
 ) -> Vec<String> {
     // With a ci.yml of its own, bosun's aggregate job is `bosun-ok` and `ci-ok` stays yours.
     let first = if own_ci { "bosun-ok" } else { "ci-ok" };
     let mut v = Vec::new();
-    if !owner_listed {
+    if let (false, Some(login)) = (owner_listed, kept_owners) {
+        let login = if login.is_empty() {
+            "<your-github-login>"
+        } else {
+            login
+        };
+        v.push(format!("Add yourself to governance/owners.toml (adopt keeps an existing file): [[owner]] github = \"{login}\"."));
+    } else if !owner_listed {
         v.push("Rerun with `bosun adopt --owner <your-github-login>` (it writes governance/owners.toml).".to_string());
     }
     if !has_key {
@@ -213,14 +222,17 @@ fn commands(changes: &[Value]) -> Vec<String> {
         .collect();
     add.sort();
     add.dedup();
-    let mut v = vec!["git checkout -b bosun-setup".to_string()];
-    if !add.is_empty() {
-        v.push(format!("git add {}", add.join(" ")));
+    if add.is_empty() {
+        // Nothing new to commit (a rerun): only the check is left.
+        return vec!["bosun doctor".to_string()];
     }
-    v.push(r#"git commit -m "chore: set up bosun""#.to_string());
-    v.push("git push -u origin bosun-setup".to_string());
-    v.push("bosun doctor".to_string());
-    v
+    vec![
+        "git checkout -b bosun-setup".to_string(),
+        format!("git add {}", add.join(" ")),
+        r#"git commit -m "chore: set up bosun""#.to_string(),
+        "git push -u origin bosun-setup".to_string(),
+        "bosun doctor".to_string(),
+    ]
 }
 
 /// Every path adopt can write; `bosun uninstall` deletes nothing else.
@@ -439,16 +451,20 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         None => "create",
     };
     changes.push(json!({"path": MANIFEST_PATH, "action": manifest_action}));
-    let listed = |rel: &str, marker: &str| {
+    // A file lists `table` when it parses and holds at least one `[[table]]`.
+    let listed = |rel: &str, table: &str| {
         read_opt(&root.join(rel)).ok().flatten().is_some_and(|b| {
             String::from_utf8_lossy(&b)
-                .lines()
-                .any(|l| l.trim() == marker)
+                .parse::<toml::Table>()
+                .ok()
+                .and_then(|t| t.get(table)?.as_array().map(|a| !a.is_empty()))
+                .unwrap_or(false)
         })
     };
     let owner_listed = (!owner.is_empty() && action_of(&changes, OWNERS.path) == "create")
-        || listed(OWNERS.path, "[[owner]]");
-    let has_key = listed(".bosun/approvers.toml", "[[key]]");
+        || listed(OWNERS.path, "owner");
+    let owners_file = (action_of(&changes, OWNERS.path) == "kept").then_some(owner.as_str());
+    let has_key = listed(".bosun/approvers.toml", "key");
     let settings_url = git_out(&root, &["remote", "get-url", "origin"])
         .filter(|u| u.contains("github.com"))
         .and_then(|u| parse_remote_url(&u))
@@ -465,7 +481,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         "labels": labels,
         "registry": registry_out,
         "commands": commands(&changes),
-        "owner_steps": owner_steps(own_ci, owner_listed, has_key, settings_url.as_deref()),
+        "owner_steps": owner_steps(own_ci, owner_listed, owners_file, has_key, settings_url.as_deref()),
     })))
 }
 

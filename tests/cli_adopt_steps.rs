@@ -106,3 +106,41 @@ fn branch_protection_link_from_a_github_origin() {
         "{s}"
     );
 }
+
+#[test]
+fn a_rerun_with_nothing_new_suggests_no_commit() {
+    let t = tempfile::tempdir().unwrap();
+    adopt(t.path(), &["--owner", "alice"]);
+    let c = commands(&adopt(t.path(), &["--owner", "alice"]));
+    assert_eq!(c, vec!["bosun doctor".to_string()], "{c:?}");
+}
+
+#[test]
+fn spaced_toml_headers_count_as_listed() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("governance")).unwrap();
+    std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
+    std::fs::write(
+        t.path().join("governance/owners.toml"),
+        "[[ owner ]] # me\ngithub = \"bob\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join(".bosun/approvers.toml"),
+        "[[ key ]]\nid = \"bob\"\ned25519 = \"x\"\n",
+    )
+    .unwrap();
+    let s = steps(&adopt(t.path(), &[]));
+    assert!(!s.contains("governance/owners.toml"), "{s}");
+    assert!(!s.contains("bosun keygen"), "{s}");
+}
+
+#[test]
+fn a_kept_owners_file_without_an_owner_says_to_edit_it() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("governance")).unwrap();
+    std::fs::write(t.path().join("governance/owners.toml"), "# none yet\n").unwrap();
+    let s = steps(&adopt(t.path(), &["--owner", "alice"]));
+    assert!(!s.contains("Rerun with"), "{s}");
+    assert!(s.contains("github = \\\"alice\\\""), "{s}");
+}

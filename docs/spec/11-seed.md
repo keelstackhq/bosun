@@ -99,7 +99,7 @@ files. Flags: `--stack rust|ts-pnpm|other` (repeatable; default detected from `C
 (no token; no labels or registry issue). Unless `--no-remote`, it creates the missing labels
 (`bosun:halt`, `bosun:registry`, the task state labels) and the registry issue; `--dry-run` only reads.
 
-`--bosun-version` must be X.Y.Z (else exit 2). `--dry-run` without a token still lists the files; labels and registry then read `unknown`. An unreadable file is an error, never "absent". The owner step names `bosun-ok` as the required check when the repo has its own `ci-ok` job.
+`--bosun-version` must be X.Y.Z (else exit 2). `--dry-run` without a token still lists the files; labels and registry then read `unknown`. An unreadable file is an error, never "absent". The owner step names `bosun-ok` as the required check when the repo has its own `ci-ok` job. `data.owner_steps` lists only what is left: the owners step when `governance/owners.toml` has no `[[owner]]` (rerun with `--owner`, or edit a kept file), the key step (`bosun keygen --enroll`) when `.bosun/approvers.toml` has no `[[key]]`, then branch protection (with the settings link when origin is on github.com), the setup PR and `bosun doctor --remote`. `data.commands` is the shell sequence that publishes the setup: a branch, `git add` of exactly what adopt wrote, commit, push and `bosun doctor`; with nothing written it is only `bosun doctor`.
 
 `.bosun/adopt.toml` records the bosun version, each written file with its FNV-1a 64 hash, the labels
 adopt created and the registry issue it opened. It is rewritten after the GitHub step and after each file, so a failure midway still leaves a record. A rerun merges into it, so a second run is all
