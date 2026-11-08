@@ -1,0 +1,1 @@
+- An empty or blank `BOSUN_GITHUB_API` counts as unset (api.github.com), for the client and `bosun approve` alike.
