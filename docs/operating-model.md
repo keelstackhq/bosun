@@ -72,7 +72,7 @@ weak point: the verdict's reviewer session and model are self-declared (see the 
 | Escaped defect → tighter loop | `main-triage` bisects, `revert` opens a mainfix PR, main-red opens a lesson; `lesson triage --as mechanizable` opens a process-fix task (manual); main-red, `revert` and `gate-missed` open a "Which gate missed this?" task | enforced |
 | No flaky tests | `flake` task kind and intake source exist; no detector, no refusal | partial |
 | Production telemetry as a test | — | missing |
-| Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate and two-verdict counts; after a merge of main the delta pack shows main's files too | partial |
+| Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate and two-verdict counts | partial |
 | Model reliability varies by task | `[models]` tiers; stop rules move to a stronger tier (`src/core/stop.rs`); `spawn` refuses `[1m]` models; no per-model reliability record | partial |
 | New model resets trust | — | missing |
 | Rules enforce themselves | gates; `test-integrity` refuses deleted tests, new skips, fewer asserts; `ci-minutes` lints workflows | enforced |
@@ -116,7 +116,7 @@ candidates are gated in practice.
 | 3 | Flag PRs that weaken a gate | R-weaken: base/head compare of limits, profiles, lints, CI steps | 250 | done |
 | 5 | Commit trailers `Bosun-Session`, `Bosun-Model`, `Bosun-Task` | `bosun pr` checks commits | 150 | done (#427) |
 | 6 | Self-repair opens "which gate missed this?" | `gate-missed` from main-red and `revert` | 120 | done |
-| 15 | Review-pack delta shows the PR's own changes | after a merge of main the delta is cut to the PR's files, with the PR's patches | 30 | yes (R-gate) — building |
+| 15 | Review-pack delta shows the PR's own changes | after a merge of main the delta is cut to the PR's files, with the PR's patches | 30 | yes (R-gate) — done |
 | 10 | Mark untrusted text everywhere | the pack names its untrusted fields and tells the reviewer they are data; every spawn prompt says so | 30 | yes (R-gate) — building |
 | 16 | bosun's own pin without a hand-added `KNOWN` entry | `tests/pinned_config.rs` falls back to the newest older release: it only knows fewer keys | 10 (test) | no — building |
 | 9 | Cost per outcome that holds | `bosun progress`: a merged task whose PR was reverted is not a held outcome | 60 | no — building |
