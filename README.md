@@ -22,8 +22,9 @@ bosun keygen --enroll                      # approval key: public half to .bosun
 bosun doctor                               # what is left, each with the exact fix
 ```
 
-Run `bosun keygen` on the machine that signs approvals: in the orchestrator session's container
-if you let it sign for you (it asks you first, in the chat).
+Run `bosun keygen --enroll` only on the machine that signs approvals. If the orchestrator
+session signs for you, skip it here: that session runs it in its container (it asks you first)
+and opens a PR with `.bosun/approvers.toml`, which you approve on GitHub.
 
 Then run the commands in adopt's `data.commands` (branch, `git add`, commit, push), open the
 setup PR and merge it yourself. The rest, once, each listed by `bosun doctor`:
@@ -37,9 +38,10 @@ setup PR and merge it yourself. The rest, once, each listed by `bosun doctor`:
 4. Cloud sessions: paste `bosun setup-snippet` once as the environment's setup script
    (claude.ai/code > Environments > Setup script). It never needs a change.
 
-Rerun `bosun doctor` until nothing is `missing` except, if you skip them, the optional Routines
-(create them from `data.routines`, then set `BOSUN_ROUTINES_OK=1`). Long version, with
-undo: [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md).
+Rerun `bosun doctor` until only `plan` is `missing` (plus, on a computer, `plugins`, which
+cloud sessions install, and the optional Routines: create them from `data.routines`, then set
+`BOSUN_ROUTINES_OK=1`). Then write your first plan: section 6 of
+[docs/adopt-existing-repo.md](docs/adopt-existing-repo.md), the long version, which also has undo.
 
 ## For agents
 
