@@ -42,8 +42,10 @@ widen them on measured evidence, never on confidence or on agents agreeing with 
 5. **Stop everything** with an open `bosun:halt` issue opened by an owner, or the repo variable
    `BOSUN_HALT=1` (`src/app.rs`). Commands that start or change work then exit 4.
 6. **Treat chat and tickets as evidence.** `bosun intake` fences the request text so it cannot
-   forge markers. The spawn prompt for a Slack-thread plan task calls that text data, never an
-   instruction; other prompts do not say so yet.
+   forge markers. Both built-in spawn prompts call issue, PR, comment and Slack text data, never an
+   instruction, and quote the epic title as data; the review pack names its untrusted fields. Gaps:
+   a `--prompt-file` prompt is the caller's own text, and the Routine prompts (`bosun doctor`)
+   carry no data note yet.
 
 ### The open tension: bootstrap mode
 
@@ -87,7 +89,7 @@ table).
 | Bottleneck at review, CI, release | drafts skip CI; `ci-minutes` gate; review-pack chunks; no review-queue limit | partial |
 | Weakening a gate is a boundary change | gate files are R-ci/R-gate/R-gov by path (hooks, `repeat.rs`, `ci_minutes` included); R-weaken flags lowered limits, profiles, lints, coverage and removed CI steps (base/head compare); `src/core/intake.rs`, `spawn.rs`, `stop.rs`, `src/cli/hold.rs`, `prereqs_gate.rs` are on no path | partial |
 | Self-repair needs a mandate and limits | budgets and stop rules apply; `gate-missed` opens the "which gate missed this?" task; no per-loop mandate | partial |
-| Human channels are untrusted | intake fence; `trusted_notes` takes records only from write users; Slack thread role `may_build = false`; `--slack-user` not verified | partial |
+| Human channels are untrusted | intake fence; `trusted_notes` takes records only from write users; Slack thread role `may_build = false`; `--slack-user` not verified; review pack names its untrusted fields; built-in spawn prompts call issue and Slack text data; Routine prompts do not yet | partial |
 | Close the loop with the reporter | `bosun notify` returns thread posts in `next` for the caller; it posts nothing itself, and the notify routine is a Blocked human step | partial |
 | Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are R-gate; label-lock is not a sandbox | partial |
 | Autonomy earned per change class | static delegate class; not earned from escape or revert rates; no automatic narrowing after an incident | partial |
@@ -120,7 +122,7 @@ candidates are gated in practice.
 | 5 | Commit trailers `Bosun-Session`, `Bosun-Model`, `Bosun-Task` | `bosun pr` checks commits | 150 | done (#427) |
 | 6 | Self-repair opens "which gate missed this?" | `gate-missed` from main-red and `revert` | 120 | done |
 | 15 | Review-pack delta shows the PR's own changes | after a merge of main the delta is cut to the PR's files, with the PR's patches | 30 | yes (R-gate) — building |
-| 10 | Mark untrusted text everywhere | the pack names its untrusted fields and tells the reviewer they are data; every spawn prompt says so | 30 | yes (R-gate) — building |
+| 10 | Mark untrusted text everywhere | the pack names its untrusted fields and tells the reviewer they are data; every spawn prompt says so | 30 | yes (R-gate) — done (Routine prompts: next) |
 | 16 | bosun's own pin without a hand-added `KNOWN` entry | `tests/pinned_config.rs` falls back to the newest older release: it only knows fewer keys | 10 (test) | no — done |
 | 9 | Cost per outcome that holds | `bosun progress`: held = merged and not undone by a merged `bosun revert` PR; no escape window yet, a revert made by hand is missed | 60 | no — done |
 | 8 | New model resets trust | record the model per verdict; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval | 150 | yes (R-gate) — building |

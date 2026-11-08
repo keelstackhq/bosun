@@ -1,0 +1,1 @@
+- review-pack names its `untrusted` fields and tells the reviewer they are data; both built-in spawn prompts call issue, PR, comment and Slack text untrusted data, and the default prompt quotes the epic title as data.
