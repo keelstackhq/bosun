@@ -127,7 +127,8 @@ owner then pastes the setup script again. The gates run the pinned release, whos
 release adds to `.bosun/bosun.toml` (such as `[approvals] bootstrap_until`, D-012) is set in this
 same pin PR, never before, and only then does the release need an entry in the `KNOWN` tables of
 `tests/pinned_config.rs`: an unlisted release is checked against the newest older entry. A release
-that removes or renames a key needs its own entry too.
+that removes or renames a key breaks `release_tables_only_grow`: change that test and `known_for`
+with it so no lookup falls back across that release.
 
 For v0.1.0, an agent opened one PR, and the owner approved it on its head SHA (R-gov, R-ci). It:
 
