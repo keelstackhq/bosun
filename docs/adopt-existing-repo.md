@@ -1,8 +1,7 @@
 # Adopt bosun on an existing repo
 
 This guide sets up bosun alone on a repo that already exists: no hull template, no keelstack
-provisioning. Do the steps in order. Every command below exists in bosun 0.7.0; check any of them
-with `bosun <command> --help`.
+provisioning. Do the steps in order. Check any command below with `bosun <command> --help`.
 
 What bosun is: one binary that agent sessions (Claude Code) call. It prints one JSON object per
 command and keeps all shared state in GitHub issues, labels, comments and PRs. Agents write the
