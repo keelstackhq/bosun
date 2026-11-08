@@ -8,13 +8,40 @@ checks, review verdicts, lessons and cost. A Claude Code session calls `bosun <c
 on the one JSON object it prints. GitHub issues, labels, comments and PRs are the only shared
 state.
 
-Status: bosun 0.7.0 is released and pinned in `.bosun/version` (see `CHANGELOG.md`,
-`docs/PROGRESS.md`). To set it up on a repo you already have, read
-[docs/adopt-existing-repo.md](docs/adopt-existing-repo.md).
+Releases and changes: `CHANGELOG.md`. The version a repo runs is pinned in `.bosun/version`.
+
+## Start in 5 minutes (humans)
+
+On a computer, in a clean checkout of your repo's default branch:
+
+```bash
+npm i -g @keelstackhq/bosun                # or: cargo install keel-bosun
+bosun adopt --owner <your-github-login>    # writes the bosun files; commits nothing
+bosun keygen --enroll                      # your approval key: private half in ~/.bosun, public half in .bosun/approvers.toml
+bosun doctor                               # what is left, each with the exact fix (works without a token)
+```
+
+Then run the commands in adopt's `data.commands` (branch, `git add`, commit, push), open the
+setup PR and merge it yourself. The rest, once, each listed by `bosun doctor`:
+
+1. Install the [Claude GitHub App](https://github.com/apps/claude) on the repo.
+2. Branch protection on the default branch (adopt prints the settings link) with the required
+   checks `ci-ok`, `risk-check`, `review-verdict`, `main-open`; turn on "Allow auto-merge"
+   (Settings > General).
+3. Kill switch label, if adopt ran without a token: `gh label create bosun:halt --color B60205`.
+4. Cloud sessions: paste `bosun setup-snippet` once as the environment's setup script
+   (claude.ai/code > Environments > Setup script). It never needs a change.
+
+Rerun `bosun doctor` (with `GITHUB_TOKEN` set) until nothing is `missing`. Long version, with
+undo: [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md).
+
+## For agents
+
+Read [AGENTS.md](AGENTS.md). Every command prints one JSON object (`ok`, `exit_code`, `data`,
+`error.fix`, `next`); do what `error.fix` says and make the calls in `next`. Start with
+`bosun status`, then `bosun claim <issue>`.
 
 ## Install
-
-Releases: see `docs/releasing.md`.
 
 ```bash
 npm i -g @keelstackhq/bosun     # launcher; the binary comes from a platform package
@@ -23,6 +50,7 @@ cargo install keel-bosun        # installs the binary `bosun`
 ```
 
 From source (Rust 1.97): `cargo install --path .` (package `keel-bosun`, binary `bosun`).
+Releases: `docs/releasing.md`.
 
 ## Cloud sessions: paste once
 
