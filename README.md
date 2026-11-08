@@ -16,10 +16,14 @@ On a computer, in a clean checkout of your repo's default branch:
 
 ```bash
 npm i -g @keelstackhq/bosun                # or: cargo install keel-bosun
-bosun adopt --owner <your-github-login>    # writes the bosun files; commits nothing
-bosun keygen --enroll                      # your approval key: private half in ~/.bosun, public half in .bosun/approvers.toml
-bosun doctor                               # what is left, each with the exact fix (works without a token)
+export GITHUB_TOKEN=$(gh auth token)       # repo and workflow scopes
+bosun adopt --owner <your-github-login>    # bosun files, labels, registry issue; commits nothing (no token: add --no-remote)
+bosun keygen --enroll                      # approval key: public half to .bosun/approvers.toml, private half to ~/.bosun/approver.pem
+bosun doctor                               # what is left, each with the exact fix
 ```
+
+Run `bosun keygen` on the machine that signs approvals: in the orchestrator session's container
+if you let it sign for you (it asks you first, in the chat).
 
 Then run the commands in adopt's `data.commands` (branch, `git add`, commit, push), open the
 setup PR and merge it yourself. The rest, once, each listed by `bosun doctor`:
@@ -28,11 +32,13 @@ setup PR and merge it yourself. The rest, once, each listed by `bosun doctor`:
 2. Branch protection on the default branch (adopt prints the settings link) with the required
    checks `ci-ok`, `risk-check`, `review-verdict`, `main-open`; turn on "Allow auto-merge"
    (Settings > General).
-3. Kill switch label, if adopt ran without a token: `gh label create bosun:halt --color B60205`.
+3. Only if you ran adopt with `--no-remote`: rerun `bosun adopt` with `GITHUB_TOKEN` set (it
+   makes the `bosun:halt` kill-switch label and the registry issue).
 4. Cloud sessions: paste `bosun setup-snippet` once as the environment's setup script
    (claude.ai/code > Environments > Setup script). It never needs a change.
 
-Rerun `bosun doctor` (with `GITHUB_TOKEN` set) until nothing is `missing`. Long version, with
+Rerun `bosun doctor` until nothing is `missing` except, if you skip them, the optional Routines
+(create them from `data.routines`, then set `BOSUN_ROUTINES_OK=1`). Long version, with
 undo: [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md).
 
 ## For agents
