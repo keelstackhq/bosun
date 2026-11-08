@@ -127,6 +127,12 @@ fn branch_protection_link_from_a_github_origin() {
 fn a_rerun_with_nothing_new_suggests_no_commit() {
     let t = tempfile::tempdir().unwrap();
     adopt(t.path(), &["--owner", "alice"]);
+    // With a key enrolled the keygen step is gone, so nothing is left to commit.
+    std::fs::write(
+        t.path().join(".bosun/approvers.toml"),
+        "[[key]]\nid = \"alice\"\n",
+    )
+    .unwrap();
     let c = commands(&adopt(t.path(), &["--owner", "alice"]));
     assert_eq!(c, vec!["bosun doctor".to_string()], "{c:?}");
 }

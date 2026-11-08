@@ -209,13 +209,15 @@ fn owner_steps(
 }
 
 /// The shell commands that publish the setup branch; `git add` lists exactly the paths adopt
-/// wrote (a dry run wrote nothing, so it gets none).
-fn commands(changes: &[Value]) -> Vec<String> {
+/// wrote (a dry run wrote nothing, so it gets none), plus the file `bosun keygen --enroll` will
+/// change when the keygen step is still shown.
+fn commands(changes: &[Value], enroll_target: Option<&str>) -> Vec<String> {
     let mut add: Vec<String> = changes
         .iter()
         .filter(|c| matches!(c["action"].as_str(), Some("create" | "update")))
         .filter_map(|c| c["path"].as_str())
         .map(str::to_string)
+        .chain(enroll_target.map(str::to_string))
         .collect();
     add.sort();
     add.dedup();
@@ -478,7 +480,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         "changes": changes,
         "labels": labels,
         "registry": registry_out,
-        "commands": if a.dry_run { Vec::new() } else { commands(&changes) },
+        "commands": if a.dry_run { Vec::new() } else { commands(&changes, (!has_key).then_some(".bosun/approvers.toml").filter(|p| root.join(p).exists())) },
         "owner_steps": owner_steps(own_ci, owner_listed, owners_file, has_key, settings_url.as_deref()),
     })))
 }
