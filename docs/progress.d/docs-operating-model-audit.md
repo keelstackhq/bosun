@@ -1,0 +1,1 @@
+- 2026-11-08 · operating-model audit · drift fixes (hooks on R-gate, D-017 policy, gate-missed, error.fix), candidates re-ranked with build and defer decisions
