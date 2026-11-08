@@ -16,7 +16,7 @@ use crate::app::App;
 use crate::app::{Result, default_ref, kill_switch, main_red};
 use crate::cli::risk_check::{
     autonomous_clean, autonomous_inputs, decisive_review, dismissed_review, enrolled_keys,
-    owner_comment, owner_logins,
+    owner_comment, owner_logins, review_models,
 };
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -718,9 +718,10 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     }
     // A decoy link (no open task the author leased) leaves no author to exclude: nothing counts.
     let inputs = autonomous_inputs(gh, pull, &app.ctx.repo.to_string())?;
+    let models = review_models(gh, &pull.base_sha)?;
     let clean = inputs.map_or(vec![], |(comments, mut excluded)| {
         excluded.push(app.ctx.session.clone());
-        autonomous_clean(&comments, &pull.head_sha, &excluded)
+        autonomous_clean(&comments, &pull.head_sha, &excluded, models.as_deref())
     });
     if clean.is_empty() {
         return Err(BosunError::error(

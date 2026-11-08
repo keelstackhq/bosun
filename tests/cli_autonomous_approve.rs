@@ -521,3 +521,27 @@ fn a_path_attribute_in_the_diff_stays_with_the_owner() {
     assert_eq!(code, 5, "{v}");
     assert!(d.starts_with(WAITING), "{d}");
 }
+
+fn model_verdict(fake: &FakeGithub, session: &str, model: &str) {
+    let r = json!({"bosun": "verdict", "session": session, "head_sha": HEAD,
+        "approved": true, "confidence": 0.95, "major": 0, "model": model});
+    fake.comment_by(
+        1,
+        "github-actions[bot]",
+        &format!("Review verdict: x.\n\n{r}"),
+    );
+}
+
+#[test]
+fn approve_needs_the_clean_verdict_model_in_base_review_models() {
+    let k = key();
+    let fake = auto(&k, GATE, PLAIN);
+    let cfg = format!("{}review_models = [\"m-ok\"]\n", config(Some("autonomous")));
+    fake.content(".bosun/bosun.toml", BASE, &cfg);
+    model_verdict(&fake, "session_r", "m-other");
+    let (code, v) = sign(&fake, &k, "session_o");
+    assert_eq!(code, 1, "{v}");
+    model_verdict(&fake, "session_r2", "m-ok");
+    let (code, v) = sign(&fake, &k, "session_o");
+    assert_eq!(code, 0, "{v}");
+}

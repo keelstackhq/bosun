@@ -48,7 +48,7 @@ fn two_hops() -> FakeGithub {
 }
 
 fn verdict(fake: &FakeGithub, sha: &str, session: &str, approved: bool) {
-    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0) };
+    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0), model: None };
     fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
 }
 

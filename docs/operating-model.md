@@ -78,8 +78,8 @@ table).
 | No flaky tests | `flake` task kind and intake source exist; no detector, no refusal | partial |
 | Production telemetry as a test | — | missing |
 | Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate, two-verdict and autonomous counts | partial |
-| Model reliability varies by task | `[models]` tiers; stop rules move to a stronger tier (`src/core/stop.rs`); `spawn` refuses `[1m]` models; no per-model reliability record | partial |
-| New model resets trust | — | missing |
+| Model reliability varies by task | `[models]` tiers; stop rules move to a stronger tier (`src/core/stop.rs`); `spawn` refuses `[1m]` models; model recorded per verdict | partial |
+| New model resets trust | verdict records carry the reviewer model; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval; the model is self-declared like the session (guards against accidents, not against a lying author); the list limits only gated approvals (two-verdict, delegate, autonomous), not the low-risk `review-verdict` status | partial |
 | Rules enforce themselves | gates; `test-integrity` refuses deleted tests, new skips, fewer asserts; `ci-minutes` lints workflows | enforced |
 | Repeated review comments become checks | lessons with hits; mechanizable lesson → task; reopens if hit after its mechanism merged | partial |
 | Derive, don't duplicate | `tests/fragments.rs` checks the fold script; `tests/plugin_marketplace.rs` checks the plugin pins match; no CI diff of generated files; the plugin SHAs are kept by hand; `tests/pinned_config.rs` needs an entry only for a release with new keys | partial |
@@ -125,7 +125,7 @@ candidates are gated in practice.
 | 10 | Mark untrusted text everywhere | the pack names its untrusted fields and tells the reviewer they are data; every spawn prompt says so | 30 | yes (R-gate) — done (Routine prompts: next) |
 | 16 | bosun's own pin without a hand-added `KNOWN` entry | `tests/pinned_config.rs` falls back to the newest older release: it only knows fewer keys | 10 (test) | no — done |
 | 9 | Cost per outcome that holds | `bosun progress`: held = merged and not undone by a merged `bosun revert` PR; no escape window yet, a revert made by hand is missed | 60 | no — done |
-| 8 | New model resets trust | record the model per verdict; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval | 150 | yes (R-gate) — building |
+| 8 | New model resets trust | record the model per verdict; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval | 150 | yes (R-gate) — done (enforced once `review_models` is set, after a release that reads it) |
 | 17 | Plugin marketplace SHAs by `bosun pin --latest` | pin the superpowers and caveman SHAs in `.claude-plugin/marketplace.json` and the setup script from the plugin repos' heads | 80 | no (writes R-gov files, so the pin PR is gated) — next |
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298); ends self-declared reviewer sessions and models | 200 | yes (R-gate, workflow: owner) — deferred: needs the owner's verdict workflow change |
 | 7 | Autonomy earned per change class | revert and escape rate per rule id, from #9's revert data; delegate only under a limit in `limits.toml` | 350 | yes (R-gate) — deferred: needs #9's data first and an owner-set limit |

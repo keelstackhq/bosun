@@ -567,6 +567,7 @@ pub fn autonomous_verdicts<'a>(
     comments: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
     head: &str,
     excluded: &[String],
+    models: Option<&[String]>,
 ) -> Vec<String> {
     let all: Vec<_> = comments.into_iter().collect();
     // Any verdict on the head that would not count blocks, edited too (an edit can only make it
@@ -582,7 +583,7 @@ pub fn autonomous_verdicts<'a>(
         return Vec::new();
     }
     let kept = (all.into_iter()).filter_map(|(a, b, unedited)| unedited.then_some((a, b)));
-    clean_verdicts(kept, head, excluded)
+    clean_verdicts(kept, head, excluded, models)
 }
 
 /// The changed paths among `(path, previous path)` pairs that are CI workflow files
@@ -695,13 +696,15 @@ pub fn lease_sessions<'a>(bodies: impl IntoIterator<Item = &'a str>) -> Vec<Stri
 /// oldest first. Only comments by [`VERDICT_AUTHOR`] in the shape of [`apply_record`] count; a
 /// session's newest record for `head` decides, so a later disapproval (or a record without a
 /// confidence) withdraws its approval. The sessions `unknown` and empty, and every session in
-/// `excluded` (the task's lease holders), never count.
+/// `excluded` (the task's lease holders), never count. With `models` (`[approvals] review_models`)
+/// a record counts only if its self-declared model is in the list; no model, no count.
 pub fn two_verdicts<'a>(
     comments: impl IntoIterator<Item = (&'a str, &'a str)>,
     head: &str,
     excluded: &[String],
+    models: Option<&[String]>,
 ) -> Vec<String> {
-    verdict_sessions(comments, head, excluded, |_| true)
+    verdict_sessions(comments, head, excluded, models, |_| true)
 }
 
 /// The sessions whose verdict on `head` lets a delegate approve: as [`two_verdicts`], and the
@@ -711,14 +714,16 @@ pub fn clean_verdicts<'a>(
     comments: impl IntoIterator<Item = (&'a str, &'a str)>,
     head: &str,
     excluded: &[String],
+    models: Option<&[String]>,
 ) -> Vec<String> {
-    verdict_sessions(comments, head, excluded, |major| major == Some(0))
+    verdict_sessions(comments, head, excluded, models, |major| major == Some(0))
 }
 
 fn verdict_sessions<'a>(
     comments: impl IntoIterator<Item = (&'a str, &'a str)>,
     head: &str,
     excluded: &[String],
+    models: Option<&[String]>,
     clean: impl Fn(Option<u32>) -> bool,
 ) -> Vec<String> {
     let mut newest: std::collections::BTreeMap<String, bool> = Default::default();
@@ -732,14 +737,18 @@ fn verdict_sessions<'a>(
             approved,
             confidence,
             major,
+            model,
         }) = apply_record(body)
             && head_sha == head
             && !session.is_empty()
             && session != "unknown"
             && !excluded.contains(&session)
         {
-            let counts =
-                approved && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE) && clean(major);
+            let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
+            let counts = approved
+                && enrolled
+                && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE)
+                && clean(major);
             newest.insert(session, counts);
         }
     }
@@ -1226,7 +1235,7 @@ mod tests {
         let (other, bad) = (v("c", &"b".repeat(40), false), v("d", &h, true));
         let (a, b, other, bad) = (a.as_str(), b.as_str(), other.as_str(), bad.as_str());
         let run = |c: &[(&str, &str, bool)], ex: &[String]| {
-            autonomous_verdicts(c.iter().copied(), &h, ex)
+            autonomous_verdicts(c.iter().copied(), &h, ex, None)
         };
         let bot = VERDICT_AUTHOR;
         assert_eq!(run(&[(bot, a, true)], &[]), ["a"]);
@@ -1580,6 +1589,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             approved,
             confidence: conf,
             major: None,
+            model: None,
         }
         .to_line()
     }
@@ -1593,7 +1603,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
     }
 
     fn count(items: &[(&str, String)], head: &str) -> Vec<String> {
-        two_verdicts(items.iter().map(|(a, b)| (*a, b.as_str())), head, &[])
+        two_verdicts(items.iter().map(|(a, b)| (*a, b.as_str())), head, &[], None)
     }
 
     #[test]
@@ -1616,6 +1626,37 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
     }
 
     #[test]
+    fn review_models_limit_which_verdicts_count() {
+        let line = |s: &str, model: Option<&str>| {
+            let r = Record::Verdict {
+                session: s.into(),
+                head_sha: "h".into(),
+                approved: true,
+                confidence: Some(0.95),
+                major: Some(0),
+                model: model.map(String::from),
+            };
+            format!("Review verdict: approve.\n\n{}", r.to_line())
+        };
+        let all = [
+            (VERDICT_AUTHOR, line("a", Some("m1"))),
+            (VERDICT_AUTHOR, line("b", Some("m2"))),
+            (VERDICT_AUTHOR, line("c", None)),
+        ];
+        let it = || all.iter().map(|(a, b)| (*a, b.as_str()));
+        assert_eq!(two_verdicts(it(), "h", &[], None), ["a", "b", "c"]);
+        let m1 = ["m1".to_string()];
+        assert_eq!(two_verdicts(it(), "h", &[], Some(&m1)), ["a"]);
+        assert_eq!(clean_verdicts(it(), "h", &[], Some(&m1)), ["a"]);
+        assert!(two_verdicts(it(), "h", &[], Some(&[])).is_empty());
+        // Exact match only.
+        let prefix = ["m".to_string()];
+        assert!(clean_verdicts(it(), "h", &[], Some(&prefix)).is_empty());
+        let auto = || all.iter().map(|(a, b)| (*a, b.as_str(), true));
+        assert_eq!(autonomous_verdicts(auto(), "h", &[], Some(&m1)), ["a"]);
+    }
+
+    #[test]
     fn unknown_empty_and_excluded_sessions_never_count() {
         let bot = VERDICT_AUTHOR;
         let all = [
@@ -1628,6 +1669,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             all.iter().map(|(a, b)| (*a, b.as_str())),
             "h",
             &["worker".to_string()],
+            None,
         );
         assert_eq!(got, ["rev"]);
     }

@@ -133,6 +133,10 @@ pub struct Approvals {
     pub bootstrap_until: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy: Option<Policy>,
+    /// Exact reviewer model ids whose verdicts count for two-verdicts, delegate and autonomous
+    /// approval. Unset: any model counts. A new model id stops counting until enrolled here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_models: Option<Vec<String>>,
 }
 
 impl Approvals {
