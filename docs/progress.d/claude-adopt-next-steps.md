@@ -1,0 +1,1 @@
+- 2026-11-08 · adopt next steps · owner_steps trimmed, data.commands added, settings link · PR #?

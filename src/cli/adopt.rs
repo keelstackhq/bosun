@@ -171,15 +171,56 @@ fn labels_wanted() -> Vec<(String, &'static str, &'static str)> {
     v
 }
 
-fn owner_steps(own_ci: bool) -> Vec<String> {
+/// What the owner still has to do. `owner_listed`: governance/owners.toml names a login (just
+/// written, or already there); `has_key`: .bosun/approvers.toml holds a `[[key]]`.
+fn owner_steps(
+    own_ci: bool,
+    owner_listed: bool,
+    has_key: bool,
+    settings_url: Option<&str>,
+) -> Vec<String> {
     // With a ci.yml of its own, bosun's aggregate job is `bosun-ok` and `ci-ok` stays yours.
     let first = if own_ci { "bosun-ok" } else { "ci-ok" };
-    vec![
-        "Add your approver key to .bosun/approvers.toml and your login to governance/owners.toml.".into(),
-        format!("Set branch protection on the default branch with the required checks {first}, risk-check, review-verdict and main-open."),
-        "Review and merge the setup PR yourself: git add .bosun .github .claude governance, commit, push, open the PR. The checks cannot run on main before it merges.".into(),
-        "Run `bosun doctor --remote` to see what is still missing.".into(),
-    ]
+    let mut v = Vec::new();
+    if !owner_listed {
+        v.push("Rerun with `bosun adopt --owner <your-github-login>` (it writes governance/owners.toml).".to_string());
+    }
+    if !has_key {
+        v.push("Make your approval key: `bosun keygen --enroll` (writes the private key outside the repo and adds the public key to .bosun/approvers.toml).".to_string());
+    }
+    let place = settings_url.map_or_else(
+        || "the default branch".to_string(),
+        |u| format!("the default branch at {u}"),
+    );
+    v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    v.push("Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string());
+    v.push("Run `bosun doctor --remote` to see what is still missing.".to_string());
+    v
+}
+
+/// The shell commands that publish the setup branch; `git add` lists what adopt wrote.
+fn commands(changes: &[Value]) -> Vec<String> {
+    let mut add: Vec<String> = changes
+        .iter()
+        .filter(|c| matches!(c["action"].as_str(), Some("create" | "update")))
+        .filter_map(|c| c["path"].as_str())
+        .map(|p| match p.split_once('/') {
+            Some((d, _)) if [".bosun", ".github", ".claude", "governance"].contains(&d) => {
+                d.to_string()
+            }
+            _ => p.to_string(),
+        })
+        .collect();
+    add.sort();
+    add.dedup();
+    let mut v = vec!["git checkout -b bosun-setup".to_string()];
+    if !add.is_empty() {
+        v.push(format!("git add {}", add.join(" ")));
+    }
+    v.push(r#"git commit -m "chore: set up bosun""#.to_string());
+    v.push("git push -u origin bosun-setup".to_string());
+    v.push("bosun doctor".to_string());
+    v
 }
 
 /// Every path adopt can write; `bosun uninstall` deletes nothing else.
@@ -398,14 +439,42 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         None => "create",
     };
     changes.push(json!({"path": MANIFEST_PATH, "action": manifest_action}));
+    let listed = |rel: &str, marker: &str| {
+        read_opt(&root.join(rel)).ok().flatten().is_some_and(|b| {
+            String::from_utf8_lossy(&b)
+                .lines()
+                .any(|l| l.trim() == marker)
+        })
+    };
+    let owner_listed = (!owner.is_empty() && action_of(&changes, OWNERS.path) == "create")
+        || listed(OWNERS.path, "[[owner]]");
+    let has_key = listed(".bosun/approvers.toml", "[[key]]");
+    let settings_url = git_out(&root, &["remote", "get-url", "origin"])
+        .filter(|u| u.contains("github.com"))
+        .and_then(|u| parse_remote_url(&u))
+        .map(|r| {
+            format!(
+                "https://github.com/{}/{}/settings/branches",
+                r.owner, r.name
+            )
+        });
     Ok(Outcome::data(json!({
         "stacks": stacks,
         "dry_run": a.dry_run,
         "changes": changes,
         "labels": labels,
         "registry": registry_out,
-        "owner_steps": owner_steps(own_ci),
+        "commands": commands(&changes),
+        "owner_steps": owner_steps(own_ci, owner_listed, has_key, settings_url.as_deref()),
     })))
+}
+
+fn action_of<'a>(changes: &'a [Value], path: &str) -> &'a str {
+    changes
+        .iter()
+        .find(|c| c["path"] == path)
+        .and_then(|c| c["action"].as_str())
+        .unwrap_or("")
 }
 
 /// Write the manifest when its text differs from what is on disk (`last`).
