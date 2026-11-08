@@ -160,3 +160,44 @@ fn enroll_creates_then_appends_and_refuses_duplicates() {
     assert!(!c.exists());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
+
+#[test]
+fn refuses_dot_dot_paths_that_land_inside_the_worktree() {
+    let (repo, home) = (git_repo(), tempfile::tempdir().unwrap());
+    let name = repo
+        .path()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let rel = format!("../nonexist/../{name}/k.pem");
+    let abs = format!("{}/nonexist/../k2.pem", repo.path().display());
+    for out in [rel.as_str(), abs.as_str()] {
+        let (code, _, _) = keygen(repo.path(), home.path(), &["--out", out]);
+        assert_eq!(code, 2, "--out {out}");
+    }
+    assert!(!repo.path().join("k.pem").exists());
+    assert!(!repo.path().join("k2.pem").exists());
+    assert!(!repo.path().join("nonexist").exists());
+}
+
+#[test]
+fn enroll_refuses_a_file_where_key_is_not_an_array_of_tables() {
+    let (repo, home) = (git_repo(), tempfile::tempdir().unwrap());
+    std::fs::create_dir(repo.path().join(".bosun")).unwrap();
+    let file = repo.path().join(".bosun/approvers.toml");
+    std::fs::write(&file, "[key]\nid = \"x\"\n").unwrap();
+    let pem = home.path().join("k.pem");
+    let (code, _, _) = keygen(
+        repo.path(),
+        home.path(),
+        &["--out", pem.to_str().unwrap(), "--enroll"],
+    );
+    assert_eq!(code, 1);
+    assert!(!pem.exists());
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "[key]\nid = \"x\"\n"
+    );
+}

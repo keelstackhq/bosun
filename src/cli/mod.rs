@@ -478,7 +478,7 @@ pub struct PrArg {
 #[derive(Debug, Args)]
 pub struct KeygenArgs {
     /// Where to write the private key PEM (default ~/.bosun/approver.pem). Never overwritten, and
-    /// never inside the git worktree.
+    /// never inside the git worktree. A relative path is relative to `-C` when given.
     #[arg(long, value_name = "PEM")]
     pub out: Option<std::path::PathBuf>,
     /// Key id for .bosun/approvers.toml (default `<role>-<YYYY-MM>`); A-Z a-z 0-9 . _ - only.

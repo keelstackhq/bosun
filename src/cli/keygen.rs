@@ -36,7 +36,25 @@ fn toplevel(base: &Path) -> Option<PathBuf> {
     (out.status.success() && !s.is_empty()).then(|| PathBuf::from(s))
 }
 
-/// `path` with symlinks resolved as far as it exists (the rest is appended unchanged).
+/// `path` made absolute and with `.` and `..` folded away, without touching the disk.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let abs = std::env::current_dir().map_or_else(|_| path.to_path_buf(), |c| c.join(path));
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `path` with symlinks resolved as far as it exists (the rest is appended unchanged). Call it
+/// on a path without `..` (see `lexical`).
 fn resolve(path: &Path) -> PathBuf {
     let mut rest = Vec::new();
     let mut cur = path;
@@ -50,15 +68,38 @@ fn resolve(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn write_new(path: &Path, pem: &str) -> Result<(), BosunError> {
+fn inside_repo(out: &Path) -> BosunError {
+    BosunError::usage(
+        format!(
+            "{} is inside this git worktree; a private key must never land in the repo",
+            out.display()
+        ),
+        GOOD_OUT,
+    )
+}
+
+/// Create `path` (mode 0600, never overwriting). The parent is created first and then checked
+/// again with every symlink resolved, so no path trick lands the key inside `root`.
+fn write_new(path: &Path, root: Option<&Path>, pem: &str) -> Result<PathBuf, BosunError> {
     use std::fs::{DirBuilder, OpenOptions};
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        let mut b = DirBuilder::new();
-        b.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
-        b.create(parent).map_err(|e| io_err("create", parent, &e))?;
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(BosunError::usage(
+            format!("{} names no file", path.display()),
+            GOOD_OUT,
+        ));
+    };
+    let mut b = DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(parent).map_err(|e| io_err("create", parent, &e))?;
+    let real = std::fs::canonicalize(parent)
+        .map_err(|e| io_err("read", parent, &e))?
+        .join(name);
+    if root.is_some_and(|r| real.starts_with(r)) {
+        return Err(inside_repo(&real));
     }
+    let path = real.as_path();
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -66,6 +107,7 @@ fn write_new(path: &Path, pem: &str) -> Result<(), BosunError> {
     match opts.open(path) {
         Ok(mut f) => f
             .write_all(pem.as_bytes())
+            .map(|()| path.to_path_buf())
             .map_err(|e| io_err("write", path, &e)),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(BosunError::conflict(
             format!(
@@ -95,7 +137,7 @@ pub fn run(dir: Option<&Path>, a: &KeygenArgs) -> CmdResult {
             "pass a plain name, e.g. `--id owner-2026-11`",
         ));
     }
-    let out = match &a.out {
+    let out = lexical(&match &a.out {
         Some(p) => base.join(p),
         None => match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
             Some(h) => PathBuf::from(h).join(".bosun/approver.pem"),
@@ -106,16 +148,10 @@ pub fn run(dir: Option<&Path>, a: &KeygenArgs) -> CmdResult {
                 ));
             }
         },
-    };
+    });
     let root = toplevel(base).map(|r| resolve(&r));
     if root.as_ref().is_some_and(|r| resolve(&out).starts_with(r)) {
-        return Err(BosunError::usage(
-            format!(
-                "{} is inside this git worktree; a private key must never land in the repo",
-                out.display()
-            ),
-            GOOD_OUT,
-        ));
+        return Err(inside_repo(&out));
     }
     let approvers = match (a.enroll, &root) {
         (true, Some(r)) => Some(r.join(APPROVERS)),
@@ -141,12 +177,25 @@ pub fn run(dir: Option<&Path>, a: &KeygenArgs) -> CmdResult {
             format!("fix {APPROVERS}, then rerun"),
         )
     })?;
-    let ids = table
-        .get("key")
-        .and_then(|k| k.as_array())
-        .into_iter()
-        .flatten();
-    if ids.filter_map(|k| k.get("id")?.as_str()).any(|i| i == id) {
+    let not_list = || {
+        BosunError::error(
+            format!("{APPROVERS} has `key` that is not a list of [[key]] tables"),
+            format!("fix {APPROVERS} so each key is a [[key]] table, then rerun"),
+        )
+    };
+    let ids = match table.get("key") {
+        None => Vec::new(),
+        Some(k) => k
+            .as_array()
+            .filter(|v| v.iter().all(toml::Value::is_table))
+            .ok_or_else(not_list)?
+            .clone(),
+    };
+    if ids
+        .iter()
+        .filter_map(|k| k.get("id")?.as_str())
+        .any(|i| i == id)
+    {
         return Err(BosunError::conflict(
             format!("key id {id} is already in {APPROVERS}"),
             "pick a new name with `bosun keygen --id <name> --enroll`",
@@ -164,25 +213,31 @@ pub fn run(dir: Option<&Path>, a: &KeygenArgs) -> CmdResult {
         .chunks(64)
         .map(|c| String::from_utf8_lossy(c).into_owned() + "\n")
         .collect::<String>();
-    write_new(
-        &out,
-        &format!("-----BEGIN PRIVATE KEY-----\n{body}-----END PRIVATE KEY-----\n"),
-    )?;
-
+    let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}-----END PRIVATE KEY-----\n");
     let block = format!("[[key]]\nid = \"{id}\"\ned25519 = \"{public}\"\nrole = \"{role}\"\n");
+    let sep = if existing.is_empty() {
+        ""
+    } else if existing.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let joined = format!("{existing}{sep}{block}");
+    if joined.parse::<toml::Table>().is_err() {
+        return Err(not_list());
+    }
+    let out = write_new(&out, root.as_deref(), &pem)?;
     let shown = out.display();
     let steps = if let Some(p) = &approvers {
-        let sep = if existing.is_empty() {
-            ""
-        } else if existing.ends_with('\n') {
-            "\n"
-        } else {
-            "\n\n"
-        };
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| io_err("create", parent, &e))?;
+        let wrote = p
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(p, &joined));
+        if let Err(e) = wrote {
+            // An unenrolled key is no use; remove it so a rerun with the same --out works.
+            let _ = std::fs::remove_file(&out);
+            return Err(io_err("write", p, &e));
         }
-        std::fs::write(p, format!("{existing}{sep}{block}")).map_err(|e| io_err("write", p, &e))?;
         vec![
             "Commit .bosun/approvers.toml and open a PR; approve it yourself on GitHub (a PR cannot enroll its own key: risk-check reads the file from the default branch).".to_string(),
             format!("Keep {shown} on the machine that signs approvals; sign with `bosun approve <pr>@<head> --sign-key {shown}`."),
