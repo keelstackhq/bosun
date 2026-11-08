@@ -1,0 +1,1 @@
+- Verdict records carry the reviewer model (comment tag `bosun:model`, from `BOSUN_MODEL` or `ANTHROPIC_MODEL`), and the optional `[approvals] review_models` limits which models count for two-verdicts, delegate and autonomous approval.
