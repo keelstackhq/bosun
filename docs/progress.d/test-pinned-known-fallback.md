@@ -1,0 +1,1 @@
+- 2026-11-08 · operating-model #16 · pinned-config tables fall back to the newest older release
