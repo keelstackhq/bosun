@@ -56,9 +56,12 @@ match (the rest of R-gov: `.claude/**` with the hook settings, `REVIEW.md`, plan
 `docs/agents/**`, agent and Claude instruction files). This trades the rule "agent agreement is
 not independent evidence" for speed. It is a mode the owner chose and ends by removing the key or
 by the date. After the window `[approvals] policy` decides (this repo: `owner-gated`). The policy
-`autonomous` (D-017, `Policy::Autonomous`) lets the orchestrator approve gated PRs with a clean
-verdict on the head, outside `autonomous_excluded` (`src/core/risk.rs`) and never on R-weaken. Its
-weak point: the verdict's reviewer session and model are self-declared (see the table).
+`autonomous` (D-017, `Policy::Autonomous`; D-017 is not in this repo's decisions snapshot, its rules
+are in spec §8) decides first, inside the window too: only R-weaken is checked before it. It lets the
+orchestrator approve gated PRs outside `autonomous_excluded` (`src/core/risk.rs`) when the PR has an
+open linked task leased by its author and a clean verdict on the head from a reviewer who is neither
+a lease holder nor the signer. Its weak point: that reviewer's session is self-declared (see the
+table).
 
 ## Principle → mechanism → status
 
@@ -72,13 +75,13 @@ weak point: the verdict's reviewer session and model are self-declared (see the 
 | Escaped defect → tighter loop | `main-triage` bisects, `revert` opens a mainfix PR, main-red opens a lesson; `lesson triage --as mechanizable` opens a process-fix task (manual); main-red, `revert` and `gate-missed` open a "Which gate missed this?" task | enforced |
 | No flaky tests | `flake` task kind and intake source exist; no detector, no refusal | partial |
 | Production telemetry as a test | — | missing |
-| Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate and two-verdict counts | partial |
+| Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate, two-verdict and autonomous counts | partial |
 | Model reliability varies by task | `[models]` tiers; stop rules move to a stronger tier (`src/core/stop.rs`); `spawn` refuses `[1m]` models; no per-model reliability record | partial |
 | New model resets trust | — | missing |
 | Rules enforce themselves | gates; `test-integrity` refuses deleted tests, new skips, fewer asserts; `ci-minutes` lints workflows | enforced |
 | Repeated review comments become checks | lessons with hits; mechanizable lesson → task; reopens if hit after its mechanism merged | partial |
 | Derive, don't duplicate | `tests/fragments.rs` checks the fold script; `tests/plugin_marketplace.rs` checks the plugin pins match; no CI diff of generated files; `KNOWN` in `tests/pinned_config.rs` and the plugin SHAs are kept by hand | partial |
-| Tools for agent users | one JSON object, 7 exit codes (`src/output.rs`); `--dry-run` on 5 commands; `error.fix` never empty is a `debug_assert!` only (tests run it, release builds do not) | enforced (fix: tests only) |
+| Tools for agent users | one JSON object, 7 exit codes (`src/output.rs`); `--dry-run` on 5 commands; `error.fix` never empty is a `debug_assert!` only (tests run it, release builds do not) | partial |
 | Merge rules are part of the system | required `ci-ok`, `risk-check`, `review-verdict`, `main-open`; risk rules from the base SHA, approver keys from the default branch | enforced |
 | Repo settings as code | `hoist.toml`; `bosun doctor --remote` runs `hoist check`; apply is manual | partial |
 | Bottleneck at review, CI, release | drafts skip CI; `ci-minutes` gate; review-pack chunks; no review-queue limit | partial |
@@ -125,12 +128,13 @@ candidates are gated in practice.
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298); ends self-declared reviewer sessions and models | 200 | yes (R-gate, workflow: owner) — deferred: needs the owner's verdict workflow change |
 | 7 | Autonomy earned per change class | revert and escape rate per rule id, from #9's revert data; delegate only under a limit in `limits.toml` | 350 | yes (R-gate) — deferred: needs #9's data first and an owner-set limit |
 | 18 | Consumers get new splice/hoist/berth pins without a bosun release | a channel piece for pins only | 100 | yes (R-ci-review) — deferred: the channel version is the bosun release by design; release more often instead |
-| 11 | Per-loop kill switch | `bosun:halt` issue with a scope; `kill_switch` checks it | 150 | yes (R-gate: `app.rs`) — deferred |
-| 12 | One manifest per loop | `.bosun/loops/<name>.toml`: mandate, identity, objective, budget, stop rule, kill switch | 300 | yes (R-gov) — deferred |
-| 13 | Churn check | `bosun progress`: files changed back and forth by different tasks within N days | 150 | yes (R-gate) — deferred |
-| 14 | Keep / harden / replace / rewrite as a plan field | plan format field, `bosun plan` checks it | 80 | probably — deferred |
+| 11 | Per-loop kill switch | `bosun:halt` issue with a scope; `kill_switch` checks it | 150 | yes (R-gate: `app.rs`) — deferred: needs #12's loop names first; the repo switch covers today's single loop |
+| 12 | One manifest per loop | `.bosun/loops/<name>.toml`: mandate, identity, objective, budget, stop rule, kill switch | 300 | yes (R-gov) — deferred: a new config surface the owner must design; no second loop runs yet |
+| 13 | Churn check | `bosun progress`: files changed back and forth by different tasks within N days | 150 | yes (R-gate) — deferred: signal only, no refusal; lower value than the safety rows |
+| 14 | Keep / harden / replace / rewrite as a plan field | plan format field, `bosun plan` checks it | 80 | probably — deferred: plan format change (R-gov plans); doc guidance is enough until plans need it |
 
-Order: rows are ranked by value for cost; "building" rows are this round's PRs, one task each.
+Order: done rows first, then the open rows ranked by value for cost, the deferred block included;
+"building" rows are this round's PRs, one task each.
 
 Rules for any new mechanism: put it as high as it fits (made impossible, then lint, test, CI,
 review, and last a doc), ratchet it (no new violations, old ones listed), and give it an owner who
