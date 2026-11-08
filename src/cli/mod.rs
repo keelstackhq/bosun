@@ -20,6 +20,7 @@ pub mod init;
 pub mod intake;
 pub mod intake_file;
 pub mod join;
+pub mod keygen;
 pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
@@ -108,6 +109,8 @@ pub enum Command {
     Gate(GateArgs),
     /// Owner only (BOSUN_OWNER_TOKEN): list the PRs that wait for an owner and approve them.
     Approve(ApproveArgs),
+    /// Make an ed25519 approval key (PEM, mode 0600, outside the repo); `--enroll` adds it to .bosun/approvers.toml.
+    Keygen(KeygenArgs),
     /// Judge a PR with the risk rules of its base branch.
     RiskCheck(PrArg),
     /// Refuse deleted tests, new skips and fewer assertions.
@@ -251,6 +254,7 @@ impl Command {
             Command::Msg(_) => "msg",
             Command::Gate(_) => "gate",
             Command::Approve(_) => "approve",
+            Command::Keygen(_) => "keygen",
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
@@ -469,6 +473,23 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct KeygenArgs {
+    /// Where to write the private key PEM (default ~/.bosun/approver.pem). Never overwritten, and
+    /// never inside the git worktree.
+    #[arg(long, value_name = "PEM")]
+    pub out: Option<std::path::PathBuf>,
+    /// Key id for .bosun/approvers.toml (default `<role>-<YYYY-MM>`); A-Z a-z 0-9 . _ - only.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// The key's role: `owner` (default) or `delegate`.
+    #[arg(long, value_parser = ["owner", "delegate"])]
+    pub role: Option<String>,
+    /// Append the key to <repo>/.bosun/approvers.toml (created when missing).
+    #[arg(long)]
+    pub enroll: bool,
 }
 
 #[derive(Debug, Args)]
