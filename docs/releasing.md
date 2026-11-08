@@ -126,7 +126,8 @@ and for v0.2.0 (#205). For a later release, the PR sets `.bosun/version` and `BO
 owner then pastes the setup script again. The gates run the pinned release, whose config parser rejects unknown keys: a key that
 release adds to `.bosun/bosun.toml` (such as `[approvals] bootstrap_until`, D-012) is set in this
 same pin PR, never before, and only then does the release need an entry in the `KNOWN` tables of
-`tests/pinned_config.rs`: an unlisted release is checked against the newest older entry.
+`tests/pinned_config.rs`: an unlisted release is checked against the newest older entry. A release
+that removes or renames a key needs its own entry too.
 
 For v0.1.0, an agent opened one PR, and the owner approved it on its head SHA (R-gov, R-ci). It:
 

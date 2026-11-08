@@ -248,16 +248,22 @@ const KNOWN_POLICIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// `major.minor.patch` as numbers, so `0.10.0` sorts after `0.9.0`.
+/// `major.minor.patch` as numbers, so `0.10.0` sorts after `0.9.0`. A pre-release or `v`-prefixed
+/// pin (`0.10.0-rc.1`, `v0.10.0`) panics: the test fails closed.
 fn semver(v: &str) -> Vec<u64> {
     v.split('.')
-        .map(|p| p.parse().expect("x.y.z version"))
+        .map(|p| {
+            p.parse()
+                .unwrap_or_else(|_| panic!("`{v}` is not an x.y.z version"))
+        })
         .collect()
 }
 
 /// The entry of `version` in a release table, else of the newest older release: a later release
-/// only adds keys, so the older set is a safe subset and a pin bump needs no new entry. Add one
-/// only when a release accepts new keys. `None` before the first entry.
+/// only adds keys (`release_tables_only_grow` checks the listed ones), so the older set is a safe
+/// subset and a pin bump needs no new entry. Add one when a release accepts new keys, and when it
+/// removes or renames one. Backstop for a removal: `tests/governance.rs` parses the committed
+/// config with the current code, which is the next release. `None` before the first entry.
 fn known_for(
     table: &[(&'static str, &'static [&'static str])],
     version: &str,
@@ -390,4 +396,30 @@ fn an_unlisted_release_falls_back_to_the_newest_older_entry() {
     // Numeric order, not string order: 0.10.0 is newer than 0.9.0, 0.2.9 older than 0.3.0.
     assert_eq!(known_for(KNOWN, "0.2.9"), known_for(KNOWN, "0.2.3"));
     assert_eq!(known_for(KNOWN, "0.2.2"), None);
+}
+
+#[test]
+fn release_tables_only_grow() {
+    // The fallback in `known_for` is safe only while each release accepts every key the one
+    // before it accepted.
+    for (name, table) in [
+        ("KNOWN", KNOWN),
+        ("KNOWN_LIMITS", KNOWN_LIMITS),
+        ("KNOWN_APPROVALS", KNOWN_APPROVALS),
+        ("KNOWN_POLICIES", KNOWN_POLICIES),
+    ] {
+        for pair in table.windows(2) {
+            let ((old, old_keys), (new, new_keys)) = (pair[0], pair[1]);
+            assert!(
+                semver(old) < semver(new),
+                "{name}: {old} must come before {new}"
+            );
+            for key in old_keys {
+                assert!(
+                    new_keys.contains(key),
+                    "{name}: {new} drops `{key}` that {old} accepts; known_for would fall back wrongly"
+                );
+            }
+        }
+    }
 }
