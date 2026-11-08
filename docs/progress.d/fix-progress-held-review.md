@@ -1,0 +1,1 @@
+- 2026-11-08 · operating-model #9 · held outcomes: writers' task-pr only, revert lookup by head
