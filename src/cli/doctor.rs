@@ -822,7 +822,9 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     // Without a token the GitHub steps are skipped; the local steps still run.
     let live_gh = LiveGithub::new(&ctx.repo.owner, &ctx.repo.name).ok();
     let gh: Option<&dyn Github> = live_gh.as_ref().map(|g| g as &dyn Github);
-    let remote = remote && gh.is_some();
+    let offline = gh.is_none();
+    let asked_remote = remote;
+    let remote = remote && !offline;
     let ctx = &ctx;
     let root = ctx.dir.as_path();
     let mut items = Vec::new();
@@ -1241,7 +1243,24 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .filter(|_| remote)
         .map(|g| apply_environments(&mut items, g, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
-    let mut data = json!({"items": items, "missing": missing, "routines": routines(slack_set)});
+    if offline {
+        // Nothing on GitHub was checked, so this can never be a full pass.
+        let mut names: Vec<String> = items
+            .iter()
+            .filter(|i| i["status"] == "skipped" && i["fix"] == NO_TOKEN_FIX)
+            .filter_map(|i| i["name"].as_str().map(String::from))
+            .collect();
+        if asked_remote {
+            names.push("hoist check".into());
+            names.push("workflow environments".into());
+        }
+        items.push(json!({
+            "step": 0, "name": "remote checks", "status": "skipped",
+            "detail": format!("not run, no GITHUB_TOKEN or GH_TOKEN: {}", names.join(", ")),
+            "fix": NO_TOKEN_FIX,
+        }));
+    }
+    let mut data = json!({"items": items, "missing": missing, "offline": offline, "routines": routines(slack_set)});
     if !slack_set {
         data["notify"] = json!({"skipped": true, "reason": "no [slack] table in .bosun/bosun.toml: the janitor skips notify and there is no notify Routine"});
     }
@@ -1257,6 +1276,21 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         .map(|i| json!({"step": i["step"], "fix": i["fix"]}));
     if let Some(n) = first {
         data["next_step"] = n;
+    } else if offline {
+        data["next_step"] = json!({"step": 0, "fix": NO_TOKEN_FIX});
+    }
+    if offline {
+        let message = if missing > 0 {
+            format!("{missing} checklist steps missing; GitHub not checked (no token)")
+        } else {
+            "0 checklist steps missing; GitHub not checked (no token)".into()
+        };
+        let fix = if missing > 0 {
+            "do the missing steps in data.items, starting with data.next_step, then export GITHUB_TOKEN (repo and workflow scopes) and rerun `bosun doctor`"
+        } else {
+            NO_TOKEN_FIX
+        };
+        return Err(BosunError::needs_human(message, fix).with_data(data));
     }
     if missing > 0 {
         return Err(BosunError::needs_human(
