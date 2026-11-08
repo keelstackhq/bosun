@@ -3,9 +3,6 @@
 Some steps only a human can do (add a token, create an environment). bosun finds them when work
 enters, so the owner does them once, from a phone if possible. After that, agents run to the end.
 
-Status: being built (`docs/superpowers/plans/2026-10-27-front-loaded-prereqs.md`); the parser
-lands first, then `bosun prereqs`, then the gating.
-
 A plan lists them in a `## Prerequisites` section. The plan parser ignores this section.
 
 ```markdown

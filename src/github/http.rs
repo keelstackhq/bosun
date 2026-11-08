@@ -53,6 +53,17 @@ impl std::fmt::Debug for Http {
     }
 }
 
+/// The GitHub API base from `BOSUN_GITHUB_API`; unset, empty or blank means api.github.com.
+pub fn api_base() -> String {
+    api_base_from(std::env::var("BOSUN_GITHUB_API").ok())
+}
+
+fn api_base_from(v: Option<String>) -> String {
+    v.map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://api.github.com".to_string())
+}
+
 impl Http {
     /// Base URL, token and sleep cap from the environment (spec D30, D31).
     pub fn from_env() -> Result<Http> {
@@ -71,8 +82,7 @@ impl Http {
 
     /// Base URL and sleep cap from the environment, with this token.
     pub fn with_env_url(token: &str) -> Http {
-        let base = std::env::var("BOSUN_GITHUB_API")
-            .unwrap_or_else(|_| "https://api.github.com".to_string());
+        let base = api_base();
         let max_sleep = std::env::var("BOSUN_HTTP_MAX_SLEEP_MS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -477,6 +487,17 @@ fn parse_link_next(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_or_blank_api_url_counts_as_unset() {
+        for v in [None, Some(""), Some("  ")] {
+            assert_eq!(api_base_from(v.map(String::from)), "https://api.github.com");
+        }
+        assert_eq!(
+            api_base_from(Some("http://127.0.0.1:9".into())),
+            "http://127.0.0.1:9"
+        );
+    }
 
     #[test]
     fn enc_escapes_label_characters() {

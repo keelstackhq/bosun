@@ -1,0 +1,1 @@
+- 2026-11-08 · operating-model · round-end state: merged, waiting for the owner, deferred, follow-ups

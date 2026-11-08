@@ -1,0 +1,1 @@
+- README: "Start in 5 minutes" for humans and a "For agents" block; stale version lines removed.

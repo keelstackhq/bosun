@@ -1,8 +1,7 @@
 # Adopt bosun on an existing repo
 
 This guide sets up bosun alone on a repo that already exists: no hull template, no keelstack
-provisioning. Do the steps in order. Every command below exists in bosun 0.7.0; check any of them
-with `bosun <command> --help`.
+provisioning. Do the steps in order. Check any command below with `bosun <command> --help`.
 
 What bosun is: one binary that agent sessions (Claude Code) call. It prints one JSON object per
 command and keeps all shared state in GitHub issues, labels, comments and PRs. Agents write the
@@ -32,6 +31,8 @@ Do these on a computer first; the phone steps come after.
    `openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64` gives the public key.
    By hand, you put the public key in `.bosun/approvers.toml` (section 3). Without a key, you
    approve with your own GitHub comment instead (section 6).
+   A bare-repo dotfiles setup (`git --git-dir=~/.cfg --work-tree=~`) has no `.git` entry in the
+   home directory and is not detected, so keep `~/.bosun` out of it.
 4. **Labels.** bosun makes its own labels on first use (`bosun:state/*`, `bosun:registry`,
    `bosun:kind/*` and others). Make the kill-switch label yourself:
    `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
