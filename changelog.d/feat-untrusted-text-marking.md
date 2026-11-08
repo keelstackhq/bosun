@@ -1,0 +1,1 @@
+- review-pack names its `untrusted` fields and tells the reviewer they are data; every spawn prompt calls issue, PR, comment and Slack text untrusted data.
