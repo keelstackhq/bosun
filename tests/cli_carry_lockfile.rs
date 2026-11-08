@@ -47,7 +47,7 @@ fn world(merged_lock: &str) -> FakeGithub {
     fake.content("Cargo.lock", H, &lock(&[pkg("anyhow", "bb")]));
     fake.content("Cargo.lock", M, &lock(&[pkg("tokio", "cc")]));
     fake.content("Cargo.lock", H2, merged_lock);
-    let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0) };
+    let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: None };
     fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
     fake
 }

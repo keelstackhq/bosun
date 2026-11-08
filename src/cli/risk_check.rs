@@ -446,6 +446,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     let autonomous = auto.is_some();
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
+    let models = review_models(gh, base)?;
     let need = Need {
         repo: &app.ctx.repo,
         pr: n,
@@ -457,6 +458,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         linked: &linked,
         unlinked,
         autonomous: auto.as_ref(),
+        models: models.as_deref(),
     };
     let found = if high {
         approval_on(gh, &need, head)?
@@ -574,6 +576,15 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         }
         _ => String::new(),
     };
+    let verdict_class =
+        autonomous || matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
+    let model_note = match &models {
+        Some(m) if verdict_class => format!(
+            "; only verdicts by a model in `[approvals] review_models` ({}) count, a verdict with another or no model does not",
+            m.join(", ")
+        ),
+        _ => String::new(),
+    };
     let fix = if autonomous {
         format!(
             "get one independent clean verdict (approve, confidence >= {}, no major finding) on head {head} from a reviewer session (`bosun verdict comment --from -`), then the orchestrator signs `bosun approve {n}@{head} --sign-key <pem> --bootstrap`; or an owner approval: {owner_fix}",
@@ -601,7 +612,7 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
             "{boot}PR #{n} is high risk ({}) and not approved on head {head}",
             ids.join(", ")
         ),
-        format!("{boot}{fix}"),
+        format!("{boot}{fix}{model_note}"),
     )
     .with_data(data))
 }
@@ -622,6 +633,8 @@ struct Need<'a> {
     /// Autonomous policy (D-017), nothing excluded: the PR comments and the lease sessions the
     /// signature's clean verdict is judged by.
     autonomous: Option<&'a (Vec<Comment>, Vec<String>)>,
+    /// `[approvals] review_models` at base: when set, only verdicts by these models count.
+    models: Option<&'a [String]>,
 }
 
 /// How a head is approved: by an owner or delegate (`approved_by`), or by two verdicts.
@@ -658,7 +671,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     let mut found = Found::default();
     let mut bootstrap = need.bootstrap;
     if let Some((comments, excluded)) = need.autonomous {
-        found.autonomous_verdicts = autonomous_clean(comments, sha, excluded);
+        found.autonomous_verdicts = autonomous_clean(comments, sha, excluded, need.models);
         if found.autonomous_verdicts.is_empty() {
             bootstrap = None;
         }
@@ -679,6 +692,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
             comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
             sha,
             &excluded,
+            need.models,
         );
     }
     // A delegate decides only with one clean independent verdict on the head (spec §8).
@@ -690,6 +704,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
                 comments.iter().map(|c| (c.user.as_str(), c.body.as_str())),
                 sha,
                 &excluded,
+                need.models,
             );
             if !found.delegate_verdicts.is_empty() && !owners_withdrawn(gh, pr, sha, owners)? {
                 let v1 = |f: Form| f == Form::V1;
@@ -1061,13 +1076,27 @@ pub(crate) fn autonomous_clean(
     comments: &[Comment],
     head: &str,
     excluded: &[String],
+    models: Option<&[String]>,
 ) -> Vec<String> {
     let c = comments.iter();
     risk::autonomous_verdicts(
         c.map(|c| (c.user.as_str(), c.body.as_str(), c.unedited())),
         head,
         excluded,
+        models,
     )
+}
+
+/// `[approvals] review_models` on `base` (D-017 and the verdict classes): `None` when unset. A
+/// base config that does not parse fails closed (an empty list: no verdict counts).
+pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
+    Ok(match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => match Config::parse(&t, CONFIG_FILE) {
+            Ok(c) => c.approvals.review_models,
+            Err(_) => Some(Vec::new()),
+        },
+        None => None,
+    })
 }
 
 /// The id of an enrolled key that signed an approval of `head` on this PR (spec §8, signed

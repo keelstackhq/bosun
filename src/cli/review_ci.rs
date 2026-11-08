@@ -172,7 +172,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
     if task.is_none() {
         pull.body.clear();
     }
-    let mut out = record(&app, &pull, &verdict, SESSION)?;
+    let mut out = record(&app, &pull, &verdict, SESSION, Some(&cfg.model))?;
     let comment = if verdict.findings.is_empty() {
         Value::Null
     } else {
