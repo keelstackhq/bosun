@@ -20,16 +20,18 @@ Do these on a computer first; the phone steps come after.
 2. **Claude GitHub App.** Install it on the repo (GitHub → Settings → GitHub Apps). Cloud
    sessions reach GitHub through it.
 3. **Approval key.** Signed approvals need an ed25519 key. It signs for you, but the
-   orchestrator session that posts approvals holds it: make it in that session's container (or
-   copy the PEM there), never in the repo:
+   orchestrator session that posts approvals holds it: run this in that session's container
+   (the key goes to `~/.bosun/approver.pem`, mode 0600, never inside the repo):
 
    ```bash
-   openssl genpkey -algorithm ed25519 -out owner.pem
-   openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64   # the public key
+   bosun keygen --enroll   # makes the key and adds its public half to .bosun/approvers.toml
    ```
 
-   You put the public key in `.bosun/approvers.toml` (section 3). Without a key, you approve with
-   your own GitHub comment instead (section 6).
+   Commit `.bosun/approvers.toml` in the setup PR (section 3) and approve that PR yourself. To
+   do it by hand instead: `openssl genpkey -algorithm ed25519 -out owner.pem`, then
+   `openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64` gives the public key.
+   By hand, you put the public key in `.bosun/approvers.toml` (section 3). Without a key, you
+   approve with your own GitHub comment instead (section 6).
 4. **Labels.** bosun makes its own labels on first use (`bosun:state/*`, `bosun:registry`,
    `bosun:kind/*` and others). Make the kill-switch label yourself:
    `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
