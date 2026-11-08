@@ -817,9 +817,27 @@ fn plugins_item(root: &Path, script: Option<&str>) -> Value {
     )
 }
 
+/// A set `BOSUN_GITHUB_API` must be an http(s) URL; otherwise doctor would blame the token.
+fn check_api_url() -> Result<(), BosunError> {
+    let Ok(raw) = std::env::var("BOSUN_GITHUB_API") else {
+        return Ok(());
+    };
+    let ok = raw.parse::<ureq::http::Uri>().is_ok_and(|u| {
+        matches!(u.scheme_str(), Some("http" | "https")) && u.host().is_some_and(|h| !h.is_empty())
+    });
+    if ok {
+        return Ok(());
+    }
+    Err(BosunError::error(
+        format!("BOSUN_GITHUB_API is not a valid URL: {raw}"),
+        "unset BOSUN_GITHUB_API, or set it to an http(s) URL such as https://api.github.com, then rerun `bosun doctor`",
+    ))
+}
+
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let ctx = Ctx::load(dir)?;
     // Without a token the GitHub steps are skipped; the local steps still run.
+    check_api_url()?;
     let live_gh = LiveGithub::new(&ctx.repo.owner, &ctx.repo.name).ok();
     let gh: Option<&dyn Github> = live_gh.as_ref().map(|g| g as &dyn Github);
     let offline = gh.is_none();
@@ -830,30 +848,34 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let mut items = Vec::new();
 
     let repo = gh.map_or(Ok(None), |g| g.repo_info());
-    items.push(item(
-        1,
-        "repo readable",
-        match &repo {
-            Ok(Some(_)) => None,
-            Ok(None) => Some(format!("{} is not readable with this token", ctx.repo)),
-            Err(e) => Some(e.message.clone()),
-        },
-        format!(
-            "{} (default branch {})",
-            ctx.repo,
-            repo.as_ref()
-                .ok()
-                .and_then(|r| r.as_ref())
-                .map_or("", |r| &r.default_branch)
-        ),
-        "create the repo, and give the GitHub token access to it",
-    ));
-    if gh.is_none() {
-        items[0] = no_token(1, "repo readable");
-    }
+    items.push(if gh.is_none() {
+        no_token(1, "repo readable")
+    } else {
+        item(
+            1,
+            "repo readable",
+            match &repo {
+                Ok(Some(_)) => None,
+                Ok(None) => Some(format!("{} is not readable with this token", ctx.repo)),
+                Err(e) => Some(e.message.clone()),
+            },
+            format!(
+                "{} (default branch {})",
+                ctx.repo,
+                repo.as_ref()
+                    .ok()
+                    .and_then(|r| r.as_ref())
+                    .map_or("", |r| &r.default_branch)
+            ),
+            "create the repo, and give the GitHub token access to it",
+        )
+    });
 
     let seen = gh.map_or(Ok(false), claude_app_seen);
-    items.push(item(
+    items.push(if gh.is_none() {
+        no_token(2, "Claude GitHub App")
+    } else {
+        item(
         2,
         "Claude GitHub App",
         match &seen {
@@ -865,10 +887,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         },
         "a `claude` login has written here".into(),
         "install the app from https://github.com/apps/claude and grant it this repo",
-    ));
-    if gh.is_none() {
-        items[1] = no_token(2, "Claude GitHub App");
-    }
+    )
+    });
 
     let hoist = read(root, "hoist.toml").and_then(|t| t.parse::<toml::Table>().ok());
     let listed: Vec<String> = hoist
@@ -970,27 +990,28 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     // The kill switch is an open `bosun:halt` issue by an owner; BOSUN_HALT is optional.
     let label = gh.map_or(Ok(true), |g| g.label_exists(HALT_LABEL));
     let halt = gh.map_or(Ok(None), halt_reason);
-    items.push(item(
-        5,
-        "kill switch",
-        match (&label, &halt) {
-            (_, Err(e)) => Some(format!("cannot read the kill switch: {}", e.message)),
-            (Err(e), _) => Some(format!("cannot read the label {HALT_LABEL}: {}", e.message)),
-            (Ok(false), _) => Some(format!("the label {HALT_LABEL} does not exist")),
-            (Ok(true), Ok(_)) => None,
-        },
-        match &halt {
-            Ok(Some((reason, _))) => format!("halted: {reason}"),
-            _ => format!("not halted; an owner's open {HALT_LABEL} issue stops all work"),
-        },
-        &format!(
-            "gh label create bosun:halt --color B60205 --repo {}",
-            ctx.repo
-        ),
-    ));
-    if gh.is_none() {
-        items[4] = no_token(5, "kill switch");
-    }
+    items.push(if gh.is_none() {
+        no_token(5, "kill switch")
+    } else {
+        item(
+            5,
+            "kill switch",
+            match (&label, &halt) {
+                (_, Err(e)) => Some(format!("cannot read the kill switch: {}", e.message)),
+                (Err(e), _) => Some(format!("cannot read the label {HALT_LABEL}: {}", e.message)),
+                (Ok(false), _) => Some(format!("the label {HALT_LABEL} does not exist")),
+                (Ok(true), Ok(_)) => None,
+            },
+            match &halt {
+                Ok(Some((reason, _))) => format!("halted: {reason}"),
+                _ => format!("not halted; an owner's open {HALT_LABEL} issue stops all work"),
+            },
+            &format!(
+                "gh label create bosun:halt --color B60205 --repo {}",
+                ctx.repo
+            ),
+        )
+    });
 
     let version = read(root, ".bosun/version").map(|v| v.trim().to_string());
     let (script, script_problem) = read_setup_script(root);
@@ -1055,7 +1076,10 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     items.push(slack_item);
 
     let reg = gh.map_or(Ok(None), registry::load);
-    items.push(item(
+    items.push(if gh.is_none() {
+        no_token(8, "registry issue")
+    } else {
+        item(
         8,
         "registry issue",
         match &reg {
@@ -1071,25 +1095,24 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .map_or(0, |r| r.0)
         ),
         "run `bosun adopt` (with GITHUB_TOKEN set) or `bosun join`; either creates the registry issue",
-    ));
-    if gh.is_none() {
-        items[7] = no_token(8, "registry issue");
-    }
+    )
+    });
 
-    items.push(item(
-        9,
-        "auto-merge",
-        match &repo {
-            Ok(Some(r)) if r.allow_auto_merge => None,
-            Ok(Some(_)) => Some("allow_auto_merge is off".into()),
-            _ => Some("the repo is not readable".into()),
-        },
-        "allow_auto_merge is on".into(),
-        HOIST_FIX,
-    ));
-    if gh.is_none() {
-        items[8] = no_token(9, "auto-merge");
-    }
+    items.push(if gh.is_none() {
+        no_token(9, "auto-merge")
+    } else {
+        item(
+            9,
+            "auto-merge",
+            match &repo {
+                Ok(Some(r)) if r.allow_auto_merge => None,
+                Ok(Some(_)) => Some("allow_auto_merge is off".into()),
+                _ => Some("the repo is not readable".into()),
+            },
+            "allow_auto_merge is on".into(),
+            HOIST_FIX,
+        )
+    });
 
     let release = gh.map_or(Ok(None), |g| g.latest_release());
     let release_set = release_configured(root, hoist.as_ref(), matches!(release, Ok(Some(_))));

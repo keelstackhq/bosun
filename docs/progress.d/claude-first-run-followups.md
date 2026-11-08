@@ -1,0 +1,1 @@
+- 2026-11-08 · first-run follow-ups · adopt key in git add, doctor no-token items, bad API URL · PR #458
