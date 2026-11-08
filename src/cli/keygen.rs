@@ -14,7 +14,8 @@ use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::Timestamp;
 
 const APPROVERS: &str = ".bosun/approvers.toml";
-const GOOD_OUT: &str = "bosun keygen --out ~/.bosun/approver.pem";
+const GOOD_OUT: &str =
+    "pass --out a path outside every git repo, e.g. `bosun keygen --out ~/.bosun/approver.pem`";
 
 fn io_err(what: &str, path: &Path, e: &std::io::Error) -> BosunError {
     BosunError::error(
@@ -68,10 +69,17 @@ fn resolve(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// Whether `path` (or its nearest existing ancestor) lies in any git worktree.
+fn in_a_worktree(path: &Path) -> bool {
+    path.ancestors()
+        .find(|a| a.is_dir())
+        .is_some_and(|a| toplevel(a).is_some())
+}
+
 fn inside_repo(out: &Path) -> BosunError {
     BosunError::usage(
         format!(
-            "{} is inside this git worktree; a private key must never land in the repo",
+            "{} is inside a git worktree; a private key must never land in a repo",
             out.display()
         ),
         GOOD_OUT,
@@ -96,7 +104,7 @@ fn write_new(path: &Path, root: Option<&Path>, pem: &str) -> Result<PathBuf, Bos
     let real = std::fs::canonicalize(parent)
         .map_err(|e| io_err("read", parent, &e))?
         .join(name);
-    if root.is_some_and(|r| real.starts_with(r)) {
+    if root.is_some_and(|r| real.starts_with(r)) || in_a_worktree(&real) {
         return Err(inside_repo(&real));
     }
     let path = real.as_path();
@@ -142,15 +150,13 @@ pub fn run(dir: Option<&Path>, a: &KeygenArgs) -> CmdResult {
         None => match std::env::var_os("HOME").filter(|h| !h.is_empty()) {
             Some(h) => PathBuf::from(h).join(".bosun/approver.pem"),
             None => {
-                return Err(BosunError::usage(
-                    "HOME is not set",
-                    format!("run `{GOOD_OUT}`"),
-                ));
+                return Err(BosunError::usage("HOME is not set", GOOD_OUT));
             }
         },
     });
     let root = toplevel(base).map(|r| resolve(&r));
-    if root.as_ref().is_some_and(|r| resolve(&out).starts_with(r)) {
+    let resolved = resolve(&out);
+    if root.as_ref().is_some_and(|r| resolved.starts_with(r)) || in_a_worktree(&resolved) {
         return Err(inside_repo(&out));
     }
     let approvers = match (a.enroll, &root) {

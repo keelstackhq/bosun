@@ -201,3 +201,43 @@ fn enroll_refuses_a_file_where_key_is_not_an_array_of_tables() {
         "[key]\nid = \"x\"\n"
     );
 }
+
+#[test]
+fn refuses_a_target_in_any_git_worktree() {
+    let (here, other, home) = (git_repo(), git_repo(), tempfile::tempdir().unwrap());
+    let out = other.path().join("key.pem");
+    let (code, _, _) = keygen(here.path(), home.path(), &["--out", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert!(!out.exists());
+    // A HOME that is itself a worktree (dotfiles): the default path is refused too.
+    let (code, _, _) = keygen(here.path(), other.path(), &[]);
+    assert_eq!(code, 2);
+    assert!(!other.path().join(".bosun/approver.pem").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn refuses_a_symlinked_parent_into_a_worktree_and_an_existing_symlink() {
+    let (repo, home, outd) = (
+        git_repo(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let link = outd.path().join("link");
+    std::os::unix::fs::symlink(repo.path(), &link).unwrap();
+    let out = link.join("k.pem");
+    let (code, _, _) = keygen(outd.path(), home.path(), &["--out", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert!(!repo.path().join("k.pem").exists());
+
+    let target = outd.path().join("target.pem");
+    let file_link = outd.path().join("k2.pem");
+    std::os::unix::fs::symlink(&target, &file_link).unwrap();
+    let (code, _, _) = keygen(
+        outd.path(),
+        home.path(),
+        &["--out", file_link.to_str().unwrap()],
+    );
+    assert_eq!(code, 3);
+    assert!(!target.exists());
+}
