@@ -1,0 +1,1 @@
+- 2026-11-08 · doctor first run · doctor runs offline, names the exact fix, data.next_step · PR #?

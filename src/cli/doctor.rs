@@ -4,13 +4,27 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::app::{App, HALT_LABEL, halt_reason};
+use crate::app::{HALT_LABEL, halt_reason};
 use crate::core::checks;
-use crate::github::{EnvBranches, Github, IssueState, Live};
+use crate::ctx::Ctx;
+use crate::github::{EnvBranches, Github, IssueState, Live, LiveGithub};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
-const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token (docs/PROGRESS.md Blocked)";
+const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token";
+
+const NO_TOKEN_FIX: &str =
+    "export GITHUB_TOKEN (repo and workflow scopes), then rerun `bosun doctor`";
+
+/// A step that needs GitHub while no token is set: reported, not counted as missing.
+fn no_token(step: u8, name: &str) -> Value {
+    skipped(
+        step,
+        name,
+        "needs GitHub and no GITHUB_TOKEN or GH_TOKEN is set",
+        NO_TOKEN_FIX,
+    )
+}
 
 fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &str) -> Value {
     let (status, detail) = match problem {
@@ -804,12 +818,16 @@ fn plugins_item(root: &Path, script: Option<&str>) -> Value {
 }
 
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
-    let app = App::load(dir)?;
-    let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
+    let ctx = Ctx::load(dir)?;
+    // Without a token the GitHub steps are skipped; the local steps still run.
+    let live_gh = LiveGithub::new(&ctx.repo.owner, &ctx.repo.name).ok();
+    let gh: Option<&dyn Github> = live_gh.as_ref().map(|g| g as &dyn Github);
+    let remote = remote && gh.is_some();
+    let ctx = &ctx;
     let root = ctx.dir.as_path();
     let mut items = Vec::new();
 
-    let repo = gh.repo_info();
+    let repo = gh.map_or(Ok(None), |g| g.repo_info());
     items.push(item(
         1,
         "repo readable",
@@ -828,8 +846,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         ),
         "create the repo, and give the GitHub token access to it",
     ));
+    if gh.is_none() {
+        items[0] = no_token(1, "repo readable");
+    }
 
-    let seen = claude_app_seen(gh);
+    let seen = gh.map_or(Ok(false), claude_app_seen);
     items.push(item(
         2,
         "Claude GitHub App",
@@ -843,6 +864,9 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "a `claude` login has written here".into(),
         "install the app from https://github.com/apps/claude and grant it this repo",
     ));
+    if gh.is_none() {
+        items[1] = no_token(2, "Claude GitHub App");
+    }
 
     let hoist = read(root, "hoist.toml").and_then(|t| t.parse::<toml::Table>().ok());
     let listed: Vec<String> = hoist
@@ -863,8 +887,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     absent.retain(|c| !listed.iter().any(|l| l == c));
     // What the default branch enforces. A 403 proves nothing (a private repo on a free plan has
     // no rulesets), so it only adds a note, like the `unknown` items of `hoist check`.
-    let live = match &repo {
-        Ok(Some(info)) => Some(gh.required_status_checks(&info.default_branch)),
+    let live = match (&repo, gh) {
+        (Ok(Some(info)), Some(gh)) => Some(gh.required_status_checks(&info.default_branch)),
         _ => None,
     };
     // A check counts as unenforced only when both endpoints were readable; with one 403, the
@@ -896,7 +920,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     } else {
         format!("add {absent:?} to hoist.toml [github] required_checks, then {HOIST_FIX}")
     };
-    items.push(item(
+    let step3 = item(
         3,
         "required checks",
         if hoist.is_none() {
@@ -921,7 +945,13 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             &live_note,
         ),
         &step3_fix,
-    ));
+    );
+    // Without a token only the local findings count; an unverified pass is skipped.
+    items.push(if gh.is_none() && step3["status"] == "ok" {
+        no_token(3, "required checks")
+    } else {
+        step3
+    });
 
     let owners = read(root, "governance/owners.toml")
         .and_then(|t| t.parse::<toml::Table>().ok())
@@ -936,8 +966,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     // The kill switch is an open `bosun:halt` issue by an owner; BOSUN_HALT is optional.
-    let label = gh.label_exists(HALT_LABEL);
-    let halt = halt_reason(gh);
+    let label = gh.map_or(Ok(true), |g| g.label_exists(HALT_LABEL));
+    let halt = gh.map_or(Ok(None), halt_reason);
     items.push(item(
         5,
         "kill switch",
@@ -951,8 +981,14 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             Ok(Some((reason, _))) => format!("halted: {reason}"),
             _ => format!("not halted; an owner's open {HALT_LABEL} issue stops all work"),
         },
-        "gh label create bosun:halt --color B60205 --repo <owner>/<repo>",
+        &format!(
+            "gh label create bosun:halt --color B60205 --repo {}",
+            ctx.repo
+        ),
     ));
+    if gh.is_none() {
+        items[4] = no_token(5, "kill switch");
+    }
 
     let version = read(root, ".bosun/version").map(|v| v.trim().to_string());
     let (script, script_problem) = read_setup_script(root);
@@ -970,10 +1006,10 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             "docs/setup-script.sh exists (content below) for the shared cloud environment \"keelstack\"; .bosun/version is {}",
             version.clone().unwrap_or_default()
         ),
-        "paste the bootstrap field (`bosun setup-snippet`) once as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments); it runs each checkout's docs/setup-script.sh (the content field), so keep that file and .bosun/version",
+        "run `bosun setup-snippet` and paste its script once as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments); it runs each checkout's docs/setup-script.sh (the content field), so keep that file and .bosun/version",
     );
     setup["environment"] = json!("keelstack");
-    setup["bootstrap"] = json!(super::setup_snippet::BOOTSTRAP);
+    setup["run"] = json!("bosun setup-snippet");
     setup["content"] = json!(script);
     items.push(setup);
 
@@ -1016,7 +1052,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     }
     items.push(slack_item);
 
-    let reg = registry::load(gh);
+    let reg = gh.map_or(Ok(None), registry::load);
     items.push(item(
         8,
         "registry issue",
@@ -1032,8 +1068,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .and_then(|r| r.as_ref())
                 .map_or(0, |r| r.0)
         ),
-        "start the seed session; `bosun join` creates the registry",
+        "run `bosun adopt` (with GITHUB_TOKEN set) or `bosun join`; either creates the registry issue",
     ));
+    if gh.is_none() {
+        items[7] = no_token(8, "registry issue");
+    }
 
     items.push(item(
         9,
@@ -1046,8 +1085,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "allow_auto_merge is on".into(),
         HOIST_FIX,
     ));
+    if gh.is_none() {
+        items[8] = no_token(9, "auto-merge");
+    }
 
-    let release = gh.latest_release();
+    let release = gh.map_or(Ok(None), |g| g.latest_release());
     let release_set = release_configured(root, hoist.as_ref(), matches!(release, Ok(Some(_))));
     let release_step = item(
         10,
@@ -1065,9 +1107,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .and_then(|r| r.as_ref())
                 .map_or("", |r| &r.tag_name)
         ),
-        "run `hoist release bootstrap` (docs/PROGRESS.md Blocked)",
+        "run `hoist release bootstrap` from a checkout of main with an admin token",
     );
-    items.push(if release_set {
+    items.push(if release_set && gh.is_none() {
+        no_token(10, "release")
+    } else if release_set {
         release_step.clone()
     } else {
         skipped(
@@ -1130,7 +1174,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     if let Some(slack) = ctx.config.slack.as_ref() {
-        let seat = registry::seat_of(gh, &ctx.session, ctx.now);
+        let seat = gh.map_or(Ok(None), |g| registry::seat_of(g, &ctx.session, ctx.now));
         let seat_ok = seat.as_ref().ok().cloned().flatten();
         let mut tag = item(
             15,
@@ -1150,7 +1194,9 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             },
             "",
         );
-        if seat_ok.is_none() {
+        if gh.is_none() {
+            tag = no_token(15, "claude-tag");
+        } else if seat_ok.is_none() {
             // No seat is normal for a session outside Claude Tag: skipped, not a warning. A
             // failed registry read is a warning.
             tag["status"] = json!(if seat.is_err() { "warn" } else { "skipped" });
@@ -1191,7 +1237,9 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     }
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
-    let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
+    let envs = gh
+        .filter(|_| remote)
+        .map(|g| apply_environments(&mut items, g, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
     let mut data = json!({"items": items, "missing": missing, "routines": routines(slack_set)});
     if !slack_set {
@@ -1203,10 +1251,17 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     if let Some(e) = envs {
         data["environments"] = e;
     }
+    let first = data["items"]
+        .as_array()
+        .and_then(|a| a.iter().find(|i| i["status"] == "missing"))
+        .map(|i| json!({"step": i["step"], "fix": i["fix"]}));
+    if let Some(n) = first {
+        data["next_step"] = n;
+    }
     if missing > 0 {
         return Err(BosunError::needs_human(
             format!("{missing} checklist steps missing"),
-            "do the missing steps in data.items; see docs/PROGRESS.md Blocked",
+            "do the missing steps in data.items, starting with data.next_step",
         )
         .with_data(data));
     }
