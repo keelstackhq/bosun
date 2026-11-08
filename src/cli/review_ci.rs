@@ -225,7 +225,8 @@ fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
             changes: f["additions"].as_u64().unwrap_or(0) + f["deletions"].as_u64().unwrap_or(0),
         })
         .collect();
-    // A delta review lists the files of a comparison, not of the PR.
+    // A delta review lists the PR's files that a comparison since the last review names, a
+    // subset of the PR (a truncated comparison gives a full review instead).
     let delta = !pack["since_sha"].is_null();
     let mut evidence = unseen_diff(&views, if delta { 0 } else { changed_files })
         .map(|m| m.evidence)

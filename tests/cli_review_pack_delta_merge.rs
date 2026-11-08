@@ -40,6 +40,7 @@ fn delta_after_a_main_merge_keeps_the_prs_own_files() {
     assert_eq!(files[0]["filename"], "b.rs");
     assert_eq!(files[0]["patch"], "@@ pr b");
     assert_eq!(files[0]["additions"], 2);
+    assert_eq!(v["data"]["delta_not_in_pr"], json!(["main_only.rs"]), "{v}");
 }
 
 /// Only main changed since the last review: an empty but valid pack.
@@ -51,4 +52,24 @@ fn delta_with_only_main_changes_is_empty() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["files"].as_array().unwrap().len(), 0, "{v}");
     assert!(v["data"]["chunks"].is_array(), "{v}");
+}
+
+/// A truncated compare (300 files or more) could hide a PR file past the cap: full review.
+#[test]
+fn a_truncated_compare_gives_a_full_review() {
+    let fake = setup();
+    for i in 0..300 {
+        fake.compare_file("A", "B", &format!("main/{i:03}.rs"), "@@ main");
+    }
+    fake.compare_file("A", "B", "z_pr.rs", "@@ merged");
+    let (code, v) = run(&fake, "s", T0, &["review-pack", "42"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["since_sha"].is_null(), "{v}");
+    assert!(
+        v["data"]["delta_fallback"]
+            .as_str()
+            .is_some_and(|w| w.contains("truncated")),
+        "{v}"
+    );
+    assert_eq!(v["data"]["files"].as_array().unwrap().len(), 2, "{v}");
 }
