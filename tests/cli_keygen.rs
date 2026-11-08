@@ -241,3 +241,28 @@ fn refuses_a_symlinked_parent_into_a_worktree_and_an_existing_symlink() {
     assert_eq!(code, 3);
     assert!(!target.exists());
 }
+
+#[test]
+fn the_worktree_guard_does_not_trust_git_env() {
+    let (repo, home, bare) = (
+        git_repo(),
+        tempfile::tempdir().unwrap(),
+        tempfile::tempdir().unwrap(),
+    );
+    let out = repo.path().join("k.pem");
+    for (k, v) in [
+        ("GIT_DIR", bare.path().to_str().unwrap()),
+        ("GIT_CEILING_DIRECTORIES", repo.path().to_str().unwrap()),
+    ] {
+        let o = bosun()
+            .env("HOME", home.path())
+            .env(k, v)
+            .arg("-C")
+            .arg(home.path())
+            .args(["keygen", "--out", out.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(2), "{k}");
+        assert!(!out.exists(), "{k}");
+    }
+}

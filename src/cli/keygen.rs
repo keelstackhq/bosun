@@ -69,11 +69,12 @@ fn resolve(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Whether `path` (or its nearest existing ancestor) lies in any git worktree.
+/// Whether `path` lies in any git worktree, judged on disk: some ancestor holds a `.git` entry
+/// (a dir, or a file for a linked worktree). git itself is not asked: its env (`GIT_DIR`,
+/// `GIT_CEILING_DIRECTORIES`), ownership checks or absence could hide a repo.
 fn in_a_worktree(path: &Path) -> bool {
     path.ancestors()
-        .find(|a| a.is_dir())
-        .is_some_and(|a| toplevel(a).is_some())
+        .any(|a| std::fs::symlink_metadata(a.join(".git")).is_ok())
 }
 
 fn inside_repo(out: &Path) -> BosunError {
@@ -116,7 +117,11 @@ fn write_new(path: &Path, root: Option<&Path>, pem: &str) -> Result<PathBuf, Bos
         Ok(mut f) => f
             .write_all(pem.as_bytes())
             .map(|()| path.to_path_buf())
-            .map_err(|e| io_err("write", path, &e)),
+            .map_err(|e| {
+                // A partial key is no use and would block a rerun with the same --out.
+                let _ = std::fs::remove_file(path);
+                io_err("write", path, &e)
+            }),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(BosunError::conflict(
             format!(
                 "{} already exists; bosun never overwrites a key",
