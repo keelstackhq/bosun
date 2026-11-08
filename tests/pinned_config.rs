@@ -2,7 +2,8 @@
 //! unknown keys. So bosun's own `.bosun/bosun.toml` may only use tables that release knows: a
 //! newer key breaks every gate on main until a release that reads it is pinned.
 
-/// The top-level keys each pinned release accepts. Add the new release when pinning it.
+/// The top-level keys each pinned release accepts. Add a release only when it accepts new keys
+/// (see `known_for`).
 const KNOWN: &[(&str, &[&str])] = &[
     ("0.2.3", &["project", "stack", "review", "slack", "prices"]),
     (
@@ -286,9 +287,37 @@ const KNOWN_POLICIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Whether release `version` accepts `[approvals] policy = value`; `None` for an unlisted release.
+/// `major.minor.patch` as numbers, so `0.10.0` sorts after `0.9.0`. A pre-release or `v`-prefixed
+/// pin (`0.10.0-rc.1`, `v0.10.0`) panics: the test fails closed.
+fn semver(v: &str) -> Vec<u64> {
+    v.split('.')
+        .map(|p| {
+            p.parse()
+                .unwrap_or_else(|_| panic!("`{v}` is not an x.y.z version"))
+        })
+        .collect()
+}
+
+/// The entry of `version` in a release table, else of the newest older release: a later release
+/// only adds keys (`release_tables_only_grow` checks the listed ones), so the older set is a safe
+/// subset and a pin bump needs no new entry. Add one when a release accepts new keys. A release
+/// that removes or renames a key breaks `release_tables_only_grow`: change that test and this
+/// function with it, so no lookup falls back across that release (exact match from it on).
+/// Backstop for a removal: `tests/governance.rs` parses the `.bosun` config with the current
+/// code, which is the next release. `None` before the first entry.
+fn known_for(
+    table: &[(&'static str, &'static [&'static str])],
+    version: &str,
+) -> Option<&'static [&'static str]> {
+    (table.iter())
+        .filter(|(v, _)| semver(v) <= semver(version))
+        .max_by_key(|(v, _)| semver(v))
+        .map(|(_, keys)| *keys)
+}
+
+/// Whether release `version` accepts `[approvals] policy = value`; `None` before the first entry.
 fn policy_known(version: &str, value: &str) -> Option<bool> {
-    let (_, values) = KNOWN_POLICIES.iter().find(|(v, _)| *v == version)?;
+    let values = known_for(KNOWN_POLICIES, version)?;
     Some(values.contains(&value))
 }
 
@@ -306,7 +335,7 @@ fn committed(path: &str) -> String {
 #[test]
 fn bosun_toml_uses_only_keys_the_pinned_release_knows() {
     let version = committed(".bosun/version").trim().to_string();
-    let Some((_, keys)) = KNOWN.iter().find(|(v, _)| *v == version) else {
+    let Some(keys) = known_for(KNOWN, &version) else {
         panic!(
             "add the top-level keys release {version} accepts to KNOWN in tests/pinned_config.rs"
         );
@@ -323,7 +352,7 @@ fn bosun_toml_uses_only_keys_the_pinned_release_knows() {
 #[test]
 fn limits_toml_uses_only_keys_the_pinned_release_knows() {
     let version = committed(".bosun/version").trim().to_string();
-    let Some((_, keys)) = KNOWN_LIMITS.iter().find(|(v, _)| *v == version) else {
+    let Some(keys) = known_for(KNOWN_LIMITS, &version) else {
         panic!(
             "add the limits keys release {version} accepts to KNOWN_LIMITS in tests/pinned_config.rs"
         );
@@ -355,7 +384,7 @@ fn approvals_uses_only_keys_the_pinned_release_knows() {
     let Some(approvals) = config.get("approvals").and_then(|a| a.as_table()) else {
         return;
     };
-    let Some((_, keys)) = KNOWN_APPROVALS.iter().find(|(v, _)| *v == version) else {
+    let Some(keys) = known_for(KNOWN_APPROVALS, &version) else {
         panic!(
             "add the `[approvals]` keys release {version} accepts to KNOWN_APPROVALS in tests/pinned_config.rs"
         );
@@ -394,4 +423,44 @@ fn policy_known_follows_the_release_table() {
     assert_eq!(policy_known("0.8.0", "autonomous"), Some(true));
     assert_eq!(policy_known("0.7.0", "owner-gated"), Some(true));
     assert_eq!(policy_known("0.4.0", "owner"), None);
+}
+
+#[test]
+fn an_unlisted_release_falls_back_to_the_newest_older_entry() {
+    // Key sets only grow, so the newest older release is a safe subset: no hand-added entry.
+    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.10.0"));
+    assert_eq!(
+        known_for(KNOWN_LIMITS, "0.9.3"),
+        known_for(KNOWN_LIMITS, "0.9.0")
+    );
+    assert_eq!(policy_known("0.99.0", "autonomous"), Some(true));
+    // Numeric order, not string order: 0.99.0 is newer than 0.10.0, 0.2.9 older than 0.3.0.
+    assert_eq!(known_for(KNOWN, "0.2.9"), known_for(KNOWN, "0.2.3"));
+    assert_eq!(known_for(KNOWN, "0.2.2"), None);
+}
+
+#[test]
+fn release_tables_only_grow() {
+    // The fallback in `known_for` is safe only while each release accepts every key the one
+    // before it accepted.
+    for (name, table) in [
+        ("KNOWN", KNOWN),
+        ("KNOWN_LIMITS", KNOWN_LIMITS),
+        ("KNOWN_APPROVALS", KNOWN_APPROVALS),
+        ("KNOWN_POLICIES", KNOWN_POLICIES),
+    ] {
+        for pair in table.windows(2) {
+            let ((old, old_keys), (new, new_keys)) = (pair[0], pair[1]);
+            assert!(
+                semver(old) < semver(new),
+                "{name}: {old} must come before {new}"
+            );
+            for key in old_keys {
+                assert!(
+                    new_keys.contains(key),
+                    "{name}: {new} drops `{key}` that {old} accepts; known_for would fall back wrongly"
+                );
+            }
+        }
+    }
 }
