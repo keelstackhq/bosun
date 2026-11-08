@@ -718,7 +718,7 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     }
     // A decoy link (no open task the author leased) leaves no author to exclude: nothing counts.
     let inputs = autonomous_inputs(gh, pull, &app.ctx.repo.to_string())?;
-    let models = review_models(gh, &pull.base_ref)?;
+    let models = review_models(gh, &pull.base_sha)?;
     let clean = inputs.map_or(vec![], |(comments, mut excluded)| {
         excluded.push(app.ctx.session.clone());
         autonomous_clean(&comments, &pull.head_sha, &excluded, models.as_deref())

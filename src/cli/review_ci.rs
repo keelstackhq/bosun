@@ -15,7 +15,7 @@ use crate::core::agreement::approved;
 use crate::core::budget::{Level, level};
 use crate::core::records::{Record, spend_total};
 use crate::core::risk::{FileView, unseen_diff};
-use crate::core::verdict::{Finding, Verdict};
+use crate::core::verdict::{Finding, Verdict, valid_model};
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -172,7 +172,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
     if task.is_none() {
         pull.body.clear();
     }
-    let mut out = record(&app, &pull, &verdict, SESSION, Some(&cfg.model))?;
+    let mut out = record(&app, &pull, &verdict, SESSION, valid_model(&cfg.model))?;
     let comment = if verdict.findings.is_empty() {
         Value::Null
     } else {

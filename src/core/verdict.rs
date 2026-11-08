@@ -163,6 +163,12 @@ pub fn comment_model(body: &str) -> Option<&str> {
     let head = body.split_once(COMMENT_MARKER).map_or(body, |(h, _)| h);
     let (_, rest) = head.split_once(MODEL_TAG)?;
     let (m, _) = rest.split_once(" -->")?;
+    valid_model(m)
+}
+
+/// A usable reviewer model id: non-empty, no whitespace. The one check for every path (comment
+/// tag, `BOSUN_MODEL`, review-ci config).
+pub fn valid_model(m: &str) -> Option<&str> {
     (!m.is_empty() && !m.contains(char::is_whitespace)).then_some(m)
 }
 

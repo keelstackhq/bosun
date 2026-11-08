@@ -77,7 +77,7 @@ table).
 | Production telemetry as a test | — | missing |
 | Agent review instead of human eyes | `review-pack` → fresh reviewer → verdict. `verdict post` writes the status directly and the reviewer session is self-declared, so the author can post its own; lease holders are excluded only for delegate, two-verdict and autonomous counts; after a merge of main the delta pack shows main's files too | partial |
 | Model reliability varies by task | `[models]` tiers; stop rules move to a stronger tier (`src/core/stop.rs`); `spawn` refuses `[1m]` models; model recorded per verdict | partial |
-| New model resets trust | verdict records carry the reviewer model; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval; the model is self-declared like the session | partial |
+| New model resets trust | verdict records carry the reviewer model; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval; the model is self-declared like the session (guards against accidents, not against a lying author); the list limits only gated approvals (two-verdict, delegate, autonomous), not the low-risk `review-verdict` status | partial |
 | Rules enforce themselves | gates; `test-integrity` refuses deleted tests, new skips, fewer asserts; `ci-minutes` lints workflows | enforced |
 | Repeated review comments become checks | lessons with hits; mechanizable lesson → task; reopens if hit after its mechanism merged | partial |
 | Derive, don't duplicate | `tests/fragments.rs` checks the fold script; `tests/plugin_marketplace.rs` checks the plugin pins match; no CI diff of generated files; `KNOWN` in `tests/pinned_config.rs` and the plugin SHAs are kept by hand | partial |

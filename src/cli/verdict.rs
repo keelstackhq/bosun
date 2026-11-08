@@ -12,7 +12,7 @@ use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
     COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
-    comment_model, comment_session, effective,
+    comment_model, comment_session, effective, valid_model,
 };
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -74,7 +74,7 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
 fn env_model() -> Option<String> {
     ["BOSUN_MODEL", "ANTHROPIC_MODEL"]
         .iter()
-        .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
+        .find_map(|k| std::env::var(k).ok().filter(|v| valid_model(v).is_some()))
 }
 
 fn parse(text: &str) -> Result<Verdict, BosunError> {

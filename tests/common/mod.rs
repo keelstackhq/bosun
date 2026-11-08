@@ -31,6 +31,8 @@ pub fn bosun() -> Command {
         .env_remove("CIRCLECI")
         .env_remove("CIRCLE_BRANCH")
         .env_remove("BOSUN_HALT")
+        .env_remove("BOSUN_MODEL")
+        .env_remove("ANTHROPIC_MODEL")
         .env_remove("BOSUN_ORIGIN")
         .env_remove("CCR_AGENT_PROXY_ENABLED")
         .env_remove("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE")
