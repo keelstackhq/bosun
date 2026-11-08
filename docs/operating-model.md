@@ -136,6 +136,14 @@ candidates are gated in practice.
 Order: done rows first, then the open rows ranked by value for cost, the deferred block included;
 "building" rows are this round's PRs, one task each.
 
+State after the 2026-11-08 round: #16 and #9 merged (#449, #453; #459 hardens #9). #10, #15 and #8
+are open gated PRs that wait for the owner (#454, #456, #457); each row says "done" only in its
+own PR. #17 is deferred: `bosun pin` would also need the changelog and progress fragments and a
+GitHub release check, and the plugin SHAs change rarely. Review follow-ups that wait for those
+merges, as one gated PR: a delta falls back to a full review when the PR's file list is short of
+`changed_files`; `delta_not_in_pr` is capped and listed as untrusted; `comment_body` uses
+`valid_model`; Routine prompts get the untrusted-data note; spec §5 names the spawn prompt note.
+
 Rules for any new mechanism: put it as high as it fits (made impossible, then lint, test, CI,
 review, and last a doc), ratchet it (no new violations, old ones listed), and give it an owner who
 can retire it.
