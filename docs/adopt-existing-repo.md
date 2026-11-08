@@ -148,7 +148,8 @@ All but `splice.yml` run the release pinned in `.bosun/version`, never code from
 5. Optional: the Routines (janitor hourly, curator daily). `bosun doctor` prints their prompts.
 
 Check the result with `bosun doctor` (add `--remote` to also run `hoist check`). It lists each
-step as ok, warn, skipped or missing.
+step as ok, warn, skipped or missing. Without `GITHUB_TOKEN` it still runs the local checks and marks the GitHub ones skipped;
+`data.next_step` names the first missing step.
 
 ## 6. The first plan and the task loop
 
