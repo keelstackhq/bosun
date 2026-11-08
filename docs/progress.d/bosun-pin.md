@@ -1,0 +1,1 @@
+- 2026-11-08 · pin bosun 0.10.0, hoist 0.4.1 (bosun pin --latest; KNOWN lists)
