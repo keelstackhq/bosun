@@ -301,7 +301,7 @@ fn semver(v: &str) -> Vec<u64> {
 /// The entry of `version` in a release table, else of the newest older release: a later release
 /// only adds keys (`release_tables_only_grow` checks the listed ones), so the older set is a safe
 /// subset and a pin bump needs no new entry. Add one when a release accepts new keys, and when it
-/// removes or renames one. Backstop for a removal: `tests/governance.rs` parses the committed
+/// removes or renames one. Backstop for a removal: `tests/governance.rs` parses the `.bosun`
 /// config with the current code, which is the next release. `None` before the first entry.
 fn known_for(
     table: &[(&'static str, &'static [&'static str])],
