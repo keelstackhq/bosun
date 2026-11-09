@@ -34,7 +34,13 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
         .arg(root)
         .args(["config", "user.email"])
         .output()
-        .is_ok_and(|o| o.status.success());
+        .is_ok_and(|o| o.status.success())
+        && Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["config", "user.name"])
+            .output()
+            .is_ok_and(|o| o.status.success());
     let mut c = Command::new("git");
     c.arg("-C").arg(root);
     if !has_id {
@@ -73,6 +79,40 @@ pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
             format!("run `git switch {base}` (up to date), then rerun"),
         ));
     }
+    let stale = if git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{BRANCH}"),
+        ],
+    )
+    .is_ok()
+    {
+        Some((
+            "locally",
+            format!("run `git branch -D {BRANCH}`, then rerun"),
+        ))
+    } else if git(
+        root,
+        &["ls-remote", "--exit-code", "--heads", "origin", BRANCH],
+    )
+    .is_ok()
+    {
+        Some((
+            "on origin",
+            format!("ask the owner to delete {BRANCH} on GitHub (Branches page), then rerun"),
+        ))
+    } else {
+        None
+    };
+    if let Some((where_, fix)) = stale {
+        return Err(BosunError::conflict(
+            format!("{BRANCH} already exists {where_}: it is left from an earlier pin"),
+            fix,
+        ));
+    }
     if !git(root, &["status", "--porcelain"])?.is_empty() {
         return Err(BosunError::conflict(
             "the working tree has changes",
@@ -107,7 +147,7 @@ pub fn publish(
 ) -> CmdResult {
     let (app, base) = match pre {
         Pre::Open(n) => {
-            data["pr"] = json!(n);
+            data["pr"] = json!({"number": n});
             data["left"] = json!([format!(
                 "PR #{n} is the open pin PR: merge it (owner approval, GitHub merges on green), then rerun to move further."
             )]);
@@ -118,9 +158,22 @@ pub fn publish(
     git(root, &["switch", "-q", "-c", BRANCH])?;
     let mut add = vec!["add", "--"];
     add.extend(files);
-    git(root, &add)?;
-    git(root, &["commit", "-q", "-m", title])?;
-    git(root, &["push", "-q", "-u", "origin", BRANCH])?;
+    let pushed = git(root, &add)
+        .and_then(|_| git(root, &["commit", "-q", "-m", title]))
+        .and_then(|_| git(root, &["push", "-q", "-u", "origin", BRANCH]));
+    if let Err(e) = pushed {
+        // The tree was clean, so only the pin edits are dropped: back to the base branch.
+        let back = git(root, &["switch", "-q", "-f", &base])
+            .and_then(|_| git(root, &["branch", "-q", "-D", BRANCH]));
+        let fix = if back.is_ok() {
+            format!("rolled back to {base}; {}", e.fix)
+        } else {
+            format!(
+                "could not roll back: run `git switch -f {base}` and `git branch -D {BRANCH}`, then rerun"
+            )
+        };
+        return Err(BosunError { fix, ..e });
+    }
     let pull = app
         .gh
         .create_pull(title, BRANCH, &base, body, true)

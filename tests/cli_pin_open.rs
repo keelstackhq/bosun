@@ -97,8 +97,40 @@ fn pin_pr_leaves_an_open_pin_pr_alone() {
     fake.pull(7, "chore: pin hoist 0.4.0", "bosun/pin", "");
     let (code, v) = e.run(&fake);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["data"]["pr"], 7);
+    assert_eq!(v["data"]["pr"]["number"], 7);
+    assert_eq!(v["data"]["changed"][0]["tool"], "hoist");
     assert!(v["data"]["left"].to_string().contains("#7"));
     assert_eq!(e.reg.tarballs(), 0);
     assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn pin_pr_refuses_a_stale_local_branch_before_writing() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["branch", "bosun/pin"]);
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("branch -D"));
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(e.reg.tarballs(), 0);
+}
+
+#[test]
+fn pin_pr_rolls_back_when_the_push_is_rejected() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    // A hook that rejects every push to origin.
+    let hook = e.origin.path().join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("rolled back"));
+    assert_eq!(
+        git(e.work.path(), &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "main"
+    );
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(git(e.work.path(), &["branch", "--list", "bosun/pin"]), "");
 }

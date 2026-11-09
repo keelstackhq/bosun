@@ -224,7 +224,7 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         None
     };
     if let Some(super::pin_pr::Pre::Open(_)) = pre {
-        let data = json!({"changed": [], "unchanged": unchanged, "files": [], "branch": BRANCH, "title": ""});
+        let data = json!({"changed": changed, "unchanged": unchanged, "files": [], "branch": BRANCH, "title": ""});
         return super::pin_pr::publish(&root, pre.unwrap(), &[], "", "", data, None);
     }
 
