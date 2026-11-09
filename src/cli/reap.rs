@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use crate::app::{
-    App, active_issues, default_branch, end_lease, merge_counts, notes, set_state, sync_merged,
+    App, active_issues, default_branch, end_lease, merge_counts, set_state, sync_merged,
     task_pr_merged, trusted_notes,
 };
 use crate::cli::plan::epic_item;
@@ -46,15 +46,13 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         // Listed only for tasks without a usable `task-pr` record (older ones).
         let mut all_pulls = None;
         for issue in open_work {
-            let recorded =
-                notes(gh, issue.number)?
-                    .iter()
-                    .rev()
-                    .find_map(|n| match parse_record(&n.body) {
-                        Some(Record::TaskPr { pr, .. }) => Some(pr),
-                        _ => None,
-                    });
-            // The record is trusted like any other; the PR must still link the task.
+            let recorded = trusted_notes(gh, issue.number)?.iter().rev().find_map(|n| {
+                match parse_record(&n.body) {
+                    Some(Record::TaskPr { pr, .. }) => Some(pr),
+                    _ => None,
+                }
+            });
+            // Only a writer's record counts (`trusted_notes`); the PR must still link the task.
             let pull = match recorded {
                 Some(pr) => gh
                     .get_pull(pr)?
