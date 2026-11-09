@@ -10,10 +10,22 @@ use crate::output::BosunError;
 
 pub const LABEL: &str = "bosun:registry";
 
-/// The registry issue and its comments; `None` before the first join.
+/// The registry issue and its writers' comments; `None` before the first join.
 pub fn load(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
+    load_with(gh, true)
+}
+
+/// As [`load`], with every comment. Only for a session's own records (`spawn --record` finds
+/// its own join to edit in place): it must work when the permission lookup fails, and a forged
+/// join under its id only makes the in-place edit fail.
+pub fn load_own(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
+    load_with(gh, false)
+}
+
+fn load_with(gh: &dyn Github, trusted: bool) -> Result<Option<(u64, Vec<Note>)>> {
     match gh.list_issues(&[LABEL], IssueState::Open)?.first() {
-        Some(i) => Ok(Some((i.number, trusted_notes(gh, i.number)?))),
+        Some(i) if trusted => Ok(Some((i.number, trusted_notes(gh, i.number)?))),
+        Some(i) => Ok(Some((i.number, crate::app::notes(gh, i.number)?))),
         None => Ok(None),
     }
 }
@@ -28,7 +40,16 @@ pub fn trusted_spend_notes(gh: &dyn Github) -> Result<Vec<Note>> {
 }
 
 pub fn ensure(gh: &dyn Github) -> Result<(u64, Vec<Note>)> {
-    if let Some(found) = load(gh)? {
+    ensure_with(gh, true)
+}
+
+/// As [`ensure`], with every comment (see [`load_own`]).
+pub fn ensure_own(gh: &dyn Github) -> Result<(u64, Vec<Note>)> {
+    ensure_with(gh, false)
+}
+
+fn ensure_with(gh: &dyn Github, trusted: bool) -> Result<(u64, Vec<Note>)> {
+    if let Some(found) = load_with(gh, trusted)? {
         return Ok(found);
     }
     gh.ensure_label(LABEL, "5319e7", "bosun session registry")?;

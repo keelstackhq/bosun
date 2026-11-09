@@ -565,7 +565,9 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             }
         }
     });
-    let (reg, reg_notes) = registry::ensure(gh)?;
+    // This session's own join and lease only: every comment, no permission lookup (a
+    // forged record under its id cannot hand over anything it does not hold).
+    let (reg, reg_notes) = registry::ensure_own(gh)?;
     let all = members(&reg_notes);
     let depth = all
         .iter()
@@ -586,7 +588,7 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
-    if leases_of(n, &trusted_notes(gh, n)?)
+    if leases_of(n, &crate::app::notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me)
     {
