@@ -369,9 +369,16 @@ fn open_pin_pr(root: &Path) -> Result<(RepoId, Option<u64>, String), BosunError>
     Ok((app.ctx.repo.clone(), None, base))
 }
 
-/// The SessionStart notice (spec D35): `Some(line)` when a tool pin is behind npm latest; `None`
-/// when the hook should stay silent (opted out, not a pin repo, nothing behind). Waits 5 s at most.
-pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
+/// What `bosun doctor` and the SessionStart notice report: the tool pins behind npm latest, and
+/// the newest bosun when this binary is older.
+pub struct Update {
+    pub moves: Vec<String>,
+    pub cli: Option<String>,
+}
+
+/// `None` when the check is off (`BOSUN_PIN_CHECK=0`), the repo has no pin script or a bosun
+/// channel, or nothing is behind. Waits 5 s at most.
+pub fn update_check(dir: &Path) -> Result<Option<Update>, BosunError> {
     if std::env::var("BOSUN_PIN_CHECK").is_ok_and(|v| v == "0") {
         return Ok(None);
     }
@@ -381,23 +388,41 @@ pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
         return Ok(None);
     }
     let npm = Npm::new(Some(Duration::from_secs(5)));
-    let (_, behind, _, _) = inspect(&root, &[], &npm)?;
-    let moves: Vec<String> = behind
-        .iter()
-        .map(|c| {
-            format!(
-                "{} {} -> {}",
-                c["tool"].as_str().unwrap_or(""),
-                c["from"],
-                c["to"]
-            )
-            .replace('"', "")
-        })
-        .collect();
-    Ok((!moves.is_empty()).then(|| {
+    let pins = inspect(&root, &[], &npm);
+    // The binary check does not depend on the pin compare: npm answered either way.
+    let cli = parse_semver(env!("CARGO_PKG_VERSION")).and_then(|have| {
+        let m = npm.meta("bosun", "latest").ok()?;
+        (parse_semver(&m.version)? > have).then_some(m.version)
+    });
+    let moves: Vec<String> = match pins {
+        Ok((_, behind, _, _)) => behind
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {} -> {}",
+                    c["tool"].as_str().unwrap_or(""),
+                    c["from"],
+                    c["to"]
+                )
+                .replace('"', "")
+            })
+            .collect(),
+        Err(e) if cli.is_none() => return Err(e),
+        Err(e) => {
+            eprintln!("bosun: warning: pin check: {}", e.message);
+            Vec::new()
+        }
+    };
+    Ok((!moves.is_empty() || cli.is_some()).then_some(Update { moves, cli }))
+}
+
+/// The SessionStart notice (spec D35): `Some(line)` when a tool pin is behind npm latest; `None`
+/// when the hook should stay silent (opted out, not a pin repo, nothing behind).
+pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
+    Ok(update_check(dir)?.filter(|u| !u.moves.is_empty()).map(|u| {
         format!(
-            "tool pins behind: {}. The orchestrator moves them: on branch {BRANCH} run `bosun pin --latest`, commit, push, then make its `next` call or refresh the open pin PR it names (one pin PR per repo).",
-            moves.join(", ")
+            "tool pins behind: {}. The orchestrator moves them: on the default branch run `bosun pin --latest --pr` (branch {BRANCH}, commit, push, draft PR; one pin PR per repo).",
+            u.moves.join(", ")
         )
     }))
 }
