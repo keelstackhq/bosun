@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::risk_check::{
-    Found, decisive_review, delegation_blocked, submitted, verdict_inputs, withdrawn,
+    Found, decisive_review, delegation_blocked, review_models, submitted, verdict_inputs, withdrawn,
 };
 use super::verdict::CONTEXT;
 use crate::core::approve::TRUST_FILES;
@@ -231,8 +231,14 @@ pub fn candidates(gh: &dyn Github, pull: &Pull, default_branch: &str) -> Vec<Str
     out
 }
 
-/// The id of the newest verdict record on `h` (workflow, unedited) if it approves independently.
-fn approved_by_independent(comments: &[Comment], excluded: &[String], h: &str) -> Option<u64> {
+/// The id of the newest verdict record on `h` (workflow, unedited) if it approves independently
+/// and, with `models` (`[approvals] review_models` at base), names one of them.
+fn approved_by_independent(
+    comments: &[Comment],
+    excluded: &[String],
+    models: Option<&[String]>,
+    h: &str,
+) -> Option<u64> {
     let bot = |c: &&Comment| c.user.eq_ignore_ascii_case(VERDICT_AUTHOR);
     let on_h = |c: &Comment| match apply_record(&c.body) {
         Some(Record::Verdict {
@@ -240,8 +246,12 @@ fn approved_by_independent(comments: &[Comment], excluded: &[String], h: &str) -
             head_sha,
             approved,
             confidence,
+            model,
             ..
-        }) if head_sha == h => Some((session, approved && confidence.is_some())),
+        }) if head_sha == h => {
+            let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
+            Some((session, approved && confidence.is_some() && enrolled))
+        }
         _ => None,
     };
     let newest = comments
@@ -361,10 +371,11 @@ pub fn carry_verdict(
         return None;
     }
     let (comments, excluded) = verdict_inputs(gh, pull.number, linked).ok()?;
+    let models = review_models(gh, &pull.base_sha).ok()?;
     let mut reviews = gh.list_reviews(pull.number).ok()?;
     reviews.sort_by_key(|r| r.id);
     cands.into_iter().find(|h| {
-        let Some(id) = approved_by_independent(&comments, &excluded, h) else {
+        let Some(id) = approved_by_independent(&comments, &excluded, models.as_deref(), h) else {
             return false;
         };
         (check(gh, pull, default_branch, h))

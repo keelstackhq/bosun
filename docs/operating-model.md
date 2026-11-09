@@ -126,9 +126,9 @@ candidates are gated in practice.
 | 16 | bosun's own pin without a hand-added `KNOWN` entry | `tests/pinned_config.rs` falls back to the newest older release: it only knows fewer keys | 10 (test) | no — done |
 | 9 | Cost per outcome that holds | `bosun progress`: held = merged and not undone by a merged `bosun revert` PR; no escape window yet, a revert made by hand is missed | 60 | no — done |
 | 8 | New model resets trust | record the model per verdict; `[approvals] review_models` limits which models count for delegate, two-verdict and autonomous approval | 150 | yes (R-gate) — done (enforced once `review_models` is set, after a release that reads it) |
-| 17 | Plugin marketplace SHAs by `bosun pin --latest` | pin the superpowers and caveman SHAs in `.claude-plugin/marketplace.json` and the setup script from the plugin repos' heads | 80 | no (writes R-gov files, so the pin PR is gated) — next |
 | 4 | Count only reviewer-bound verdicts | `review-verdict` from `verdict apply` only, reviewer bound to a workflow run (#298); ends self-declared reviewer sessions and models | 200 | yes (R-gate, workflow: owner) — deferred: needs the owner's verdict workflow change |
 | 7 | Autonomy earned per change class | revert and escape rate per rule id, from #9's revert data; delegate only under a limit in `limits.toml` | 350 | yes (R-gate) — deferred: needs #9's data first and an owner-set limit |
+| 17 | Plugin marketplace SHAs by `bosun pin --latest` | pin the superpowers and caveman SHAs in `.claude-plugin/marketplace.json` and the setup script from the plugin repos' heads | 80 | no (writes R-gov files, so the pin PR is gated) — deferred: `bosun pin` would also need fragments and a GitHub release check; the SHAs change rarely |
 | 18 | Consumers get new splice/hoist/berth pins without a bosun release | a channel piece for pins only | 100 | yes (R-ci-review) — deferred: the channel version is the bosun release by design; release more often instead |
 | 11 | Per-loop kill switch | `bosun:halt` issue with a scope; `kill_switch` checks it | 150 | yes (R-gate: `app.rs`) — deferred: needs #12's loop names first; the repo switch covers today's single loop |
 | 12 | One manifest per loop | `.bosun/loops/<name>.toml`: mandate, identity, objective, budget, stop rule, kill switch | 300 | yes (R-gov) — deferred: a new config surface the owner must design; no second loop runs yet |
@@ -141,10 +141,11 @@ Order: done rows first, then the open rows ranked by value for cost, the deferre
 State after the 2026-11-08 round: #16 and #9 merged (#449, #453; #459 hardens #9). #10, #15 and #8
 are open gated PRs that wait for the owner (#454, #456, #457); each row says "done" only in its
 own PR. #17 is deferred: `bosun pin` would also need the changelog and progress fragments and a
-GitHub release check, and the plugin SHAs change rarely. Review follow-ups that wait for those
-merges, as one gated PR: a delta falls back to a full review when the PR's file list is short of
-`changed_files`; `delta_not_in_pr` is capped and listed as untrusted; `comment_body` uses
-`valid_model`; Routine prompts get the untrusted-data note; spec §5 names the spawn prompt note.
+GitHub release check, and the plugin SHAs change rarely. The review follow-ups are done in one
+gated PR (a delta falls back to a full review when the PR's file list is short of `changed_files`;
+`delta_not_in_pr` is capped and untrusted; `comment_body` uses `valid_model`; carry honours
+`review_models`; spec §5 names the spawn prompt note). Left: Routine prompts get the
+untrusted-data note.
 
 Rules for any new mechanism: put it as high as it fits (made impossible, then lint, test, CI,
 review, and last a doc), ratchet it (no new violations, old ones listed), and give it an owner who
