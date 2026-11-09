@@ -1,1 +1,0 @@
-- `bosun progress` reads the task PR only from writers' records and finds reverts by their own branch in this repo, not by scanning every closed PR.

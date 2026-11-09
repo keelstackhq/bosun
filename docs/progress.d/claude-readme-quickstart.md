@@ -1,1 +1,0 @@
-- 2026-11-08 · readme quickstart · README start-in-5-minutes and for-agents blocks · PR #455

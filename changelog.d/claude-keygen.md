@@ -1,1 +1,0 @@
-- `bosun keygen` makes an ed25519 approval key (PEM, mode 0600, outside the repo) and with `--enroll` adds it to `.bosun/approvers.toml`.

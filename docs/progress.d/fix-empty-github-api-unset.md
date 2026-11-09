@@ -1,1 +1,0 @@
-- 2026-11-08 · github client · empty BOSUN_GITHUB_API counts as unset

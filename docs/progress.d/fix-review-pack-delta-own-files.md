@@ -1,1 +1,0 @@
-- 2026-11-08 · operating-model #15 · review-pack delta shows only the PR's own files after a main merge

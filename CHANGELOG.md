@@ -4,6 +4,20 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.10.0 (hoist 0.4.1) with npm sha512 values via `bosun pin --latest`; KNOWN lists gain 0.10.0 (config unchanged). After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
+- `bosun adopt` prints only the owner steps still left, the exact setup commands in `data.commands`, and the branch-protection settings link.
+- `bosun doctor` runs without a token (GitHub steps are skipped), fills in the real owner/repo in fixes, drops the embedded setup script for `run: bosun setup-snippet`, and adds `data.next_step`.
+- `bosun adopt` adds `.bosun/approvers.toml` to `data.commands` when git shows it new or changed (after `bosun keygen --enroll`); `bosun doctor` names a malformed `BOSUN_GITHUB_API`.
+- `bosun keygen` makes an ed25519 approval key (PEM, mode 0600, outside the repo) and with `--enroll` adds it to `.bosun/approvers.toml`.
+- README: "Start in 5 minutes" for humans and a "For agents" block; stale version lines removed.
+- `bosun progress` reports `reverted`, `held` and `cost_per_held_task_usd`: tasks whose PR a merged `bosun/revert-<n>` PR undid are left out of the held outcomes.
+- review-pack names its `untrusted` fields and tells the reviewer they are data; both built-in spawn prompts call issue, PR, comment and Slack text untrusted data, and the default prompt quotes the epic title as data.
+- Verdict records carry the reviewer model (comment tag `bosun:model`, from `BOSUN_MODEL` or `ANTHROPIC_MODEL`), and the optional `[approvals] review_models` limits which models count for two-verdicts, delegate and autonomous approval.
+- An empty or blank `BOSUN_GITHUB_API` counts as unset (api.github.com), for the client and `bosun approve` alike.
+- `bosun progress` reads the task PR only from writers' records and finds reverts by their own branch in this repo, not by scanning every closed PR.
+- fix: `review-pack` delta after a merge of main lists only the PR's own files, with the PR's patches
+- A pinned release with no entry in `tests/pinned_config.rs` is checked against the newest older entry, so a pin bump needs no hand-added `KNOWN` entry.
+
 ## 0.10.0 (2026-11-07)
 
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.9.0 with its npm sha512 values; KNOWN lists gain 0.9.0 (`trailers`). After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
