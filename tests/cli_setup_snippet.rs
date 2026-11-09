@@ -328,6 +328,11 @@ fn a_merged_pin_reaches_the_next_session_without_a_new_paste() {
     let (code, err, l) = boot(&work, &bin, &log);
     assert_eq!(code, 0, "{err}");
     assert!(l.contains("pin=0.10.0"), "the new pin runs: {l}");
+    // The pasted text holds no version or checksum, so a release never changes it.
+    assert!(
+        !snippet().contains("BOSUN_VERSION") && !snippet().contains("SHA512"),
+        "the bootstrap pins nothing"
+    );
     // A new pinned version has its own install record, so a warm container installs it again.
     let script =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
