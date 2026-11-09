@@ -9,16 +9,17 @@ use super::cost::{per_task, round_usd};
 use super::records::{Note, Record, parse_record};
 use crate::time::parse_rfc3339;
 
-/// One PR with recorded spend.
+/// One PR of the month. `None` fields are unrecorded: nothing is guessed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
     pub pr: u64,
-    pub title: Option<String>,
-    pub issue: u64,
-    pub sessions: Vec<String>,
-    pub models: Vec<String>,
-    pub usd: f64,
-    /// No record carries tokens yet, so this is always `None`: unknown is never guessed.
+    pub title: String,
+    /// The task issue that names this PR in a `task-pr` record.
+    pub issue: Option<u64>,
+    pub sessions: Option<Vec<String>>,
+    pub models: Option<Vec<String>>,
+    pub usd: Option<f64>,
+    /// No record carries tokens yet, so this is always `None`.
     pub tokens: Option<u64>,
     pub outcome: &'static str,
     pub merged_at: Option<String>,
@@ -80,19 +81,37 @@ pub fn facts(notes: &[Note]) -> (Vec<String>, Vec<String>, f64, usize) {
 fn totals(rows: &[Row]) -> Value {
     let count = |o: &str| rows.iter().filter(|r| r.outcome == o).count();
     let (held, reverted) = (count("held"), count("reverted"));
-    let usd = round_usd(rows.iter().map(|r| r.usd).sum());
-    let mut top: Vec<&Row> = rows.iter().collect();
-    top.sort_by(|a, b| b.usd.total_cmp(&a.usd).then(a.pr.cmp(&b.pr)));
+    let with_spend = rows.iter().filter(|r| r.usd.is_some()).count();
+    let usd = round_usd(rows.iter().filter_map(|r| r.usd).sum());
+    // Cost per merged or held PR: only PRs of that outcome with recorded spend, both ways.
+    let spent = |outcomes: &[&str]| -> (usize, f64) {
+        let v: Vec<f64> = rows
+            .iter()
+            .filter(|r| outcomes.contains(&r.outcome))
+            .filter_map(|r| r.usd)
+            .collect();
+        (v.len(), round_usd(v.iter().sum()))
+    };
+    let ((merged_n, merged_usd), (held_n, held_usd)) =
+        (spent(&["held", "reverted"]), spent(&["held"]));
+    let mut top: Vec<&Row> = rows.iter().filter(|r| r.usd.is_some()).collect();
+    top.sort_by(|a, b| {
+        b.usd
+            .partial_cmp(&a.usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.pr.cmp(&b.pr))
+    });
     let top: Vec<Value> = top
         .iter()
         .take(5)
         .map(|r| json!({"pr": r.pr, "title": r.title, "usd": r.usd}))
         .collect();
     json!({
-        "prs": rows.len(), "usd": usd,
+        "prs": rows.len(), "prs_with_spend": with_spend, "usd": usd,
         "merged": held + reverted, "held": held, "reverted": reverted,
-        "cost_per_merged_usd": per_task(usd, held + reverted),
-        "cost_per_held_usd": per_task(usd, held),
+        "merged_with_spend": merged_n, "held_with_spend": held_n,
+        "cost_per_merged_usd": per_task(merged_usd, merged_n),
+        "cost_per_held_usd": per_task(held_usd, held_n),
         "top_prs": top,
     })
 }
@@ -112,8 +131,9 @@ pub fn report(month: &str, rows: &[Row]) -> Value {
     json!({"month": month, "rows": list, "totals": totals(&rows)})
 }
 
+/// Dollars with two decimals; `-` for null. A negative zero prints as 0.00.
 fn usd_cell(v: &Value) -> String {
-    v.as_f64().map_or("-".into(), |x| format!("{x:.2}"))
+    v.as_f64().map_or("-".into(), |x| format!("{:.2}", x + 0.0))
 }
 
 fn cell(v: &Value) -> String {
@@ -134,7 +154,9 @@ pub fn markdown(data: &Value) -> String {
     let (t, month) = (&data["totals"], data["month"].as_str().unwrap_or(""));
     let mut out = format!("# Budget report {month}\n\n");
     out += &format!(
-        "- PRs: {}\n- Spend: ${}\n- Merged: {} (held {}, reverted {})\n",
+        "- PRs: {} (spend recorded for {} of {} PRs)\n- Spend: ${}\n- Merged: {} (held {}, reverted {})\n",
+        t["prs"],
+        t["prs_with_spend"],
         t["prs"],
         usd_cell(&t["usd"]),
         t["merged"],
@@ -142,11 +164,13 @@ pub fn markdown(data: &Value) -> String {
         t["reverted"],
     );
     out += &format!(
-        "- Cost per merged PR: ${}\n- Cost per held PR: ${}\n",
+        "- Cost per merged PR (with recorded spend, n={}): ${}\n- Cost per held PR (with recorded spend, n={}): ${}\n",
+        t["merged_with_spend"],
         usd_cell(&t["cost_per_merged_usd"]),
+        t["held_with_spend"],
         usd_cell(&t["cost_per_held_usd"]),
     );
-    out += "\n## Top PRs by spend\n\n";
+    out += "\n## Top PRs by recorded spend\n\n";
     for p in t["top_prs"].as_array().into_iter().flatten() {
         out += &format!(
             "- #{} {}: ${}\n",
@@ -158,11 +182,12 @@ pub fn markdown(data: &Value) -> String {
     out += "\n## PRs\n\n| PR | Title | Task | Sessions | Models | USD | Tokens | Outcome | Merged at |\n";
     out += "| --- | --- | --- | --- | --- | ---: | ---: | --- | --- |\n";
     for r in data["rows"].as_array().into_iter().flatten() {
+        let task = r["issue"].as_u64().map_or("-".into(), |n| format!("#{n}"));
         out += &format!(
-            "| #{} | {} | #{} | {} | {} | {} | {} | {} | {} |\n",
+            "| #{} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             r["pr"],
             cell(&r["title"]),
-            r["issue"],
+            task,
             cell(&r["sessions"]),
             cell(&r["models"]),
             usd_cell(&r["usd"]),
@@ -182,11 +207,11 @@ mod tests {
     fn row(pr: u64, usd: f64, outcome: &'static str) -> Row {
         Row {
             pr,
-            title: Some(format!("T{pr}")),
-            issue: pr + 100,
-            sessions: vec!["s".into()],
-            models: vec![],
-            usd,
+            title: format!("T{pr}"),
+            issue: Some(pr + 100),
+            sessions: Some(vec!["s".into()]),
+            models: None,
+            usd: Some(usd),
             tokens: None,
             outcome,
             merged_at: None,
@@ -262,7 +287,16 @@ mod tests {
             (Some(6), Some(4), Some(3))
         );
         assert_eq!(t["usd"], 7.75);
-        assert_eq!(t["cost_per_merged_usd"], 1.9375);
+        // Merged or held PRs with recorded spend only: reverted 3.0, held 1.0, 1.0 and 0.25.
+        assert_eq!(
+            (
+                t["merged_with_spend"].as_u64(),
+                t["held_with_spend"].as_u64()
+            ),
+            (Some(4), Some(3))
+        );
+        assert_eq!(t["cost_per_merged_usd"], 1.3125);
+        assert_eq!(t["cost_per_held_usd"], 0.75);
         let top: Vec<u64> = t["top_prs"]
             .as_array()
             .unwrap()
@@ -283,5 +317,31 @@ mod tests {
             markdown(&report("2026-11", &[row(1, 1.0, "open")]))
         );
         assert!(markdown(&d).contains("| #1 | T1 | #101 | s | - | 1.00 | - | open | - |"));
+    }
+
+    #[test]
+    fn unrecorded_spend_is_null_and_zero_prints_without_a_sign() {
+        let mut r = row(1, 0.0, "held");
+        (r.usd, r.sessions, r.issue) = (None, None, None);
+        let d = report("2026-11", &[r]);
+        assert!(d["rows"][0]["usd"].is_null() && d["rows"][0]["sessions"].is_null());
+        let t = &d["totals"];
+        assert_eq!(
+            (t["prs"].as_u64(), t["prs_with_spend"].as_u64()),
+            (Some(1), Some(0))
+        );
+        assert_eq!(t["usd"], 0.0);
+        assert!(t["usd"].as_f64().unwrap().is_sign_positive());
+        assert!(t["top_prs"].as_array().unwrap().is_empty());
+        let md = markdown(&d);
+        assert!(
+            md.contains("- Spend: $0.00\n") && !md.contains("-0.00"),
+            "{md}"
+        );
+        assert!(md.contains("spend recorded for 0 of 1 PRs"));
+        assert!(
+            md.contains("| #1 | T1 | - | - | - | - | - | held | - |"),
+            "{md}"
+        );
     }
 }

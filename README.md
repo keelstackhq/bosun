@@ -120,7 +120,7 @@ bosun pr 42                            # open the PR as a draft: no CI runs on i
 for g in fmt lint test deps test-integrity; do bosun gate $g || break; done   # local, stamped
 bosun pr 42 --ready                    # ready + auto-merge; GitHub merges on green (bosun never merges)
 bosun gate-missed --pr 41              # "Which gate missed this?" issue for an escaped defect (main-red and revert open it too)
-bosun budget report --month 2026-11 --out reports/budget   # spend per PR for one UTC month: stdout JSON, DIR/2026-11.md and .json (read-only)
+bosun budget report --month 2026-11 --out reports/budget   # every PR of one UTC month, with spend where recorded: stdout JSON, DIR/2026-11.md and .json (read-only)
 ```
 
 The loop is draft first: `bosun pr`, local gates, then `bosun pr --ready`. A draft costs no CI

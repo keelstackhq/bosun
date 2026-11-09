@@ -182,13 +182,20 @@ impl Http {
     }
 
     fn pages(&self, path: &str, key: Option<&str>) -> Result<Vec<Value>> {
-        self.pages_capped(path, key, usize::MAX)
+        self.pages_capped(path, key, usize::MAX, None)
+            .map(|(items, _)| items)
+    }
+
+    /// Like `get_all`, but stops after the first page whose last item satisfies `stop` (a list
+    /// sorted so that nothing after it can matter). That page is returned whole.
+    pub fn get_all_until(&self, path: &str, stop: &dyn Fn(&Value) -> bool) -> Result<Vec<Value>> {
+        self.pages_capped(path, None, usize::MAX, Some(stop))
             .map(|(items, _)| items)
     }
 
     /// Like `get_all`, but reads at most `max` pages; the flag says that a next page was left.
     pub fn get_pages(&self, path: &str, max: usize) -> Result<(Vec<Value>, bool)> {
-        self.pages_capped(path, None, max)
+        self.pages_capped(path, None, max, None)
     }
 
     fn pages_capped(
@@ -196,6 +203,7 @@ impl Http {
         path: &str,
         key: Option<&str>,
         max: usize,
+        stop: Option<&dyn Fn(&Value) -> bool>,
     ) -> Result<(Vec<Value>, bool)> {
         let mut items = Vec::new();
         let mut next = Some(path.to_string());
@@ -215,7 +223,11 @@ impl Http {
                 None => body,
             };
             if let Value::Array(page) = page {
+                let done = stop.is_some_and(|f| page.last().is_some_and(f));
                 items.extend(page);
+                if done {
+                    return Ok((items, false));
+                }
             }
             next = match &r.link_next {
                 // Only follow links that stay on the configured API host.

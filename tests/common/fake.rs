@@ -1260,6 +1260,14 @@ fn route(
                     p
                 })
                 .collect();
+            let mut items: Vec<Value> = items;
+            if query.get("sort").map(String::as_str) == Some("updated") {
+                // Newest update first, as GitHub does with direction=desc.
+                items.sort_by(|a, b| {
+                    let key = |p: &Value| p["updated_at"].as_str().unwrap_or("").to_string();
+                    key(b).cmp(&key(a))
+                });
+            }
             page(items, &query, base, path, raw_query)
         }
         ("POST", ["pulls"]) => {
