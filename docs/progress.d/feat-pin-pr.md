@@ -1,1 +1,1 @@
-- 2026-11-09 · update 1 · `bosun pin --latest --pr`, one-step pin PR · PR #TBD
+- 2026-11-09 · update 1 · `bosun pin --latest --pr`, one-step pin PR · PR #474

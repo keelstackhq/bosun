@@ -101,13 +101,38 @@ fn up_to_date_is_silent() {
         ],
         true,
     );
-    assert!(update(&v).is_none(), "{v}");
+    let it = update(&v).expect("always an item");
+    assert_eq!(it["status"], "ok", "{it}");
+    assert_eq!(it["detail"], "pins and binary match npm latest");
 }
 
 #[test]
-fn the_opt_out_skips_the_check() {
+fn the_opt_out_is_a_skipped_item_with_the_reason() {
     let v = doctor(&BEHIND, false);
-    assert!(update(&v).is_none(), "{v}");
+    let it = update(&v).expect("always an item");
+    assert_eq!(it["status"], "skipped", "{it}");
+    assert!(it["detail"].as_str().unwrap().contains("BOSUN_PIN_CHECK=0"));
+}
+
+#[test]
+fn a_channel_repo_still_checks_the_binary() {
+    let d = repo();
+    std::fs::create_dir_all(d.path().join(".splice/channels")).unwrap();
+    std::fs::write(d.path().join(".splice/channels/bosun.toml"), "# c\n").unwrap();
+    let reg = Registry::start(&BEHIND, None, None);
+    let fake = FakeGithub::start();
+    let out = bosun()
+        .env("BOSUN_NPM_REGISTRY", &reg.base)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env_remove("BOSUN_PIN_CHECK")
+        .arg("-C")
+        .arg(d.path())
+        .arg("doctor")
+        .output()
+        .unwrap();
+    let it = update(&one_object(&out.stdout)).expect("item");
+    assert_eq!(it["status"], "warn", "{it}");
+    assert_eq!(it["fix"], "npm i -g @keelstackhq/bosun@99.0.0");
 }
 
 #[test]
@@ -124,6 +149,11 @@ fn an_unreachable_registry_does_not_fail_doctor() {
         .output()
         .unwrap();
     let v = one_object(&out.stdout);
-    assert!(update(&v).is_none(), "{v}");
+    let it = update(&v).expect("always an item");
+    assert_eq!(it["status"], "skipped", "{it}");
+    assert!(
+        it["detail"].as_str().unwrap().contains("npm unreachable"),
+        "{it}"
+    );
     assert!(v["data"]["items"].is_array());
 }

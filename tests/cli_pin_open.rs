@@ -75,9 +75,10 @@ fn pin_pr_pushes_the_branch_and_opens_a_draft_pr() {
     assert_eq!(pushed, "chore: pin hoist 0.4.1");
     assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
     let left = v["data"]["left"].to_string();
+    assert!(left.contains("Approve pin PR #1"), "{left}");
     assert!(
-        left.contains("ready") && left.contains("next session"),
-        "{left}"
+        !left.contains("auto-merge") && !left.contains("session"),
+        "only human steps: {left}"
     );
 }
 
@@ -105,13 +106,36 @@ fn pin_pr_leaves_an_open_pin_pr_alone() {
 }
 
 #[test]
-fn pin_pr_refuses_a_stale_local_branch_before_writing() {
+fn a_stale_local_branch_gets_a_dated_name() {
     let (e, fake) = (Env::new(), FakeGithub::start());
     git(e.work.path(), &["branch", "bosun/pin"]);
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["branch"], "bosun/pin-20261022", "{v}");
+    let on_origin = git(e.origin.path(), &["branch", "--list", "bosun/pin-20261022"]);
+    assert!(on_origin.contains("bosun/pin-20261022"), "{on_origin}");
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn both_names_taken_refuses_before_writing() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["branch", "bosun/pin"]);
+    git(e.work.path(), &["branch", "bosun/pin-20261022"]);
     let (code, v) = e.run(&fake);
     assert_eq!(code, 3, "{v}");
     assert!(v["error"]["fix"].as_str().unwrap().contains("branch -D"));
     assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(e.reg.tarballs(), 0);
+}
+
+#[test]
+fn an_open_dated_pin_pr_counts_as_open() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    fake.pull(9, "chore: pin hoist 0.4.0", "bosun/pin-20261001", "");
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pr"]["number"], 9);
     assert_eq!(e.reg.tarballs(), 0);
 }
 
@@ -146,13 +170,12 @@ fn pin_pr_stops_when_halted_before_any_download() {
 }
 
 #[test]
-fn pin_pr_refuses_a_stale_origin_branch() {
+fn a_stale_origin_branch_gets_a_dated_name() {
     let (e, fake) = (Env::new(), FakeGithub::start());
     git(e.work.path(), &["push", "-q", "origin", "main:bosun/pin"]);
     let (code, v) = e.run(&fake);
-    assert_eq!(code, 3, "{v}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("owner"));
-    assert_eq!(e.reg.tarballs(), 0);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["branch"], "bosun/pin-20261022", "{v}");
 }
 
 #[test]
