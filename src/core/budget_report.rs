@@ -78,6 +78,23 @@ pub fn facts(notes: &[Note]) -> (Vec<String>, Vec<String>, f64, usize) {
     )
 }
 
+/// The spend notes of a task and of its PR together: a session that has spend on the task is
+/// not counted again from the PR, and a PR counts one spend record per session (the first).
+pub fn merge_spend(task: Vec<Note>, pr: Vec<Note>) -> Vec<Note> {
+    let session = |n: &Note| match parse_record(&n.body) {
+        Some(Record::Spend { session, .. }) => Some(session),
+        _ => None,
+    };
+    let mut seen: BTreeSet<String> = task.iter().filter_map(session).collect();
+    let mut out = task;
+    for n in pr {
+        if session(&n).is_some_and(|s| seen.insert(s)) {
+            out.push(n);
+        }
+    }
+    out
+}
+
 fn totals(rows: &[Row]) -> Value {
     let count = |o: &str| rows.iter().filter(|r| r.outcome == o).count();
     let (held, reverted) = (count("held"), count("reverted"));

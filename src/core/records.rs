@@ -58,6 +58,9 @@ pub enum Record {
         at: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         issue: Option<u64>,
+        /// The model the session ran on (`budget record --pr`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     /// A question to the owner.
     Ask { session: String, question: String },

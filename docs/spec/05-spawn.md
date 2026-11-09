@@ -117,6 +117,7 @@ Janitor, resume, results:
   `leave` (reason `relayed`).
   Put `relay_waves` and `[cloud]` into `.bosun` files only once `.bosun/version` pins a bosun
   that knows them: the pinned bosun refuses unknown keys.
+- Spend of a child that made PRs without task issues: at the end the worker, or its orchestrator when archiving it, runs `bosun budget record --pr <n> --from -` for each PR the child made (§9).
 - Archiving finished children: `status` and `reap` add `archive_session` (`{"session_id": <child>}`)
   to `next` for each child of the caller's orchestrator (a session whose `join` names it as
   parent, or its `<session>` part when the caller is `<session>/<task>`; it may have left already)

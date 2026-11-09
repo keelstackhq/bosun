@@ -27,7 +27,7 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     }
 }
 
-fn read_input(from: &str) -> Result<Value> {
+pub(super) fn read_input(from: &str) -> Result<Value> {
     let mut text = String::new();
     let read = if from == "-" {
         std::io::stdin().read_to_string(&mut text).map(|_| ())
@@ -48,7 +48,7 @@ fn read_input(from: &str) -> Result<Value> {
     })
 }
 
-fn usd_of(
+pub(super) fn usd_of(
     a: &BudgetRecordArgs,
     prices: &std::collections::BTreeMap<String, crate::config::Price>,
 ) -> Result<f64> {
@@ -71,6 +71,15 @@ fn usd_of(
 }
 
 fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
+    if !a.pr.is_empty() {
+        return super::budget_pr::run(dir, a);
+    }
+    let Some(n) = a.issue else {
+        return Err(BosunError::usage(
+            "budget record needs an issue number or --pr",
+            "pass the task issue, or --pr <n> for each PR the session made",
+        ));
+    };
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
@@ -82,7 +91,6 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         ));
     }
     let limits = limits_from_default(gh, ctx)?;
-    let n = a.issue;
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
             format!("issue #{n} does not exist"),
@@ -94,6 +102,7 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         usd,
         at: ctx.now.to_string(),
         issue: Some(n),
+        model: None,
     };
     gh.add_comment(n, &spend.to_line())?;
     let (registry_issue, _) = registry::ensure(gh)?;

@@ -8,6 +8,7 @@ pub mod answer;
 pub mod approve;
 pub mod ask;
 pub mod budget;
+mod budget_pr;
 pub mod budget_report;
 pub mod carry_over;
 pub mod ci_log;
@@ -750,8 +751,16 @@ pub struct ProgressArgs {
 
 #[derive(Debug, Args)]
 pub struct BudgetRecordArgs {
-    pub issue: u64,
-    #[arg(long, value_parser = ["claude-sessions", "generic"])]
+    /// The task issue (leave out with --pr).
+    #[arg(conflicts_with = "pr")]
+    pub issue: Option<u64>,
+    /// A PR the session made (repeatable): the cost is split evenly over the PRs and recorded on each.
+    #[arg(long, value_name = "N", conflicts_with = "issue")]
+    pub pr: Vec<u64>,
+    /// With --pr: the cost in USD, instead of reading it from the session.
+    #[arg(long, requires = "pr")]
+    pub usd: Option<f64>,
+    #[arg(long, default_value = "claude-sessions", value_parser = ["claude-sessions", "generic"])]
     pub provider: String,
     #[arg(long)]
     pub from: Option<String>,
