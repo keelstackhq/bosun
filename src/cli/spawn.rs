@@ -17,7 +17,7 @@ use crate::cli::status::process_red;
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members, thread_of};
 use crate::core::meta::area_of;
-use crate::core::records::{Note, Record, spend_total};
+use crate::core::records::{Note, Record, parse_record, spend_total};
 use crate::core::spawn::{SpawnInput, check};
 use crate::core::state::{State, state_of};
 use crate::ctx::Origin;
@@ -565,15 +565,21 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             }
         }
     });
-    // This session's own join and lease only: every comment, no permission lookup (a
-    // forged record under its id cannot hand over anything it does not hold).
+    // Every comment, no permission lookup: record must hand over even when the lookup fails.
+    // So a reader can forge joins under this session's id; the child's depth is the highest
+    // depth of any of them, so a forgery can only raise it (fail closed), never lower it.
     let (reg, reg_notes) = registry::ensure_own(gh)?;
     let all = members(&reg_notes);
-    let depth = all
-        .iter()
+    all.iter()
         .find(|m| &m.session == me && m.expires > now)
-        .map(|m| m.depth)
-        .ok_or_else(unregistered)?
+        .ok_or_else(unregistered)?;
+    let depth = (reg_notes.iter())
+        .filter_map(|n| match parse_record(&n.body) {
+            Some(Record::Join { session, depth, .. }) if &session == me => Some(depth),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
         + 1;
     let expires = now.plus_secs(TTL_SECS);
     let prior = all.iter().find(|m| m.session == child);
