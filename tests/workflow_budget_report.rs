@@ -37,7 +37,7 @@ fn runs_daily_on_main_pushes_and_by_hand_one_at_a_time() {
     assert!(y.contains("  push:\n    branches: [main]"));
     assert!(y.contains("  schedule:\n    - cron:"));
     assert!(y.contains("  workflow_dispatch:"));
-    assert!(y.contains("concurrency:\n  group: budget-report\n  cancel-in-progress: false"));
+    assert!(y.contains("concurrency:\n  group: budget-report\n  cancel-in-progress: true"));
     for id in ["build", "report"] {
         assert!(
             job(&y, id).contains("if: github.ref == 'refs/heads/main'"),
@@ -53,7 +53,9 @@ fn only_the_report_job_can_write_and_it_runs_no_repo_code() {
     assert_eq!(y.matches("contents: write").count(), 1);
     assert_eq!(y.matches("pull-requests: write").count(), 1);
     let (build, report) = (job(&y, "build"), job(&y, "report"));
-    assert!(build.contains("permissions:\n      contents: read"));
+    assert!(build.contains(
+        "permissions:\n      contents: read\n      issues: read\n      pull-requests: read"
+    ));
     assert!(!build.contains("write"));
     assert!(report.contains("contents: write") && report.contains("pull-requests: write"));
     assert!(build.contains("persist-credentials: false"));
@@ -62,7 +64,12 @@ fn only_the_report_job_can_write_and_it_runs_no_repo_code() {
         !report.contains("cargo "),
         "the write job never builds repo code"
     );
-    assert!(report.contains("path: main\n          persist-credentials: false"));
+    assert!(
+        !report.contains("bosun budget")
+            && !report.contains("./bin/")
+            && !report.contains("path: main")
+    );
+    assert!(report.contains("unexpected file in the report artifact"));
 }
 
 #[test]

@@ -7,9 +7,10 @@ name: budget-report
 # reports/budget/** and nothing else; the PR diff (merge base to branch) is just those files.
 #
 # bosun is built from source at the checked-out main: the pinned release (.bosun/version) has no
-# `budget report` yet. The build job runs repo code with a read-only token; the report job holds
-# the write token, runs only that binary and never builds or executes anything from the repo.
-# Event data reaches `run:` lines through `env:` only. A run on another branch does nothing.
+# `budget report` yet. The build job builds and runs it with a read-only token (repo code runs
+# there), and uploads only the report files. The report job holds the write token and runs only
+# git, gh and jq on those files (names checked): it never builds or executes anything from the
+# repo. Event data reaches `run:` lines through `env:` only. A run on another branch does nothing.
 on:
   push:
     branches: [main]
@@ -19,10 +20,11 @@ on:
     - cron: "41 4 * * *"
   workflow_dispatch:
 
-# One run at a time: two runs must never race on the branch. A queued run waits, none is cancelled.
+# One run at a time: two runs must never race on the branch. A newer run cancels the older one;
+# every step is repeatable, so the next run finishes what a cancelled one left.
 concurrency:
   group: budget-report
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -31,8 +33,13 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Read-only: bosun reads issues, comments and pull requests; the write token is not here.
     permissions:
       contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      current: ${{ steps.reports.outputs.current }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,10 +50,30 @@ jobs:
           toolchain: "1.97"
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
+      - name: build the reports
+        id: reports
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_REPO: ${{ github.repository }}
+        run: |
+          cur="$(date -u +%Y-%m)"
+          months="$cur"
+          # In the first 3 days of a month the previous month is still settling.
+          if [ "$(date -u +%d)" -le 3 ]; then
+            months="$months $(date -u -d "${cur}-01 -1 month" +%Y-%m)"
+          fi
+          echo "current=$cur" >> "$GITHUB_OUTPUT"
+          for m in $months; do
+            if ! ./target/release/bosun budget report --month "$m" --out out > "$RUNNER_TEMP/run-$m.json"; then
+              cat "$RUNNER_TEMP/run-$m.json"
+              exit 1
+            fi
+          done
+          ls out
       - uses: actions/upload-artifact@v4
         with:
-          name: bosun-bin
-          path: target/release/bosun
+          name: budget-reports
+          path: out
           retention-days: 1
           if-no-files-found: error
 
@@ -55,43 +82,31 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # The only job with write access: contents for the reports branch, pull-requests for the one
-    # draft PR. issues: read is what `bosun budget report` reads.
+    # draft PR.
     permissions:
       contents: write
       pull-requests: write
-      issues: read
     env:
       GH_TOKEN: ${{ github.token }}
-      GITHUB_TOKEN: ${{ github.token }}
-      BOSUN_REPO: ${{ github.repository }}
       GH_REPO: ${{ github.repository }}
       SHA: ${{ github.sha }}
+      CURRENT: ${{ needs.build.outputs.current }}
       BRANCH: bosun/budget-reports
     steps:
-      # main for bosun's config files only; no credentials are kept in this checkout.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: main
-          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: bosun-bin
-          path: bin
-      - name: build the reports
+          name: budget-reports
+          path: out
+      - name: check the report files
         run: |
-          chmod +x bin/bosun
-          cur="$(date -u +%Y-%m)"
-          months="$cur"
-          # In the first 3 days of a month the previous month is still settling.
-          if [ "$(date -u +%d)" -le 3 ]; then
-            months="$months $(date -u -d "${cur}-01 -1 month" +%Y-%m)"
-          fi
-          echo "CURRENT=$cur" >> "$GITHUB_ENV"
-          for m in $months; do
-            ./bin/bosun -C main budget report --month "$m" --out "$RUNNER_TEMP/out" > "$RUNNER_TEMP/run-$m.json"
+          n=0
+          for f in out/*; do
+            case "$(basename "$f")" in
+              [0-9][0-9][0-9][0-9]-[0-9][0-9].md|[0-9][0-9][0-9][0-9]-[0-9][0-9].json) n=$((n + 1)) ;;
+              *) echo "::error::unexpected file in the report artifact: $f"; exit 1 ;;
+            esac
           done
-          ls "$RUNNER_TEMP/out"
+          test "$n" -gt 0
       - name: does the reports branch exist
         id: branch
         run: |
@@ -112,7 +127,7 @@ jobs:
         run: |
           git checkout -B "$BRANCH"
           mkdir -p reports/budget
-          cp "$RUNNER_TEMP"/out/* reports/budget/
+          cp "$GITHUB_WORKSPACE"/out/* reports/budget/
           git add reports/budget
           if git diff --cached --quiet; then
             echo "no report changed"
@@ -132,7 +147,7 @@ jobs:
       # One draft PR, made once: an existing one (open or not) is never made again.
       - name: the draft PR
         run: |
-          json="$RUNNER_TEMP/out/$CURRENT.json"
+          json="$GITHUB_WORKSPACE/out/$CURRENT.json"
           url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$BRANCH/reports/budget/$CURRENT.md"
           {
             echo "Budget reports for every month, kept on one branch by the budget-report workflow. This PR is never merged."
