@@ -122,8 +122,8 @@ download do not work. Build from source with `cargo install --path .`.
 Done for v0.1.0 (the first pin also switched `ci.yml` and the setup script to npm, see below)
 and for v0.2.0 (#205). For a later release, the PR sets `.bosun/version` and `BOSUN_VERSION` in
 `docs/setup-script.sh` to the new version (and its three `BOSUN_*_SHA512` to the `npm view
-@keelstackhq/<package>@<version> dist.integrity` of `bosun`, `bosun-linux-x64` and `bosun-linux-arm64`) and updates the Status in `docs/PROGRESS.md`; the
-owner then pastes the setup script again. The gates run the pinned release, whose config parser rejects unknown keys: a key that
+@keelstackhq/<package>@<version> dist.integrity` of `bosun`, `bosun-linux-x64` and `bosun-linux-arm64`) and updates the Status in `docs/PROGRESS.md`. No new paste
+is needed: the pasted bootstrap runs each checkout's `docs/setup-script.sh`. The gates run the pinned release, whose config parser rejects unknown keys: a key that
 release adds to `.bosun/bosun.toml` (such as `[approvals] bootstrap_until`, D-012) is set in this
 same pin PR, never before, and only then does the release need an entry in the `KNOWN` tables of
 `tests/pinned_config.rs`: an unlisted release is checked against the newest older entry. A release
