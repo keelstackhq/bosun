@@ -1,0 +1,1 @@
+- 2026-11-09 · budget · spend records count only from writers

@@ -42,16 +42,17 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
         if !parse_rfc3339(&closed_at).is_some_and(|t| in_window(t, since, now)) {
             continue;
         }
-        let notes = notes(gh, issue.number)?;
         // The task's PR only from writers' records: a reader cannot mark a task reverted.
-        let pr = trusted_notes(gh, issue.number)?.iter().rev().find_map(|n| {
-            match parse_record(&n.body) {
+        let trusted = trusted_notes(gh, issue.number)?;
+        let pr = trusted
+            .iter()
+            .rev()
+            .find_map(|n| match parse_record(&n.body) {
                 Some(Record::TaskPr { pr, .. }) => Some(pr),
                 _ => None,
-            }
-        });
+            });
         task_prs.extend(pr.map(|pr| (issue.number, pr)));
-        let usd = spend_total(&notes, None);
+        let usd = spend_total(&crate::app::spend_notes(gh, issue.number)?, None);
         tasks.push((issue.number, issue.title, closed_at, round_usd(usd)));
     }
     tasks.sort_by_key(|t| t.0);
@@ -71,13 +72,10 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
     }
     let reverted = task_prs.iter().filter(|t| undone.contains(&t.1)).count();
     let held = tasks.len() - reverted;
-    let spend_usd = match registry::load(gh)? {
-        // Records in [since, now]: a record stamped after now (clock skew) is left out.
-        Some((_, n)) => {
-            round_usd(spend_total(&n, Some(since)) - spend_total(&n, Some(now.plus_secs(1))))
-        }
-        None => 0.0,
-    };
+    // Records in [since, now]: a record stamped after now (clock skew) is left out.
+    let n = registry::trusted_spend_notes(gh)?;
+    let spend_usd =
+        round_usd(spend_total(&n, Some(since)) - spend_total(&n, Some(now.plus_secs(1))));
     let costs: Vec<f64> = tasks.iter().map(|t| t.3).collect();
     let list: Vec<_> = tasks
         .iter()

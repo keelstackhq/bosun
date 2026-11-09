@@ -199,9 +199,10 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
 fn budget_guard(app: &App) -> Result<(), BosunError> {
     let gh = app.gh.as_ref();
     let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
-    let spent = registry::load(gh)?.map_or(0.0, |(_, reg)| {
-        spend_total(&reg, Some(app.ctx.now.day_start()))
-    });
+    let spent = spend_total(
+        &registry::trusted_spend_notes(gh)?,
+        Some(app.ctx.now.day_start()),
+    );
     if level(spent, daily) == Level::Stop {
         return Err(BosunError::limit(
             format!("spent ${spent:.2} of ${daily:.2} today; no CI review"),

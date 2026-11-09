@@ -264,12 +264,15 @@ fn collect(
     }
     if wants("budget-halt")
         && notified_ok
-        && let Some((reg_issue, reg_notes)) = &reg
+        && let Some((reg_issue, _)) = &reg
     {
-        match limits_from_default(gh, ctx) {
-            Ok(l) => {
+        let limits = limits_from_default(gh, ctx).and_then(|l| {
+            let n = registry::trusted_spend_notes(gh)?;
+            Ok((l, spend_total(&n, Some(ctx.now.day_start()))))
+        });
+        match limits {
+            Ok((l, spent)) => {
                 let daily = l.budget.daily_usd;
-                let spent = spend_total(reg_notes, Some(ctx.now.day_start()));
                 if level(spent, daily) == Level::Stop {
                     let text = format!(
                         "daily budget reached: ${spent:.2} of ${daily:.2} spent; live sessions are stopped. {}",
