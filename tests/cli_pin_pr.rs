@@ -78,3 +78,13 @@ fn unreachable_github_does_not_fail_the_pin() {
     assert_eq!(v["next"][0]["tool"], "mcp__github__create_pull_request");
     assert_eq!(v["next"][0]["args"]["base"], "main");
 }
+
+#[test]
+fn an_open_dated_pin_pr_is_refreshed_not_duplicated() {
+    let fake = FakeGithub::start();
+    fake.pull(9, "chore: pin hoist 0.4.0", "bosun/pin-20261001", "");
+    let (v, _r, _d) = pin(Some(&fake), true);
+    assert_eq!(v["data"]["pr"], 9, "{v}");
+    assert_eq!(v["data"]["branch"], "bosun/pin-20261001");
+    assert_eq!(v["next"], json!([]));
+}

@@ -13,10 +13,20 @@ use crate::output::{BosunError, CmdResult, Outcome};
 
 const BRANCH: &str = "bosun/pin";
 
+/// The open pin PR (number and head branch): from `bosun/pin` or a dated `bosun/pin-*`.
+pub fn find_open(gh: &dyn crate::github::Github) -> Result<Option<(u64, String)>, BosunError> {
+    let own = |h: &str| h == BRANCH || h.starts_with(&format!("{BRANCH}-"));
+    Ok(gh
+        .list_pulls(None, IssueState::Open)?
+        .into_iter()
+        .find(|p| own(&p.head_ref))
+        .map(|p| (p.number, p.head_ref)))
+}
+
 /// What `preflight` found.
 pub enum Pre {
     /// Open pin PR `n`: nothing to do but merge it.
-    Open(u64),
+    Open(u64, String),
     /// Clean tree on the default branch: the app, the base, the branch to push.
     Go(Box<App>, String, String),
 }
@@ -66,14 +76,8 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
     let app = App::load(Some(root))?;
     kill_switch(app.gh.as_ref())?;
-    let own = |h: &str| h == BRANCH || h.starts_with(&format!("{BRANCH}-"));
-    if let Some(p) = app
-        .gh
-        .list_pulls(None, IssueState::Open)?
-        .iter()
-        .find(|p| own(&p.head_ref))
-    {
-        return Ok(Pre::Open(p.number));
+    if let Some((n, head)) = find_open(app.gh.as_ref())? {
+        return Ok(Pre::Open(n, head));
     }
     let base = default_branch(app.gh.as_ref())?;
     let on = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -101,9 +105,7 @@ pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
     } else {
         return Err(BosunError::conflict(
             format!("{BRANCH} and {dated} already exist: they are left from earlier pins"),
-            format!(
-                "run `git branch -D {BRANCH} {dated}` and ask the owner to delete both on GitHub (Branches page), then rerun"
-            ),
+            "delete both names locally (`git branch -D <name>`) and on origin (the owner, on GitHub's Branches page), then rerun".to_string(),
         ));
     };
     if !git(root, &["status", "--porcelain"])?.is_empty() {
@@ -139,7 +141,8 @@ pub fn publish(
     bosun_to: Option<&str>,
 ) -> CmdResult {
     let (app, base, branch) = match pre {
-        Pre::Open(n) => {
+        Pre::Open(n, head) => {
+            data["branch"] = json!(head);
             data["pr"] = json!({"number": n});
             data["left"] = json!([format!(
                 "Approve pin PR #{n} (owner); once it merges, rerun to move further."

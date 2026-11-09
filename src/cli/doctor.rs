@@ -1263,7 +1263,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     }
 
     items.push(match super::pin::update_check(root) {
-        Check::Skipped(why, fix) => skipped(17, "update", &why, &fix),
+        Check::Skipped(why, fix) | Check::Failed(why, fix) => skipped(17, "update", &why, &fix),
         Check::Current => item(
             17,
             "update",

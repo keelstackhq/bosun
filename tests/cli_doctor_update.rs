@@ -157,3 +157,56 @@ fn an_unreachable_registry_does_not_fail_doctor() {
     );
     assert!(v["data"]["items"].is_array());
 }
+
+fn doctor_in(d: &tempfile::TempDir, latest: &[(&str, &str)]) -> Value {
+    let reg = Registry::start(latest, None, None);
+    let fake = FakeGithub::start();
+    let out = bosun()
+        .env("BOSUN_NPM_REGISTRY", &reg.base)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env_remove("BOSUN_PIN_CHECK")
+        .arg("-C")
+        .arg(d.path())
+        .arg("doctor")
+        .output()
+        .unwrap();
+    one_object(&out.stdout)
+}
+
+#[test]
+fn a_broken_script_is_not_called_a_network_error() {
+    let d = repo();
+    let sp = d.path().join("docs/setup-script.sh");
+    let text = std::fs::read_to_string(&sp).unwrap();
+    std::fs::write(&sp, format!("{text}HOIST_VERSION=0.4.0\n")).unwrap();
+    // The binary (0.11) is not behind npm's bosun (0.9), so the broken script is the only signal.
+    let latest = [
+        ("splice", "0.4.0"),
+        ("hoist", "0.4.0"),
+        ("berth", "0.1.0"),
+        ("bosun", "0.9.0"),
+    ];
+    let it = update(&doctor_in(&d, &latest)).expect("item");
+    assert_eq!(it["status"], "skipped", "{it}");
+    let detail = it["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("pin check failed") && !detail.contains("unreachable"),
+        "{it}"
+    );
+    assert!(!it["fix"].as_str().unwrap().contains("network"), "{it}");
+}
+
+#[test]
+fn a_pin_error_does_not_hide_an_old_binary() {
+    // hoist's npm latest (0.3.0) is older than its pin (0.4.0): the pin compare refuses.
+    let d = repo();
+    let latest = [
+        ("splice", "0.4.0"),
+        ("hoist", "0.3.0"),
+        ("berth", "0.1.0"),
+        ("bosun", "99.0.0"),
+    ];
+    let it = update(&doctor_in(&d, &latest)).expect("item");
+    assert_eq!(it["status"], "warn", "{it}");
+    assert_eq!(it["fix"], "npm i -g @keelstackhq/bosun@99.0.0");
+}

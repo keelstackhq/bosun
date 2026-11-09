@@ -136,6 +136,7 @@ fn an_open_dated_pin_pr_counts_as_open() {
     let (code, v) = e.run(&fake);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["pr"]["number"], 9);
+    assert_eq!(v["data"]["branch"], "bosun/pin-20261001");
     assert_eq!(e.reg.tarballs(), 0);
 }
 
