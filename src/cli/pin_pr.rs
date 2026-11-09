@@ -13,13 +13,17 @@ use crate::output::{BosunError, CmdResult, Outcome};
 
 const BRANCH: &str = "bosun/pin";
 
-/// The open pin PR (number and head branch): from `bosun/pin` or a dated `bosun/pin-*`.
-pub fn find_open(gh: &dyn crate::github::Github) -> Result<Option<(u64, String)>, BosunError> {
+/// The open pin PR (number and head branch): from `bosun/pin` or a dated `bosun/pin-*`, in this
+/// repo (a fork's PR of that name is not ours; an unknown head repo never matches).
+pub fn find_open(
+    gh: &dyn crate::github::Github,
+    repo: &str,
+) -> Result<Option<(u64, String)>, BosunError> {
     let own = |h: &str| h == BRANCH || h.starts_with(&format!("{BRANCH}-"));
     Ok(gh
         .list_pulls(None, IssueState::Open)?
         .into_iter()
-        .find(|p| own(&p.head_ref))
+        .find(|p| own(&p.head_ref) && p.head_repo.eq_ignore_ascii_case(repo))
         .map(|p| (p.number, p.head_ref)))
 }
 
@@ -76,7 +80,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
     let app = App::load(Some(root))?;
     kill_switch(app.gh.as_ref())?;
-    if let Some((n, head)) = find_open(app.gh.as_ref())? {
+    if let Some((n, head)) = find_open(app.gh.as_ref(), &app.ctx.repo.to_string())? {
         return Ok(Pre::Open(n, head));
     }
     let base = default_branch(app.gh.as_ref())?;

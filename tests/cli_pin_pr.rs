@@ -88,3 +88,12 @@ fn an_open_dated_pin_pr_is_refreshed_not_duplicated() {
     assert_eq!(v["data"]["branch"], "bosun/pin-20261001");
     assert_eq!(v["next"], json!([]));
 }
+
+#[test]
+fn a_fork_pr_named_like_the_pin_branch_does_not_hide_the_create_call() {
+    let fake = FakeGithub::start();
+    fake.pull_from_fork(7, "bosun/pin", "mallory/widget");
+    let (v, _r, _d) = pin(Some(&fake), true);
+    assert_eq!(v["data"]["pr"], Value::Null, "{v}");
+    assert_eq!(v["next"][0]["tool"], "mcp__github__create_pull_request");
+}

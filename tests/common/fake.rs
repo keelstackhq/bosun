@@ -271,6 +271,14 @@ impl FakeGithub {
             .push(pull_json(number, title, head_ref, "main", body, false));
     }
 
+    /// An open pull request whose head branch lives in another repo (a fork).
+    pub fn pull_from_fork(&self, number: u64, head_ref: &str, fork: &str) {
+        let mut s = self.state.lock().unwrap();
+        let mut p = pull_json(number, "from a fork", head_ref, "main", "", false);
+        p["head"]["repo"] = serde_json::json!({"full_name": fork});
+        s.pulls.push(p);
+    }
+
     /// Whether the pull request is a draft.
     pub fn pull_is_draft(&self, number: u64) -> bool {
         let s = self.state.lock().unwrap();

@@ -213,3 +213,13 @@ fn a_rejected_push_on_the_dated_branch_deletes_only_that_branch() {
     );
     assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
 }
+
+#[test]
+fn a_fork_pr_named_like_the_pin_branch_is_not_the_pin_pr() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    fake.pull_from_fork(7, "bosun/pin", "mallory/widget");
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 0, "{v}");
+    assert_ne!(v["data"]["pr"]["number"], 7, "{v}");
+    assert!(fake.pull_is_draft(8), "a new PR was opened");
+}

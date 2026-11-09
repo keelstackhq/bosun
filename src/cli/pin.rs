@@ -372,7 +372,7 @@ type OpenPin = (RepoId, Option<(u64, String)>, String);
 fn open_pin_pr(root: &Path) -> Result<OpenPin, BosunError> {
     let app = App::load(Some(root))?;
     // An open PR needs no base: a failing base lookup must not hide it.
-    if let Some(found) = super::pin_pr::find_open(app.gh.as_ref())? {
+    if let Some(found) = super::pin_pr::find_open(app.gh.as_ref(), &app.ctx.repo.to_string())? {
         return Ok((app.ctx.repo.clone(), Some(found), String::new()));
     }
     let base = default_branch(app.gh.as_ref())?;
