@@ -22,7 +22,7 @@ pub fn load(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
 /// is summed only from these: a forged `spend` record by anyone else must not stop the agents.
 pub fn trusted_spend_notes(gh: &dyn Github) -> Result<Vec<Note>> {
     match gh.list_issues(&[LABEL], IssueState::Open)?.first() {
-        Some(i) => trusted_notes(gh, i.number),
+        Some(i) => crate::app::spend_notes(gh, i.number),
         None => Ok(Vec::new()),
     }
 }

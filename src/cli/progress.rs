@@ -52,7 +52,7 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
                 _ => None,
             });
         task_prs.extend(pr.map(|pr| (issue.number, pr)));
-        let usd = spend_total(&trusted, None);
+        let usd = spend_total(&crate::app::spend_notes(gh, issue.number)?, None);
         tasks.push((issue.number, issue.title, closed_at, round_usd(usd)));
     }
     tasks.sort_by_key(|t| t.0);

@@ -72,3 +72,17 @@ fn budget_record_does_not_block_a_task_over_a_forged_spend() {
     assert_eq!(v["data"]["over_task_cap"], false, "{v}");
     assert_eq!(v["data"]["blocked"], false, "{v}");
 }
+
+/// review-ci (mode b) posts its spend as github-actions[bot], whose permission lookup is not
+/// `write`: that spend must still count, or the daily stop fails open.
+#[test]
+fn the_workflow_bots_spend_counts() {
+    let fake = FakeGithub::start();
+    registry(&fake);
+    fake.permission("github-actions[bot]", "none");
+    fake.comment_by(1, "github-actions[bot]", &spend(150.0, AT));
+    let (code, v) = run(&fake, "session_me", NOW, &["budget", "check"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["spent_today_usd"], 150.0, "{v}");
+    assert_eq!(v["data"]["level"], "stop", "{v}");
+}

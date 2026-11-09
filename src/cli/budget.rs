@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::lesson::capture_lesson;
 use super::{BudgetCmd, BudgetRecordArgs};
-use crate::app::{App, Result, kill_switch, limits_from_default, set_state, trusted_notes};
+use crate::app::{App, Result, kill_switch, limits_from_default, set_state};
 use crate::core::budget::{level, to_stop};
 use crate::core::lease::members;
 use crate::core::records::{Record, spend_total};
@@ -98,7 +98,7 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let (registry_issue, _) = registry::ensure(gh)?;
     gh.add_comment(registry_issue, &spend.to_line())?;
 
-    let total = spend_total(&trusted_notes(gh, n)?, None);
+    let total = spend_total(&crate::app::spend_notes(gh, n)?, None);
     let over = total > limits.budget.per_task_usd;
     let was_blocked = state_of(&issue.labels) == Some(State::Blocked);
     let blocked = over && set_state(gh, n, &issue, State::Blocked).is_ok();
