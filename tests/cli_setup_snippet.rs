@@ -301,3 +301,41 @@ fn an_unknown_arch_warns_and_goes_on() {
     assert_eq!((code, l.as_str()), (0, "ran\n"));
     assert!(err.contains("riscv64"), "{err}");
 }
+
+/// Updating the cloud needs no re-paste (docs/update.md): the pasted text is the same before and
+/// after a pin PR merges, and the next session start runs the checkout's new script.
+#[test]
+fn a_merged_pin_reaches_the_next_session_without_a_new_paste() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (work, bin, log) = (
+        tmp.path().join("w"),
+        tmp.path().join("bin"),
+        tmp.path().join("log"),
+    );
+    fs::create_dir_all(&bin).unwrap();
+    tools(&bin);
+    stub(&bin, "npm", "echo \"npm $*\" >>\"$LOG\"");
+    let pasted = snippet();
+    checkout(&work, "r", true, Some("echo pin=0.9.0 >>\"$LOG\""));
+    let (code, err, l) = boot(&work, &bin, &log);
+    assert_eq!(code, 0, "{err}");
+    assert!(l.contains("pin=0.9.0") && !l.contains("pin=0.10.0"), "{l}");
+    // The pin PR merges: the default branch has a new docs/setup-script.sh.
+    fs::write(
+        work.join("r/docs/setup-script.sh"),
+        "echo pin=0.10.0 >>\"$LOG\"",
+    )
+    .unwrap();
+    let (code, err, l) = boot(&work, &bin, &log);
+    assert_eq!(code, 0, "{err}");
+    assert!(l.contains("pin=0.10.0"), "the new pin runs: {l}");
+    assert_eq!(pasted, snippet(), "the pasted text never changes");
+    // A new pinned version has its own install record, so a warm container installs it again.
+    let script =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
+            .unwrap();
+    assert!(
+        script.contains("rec=\"$SETUP_STATE_DIR/$1@$2.sha256\""),
+        "install record is keyed by tool@version"
+    );
+}

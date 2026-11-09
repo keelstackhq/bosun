@@ -1,0 +1,1 @@
+- Update path documented: README "Update bosun" and `docs/update.md` (human and agent, local and cloud, verification failures); a test keeps "no re-paste" true.
