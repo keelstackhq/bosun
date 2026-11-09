@@ -25,35 +25,51 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
         })?,
         None => now.to_string()[..7].to_string(),
     };
-    let mut rows = Vec::new();
-    for issue in gh.list_issues(&[], IssueState::All)? {
+    let (mut rows, mut skipped) = (Vec::new(), Vec::new());
+    let mut issues = gh.list_issues(&[], IssueState::All)?;
+    issues.sort_by_key(|i| i.number);
+    for issue in issues {
         if task_meta(&issue).is_none() {
             continue;
         }
         let task_notes = notes(gh, issue.number)?;
-        let (sessions, mut models, usd, spends) = facts(&task_notes);
+        let (sessions, _, usd, spends) = facts(&task_notes);
         if spends == 0 {
             continue;
         }
         // The task's PR only from writers' records, as `bosun progress` reads it.
-        let pr = trusted_notes(gh, issue.number)?.iter().rev().find_map(|n| {
-            match parse_record(&n.body) {
+        let trusted = trusted_notes(gh, issue.number)?;
+        let pr = trusted
+            .iter()
+            .rev()
+            .find_map(|n| match parse_record(&n.body) {
                 Some(Record::TaskPr { pr, .. }) => Some(pr),
                 _ => None,
-            }
-        });
+            });
         let Some(pull) = pr.map(|n| gh.get_pull(n)).transpose()?.flatten() else {
+            skipped.push(issue.number);
             continue;
         };
-        let merged_at = pull.merged_at.clone().filter(|_| pull.merged);
-        let touched = [&merged_at, &pull.closed_at, &pull.updated_at];
-        if !touched
-            .iter()
-            .any(|t| t.as_deref().is_some_and(|t| in_month(&month, t)))
-        {
+        // One row per PR: the lowest task number wins when two tasks name the same PR.
+        if rows.iter().any(|r: &Row| r.pr == pull.number) {
             continue;
         }
-        models.extend(facts(&notes(gh, pull.number)?).1);
+        let merged_at = pull.merged_at.clone().filter(|_| pull.merged);
+        // A finished PR belongs to the month it merged or closed in (later comments do not move
+        // it); an open PR to the month it was last updated in.
+        let when = if pull.merged {
+            &merged_at
+        } else if pull.state == "closed" {
+            &pull.closed_at
+        } else {
+            &pull.updated_at
+        };
+        if !when.as_deref().is_some_and(|t| in_month(&month, t)) {
+            continue;
+        }
+        // Models only from writers' records: a reader cannot add a verdict or an escalation.
+        let mut models = facts(&trusted).1;
+        models.extend(facts(&trusted_notes(gh, pull.number)?).1);
         models.sort();
         models.dedup();
         let mut reverted = false;
@@ -101,5 +117,6 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
     }
     let mut data = data;
     data["written"] = json!(written);
+    data["skipped_no_pr"] = json!(skipped);
     Ok(Outcome::data(data))
 }

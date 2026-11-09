@@ -53,6 +53,16 @@ fn seeded() -> FakeGithub {
     merged(&fake, 20, "2026-11-03T10:00:00Z");
     fake.pull_set(21, "updated_at", json!("2026-11-05T10:00:00Z"));
     merged(&fake, 22, "2026-10-30T10:00:00Z");
+    // A later comment touches the October PR: it stays in October.
+    fake.pull_set(22, "updated_at", json!("2026-11-08T10:00:00Z"));
+    // Spend but no task-pr record: listed as skipped.
+    fake.issue(
+        16,
+        "Task 16",
+        &[REVIEW],
+        r#"<!-- bosun:task {"item":"M4","task":"T16"} -->"#,
+    );
+    fake.comment(16, &spend("s1", 1.0));
     merged(&fake, 23, "2026-11-04T10:00:00Z");
     fake.pull(40, "Revert", "bosun/revert-23", "");
     merged(&fake, 40, "2026-11-06T10:00:00Z");
@@ -72,6 +82,7 @@ fn month_rows_and_totals() {
     let rows = d["rows"].as_array().unwrap();
     let prs: Vec<u64> = rows.iter().map(|r| r["pr"].as_u64().unwrap()).collect();
     assert_eq!(prs, [20, 21, 23, 25]);
+    assert_eq!(d["skipped_no_pr"], json!([16]));
     let by = |pr: u64| rows.iter().find(|r| r["pr"] == pr).unwrap();
     assert_eq!(by(20)["outcome"], "held");
     assert_eq!(by(20)["usd"], 2.0);

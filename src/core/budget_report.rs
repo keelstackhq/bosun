@@ -119,7 +119,10 @@ fn usd_cell(v: &Value) -> String {
 fn cell(v: &Value) -> String {
     match v {
         Value::Null => "-".into(),
-        Value::String(s) => s.replace('|', "\\|").replace('\n', " "),
+        Value::String(s) => s
+            .replace('\\', "\\\\")
+            .replace('|', "\\|")
+            .replace(['\n', '\r'], " "),
         Value::Array(a) if a.is_empty() => "-".into(),
         Value::Array(a) => a.iter().map(cell).collect::<Vec<_>>().join(", "),
         other => other.to_string(),
