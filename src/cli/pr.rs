@@ -10,7 +10,7 @@ use serde_json::json;
 use super::PrArgs;
 use super::reap::{EpicScope, close_done_epics};
 use super::stamps;
-use crate::app::{App, default_branch, kill_switch, notes, set_state, sync_merged};
+use crate::app::{App, default_branch, kill_switch, set_state, sync_merged, trusted_notes};
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
@@ -218,7 +218,7 @@ fn touch_check(
     n: u64,
     fetch: impl FnOnce() -> Result<(Vec<PrFile>, Option<u64>), BosunError>,
 ) -> Result<&'static str, BosunError> {
-    let Some(lease) = leases_of(n, &notes(app.gh.as_ref(), n)?)
+    let Some(lease) = leases_of(n, &trusted_notes(app.gh.as_ref(), n)?)
         .into_iter()
         // An empty touch (a spawn's epic lease) restricts nothing, as in the edit hook.
         .filter(|l| l.is_live(app.ctx.now) && !l.touch.is_empty())

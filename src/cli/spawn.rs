@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use super::{IntakeArgs, SpawnArgs, intake};
 use crate::app::{
-    App, default_branch, end_lease, kill_switch, limits_from_default, main_red, notes, set_state,
-    settle_race, task_meta,
+    App, default_branch, end_lease, kill_switch, limits_from_default, main_red, set_state,
+    settle_race, task_meta, trusted_notes,
 };
 use crate::cli::plan::epic_item;
 use crate::cli::risk_check::owner_slack_ids;
@@ -93,7 +93,7 @@ fn gather(
     let labels: &[String] = issue.map_or(&[], |i| &i.labels);
     let area = area_of(labels);
     let leases = match issue {
-        Some(_) => leases_of(n, &notes(app.gh.as_ref(), n)?),
+        Some(_) => leases_of(n, &trusted_notes(app.gh.as_ref(), n)?),
         None => Vec::new(),
     };
     let input = SpawnInput {
@@ -583,7 +583,7 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
-    if leases_of(n, &notes(gh, n)?)
+    if leases_of(n, &trusted_notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me)
     {

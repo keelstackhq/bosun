@@ -1,7 +1,7 @@
 //! The registry: the one open issue labelled `bosun:registry`; each session has one `join`
 //! comment there that heartbeats edit in place (spec §4).
 
-use crate::app::{App, Result, notes, trusted_notes};
+use crate::app::{App, Result, trusted_notes};
 use crate::core::lease::{Member, members};
 use crate::core::records::{Note, Record, SlackSeat, replace_record};
 use crate::ctx::Origin;
@@ -13,7 +13,7 @@ pub const LABEL: &str = "bosun:registry";
 /// The registry issue and its comments; `None` before the first join.
 pub fn load(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
     match gh.list_issues(&[LABEL], IssueState::Open)?.first() {
-        Some(i) => Ok(Some((i.number, notes(gh, i.number)?))),
+        Some(i) => Ok(Some((i.number, trusted_notes(gh, i.number)?))),
         None => Ok(None),
     }
 }

@@ -260,7 +260,7 @@ pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
     found
         .into_iter()
         .map(|i| {
-            let n = notes(gh, i.number)?;
+            let n = trusted_notes(gh, i.number)?;
             Ok((i, n))
         })
         .collect()
@@ -279,9 +279,9 @@ pub fn settle_race(
     others: &[u64],
     now: Timestamp,
 ) -> Result<()> {
-    let mut fresh = vec![(issue, notes(gh, issue)?)];
+    let mut fresh = vec![(issue, trusted_notes(gh, issue)?)];
     for &n in others.iter().filter(|&&n| n != issue) {
-        fresh.push((n, notes(gh, n)?));
+        fresh.push((n, trusted_notes(gh, n)?));
     }
     let Some(w) = race_winner(issue, comment_id, touch, &fresh, now) else {
         return Ok(());
@@ -426,7 +426,7 @@ pub fn sync_merged(
         return Ok(false);
     }
     set_state(gh, number, issue, State::Merged)?;
-    for lease in leases_of(number, &notes(gh, number)?) {
+    for lease in leases_of(number, &trusted_notes(gh, number)?) {
         if only_session.is_none_or(|s| s == lease.session) {
             end_lease(gh, number, &lease.session, "merged")?;
         }

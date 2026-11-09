@@ -1,0 +1,1 @@
+- Join and lease records now count only from commenters with write access, so a forged join or lease from a reader or outsider no longer counts as a live session or blocks a claim.
