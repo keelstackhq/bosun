@@ -18,6 +18,15 @@ pub fn load(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
     }
 }
 
+/// The registry comments written by admin or write users; empty before the first join. Spend
+/// is summed only from these: a forged `spend` record by anyone else must not stop the agents.
+pub fn trusted_spend_notes(gh: &dyn Github) -> Result<Vec<Note>> {
+    match gh.list_issues(&[LABEL], IssueState::Open)?.first() {
+        Some(i) => trusted_notes(gh, i.number),
+        None => Ok(Vec::new()),
+    }
+}
+
 pub fn ensure(gh: &dyn Github) -> Result<(u64, Vec<Note>)> {
     if let Some(found) = load(gh)? {
         return Ok(found);

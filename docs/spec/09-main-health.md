@@ -40,4 +40,4 @@ Spend guard:
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
 - Only the owner raises a budget (an R-gov change of limits.toml).
-- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC (task issues hold the same records, so they are not summed again). `bosun status` reports it with `daily_usd` (from the default branch, as in §5) and its percent of it, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
+- Spend today is the sum of the `spend` records on the registry issue with `at` since 00:00 UTC, counting only records from commenters with admin or write access (a forged record by anyone else is ignored here, in per-task sums and in `bosun progress`) (task issues hold the same records, so they are not summed again). `bosun status` reports it with `daily_usd` (from the default branch, as in §5) and its percent of it, and reports `integrity: reduced` when a stack uses a profile other than the built-in `rust`.
