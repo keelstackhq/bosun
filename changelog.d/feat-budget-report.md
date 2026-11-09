@@ -1,0 +1,1 @@
+- `bosun budget report --month YYYY-MM [--out DIR]`: spend per PR for one month with totals; `--out` writes `YYYY-MM.md` and `YYYY-MM.json` (same input, same bytes)

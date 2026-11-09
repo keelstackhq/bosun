@@ -23,6 +23,7 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     match cmd {
         BudgetCmd::Record(a) => record(dir, a),
         BudgetCmd::Check => check(dir),
+        BudgetCmd::Report(a) => super::budget_report::run(dir, a),
     }
 }
 

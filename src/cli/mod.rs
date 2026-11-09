@@ -8,6 +8,7 @@ pub mod answer;
 pub mod approve;
 pub mod ask;
 pub mod budget;
+pub mod budget_report;
 pub mod carry_over;
 pub mod ci_log;
 pub mod claim;
@@ -286,6 +287,7 @@ impl Command {
             Command::HandoffPr(_) => "handoff-pr",
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
+            Command::Budget(BudgetCmd::Report(_)) => "budget report",
             Command::Result(_) => "result",
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
@@ -722,6 +724,18 @@ pub enum BudgetCmd {
     Record(BudgetRecordArgs),
     /// Compare today's spend with the daily budget; at 100 % return the sessions to stop.
     Check,
+    /// One month of spend per PR, with totals; `--out DIR` also writes DIR/YYYY-MM.md and .json.
+    Report(BudgetReportArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BudgetReportArgs {
+    /// The month as YYYY-MM (UTC); default: the current month.
+    #[arg(long)]
+    pub month: Option<String>,
+    /// Write DIR/YYYY-MM.md and DIR/YYYY-MM.json.
+    #[arg(long)]
+    pub out: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
