@@ -83,6 +83,17 @@ fn totals(rows: &[Row]) -> Value {
     let (held, reverted) = (count("held"), count("reverted"));
     let with_spend = rows.iter().filter(|r| r.usd.is_some()).count();
     let usd = round_usd(rows.iter().filter_map(|r| r.usd).sum());
+    // Cost per merged or held PR: only PRs of that outcome with recorded spend, both ways.
+    let spent = |outcomes: &[&str]| -> (usize, f64) {
+        let v: Vec<f64> = rows
+            .iter()
+            .filter(|r| outcomes.contains(&r.outcome))
+            .filter_map(|r| r.usd)
+            .collect();
+        (v.len(), round_usd(v.iter().sum()))
+    };
+    let ((merged_n, merged_usd), (held_n, held_usd)) =
+        (spent(&["held", "reverted"]), spent(&["held"]));
     let mut top: Vec<&Row> = rows.iter().filter(|r| r.usd.is_some()).collect();
     top.sort_by(|a, b| {
         b.usd
@@ -98,8 +109,9 @@ fn totals(rows: &[Row]) -> Value {
     json!({
         "prs": rows.len(), "prs_with_spend": with_spend, "usd": usd,
         "merged": held + reverted, "held": held, "reverted": reverted,
-        "cost_per_merged_usd": per_task(usd, held + reverted),
-        "cost_per_held_usd": per_task(usd, held),
+        "merged_with_spend": merged_n, "held_with_spend": held_n,
+        "cost_per_merged_usd": per_task(merged_usd, merged_n),
+        "cost_per_held_usd": per_task(held_usd, held_n),
         "top_prs": top,
     })
 }
@@ -152,8 +164,10 @@ pub fn markdown(data: &Value) -> String {
         t["reverted"],
     );
     out += &format!(
-        "- Recorded spend per merged PR: ${}\n- Recorded spend per held PR: ${}\n",
+        "- Cost per merged PR (with recorded spend, n={}): ${}\n- Cost per held PR (with recorded spend, n={}): ${}\n",
+        t["merged_with_spend"],
         usd_cell(&t["cost_per_merged_usd"]),
+        t["held_with_spend"],
         usd_cell(&t["cost_per_held_usd"]),
     );
     out += "\n## Top PRs by recorded spend\n\n";
@@ -273,7 +287,16 @@ mod tests {
             (Some(6), Some(4), Some(3))
         );
         assert_eq!(t["usd"], 7.75);
-        assert_eq!(t["cost_per_merged_usd"], 1.9375);
+        // Merged or held PRs with recorded spend only: reverted 3.0, held 1.0, 1.0 and 0.25.
+        assert_eq!(
+            (
+                t["merged_with_spend"].as_u64(),
+                t["held_with_spend"].as_u64()
+            ),
+            (Some(4), Some(3))
+        );
+        assert_eq!(t["cost_per_merged_usd"], 1.3125);
+        assert_eq!(t["cost_per_held_usd"], 0.75);
         let top: Vec<u64> = t["top_prs"]
             .as_array()
             .unwrap()

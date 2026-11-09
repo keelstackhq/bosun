@@ -108,8 +108,16 @@ fn month_rows_and_totals() {
     );
     assert_eq!(t["reverted"], 1);
     assert_eq!(t["usd"], 6.5);
-    assert_eq!(t["cost_per_merged_usd"], 2.166667);
-    assert_eq!(t["cost_per_held_usd"], 3.25);
+    // PR 40 is merged and held but has no recorded spend: it is left out of both costs.
+    assert_eq!(
+        (
+            t["merged_with_spend"].as_u64(),
+            t["held_with_spend"].as_u64()
+        ),
+        (Some(2), Some(1))
+    );
+    assert_eq!(t["cost_per_merged_usd"], 1.5);
+    assert_eq!(t["cost_per_held_usd"], 2.0);
     assert_eq!(t["top_prs"][0]["pr"], 21);
     for r in fake.requests() {
         assert_eq!(r.method, "GET", "read-only, saw {} {}", r.method, r.path);
@@ -147,6 +155,10 @@ fn out_writes_md_and_json_with_the_same_bytes_each_run() {
     let text = String::from_utf8(md1.clone()).unwrap();
     assert!(text.starts_with("# Budget report 2026-11\n"), "{text}");
     assert!(text.contains("spend recorded for 4 of 5 PRs"), "{text}");
+    assert!(
+        text.contains("- Cost per merged PR (with recorded spend, n=2): $1.50\n"),
+        "{text}"
+    );
     assert!(
         text.contains(
             "| #20 | PR 20 | #10 | s1, s2 | - | 2.00 | - | held | 2026-11-03T10:00:00Z |"
