@@ -94,7 +94,7 @@ table).
 | Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are R-gate; label-lock is not a sandbox | partial |
 | Autonomy earned per change class | static delegate class; not earned from escape or revert rates; no automatic narrowing after an incident | partial |
 | Challenge in proportion | two levels only (`normal`, `high`) | partial |
-| Cost per outcome | `bosun progress`: cost per merged task; budget refuses new work at 80 % (exit 6) and returns stop actions for the caller; `held` and `cost_per_held_task_usd` leave out tasks whose PR was reverted; no human minutes | partial |
+| Cost per outcome | `bosun progress`: cost per merged task; budget refuses new work at 80 % (exit 6) and returns stop actions for the caller; `held` and `cost_per_held_task_usd` leave out tasks whose PR was reverted; `bosun budget report` lists spend, models and outcome per PR for a month, and the `budget-report` workflow (weekly and by manual dispatch) keeps `reports/budget/YYYY-MM.{md,json}` on the branch `bosun/budget-reports` (one draft PR, never merged); no human minutes | partial |
 | Approval on exact commit, with identity | head-SHA approvals; signing keys from default-branch `approvers.toml` | enforced |
 | Preview and cancel | `--dry-run` (some commands), `bosun hold`, halt issue | partial |
 | Rubber-stamp approvals | stale-head rule only | partial |

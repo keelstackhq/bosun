@@ -21,6 +21,8 @@ History (one line per task) is in `docs/progress-done.md`; agents do not read it
 
 Human-only items, in order. Each has the exact action.
 
+0. **Budget reports workflow (phone ok).** Settings > Actions > General > Workflow permissions: tick "Allow GitHub Actions to create and approve pull requests" (the budget-report workflow makes one draft PR). Verify: run the workflow by hand; the PR "Budget reports" appears.
+
 1. **Repo settings (checklist steps 3 and 5).** After the S10 PRs merge, from a checkout of main
    with an admin token: `hoist plan --area github`, then `hoist apply --area github --yes`. It
    sets auto-merge, delete-branch-on-merge and the required checks `ci-ok`, `risk-check`,
