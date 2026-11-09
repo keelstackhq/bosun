@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::BudgetReportArgs;
-use crate::app::{App, notes, task_meta, trusted_notes};
+use crate::app::{App, task_meta, trusted_notes};
 use crate::core::budget_report::{Row, facts, in_month, markdown, outcome, parse_month, report};
 use crate::core::cost::revert_target;
 use crate::core::records::{Record, parse_record};
@@ -32,13 +32,12 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
         if task_meta(&issue).is_none() {
             continue;
         }
-        let task_notes = notes(gh, issue.number)?;
-        let (sessions, _, usd, spends) = facts(&task_notes);
+        // Every record only from writers: a reader cannot add spend, a verdict or a task PR.
+        let trusted = trusted_notes(gh, issue.number)?;
+        let (sessions, _, usd, spends) = facts(&trusted);
         if spends == 0 {
             continue;
         }
-        // The task's PR only from writers' records, as `bosun progress` reads it.
-        let trusted = trusted_notes(gh, issue.number)?;
         let pr = trusted
             .iter()
             .rev()
@@ -67,7 +66,6 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
         if !when.as_deref().is_some_and(|t| in_month(&month, t)) {
             continue;
         }
-        // Models only from writers' records: a reader cannot add a verdict or an escalation.
         let mut models = facts(&trusted).1;
         models.extend(facts(&trusted_notes(gh, pull.number)?).1);
         models.sort();

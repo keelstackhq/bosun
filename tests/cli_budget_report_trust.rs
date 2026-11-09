@@ -103,3 +103,32 @@ fn unreadable_or_unwritten_task_pr_is_skipped() {
     assert!(rows(&v).is_empty(), "{v}");
     assert_eq!(v["data"]["skipped_no_pr"], json!([10, 11]));
 }
+
+#[test]
+fn a_readers_forged_spend_is_ignored() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.permission("mallory", "read");
+    let forged = r#"{"bosun":"spend","session":"mallory","usd":50.0,"at":"2026-11-02T09:00:00Z"}"#;
+    task(&fake, 10, 2.0);
+    task_pr(&fake, 10, 20);
+    fake.comment_by(10, "mallory", forged);
+    open_pr(&fake, 20);
+    // A task with only forged spend never enters the report.
+    fake.issue(
+        11,
+        "Task 11",
+        &[REVIEW],
+        r#"<!-- bosun:task {"item":"M4","task":"T11"} -->"#,
+    );
+    task_pr(&fake, 11, 21);
+    fake.comment_by(11, "mallory", forged);
+    open_pr(&fake, 21);
+    let (code, v) = run(&fake, "session_a", NOW, &["budget", "report"]);
+    assert_eq!(code, 0, "{v}");
+    let rows = rows(&v);
+    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows[0]["usd"], 2.0, "{v}");
+    assert_eq!(rows[0]["sessions"], json!(["s10"]), "{v}");
+    assert_eq!(v["data"]["totals"]["usd"], 2.0);
+}
