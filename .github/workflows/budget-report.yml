@@ -58,8 +58,8 @@ jobs:
         run: |
           cur="$(date -u +%Y-%m)"
           months="$cur"
-          # In the first 3 days of a month the previous month is still settling.
-          if [ "$(date -u +%d)" -le 3 ]; then
+          # In the first 7 days of a month the previous month is still settling (a weekly run always lands in this window once a month).
+          if [ "$(date -u +%d)" -le 7 ]; then
             months="$months $(date -u -d "${cur}-01 -1 month" +%Y-%m)"
           fi
           echo "current=$cur" >> "$GITHUB_OUTPUT"

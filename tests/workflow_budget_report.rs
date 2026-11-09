@@ -109,7 +109,7 @@ fn the_branch_holds_only_reports_and_the_pr_is_a_single_draft() {
     assert!(!y.contains("gh pr merge") && !y.contains("--auto"));
     assert!(y.contains("--month \"$m\" --out"));
     assert!(
-        y.contains("-le 3"),
-        "the previous month in the first 3 days"
+        y.contains("-le 7"),
+        "the previous month in the first 7 days"
     );
 }
