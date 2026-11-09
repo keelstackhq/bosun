@@ -1,1 +1,0 @@
-- 2026-11-08 · operating-model #8 · verdicts record the reviewer model; `[approvals] review_models` resets trust on a model swap

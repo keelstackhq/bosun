@@ -1,1 +1,0 @@
-- 2026-11-08 · operating-model #10 · review pack lists `untrusted` fields with a reviewer instruction; default spawn prompt marks issue, PR, comment and Slack text as data

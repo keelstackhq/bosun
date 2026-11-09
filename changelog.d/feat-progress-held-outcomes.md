@@ -1,1 +1,0 @@
-- `bosun progress` reports `reverted`, `held` and `cost_per_held_task_usd`: tasks whose PR a merged `bosun/revert-<n>` PR undid are left out of the held outcomes.

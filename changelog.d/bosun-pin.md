@@ -1,1 +1,0 @@
-- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.10.0 (hoist 0.4.1) with npm sha512 values via `bosun pin --latest`; KNOWN lists gain 0.10.0 (config unchanged). After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.

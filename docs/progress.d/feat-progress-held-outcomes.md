@@ -1,1 +1,0 @@
-- 2026-11-08 · operating-model #9 · `bosun progress` reports `reverted`, `held` and `cost_per_held_task_usd`, leaving out tasks whose PR was reverted

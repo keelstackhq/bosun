@@ -1,1 +1,0 @@
-- `bosun doctor` runs without a token (GitHub steps are skipped), fills in the real owner/repo in fixes, drops the embedded setup script for `run: bosun setup-snippet`, and adds `data.next_step`.

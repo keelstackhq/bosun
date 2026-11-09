@@ -353,3 +353,18 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-07 · paste-once setup bootstrap (`bosun setup-snippet`, README, adopt doc §9)
 - 2026-11-07 · setup fingerprint: symlinks, LC_ALL=C; D23 boundary note
 - 2026-11-07 · pin hardening: https-only `BOSUN_NPM_REGISTRY`, no leading zeros (D35) · `tests/cli_pin_registry.rs`
+- 2026-11-08 · pin bosun 0.10.0, hoist 0.4.1 (bosun pin --latest; KNOWN lists)
+- 2026-11-08 · adopt next steps · owner_steps trimmed, data.commands added, settings link · PR #451
+- 2026-11-08 · doctor first run · doctor runs offline, names the exact fix, data.next_step · PR #452
+- 2026-11-08 · first-run follow-ups · adopt key in git add, doctor no-token items, bad API URL · PR #458
+- 2026-11-08 · keygen · `bosun keygen [--enroll]` replaces the two openssl commands · PR #450
+- 2026-11-08 · readme quickstart · README start-in-5-minutes and for-agents blocks · PR #455
+- 2026-11-08 · operating-model audit · drift fixes (hooks on R-gate, D-017 policy, gate-missed, error.fix), candidates re-ranked with build and defer decisions
+- 2026-11-08 · operating-model · round-end state: merged, waiting for the owner, deferred, follow-ups
+- 2026-11-08 · operating-model #9 · `bosun progress` reports `reverted`, `held` and `cost_per_held_task_usd`, leaving out tasks whose PR was reverted
+- 2026-11-08 · operating-model #10 · review pack lists `untrusted` fields with a reviewer instruction; default spawn prompt marks issue, PR, comment and Slack text as data
+- 2026-11-08 · operating-model #8 · verdicts record the reviewer model; `[approvals] review_models` resets trust on a model swap
+- 2026-11-08 · github client · empty BOSUN_GITHUB_API counts as unset
+- 2026-11-08 · operating-model #9 · held outcomes: writers' task-pr only, revert lookup by head
+- 2026-11-08 · operating-model #15 · review-pack delta shows only the PR's own files after a main merge
+- 2026-11-08 · operating-model #16 · pinned-config tables fall back to the newest older release

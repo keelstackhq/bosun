@@ -1,1 +1,0 @@
-- 2026-11-08 · keygen · `bosun keygen [--enroll]` replaces the two openssl commands · PR #450
