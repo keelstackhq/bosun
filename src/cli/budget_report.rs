@@ -57,7 +57,7 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
     let repo = app.ctx.repo.to_string();
     let undone: BTreeSet<u64> = pulls
         .iter()
-        .filter(|p| p.merged_at.is_some() && p.head_repo == repo)
+        .filter(|p| p.merged_at.is_some() && p.head_repo.eq_ignore_ascii_case(&repo))
         .filter_map(|p| revert_target(&p.head_ref))
         .collect();
     let mut rows = Vec::new();
