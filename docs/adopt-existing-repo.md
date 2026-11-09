@@ -226,7 +226,7 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    script (claude.ai → environment settings). You never paste again: before each session it runs
    every checkout's own `docs/setup-script.sh`, which installs pinned Node, pnpm, splice, hoist,
    berth, bosun, the Rust toolchain of `rust-toolchain.toml` and the superpowers and caveman
-   plugins. A bosun upgrade is a PR that moves the pins in that file. One line to send a client
+   plugins. A bosun upgrade is a PR that moves the pins in that file ([update.md](update.md)). One line to send a client
    with it: "Paste this script once as the setup script of your Claude Code cloud environment
    (claude.ai/code > Environments > Setup script). You never change it again: each repo's own
    docs/setup-script.sh pins its tools."
