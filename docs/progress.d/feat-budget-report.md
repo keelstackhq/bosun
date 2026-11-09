@@ -1,0 +1,1 @@
+- 2026-11-09 · budget report 1 · `bosun budget report`, monthly spend per PR (md + json) · PR #TBD

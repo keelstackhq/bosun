@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::lesson::capture_lesson;
 use super::{BudgetCmd, BudgetRecordArgs};
-use crate::app::{App, Result, kill_switch, limits_from_default, notes, set_state};
+use crate::app::{App, Result, kill_switch, limits_from_default, set_state};
 use crate::core::budget::{level, to_stop};
 use crate::core::lease::members;
 use crate::core::records::{Record, spend_total};
@@ -23,6 +23,7 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     match cmd {
         BudgetCmd::Record(a) => record(dir, a),
         BudgetCmd::Check => check(dir),
+        BudgetCmd::Report(a) => super::budget_report::run(dir, a),
     }
 }
 
@@ -98,7 +99,7 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let (registry_issue, _) = registry::ensure(gh)?;
     gh.add_comment(registry_issue, &spend.to_line())?;
 
-    let total = spend_total(&notes(gh, n)?, None);
+    let total = spend_total(&crate::app::spend_notes(gh, n)?, None);
     let over = total > limits.budget.per_task_usd;
     let was_blocked = state_of(&issue.labels) == Some(State::Blocked);
     let blocked = over && set_state(gh, n, &issue, State::Blocked).is_ok();
@@ -149,7 +150,10 @@ fn check(dir: Option<&Path>) -> CmdResult {
     let daily = limits.budget.daily_usd;
     let (mut spent, mut live) = (0.0, Vec::new());
     if let Some((_, notes)) = registry::load(gh)? {
-        spent = spend_total(&notes, Some(ctx.now.day_start()));
+        spent = spend_total(
+            &registry::trusted_spend_notes(gh)?,
+            Some(ctx.now.day_start()),
+        );
         live = members(&notes);
     }
     let lvl = level(spent, daily);

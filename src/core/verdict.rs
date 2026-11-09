@@ -145,7 +145,7 @@ pub fn comment_body(v: &Verdict, session: &str, model: Option<&str>) -> String {
         v.head_sha,
         v.summary(),
         model_line = model
-            .filter(|m| !m.is_empty() && !m.contains(char::is_whitespace))
+            .and_then(valid_model)
             .map_or(String::new(), |m| format!("{MODEL_TAG}{m} -->\n")),
         chunk_line = if chunks.is_empty() {
             String::new()

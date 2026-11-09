@@ -1,0 +1,1 @@
+- 2026-11-09 · operating-model follow-ups · review-pack delta cap fallback, delta_not_in_pr untrusted and capped, carry filters review_models

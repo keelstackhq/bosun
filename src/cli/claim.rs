@@ -105,8 +105,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     // idempotent re-claim above, which is not new work.
     if !mainfix {
         let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
-        let spent =
-            registry::load(gh)?.map_or(0.0, |(_, reg)| spend_total(&reg, Some(now.day_start())));
+        let spent = spend_total(&registry::trusted_spend_notes(gh)?, Some(now.day_start()));
         if no_new_work(spent, daily) {
             return Err(BosunError::limit(
                 format!(

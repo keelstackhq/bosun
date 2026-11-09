@@ -7,6 +7,7 @@ pub mod answer;
 pub mod approve;
 pub mod bisect;
 pub mod budget;
+pub mod budget_report;
 pub mod carry;
 pub mod checks;
 pub mod ci_minutes;

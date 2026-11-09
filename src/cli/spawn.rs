@@ -105,7 +105,10 @@ fn gather(
         mainfix: !restricted
             && (meta.as_ref().is_some_and(|m| m.kind == "mainfix")
                 || labels.iter().any(|l| l == "bosun:kind/mainfix")),
-        spent_today_usd: spend_total(reg_notes, Some(now.day_start())),
+        spent_today_usd: spend_total(
+            &registry::trusted_spend_notes(app.gh.as_ref())?,
+            Some(now.day_start()),
+        ),
         daily_usd: limits.budget.daily_usd,
         parent_depth,
         max_depth: limits.sessions.max_depth,
