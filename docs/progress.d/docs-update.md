@@ -1,1 +1,1 @@
-- 2026-11-09 · update 3 · README "Update bosun", docs/update.md, no-re-paste test · PR #TBD
+- 2026-11-09 · update 3 · README "Update bosun", docs/update.md, no-re-paste test · PR #477

@@ -13,12 +13,26 @@ use crate::output::{BosunError, CmdResult, Outcome};
 
 const BRANCH: &str = "bosun/pin";
 
+/// The open pin PR (number and head branch): from `bosun/pin` or a dated `bosun/pin-*`, in this
+/// repo (a fork's PR of that name is not ours; an unknown head repo never matches).
+pub fn find_open(
+    gh: &dyn crate::github::Github,
+    repo: &str,
+) -> Result<Option<(u64, String)>, BosunError> {
+    let own = |h: &str| h == BRANCH || h.starts_with(&format!("{BRANCH}-"));
+    Ok(gh
+        .list_pulls(None, IssueState::Open)?
+        .into_iter()
+        .find(|p| own(&p.head_ref) && p.head_repo.eq_ignore_ascii_case(repo))
+        .map(|p| (p.number, p.head_ref)))
+}
+
 /// What `preflight` found.
 pub enum Pre {
     /// Open pin PR `n`: nothing to do but merge it.
-    Open(u64),
-    /// Clean tree on the default branch.
-    Go(Box<App>, String),
+    Open(u64, String),
+    /// Clean tree on the default branch: the app, the base, the branch to push.
+    Go(Box<App>, String, String),
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
@@ -66,9 +80,8 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
     let app = App::load(Some(root))?;
     kill_switch(app.gh.as_ref())?;
-    let head = format!("{}:{BRANCH}", app.ctx.repo.owner);
-    if let Some(p) = app.gh.list_pulls(Some(&head), IssueState::Open)?.first() {
-        return Ok(Pre::Open(p.number));
+    if let Some((n, head)) = find_open(app.gh.as_ref(), &app.ctx.repo.to_string())? {
+        return Ok(Pre::Open(n, head));
     }
     let base = default_branch(app.gh.as_ref())?;
     let on = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
@@ -78,58 +91,45 @@ pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
             format!("run `git switch {base}` (up to date), then rerun"),
         ));
     }
-    let stale = if git(
-        root,
-        &[
-            "rev-parse",
-            "--verify",
-            "-q",
-            &format!("refs/heads/{BRANCH}"),
-        ],
-    )
-    .is_ok()
-    {
-        Some((
-            "locally",
-            format!("run `git branch -D {BRANCH}`, then rerun"),
-        ))
-    } else if git(
-        root,
-        &["ls-remote", "--exit-code", "--heads", "origin", BRANCH],
-    )
-    .is_ok()
-    {
-        Some((
-            "on origin",
-            format!("ask the owner to delete {BRANCH} on GitHub (Branches page), then rerun"),
-        ))
-    } else {
-        None
+    // `bosun/pin` is free, else one dated name (an earlier pin's branch has no open PR here).
+    let taken = |b: &str| {
+        git(
+            root,
+            &["rev-parse", "--verify", "-q", &format!("refs/heads/{b}")],
+        )
+        .is_ok()
+            || git(root, &["ls-remote", "--exit-code", "--heads", "origin", b]).is_ok()
     };
-    if let Some((where_, fix)) = stale {
+    let day = crate::time::Timestamp::now().to_string().replace('-', "");
+    let dated = format!("{BRANCH}-{}", &day[..8]);
+    let branch = if !taken(BRANCH) {
+        BRANCH.to_string()
+    } else if !taken(&dated) {
+        dated
+    } else {
         return Err(BosunError::conflict(
-            format!("{BRANCH} already exists {where_}: it is left from an earlier pin"),
-            fix,
+            format!("{BRANCH} and {dated} already exist: they are left from earlier pins"),
+            "delete both names locally (`git branch -D <name>`) and on origin (the owner, on GitHub's Branches page), then rerun".to_string(),
         ));
-    }
+    };
     if !git(root, &["status", "--porcelain"])?.is_empty() {
         return Err(BosunError::conflict(
             "the working tree has changes",
             "commit or stash them, then rerun",
         ));
     }
-    Ok(Pre::Go(Box::new(app), base))
+    Ok(Pre::Go(Box::new(app), base, branch))
 }
 
-/// What is left for the human, in order.
+/// What is left for a human to do (agents and the orchestrator turn on auto-merge; the cloud
+/// environment needs nothing).
 pub fn left(pr: u64, bosun_to: Option<&str>) -> Vec<String> {
     let mut v = vec![format!(
-        "PR #{pr}: mark it ready for review and get the owner approval (it edits .bosun/ pins); then turn on auto-merge so GitHub merges on green."
+        "Approve pin PR #{pr} (owner: it is gated; it edits the setup-script pins)."
     )];
-    v.push("Cloud environment: nothing. The next session start runs the merged docs/setup-script.sh; the pasted snippet never changes.".into());
     if let Some(to) = bosun_to {
         v.push(format!(
-            "This machine: after the merge run `npm i -g @keelstackhq/bosun@{to}`."
+            "After it merges, on your own machine run `npm i -g @keelstackhq/bosun@{to}`."
         ));
     }
     v
@@ -144,44 +144,46 @@ pub fn publish(
     mut data: Value,
     bosun_to: Option<&str>,
 ) -> CmdResult {
-    let (app, base) = match pre {
-        Pre::Open(n) => {
+    let (app, base, branch) = match pre {
+        Pre::Open(n, head) => {
+            data["branch"] = json!(head);
             data["pr"] = json!({"number": n});
             data["left"] = json!([format!(
-                "PR #{n} is the open pin PR: merge it (owner approval, GitHub merges on green), then rerun to move further."
+                "Approve pin PR #{n} (owner); once it merges, rerun to move further."
             )]);
             return Ok(Outcome::data(data));
         }
-        Pre::Go(a, b) => (a, b),
+        Pre::Go(a, b, c) => (a, b, c),
     };
-    git(root, &["switch", "-q", "-c", BRANCH])?;
+    git(root, &["switch", "-q", "-c", &branch])?;
     let mut add = vec!["add", "--"];
     add.extend(files);
     let pushed = git(root, &add)
         .and_then(|_| git(root, &["commit", "-q", "-m", title]))
-        .and_then(|_| git(root, &["push", "-q", "-u", "origin", BRANCH]));
+        .and_then(|_| git(root, &["push", "-q", "-u", "origin", &branch]));
     if let Err(e) = pushed {
         // The tree was clean, so only the pin edits are dropped: back to the base branch.
         let back = git(root, &["switch", "-q", "-f", &base])
-            .and_then(|_| git(root, &["branch", "-q", "-D", BRANCH]));
+            .and_then(|_| git(root, &["branch", "-q", "-D", &branch]));
         let fix = if back.is_ok() {
             format!("rolled back to {base}; {}", e.fix)
         } else {
             format!(
-                "could not roll back: run `git switch -f {base}` and `git branch -D {BRANCH}`, then rerun"
+                "could not roll back: run `git switch -f {base}` and `git branch -D {branch}`, then rerun"
             )
         };
         return Err(BosunError { fix, ..e });
     }
     let pull = app
         .gh
-        .create_pull(title, BRANCH, &base, body, true)
+        .create_pull(title, &branch, &base, body, true)
         .map_err(|e| BosunError {
             fix: format!(
-                "{BRANCH} is pushed: open its PR by hand with `gh pr create --draft --head {BRANCH} --base {base} --title \"{title}\"`"
+                "{branch} is pushed: open its PR by hand with `gh pr create --draft --head {branch} --base {base} --title \"{title}\"`"
             ),
             ..e
         })?;
+    data["branch"] = json!(branch);
     data["pr"] = json!({"number": pull.number, "head_sha": pull.head_sha});
     data["left"] = json!(left(pull.number, bosun_to));
     Ok(Outcome::data(data))

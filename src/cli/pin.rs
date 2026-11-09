@@ -10,7 +10,6 @@ use super::PinArgs;
 use crate::app::{App, default_branch};
 use crate::core::pin::{Pins, apply, get_line, keys, parse_semver, sha512_of};
 use crate::ctx::{RepoId, git_out};
-use crate::github::IssueState;
 use crate::github::b64;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -151,7 +150,13 @@ fn io_err(what: &str, p: &Path, e: std::io::Error) -> BosunError {
 
 /// What `inspect` found: the script text, the tools behind, the tools current, and npm's metadata
 /// for those behind.
-type Found<'a> = (String, Vec<Value>, Vec<Value>, Vec<(&'a str, Meta)>);
+type Found<'a> = (
+    String,
+    Vec<Value>,
+    Vec<Value>,
+    Vec<(&'a str, Meta)>,
+    Option<String>,
+);
 
 /// Read the pins of `root` and compare them with npm latest (nothing is written or downloaded).
 fn inspect<'a>(root: &Path, only: &'a [String], npm: &Npm) -> Result<Found<'a>, BosunError> {
@@ -169,6 +174,7 @@ fn inspect<'a>(root: &Path, only: &'a [String], npm: &Npm) -> Result<Found<'a>, 
         .collect();
     // Compare every tool first; any refusal happens before a tarball is fetched or a file written.
     let (mut changed, mut unchanged, mut latest) = (Vec::new(), Vec::new(), Vec::new());
+    let mut bosun_latest = None;
     for t in &tools {
         let key = &keys(t)[0];
         let cur = get_line(&script, key).ok_or_else(|| {
@@ -178,6 +184,9 @@ fn inspect<'a>(root: &Path, only: &'a [String], npm: &Npm) -> Result<Found<'a>, 
             )
         })?;
         let m = npm.meta(t, "latest")?;
+        if *t == "bosun" {
+            bosun_latest = Some(m.version.clone());
+        }
         let sv = |v: &str, what: &str| {
             parse_semver(v).ok_or_else(|| {
                 BosunError::error(
@@ -200,7 +209,7 @@ fn inspect<'a>(root: &Path, only: &'a [String], npm: &Npm) -> Result<Found<'a>, 
             latest.push((*t, m));
         }
     }
-    Ok((script, changed, unchanged, latest))
+    Ok((script, changed, unchanged, latest, bosun_latest))
 }
 
 pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
@@ -211,7 +220,7 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
     let root: PathBuf =
         git_out(&start, &["rev-parse", "--show-toplevel"]).map_or(start, PathBuf::from);
     let npm = Npm::new(None);
-    let (script, changed, unchanged, latest) = inspect(&root, &a.tool, &npm)?;
+    let (script, changed, unchanged, latest, _) = inspect(&root, &a.tool, &npm)?;
     if a.check {
         return Ok(Outcome::data(
             json!({"behind": changed, "unchanged": unchanged}),
@@ -223,7 +232,7 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
     } else {
         None
     };
-    if let Some(super::pin_pr::Pre::Open(_)) = pre {
+    if let Some(super::pin_pr::Pre::Open(..)) = pre {
         let data = json!({"changed": changed, "unchanged": unchanged, "files": [], "branch": BRANCH, "title": ""});
         return super::pin_pr::publish(&root, pre.unwrap(), &[], "", "", data, None);
     }
@@ -330,11 +339,12 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
     let mut call =
         json!({"head": BRANCH, "base": "main", "draft": true, "title": title, "body": body});
     match found {
-        Ok((_, Some(n), _)) => {
+        Ok((_, Some((n, head)), _)) => {
+            d.insert("branch".into(), json!(head));
             d.insert("pr".into(), json!(n));
             d.insert("steps".into(), json!([
                 format!("PR #{n} is the open pin PR: do not open another."),
-                format!("Commit the files on branch {BRANCH}, merge origin/<default branch> into it first (never force-push), then push to refresh the PR."),
+                format!("Commit the files on branch {head}, merge origin/<default branch> into it first (never force-push), then push to refresh the PR."),
             ]));
             return Ok(Outcome::data(data));
         }
@@ -357,13 +367,13 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
 }
 
 /// The repo, the number of the open PR from `bosun/pin` (if any) and the default branch.
-fn open_pin_pr(root: &Path) -> Result<(RepoId, Option<u64>, String), BosunError> {
+type OpenPin = (RepoId, Option<(u64, String)>, String);
+
+fn open_pin_pr(root: &Path) -> Result<OpenPin, BosunError> {
     let app = App::load(Some(root))?;
-    let head = format!("{}:{BRANCH}", app.ctx.repo.owner);
-    let open = app.gh.list_pulls(Some(&head), IssueState::Open)?;
     // An open PR needs no base: a failing base lookup must not hide it.
-    if let Some(p) = open.first() {
-        return Ok((app.ctx.repo.clone(), Some(p.number), String::new()));
+    if let Some(found) = super::pin_pr::find_open(app.gh.as_ref(), &app.ctx.repo.to_string())? {
+        return Ok((app.ctx.repo.clone(), Some(found), String::new()));
     }
     let base = default_branch(app.gh.as_ref())?;
     Ok((app.ctx.repo.clone(), None, base))
@@ -374,55 +384,123 @@ fn open_pin_pr(root: &Path) -> Result<(RepoId, Option<u64>, String), BosunError>
 pub struct Update {
     pub moves: Vec<String>,
     pub cli: Option<String>,
+    /// A bosun channel repo: its pins move with `splice update --channel bosun`, not `bosun pin`.
+    pub channel: bool,
 }
 
-/// `None` when the check is off (`BOSUN_PIN_CHECK=0`), the repo has no pin script or a bosun
-/// channel, or nothing is behind. Waits 5 s at most.
-pub fn update_check(dir: &Path) -> Result<Option<Update>, BosunError> {
+/// The result of the update check.
+pub enum Check {
+    /// Not checked on purpose: why, and the fix.
+    Skipped(String, String),
+    /// The check itself failed: why, and the fix.
+    Failed(String, String),
+    /// Pins and binary match npm latest.
+    Current,
+    Behind(Update),
+}
+
+/// `latest` when it is newer than this binary. A prerelease binary is never flagged: it has no X.Y.Z.
+fn newer(latest: Option<&str>) -> Option<String> {
+    let have = parse_semver(env!("CARGO_PKG_VERSION"))?;
+    let v = latest?;
+    (parse_semver(v)? > have).then(|| v.to_string())
+}
+
+const NPM_FIX: &str = "check the network and BOSUN_NPM_REGISTRY, then rerun";
+
+/// Waits 5 s at most; never fails (an error is `Skipped`).
+pub fn update_check(dir: &Path) -> Check {
     if std::env::var("BOSUN_PIN_CHECK").is_ok_and(|v| v == "0") {
-        return Ok(None);
+        return Check::Skipped(
+            "BOSUN_PIN_CHECK=0".into(),
+            "unset BOSUN_PIN_CHECK to check for updates".into(),
+        );
     }
     let root: PathBuf =
         git_out(dir, &["rev-parse", "--show-toplevel"]).map_or(dir.to_path_buf(), PathBuf::from);
-    if root.join(CHANNEL).exists() || !root.join(SCRIPT).exists() {
-        return Ok(None);
+    let channel = root.join(CHANNEL).exists();
+    if !channel && !root.join(SCRIPT).exists() {
+        return Check::Skipped(
+            format!("no {SCRIPT}: not a repo with tool pins"),
+            format!("add {SCRIPT} (bosun adopt does), or ignore"),
+        );
     }
     let npm = Npm::new(Some(Duration::from_secs(5)));
-    let pins = inspect(&root, &[], &npm);
-    // The binary check does not depend on the pin compare: npm answered either way.
-    let cli = parse_semver(env!("CARGO_PKG_VERSION")).and_then(|have| {
-        let m = npm.meta("bosun", "latest").ok()?;
-        (parse_semver(&m.version)? > have).then_some(m.version)
-    });
-    let moves: Vec<String> = match pins {
-        Ok((_, behind, _, _)) => behind
-            .iter()
-            .map(|c| {
-                format!(
-                    "{} {} -> {}",
-                    c["tool"].as_str().unwrap_or(""),
-                    c["from"],
-                    c["to"]
-                )
-                .replace('"', "")
-            })
-            .collect(),
-        Err(e) if cli.is_none() => return Err(e),
-        Err(e) => {
-            eprintln!("bosun: warning: pin check: {}", e.message);
-            Vec::new()
+    // Npm's own errors start with "npm ": the network or the registry; any other is the repo's.
+    let failed = |e: &BosunError| {
+        if e.message.starts_with("npm ") {
+            Check::Failed(format!("npm unreachable: {}", e.message), NPM_FIX.into())
+        } else {
+            Check::Failed(format!("pin check failed: {}", e.message), e.fix.clone())
         }
     };
-    Ok((!moves.is_empty() || cli.is_some()).then_some(Update { moves, cli }))
+    let (moves, latest) = if channel {
+        // The pins are the channel's; only the binary is compared.
+        match npm.meta("bosun", "latest") {
+            Ok(m) => (Vec::new(), Some(m.version)),
+            Err(e) => return failed(&e),
+        }
+    } else {
+        match inspect(&root, &[], &npm) {
+            Ok((_, behind, _, _, latest)) => {
+                let moves = behind
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "{} {} -> {}",
+                            c["tool"].as_str().unwrap_or(""),
+                            c["from"],
+                            c["to"]
+                        )
+                        .replace('"', "")
+                    })
+                    .collect();
+                (moves, latest)
+            }
+            Err(e) => {
+                // The binary check does not depend on the pin compare: try it on its own.
+                let latest = npm.meta("bosun", "latest").ok().map(|m| m.version);
+                if newer(latest.as_deref()).is_none() {
+                    return failed(&e);
+                }
+                eprintln!("bosun: warning: pin check: {}", e.message);
+                (Vec::new(), latest)
+            }
+        }
+    };
+    // A prerelease binary is never flagged: it has no X.Y.Z to compare.
+    let cli = newer(latest.as_deref());
+    if moves.is_empty() && cli.is_none() {
+        if channel {
+            return Check::Skipped(
+                "bosun channel repo: its tool pins move with the channel".into(),
+                "splice update --channel bosun".into(),
+            );
+        }
+        return Check::Current;
+    }
+    Check::Behind(Update {
+        moves,
+        cli,
+        channel,
+    })
 }
 
 /// The SessionStart notice (spec D35): `Some(line)` when a tool pin is behind npm latest; `None`
 /// when the hook should stay silent (opted out, not a pin repo, nothing behind).
 pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
-    Ok(update_check(dir)?.filter(|u| !u.moves.is_empty()).map(|u| {
-        format!(
+    // No npm call in a bosun channel repo: its pins are the channel's (spec 04, SessionStart).
+    let root: PathBuf =
+        git_out(dir, &["rev-parse", "--show-toplevel"]).map_or(dir.to_path_buf(), PathBuf::from);
+    if root.join(CHANNEL).exists() {
+        return Ok(None);
+    }
+    Ok(match update_check(dir) {
+        Check::Behind(u) if !u.moves.is_empty() => Some(format!(
             "tool pins behind: {}. The orchestrator moves them: on the default branch run `bosun pin --latest --pr` (branch {BRANCH}, commit, push, draft PR; one pin PR per repo).",
             u.moves.join(", ")
-        )
-    }))
+        )),
+        Check::Failed(why, fix) => return Err(BosunError::error(why, fix)),
+        _ => None,
+    })
 }

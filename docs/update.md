@@ -16,7 +16,7 @@ bot opens that PR, or run `splice update --channel bosun`.
 
 ## 1. Know that an update exists
 
-- Human: `bosun doctor` shows step 17 `update` (a warning, exit stays 0). Its `fix` is the command to run.
+- Human: `bosun doctor` always shows step 17 `update`: `ok` (everything matches npm latest), `warn` (something is behind; exit stays 0; its `fix` is the command to run) or `skipped` (not checked: the `detail` says why, for example npm is unreachable). A bosun channel repo still compares the binary.
 - Agent: the SessionStart text says `tool pins behind: …` and names the command. Do nothing if it is absent.
 - Either: `bosun pin --latest --check` lists what is behind and writes nothing.
 
@@ -32,13 +32,13 @@ bosun pin --latest --pr
 ```
 
 It downloads each tarball, checks it against npm's `dist.integrity`, rewrites the pins, creates the branch
-`bosun/pin`, commits, pushes (never forced) and opens a draft PR. It prints `data.pr` and `data.left`, the steps
-that remain. If a pin PR is already open it only names it. If `bosun/pin` is left from an old pin, it stops
-(exit 3) and says what to delete.
+`bosun/pin` (or `bosun/pin-<date>` when an old pin left that name), commits, pushes (never forced) and opens a draft
+PR. It prints `data.pr` and `data.left`, the steps that remain. If a pin PR is already open it only names it. If both
+names are left from old pins, it stops (exit 3) and says what to delete.
 
 Then:
 
-1. Mark the PR ready and get the owner approval. It edits `.bosun/`, so it is a gated PR (spec §8).
+1. Mark the PR ready and get the owner approval. It edits `docs/setup-script.sh` (and `.bosun/version` when bosun moves), which are gated paths (R-gov, spec §8). `data.left` lists only the steps a human must do.
 2. Turn on auto-merge. GitHub merges when the checks are green. **Agents never merge.**
 3. Post a review verdict if your repo asks for one (`bosun review-pack`, `bosun verdict comment`).
 
@@ -56,7 +56,7 @@ bosun --version
 ## 4. Update a cloud environment
 
 Nothing to do. Before each session the pasted bootstrap runs the checkout's `docs/setup-script.sh`. After the pin
-PR merges, the next session clones the default branch, so it installs the new pinned version (each version has its own
+PR merges, the next session on the default branch installs the new pinned version (each version has its own
 install record, so a warm container installs it again). A test keeps this true: `tests/cli_setup_snippet.rs`.
 
 Paste the snippet **once**, when you create the environment: `bosun setup-snippet`, then claude.ai/code >
@@ -68,9 +68,9 @@ Environments > Setup script. Never paste it again; it does not change between re
 | --- | --- | --- |
 | `tarball sha512 does not match dist.integrity` or `outside the registry` | npm served other bytes than it signed | Do not pin. Tell the owner. Rerun later. |
 | `npm latest X is older than the pin` (exit 3) | the `latest` tag moved back | Pins only move up. Check the npm dist-tag, or pin by hand. |
-| `npm …: HTTP …` or `timed out` | network or registry | Check the network and `BOSUN_NPM_REGISTRY` (https only), rerun. |
+| `npm …: HTTP …` or `timeout` | network or registry | Check the network and `BOSUN_NPM_REGISTRY` (https only), rerun. |
 | `the working tree has changes`, `not the default branch` (exit 3) | the pin PR needs a clean base | Commit or stash, `git switch <default>`, rerun. |
-| `bosun/pin already exists` (exit 3) | an old pin branch is left | Locally `git branch -D bosun/pin`; on origin the owner deletes it. |
+| `bosun/pin and bosun/pin-<date> already exist` (exit 3) | old pin branches are left | If only `bosun/pin` is left, the command uses `bosun/pin-<date>` by itself. When both are left, delete them locally (`git branch -D`) and on origin (the owner). |
 | exit 4 | the repo is halted | Close the `bosun:halt` issue (owner). |
 | setup script: `does not match its pinned sha512; skipping it` | a pin in a merged script is wrong | The session goes on without that tool. Run `bosun pin --latest --pr` again. |
 | bootstrap: `no verified bosun` | no repo script, and the npm signature or provenance check failed | Allow `tuf-repo-cdn.sigstore.dev`, or `npm i -g @keelstackhq/bosun`. |
