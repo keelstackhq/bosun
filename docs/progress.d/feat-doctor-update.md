@@ -1,0 +1,1 @@
+- 2026-11-09 · update 2 · `bosun doctor` update-available warning · PR #TBD
