@@ -218,6 +218,16 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         ));
     }
 
+    let pre = if a.pr && !changed.is_empty() {
+        Some(super::pin_pr::preflight(&root)?)
+    } else {
+        None
+    };
+    if let Some(super::pin_pr::Pre::Open(_)) = pre {
+        let data = json!({"changed": changed, "unchanged": unchanged, "files": [], "branch": BRANCH, "title": ""});
+        return super::pin_pr::publish(&root, pre.unwrap(), &[], "", "", data, None);
+    }
+
     // Verify and rewrite in memory; write only when everything passed.
     let tpl_path = root.join(TEMPLATE);
     let mut tpl = match std::fs::read_to_string(&tpl_path) {
@@ -308,6 +318,13 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         "Tool pins moved by `bosun pin --latest` (tarballs checked against npm dist.integrity):\n{}\n\nGated R-gov: needs owner approval.",
         moves.join("\n")
     );
+    if let Some(pre) = pre {
+        let to = latest
+            .iter()
+            .find(|(t, _)| *t == "bosun")
+            .map(|(_, m)| m.version.as_str());
+        return super::pin_pr::publish(&root, pre, &files, &title, &body, data, to);
+    }
     let found = open_pin_pr(&root);
     let d = data.as_object_mut().expect("object");
     let mut call =
