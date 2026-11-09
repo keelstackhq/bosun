@@ -115,6 +115,10 @@ pub struct Pull {
     /// `owner/name` of the repo the head branch lives in; `""` when GitHub did not say (a
     /// deleted fork). A PR from a fork differs from the base repo.
     pub head_repo: String,
+    /// RFC 3339 times GitHub reports; `None` when absent or `null` (`bosun budget report`).
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +164,12 @@ struct RawPull {
     commits: u64,
     #[serde(default)]
     mergeable_state: Option<String>,
+    #[serde(default)]
+    merged_at: Option<String>,
+    #[serde(default)]
+    closed_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
 }
 
 impl From<RawPull> for Pull {
@@ -183,6 +193,9 @@ impl From<RawPull> for Pull {
             merge_commit_sha: r.merge_commit_sha,
             commits: r.commits,
             mergeable_state: r.mergeable_state,
+            merged_at: r.merged_at,
+            closed_at: r.closed_at,
+            updated_at: r.updated_at,
         }
     }
 }
