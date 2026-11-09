@@ -51,6 +51,7 @@ fn seeded() -> FakeGithub {
         r#"<!-- bosun:task {"item":"M4","task":"T14"} -->"#,
     );
     merged(&fake, 20, "2026-11-03T10:00:00Z");
+    fake.pull_set(21, "created_at", json!("2026-11-05T10:00:00Z"));
     fake.pull_set(21, "updated_at", json!("2026-11-05T10:00:00Z"));
     merged(&fake, 22, "2026-10-30T10:00:00Z");
     // A later comment touches the October PR: it stays in October.
@@ -81,7 +82,7 @@ fn month_rows_and_totals() {
     assert_eq!(d["month"], "2026-11");
     let rows = d["rows"].as_array().unwrap();
     let prs: Vec<u64> = rows.iter().map(|r| r["pr"].as_u64().unwrap()).collect();
-    assert_eq!(prs, [20, 21, 23, 25]);
+    assert_eq!(prs, [20, 21, 23, 25, 40]);
     assert_eq!(d["skipped_no_pr"], json!([16]));
     let by = |pr: u64| rows.iter().find(|r| r["pr"] == pr).unwrap();
     assert_eq!(by(20)["outcome"], "held");
@@ -96,17 +97,19 @@ fn month_rows_and_totals() {
     assert_eq!(by(23)["outcome"], "reverted");
     assert_eq!(by(25)["outcome"], "closed");
     let t = &d["totals"];
+    // PR 40 (the revert) has no task and no spend: a row with nulls.
+    assert_eq!(by(40)["outcome"], "held");
+    assert!(by(40)["usd"].is_null() && by(40)["sessions"].is_null() && by(40)["issue"].is_null());
+    assert_eq!(t["prs"], 5);
+    assert_eq!(t["prs_with_spend"], 4);
     assert_eq!(
-        (t["prs"].as_u64(), t["merged"].as_u64()),
-        (Some(4), Some(2))
+        (t["merged"].as_u64(), t["held"].as_u64()),
+        (Some(3), Some(2))
     );
-    assert_eq!(
-        (t["held"].as_u64(), t["reverted"].as_u64()),
-        (Some(1), Some(1))
-    );
+    assert_eq!(t["reverted"], 1);
     assert_eq!(t["usd"], 6.5);
-    assert_eq!(t["cost_per_merged_usd"], 3.25);
-    assert_eq!(t["cost_per_held_usd"], 6.5);
+    assert_eq!(t["cost_per_merged_usd"], 2.166667);
+    assert_eq!(t["cost_per_held_usd"], 3.25);
     assert_eq!(t["top_prs"][0]["pr"], 21);
     for r in fake.requests() {
         assert_eq!(r.method, "GET", "read-only, saw {} {}", r.method, r.path);
@@ -143,6 +146,7 @@ fn out_writes_md_and_json_with_the_same_bytes_each_run() {
     assert_eq!(file["totals"], v["data"]["totals"]);
     let text = String::from_utf8(md1.clone()).unwrap();
     assert!(text.starts_with("# Budget report 2026-11\n"), "{text}");
+    assert!(text.contains("spend recorded for 4 of 5 PRs"), "{text}");
     assert!(
         text.contains(
             "| #20 | PR 20 | #10 | s1, s2 | - | 2.00 | - | held | 2026-11-03T10:00:00Z |"
@@ -154,5 +158,32 @@ fn out_writes_md_and_json_with_the_same_bytes_each_run() {
     assert_eq!(code, 0);
     assert_eq!(std::fs::read(&md).unwrap(), md1);
     assert_eq!(std::fs::read(&js).unwrap(), js1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_empty_month_prints_zero_and_no_negative_zero() {
+    let fake = seeded();
+    let dir = std::env::temp_dir().join(format!("bosun-budget-empty-{}", std::process::id()));
+    let out = dir.to_str().unwrap();
+    let args = ["budget", "report", "--month", "2025-01", "--out", out];
+    let (code, v) = run(&fake, "session_a", NOW, &args);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["rows"], json!([]));
+    assert_eq!(v["data"]["totals"]["prs"], 0);
+    assert!(
+        v["data"]["totals"]["usd"]
+            .as_f64()
+            .unwrap()
+            .is_sign_positive(),
+        "{v}"
+    );
+    let md = std::fs::read_to_string(dir.join("2025-01.md")).unwrap();
+    assert!(
+        md.contains("- Spend: $0.00\n") && !md.contains("-0.00"),
+        "{md}"
+    );
+    let js = std::fs::read_to_string(dir.join("2025-01.json")).unwrap();
+    assert!(!js.contains("-0.0"), "{js}");
     std::fs::remove_dir_all(&dir).ok();
 }

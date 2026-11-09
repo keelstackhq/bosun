@@ -119,6 +119,7 @@ pub struct Pull {
     pub merged_at: Option<String>,
     pub closed_at: Option<String>,
     pub updated_at: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +171,8 @@ struct RawPull {
     closed_at: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
 impl From<RawPull> for Pull {
@@ -196,6 +199,7 @@ impl From<RawPull> for Pull {
             merged_at: r.merged_at,
             closed_at: r.closed_at,
             updated_at: r.updated_at,
+            created_at: r.created_at,
         }
     }
 }

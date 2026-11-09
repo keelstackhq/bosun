@@ -33,6 +33,7 @@ fn verdict(model: &str) -> String {
 
 fn open_pr(fake: &FakeGithub, pr: u64) {
     fake.pull(pr, &format!("PR {pr}"), &format!("feat/{pr}"), "");
+    fake.pull_set(pr, "created_at", json!("2026-11-05T10:00:00Z"));
     fake.pull_set(pr, "updated_at", json!("2026-11-05T10:00:00Z"));
 }
 
@@ -89,7 +90,7 @@ fn unreadable_or_unwritten_task_pr_is_skipped() {
     let fake = FakeGithub::start();
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     fake.permission("mallory", "read");
-    task(&fake, 10, 1.0); // task-pr names PR 999, which does not exist
+    task(&fake, 10, 1.0); // task-pr names PR 999, not in the month: no row, not skipped
     task_pr(&fake, 10, 999);
     task(&fake, 11, 1.0); // task-pr from a reader only
     fake.comment_by(
@@ -100,8 +101,14 @@ fn unreadable_or_unwritten_task_pr_is_skipped() {
     open_pr(&fake, 20);
     let (code, v) = run(&fake, "session_a", NOW, &["budget", "report"]);
     assert_eq!(code, 0, "{v}");
-    assert!(rows(&v).is_empty(), "{v}");
-    assert_eq!(v["data"]["skipped_no_pr"], json!([10, 11]));
+    // PR 20 is still a row, without a task and so without spend.
+    let rows = rows(&v);
+    assert_eq!(rows.len(), 1, "{v}");
+    assert!(
+        rows[0]["issue"].is_null() && rows[0]["usd"].is_null(),
+        "{v}"
+    );
+    assert_eq!(v["data"]["skipped_no_pr"], json!([11]));
 }
 
 #[test]
@@ -127,8 +134,35 @@ fn a_readers_forged_spend_is_ignored() {
     let (code, v) = run(&fake, "session_a", NOW, &["budget", "report"]);
     assert_eq!(code, 0, "{v}");
     let rows = rows(&v);
-    assert_eq!(rows.len(), 1, "{v}");
+    assert_eq!(rows.len(), 2, "{v}");
+    assert!(rows[1]["usd"].is_null(), "{v}");
     assert_eq!(rows[0]["usd"], 2.0, "{v}");
     assert_eq!(rows[0]["sessions"], json!(["s10"]), "{v}");
     assert_eq!(v["data"]["totals"]["usd"], 2.0);
+}
+
+#[test]
+fn the_pull_list_stops_at_the_first_page_older_than_the_month() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    for pr in 20..=21 {
+        open_pr(&fake, pr);
+    }
+    // Eight PRs last updated long before the month: four pages of two.
+    for pr in 30..=37 {
+        fake.pull(pr, &format!("PR {pr}"), &format!("feat/{pr}"), "");
+        fake.pull_set(pr, "updated_at", json!("2025-01-05T10:00:00Z"));
+    }
+    let (code, v) = run(&fake, "session_a", NOW, &["budget", "report"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(rows(&v).len(), 2, "{v}");
+    let pages = fake
+        .requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/pulls") && r.method == "GET")
+        .count();
+    assert_eq!(
+        pages, 2,
+        "page 1 holds the two new PRs, page 2 ends before the month"
+    );
 }

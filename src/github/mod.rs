@@ -109,6 +109,9 @@ pub trait Github {
     fn get_pull(&self, number: u64) -> Result<Option<Pull>>;
     /// Pull requests in `state`; `head` is `owner:branch`.
     fn list_pulls(&self, head: Option<&str>, state: IssueState) -> Result<Vec<Pull>>;
+    /// Pull requests (any state) last updated at or after `since` (RFC 3339, UTC) and some older
+    /// ones: newest update first, pages read until one ends before `since`.
+    fn list_pulls_updated_since(&self, since: &str) -> Result<Vec<Pull>>;
     /// Every changed file, all pages.
     fn pull_files(&self, number: u64) -> Result<Vec<PrFile>>;
     /// The files changed between two commits (`base...head`).
@@ -585,6 +588,12 @@ impl Github for LiveGithub {
             path.push_str(&format!("&head={}", enc(h)));
         }
         self.parse_all("pull request", self.http.get_all(&path)?)
+    }
+
+    fn list_pulls_updated_since(&self, since: &str) -> Result<Vec<Pull>> {
+        let path = self.path("/pulls?state=all&sort=updated&direction=desc&per_page=100");
+        let old = |p: &Value| p["updated_at"].as_str().is_some_and(|t| t < since);
+        self.parse_all("pull request", self.http.get_all_until(&path, &old)?)
     }
 
     fn pull_files(&self, number: u64) -> Result<Vec<PrFile>> {

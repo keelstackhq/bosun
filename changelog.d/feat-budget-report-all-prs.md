@@ -1,0 +1,1 @@
+- `bosun budget report` lists every PR opened, merged or closed in the month (spend, sessions and models `null` when unrecorded) with "spend recorded for N of M PRs", and prints a zero total as 0.00, never -0.00

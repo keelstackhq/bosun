@@ -1,15 +1,16 @@
 //! `bosun budget report`: spend per PR for one UTC month (spec §9). Read-only on GitHub; with
 //! `--out` it writes `YYYY-MM.md` and `YYYY-MM.json` into a directory.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde_json::json;
 
 use super::BudgetReportArgs;
-use crate::app::{App, task_meta, trusted_notes};
+use crate::app::{App, spend_notes, task_meta, trusted_notes};
 use crate::core::budget_report::{Row, facts, in_month, markdown, outcome, parse_month, report};
 use crate::core::cost::revert_target;
-use crate::core::records::{Record, parse_record};
+use crate::core::records::{Note, Record, parse_record};
 use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -25,19 +26,14 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
         })?,
         None => now.to_string()[..7].to_string(),
     };
-    let (mut rows, mut skipped) = (Vec::new(), Vec::new());
+    // Task issues by number; the PR each names in a writers' `task-pr` record. A PR keeps the
+    // lowest task number that names it. Tasks with spend and no PR record are listed as skipped.
     let mut issues = gh.list_issues(&[], IssueState::All)?;
     issues.sort_by_key(|i| i.number);
-    for issue in issues {
-        if task_meta(&issue).is_none() {
-            continue;
-        }
-        // Every record only from writers: a reader cannot add spend, a verdict or a task PR.
+    let mut task_of: BTreeMap<u64, (u64, Vec<Note>)> = BTreeMap::new();
+    let mut skipped: Vec<u64> = Vec::new();
+    for issue in issues.iter().filter(|i| task_meta(i).is_some()) {
         let trusted = trusted_notes(gh, issue.number)?;
-        let (sessions, _, usd, spends) = facts(&trusted);
-        if spends == 0 {
-            continue;
-        }
         let pr = trusted
             .iter()
             .rev()
@@ -45,53 +41,56 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
                 Some(Record::TaskPr { pr, .. }) => Some(pr),
                 _ => None,
             });
-        let Some(pull) = pr.map(|n| gh.get_pull(n)).transpose()?.flatten() else {
-            skipped.push(issue.number);
-            continue;
-        };
-        // One row per PR: the lowest task number wins when two tasks name the same PR.
-        if rows.iter().any(|r: &Row| r.pr == pull.number) {
+        match pr {
+            Some(pr) => {
+                task_of.entry(pr).or_insert((issue.number, trusted));
+            }
+            None if facts(&spend_notes(gh, issue.number)?).3 > 0 => skipped.push(issue.number),
+            None => {}
+        }
+    }
+    // Every PR opened, merged or closed in the month. The list is newest update first and stops
+    // at the first page that ends before the month: a PR with an event in the month was updated
+    // in or after it. The same list tells which merged PRs a merged `bosun/revert-<n>` undid.
+    let pulls = gh.list_pulls_updated_since(&format!("{month}-01T00:00:00Z"))?;
+    let undone: BTreeSet<u64> = pulls
+        .iter()
+        .filter(|p| p.merged_at.is_some())
+        .filter_map(|p| revert_target(&p.head_ref))
+        .collect();
+    let mut rows = Vec::new();
+    for pull in &pulls {
+        let events = [&pull.created_at, &pull.merged_at, &pull.closed_at];
+        if !events
+            .iter()
+            .any(|t| t.as_deref().is_some_and(|t| in_month(&month, t)))
+        {
             continue;
         }
-        let merged_at = pull.merged_at.clone().filter(|_| pull.merged);
-        // A finished PR belongs to the month it merged or closed in (later comments do not move
-        // it); an open PR to the month it was last updated in.
-        let when = if pull.merged {
-            &merged_at
-        } else if pull.state == "closed" {
-            &pull.closed_at
-        } else {
-            &pull.updated_at
-        };
-        if !when.as_deref().is_some_and(|t| in_month(&month, t)) {
-            continue;
+        // Lists do not carry `merged`: a merge time says it.
+        let merged = pull.merged_at.is_some();
+        let task = task_of.get(&pull.number);
+        let (mut sessions, mut usd) = (None, None);
+        let mut models = task.map_or_else(Vec::new, |(_, n)| facts(n).1);
+        if let Some((issue, _)) = task {
+            let (s, _, u, spends) = facts(&spend_notes(gh, *issue)?);
+            if spends > 0 {
+                (sessions, usd) = (Some(s), Some(u));
+            }
         }
-        let mut models = facts(&trusted).1;
         models.extend(facts(&trusted_notes(gh, pull.number)?).1);
         models.sort();
         models.dedup();
-        let mut reverted = false;
-        if pull.merged {
-            let head = format!("{}:bosun/revert-{}", app.ctx.repo.owner, pull.number);
-            for p in gh.list_pulls(Some(&head), IssueState::Closed)? {
-                if revert_target(&p.head_ref) == Some(pull.number)
-                    && gh.get_pull(p.number)?.is_some_and(|p| p.merged)
-                {
-                    reverted = true;
-                    break;
-                }
-            }
-        }
         rows.push(Row {
             pr: pull.number,
-            title: Some(pull.title.clone()),
-            issue: issue.number,
+            title: pull.title.clone(),
+            issue: task.map(|t| t.0),
             sessions,
-            models,
+            models: (!models.is_empty()).then_some(models),
             usd,
             tokens: None,
-            outcome: outcome(&pull.state, pull.merged, reverted),
-            merged_at,
+            outcome: outcome(&pull.state, merged, undone.contains(&pull.number)),
+            merged_at: pull.merged_at.clone(),
         });
     }
     let data = report(&month, &rows);
