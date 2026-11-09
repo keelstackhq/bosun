@@ -1,0 +1,14 @@
+{
+  "month": "2026-11",
+  "rows": [],
+  "totals": {
+    "cost_per_held_usd": null,
+    "cost_per_merged_usd": null,
+    "held": 0,
+    "merged": 0,
+    "prs": 0,
+    "reverted": 0,
+    "top_prs": [],
+    "usd": -0.0
+  }
+}
