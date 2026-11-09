@@ -1,0 +1,153 @@
+name: budget-report
+
+# Keeps the monthly budget reports (`bosun budget report`, spec §9) on one long-lived branch,
+# `bosun/budget-reports`, in reports/budget/YYYY-MM.{md,json}, and one draft PR "Budget reports"
+# from that branch to main (made once, never merged; its body links the current month's file and
+# shows that month's totals). A run commits only when a report file changed. Its commits touch
+# reports/budget/** and nothing else; the PR diff (merge base to branch) is just those files.
+#
+# bosun is built from source at the checked-out main: the pinned release (.bosun/version) has no
+# `budget report` yet. The build job runs repo code with a read-only token; the report job holds
+# the write token, runs only that binary and never builds or executes anything from the repo.
+# Event data reaches `run:` lines through `env:` only. A run on another branch does nothing.
+on:
+  push:
+    branches: [main]
+  # Daily: spend records and closed PRs change without a push to main (D-007 says crons at most
+  # weekly; the owner asked for a daily refresh of this one cheap job).
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+# One run at a time: two runs must never race on the branch. A queued run waits, none is cancelled.
+concurrency:
+  group: budget-report
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bosun-bin
+          path: target/release/bosun
+          retention-days: 1
+          if-no-files-found: error
+
+  report:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # The only job with write access: contents for the reports branch, pull-requests for the one
+    # draft PR. issues: read is what `bosun budget report` reads.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      BOSUN_REPO: ${{ github.repository }}
+      GH_REPO: ${{ github.repository }}
+      SHA: ${{ github.sha }}
+      BRANCH: bosun/budget-reports
+    steps:
+      # main for bosun's config files only; no credentials are kept in this checkout.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: main
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: bosun-bin
+          path: bin
+      - name: build the reports
+        run: |
+          chmod +x bin/bosun
+          cur="$(date -u +%Y-%m)"
+          months="$cur"
+          # In the first 3 days of a month the previous month is still settling.
+          if [ "$(date -u +%d)" -le 3 ]; then
+            months="$months $(date -u -d "${cur}-01 -1 month" +%Y-%m)"
+          fi
+          echo "CURRENT=$cur" >> "$GITHUB_ENV"
+          for m in $months; do
+            ./bin/bosun -C main budget report --month "$m" --out "$RUNNER_TEMP/out" > "$RUNNER_TEMP/run-$m.json"
+          done
+          ls "$RUNNER_TEMP/out"
+      - name: does the reports branch exist
+        id: branch
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/branches/$BRANCH" --silent 2>/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+            echo "::notice::creating $BRANCH from main"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.branch.outputs.ref }}
+          path: reports
+          persist-credentials: true
+      - name: commit changed reports
+        id: commit
+        working-directory: reports
+        run: |
+          git checkout -B "$BRANCH"
+          mkdir -p reports/budget
+          cp "$RUNNER_TEMP"/out/* reports/budget/
+          git add reports/budget
+          if git diff --cached --quiet; then
+            echo "no report changed"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only reports/budget/** may ever be committed on this branch.
+          if git diff --cached --name-only | grep -qv '^reports/budget/'; then
+            echo "::error::a path outside reports/budget would be committed"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "budget: reports for $(date -u +%Y-%m-%d)"
+          git push origin "$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+      # One draft PR, made once: an existing one (open or not) is never made again.
+      - name: the draft PR
+        run: |
+          json="$RUNNER_TEMP/out/$CURRENT.json"
+          url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$BRANCH/reports/budget/$CURRENT.md"
+          {
+            echo "Budget reports for every month, kept on one branch by the budget-report workflow. This PR is never merged."
+            echo
+            echo "Current month: [$CURRENT]($url)"
+            echo
+            jq -r '.totals | "- PRs: \(.prs)\n- Spend: $\(.usd)\n- Merged: \(.merged) (held \(.held), reverted \(.reverted))\n- Cost per merged PR: \(.cost_per_merged_usd // "n/a")\n- Cost per held PR: \(.cost_per_held_usd // "n/a")"' "$json"
+          } > "$RUNNER_TEMP/body.md"
+          n="$(gh pr list --head "$BRANCH" --base main --state all --json number,state --jq '.[0].number // empty')"
+          if [ -z "$n" ]; then
+            gh pr create --draft --base main --head "$BRANCH" --title "Budget reports" --body-file "$RUNNER_TEMP/body.md"
+          elif [ "$(gh pr view "$n" --json state --jq .state)" = OPEN ]; then
+            if [ "$(gh pr view "$n" --json body --jq .body)" != "$(cat "$RUNNER_TEMP/body.md")" ]; then
+              gh pr edit "$n" --body-file "$RUNNER_TEMP/body.md"
+            fi
+          else
+            echo "::warning::PR #$n is not open; not making another one"
+          fi
