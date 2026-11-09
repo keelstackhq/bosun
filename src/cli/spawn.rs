@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use super::{IntakeArgs, SpawnArgs, intake};
 use crate::app::{
-    App, default_branch, end_lease, kill_switch, limits_from_default, main_red, notes, set_state,
-    settle_race, task_meta,
+    App, default_branch, end_lease, kill_switch, limits_from_default, main_red, set_state,
+    settle_race, task_meta, trusted_notes,
 };
 use crate::cli::plan::epic_item;
 use crate::cli::risk_check::owner_slack_ids;
@@ -17,7 +17,7 @@ use crate::cli::status::process_red;
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members, thread_of};
 use crate::core::meta::area_of;
-use crate::core::records::{Note, Record, spend_total};
+use crate::core::records::{Note, Record, parse_record, spend_total};
 use crate::core::spawn::{SpawnInput, check};
 use crate::core::state::{State, state_of};
 use crate::ctx::Origin;
@@ -93,7 +93,7 @@ fn gather(
     let labels: &[String] = issue.map_or(&[], |i| &i.labels);
     let area = area_of(labels);
     let leases = match issue {
-        Some(_) => leases_of(n, &notes(app.gh.as_ref(), n)?),
+        Some(_) => leases_of(n, &trusted_notes(app.gh.as_ref(), n)?),
         None => Vec::new(),
     };
     let input = SpawnInput {
@@ -565,13 +565,21 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
             }
         }
     });
-    let (reg, reg_notes) = registry::ensure(gh)?;
+    // Every comment, no permission lookup: record must hand over even when the lookup fails.
+    // So a reader can forge joins under this session's id; the child's depth is the highest
+    // depth of any of them, so a forgery can only raise it (fail closed), never lower it.
+    let (reg, reg_notes) = registry::ensure_own(gh)?;
     let all = members(&reg_notes);
-    let depth = all
-        .iter()
+    all.iter()
         .find(|m| &m.session == me && m.expires > now)
-        .map(|m| m.depth)
-        .ok_or_else(unregistered)?
+        .ok_or_else(unregistered)?;
+    let depth = (reg_notes.iter())
+        .filter_map(|n| match parse_record(&n.body) {
+            Some(Record::Join { session, depth, .. }) if &session == me => Some(depth),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
         + 1;
     let expires = now.plus_secs(TTL_SECS);
     let prior = all.iter().find(|m| m.session == child);
@@ -586,7 +594,7 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
-    if leases_of(n, &notes(gh, n)?)
+    if leases_of(n, &crate::app::notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me)
     {

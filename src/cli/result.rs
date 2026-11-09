@@ -7,8 +7,8 @@ use serde_json::json;
 use super::ResultArgs;
 use super::reap::{EpicScope, close_done_epics};
 use crate::app::{
-    App, default_branch, end_lease, halt_reason, merge_counts, notes, set_state, sync_merged,
-    task_pr_merged,
+    App, default_branch, end_lease, halt_reason, merge_counts, set_state, sync_merged,
+    task_pr_merged, trusted_notes,
 };
 use crate::core::lease::{leases_of, members};
 use crate::core::meta::{linked_issues, parse_task_meta};
@@ -130,7 +130,7 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     tasks_merged.sort_unstable();
     tasks_merged.dedup();
 
-    let lease_ended = leases_of(n, &notes(gh, n)?)
+    let lease_ended = leases_of(n, &trusted_notes(gh, n)?)
         .iter()
         .any(|l| &l.session == session);
     if lease_ended {
@@ -188,7 +188,7 @@ fn partial_refusal(app: &App, n: u64, state: Option<State>) -> crate::app::Resul
             "#{n} is {st}; partial moves only claimed, building, review or fixing"
         )));
     }
-    if !leases_of(n, &notes(gh, n)?)
+    if !leases_of(n, &trusted_notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me && l.is_live(now))
     {

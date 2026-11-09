@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::app::{
     App, active_issues, default_branch, end_lease, merge_counts, notes, set_state, sync_merged,
-    task_pr_merged,
+    task_pr_merged, trusted_notes,
 };
 use crate::cli::plan::epic_item;
 use crate::core::lease::{leases_of, members};
@@ -282,11 +282,14 @@ pub(crate) fn close_done_epics(
         // expiry, which runs first): until then the child may still report partial or blocked,
         // so even an expired one blocks. Other states are not reaped: only live leases count.
         let claimed = state_of(&e.labels) == Some(State::Claimed);
-        if !leases_of(e.number, &notes(gh, e.number)?).iter().any(|l| {
-            (l.is_live(now) || (claimed && l.origin == "spawned"))
-                && (scope.own_session != Some(l.session.as_str())
-                    || (scope.own_spawned_blocks && l.origin == "spawned"))
-        }) {
+        if !leases_of(e.number, &trusted_notes(gh, e.number)?)
+            .iter()
+            .any(|l| {
+                (l.is_live(now) || (claimed && l.origin == "spawned"))
+                    && (scope.own_session != Some(l.session.as_str())
+                        || (scope.own_spawned_blocks && l.origin == "spawned"))
+            })
+        {
             candidates.push(e);
         }
     }
