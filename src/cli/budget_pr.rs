@@ -37,11 +37,13 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
             "pass the unchanged get_session result, or --usd with a cost of 0 or more",
         ));
     }
-    let session = input
-        .as_ref()
-        .and_then(|v| text(v, &[&["session_id"], &["session", "id"], &["id"]]))
-        .unwrap_or(&ctx.session)
-        .to_string();
+    let session = a.session.clone().unwrap_or_else(|| {
+        input
+            .as_ref()
+            .and_then(|v| text(v, &[&["session_id"], &["session", "id"], &["id"]]))
+            .unwrap_or(&ctx.session)
+            .to_string()
+    });
     let model = a.model.clone().or_else(|| {
         let v = input.as_ref()?;
         text(
@@ -54,7 +56,9 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         )
         .map(String::from)
     });
-    // Check every PR before writing any: a refusal leaves nothing half recorded.
+    // Check every PR before writing any. A PR that already has this session's record is left
+    // alone, so a retry after a failed write adds only what is missing.
+    let (mut todo, mut done) = (Vec::new(), Vec::new());
     for &pr in &prs {
         if gh.get_pull(pr)?.is_none() {
             return Err(BosunError::error(
@@ -65,15 +69,16 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         let seen = spend_notes(gh, pr)?.iter().any(|n| {
             matches!(parse_record(&n.body), Some(Record::Spend { session: s, .. }) if s == session)
         });
-        if seen {
-            return Err(BosunError::conflict(
-                format!("session {session} already has a spend record on PR #{pr}"),
-                "do not record it again; the spend is already on the PR",
-            ));
-        }
+        if seen { done.push(pr) } else { todo.push(pr) }
+    }
+    if todo.is_empty() {
+        return Err(BosunError::conflict(
+            format!("session {session} already has a spend record on PR(s) {done:?}"),
+            "do not record it again; the spend is already on the PR",
+        ));
     }
     let share = usd / prs.len() as f64;
-    for &pr in &prs {
+    for &pr in &todo {
         let spend = Record::Spend {
             session: session.clone(),
             usd: share,
@@ -84,6 +89,6 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         gh.add_comment(pr, &spend.to_line())?;
     }
     Ok(Outcome::data(json!({
-        "prs": prs, "usd": usd, "usd_per_pr": share, "session": session, "model": model,
+        "prs": prs, "recorded": todo, "already_recorded": done, "usd": usd, "usd_per_pr": share, "session": session, "model": model,
     })))
 }

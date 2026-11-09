@@ -110,3 +110,58 @@ fn report_adds_pr_spend_to_task_spend_and_counts_a_session_once() {
     assert_eq!(by(21)["sessions"], json!(["s3"]));
     assert_eq!(v["data"]["totals"]["prs_with_spend"], 2);
 }
+
+#[test]
+fn session_flag_names_the_child_and_a_second_child_is_no_duplicate() {
+    let fake = seeded();
+    assert_eq!(
+        record(&fake, "", &["--pr", "20", "--usd", "1", "--session", "c1"]).0,
+        0
+    );
+    assert_eq!(
+        record(&fake, "", &["--pr", "20", "--usd", "2", "--session", "c2"]).0,
+        0
+    );
+    let s = spends(&fake, 20);
+    assert_eq!(
+        (s[0]["session"].clone(), s[1]["session"].clone()),
+        (json!("c1"), json!("c2"))
+    );
+}
+
+#[test]
+fn a_retry_writes_only_the_prs_that_lack_the_record() {
+    let fake = seeded();
+    assert_eq!(
+        record(&fake, "", &["--pr", "20", "--usd", "1", "--session", "c1"]).0,
+        0
+    );
+    let (code, v) = record(
+        &fake,
+        "",
+        &["--pr", "20", "--pr", "21", "--usd", "2", "--session", "c1"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!((spends(&fake, 20).len(), spends(&fake, 21).len()), (1, 1));
+    assert_eq!(v["data"]["already_recorded"], json!([20]));
+}
+
+#[test]
+fn bad_input_is_refused_with_nothing_written() {
+    let fake = seeded();
+    for (args, code) in [
+        (vec!["--usd", "1"], 2),
+        (vec!["5", "--pr", "20"], 2),
+        (vec!["--pr", "20", "--usd=-1"], 1),
+        (vec!["--pr", "99", "--usd", "1"], 1),
+    ] {
+        assert_eq!(record(&fake, "", &args).0, code, "{args:?}");
+    }
+    assert!(record(&fake, "", &[]).0 == 2);
+    assert!(spends(&fake, 20).is_empty());
+    assert_eq!(
+        record(&fake, "", &["--pr", "20", "--pr", "20", "--usd", "2"]).0,
+        0
+    );
+    assert_eq!(spends(&fake, 20)[0]["usd"], 2.0);
+}
