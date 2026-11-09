@@ -110,7 +110,9 @@ fn is_lockfile(path: &str) -> bool {
 }
 
 /// The pack of PR `n` (also the input of `bosun review-ci`). With `full` there is no delta
-/// scan: `since_sha` and `delta_fallback` are null and the files are all of the PR's.
+/// scan: `since_sha` and `delta_fallback` are null and the files are all of the PR's. A delta
+/// lists the PR's files (and patches, against the base) that changed since `since_sha`: files
+/// that only main changed, brought in by a merge of main, are left out; it can be empty.
 pub(crate) fn build(gh: &dyn Github, repo: &str, n: u64, full: bool) -> Result<Value, BosunError> {
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(
@@ -148,15 +150,36 @@ pub(crate) fn build(gh: &dyn Github, repo: &str, n: u64, full: bool) -> Result<V
     // A delta needs since to be an ancestor of the head (`ahead`: the three-dot compare of a
     // behind or diverged sha is empty or misleading). The old sha can also be gone after a
     // force-push. Any problem means a full review, the safe direction.
+    let mut not_in_pr: Vec<String> = Vec::new();
     let files = match &since {
         Some(s) => {
             let delta: Result<Vec<_>, String> = match gh.compare(s, &pull.head_sha) {
+                // Past GitHub's compare cap a PR file can be missing from the list: never filter
+                // a truncated compare.
+                Ok(c) if c.status == "ahead" && c.truncated => {
+                    Err(format!("the compare {s}...{} is truncated", pull.head_sha))
+                }
                 Ok(c) if c.status == "ahead" => {
                     // An ancestor can still belong to another PR (a stack): it must be one of
                     // this PR's commits. GitHub lists at most 250, so a full list proves nothing.
                     let commits = gh.pull_commits(n)?;
                     if commits.len() < MAX_PR_COMMITS && commits.contains(s) {
-                        Ok(c.files)
+                        // Main merged into the branch shows up in the compare: keep only the
+                        // PR's own files, with the PR's patch (its diff against the base).
+                        let own = gh.pull_files(n)?;
+                        let mine: HashSet<&str> = own.iter().map(|f| f.filename.as_str()).collect();
+                        // Changed since the review but not in the PR's diff: main's files, or a
+                        // PR change undone. Named, so a reverted reviewed fix stays visible.
+                        not_in_pr = (c.files.iter())
+                            .filter(|f| !mine.contains(f.filename.as_str()))
+                            .map(|f| f.filename.clone())
+                            .collect();
+                        let shown: HashSet<&str> =
+                            c.files.iter().map(|f| f.filename.as_str()).collect();
+                        Ok(own
+                            .into_iter()
+                            .filter(|f| shown.contains(f.filename.as_str()))
+                            .collect())
                     } else {
                         Err(format!("{s} is not a commit of this PR"))
                     }
@@ -179,6 +202,7 @@ pub(crate) fn build(gh: &dyn Github, repo: &str, n: u64, full: bool) -> Result<V
                 Err(why) => {
                     eprintln!("bosun: full review instead of a delta: {why}");
                     delta_fallback = Some(why);
+                    not_in_pr.clear();
                     since = None;
                     gh.pull_files(n)?
                 }
@@ -268,6 +292,7 @@ pub(crate) fn build(gh: &dyn Github, repo: &str, n: u64, full: bool) -> Result<V
         "task": task, "bundle_tasks": bundle_tasks, "ucs": ucs, "lessons": lessons::matching(&store, &names).into_iter().map(lessons::line).collect::<Vec<_>>(),
         "review_md": gh.file_at("REVIEW.md", &pull.base_sha)?,
         "instructions": INSTRUCTIONS, "untrusted": UNTRUSTED, "delta_fallback": delta_fallback,
+        "delta_not_in_pr": not_in_pr,
         "changed_files": pull.changed_files,
     }))
 }
