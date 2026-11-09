@@ -33,7 +33,7 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Read-only: bosun reads issues, comments and pull requests; the write token is not here.
+    # Read-only: bosun reads issues, comments and pull requests; no token that can write is here.
     permissions:
       contents: read
       issues: read
