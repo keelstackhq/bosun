@@ -53,9 +53,11 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
     // at the first page that ends before the month: a PR with an event in the month was updated
     // in or after it. The same list tells which merged PRs a merged `bosun/revert-<n>` undid.
     let pulls = gh.list_pulls_updated_since(&format!("{month}-01T00:00:00Z"))?;
+    // Only this repo's own branches count, as for `bosun progress` (a fork's branch has another owner).
+    let repo = app.ctx.repo.to_string();
     let undone: BTreeSet<u64> = pulls
         .iter()
-        .filter(|p| p.merged_at.is_some())
+        .filter(|p| p.merged_at.is_some() && p.head_repo == repo)
         .filter_map(|p| revert_target(&p.head_ref))
         .collect();
     let mut rows = Vec::new();

@@ -166,3 +166,23 @@ fn the_pull_list_stops_at_the_first_page_older_than_the_month() {
         "page 1 holds the two new PRs, page 2 ends before the month"
     );
 }
+
+#[test]
+fn a_revert_branch_from_a_fork_does_not_undo_a_pr() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    for (pr, head) in [(20, "feat/a"), (40, "bosun/revert-20")] {
+        fake.pull(pr, &format!("PR {pr}"), head, "");
+        fake.pull_set(pr, "merged_at", json!("2026-11-06T10:00:00Z"));
+        fake.pull_set(pr, "closed_at", json!("2026-11-06T10:00:00Z"));
+        fake.pull_set(pr, "updated_at", json!("2026-11-06T10:00:00Z"));
+        fake.pull_set(pr, "state", json!("closed"));
+    }
+    let mut head = serde_json::json!({"sha": "sha40", "ref": "bosun/revert-20", "repo": {"full_name": "mallory/widget"}});
+    head["label"] = json!("mallory:bosun/revert-20");
+    fake.pull_set(40, "head", head);
+    let (code, v) = run(&fake, "session_a", NOW, &["budget", "report"]);
+    assert_eq!(code, 0, "{v}");
+    let outcomes: Vec<_> = rows(&v).iter().map(|r| r["outcome"].clone()).collect();
+    assert_eq!(outcomes, [json!("held"), json!("held")], "{v}");
+}
