@@ -32,12 +32,14 @@ fn job(yaml: &str, id: &str) -> String {
 }
 
 #[test]
-fn runs_daily_on_main_pushes_and_by_hand_one_at_a_time() {
+fn runs_weekly_on_main_pushes_and_by_hand_one_at_a_time() {
     let y = wf();
     assert!(y.contains("  push:\n    branches: [main]"));
-    assert!(y.contains("  schedule:\n    - cron:"));
+    assert!(y.contains("  schedule:\n    - cron: \"41 4 * * 1\""));
     assert!(y.contains("  workflow_dispatch:"));
-    assert!(y.contains("concurrency:\n  group: budget-report\n  cancel-in-progress: true"));
+    assert!(y.contains(
+        "concurrency:\n  group: budget-report-${{ github.ref }}\n  cancel-in-progress: true"
+    ));
     for id in ["build", "report"] {
         assert!(
             job(&y, id).contains("if: github.ref == 'refs/heads/main'"),

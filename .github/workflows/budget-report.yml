@@ -14,16 +14,16 @@ name: budget-report
 on:
   push:
     branches: [main]
-  # Daily: spend records and closed PRs change without a push to main (D-007 says crons at most
-  # weekly; the owner asked for a daily refresh of this one cheap job).
+  # Weekly, not daily (D-007): every merge to main already refreshes the reports; this run catches
+  # month rollover and quiet weeks.
   schedule:
-    - cron: "41 4 * * *"
+    - cron: "41 4 * * 1"
   workflow_dispatch:
 
 # One run at a time: two runs must never race on the branch. A newer run cancels the older one;
 # every step is repeatable, so the next run finishes what a cancelled one left.
 concurrency:
-  group: budget-report
+  group: budget-report-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
