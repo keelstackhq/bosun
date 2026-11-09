@@ -12,10 +12,7 @@ name: budget-report
 # git, gh and jq on those files (names checked): it never builds or executes anything from the
 # repo. Event data reaches `run:` lines through `env:` only. A run on another branch does nothing.
 on:
-  push:
-    branches: [main]
-  # Weekly, not daily (D-007): every merge to main already refreshes the reports; this run catches
-  # month rollover and quiet weeks.
+  # Weekly (D-007) plus by hand: no push trigger, so the reports are as fresh as the last run.
   schedule:
     - cron: "41 4 * * 1"
   workflow_dispatch:
@@ -41,14 +38,14 @@ jobs:
     outputs:
       current: ${{ steps.reports.outputs.current }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.97"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo build --release --locked
       - name: build the reports
         id: reports
@@ -70,7 +67,7 @@ jobs:
             fi
           done
           ls out
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: budget-reports
           path: out
@@ -93,7 +90,7 @@ jobs:
       CURRENT: ${{ needs.build.outputs.current }}
       BRANCH: bosun/budget-reports
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: budget-reports
           path: out
@@ -116,7 +113,7 @@ jobs:
             echo "ref=$SHA" >> "$GITHUB_OUTPUT"
             echo "::notice::creating $BRANCH from main"
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ steps.branch.outputs.ref }}
           path: reports

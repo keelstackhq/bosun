@@ -128,8 +128,8 @@ minutes; see [docs/ci-minutes.md](docs/ci-minutes.md). `--auto-merge` is an old 
 
 Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit.
 
-Monthly spend per PR: the `budget-report` workflow runs `bosun budget report` weekly and on every
-push to main, and commits `reports/budget/YYYY-MM.md` and `.json` to the branch
+Monthly spend per PR: the `budget-report` workflow runs `bosun budget report` weekly (Monday) and by
+manual dispatch, and commits `reports/budget/YYYY-MM.md` and `.json` to the branch
 `bosun/budget-reports` (one draft PR "Budget reports", never merged). It needs the setting
 Actions > allow GitHub Actions to create pull requests.
 

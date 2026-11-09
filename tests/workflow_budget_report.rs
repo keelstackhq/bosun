@@ -32,9 +32,12 @@ fn job(yaml: &str, id: &str) -> String {
 }
 
 #[test]
-fn runs_weekly_on_main_pushes_and_by_hand_one_at_a_time() {
+fn runs_weekly_and_by_hand_never_on_a_push_one_at_a_time() {
     let y = wf();
-    assert!(y.contains("  push:\n    branches: [main]"));
+    assert!(
+        !y.contains("push:") && !y.contains("pull_request"),
+        "no push or PR trigger (D-007)"
+    );
     assert!(y.contains("  schedule:\n    - cron: \"41 4 * * 1\""));
     assert!(y.contains("  workflow_dispatch:"));
     assert!(y.contains(
@@ -112,4 +115,31 @@ fn the_branch_holds_only_reports_and_the_pr_is_a_single_draft() {
         y.contains("-le 7"),
         "the previous month in the first 7 days"
     );
+}
+
+#[test]
+fn every_action_is_pinned_by_commit_sha() {
+    let mut n = 0;
+    for line in wf().lines() {
+        let Some(at) = line
+            .trim_start()
+            .strip_prefix("- uses: ")
+            .or_else(|| line.trim_start().strip_prefix("uses: "))
+        else {
+            continue;
+        };
+        n += 1;
+        let (name, rest) = at
+            .split_once('@')
+            .unwrap_or_else(|| panic!("no pin: {line}"));
+        let (sha, comment) = rest
+            .split_once(" # ")
+            .unwrap_or_else(|| panic!("no version comment: {line}"));
+        assert!(
+            sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{name} is not pinned by a 40-hex SHA: {line}"
+        );
+        assert!(!comment.trim().is_empty(), "{line}");
+    }
+    assert!(n >= 6, "found only {n} uses: lines");
 }
