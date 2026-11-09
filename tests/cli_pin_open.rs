@@ -134,3 +134,38 @@ fn pin_pr_rolls_back_when_the_push_is_rejected() {
     assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
     assert_eq!(git(e.work.path(), &["branch", "--list", "bosun/pin"]), "");
 }
+
+#[test]
+fn pin_pr_stops_when_halted_before_any_download() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    fake.variable("BOSUN_HALT", "1");
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 4, "{v}");
+    assert_eq!(e.reg.tarballs(), 0);
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn pin_pr_refuses_a_stale_origin_branch() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["push", "-q", "origin", "main:bosun/pin"]);
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("owner"));
+    assert_eq!(e.reg.tarballs(), 0);
+}
+
+#[test]
+fn pin_pr_needs_the_default_branch() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["switch", "-q", "-c", "other"]);
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("git switch main")
+    );
+    assert_eq!(e.reg.tarballs(), 0);
+}

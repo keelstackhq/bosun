@@ -7,7 +7,7 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
-use crate::app::{App, default_branch};
+use crate::app::{App, default_branch, kill_switch};
 use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -56,9 +56,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
                 args.join(" "),
                 String::from_utf8_lossy(&out.stderr).trim()
             ),
-            format!(
-                "fix the git error above; if {BRANCH} is stale run `git branch -D {BRANCH}`; then rerun `bosun pin --latest --pr`"
-            ),
+            "fix the git error above, then rerun `bosun pin --latest --pr`",
         ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -67,6 +65,7 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
 /// Before anything is downloaded or written.
 pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
     let app = App::load(Some(root))?;
+    kill_switch(app.gh.as_ref())?;
     let head = format!("{}:{BRANCH}", app.ctx.repo.owner);
     if let Some(p) = app.gh.list_pulls(Some(&head), IssueState::Open)?.first() {
         return Ok(Pre::Open(p.number));
@@ -125,7 +124,7 @@ pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
 /// What is left for the human, in order.
 pub fn left(pr: u64, bosun_to: Option<&str>) -> Vec<String> {
     let mut v = vec![format!(
-        "PR #{pr}: mark it ready for review and get the owner approval (it edits .bosun/ pins); GitHub merges on green."
+        "PR #{pr}: mark it ready for review and get the owner approval (it edits .bosun/ pins); then turn on auto-merge so GitHub merges on green."
     )];
     v.push("Cloud environment: nothing. The next session start runs the merged docs/setup-script.sh; the pasted snippet never changes.".into());
     if let Some(to) = bosun_to {
