@@ -193,3 +193,23 @@ fn pin_pr_needs_the_default_branch() {
     );
     assert_eq!(e.reg.tarballs(), 0);
 }
+
+#[test]
+fn a_rejected_push_on_the_dated_branch_deletes_only_that_branch() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["branch", "bosun/pin"]);
+    let hook = e.origin.path().join("hooks/pre-receive");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, v) = e.run(&fake);
+    assert_eq!(code, 1, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("rolled back"));
+    let branches = git(e.work.path(), &["branch", "--list", "bosun/pin*"]);
+    assert!(
+        branches.contains("bosun/pin") && !branches.contains("20261022"),
+        "{branches}"
+    );
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}

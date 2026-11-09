@@ -489,6 +489,12 @@ pub fn update_check(dir: &Path) -> Check {
 /// The SessionStart notice (spec D35): `Some(line)` when a tool pin is behind npm latest; `None`
 /// when the hook should stay silent (opted out, not a pin repo, nothing behind).
 pub fn session_notice(dir: &Path) -> Result<Option<String>, BosunError> {
+    // No npm call in a bosun channel repo: its pins are the channel's (spec 04, SessionStart).
+    let root: PathBuf =
+        git_out(dir, &["rev-parse", "--show-toplevel"]).map_or(dir.to_path_buf(), PathBuf::from);
+    if root.join(CHANNEL).exists() {
+        return Ok(None);
+    }
     Ok(match update_check(dir) {
         Check::Behind(u) if !u.moves.is_empty() => Some(format!(
             "tool pins behind: {}. The orchestrator moves them: on the default branch run `bosun pin --latest --pr` (branch {BRANCH}, commit, push, draft PR; one pin PR per repo).",

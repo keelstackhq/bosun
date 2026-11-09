@@ -32,9 +32,9 @@ bosun pin --latest --pr
 ```
 
 It downloads each tarball, checks it against npm's `dist.integrity`, rewrites the pins, creates the branch
-`bosun/pin`, commits, pushes (never forced) and opens a draft PR. It prints `data.pr` and `data.left`, the steps
-that remain. If a pin PR is already open it only names it. If `bosun/pin` is left from an old pin, it stops
-(exit 3) and says what to delete.
+`bosun/pin` (or `bosun/pin-<date>` when an old pin left that name), commits, pushes (never forced) and opens a draft
+PR. It prints `data.pr` and `data.left`, the steps that remain. If a pin PR is already open it only names it. If both
+names are left from old pins, it stops (exit 3) and says what to delete.
 
 Then:
 
