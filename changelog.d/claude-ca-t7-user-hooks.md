@@ -1,0 +1,1 @@
+- `bosun setup-snippet --install-hooks` merges the hooks into ~/.claude/settings.json idempotently; session-start in a repo without `.bosun/version` skips GitHub calls and prints the `bosun adopt` step.
