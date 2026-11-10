@@ -1,1 +1,1 @@
-- The CLI repeat counter lives in the repo bosun runs in, not the `-C` directory, so the hook's next tool call resets it; the hook reads a deny from the parsed hook output.
+- The CLI repeat counter and the sticky refusal markers live in the repo bosun runs in, not the `-C` directory, so the hook resets and shows them; the hook reads a deny from the parsed hook output.

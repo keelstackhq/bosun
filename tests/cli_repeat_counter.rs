@@ -219,10 +219,29 @@ fn a_call_with_dash_c_counts_where_the_hook_resets() {
     for _ in 0..4 {
         run(here.path(), "s", &call);
     }
+    assert!(here.path().join(".git/bosun/cli-repeat").is_dir());
     assert!(!other.path().join(".git/bosun/cli-repeat").exists());
     hook(
         here.path(),
         &json!({"tool_name": "Read", "tool_input": {"file_path": "x"}}),
     );
     assert_ne!(run(here.path(), "s", &call).0, 6);
+}
+
+/// Without a tool call the 5th `-C` call is refused, and its sticky marker lands where the
+/// hook reads it: the shell's repo, not the `-C` one.
+#[test]
+fn a_dash_c_refusal_is_recorded_in_the_shells_repo() {
+    let here = repo();
+    let other = repo();
+    let o = other.path().to_str().unwrap();
+    let call = ["-C", o, "release", "999"];
+    for _ in 0..4 {
+        run(here.path(), "s", &call);
+    }
+    assert_eq!(run(here.path(), "s", &call).0, 6);
+    let markers =
+        |p: &Path| std::fs::read_dir(p.join(".git/bosun/refusals")).map_or(0, |d| d.count());
+    assert_eq!(markers(here.path()), 1);
+    assert_eq!(markers(other.path()), 0);
 }
