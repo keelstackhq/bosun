@@ -1,0 +1,1 @@
+- 2026-11-10 · #502 PR 1 · sticky refusal markers shown by the PreToolUse hook; a kill-switch halt refuses writes · PR #506

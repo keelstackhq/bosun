@@ -13,6 +13,7 @@ use crate::output::{CmdResult, Outcome};
 
 pub mod cache;
 pub mod pre_tool_use;
+pub mod refusal;
 pub mod session_rules;
 pub mod session_start;
 pub mod stop;

@@ -14,8 +14,10 @@ fn main() -> ExitCode {
     let command = cli.command.name();
     // Hooks print their own protocol output; no envelope.
     let is_hook = matches!(cli.command, bosun::Command::Hook(_));
+    let dir = cli.dir.clone();
     let result = bosun::run(cli);
     if !is_hook {
+        bosun::hooks::refusal::record(dir.as_deref(), command, &result);
         print(command, &result);
     }
     ExitCode::from(bosun::output::exit_of(&result).code())

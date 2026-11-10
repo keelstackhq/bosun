@@ -23,7 +23,20 @@ pub fn deny(reason: &str) -> String {
 /// The hook fails closed on a bosun bug: a panic would exit 101, which Claude Code treats as a
 /// non-blocking error and lets the tool call run.
 pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
-    guarded(|| judge(cwd, input))
+    guarded(|| {
+        let out = judge(cwd, input);
+        let dir = cwd
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok());
+        let tool = input.get("tool_name").and_then(Value::as_str);
+        match (dir, tool) {
+            (Some(d), Some(t)) => {
+                let tool_input = input.get("tool_input").unwrap_or(&Value::Null);
+                super::refusal::apply(&d, t, tool_input, out)
+            }
+            _ => out,
+        }
+    })
 }
 
 /// Run `f`; a panic becomes a deny. While `f` runs, a panic prints one short line to stderr
