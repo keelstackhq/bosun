@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.12.0 (2026-11-10)
+
 - `bosun budget record --pr <n>` (repeatable) records session spend on PRs; `budget report` counts spend on the PR itself.
 - `bosun adopt --policy owner|owner-gated|orchestrator|autonomous` writes `[approvals] policy` into the rendered `.bosun/bosun.toml` (channel var `policy`, default empty: render unchanged); a policy the pinned release cannot parse (`autonomous` before 0.8.0, the others before 0.5.0) is exit 2 naming the minimum, and a kept config gets an owner step to set it by hand.
 - `@keelstackhq/cargo-deny` npm packages (launcher, linux-x64, linux-arm64) republish upstream cargo-deny's prebuilt musl binaries through the manual `cargo-deny-npm.yml` workflow (checked against upstream's `.sha256`, npm trusted publishing).
