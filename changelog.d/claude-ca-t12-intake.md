@@ -1,0 +1,1 @@
+- `bosun intake verify --chat <issue>` accepts the orchestrator's chat record of the owner's yes instead of the intake signature.

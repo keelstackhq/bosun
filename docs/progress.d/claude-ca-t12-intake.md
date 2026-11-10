@@ -1,0 +1,1 @@
+- Chat approval T12: `intake verify --chat` counts an intake chat record (plan 2026-11-10).
