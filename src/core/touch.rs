@@ -108,7 +108,7 @@ pub fn is_fragment(path: &str) -> bool {
     };
     one_level("changelog.d/")
         || one_level("docs/progress.d/")
-        || (one_level(".changeset/") && path != ".changeset/README.md")
+        || (one_level(".changeset/") && !path.eq_ignore_ascii_case(".changeset/README.md"))
 }
 
 /// The paths of `changed` that no `touch` glob covers: files that are modified, removed or

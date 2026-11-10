@@ -47,11 +47,7 @@ fn own_leases<'a>(leases: &'a [Lease], me: &str) -> Vec<&'a Lease> {
 fn own_touch_lock(path: &str, exists: bool, leases: &[Lease], me: &str) -> Option<String> {
     let own = own_leases(leases, me);
     let first = own.first()?;
-    if !exists
-        || path.starts_with("changelog.d/")
-        || path.starts_with("docs/progress.d/")
-        || crate::core::touch::is_fragment(path)
-    {
+    if !exists || crate::core::touch::is_fragment(path) {
         return None;
     }
     let touch: Vec<String> = own.iter().flat_map(|l| l.touch.clone()).collect();

@@ -219,7 +219,7 @@ High-risk PRs:
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
   bootstrap window and whatever the requirement, and only by an allowlist
   (`risk::autonomous_excluded`): every changed path (previous name too, any case) must be under
-  `src/**`, `tests/**`, `docs/**`, `changelog.d/**` or `.changeset/**` (`AUTONOMOUS_ALLOWED`) and outside
+  `src/**`, `tests/**`, `docs/**`, `changelog.d/**` or `.changeset/*.md` (one level, markdown only; `.changeset/config.json` names the changelog generator the release runs with secrets, so it and every other non-`.md` file there is the owner's) (`AUTONOMOUS_ALLOWED`) and outside
   `docs/setup-script.sh`, `docs/agents/**`, `docs/lessons.toml`, `**/plans/**`, `**/*.jinja` and
   `**/build.rs` (`AUTONOMOUS_DENIED`). Everything else is the owner's: workflows, `.github/**`,
   `.bosun/**`, `channel/**`, `.circleci/**`, actions, root files (`Cargo.toml`, `deny.toml`,

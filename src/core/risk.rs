@@ -499,7 +499,7 @@ pub const AUTONOMOUS_ALLOWED: [&str; 5] = [
     "tests/**",
     "docs/**",
     "changelog.d/**",
-    ".changeset/**",
+    ".changeset/*.md",
 ];
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
@@ -1155,10 +1155,13 @@ mod tests {
             "changelog.d/x.md",
             ".changeset/x.md",
             ".changeset/README.md",
-            ".changeset/config.json",
         ];
         let no = [
             ".github/workflows/ci.yml",
+            // config.json picks the changelog generator the release runs with secrets.
+            ".changeset/config.json",
+            ".changeset/gen.js",
+            ".changeset/sub/x.md",
             ".github/actions/x/action.yml",
             ".bosun/risk.toml",
             "channel/pieces/core/files/src/a.rs",
