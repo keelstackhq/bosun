@@ -39,6 +39,20 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
     let pull = gh.get_pull(pr)?.ok_or_else(|| {
         BosunError::error(format!("PR #{pr} does not exist"), "check the PR number")
     })?;
+    // Only a merge into the default branch lands a task (as `bosun pr` counts it), and the gates
+    // (main-open, required checks) judge that branch.
+    let base = default_branch(gh)?;
+    if pull.base_ref != base {
+        return Err(BosunError::conflict(
+            format!(
+                "PR #{pr} targets {}, not the default branch {base}; nothing was merged",
+                pull.base_ref
+            ),
+            format!(
+                "merge its base PR first and retarget PR #{pr} to {base}, then rerun `bosun merge {pr}`"
+            ),
+        ));
+    }
     if pull.merged {
         let tasks = sync_tasks(&app, &pull)?;
         return Ok(Outcome::data(json!({
@@ -56,12 +70,12 @@ pub fn run(dir: Option<&Path>, args: &MergeArgs) -> CmdResult {
     if provider == CiProvider::None {
         check_no_ci(&app, &pull)?;
     } else {
-        check_ci(gh, &pull)?;
+        check_ci(gh, &pull, &base)?;
     }
     gh.merge_pull(pr, &head, &args.method)
         .map_err(|e| match e.exit {
             Exit::Conflict => e,
-            _ if e.message.contains(" 403 ") => BosunError::needs_human(
+            _ if http_status(&e.message, 403) => BosunError::needs_human(
                 e.message,
                 format!("this session cannot merge through the API: the owner taps Merge on PR #{pr} (head {head}) in the GitHub app"),
             ),
@@ -137,10 +151,9 @@ fn check_no_ci(app: &App, pull: &Pull) -> Result<(), BosunError> {
 
 /// With CI: every required check green on the head, `risk-check` and `review-verdict` posted
 /// by GitHub Actions (the case where GitHub cannot turn on auto-merge: already clean).
-fn check_ci(gh: &dyn Github, pull: &Pull) -> Result<(), BosunError> {
+fn check_ci(gh: &dyn Github, pull: &Pull, base: &str) -> Result<(), BosunError> {
     let (pr, head) = (pull.number, pull.head_sha.as_str());
-    let base = default_branch(gh)?;
-    let mut bad = super::pr::not_green(gh, &base, head)?;
+    let mut bad = super::pr::not_green(gh, base, head)?;
     for (ctx, state) in super::pr::merge_gates(gh, head)? {
         if state != "success" && !bad.iter().any(|b| b.0 == ctx) {
             bad.push((ctx, state));
@@ -169,4 +182,10 @@ fn sync_tasks(app: &App, pull: &Pull) -> Result<Vec<u64>, BosunError> {
         }
     }
     Ok(moved)
+}
+
+/// Whether a GitHub error message (`GitHub PUT <path>: <status> <message>`, trimmed) names `status`.
+pub(crate) fn http_status(message: &str, status: u16) -> bool {
+    let code = format!(": {status}");
+    message.contains(&format!("{code} ")) || message.ends_with(&code)
 }
