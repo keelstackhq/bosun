@@ -71,6 +71,9 @@ pub fn check_envelope(v: &Value) -> Result<(), String> {
         {
             return Err("error.fix is empty".into());
         }
+        if v["next"] != serde_json::json!([]) {
+            return Err("next of a failed envelope is not empty".into());
+        }
         return Ok(());
     }
     match v["command"].as_str().and_then(data_of) {

@@ -174,7 +174,7 @@ fn a_direct_label_edit_is_refused_by_the_hook() {
         .write_stdin(input.to_string())
         .output()
         .unwrap();
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v: Value = common::one_object(&out.stdout);
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 

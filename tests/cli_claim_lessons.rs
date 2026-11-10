@@ -39,7 +39,7 @@ fn claim(fake: &FakeGithub, dir: &Path, args: &[&str]) -> Value {
         .args(args)
         .output()
         .unwrap();
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v: Value = common::one_object(&out.stdout);
     assert_eq!(v["ok"], true, "{v}");
     v
 }

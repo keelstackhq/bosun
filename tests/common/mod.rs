@@ -50,9 +50,7 @@ pub fn one_object(stdout: &[u8]) -> Value {
     assert!(stream.next().is_none(), "more than one JSON value: {text}");
     assert!(first.is_object(), "not an object: {text}");
     let envelope = first.get("version").is_some() && first.get("exit_code").is_some();
-    if let Err(e) = schema_check::check_envelope(&first)
-        && envelope
-    {
+    if envelope && let Err(e) = schema_check::check_envelope(&first) {
         panic!("the envelope does not match `bosun schema`: {e}\n{text}");
     }
     first
