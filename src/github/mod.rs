@@ -261,6 +261,17 @@ pub struct RepoInfo {
     /// Present with an authenticated token: what the token may do.
     #[serde(default)]
     pub permissions: Option<Value>,
+    #[serde(default)]
+    pub owner: Option<RepoOwner>,
+}
+
+/// The repository's owner: a user, or an organization.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct RepoOwner {
+    pub login: String,
+    /// `User` or `Organization`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
