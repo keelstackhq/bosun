@@ -33,7 +33,7 @@ fn a_readers_forged_lease_does_not_pass_require_lease() {
             "--phone",
         ],
     );
-    assert_ne!(code, 0, "{v}");
+    assert_eq!(code, 3, "{v}");
     assert!(
         !fake
             .comments_of(11)

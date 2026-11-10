@@ -569,8 +569,10 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
     // So a reader can forge joins under this session's id. The child's depth is the highest
     // depth of any of them, so a forgery can only raise it (fail closed), never lower it. The
     // spawner counts as registered while any of its joins is live; `leave` records are ignored
-    // (a forged one would unregister it), so a forged live join can only keep an expired
-    // spawner registered for this record, which still needs its lease.
+    // (a forged one would unregister it, and the session's own leave too: record follows a
+    // spawn this session just made through the trusted checks). A forged live join can keep
+    // an expired spawner registered for this record only; it can raise the depth, never lower it,
+    // and grants no spawn, which the trusted checks decide.
     let (reg, reg_notes) = registry::ensure_own(gh)?;
     let all = members(&reg_notes);
     let registered = reg_notes.iter().any(|n| {
