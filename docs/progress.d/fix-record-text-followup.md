@@ -1,0 +1,1 @@
+- 2026-11-10 · fix · record-text follow-up to #473 · PR #TBD
