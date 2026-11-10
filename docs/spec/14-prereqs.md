@@ -67,7 +67,16 @@ naming repo, `#pr`, inert title, risk ids, short and full head, verdict, ending 
 `Approve #<pr> <short>` per PR for the first 3 ready PRs plus `Hold`, multi-select when more
 than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post` ending
 `answer "approve <short>…"`. Nothing ready, no `next`. Only the orchestrator asks the owner (D-018):
-a child session hands `next` to it. This is the per-PR form; the daily digest below is the batch form
+a child session hands `next` to it.
+The PostToolUse hook (`bosun hook post-tool-use`, matcher `AskUserQuestion`, in
+`.claude/settings.json` and the core channel piece) stores the answer to each marked PR in
+`<git common dir>/bosun/answers.json` (`question_id -> {answer, pr, head, at}`; head read from
+`head <short> = <full>` on the marker's line). A picked `Approve #<pr> <short>` stores
+`approve`; `Hold` stores `hold` for every PR of the question, even with approves picked (Hold
+wins); an unpicked PR stores nothing. It never denies and prints nothing. `--list` moves a PR
+held at its current head to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
+head asks again. `approve --chat` (T5) needs a stored `approve` for the question and head.
+This is the per-PR form; the daily digest below is the batch form
 and reads only `data`.
 
 **Daily digest (§18, `approvals_batch = "daily"`).** For Claude-Tag-first repos the Slack kind `digest` (§10, opt-in) posts the owner-waiting PRs with GitHub links and the comment to approve with; Slack itself approves nothing. `bosun digest` (the orchestrator, once a day)
