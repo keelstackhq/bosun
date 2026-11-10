@@ -120,7 +120,7 @@ if [ "$found" = 0 ] && ! command -v bosun >/dev/null 2>&1; then
     w "no repo setup script and no verified bosun (npm, its signature check or the provenance check failed; allow tuf-repo-cdn.sigstore.dev or run npm i -g @keelstackhq/bosun); continuing"
   fi
 fi
-exit 0
+command -v bosun >/dev/null 2>&1 && bosun setup-snippet --install-hooks >/dev/null 2>&1; exit 0 # user-scope hooks
 ```
 
 ### Smaller sessions: auto-compact sooner

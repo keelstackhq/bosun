@@ -1,0 +1,1 @@
+- Chat approvals T7: user-scope hooks via `setup-snippet --install-hooks`; un-adopted session-start detection.
