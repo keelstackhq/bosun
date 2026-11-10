@@ -47,10 +47,10 @@ KEELSTACK_MARKETPLACE_REF=main
 SUPERPOWERS_SHA=22f0b463e7a5e579904dd6211a520321035526f7
 CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
-BOSUN_VERSION=0.19.0
-BOSUN_SHA512=NC5PAdHp1TuUsRgHuJNlLBdNa9jx6bBTo+iCMq0YNtFKbM36ufgnpsOXaRVgbTLG1iv6qi5X5QXtU7RBK/P2nw==
-BOSUN_LINUX_X64_SHA512=hfBRnTj7uOSq6oQVe9aWI6+qRGrKm6RbcYQXWmIWI/cBoIMKbFRGzFwFkb8YEZDplt5XzCZ6G4eVdIaQJTYHVg==
-BOSUN_LINUX_ARM64_SHA512=B3H+CW/xrScJ+uZsK02H+/ftaA6QWfILduBjL8Udh1d4tvK9vVKv1e3B2Vq/GM+vk4iuYr5gQdKrx2yX6UF3HA==
+BOSUN_VERSION=0.20.0
+BOSUN_SHA512=llmXKcntmS+Z3bXrnDc7EuLhd39Ys9rufC1noPHH61drbLZRCe3EMwtM5J7I8dH6qer2IuRcMki2Uq9CXTXG6g==
+BOSUN_LINUX_X64_SHA512=wjGkiWknpSnb3pKT9YwQpjVedgT5/nq8G50lVyU6Mm0a5iqR2WcTnZkKOCL/znqfCuslptPOesImTVSgmRO5Pw==
+BOSUN_LINUX_ARM64_SHA512=1bCm4kq5MsCR7TgpdTCYLcNfolozxIwrjIqqcVz0u1dxTnnSyBIXlKLU2ikFzAkTBKemR40SFyhVhlGnQfbFKw==
 
 # Stacks of this checkout: Rust steps run only with a Cargo.toml or a toolchain file, pnpm only
 # with a pnpm-lock.yaml, a pnpm-workspace.yaml or a package.json `packageManager` of pnpm.

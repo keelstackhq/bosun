@@ -288,6 +288,17 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
         "0.15.0",
         &["bootstrap_until", "policy", "review_models", "signer"],
     ),
+    // `chat` (a chat approval record counts as the owner's approval) is read from 0.21.0.
+    (
+        "0.21.0",
+        &[
+            "bootstrap_until",
+            "policy",
+            "review_models",
+            "signer",
+            "chat",
+        ],
+    ),
 ];
 
 /// The `[approvals] policy` values each pinned release accepts (`autonomous` from 0.8.0).
@@ -500,4 +511,11 @@ fn signer_is_known_from_0_15_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"signer"));
     assert!(!has("0.14.0"));
     assert!(has("0.15.0"));
+}
+
+#[test]
+fn chat_is_known_from_0_21_0() {
+    let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"chat"));
+    assert!(!has("0.20.0"));
+    assert!(has("0.21.0"));
 }

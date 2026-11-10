@@ -272,6 +272,9 @@ pub struct Approvals {
     /// `policy` came from the `[mode]` preset, not from this table.
     #[serde(skip)]
     pub policy_preset: bool,
+    /// Whether a chat approval record counts as the owner's approval. Unset: true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat: Option<bool>,
 }
 
 impl Approvals {
@@ -286,6 +289,11 @@ impl Approvals {
             (_, true) => "explicit",
             _ => "default",
         }
+    }
+
+    /// Whether a chat approval record counts as the owner's approval (default true).
+    pub fn chat_enabled(&self) -> bool {
+        self.chat.unwrap_or(true)
     }
 }
 

@@ -1,0 +1,1 @@
+- 2026-11-18 · chat-approval T1 · chat record core + `[approvals] chat` · this PR
