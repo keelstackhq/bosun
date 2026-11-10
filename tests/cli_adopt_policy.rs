@@ -212,8 +212,7 @@ fn adopt_rerun_keeps_written_ci() {
     let tmp = tempfile::tempdir().unwrap();
     let args = ["--bosun-version", "0.12.0"];
     assert_eq!(adopt(tmp.path(), &args).0, 0);
-    // Adopt's own workflows now exist; delete the config so it renders again.
-    std::fs::remove_file(tmp.path().join(".bosun/bosun.toml")).unwrap();
+    // Adopt's own workflows now exist (detection would say github); the file holds circleci.
     std::fs::write(
         tmp.path().join(".bosun/bosun.toml"),
         "project = \"x\"\n[ci]\nprovider = \"circleci\"\n",
@@ -222,4 +221,20 @@ fn adopt_rerun_keeps_written_ci() {
     let (code, v) = adopt(tmp.path(), &args);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["ci"], "circleci");
+}
+
+#[test]
+fn adopt_kept_config_without_ci_gets_owner_step() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0", "--ci", "none"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["ci"].is_null(), "{v}");
+    assert!(
+        v["data"]["owner_steps"][0]
+            .as_str()
+            .unwrap()
+            .contains("[ci]")
+    );
 }

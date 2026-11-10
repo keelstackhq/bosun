@@ -560,6 +560,21 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         has_key,
         settings_url.as_deref(),
     );
+    // A kept config never gets `[ci]` from adopt: say so, and do not claim it was written.
+    let mut ci = ci;
+    if let Some(c) = ci.clone()
+        && action_of(&changes, ".bosun/bosun.toml") == "kept"
+    {
+        let held = read_opt(&root.join(".bosun/bosun.toml"))
+            .ok()
+            .flatten()
+            .and_then(|b| String::from_utf8_lossy(&b).parse::<toml::Table>().ok())
+            .and_then(|t| Some(t.get("ci")?.get("provider")?.as_str()? == c));
+        if held != Some(true) {
+            steps.insert(0, format!("Set provider = \"{c}\" under [ci] in .bosun/bosun.toml by hand (adopt keeps an existing file)."));
+            ci = None;
+        }
+    }
     // A kept config never gets the policy from adopt: say so unless it already holds it.
     if let Some(p) = a.policy.as_deref() {
         let cfg = ".bosun/bosun.toml";
