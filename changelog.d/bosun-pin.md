@@ -1,1 +1,1 @@
-- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.13.0 with npm sha512 values via `bosun pin --latest`. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.13.0 with npm sha512 values via `bosun pin --latest`; CLAUDE.md runs tests with `cargo test --locked` (fresh cloud containers no longer build nextest).

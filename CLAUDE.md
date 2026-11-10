@@ -39,9 +39,9 @@ tests/common/               fake GitHub (tiny_http, stateful), bosun() command b
 
 ```bash
 export PATH=/root/.cargo/bin:$PATH
-cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo nextest run --locked
+cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings && cargo test --locked
 cargo deny check
-cargo nextest run --test cli_claim   # one file
+cargo test --locked --test cli_claim   # one file
 ```
 
 Run the fast checks before every commit.
