@@ -5,28 +5,35 @@ use super::{
     RUNNERS, SEP, WRAPPERS, base, literal_path, shell_words, split_heredocs, unwrap_runners,
 };
 
-/// The file a redirection word writes: `>f`, `>>f`, `N>f`, `&>f`, glued `x>f` (the target is
-/// the rest of the word, or the next word when the rest is empty). `None` for other words.
+/// Whether a word is a redirection: `>f`, `>>f`, `N>f`, `&>f`. A word with other text before
+/// the `>` is an argument whose quotes are gone (`s/a>b/c/`, `-m 'a > b'`), not a redirection.
+fn is_redirect(word: &str) -> bool {
+    word.find('>').is_some_and(|at| {
+        let lead = &word[..at];
+        !word.contains(char::is_whitespace)
+            && (lead == "&" || lead.bytes().all(|c| c.is_ascii_digit()))
+    })
+}
+
+/// The file a redirection word writes: the rest of the word, or the next word.
 fn redirect<'a>(word: &'a str, next: Option<&'a String>) -> Option<&'a str> {
-    if word.contains(char::is_whitespace) {
-        return None; // a quoted argument (`-m 'a > b'`), not a redirection
+    if !is_redirect(word) {
+        return None;
     }
     let at = word.find('>')?;
-    let lead = &word[..at];
-    let glued = !lead.is_empty() && !lead.bytes().all(|c| c.is_ascii_digit()) && lead != "&";
-    let rest = word[at..].trim_start_matches('>');
-    match (rest, glued) {
-        ("", false) => next.map(String::as_str),
-        ("", true) => None,
-        (r, _) => Some(r),
+    match word[at..].trim_start_matches('>') {
+        "" => next.map(String::as_str),
+        r => Some(r),
     }
 }
 
 /// The command word of a segment and its arguments, after assignments, wrappers (`if`, `then`,
-/// `{`, a leading `(`) and runners with their options (`sudo -u x`, `time`, `env`).
-fn command_of(seg: &[String]) -> (&str, Vec<&str>) {
+/// `{`, a leading `(`) and runners with their options (`sudo -u x`, `time`, `env`); and whether
+/// a runner changes directory (`env -C dir`, `sudo -D dir`).
+fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
     let all: Vec<&str> = seg.iter().map(|w| w.trim_start_matches('(')).collect();
     let mut cmd: &[&str] = &all;
+    let mut moved = false;
     loop {
         let wrapper = |w: &str| {
             (w.contains('=') && !w.starts_with('-'))
@@ -34,7 +41,8 @@ fn command_of(seg: &[String]) -> (&str, Vec<&str>) {
                 || (WRAPPERS.contains(&w) && !RUNNERS.iter().any(|r| r.0 == base(w)))
         };
         let skip = cmd.iter().take_while(|w| wrapper(w)).count();
-        let (rest, _, _) = unwrap_runners(&cmd[skip..]);
+        let (rest, dirs, _) = unwrap_runners(&cmd[skip..]);
+        moved |= !dirs.is_empty();
         if rest.len() == cmd.len() {
             break;
         }
@@ -45,8 +53,9 @@ fn command_of(seg: &[String]) -> (&str, Vec<&str>) {
         Some([c, rest @ ..]) => (
             base(c.trim_start_matches('(')),
             rest.iter().map(String::as_str).collect(),
+            moved,
         ),
-        _ => ("", Vec::new()),
+        _ => ("", Vec::new(), moved),
     }
 }
 
@@ -59,14 +68,15 @@ pub fn bash_writes(command: &str) -> Vec<String> {
     let (mut out, mut moved) = (Vec::new(), false);
     for seg in words.split(|w| w == SEP) {
         let mut found: Vec<String> = Vec::new();
-        let (cmd, all) = command_of(seg);
+        let (cmd, all, here_moved) = command_of(seg);
+        let moved_now = moved || here_moved;
         for (i, w) in seg.iter().enumerate() {
             found.extend(redirect(w, seg.get(i + 1)).map(str::to_string));
         }
         if cmd == "tee" {
             found.extend(
                 all.iter()
-                    .find(|a| !a.starts_with('-'))
+                    .find(|a| !a.starts_with('-') && !is_redirect(a))
                     .map(|s| s.to_string()),
             );
         }
@@ -74,16 +84,17 @@ pub fn bash_writes(command: &str) -> Vec<String> {
         let args: Vec<&str> = all
             .iter()
             .copied()
-            .take_while(|a| !a.contains('>'))
+            .take_while(|a| !is_redirect(a))
             .collect();
         let plain: Vec<&str> = args
             .iter()
             .copied()
             .filter(|a| !a.starts_with('-'))
             .collect();
-        let target_dir = args
-            .iter()
-            .any(|a| *a == "-t" || a.starts_with("--target-directory"));
+        let target_dir = args.iter().any(|a| {
+            a.starts_with("--target-directory")
+                || (a.starts_with('-') && !a.starts_with("--") && a.contains('t'))
+        });
         let in_place = |a: &&str| {
             a.starts_with("--in-place")
                 || (a.starts_with('-') && !a.starts_with("--") && a.contains('i'))
@@ -115,9 +126,9 @@ pub fn bash_writes(command: &str) -> Vec<String> {
         out.extend(
             found
                 .into_iter()
-                .filter(|p| !p.starts_with('&') && !p.starts_with("/dev/"))
+                .filter(|p| !p.starts_with(['&', '(']) && !p.starts_with("/dev/"))
                 .map(|p| p.trim_end_matches(')').to_string())
-                .filter(|p| !moved || p.starts_with('/'))
+                .filter(|p| !moved_now || p.starts_with('/'))
                 .filter_map(|p| literal_path(&p)),
         );
     }
@@ -148,7 +159,12 @@ mod tests {
             ("cp a src/b.rs 2>/dev/null", vec!["src/b.rs"]),
             ("cp a src/b.rs 2>&1", vec!["src/b.rs"]),
             ("cargo build 2> err.log", vec!["err.log"]),
-            ("echo x>src/a.rs", vec!["src/a.rs"]),
+            (
+                "sed -i 's/Vec<String>/Vec<&str>/' src/x.rs",
+                vec!["src/x.rs"],
+            ),
+            ("sed -i 's/->/=>/g' src/x.rs", vec!["src/x.rs"]),
+            ("sed -i -e 's/a>b/c/' src/x.rs", vec!["src/x.rs"]),
             ("echo x 1>src/a.rs", vec!["src/a.rs"]),
             ("sed -ni 's/a/b/p' src/x.rs", vec!["src/x.rs"]),
             ("sudo -u bob cp a src/b.rs", vec!["src/b.rs"]),
@@ -181,6 +197,11 @@ mod tests {
             "cp --target-directory=/tmp src/a.rs src/b.rs",
             "git commit -m 'a > b'",
             "grep -- '->' src/a.rs",
+            "cp -rt /tmp src/a.rs",
+            "env -C /tmp cp a README.md",
+            "sudo -D /tmp cp a README.md",
+            "echo \"a>README.md\"",
+            "tee >(wc -l)",
         ] {
             assert!(bash_writes(cmd).is_empty(), "{cmd}: {:?}", bash_writes(cmd));
         }
