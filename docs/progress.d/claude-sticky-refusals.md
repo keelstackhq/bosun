@@ -1,0 +1,1 @@
+- 2026-11-10 · #502 PR 1 · sticky refusal markers shown by the PreToolUse hook; a halt refuses writes · PR #TBD

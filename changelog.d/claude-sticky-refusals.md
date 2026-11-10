@@ -1,0 +1,1 @@
+- Sticky refusals: a bosun exit 4, 5 or 6 (3 from `claim`) leaves a per-session marker; the PreToolUse hook shows its fix on the next tool call and, while halted, refuses writes and pushes until `bosun status` shows the halt lifted, so a script that swallows an exit code cannot go on blind.
