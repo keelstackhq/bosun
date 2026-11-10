@@ -1,1 +1,1 @@
-- 2026-11-10 · fast setup task 2 · setup script skips absent stacks, no nextest build, cargo-deny npm pin slots · PR #TBD
+- 2026-11-10 · fast setup task 2 · setup script skips absent stacks, no nextest build, cargo-deny npm pin slots · PR #483
