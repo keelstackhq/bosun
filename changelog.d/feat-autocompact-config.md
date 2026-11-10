@@ -1,0 +1,1 @@
+- `[session] autocompact_window` (cloud) and `autocompact_pct` (local only) in `.bosun/bosun.toml` make `bosun setup-snippet` print the auto-compact variables and where each takes effect (spec §5).

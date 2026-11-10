@@ -91,7 +91,9 @@ uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
     from: str, to: str}], files?: [str], branch?: str, title?: str, pr?: int | {number: int,
     head_sha?: str} | null, pr_lookup?: str, left?: [str], steps?: [str]};
-setup-snippet = {script: str, paste_into: str, repo_script: str, client_message: str};
+setup-snippet = {script: str, paste_into: str, repo_script: str, client_message: str,
+    autocompact?: {cloud_env: {CLAUDE_CODE_AUTO_COMPACT_WINDOW?: str}, local_exports: [str],
+    paste_into: str, note?: str}};
 revert = {pr: int, revert_pr: int, reverted_sha: str, branch: str, base: str,
     main_red: int | null, gate_missed: {created: bool, issue: int}, warning: str | null};
 trailers = {hook?: str, stamped?: bool, session?: str, revert?: str | null, commits?: [{sha: str,

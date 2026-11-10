@@ -71,6 +71,20 @@ per_task_usd = 25
 
 With `max_live_sessions = 1` the same code path runs: the root session does all the work in waves.
 
+Session size: `[session]` in `.bosun/bosun.toml` takes `autocompact_window` (100000-1000000
+tokens) and `autocompact_pct` (1-100), both optional; a value out of range or of another type is
+exit 1 naming `session.<key>` and its range. When either is set, `bosun setup-snippet` adds
+`data.autocompact` `{cloud_env, local_exports, paste_into, note?}`: `cloud_env` holds
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` for the cloud environment's environment variables (`paste_into`);
+`local_exports` holds the `export` line of each set key for a local shell. `autocompact_pct`
+(`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, only lowers the trigger) is local only and adds `note`: a
+cloud session sets that variable itself and ignores an environment value (Claude Code cloud
+environments docs). Not the setup script (its exports end with its shell) and not
+`.claude/settings.json` `env` (the docs do not say it moves the auto-compact point, and cloud
+sessions do not apply it). setup-snippet reads only the `[session]` table: a missing or bad file,
+another section or an unknown `[session]` key prints no `autocompact`, never an error. The
+bootstrap script does not change. Release ordering as for `intake`.
+
 Janitor, resume, results:
 - Janitor (Routine, every hour, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
   `bosun notify` (only when `.bosun/bosun.toml` has a `[slack]` table; without one the prompt `bosun doctor` prints leaves it out).
