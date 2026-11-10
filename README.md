@@ -125,14 +125,15 @@ exit 0
 
 ### Smaller sessions: auto-compact sooner
 
-Set `[session] autocompact_pct = 70` (1-100) in `.bosun/bosun.toml` and `bosun setup-snippet`
-also prints `data.autocompact.export`: `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70`. Add it as an
-environment variable of the cloud environment (claude.ai/code > Environments > Environment
-variables), or export it in the shell that starts `claude`. Not the setup script: its exports end
-with its shell. Not the `env` of `.claude/settings.json`: the docs do not say it moves the
-auto-compact point, and cloud sessions do not apply it. The value can only lower the trigger.
-Alternative: `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<100000-1000000>` (tokens) shrinks the window the
-percentage is taken of. No hook can start a compaction; the bosun hooks keep the state across it
+In `.bosun/bosun.toml`, `[session] autocompact_window = 200000` (100000-1000000 tokens) makes
+`bosun setup-snippet` print `data.autocompact.cloud_env`: `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000`.
+Add it as an environment variable of the cloud environment (claude.ai/code > Environments >
+Environment variables). `autocompact_pct = 70` (1-100) is for local sessions only: export
+`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` in the shell that starts `claude`. A cloud session sets that
+variable itself and ignores an environment value. `data.autocompact.local_exports` lists the
+`export` lines for both. Not the setup script: its exports end with its shell. Not the `env` of
+`.claude/settings.json`: the docs do not say it moves the auto-compact point, and cloud sessions
+do not apply it. No hook can start a compaction; the bosun hooks keep the state across it
 (spec §4).
 
 ## Use

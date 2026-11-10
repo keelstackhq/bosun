@@ -39,13 +39,45 @@ pub struct Config {
     pub session: Session,
 }
 
-/// `[session]`: `autocompact_pct` (1-100) is the auto-compact trigger `bosun setup-snippet`
-/// prints as `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`; unset keeps Claude Code's default.
+/// `[session]`: the auto-compact point `bosun setup-snippet` prints. `autocompact_window`
+/// (100000-1000000 tokens) is `CLAUDE_CODE_AUTO_COMPACT_WINDOW`; `autocompact_pct` (1-100) is
+/// `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, local sessions only (cloud sessions set it themselves).
+/// Raw values, so a wrong type gets the named-key message of [`Session::resolve`].
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub autocompact_pct: Option<u8>,
+    pub autocompact_pct: Option<toml::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autocompact_window: Option<toml::Value>,
+}
+
+/// The checked `[session]` values: (pct, window).
+pub type Autocompact = (Option<i64>, Option<i64>);
+
+impl Session {
+    /// Check both keys; an error names the key, its range and `file`.
+    pub fn resolve(&self, file: &str) -> Result<Autocompact, BosunError> {
+        let one = |key: &str, v: &Option<toml::Value>, lo: i64, hi: i64| match v {
+            None => Ok(None),
+            Some(toml::Value::Integer(n)) if (lo..=hi).contains(n) => Ok(Some(*n)),
+            Some(_) => Err(BosunError::error(
+                format!("{file}: session.{key} must be a whole number from {lo} to {hi}"),
+                format!(
+                    "edit {file}: set session.{key} to a number from {lo} to {hi}, or remove it"
+                ),
+            )),
+        };
+        Ok((
+            one("autocompact_pct", &self.autocompact_pct, 1, 100)?,
+            one(
+                "autocompact_window",
+                &self.autocompact_window,
+                100_000,
+                1_000_000,
+            )?,
+        ))
+    }
 }
 
 /// How bosun posts `risk-check`, `review-verdict` and `main-open`: commit statuses (today),
@@ -361,17 +393,7 @@ impl Config {
                 ));
             }
         }
-        if c.session
-            .autocompact_pct
-            .is_some_and(|p| !(1..=100).contains(&p))
-        {
-            return Err(BosunError::error(
-                format!("{file}: session.autocompact_pct must be 1-100"),
-                format!(
-                    "edit {file}: set session.autocompact_pct to a number from 1 to 100, or remove it"
-                ),
-            ));
-        }
+        c.session.resolve(file)?;
         let k = &c.checks;
         if k.mode != CheckMode::Statuses {
             let id_ok = k.app_id.is_some_and(|i| i > 0);

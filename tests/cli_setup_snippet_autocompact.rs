@@ -1,4 +1,6 @@
-//! `[session] autocompact_pct` and the env line `bosun setup-snippet` prints for it (spec §5).
+//! `[session] autocompact_window` / `autocompact_pct` and the env lines `bosun setup-snippet`
+//! prints for them (spec §5). Cloud sessions set the pct variable themselves, so only the window
+//! goes into a cloud environment; pct is for local sessions.
 
 mod common;
 
@@ -33,46 +35,76 @@ fn snippet(dir: &Path) -> (i32, Value) {
 }
 
 #[test]
-fn a_set_pct_prints_the_export_line_and_where_it_goes() {
-    let t = repo(Some("[session]\nautocompact_pct = 70\n"));
+fn a_window_goes_into_the_cloud_environment() {
+    let t = repo(Some("[session]\nautocompact_window = 200000\n"));
     let (code, v) = snippet(t.path());
     assert_eq!(code, 0, "{v}");
     let a = &v["data"]["autocompact"];
-    assert_eq!(a["export"], "export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70");
-    assert_eq!(a["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "70");
-    assert!(a["paste_into"].as_str().unwrap().contains("Environment"));
+    assert_eq!(a["cloud_env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"], "200000");
+    assert_eq!(
+        a["local_exports"][0],
+        "export CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000"
+    );
     assert!(
-        a["alternative"]
+        a["paste_into"]
             .as_str()
             .unwrap()
-            .contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+            .contains("Environment variables")
     );
     assert!(
         !v["data"]["script"]
             .as_str()
             .unwrap()
-            .contains("AUTOCOMPACT"),
+            .contains("AUTO_COMPACT"),
         "the bootstrap stays the same for every repo"
     );
 }
 
 #[test]
-fn unset_or_no_config_prints_no_autocompact() {
-    for toml in [None, Some("project = \"x\"\n")] {
+fn a_pct_is_local_only_and_never_a_cloud_variable() {
+    let t = repo(Some("[session]\nautocompact_pct = 70\n"));
+    let (code, v) = snippet(t.path());
+    assert_eq!(code, 0, "{v}");
+    let a = &v["data"]["autocompact"];
+    assert_eq!(
+        a["local_exports"][0],
+        "export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70"
+    );
+    assert_eq!(a["cloud_env"], serde_json::json!({}));
+    assert!(a["note"].as_str().unwrap().contains("cloud"), "{a}");
+}
+
+#[test]
+fn unset_no_config_or_another_bad_section_prints_no_autocompact() {
+    for toml in [
+        None,
+        Some("project = \"x\"\n"),
+        Some("[future_section]\nkey = 1\n"),
+        Some("not = [valid\n"),
+    ] {
         let t = repo(toml);
         let (code, v) = snippet(t.path());
-        assert_eq!(code, 0, "{v}");
+        assert_eq!(code, 0, "{toml:?}: {v}");
         assert!(v["data"].get("autocompact").is_none(), "{v}");
     }
 }
 
 #[test]
-fn out_of_range_pct_is_refused_with_a_fix() {
-    for bad in ["0", "101"] {
-        let t = repo(Some(&format!("[session]\nautocompact_pct = {bad}\n")));
+fn bad_values_are_refused_naming_the_key() {
+    for (key, bad) in [
+        ("autocompact_pct", "0"),
+        ("autocompact_pct", "101"),
+        ("autocompact_pct", "\"70\""),
+        ("autocompact_window", "99999"),
+        ("autocompact_window", "1000001"),
+    ] {
+        let t = repo(Some(&format!("[session]\n{key} = {bad}\n")));
         let (code, v) = snippet(t.path());
         assert_eq!(code, 1, "{v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.contains(&format!("session.{key}")), "{msg}");
+        assert!(!msg.contains("expected"), "named, not serde: {msg}");
         let fix = v["error"]["fix"].as_str().unwrap();
-        assert!(fix.contains("session.autocompact_pct"), "{fix}");
+        assert!(fix.contains(&format!("session.{key}")), "{fix}");
     }
 }

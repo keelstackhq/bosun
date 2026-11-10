@@ -1,1 +1,1 @@
-- 2026-11-10 · compaction · `[session] autocompact_pct` and the setup-snippet env line
+- 2026-11-10 · compaction · `[session] autocompact_window`/`autocompact_pct` and the setup-snippet auto-compact lines

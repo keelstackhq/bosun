@@ -1,1 +1,1 @@
-- `[session] autocompact_pct` (1-100) in `.bosun/bosun.toml` makes `bosun setup-snippet` print `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<n>` and where it takes effect (spec §5).
+- `[session] autocompact_window` (cloud) and `autocompact_pct` (local only) in `.bosun/bosun.toml` make `bosun setup-snippet` print the auto-compact variables and where each takes effect (spec §5).
