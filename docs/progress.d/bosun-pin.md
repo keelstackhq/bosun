@@ -1,0 +1,1 @@
+- 2026-11-10 · pin bosun 0.13.0 (bosun pin --latest)
