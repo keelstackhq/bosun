@@ -14,18 +14,18 @@ fn main() -> ExitCode {
     let command = cli.command.name();
     // Hooks print their own protocol output; no envelope.
     let is_hook = matches!(cli.command, bosun::Command::Hook(_));
-    let dir = cli.dir.clone();
     // The CLI counts its own calls: a loop inside one script is one tool call for the hook.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let repeated = (!is_hook)
-        .then(|| bosun::hooks::cli_repeat::check(dir.as_deref(), &args))
+        .then(|| bosun::hooks::cli_repeat::check(&args))
         .flatten();
     let result = match repeated {
         Some(e) => Err(e),
         None => bosun::run(cli),
     };
     if !is_hook {
-        bosun::hooks::refusal::record(dir.as_deref(), command, &result);
+        // The marker goes to the repo the shell runs in, where the hook reads it (not `-C`).
+        bosun::hooks::refusal::record(None, command, &result);
         print(command, &result);
     }
     ExitCode::from(bosun::output::exit_of(&result).code())

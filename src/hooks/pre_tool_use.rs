@@ -20,6 +20,12 @@ pub fn deny(reason: &str) -> String {
     .to_string()
 }
 
+/// Whether a hook output is a deny (parsed, not a substring).
+pub fn is_deny(out: &str) -> bool {
+    serde_json::from_str::<Value>(out)
+        .is_ok_and(|v| v["hookSpecificOutput"]["permissionDecision"] == "deny")
+}
+
 /// The hook fails closed on a bosun bug: a panic would exit 101, which Claude Code treats as a
 /// non-blocking error and lets the tool call run.
 pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
@@ -33,10 +39,7 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
             (Some(d), Some(t)) => {
                 let tool_input = input.get("tool_input").unwrap_or(&Value::Null);
                 let out = super::refusal::apply(&d, t, tool_input, out);
-                let denied = out
-                    .as_deref()
-                    .is_some_and(|o| o.contains("\"permissionDecision\""));
-                if !denied {
+                if !out.as_deref().is_some_and(is_deny) {
                     super::cli_repeat::reset(&d, t, tool_input);
                 }
                 out

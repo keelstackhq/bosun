@@ -53,6 +53,7 @@ fn all(dir: &Path) -> Vec<(PathBuf, Refusal)> {
 
 /// After a command (not a hook): a sticky refusal writes its marker; a success clears the
 /// session's markers it answers.
+/// `dir` is `None` in the CLI (the shell's repo, where the hook reads); tests pass a repo.
 pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
     let cwd = dir
         .map(Path::to_path_buf)
@@ -133,10 +134,7 @@ pub fn apply(cwd: &Path, tool: &str, tool_input: &Value, out: Option<String>) ->
     }
     marks.sort_by(|a, b| a.0.cmp(&b.0));
     let parsed: Option<Value> = out.as_deref().and_then(|t| serde_json::from_str(t).ok());
-    let denied = parsed
-        .as_ref()
-        .is_some_and(|v| v["hookSpecificOutput"]["permissionDecision"] == "deny");
-    if denied {
+    if out.as_deref().is_some_and(super::pre_tool_use::is_deny) {
         return out;
     }
     if is_write(tool, tool_input)
