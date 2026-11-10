@@ -326,7 +326,7 @@ jobs:
       - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.setup == 'true'
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,cargo-deny
+          tool: cargo-deny
 {% endif %}{% endif %}{% if "ts-pnpm" in pieces %}      # ts-pnpm stack, for the deps gate's `pnpm audit` only: Node 24 and the pnpm release that the
       # base's package.json `packageManager` names (the PR's while the base names none), an exact
       # version 9 or later from the registry, never a path, URL or range. No install, no cache. Skipped
@@ -559,10 +559,6 @@ jobs:
         with:
           workspaces: {{ rust_path }}
           cache-bin: "false"
-      - if: needs.bosun-trusted.outputs.pr_gates != ''
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
 {% endif %}      # Node 24, pnpm from package.json `packageManager`, the Turborepo cache through hoard. A
       # plain install: the PR's install scripts run here, after bosun-trusted passed.
       - uses: pnpm/action-setup@v4

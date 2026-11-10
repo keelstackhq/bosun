@@ -1,0 +1,1 @@
+- The built-in rust profile's test gate is `cargo test --locked` (was `cargo nextest run --locked`; it also runs doctests); channel CI files no longer install cargo-nextest. Keep nextest with a `.bosun/profiles/rust.toml` override.

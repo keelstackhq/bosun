@@ -14,7 +14,7 @@ cmd = ["cargo", "fmt", "--check"]
 cmd = ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]
 
 [gates.test]
-cmd = ["cargo", "nextest", "run", "--locked"]
+cmd = ["cargo", "test", "--locked"]
 each_package = ["-p", "{package}"]
 all = ["--workspace"]
 when_no_package = "skip"

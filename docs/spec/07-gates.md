@@ -31,7 +31,7 @@ profile has three adapters:
 | fmt | cargo fmt --check | prettier --check {files} |
 | lint | cargo clippy --all-targets -- -D warnings | eslint --max-warnings 0 {files} |
 | types | (in lint) | tsc -b |
-| test | cargo nextest run -p {packages} | vitest run --project {packages} |
+| test | cargo test --locked -p {packages} | vitest run --project {packages} |
 | deps | cargo deny check | bosun deps-check |
 | mutants | cargo mutants --in-diff {diff} | stryker run --incremental |
 | snapshots | cargo insta test --check | vitest snapshots |
@@ -40,6 +40,11 @@ profile has three adapters:
 - Custom profiles and generic regex adapters are allowed; `bosun status` shows "reduced
   integrity" when a generic adapter is used.
 - Generic adapters, for stacks bosun has no built-in adapters for (a repo profile `.bosun/profiles/<name>.toml`): `packages = "none"` (or `"generic"`) means the stack has no packages, so a per-package gate runs once over the whole stack with its `all` arguments; `pending = "regex"` and `assertions = "regex"` read `[adapters.regex]`: `test_files` (globs relative to the stack directory, required), `pending` (regexes; a matching line is a skip marker, and a `UC-…` id on it makes it a plan marker) and `assertions` (regexes; each match is one assertion). Both `pending` and `assertions` are `regex`, or neither, and each has at least one pattern. Profiles without `[adapters.regex]` are unchanged. There is no test counter, so `fewer-tests` does not fire for a regex stack. When any stack's profile uses a generic adapter, test-integrity still runs, and its data and `bosun status` say `"integrity": "reduced"` with `integrity_reason` (for example "stack py/ uses regex adapters", naming the stack path); otherwise `"integrity": "full"`. Adapter names are a closed set (packages: `cargo-metadata`, `pnpm-workspace`, `none`, `generic`; pending: `rust-ignore`, `ts-skip`, `regex`; assertions: `rust`, `ts`, `regex`): any other name is an error with a fix listing them, and `bosun status` shows such a stack as reduced. Every stack gets a kit, and the innermost stack holding a file decides which adapters read it.
+- Rust test gate: the built-in profile runs `cargo test --locked` (since 2026-11-10; was
+  `cargo nextest run --locked`), so no CI file or setup script needs cargo-nextest. `cargo test`
+  also runs doctests, which nextest never ran: a repo with stale doctests may go red. A repo that
+  wants nextest sets `[gates.test] cmd = ["cargo", "nextest", "run", "--locked"]` in
+  `.bosun/profiles/rust.toml` and installs cargo-nextest in its own CI.
 - A mixed repo uses one `[[stack]]` per path (`path = "web/"`, `profile = "ts-pnpm"`).
 - `unsupported = ["mutants"]` needs a reason and an owner approval (R-gov).
 - Packages adapter (rust): a changed root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or `.cargo/**`, or a changed `.rs`, `.toml` or `.lock` file in no package, means all packages; other files outside every package (docs) affect none.

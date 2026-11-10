@@ -392,6 +392,34 @@ const ALL_GATES: [&str; 6] = [
 ];
 const BOSUN_YML: &str = ".github/workflows/bosun.yml";
 
+/// The built-in test gate is `cargo test` (spec §7): no CI file installs cargo-nextest, and the
+/// rust stack still installs cargo-deny for the deps gate.
+#[test]
+fn ci_files_install_cargo_deny_but_not_cargo_nextest() {
+    for stack in [&["rust"][..], &["rust", "ts-pnpm"]] {
+        for ci in [&[][..], &["circleci"], &["circleci", "circleci-only"]] {
+            for own_ci in ["", "1"] {
+                let files = variant(&[stack, ci].concat(), own_ci);
+                for (name, text) in &files {
+                    if name.starts_with(".github/workflows/") || name.starts_with(".circleci/") {
+                        assert!(
+                            !text.contains("nextest"),
+                            "{stack:?} {ci:?} {own_ci:?}: {name}"
+                        );
+                    }
+                }
+                let deny = files
+                    .iter()
+                    .filter(|(n, _)| {
+                        n.starts_with(".github/workflows/") || n.starts_with(".circleci/")
+                    })
+                    .any(|(_, t)| t.contains("cargo-deny"));
+                assert!(deny, "{stack:?} {ci:?} {own_ci:?}: no cargo-deny install");
+            }
+        }
+    }
+}
+
 #[test]
 fn rust_gates_install_the_toolchain_file_once() {
     for own_ci in ["", "1"] {

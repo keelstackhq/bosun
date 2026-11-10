@@ -79,7 +79,7 @@ before anything reads the base, since a stale cached `origin/<default>` would hi
 deleted test); then, as bosun.yml, the release that origin/main's tip pins (as `base.sha`; never the
 merge-base, which the author picks; the setup-PR fallback to this change's pin and `.bosun` only when
 origin/main has no `.bosun`), checked by its version and by its sha256 before each gate, the pin
-check, origin/main's gate config, the rust toolchain (rustup-init, cargo-nextest and cargo-deny each
+check, origin/main's gate config, the rust toolchain (rustup-init and cargo-deny each
 checked against a pinned sha256; the toolchain file in rust_path or a parent, checked line by line
 like bosun.yml's (only `[toolchain]` with plain-name channel, components, targets and profile), is
 installed as it names, else 1.97, and its channel is exported as `RUSTUP_TOOLCHAIN`) or pnpm, and the gates of bosun.yml in order (a test keeps
