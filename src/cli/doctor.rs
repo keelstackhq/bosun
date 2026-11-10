@@ -399,7 +399,6 @@ fn describe(it: &Value) -> String {
     )
 }
 
-/// Add hoist's finding to a step, keeping the step's own problem and fix.
 /// In `[checks] mode = "checks"`: the gate contexts the live rulesets do not pin to the App, and
 /// a sign that the token may hold write scopes it should not (spec §15, Residuals).
 fn pin_warnings(gh: &dyn Github, ctx: &Ctx, branch: &str) -> Vec<String> {
@@ -442,6 +441,7 @@ fn warn_on(it: &mut Value, note: &str) {
     }
 }
 
+/// Add hoist's finding to a step, keeping the step's own problem and fix.
 fn append_problem(it: &mut Value, problem: &str, fix: &str) {
     let (detail, fix) = if it["status"] == "missing" {
         (

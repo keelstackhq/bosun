@@ -974,7 +974,8 @@ impl Github for LiveGithub {
     }
 
     fn ruleset_pins(&self, branch: &str) -> Result<Option<Vec<Pin>>> {
-        let path = self.path(&format!("/rules/branches/{}", enc(branch)));
+        // One page of 100 rules: a branch has a handful (the gates are one rule).
+        let path = self.path(&format!("/rules/branches/{}?per_page=100", enc(branch)));
         let Ok(rules) = self.http.get_json_or_forbidden(&path)? else {
             return Ok(None);
         };
