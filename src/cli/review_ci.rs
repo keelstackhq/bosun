@@ -1,6 +1,7 @@
 //! `bosun review-ci <pr>`: review mode b (spec §7). Builds the review pack, asks the Anthropic
 //! API for a verdict, and records it like `bosun verdict post`, with no session.
 
+use crate::github::gate::GateWriter;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -42,6 +43,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
     let dry = args.dry_run;
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
+    let w = GateWriter::for_ctx(gh, &app.ctx);
     kill_switch(gh)?;
     let n = args.pr;
     let cfg = &app.ctx.config.review;
@@ -59,7 +61,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
     if let Some(evidence) = unseen(&pack, changed) {
         let short: String = evidence.chars().take(MAX_REASON).collect();
         return Err(refuse(
-            gh,
+            &w,
             (!dry).then_some(head_sha.as_str()),
             format!("unreviewable diff: {short}; review in a session (mode a)"),
             format!("the diff of PR #{n} cannot be seen in full: {evidence}"),
@@ -104,7 +106,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
     if size as u64 > cfg.max_diff_bytes {
         let cap = cfg.max_diff_bytes;
         return Err(refuse(
-            gh,
+            &w,
             (!dry).then_some(head_sha.as_str()),
             format!("too large for CI review: {size} bytes > {cap}; review in a session (mode a)"),
             format!("the review of PR #{n} is too large for CI review: {size} bytes > {cap}"),
@@ -141,12 +143,11 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
         Err(why) => {
             let why: String = why.chars().take(MAX_REASON).collect();
             if !dry {
-                gh.create_status(
+                w.post(
                     &head_sha,
                     CONTEXT,
                     "failure",
                     &format!("reviewer output invalid: {why}"),
-                    None,
                 )?;
             }
             return Err(BosunError::error(
@@ -243,14 +244,14 @@ fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
 
 /// Set the status to failure (unless `head_sha` is None: a dry run), and return the error.
 fn refuse(
-    gh: &dyn Github,
+    w: &GateWriter,
     head_sha: Option<&str>,
     description: String,
     message: String,
     fix: &str,
 ) -> Result<BosunError, BosunError> {
     if let Some(sha) = head_sha {
-        gh.create_status(sha, CONTEXT, "failure", &description, None)?;
+        w.post(sha, CONTEXT, "failure", &description)?;
     }
     Ok(BosunError::error(message, fix))
 }

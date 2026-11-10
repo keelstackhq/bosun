@@ -27,6 +27,7 @@ use crate::core::touch::{Changed, outside};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
+use crate::github::gate::GateWriter;
 use crate::github::{Comment, Github, Issue, PrFile, Pull, Review, b64};
 use crate::output::{BosunError, CmdResult, Exit, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
@@ -82,17 +83,18 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             "check the number; `gh pr list` lists the open PRs",
         )
     })?;
+    let w = GateWriter::for_ctx(gh, &app.ctx);
     // In flight, a required check is pending, so auto-merge waits for this run's verdict.
-    if let Err(e) = gh.create_status(&pull.head_sha, CONTEXT, "pending", PENDING, None) {
+    if let Err(e) = w.post(&pull.head_sha, CONTEXT, "pending", PENDING) {
         eprintln!(
             "bosun: risk-check: cannot post the pending status: {}",
             e.message
         );
     }
-    let out = judge(&app, pull.clone());
+    let out = judge(&app, &w, pull.clone());
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
-        _ = gh.create_status(&pull.head_sha, CONTEXT, "error", UNFINISHED, None);
+        _ = w.post(&pull.head_sha, CONTEXT, "error", UNFINISHED);
     }
     out
 }
@@ -260,7 +262,7 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
     ]
 }
 
-fn judge(app: &App, pull: Pull) -> CmdResult {
+fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
@@ -534,13 +536,18 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         (None, _) => format!("high risk, owner approval needed: {}", ids.join(", ")),
     };
     let state = if passed { "success" } else { "failure" };
-    gh.create_status(head, CONTEXT, state, &description, None)?;
+    let rules: Vec<String> = matches.iter().map(|m| format!("- {}", m.rule)).collect();
+    let summary = format!("{description}\n\nMatched rules:\n{}", rules.join("\n"));
+    w.post_full(head, CONTEXT, state, &description, &summary)?;
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
-    let carried = carry_status(gh, &pull, &linked);
+    let carried = carry_status(gh, w, &pull, &linked);
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
         "verdict_carried_from": carried, "approval_carried_from": carried_from});
+    if w.checks_skipped() {
+        data["checks_skipped"] = json!(true);
+    }
     if high {
         data["requirement"] = json!(requirement.name());
         if requirement == Approval::TwoVerdicts {
@@ -718,7 +725,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
 
 /// Carries `review-verdict` of an older head onto exactly `pull.head_sha` (design §3 C7), checking
 /// its statuses before and after posting (verdict.yml is not serialized with us). Never an error.
-fn carry_status(gh: &dyn Github, pull: &Pull, linked: &[u64]) -> Option<String> {
+fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) -> Option<String> {
     let head = pull.head_sha.as_str();
     // A carried status on top of a real verdict (a run was cancelled mid-post) is repaired first.
     let top = gh
@@ -726,7 +733,7 @@ fn carry_status(gh: &dyn Github, pull: &Pull, linked: &[u64]) -> Option<String> 
         .ok()
         .and_then(|l| l.into_iter().find(is_verdict));
     if let Some(s) = top.filter(|s| s.description.starts_with(CARRIED)) {
-        settle(gh, head, &s.description);
+        settle(gh, w, head, &s.description);
         return None;
     }
     let branch = default_branch(gh).ok()?;
@@ -740,9 +747,8 @@ fn carry_status(gh: &dyn Github, pull: &Pull, linked: &[u64]) -> Option<String> 
     if has_verdict(gh, head) {
         return None;
     }
-    gh.create_status(head, VERDICT, "success", &text, None)
-        .ok()?;
-    settle(gh, head, &text).then_some(h)
+    w.post(head, VERDICT, "success", &text).ok()?;
+    settle(gh, w, head, &text).then_some(h)
 }
 
 const CARRIED: &str = "carried from ";
@@ -750,8 +756,8 @@ const UNSURE: &str = "carry withdrawn: could not confirm no verdict raced it";
 
 /// True only when `ours` stands unchallenged on `head`. Another review-verdict is a real verdict
 /// that raced us: the newest is posted again. If that fails, or the history is unreadable: withdraw.
-fn settle(gh: &dyn Github, head: &str, ours: &str) -> bool {
-    let post = |state: &str, text: &str| gh.create_status(head, VERDICT, state, text, None);
+fn settle(gh: &dyn Github, w: &GateWriter, head: &str, ours: &str) -> bool {
+    let post = |state: &str, text: &str| w.post(head, VERDICT, state, text);
     let seen = gh.status_history(head).map(|l| {
         l.into_iter()
             .find(|s| is_verdict(s) && s.description != ours && !s.description.starts_with(CARRIED))

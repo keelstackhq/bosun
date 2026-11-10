@@ -1,7 +1,10 @@
 ## 15. Trusted check source: App check runs (B2)
 
-Status: designed, not built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`,
-item B2). Until the ruleset switch (Transition, step 6), §7, §8 and §9 describe what runs.
+Status: partly built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, item
+B2): the check-run client (T1), `[checks]` (T2) and the gate writer (T3) are in; reading back by
+App (T4) and the checks-mode refusals (T5) are not. The default mode is `statuses`, so nothing
+changes until a repo sets `[checks]`. Until the ruleset switch (Transition, step 6), §7, §8 and §9
+describe what runs.
 
 **The problem.** `risk-check`, `review-verdict` and `main-open` are commit statuses that the
 workflows post with `GITHUB_TOKEN`, as the github-actions app (D32). Any `on: pull_request`
@@ -93,12 +96,18 @@ key goes only to the token step, the token only to the bosun step. main-health's
 - The token comes from env `BOSUN_APP_TOKEN` (never argv, never printed). Missing in `checks`
   mode: exit 1, the fix names the token step and the `bosun-app` environment. In `dual` the status
   is posted, the check run is skipped with one stderr line and `data.checks_skipped: true`.
-- `src/github`: `create_check_run(name, head_sha, status, conclusion, title, summary) -> id` and
-  `update_check_run(id, ...)` on a second client built with the App token; `CheckRun` gains
-  `app_id`; `check_runs(sha)` reads `filter=all`, paginated, so readers see every run per App.
-- One gate writer `post(context, state, description)` posts a status, a check run or both by
-  mode. Every post of the three contexts moves to it: risk-check (pending, verdict, error, the
-  verdict carry), `verdict apply`/`post`, `gate main-open` (and so main-health), `review-ci`.
+- `src/github`: `create_check_run(GateRun) -> id` and `update_check_run(id, GateRun)` (name,
+  head_sha, state `Pending | Success | Failure`, title, summary cut to 65,535 characters) on a
+  second client built with the App token; `CheckRun` gains `app_id`; `check_runs_all(sha)` reads
+  `filter=all`, paginated, so readers see every run per App (`check_runs(sha)` keeps GitHub's
+  default, the newest per name and App, for the readers of `ci-ok`).
+- One gate writer (`src/github/gate.rs`, `GateWriter::post(sha, context, state, description)`)
+  posts a status, a check run or both by mode. Every post of the three contexts moves to it:
+  risk-check (pending, verdict, error, the verdict carry), `verdict apply`/`post`, `gate
+  main-open` (and so main-health), `review-ci`. The pending run is the one the verdict PATCHes
+  (same process); risk-check's summary lists the matched rules. In `dual` a failed check-run
+  write is one stderr line, never an error (the statuses are the authority); in `checks` it is
+  exit 1. `bosun approve --main-open` stays on statuses until T5.
 - Reading the gate's own state: in `checks` mode the newest check run of that name whose `app_id`
   is `[checks] app_id`, statuses ignored; in `statuses` and `dual` the statuses, as today, since
   they are the authority until the switch. Readers: risk-check (pending repair, carry), `bosun

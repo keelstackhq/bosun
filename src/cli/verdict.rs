@@ -1,6 +1,7 @@
 //! `bosun verdict post|comment|apply`: record the reviewer's verdict as the `review-verdict`
 //! status, directly or through a verdict comment that the verdict workflow applies (spec §7).
 
+use crate::github::gate::GateWriter;
 use std::io::Read;
 use std::path::Path;
 
@@ -209,7 +210,8 @@ pub(crate) fn record(
     } else {
         verdict.summary()
     };
-    gh.create_status(&verdict.head_sha, CONTEXT, state, &description, None)?;
+    let w = GateWriter::for_ctx(gh, &app.ctx);
+    w.post(&verdict.head_sha, CONTEXT, state, &description)?;
     let record = Record::Verdict {
         session: session.to_string(),
         head_sha: verdict.head_sha.clone(),
@@ -236,8 +238,12 @@ pub(crate) fn record(
         set_state(gh, issue_no, &issue, to)?;
         task_state = Some(to.name());
     }
-    Ok(Outcome::data(json!({
+    let mut data = json!({
         "pr": n, "head_sha": verdict.head_sha, "approved": eff.approve,
         "reasons": eff.reasons, "status": state, "task_state": task_state,
-    })))
+    });
+    if w.checks_skipped() {
+        data["checks_skipped"] = json!(true);
+    }
+    Ok(Outcome::data(data))
 }
