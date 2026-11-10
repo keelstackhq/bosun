@@ -107,7 +107,7 @@ pub fn session_id(bosun_session: Option<&str>, remote_session: Option<&str>, hos
     format!("local-{host}")
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::env::var("HOSTNAME")
         .ok()
         .or_else(|| std::fs::read_to_string("/etc/hostname").ok())

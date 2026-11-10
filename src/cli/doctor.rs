@@ -4,13 +4,28 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::app::{App, HALT_LABEL, halt_reason};
+use crate::app::{HALT_LABEL, halt_reason};
+use crate::cli::pin::Check;
 use crate::core::checks;
-use crate::github::{EnvBranches, Github, IssueState, Live};
+use crate::ctx::Ctx;
+use crate::github::{EnvBranches, Github, IssueState, Live, LiveGithub};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
-const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token (docs/PROGRESS.md Blocked)";
+const HOIST_FIX: &str = "run `hoist plan --area github && hoist apply --area github --yes` from a checkout of main with an admin token";
+
+const NO_TOKEN_FIX: &str =
+    "export GITHUB_TOKEN (repo and workflow scopes), then rerun `bosun doctor`";
+
+/// A step that needs GitHub while no token is set: reported, not counted as missing.
+fn no_token(step: u8, name: &str) -> Value {
+    skipped(
+        step,
+        name,
+        "needs GitHub and no GITHUB_TOKEN or GH_TOKEN is set",
+        NO_TOKEN_FIX,
+    )
+}
 
 fn item(step: u8, name: &str, problem: Option<String>, ok_detail: String, fix: &str) -> Value {
     let (status, detail) = match problem {
@@ -803,34 +818,65 @@ fn plugins_item(root: &Path, script: Option<&str>) -> Value {
     )
 }
 
+/// A set `BOSUN_GITHUB_API` must be an http(s) URL; otherwise doctor would blame the token.
+fn check_api_url() -> Result<(), BosunError> {
+    let Ok(raw) = std::env::var("BOSUN_GITHUB_API") else {
+        return Ok(());
+    };
+    let ok = raw.parse::<ureq::http::Uri>().is_ok_and(|u| {
+        matches!(u.scheme_str(), Some("http" | "https")) && u.host().is_some_and(|h| !h.is_empty())
+    });
+    if ok {
+        return Ok(());
+    }
+    Err(BosunError::error(
+        format!("BOSUN_GITHUB_API is not a valid URL: {raw}"),
+        "unset BOSUN_GITHUB_API, or set it to an http(s) URL such as https://api.github.com, then rerun `bosun doctor`",
+    ))
+}
+
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
-    let app = App::load(dir)?;
-    let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
+    let ctx = Ctx::load(dir)?;
+    // Without a token the GitHub steps are skipped; the local steps still run.
+    check_api_url()?;
+    let live_gh = LiveGithub::new(&ctx.repo.owner, &ctx.repo.name).ok();
+    let gh: Option<&dyn Github> = live_gh.as_ref().map(|g| g as &dyn Github);
+    let offline = gh.is_none();
+    let asked_remote = remote;
+    let remote = remote && !offline;
+    let ctx = &ctx;
     let root = ctx.dir.as_path();
     let mut items = Vec::new();
 
-    let repo = gh.repo_info();
-    items.push(item(
-        1,
-        "repo readable",
-        match &repo {
-            Ok(Some(_)) => None,
-            Ok(None) => Some(format!("{} is not readable with this token", ctx.repo)),
-            Err(e) => Some(e.message.clone()),
-        },
-        format!(
-            "{} (default branch {})",
-            ctx.repo,
-            repo.as_ref()
-                .ok()
-                .and_then(|r| r.as_ref())
-                .map_or("", |r| &r.default_branch)
-        ),
-        "create the repo, and give the GitHub token access to it",
-    ));
+    let repo = gh.map_or(Ok(None), |g| g.repo_info());
+    items.push(if gh.is_none() {
+        no_token(1, "repo readable")
+    } else {
+        item(
+            1,
+            "repo readable",
+            match &repo {
+                Ok(Some(_)) => None,
+                Ok(None) => Some(format!("{} is not readable with this token", ctx.repo)),
+                Err(e) => Some(e.message.clone()),
+            },
+            format!(
+                "{} (default branch {})",
+                ctx.repo,
+                repo.as_ref()
+                    .ok()
+                    .and_then(|r| r.as_ref())
+                    .map_or("", |r| &r.default_branch)
+            ),
+            "create the repo, and give the GitHub token access to it",
+        )
+    });
 
-    let seen = claude_app_seen(gh);
-    items.push(item(
+    let seen = gh.map_or(Ok(false), claude_app_seen);
+    items.push(if gh.is_none() {
+        no_token(2, "Claude GitHub App")
+    } else {
+        item(
         2,
         "Claude GitHub App",
         match &seen {
@@ -842,7 +888,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         },
         "a `claude` login has written here".into(),
         "install the app from https://github.com/apps/claude and grant it this repo",
-    ));
+    )
+    });
 
     let hoist = read(root, "hoist.toml").and_then(|t| t.parse::<toml::Table>().ok());
     let listed: Vec<String> = hoist
@@ -863,8 +910,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     absent.retain(|c| !listed.iter().any(|l| l == c));
     // What the default branch enforces. A 403 proves nothing (a private repo on a free plan has
     // no rulesets), so it only adds a note, like the `unknown` items of `hoist check`.
-    let live = match &repo {
-        Ok(Some(info)) => Some(gh.required_status_checks(&info.default_branch)),
+    let live = match (&repo, gh) {
+        (Ok(Some(info)), Some(gh)) => Some(gh.required_status_checks(&info.default_branch)),
         _ => None,
     };
     // A check counts as unenforced only when both endpoints were readable; with one 403, the
@@ -896,7 +943,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     } else {
         format!("add {absent:?} to hoist.toml [github] required_checks, then {HOIST_FIX}")
     };
-    items.push(item(
+    let step3 = item(
         3,
         "required checks",
         if hoist.is_none() {
@@ -921,7 +968,13 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             &live_note,
         ),
         &step3_fix,
-    ));
+    );
+    // Without a token only the local findings count; an unverified pass is skipped.
+    items.push(if gh.is_none() && step3["status"] == "ok" {
+        no_token(3, "required checks")
+    } else {
+        step3
+    });
 
     let owners = read(root, "governance/owners.toml")
         .and_then(|t| t.parse::<toml::Table>().ok())
@@ -936,23 +989,30 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     // The kill switch is an open `bosun:halt` issue by an owner; BOSUN_HALT is optional.
-    let label = gh.label_exists(HALT_LABEL);
-    let halt = halt_reason(gh);
-    items.push(item(
-        5,
-        "kill switch",
-        match (&label, &halt) {
-            (_, Err(e)) => Some(format!("cannot read the kill switch: {}", e.message)),
-            (Err(e), _) => Some(format!("cannot read the label {HALT_LABEL}: {}", e.message)),
-            (Ok(false), _) => Some(format!("the label {HALT_LABEL} does not exist")),
-            (Ok(true), Ok(_)) => None,
-        },
-        match &halt {
-            Ok(Some((reason, _))) => format!("halted: {reason}"),
-            _ => format!("not halted; an owner's open {HALT_LABEL} issue stops all work"),
-        },
-        "gh label create bosun:halt --color B60205 --repo <owner>/<repo>",
-    ));
+    let label = gh.map_or(Ok(true), |g| g.label_exists(HALT_LABEL));
+    let halt = gh.map_or(Ok(None), halt_reason);
+    items.push(if gh.is_none() {
+        no_token(5, "kill switch")
+    } else {
+        item(
+            5,
+            "kill switch",
+            match (&label, &halt) {
+                (_, Err(e)) => Some(format!("cannot read the kill switch: {}", e.message)),
+                (Err(e), _) => Some(format!("cannot read the label {HALT_LABEL}: {}", e.message)),
+                (Ok(false), _) => Some(format!("the label {HALT_LABEL} does not exist")),
+                (Ok(true), Ok(_)) => None,
+            },
+            match &halt {
+                Ok(Some((reason, _))) => format!("halted: {reason}"),
+                _ => format!("not halted; an owner's open {HALT_LABEL} issue stops all work"),
+            },
+            &format!(
+                "gh label create bosun:halt --color B60205 --repo {}",
+                ctx.repo
+            ),
+        )
+    });
 
     let version = read(root, ".bosun/version").map(|v| v.trim().to_string());
     let (script, script_problem) = read_setup_script(root);
@@ -970,9 +1030,10 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             "docs/setup-script.sh exists (content below) for the shared cloud environment \"keelstack\"; .bosun/version is {}",
             version.clone().unwrap_or_default()
         ),
-        "paste docs/setup-script.sh (the content field) as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments), no secrets; keep .bosun/version",
+        "run `bosun setup-snippet` and paste its script once as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments); it runs each checkout's docs/setup-script.sh (the content field), so keep that file and .bosun/version",
     );
     setup["environment"] = json!("keelstack");
+    setup["run"] = json!("bosun setup-snippet");
     setup["content"] = json!(script);
     items.push(setup);
 
@@ -1015,8 +1076,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     }
     items.push(slack_item);
 
-    let reg = registry::load(gh);
-    items.push(item(
+    let reg = gh.map_or(Ok(None), registry::load);
+    items.push(if gh.is_none() {
+        no_token(8, "registry issue")
+    } else {
+        item(
         8,
         "registry issue",
         match &reg {
@@ -1031,22 +1095,27 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .and_then(|r| r.as_ref())
                 .map_or(0, |r| r.0)
         ),
-        "start the seed session; `bosun join` creates the registry",
-    ));
+        "run `bosun adopt` (with GITHUB_TOKEN set) or `bosun join`; either creates the registry issue",
+    )
+    });
 
-    items.push(item(
-        9,
-        "auto-merge",
-        match &repo {
-            Ok(Some(r)) if r.allow_auto_merge => None,
-            Ok(Some(_)) => Some("allow_auto_merge is off".into()),
-            _ => Some("the repo is not readable".into()),
-        },
-        "allow_auto_merge is on".into(),
-        HOIST_FIX,
-    ));
+    items.push(if gh.is_none() {
+        no_token(9, "auto-merge")
+    } else {
+        item(
+            9,
+            "auto-merge",
+            match &repo {
+                Ok(Some(r)) if r.allow_auto_merge => None,
+                Ok(Some(_)) => Some("allow_auto_merge is off".into()),
+                _ => Some("the repo is not readable".into()),
+            },
+            "allow_auto_merge is on".into(),
+            HOIST_FIX,
+        )
+    });
 
-    let release = gh.latest_release();
+    let release = gh.map_or(Ok(None), |g| g.latest_release());
     let release_set = release_configured(root, hoist.as_ref(), matches!(release, Ok(Some(_))));
     let release_step = item(
         10,
@@ -1064,9 +1133,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .and_then(|r| r.as_ref())
                 .map_or("", |r| &r.tag_name)
         ),
-        "run `hoist release bootstrap` (docs/PROGRESS.md Blocked)",
+        "run `hoist release bootstrap` from a checkout of main with an admin token",
     );
-    items.push(if release_set {
+    items.push(if release_set && gh.is_none() {
+        no_token(10, "release")
+    } else if release_set {
         release_step.clone()
     } else {
         skipped(
@@ -1129,7 +1200,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     ));
 
     if let Some(slack) = ctx.config.slack.as_ref() {
-        let seat = registry::seat_of(gh, &ctx.session, ctx.now);
+        let seat = gh.map_or(Ok(None), |g| registry::seat_of(g, &ctx.session, ctx.now));
         let seat_ok = seat.as_ref().ok().cloned().flatten();
         let mut tag = item(
             15,
@@ -1149,7 +1220,9 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             },
             "",
         );
-        if seat_ok.is_none() {
+        if gh.is_none() {
+            tag = no_token(15, "claude-tag");
+        } else if seat_ok.is_none() {
             // No seat is normal for a session outside Claude Tag: skipped, not a warning. A
             // failed registry read is a warning.
             tag["status"] = json!(if seat.is_err() { "warn" } else { "skipped" });
@@ -1189,10 +1262,68 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         items.push(it);
     }
 
+    items.push(match super::pin::update_check(root) {
+        Check::Skipped(why, fix) | Check::Failed(why, fix) => skipped(17, "update", &why, &fix),
+        Check::Current => item(
+            17,
+            "update",
+            None,
+            "pins and binary match npm latest".into(),
+            "",
+        ),
+        Check::Behind(u) => {
+            let mut parts = Vec::new();
+            if !u.moves.is_empty() {
+                parts.push(format!("tool pins behind npm: {}", u.moves.join(", ")));
+            }
+            let mut fix = if u.channel {
+                "splice update --channel bosun".to_string()
+            } else {
+                "bosun pin --latest --pr".to_string()
+            };
+            if let Some(v) = &u.cli {
+                let cmd = format!("npm i -g @keelstackhq/bosun@{v}");
+                let when = if u.moves.is_empty() {
+                    fix = cmd.clone();
+                    ""
+                } else {
+                    " after the pin PR merges"
+                };
+                parts.push(format!(
+                    "this machine runs bosun {}; run `{cmd}`{when}",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            let mut it = item(17, "update", None, String::new(), &fix);
+            it["status"] = json!("warn");
+            it["detail"] = json!(parts.join("; "));
+            it
+        }
+    });
+
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
-    let envs = remote.then(|| apply_environments(&mut items, gh, &ctx.repo.to_string(), root));
+    let envs = gh
+        .filter(|_| remote)
+        .map(|g| apply_environments(&mut items, g, &ctx.repo.to_string(), root));
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
-    let mut data = json!({"items": items, "missing": missing, "routines": routines(slack_set)});
+    if offline {
+        // Nothing on GitHub was checked, so this can never be a full pass.
+        let mut names: Vec<String> = items
+            .iter()
+            .filter(|i| i["status"] == "skipped" && i["fix"] == NO_TOKEN_FIX)
+            .filter_map(|i| i["name"].as_str().map(String::from))
+            .collect();
+        if asked_remote {
+            names.push("hoist check".into());
+            names.push("workflow environments".into());
+        }
+        items.push(json!({
+            "step": 0, "name": "remote checks", "status": "skipped",
+            "detail": format!("not run, no GITHUB_TOKEN or GH_TOKEN: {}", names.join(", ")),
+            "fix": NO_TOKEN_FIX,
+        }));
+    }
+    let mut data = json!({"items": items, "missing": missing, "offline": offline, "routines": routines(slack_set)});
     if !slack_set {
         data["notify"] = json!({"skipped": true, "reason": "no [slack] table in .bosun/bosun.toml: the janitor skips notify and there is no notify Routine"});
     }
@@ -1202,10 +1333,32 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     if let Some(e) = envs {
         data["environments"] = e;
     }
+    let first = data["items"]
+        .as_array()
+        .and_then(|a| a.iter().find(|i| i["status"] == "missing"))
+        .map(|i| json!({"step": i["step"], "fix": i["fix"]}));
+    if let Some(n) = first {
+        data["next_step"] = n;
+    } else if offline {
+        data["next_step"] = json!({"step": 0, "fix": NO_TOKEN_FIX});
+    }
+    if offline {
+        let message = if missing > 0 {
+            format!("{missing} checklist steps missing; GitHub not checked (no token)")
+        } else {
+            "0 checklist steps missing; GitHub not checked (no token)".into()
+        };
+        let fix = if missing > 0 {
+            "do the missing steps in data.items, starting with data.next_step, then export GITHUB_TOKEN (repo and workflow scopes) and rerun `bosun doctor`"
+        } else {
+            NO_TOKEN_FIX
+        };
+        return Err(BosunError::needs_human(message, fix).with_data(data));
+    }
     if missing > 0 {
         return Err(BosunError::needs_human(
             format!("{missing} checklist steps missing"),
-            "do the missing steps in data.items; see docs/PROGRESS.md Blocked",
+            "do the missing steps in data.items, starting with data.next_step",
         )
         .with_data(data));
     }

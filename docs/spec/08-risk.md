@@ -118,7 +118,7 @@ High-risk PRs:
   delegate key, on a PR that changes or renames away `.bosun/approvers.toml`,
   `governance/owners.toml` or a `CODEOWNERS` file (root, `.github/`, `docs/`; `TRUST_FILES` in
   `src/core/approve.rs`), or on a PR whose diff bosun could not see whole (R-unseen: it may hide
-  one), so a compromised key cannot enroll keys or owners; risk-check logs why to stderr. A removed key stops counting once that PR merges. Make a key with
+  one), so a compromised key cannot enroll keys or owners; risk-check logs why to stderr. A removed key stops counting once that PR merges. `bosun keygen [--out PEM] [--id ID] [--role owner|delegate] [--enroll]` makes the key (PKCS#8 PEM, mode 0600, default `~/.bosun/approver.pem`, refused inside any git worktree, never overwritten) and prints or, with `--enroll`, appends its block. A bare-repo dotfiles setup (`git --git-dir=~/.cfg --work-tree=~`) has no `.git` entry and is not detected, so keep `~/.bosun` out of it. By hand, make a key with
   `openssl genpkey -algorithm ed25519 -out key.pem`; its public key is
   `openssl pkey -in key.pem -pubout -outform DER | tail -c 32 | base64`. risk.yml runs the
   release pinned in `.bosun/version`, so signed approvals count in CI once that pin is a
@@ -158,6 +158,7 @@ High-risk PRs:
   delegate has no v2. Keys stand for the owners: any enrolled owner key's v2 clears any
   owner's dismissed review, whichever owner the key belongs to. A v2 signed for another PR
   number or another repo does not verify and clears nothing.
+- Reviewer model (operating model #8). A verdict comment carries the reviewer's model as `<!-- bosun:model <id> -->` next to the session tag (`BOSUN_MODEL`, else `ANTHROPIC_MODEL`; `bosun review-ci` passes its own `model`), and `verdict apply` and `verdict post` copy it into the verdict record as `model` (absent in older records, which stay valid). `[approvals] review_models = ["<exact model id>", ...]` in `.bosun/bosun.toml`, read at the PR's base like `bootstrap_until`, limits which verdicts count for two-verdicts, delegate (clean verdict) and autonomous (D-017) approval: a record counts only if its `model` is in the list, exact match, and a record without a model never counts. Unset: any model counts (unchanged). A new model id therefore stops counting until the owner adds it (`.bosun/bosun.toml` is R-gov). The model is self-declared like the session, so this guards against accidents (a swapped reviewer), not against a lying author. The list limits only these gated approvals, not the low-risk `review-verdict` status. A base config that does not parse counts as an empty list: no verdict counts. When the list is set and a verdict class is missing, the risk-check `fix` names the list. Release ordering: a pinned release rejects the unknown key, so a repo sets it only after its `.bosun/version` pins a release that reads it. Carrying a `review-verdict` status to a new head (`carry_verdict`) is filtered the same way: the older head's independent approving record must name a listed model (the list is read at the PR's base; an unreadable one means no carry).
 - Bootstrap mode (D-012). `[approvals] bootstrap_until = "YYYY-MM-DD"` in `.bosun/bosun.toml`
   is the last day (UTC, inclusive) on which the orchestrator may approve gated PRs itself, after
   an independent reviewer approved the head; bosun's own file says `2026-11-30` since the 0.3.0 pin, the first release that reads `[approvals]` (the gates run the pinned release, which rejects unknown keys; `tests/pinned_config.rs`). An invalid date
@@ -192,7 +193,7 @@ High-risk PRs:
   drops the key to opt out.
 - Approval policy (D-014 draft, spec B6). `[approvals] policy = "owner" | "owner-gated" |
   "orchestrator"` (or `"autonomous"`, next bullet; default `owner`, fail safe: intake writes the policy explicitly for new and
-  adopted repos; another value is a parse error) says when an orchestrator approval (the
+  adopted repos, and `bosun adopt --policy` writes it, §11; another value is a parse error) says when an orchestrator approval (the
   bootstrap-form signature above, format unchanged) counts. Checks, in order, first failure wins
   (`orchestrator_counts` in `src/core/approve.rs`): the requirement is `owner`; no
   `BOOTSTRAP_EXCLUDED` hit; no changed `WORKFLOW_PATHS` file (`.github/workflows/**`,
@@ -218,7 +219,7 @@ High-risk PRs:
   (`data.policy = "autonomous"`). It decides first in `orchestrator_counts`, also inside the
   bootstrap window and whatever the requirement, and only by an allowlist
   (`risk::autonomous_excluded`): every changed path (previous name too, any case) must be under
-  `src/**`, `tests/**`, `docs/**` or `changelog.d/**` (`AUTONOMOUS_ALLOWED`) and outside
+  `src/**`, `tests/**`, `docs/**`, `changelog.d/**` or `.changeset/*.md` (one level, markdown only; `.changeset/config.json` names the changelog generator the release runs with secrets, so it and every other non-`.md` file there is the owner's) (`AUTONOMOUS_ALLOWED`) and outside
   `docs/setup-script.sh`, `docs/agents/**`, `docs/lessons.toml`, `**/plans/**`, `**/*.jinja` and
   `**/build.rs` (`AUTONOMOUS_DENIED`). Everything else is the owner's: workflows, `.github/**`,
   `.bosun/**`, `channel/**`, `.circleci/**`, actions, root files (`Cargo.toml`, `deny.toml`,

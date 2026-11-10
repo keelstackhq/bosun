@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::prereqs::Env;
 use super::prereqs_gate::{Held, blockers};
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
-use crate::app::{App, Result, default_branch, kill_switch, notes, set_state, task_meta};
+use crate::app::{App, Result, default_branch, kill_switch, set_state, task_meta, trusted_notes};
 use crate::core::glob::Glob;
 use crate::core::lease::leases_of;
 use crate::core::meta::{TaskMeta, closing_issues_in, linked_issues, parse_task_meta};
@@ -791,7 +791,7 @@ fn blocked(imp: &Importer, i: &Issue) -> Result<Option<String>> {
     {
         return Ok(Some(s.name().to_string()));
     }
-    let n = notes(imp.gh, i.number)?;
+    let n = trusted_notes(imp.gh, i.number)?;
     let live = leases_of(i.number, &n).iter().any(|l| l.is_live(imp.now));
     Ok(live.then(|| "leased".to_string()))
 }

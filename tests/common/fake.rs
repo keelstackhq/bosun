@@ -76,6 +76,8 @@ pub struct State {
     pub files: HashMap<u64, Vec<Value>>,
     pub statuses: HashMap<String, Vec<Value>>,
     pub check_runs: HashMap<String, Vec<Value>>,
+    /// (slug, id) of the App the token belongs to, for check runs the client creates.
+    pub token_app: (String, u64),
     pub contents: HashMap<String, String>,
     pub reviews: HashMap<u64, Vec<Value>>,
     pub timeline: HashMap<u64, Vec<Value>>,
@@ -102,6 +104,8 @@ pub struct State {
     pub fail: Option<(u16, u32)>,
     /// Repository permission by login; a login not listed has `write`.
     pub permissions: HashMap<String, String>,
+    /// Login `GET /user` answers; none answers 404.
+    pub viewer: Option<String>,
     /// (path suffix, status) answered for every matching request.
     pub fail_paths: Vec<(String, u16)>,
     /// (path suffix, status, message) answered for every matching request.
@@ -173,7 +177,10 @@ impl FakeGithub {
     pub fn start() -> FakeGithub {
         let server = tiny_http::Server::http("127.0.0.1:0").expect("bind fake github");
         let url = format!("http://{}", server.server_addr().to_ip().expect("ip"));
-        let state = Arc::new(Mutex::new(State::default()));
+        let state = Arc::new(Mutex::new(State {
+            token_app: ("keelstackhq-bosun-gate".into(), 4242),
+            ..State::default()
+        }));
         let stop = Arc::new(AtomicBool::new(false));
         let handle = {
             let (state, stop, url) = (state.clone(), stop.clone(), url.clone());
@@ -269,6 +276,14 @@ impl FakeGithub {
         let mut s = self.state.lock().unwrap();
         s.pulls
             .push(pull_json(number, title, head_ref, "main", body, false));
+    }
+
+    /// An open pull request whose head branch lives in another repo (a fork).
+    pub fn pull_from_fork(&self, number: u64, head_ref: &str, fork: &str) {
+        let mut s = self.state.lock().unwrap();
+        let mut p = pull_json(number, "from a fork", head_ref, "main", "", false);
+        p["head"]["repo"] = serde_json::json!({"full_name": fork});
+        s.pulls.push(p);
     }
 
     /// Whether the pull request is a draft.
@@ -525,8 +540,20 @@ impl FakeGithub {
         let id = list.len() + 1;
         list.push(
             json!({"id": id, "name": name, "status": status, "conclusion": conclusion,
-            "head_sha": sha, "app": {"slug": "github-actions"}}),
+            "head_sha": sha, "app": {"slug": "github-actions", "id": 15368}}),
         );
+    }
+
+    /// Check runs the client creates belong to App `slug` with id `id`
+    /// (default `keelstackhq-bosun-gate`, 4242).
+    pub fn check_runs_as_app(&self, slug: &str, id: u64) {
+        self.state.lock().unwrap().token_app = (slug.into(), id);
+    }
+
+    /// Every check run on `sha`, oldest first, as stored.
+    pub fn check_runs_of(&self, sha: &str) -> Vec<Value> {
+        let s = self.state.lock().unwrap();
+        s.check_runs.get(sha).cloned().unwrap_or_default()
     }
 
     /// A check run created by the GitHub App `app` (check runs default to `github-actions`).
@@ -534,7 +561,7 @@ impl FakeGithub {
         self.check_run(sha, name, "completed", Some(conclusion));
         let mut s = self.state.lock().unwrap();
         let last = s.check_runs.get_mut(sha).unwrap().last_mut().unwrap();
-        last["app"] = json!({"slug": app});
+        last["app"] = json!({"slug": app, "id": 0});
     }
 
     /// Answer failing requests (`fail_path`) with a message that echoes the Authorization header,
@@ -597,6 +624,11 @@ impl FakeGithub {
 
     pub fn graphql_error(&self, message: &str) {
         self.state.lock().unwrap().graphql_error = Some(message.into());
+    }
+
+    /// The login of the token's user (`GET /user`).
+    pub fn viewer(&self, login: &str) {
+        self.state.lock().unwrap().viewer = Some(login.into());
     }
 
     /// Set a field of the repository document, for example `allow_auto_merge`.
@@ -981,6 +1013,12 @@ fn route(
         }
         return graphql(s, body);
     }
+    if method == "GET" && seg == ["user"] {
+        return match &s.viewer {
+            Some(l) => ok(json!({"login": l})),
+            None => msg(404, "Not Found"),
+        };
+    }
     let ["repos", _, _, rest @ ..] = seg.as_slice() else {
         return msg(404, "Not Found");
     };
@@ -1260,6 +1298,14 @@ fn route(
                     p
                 })
                 .collect();
+            let mut items: Vec<Value> = items;
+            if query.get("sort").map(String::as_str) == Some("updated") {
+                // Newest update first, as GitHub does with direction=desc.
+                items.sort_by(|a, b| {
+                    let key = |p: &Value| p["updated_at"].as_str().unwrap_or("").to_string();
+                    key(b).cmp(&key(a))
+                });
+            }
             page(items, &query, base, path, raw_query)
         }
         ("POST", ["pulls"]) => {
@@ -1406,8 +1452,19 @@ fn route(
                 .collect();
             page(items, &query, base, path, raw_query)
         }
+        ("POST", ["check-runs"]) => post_check_run(s, body),
+        ("PATCH", ["check-runs", id]) => patch_check_run(s, id, body),
         ("GET", ["commits", sha, "check-runs"]) => {
-            let items = s.check_runs.get(*sha).cloned().unwrap_or_default();
+            let mut items = s.check_runs.get(*sha).cloned().unwrap_or_default();
+            if query.get("filter").map(String::as_str) != Some("all") {
+                // GitHub's default filter `latest`: the newest run (highest id) per name and App.
+                let key = |r: &Value| (r["name"].to_string(), r["app"]["slug"].to_string());
+                let all = items.clone();
+                items.retain(|r| {
+                    !all.iter()
+                        .any(|o| key(o) == key(r) && o["id"].as_u64() > r["id"].as_u64())
+                });
+            }
             let total = items.len();
             wrapped(
                 page(items, &query, base, path, raw_query),
@@ -1572,6 +1629,55 @@ fn graphql(s: &mut State, body: &Value) -> Reply {
     };
     s.auto_merge.insert(n, method.into());
     ok(json!({"data": {"enablePullRequestAutoMerge": {"pullRequest": {"number": n}}}}))
+}
+
+/// Gate check runs: `status` is `in_progress` or `completed`; a conclusion only when completed.
+fn check_run_fields(body: &Value) -> Result<(), Reply> {
+    let status = body["status"].as_str().unwrap_or("queued");
+    let conclusion = body["conclusion"].as_str();
+    match (status, conclusion) {
+        ("completed", Some(_)) | ("in_progress" | "queued", None) => Ok(()),
+        _ => Err(msg(422, "Invalid status and conclusion")),
+    }
+}
+
+fn post_check_run(s: &mut State, body: &Value) -> Reply {
+    if let Err(r) = check_run_fields(body) {
+        return r;
+    }
+    let (Some(name), Some(sha)) = (body["name"].as_str(), body["head_sha"].as_str()) else {
+        return msg(422, "name and head_sha are required");
+    };
+    let id = 1000 + s.check_runs.values().map(Vec::len).sum::<usize>() as u64 + 1;
+    let (slug, app_id) = s.token_app.clone();
+    let run = json!({"id": id, "name": name, "head_sha": sha,
+        "status": body["status"].as_str().unwrap_or("queued"),
+        "conclusion": body["conclusion"], "output": body["output"],
+        "app": {"slug": slug, "id": app_id}});
+    s.check_runs
+        .entry(sha.into())
+        .or_default()
+        .push(run.clone());
+    (201, run, vec![])
+}
+
+fn patch_check_run(s: &mut State, id: &str, body: &Value) -> Reply {
+    if body.get("head_sha").is_some() {
+        return msg(422, "head_sha cannot be changed");
+    }
+    if let Err(r) = check_run_fields(body) {
+        return r;
+    }
+    let id: u64 = id.parse().unwrap_or(0);
+    let Some(run) = s.check_runs.values_mut().flatten().find(|r| r["id"] == id) else {
+        return msg(404, "Not Found");
+    };
+    for k in ["name", "status", "conclusion", "output"] {
+        if let Some(v) = body.get(k) {
+            run[k] = v.clone();
+        }
+    }
+    ok(run.clone())
 }
 
 fn serve(server: tiny_http::Server, state: Arc<Mutex<State>>, stop: Arc<AtomicBool>, base: String) {

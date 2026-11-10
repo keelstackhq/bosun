@@ -115,6 +115,11 @@ pub struct Pull {
     /// `owner/name` of the repo the head branch lives in; `""` when GitHub did not say (a
     /// deleted fork). A PR from a fork differs from the base repo.
     pub head_repo: String,
+    /// RFC 3339 times GitHub reports; `None` when absent or `null` (`bosun budget report`).
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +165,14 @@ struct RawPull {
     commits: u64,
     #[serde(default)]
     mergeable_state: Option<String>,
+    #[serde(default)]
+    merged_at: Option<String>,
+    #[serde(default)]
+    closed_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
 impl From<RawPull> for Pull {
@@ -183,6 +196,10 @@ impl From<RawPull> for Pull {
             merge_commit_sha: r.merge_commit_sha,
             commits: r.commits,
             mergeable_state: r.mergeable_state,
+            merged_at: r.merged_at,
+            closed_at: r.closed_at,
+            updated_at: r.updated_at,
+            created_at: r.created_at,
         }
     }
 }
@@ -229,21 +246,79 @@ pub struct Status {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(from = "RawCheckRun")]
 pub struct CheckRun {
     pub name: String,
     pub status: String,
     /// `None` until the run completes.
-    #[serde(default)]
     pub conclusion: Option<String>,
-    #[serde(default)]
     pub id: u64,
-    #[serde(default)]
     pub started_at: Option<String>,
-    #[serde(default)]
     pub completed_at: Option<String>,
     /// Slug of the GitHub App that created the run (`github-actions` for Actions); `""` if unknown.
-    #[serde(default, deserialize_with = "app_slug_name")]
     pub app: String,
+    /// Id of that App (15368 for GitHub Actions); 0 if unknown.
+    pub app_id: u64,
+}
+
+#[derive(Deserialize)]
+struct RawCheckRun {
+    name: String,
+    status: String,
+    #[serde(default)]
+    conclusion: Option<String>,
+    #[serde(default)]
+    id: u64,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
+    #[serde(default)]
+    app: Option<AppRef>,
+}
+
+#[derive(Deserialize)]
+struct AppRef {
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    id: u64,
+}
+
+impl From<RawCheckRun> for CheckRun {
+    fn from(r: RawCheckRun) -> Self {
+        let (app, app_id) = r.app.map_or((String::new(), 0), |a| (a.slug, a.id));
+        CheckRun {
+            name: r.name,
+            status: r.status,
+            conclusion: r.conclusion,
+            id: r.id,
+            started_at: r.started_at,
+            completed_at: r.completed_at,
+            app,
+            app_id,
+        }
+    }
+}
+
+/// What a gate's check run says (spec §15). `Pending` is `in_progress`; the others complete the
+/// run. There is no `neutral` or `skipped`: both satisfy a required check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Pending,
+    Success,
+    Failure,
+}
+
+/// A gate check run to create or update: `title` is the description a status would carry,
+/// `summary` that text plus the matched rules.
+#[derive(Debug, Clone, Copy)]
+pub struct GateRun<'a> {
+    pub name: &'a str,
+    pub head_sha: &'a str,
+    pub state: RunState,
+    pub title: &'a str,
+    pub summary: &'a str,
 }
 
 /// A job of an Actions workflow run.

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Setup script for the Claude Code cloud environment of bosun and of repos that use it
-# (spec D23). Paste it into the environment's setup script; it runs as root before a session.
+# Per-repo setup script of bosun's Claude Code cloud environment (spec D23). Not pasted by hand:
+# the bosun bootstrap (`bosun setup-snippet`, pasted once into the environment) runs it as root
+# before a session, from inside each checkout, possibly on a warm container. Pins move only by
+# reviewed PRs that edit this file (R-ci reviews it).
 set -euo pipefail
 
-# Pinned tool versions. Move a pin with a PR that edits this file (R-ci reviews it).
+# Pinned tool versions.
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
 SPLICE_VERSION=0.4.0
@@ -12,14 +14,21 @@ SPLICE_VERSION=0.4.0
 SPLICE_SHA512=8/6VRlKzHY3nHFdZnKqGhgyxkj6SLyPeXtqzDgQjTEPlY1m6ZCzGkaXyzuHAj9PYDi1pDOYovlPClyUXRj7dMA==
 SPLICE_LINUX_X64_SHA512=0ZtX3mxakLqYUGKFPUZ1xQ8Vd+zkk+YRttlwxZHVSncBBGhe+i4cWCTTbEVjnfNX9qBV0HPfqwQNn2aGV3/suQ==
 SPLICE_LINUX_ARM64_SHA512=2UH1s2IWCD9lISISwwFmEhoCgujWmeVdrU1bK5SEPOWq8HPAdUgvSDkoTbHpKd3VrZUjYDTgJ/fsYKu06chNpg==
-HOIST_VERSION=0.4.0
-HOIST_SHA512=+4m/obpmAmEBq3XM7pDfIkSmk52fmmzpr+OB2Zhq7cJfasNTYJjuooxvLhXoYJ8mqnbkqU48rB9vdKUC/5F2+w==
-HOIST_LINUX_X64_SHA512=yfGzHACUGIPVGOyLT2UcXsEAGEM2Khs/rAUgUnhvi34+x8A2s9X5zzLwPJbtoqZ0fs9LFl68KPa+jBidkSnukg==
-HOIST_LINUX_ARM64_SHA512=ipN4xVhGm4D9276srARl2EU03xH2uOjlIgRreud2ZB7lI6d0oIjnHcy8cIyo4nqRsM1CSprKxTh2V37l29pf1Q==
+HOIST_VERSION=0.4.1
+HOIST_SHA512=vZrurRfS8IzUf22HtHJnWrU+m+vZclJ06ivYi288Urf5TG6tII24kdY51waoYNuMi50SJ5QIv7k6q0kUKarv8A==
+HOIST_LINUX_X64_SHA512=eBWtbwxVHJ1DeshsnSa1ZpmkNiamyfkPgQr0/7mez8dOVQYBWTVOAAHtEE76RvXLV5gFQd41TyimX9LOwJx52Q==
+HOIST_LINUX_ARM64_SHA512=CCCPHyAVbnbheK9M/NN9xXCWw6ko7m7wwsHMexWPuyW+EZU4aLbiKSXsm5/OT37rfnTsoexD+BQlxasV9UdfSA==
 BERTH_VERSION=0.1.0
 BERTH_SHA512=4V71F1YqcduupUm/yqc3HaK5/VMH6bD1PZa6xskA+84UiSs1UZRnkX7W+zoLPNizoT2CM1bVGmEtk2cjjYg3Eg==
 BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+J+jEvUBHKxS3xfQMT7HqCO35TUysw==
 BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
+# cargo-deny's prebuilt binary as npm packages (@keelstackhq/cargo-deny, its launcher, and
+# cargo-deny-linux-<arch>), pinned like the tools above. Empty until their first publish: then the
+# Rust step builds it with `cargo install --locked cargo-deny` (minutes) instead.
+CARGO_DENY_VERSION=""
+CARGO_DENY_SHA512=""
+CARGO_DENY_LINUX_X64_SHA512=""
+CARGO_DENY_LINUX_ARM64_SHA512=""
 # Claude Code plugins. `keelstack` is bosun's marketplace (.claude-plugin/marketplace.json on this
 # branch of keelstackhq/bosun, owner-reviewed); it pins each plugin source by sha. A marketplace ref
 # must be a branch or tag (`#<sha>` fails to clone). Move the plugin pins with marketplace.json;
@@ -28,14 +37,22 @@ KEELSTACK_MARKETPLACE_REF=main
 SUPERPOWERS_SHA=22f0b463e7a5e579904dd6211a520321035526f7
 CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
-BOSUN_VERSION=0.9.0
-BOSUN_SHA512=jcVH/IAukxU1j8vtSZtf7Ay6E/RGzp6mbucG59Z2p0S96M+Qn46bv49U4243+gCnyKV5Ehl86CriBoWdkcAFBg==
-BOSUN_LINUX_X64_SHA512=wHoSBbPYcOsutvtZz6/ugMvvDOiGCdSIBu6+KhgCMuQlxR8iXtTKmUH5LSiVlGkp1KWnL4uShUogWZXHb5VSaQ==
-BOSUN_LINUX_ARM64_SHA512=7+pSNjVnhn5EBSfr8+3+z4+R5wIdew+ueELehhcg8VQyt3/fF6fSolxxxUFS/YcNVuCAMwj/crQQ7ybjeytChg==
+BOSUN_VERSION=0.11.0
+BOSUN_SHA512=BV3R+ekqyvkeogr4wDFjmXeluEZilN1cSmKQrxcGa97Cglp+yv68MZRtmFvxJJ9tmUDBSkDg0avDuOrZfUkbcA==
+BOSUN_LINUX_X64_SHA512=2YqfSb3zK2MUuVA5Tjsa3MmFM1/3BCC9LcntsSph3OiVmLREzWhb4SRI6AEU0/7R9CYrp7CeKQNvz6ob6lVkcA==
+BOSUN_LINUX_ARM64_SHA512=cw/Hj+t7Tge3SOzg6VRCeuJk3zmNYAtZcAC/j2OywpwT8pWDyDSfAP3AEVx61YojSGD0utpO6GydTQR8T48eyw==
+
+# Stacks of this checkout: Rust steps run only with a Cargo.toml or a toolchain file, pnpm only
+# with a pnpm-lock.yaml, a pnpm-workspace.yaml or a package.json `packageManager` of pnpm.
+HAS_RUST=""
+if [ -f Cargo.toml ] || [ -f rust-toolchain.toml ]; then HAS_RUST=1; fi
+HAS_PNPM=""
+if [ -f pnpm-lock.yaml ] || [ -f pnpm-workspace.yaml ] || grep -Eq '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@' package.json 2>/dev/null; then HAS_PNPM=1; fi
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
-# Without one the script warns, skips the pinned toolchain and still installs the cargo tools. `bash docs/setup-script.sh --rust-version` prints the version
-# and installs nothing.
+# Without one a Rust checkout warns, skips the pinned toolchain and still installs cargo-deny. A
+# checkout with neither Cargo.toml nor rust-toolchain.toml gets no Rust step. `bash
+# docs/setup-script.sh --rust-version` prints the version and installs nothing.
 RUST_VERSION=""
 if [ -f rust-toolchain.toml ]; then
   RUST_VERSION="$(sed -nE "s/^[[:space:]]*channel[[:space:]]*=[[:space:]]*[\"']([^\"']*)[\"'].*/\1/p" rust-toolchain.toml | head -n1)"
@@ -43,12 +60,14 @@ fi
 # The channel reaches rustup as root: only a toolchain name passes, anything else is skipped like a
 # missing file (printf %q shows the rejected value safely).
 if [ -n "$RUST_VERSION" ] && ! [[ "$RUST_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-  printf 'setup-script: invalid channel %q in rust-toolchain.toml; skipping the Rust toolchain install (the cargo tools still install with the default toolchain)\n' "$RUST_VERSION" >&2
+  printf 'setup-script: invalid channel %q in rust-toolchain.toml; skipping the Rust toolchain install (cargo-deny still installs with the default toolchain)\n' "$RUST_VERSION" >&2
   RUST_VERSION=""
   if [ "${1:-}" = --rust-version ]; then exit 1; fi
 elif [ -z "$RUST_VERSION" ]; then
   # Never fail here: a failing setup script blocks every session of the environment.
-  echo "setup-script: no rust-toolchain.toml with a channel in $PWD; skipping the Rust toolchain install (the cargo tools still install with the default toolchain), rustup installs the checkout's pinned toolchain on first cargo use" >&2
+  if [ -n "$HAS_RUST" ] || [ "${1:-}" = --rust-version ]; then
+    echo "setup-script: no rust-toolchain.toml with a channel in $PWD; skipping the Rust toolchain install (cargo-deny still installs with the default toolchain), rustup installs the checkout's pinned toolchain on first cargo use" >&2
+  fi
   if [ "${1:-}" = --rust-version ]; then exit 1; fi
 fi
 if [ "${1:-}" = --rust-version ]; then echo "$RUST_VERSION"; exit 0; fi
@@ -84,15 +103,25 @@ if ! node_major_ok "$(command -v node || echo node)"; then
   fi
 fi
 
+# pnpm is not integrity-pinned (npm installs it by version), so its warm skip stays a version check.
 # pnpm 12 ships a native binary; its install.js puts it in place.
-npm install -g "pnpm@${PNPM_VERSION}"
-(cd "$(npm root -g)/pnpm" && node install.js) || true
+# From /: inside the checkout pnpm may follow package.json `packageManager` instead.
+if [ -z "$HAS_PNPM" ]; then
+  echo "setup-script: no pnpm-lock.yaml, pnpm-workspace.yaml or packageManager pnpm@ in $PWD; skipping pnpm" >&2
+elif [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
+  npm install -g "pnpm@${PNPM_VERSION}" ||
+    echo "setup-script: npm install of pnpm@${PNPM_VERSION} failed; continuing" >&2
+  (cd "$(npm root -g)/pnpm" && node install.js) || true
+fi
 
-# Rust (the version read above) and the cargo tools the gates run.
-# Without a toolchain file (the checkout does not exist yet when this runs) rustup's stable default
-# serves the tools, and rustup installs the checkout's pinned toolchain on first cargo use there.
-# A failed step warns and the script goes on: a failing setup script blocks every session.
-if [ -n "$RUST_VERSION" ]; then
+# Rust (the version read above), only in a checkout with Cargo.toml or a toolchain file.
+# Without a toolchain file in the checkout rustup's stable default serves the tools, and rustup
+# installs the checkout's pinned toolchain on first cargo use there. cargo-deny installs below,
+# after install_tool. A failed step warns and the script goes on: a failing setup script blocks
+# every session.
+if [ -z "$HAS_RUST" ]; then
+  echo "setup-script: no Cargo.toml or rust-toolchain.toml in $PWD; skipping Rust" >&2
+elif [ -n "$RUST_VERSION" ]; then
   { rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy &&
     rustup default "${RUST_VERSION}"; } ||
     echo "setup-script: installing the Rust toolchain ${RUST_VERSION} failed; continuing" >&2
@@ -100,12 +129,6 @@ elif command -v rustup >/dev/null 2>&1 && ! rustup show active-toolchain >/dev/n
   { rustup toolchain install stable --profile minimal --component rustfmt,clippy &&
     rustup default stable; } ||
     echo "setup-script: installing the stable Rust toolchain failed; continuing" >&2
-fi
-if command -v cargo >/dev/null 2>&1; then
-  cargo install --locked cargo-nextest cargo-deny ||
-    echo "setup-script: cargo install of cargo-nextest and cargo-deny failed; continuing without them" >&2
-else
-  echo "setup-script: no cargo found; skipping cargo-nextest and cargo-deny" >&2
 fi
 
 # The keelstackhq tools, pinned, install only from npm tarballs that match the pinned sha512:
@@ -117,20 +140,75 @@ tool_pack() {
   if [ "$got" != "$3" ]; then echo "setup-script: $1 does not match its pinned sha512; skipping it" >&2; return 1; fi
   echo "$2/$f"
 }
+# Where a verified install leaves its fingerprint. A later run skips a tool only when the current
+# fingerprint equals the record for that tool@pin, so no other program that prints the pinned
+# version is trusted.
+SETUP_STATE_DIR="${SETUP_STATE_DIR:-/var/lib/bosun-setup}"
+tool_arch() { case "$(uname -m)" in aarch64 | arm64) echo arm64 ;; *) echo x64 ;; esac; }
+# tool_fp <name> <arch>: sha256 over the resolved command's real path and every file and symlink of
+# the tool's launcher and linux packages; fails when PATH resolves to anything outside the launcher package.
+tool_fp() {
+  r="$(npm root -g 2>/dev/null)" && p="$(readlink -f "$(command -v "$1")" 2>/dev/null)" || return 1
+  case "$p" in "$r/@keelstackhq/$1/"*) ;; *) return 1 ;; esac
+  set -- "$r/@keelstackhq/$1" "$r/@keelstackhq/$1-linux-$2"
+  # Symlinks count by name and target (a planted one can win Node's module lookup); byte order.
+  { echo "$p"; { find "$@" -type l -printf '%p -> %l\0' 2>/dev/null || true; } | LC_ALL=C sort -z | tr '\0' '\n'
+    { find "$@" -type f -print0 2>/dev/null || true; } | LC_ALL=C sort -z | xargs -0 -r sha256sum; } | sha256sum | cut -d' ' -f1
+}
+# tool_warm <name> <arch> <record>: true when the installed tool matches its recorded fingerprint.
+tool_warm() { [ -f "$3" ] && fp="$(tool_fp "$1" "$2")" && [ "$fp" = "$(cat "$3")" ]; }
+# tool_record <name> <arch> <record>: after a verified install; never fails the script.
+tool_record() {
+  if fp="$(tool_fp "$1" "$2")" && mkdir -p "$SETUP_STATE_DIR" && printf '%s\n' "$fp" >"$3"; then :; else
+    echo "setup-script: could not record the fingerprint of $1; it installs again on the next run" >&2
+  fi
+}
 # install_tool <name> <version> <launcher sha512> <linux-x64 sha512> <linux-arm64 sha512>
 install_tool() {
   case "$(uname -m)" in aarch64 | arm64) a=arm64 s="$5" ;; *) a=x64 s="$4" ;; esac
+  rec="$SETUP_STATE_DIR/$1@$2.sha256"
+  # Warm container or a second checkout: skip only a tool whose fingerprint equals the one recorded
+  # at its verified install.
+  if tool_warm "$1" "$a" "$rec"; then return 0; fi
   t="$(mktemp -d)"
   if l="$(tool_pack "@keelstackhq/$1@$2" "$t" "$3")" && b="$(tool_pack "@keelstackhq/$1-linux-$a@$2" "$t" "$s")"; then
     # npm still reads the optional packages' metadata: a registry error must not stop the script.
-    npm install -g --ignore-scripts --omit=optional "$l" "$b" ||
+    if npm install -g --ignore-scripts --omit=optional "$l" "$b"; then
+      tool_record "$1" "$a" "$rec"
+    else
       echo "setup-script: $1 install failed; skipping $1" >&2
+    fi
   fi
 }
 install_tool splice "$SPLICE_VERSION" "$SPLICE_SHA512" "$SPLICE_LINUX_X64_SHA512" "$SPLICE_LINUX_ARM64_SHA512"
 install_tool hoist "$HOIST_VERSION" "$HOIST_SHA512" "$HOIST_LINUX_X64_SHA512" "$HOIST_LINUX_ARM64_SHA512"
 install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$BERTH_LINUX_ARM64_SHA512"
 install_tool bosun "$BOSUN_VERSION" "$BOSUN_SHA512" "$BOSUN_LINUX_X64_SHA512" "$BOSUN_LINUX_ARM64_SHA512"
+# cargo-deny for the deps gate: the pinned npm packages when their pin is set, else (or when that
+# install fails) built by cargo. The test gate's own tool (cargo-nextest) installs below. Only a verified install
+# (its recorded fingerprint) counts, not another cargo-deny on PATH.
+if [ -n "$HAS_RUST" ]; then
+  if [ -n "$CARGO_DENY_VERSION" ]; then
+    install_tool cargo-deny "$CARGO_DENY_VERSION" "$CARGO_DENY_SHA512" "$CARGO_DENY_LINUX_X64_SHA512" "$CARGO_DENY_LINUX_ARM64_SHA512"
+  fi
+  if [ -n "$CARGO_DENY_VERSION" ] &&
+    tool_warm cargo-deny "$(tool_arch)" "$SETUP_STATE_DIR/cargo-deny@${CARGO_DENY_VERSION}.sha256"; then
+    : # installed from its pin
+  elif command -v cargo >/dev/null 2>&1; then
+    cargo install --locked cargo-deny ||
+      echo "setup-script: cargo install of cargo-deny failed; continuing without it" >&2
+  else
+    echo "setup-script: no cargo found; skipping cargo-deny" >&2
+  fi
+  # cargo-nextest only while the pinned bosun's test gate runs it (releases before 0.12.0, spec
+  # §7) or a repo profile names it: `cargo install` builds it from source (minutes).
+  if command -v cargo >/dev/null 2>&1 &&
+    { [ "$(printf '%s\n0.12.0\n' "$BOSUN_VERSION" | sort -V | head -n1)" != 0.12.0 ] ||
+      grep -qs nextest .bosun/profiles/rust.toml; }; then
+    cargo install --locked cargo-nextest ||
+      echo "setup-script: cargo install of cargo-nextest failed; continuing without it" >&2
+  fi
+fi
 
 bosun --version || echo "setup-script: bosun is not installed" >&2
 

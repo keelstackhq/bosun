@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::lesson::capture_lesson;
 use super::{BudgetCmd, BudgetRecordArgs};
-use crate::app::{App, Result, kill_switch, limits_from_default, notes, set_state};
+use crate::app::{App, Result, kill_switch, limits_from_default, set_state};
 use crate::core::budget::{level, to_stop};
 use crate::core::lease::members;
 use crate::core::records::{Record, spend_total};
@@ -23,10 +23,11 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     match cmd {
         BudgetCmd::Record(a) => record(dir, a),
         BudgetCmd::Check => check(dir),
+        BudgetCmd::Report(a) => super::budget_report::run(dir, a),
     }
 }
 
-fn read_input(from: &str) -> Result<Value> {
+pub(super) fn read_input(from: &str) -> Result<Value> {
     let mut text = String::new();
     let read = if from == "-" {
         std::io::stdin().read_to_string(&mut text).map(|_| ())
@@ -47,7 +48,7 @@ fn read_input(from: &str) -> Result<Value> {
     })
 }
 
-fn usd_of(
+pub(super) fn usd_of(
     a: &BudgetRecordArgs,
     prices: &std::collections::BTreeMap<String, crate::config::Price>,
 ) -> Result<f64> {
@@ -70,6 +71,15 @@ fn usd_of(
 }
 
 fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
+    if !a.pr.is_empty() {
+        return super::budget_pr::run(dir, a);
+    }
+    let Some(n) = a.issue else {
+        return Err(BosunError::usage(
+            "budget record needs an issue number or --pr",
+            "pass the task issue, or --pr <n> for each PR the session made",
+        ));
+    };
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
@@ -81,7 +91,6 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         ));
     }
     let limits = limits_from_default(gh, ctx)?;
-    let n = a.issue;
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
             format!("issue #{n} does not exist"),
@@ -93,12 +102,13 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         usd,
         at: ctx.now.to_string(),
         issue: Some(n),
+        model: None,
     };
     gh.add_comment(n, &spend.to_line())?;
     let (registry_issue, _) = registry::ensure(gh)?;
     gh.add_comment(registry_issue, &spend.to_line())?;
 
-    let total = spend_total(&notes(gh, n)?, None);
+    let total = spend_total(&crate::app::spend_notes(gh, n)?, None);
     let over = total > limits.budget.per_task_usd;
     let was_blocked = state_of(&issue.labels) == Some(State::Blocked);
     let blocked = over && set_state(gh, n, &issue, State::Blocked).is_ok();
@@ -149,7 +159,10 @@ fn check(dir: Option<&Path>) -> CmdResult {
     let daily = limits.budget.daily_usd;
     let (mut spent, mut live) = (0.0, Vec::new());
     if let Some((_, notes)) = registry::load(gh)? {
-        spent = spend_total(&notes, Some(ctx.now.day_start()));
+        spent = spend_total(
+            &registry::trusted_spend_notes(gh)?,
+            Some(ctx.now.day_start()),
+        );
         live = members(&notes);
     }
     let lvl = level(spent, daily);

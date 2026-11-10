@@ -1,8 +1,7 @@
 # Adopt bosun on an existing repo
 
 This guide sets up bosun alone on a repo that already exists: no hull template, no keelstack
-provisioning. Do the steps in order. Every command below exists in bosun 0.7.0; check any of them
-with `bosun <command> --help`.
+provisioning. Do the steps in order. Check any command below with `bosun <command> --help`.
 
 What bosun is: one binary that agent sessions (Claude Code) call. It prints one JSON object per
 command and keeps all shared state in GitHub issues, labels, comments and PRs. Agents write the
@@ -20,16 +19,20 @@ Do these on a computer first; the phone steps come after.
 2. **Claude GitHub App.** Install it on the repo (GitHub → Settings → GitHub Apps). Cloud
    sessions reach GitHub through it.
 3. **Approval key.** Signed approvals need an ed25519 key. It signs for you, but the
-   orchestrator session that posts approvals holds it: make it in that session's container (or
-   copy the PEM there), never in the repo:
+   orchestrator session that posts approvals holds it: run this in that session's container
+   (the key goes to `~/.bosun/approver.pem`, mode 0600, never inside the repo):
 
    ```bash
-   openssl genpkey -algorithm ed25519 -out owner.pem
-   openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64   # the public key
+   bosun keygen --enroll   # makes the key and adds its public half to .bosun/approvers.toml
    ```
 
-   You put the public key in `.bosun/approvers.toml` (section 3). Without a key, you approve with
-   your own GitHub comment instead (section 6).
+   Commit `.bosun/approvers.toml` in the setup PR (section 3) and approve that PR yourself. To
+   do it by hand instead: `openssl genpkey -algorithm ed25519 -out owner.pem`, then
+   `openssl pkey -in owner.pem -pubout -outform DER | tail -c 32 | base64` gives the public key.
+   By hand, you put the public key in `.bosun/approvers.toml` (section 3). Without a key, you
+   approve with your own GitHub comment instead (section 6).
+   A bare-repo dotfiles setup (`git --git-dir=~/.cfg --work-tree=~`) has no `.git` entry in the
+   home directory and is not detected, so keep `~/.bosun` out of it.
 4. **Labels.** bosun makes its own labels on first use (`bosun:state/*`, `bosun:registry`,
    `bosun:kind/*` and others). Make the kill-switch label yourself:
    `gh label create bosun:halt --repo <owner>/<repo> --color B60205`.
@@ -42,12 +45,19 @@ creates the labels and the registry issue. It commits nothing; you commit and op
 ```bash
 bosun adopt --dry-run                          # see what would change; writes nothing
 bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
-git add .bosun .github .claude governance && git commit -m "chore: set up bosun"
+bosun adopt --owner <login> --policy autonomous   # also write [approvals] policy (section 9, item 4)
 ```
 
+The JSON gives the exact commands in `data.commands`: `git switch bosun-setup 2>/dev/null || git switch -c bosun-setup`, a `git add`
+of the paths adopt wrote, `git commit -m "chore: set up bosun"`, `git push -u origin bosun-setup`,
+then `bosun doctor`.
+
 Existing files are never overwritten (`kept` in `data.changes`). `--no-remote` needs no token and
-skips the labels and the registry issue. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
-no-op. `data.owner_steps` lists what is left for you. Undo it with `bosun uninstall` (section 7).
+skips the labels and the registry issue. `--policy owner|owner-gated|orchestrator|autonomous`
+writes `policy` under `[approvals]` in `.bosun/bosun.toml`; adopt refuses (exit 2) a policy the
+pinned release cannot parse (`autonomous` needs 0.8.0, the others 0.5.0), and when it keeps an
+existing `bosun.toml` an owner step tells you to set the line by hand. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
+no-op. `data.owner_steps` lists only the steps still left for you (no owners step once `--owner` wrote the file; no key step once `.bosun/approvers.toml` has a key). Undo it with `bosun uninstall` (section 7).
 The rest of this section is the splice path.
 
 ### With splice: `bosun init`
@@ -143,7 +153,8 @@ All but `splice.yml` run the release pinned in `.bosun/version`, never code from
 5. Optional: the Routines (janitor hourly, curator daily). `bosun doctor` prints their prompts.
 
 Check the result with `bosun doctor` (add `--remote` to also run `hoist check`). It lists each
-step as ok, warn, skipped or missing.
+step as ok, warn, skipped or missing. Without `GITHUB_TOKEN` it still runs the local checks and marks the GitHub ones skipped;
+`data.next_step` names the first missing step.
 
 ## 6. The first plan and the task loop
 
@@ -214,11 +225,15 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
 
 ## 9. Cloud sessions (Claude Code on the web)
 
-1. **Setup script.** Paste `docs/setup-script.sh` into the cloud environment's setup script
-   (claude.ai → environment settings). It installs pinned Node, pnpm, splice, hoist, berth, bosun,
-   the Rust toolchain of `rust-toolchain.toml` and the superpowers and caveman plugins.
-   `bosun doctor` step 6 prints the script, so you can paste it without opening the file. Paste
-   it again after each bosun upgrade.
+1. **Setup script: paste once.** Paste the bootstrap from the README ("Cloud sessions: paste
+   once"), or the `data.script` of `bosun setup-snippet`, into the cloud environment's setup
+   script (claude.ai → environment settings). You never paste again: before each session it runs
+   every checkout's own `docs/setup-script.sh`, which installs pinned Node, pnpm, splice, hoist,
+   berth, bosun, the Rust toolchain of `rust-toolchain.toml` and the superpowers and caveman
+   plugins. A bosun upgrade is a PR that moves the pins in that file ([update.md](update.md)). One line to send a client
+   with it: "Paste this script once as the setup script of your Claude Code cloud environment
+   (claude.ai/code > Environments > Setup script). You never change it again: each repo's own
+   docs/setup-script.sh pins its tools."
 2. **No PAT in the environment.** The session reaches GitHub through the Claude GitHub App and
    the agent proxy. The proxy rewrites every GitHub write (app attribution, a Claude footer), so a
    PAT there would not count as you anyway: `bosun approve` with `BOSUN_OWNER_TOKEN` refuses in a
@@ -233,7 +248,8 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    changes, e.g. `deny.toml`) or `orchestrator`. Workflow changes always need you. Bootstrap mode
    (D-012) ends on 2026-11-30; init writes `[approvals]` only without `--bosun-version`.
    Autonomous mode (D-017): `policy = "autonomous"` under an older pinned release is a parse
-   error (signatures do not count); set it only after pinning a release that knows it. The
+   error (signatures do not count); set it only after pinning a release that knows it
+   (`bosun adopt --policy autonomous` writes it and checks the pin). The
    orchestrator then approves PRs that change only `src/`, `tests/`, `docs/` or `changelog.d/`
    (not `docs/agents/`, plans, `*.jinja`, `build.rs`, `docs/lessons.toml`, `docs/setup-script.sh`, nor R-gate code, module roots or `#[path]` changes),
    when every verdict on the exact head is clean and one is from an independent reviewer session, for a PR that

@@ -53,6 +53,17 @@ impl std::fmt::Debug for Http {
     }
 }
 
+/// The GitHub API base from `BOSUN_GITHUB_API`; unset, empty or blank means api.github.com.
+pub fn api_base() -> String {
+    api_base_from(std::env::var("BOSUN_GITHUB_API").ok())
+}
+
+fn api_base_from(v: Option<String>) -> String {
+    v.map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "https://api.github.com".to_string())
+}
+
 impl Http {
     /// Base URL, token and sleep cap from the environment (spec D30, D31).
     pub fn from_env() -> Result<Http> {
@@ -71,8 +82,7 @@ impl Http {
 
     /// Base URL and sleep cap from the environment, with this token.
     pub fn with_env_url(token: &str) -> Http {
-        let base = std::env::var("BOSUN_GITHUB_API")
-            .unwrap_or_else(|_| "https://api.github.com".to_string());
+        let base = api_base();
         let max_sleep = std::env::var("BOSUN_HTTP_MAX_SLEEP_MS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -172,13 +182,20 @@ impl Http {
     }
 
     fn pages(&self, path: &str, key: Option<&str>) -> Result<Vec<Value>> {
-        self.pages_capped(path, key, usize::MAX)
+        self.pages_capped(path, key, usize::MAX, None)
+            .map(|(items, _)| items)
+    }
+
+    /// Like `get_all`, but stops after the first page whose last item satisfies `stop` (a list
+    /// sorted so that nothing after it can matter). That page is returned whole.
+    pub fn get_all_until(&self, path: &str, stop: &dyn Fn(&Value) -> bool) -> Result<Vec<Value>> {
+        self.pages_capped(path, None, usize::MAX, Some(stop))
             .map(|(items, _)| items)
     }
 
     /// Like `get_all`, but reads at most `max` pages; the flag says that a next page was left.
     pub fn get_pages(&self, path: &str, max: usize) -> Result<(Vec<Value>, bool)> {
-        self.pages_capped(path, None, max)
+        self.pages_capped(path, None, max, None)
     }
 
     fn pages_capped(
@@ -186,6 +203,7 @@ impl Http {
         path: &str,
         key: Option<&str>,
         max: usize,
+        stop: Option<&dyn Fn(&Value) -> bool>,
     ) -> Result<(Vec<Value>, bool)> {
         let mut items = Vec::new();
         let mut next = Some(path.to_string());
@@ -205,7 +223,11 @@ impl Http {
                 None => body,
             };
             if let Value::Array(page) = page {
+                let done = stop.is_some_and(|f| page.last().is_some_and(f));
                 items.extend(page);
+                if done {
+                    return Ok((items, false));
+                }
             }
             next = match &r.link_next {
                 // Only follow links that stay on the configured API host.
@@ -477,6 +499,17 @@ fn parse_link_next(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_or_blank_api_url_counts_as_unset() {
+        for v in [None, Some(""), Some("  ")] {
+            assert_eq!(api_base_from(v.map(String::from)), "https://api.github.com");
+        }
+        assert_eq!(
+            api_base_from(Some("http://127.0.0.1:9".into())),
+            "http://127.0.0.1:9"
+        );
+    }
 
     #[test]
     fn enc_escapes_label_characters() {

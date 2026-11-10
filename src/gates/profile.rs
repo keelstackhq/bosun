@@ -342,7 +342,7 @@ mod tests {
         let t = &p.gates["test"];
         assert_eq!(
             t.expand_packages(t.expand_cmd(&[], None), vec!["-p".into(), "x".into()]),
-            ["cargo", "nextest", "run", "--locked", "-p", "x"]
+            ["cargo", "test", "--locked", "-p", "x"]
         );
         let argv: Vec<String> = ["tool", "{packages}", "run"].map(String::from).to_vec();
         assert_eq!(

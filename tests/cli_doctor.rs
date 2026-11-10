@@ -42,14 +42,20 @@ fn statuses(v: &Value) -> Vec<String> {
 }
 
 #[test]
-fn an_empty_repo_reports_all_fourteen_steps() {
+fn an_empty_repo_reports_all_fourteen_steps_and_the_update_item() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let (code, v) = doctor(&fake, tmp.path(), false);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["error"]["kind"], "needs-human");
     let items = v["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 14);
-    for (i, it) in items.iter().enumerate() {
+    // The 14 checklist steps, then step 17 (update), which is skipped here: the tests turn the
+    // npm check off with BOSUN_PIN_CHECK=0.
+    assert_eq!(items.len(), 15);
+    assert_eq!(
+        (items[14]["step"].as_u64(), items[14]["status"].as_str()),
+        (Some(17), Some("skipped"))
+    );
+    for (i, it) in items[..14].iter().enumerate() {
         assert_eq!(it["step"], i + 1);
         assert!(!it["fix"].as_str().unwrap().is_empty());
     }
@@ -64,7 +70,7 @@ fn an_empty_repo_reports_all_fourteen_steps() {
         st.iter()
             .enumerate()
             .skip(1)
-            .filter(|(i, _)| ![6, 9, 12, 13].contains(i))
+            .filter(|(i, _)| ![6, 9, 12, 13, 14].contains(i))
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
@@ -116,7 +122,7 @@ fn a_fully_set_up_repo_is_ok() {
     assert_eq!(code, 0, "{v}");
     // The Claude Tag seat is skipped: this session has not joined with one.
     for it in v["data"]["items"].as_array().unwrap() {
-        let want = if it["name"] == "claude-tag" {
+        let want = if it["name"] == "claude-tag" || it["name"] == "update" {
             "skipped"
         } else {
             "ok"

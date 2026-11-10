@@ -1,0 +1,1 @@
+- 2026-11-10 · B2/T2 · `[checks]` config and the hoist.toml table form of required_checks

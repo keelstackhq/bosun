@@ -15,7 +15,7 @@ use crate::core::agreement::approved;
 use crate::core::budget::{Level, level};
 use crate::core::records::{Record, spend_total};
 use crate::core::risk::{FileView, unseen_diff};
-use crate::core::verdict::{Finding, Verdict};
+use crate::core::verdict::{Finding, Verdict, valid_model};
 use crate::github::Github;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
@@ -172,7 +172,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
     if task.is_none() {
         pull.body.clear();
     }
-    let mut out = record(&app, &pull, &verdict, SESSION)?;
+    let mut out = record(&app, &pull, &verdict, SESSION, valid_model(&cfg.model))?;
     let comment = if verdict.findings.is_empty() {
         Value::Null
     } else {
@@ -199,9 +199,10 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
 fn budget_guard(app: &App) -> Result<(), BosunError> {
     let gh = app.gh.as_ref();
     let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
-    let spent = registry::load(gh)?.map_or(0.0, |(_, reg)| {
-        spend_total(&reg, Some(app.ctx.now.day_start()))
-    });
+    let spent = spend_total(
+        &registry::trusted_spend_notes(gh)?,
+        Some(app.ctx.now.day_start()),
+    );
     if level(spent, daily) == Level::Stop {
         return Err(BosunError::limit(
             format!("spent ${spent:.2} of ${daily:.2} today; no CI review"),
@@ -225,7 +226,8 @@ fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
             changes: f["additions"].as_u64().unwrap_or(0) + f["deletions"].as_u64().unwrap_or(0),
         })
         .collect();
-    // A delta review lists the files of a comparison, not of the PR.
+    // A delta review lists the PR's files that a comparison since the last review names, a
+    // subset of the PR (a truncated comparison gives a full review instead).
     let delta = !pack["since_sha"].is_null();
     let mut evidence = unseen_diff(&views, if delta { 0 } else { changed_files })
         .map(|m| m.evidence)
@@ -343,6 +345,7 @@ fn record_spend(app: &App, usd: Result<f64, BosunError>, task: Option<u64>) -> V
             usd,
             at: app.ctx.now.to_string(),
             issue: task,
+            model: None,
         };
         if let Some(t) = task {
             gh.add_comment(t, &spend.to_line())?;

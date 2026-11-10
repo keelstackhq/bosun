@@ -467,8 +467,8 @@ fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_inte
     };
     assert_eq!(
         pins(&own).len(),
-        9,
-        "splice, hoist, berth: launcher, linux-x64, linux-arm64"
+        12,
+        "splice, hoist, berth, cargo-deny: launcher, linux-x64, linux-arm64"
     );
     assert_eq!(
         pins(&own),
@@ -480,7 +480,7 @@ fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_inte
         4,
         "BOSUN_VERSION and 3 sums"
     );
-    let bosun_ch = "npm install -g --ignore-scripts \"@keelstackhq/bosun@${BOSUN_VERSION}\"";
+    let bosun_ch = "  npm install -g --ignore-scripts \"@keelstackhq/bosun@${BOSUN_VERSION}\"";
     for (t, tools, want) in [
         (&own, &["splice", "hoist", "berth", "bosun"][..], &[][..]),
         (&ch, &["splice", "hoist", "berth"], &[bosun_ch][..]),
@@ -508,7 +508,7 @@ fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_inte
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     // A fake npm: `pack` writes "abc", `install` logs its args and exits with $INSTALL.
-    let fake = "#!/bin/sh\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; *) echo \"$*\" >> log; exit \"$INSTALL\" ;; esac\n";
+    let fake = "#!/bin/sh\ncase \"$1\" in pack) printf abc > x.tgz; echo x.tgz ;; root) echo \"$ROOT\" ;; *) echo \"$*\" >> log; exit \"$INSTALL\" ;; esac\n";
     fs::write(d.join("npm"), fake).unwrap();
     std::fs::set_permissions(
         d.join("npm"),
@@ -554,6 +554,37 @@ fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_inte
             log.starts_with("install -g --ignore-scripts --omit=optional "),
             logged,
             "{log}"
+        );
+    }
+    // A verified install records the fingerprint of what PATH now resolves to; a failed one does not.
+    let launcher = d.join("gr/@keelstackhq/hoist/bin/hoist.js");
+    fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+    fs::write(&launcher, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        &launcher,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    fs::create_dir_all(d.join("bin")).unwrap();
+    let _ = std::os::unix::fs::symlink(&launcher, d.join("bin/hoist"));
+    let path = format!("{}:{path}", d.join("bin").display());
+    for (install, recorded) in [("1", false), ("0", true)] {
+        let script = format!("{funcs}install_tool hoist 0.2.0 {abc} {abc} {abc}");
+        let o = std::process::Command::new("bash")
+            .args(["-euo", "pipefail", "-c", &script])
+            .current_dir(d)
+            .env("PATH", &path)
+            .env("INSTALL", install)
+            .env("ROOT", d.join("gr"))
+            .env("SETUP_STATE_DIR", d.join("state"))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let rec = fs::read_to_string(d.join("state/hoist@0.2.0.sha256")).unwrap_or_default();
+        assert_eq!(
+            rec.trim().len() == 64,
+            recorded,
+            "install={install}: {rec:?}"
         );
     }
 }

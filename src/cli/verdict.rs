@@ -12,7 +12,7 @@ use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
     COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
-    comment_session, effective,
+    comment_model, comment_session, effective, valid_model,
 };
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -44,13 +44,22 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
             let verdict = parse(&read_input(from)?)?;
             let pull = current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-            record(&app, &pull, &verdict, &app.ctx.session)
+            record(
+                &app,
+                &pull,
+                &verdict,
+                &app.ctx.session,
+                env_model().as_deref(),
+            )
         }
         VerdictCmd::Comment(FromArg { from }) => {
             let verdict = parse(&read_input(from)?)?;
             current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-            let c = gh.add_comment(verdict.pr, &comment_body(&verdict, &app.ctx.session))?;
+            let c = gh.add_comment(
+                verdict.pr,
+                &comment_body(&verdict, &app.ctx.session, env_model().as_deref()),
+            )?;
             Ok(Outcome::data(
                 json!({"pr": verdict.pr, "head_sha": verdict.head_sha,
                 "comment_id": c.id, "applied_by": "the verdict workflow"}),
@@ -58,6 +67,14 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
         }
         VerdictCmd::Apply(ApplyArg { comment_id }) => apply(&app, *comment_id),
     }
+}
+
+/// The reviewer model this session declares: `BOSUN_MODEL`, else `ANTHROPIC_MODEL` (as the
+/// commit trailers do).
+fn env_model() -> Option<String> {
+    ["BOSUN_MODEL", "ANTHROPIC_MODEL"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| valid_model(v).is_some()))
 }
 
 fn parse(text: &str) -> Result<Verdict, BosunError> {
@@ -141,7 +158,7 @@ fn apply(app: &App, id: u64) -> CmdResult {
         )));
     }
     require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-    record(app, &pull, &verdict, session)
+    record(app, &pull, &verdict, session, comment_model(&c.body))
 }
 
 /// A review of a PR with several chunks must list every chunk (1-based, as in the pack).
@@ -171,7 +188,13 @@ fn require_all_chunks(gh: &dyn Github, repo: &str, verdict: &Verdict) -> Result<
 }
 
 /// Post the review-verdict status and the verdict record, and move the linked task.
-pub(crate) fn record(app: &App, pull: &Pull, verdict: &Verdict, session: &str) -> CmdResult {
+pub(crate) fn record(
+    app: &App,
+    pull: &Pull,
+    verdict: &Verdict,
+    session: &str,
+    model: Option<&str>,
+) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = verdict.pr;
     let mut eff = effective(verdict);
@@ -193,6 +216,7 @@ pub(crate) fn record(app: &App, pull: &Pull, verdict: &Verdict, session: &str) -
         approved: eff.approve,
         confidence: Some(verdict.confidence),
         major: Some(verdict.count("major") as u32),
+        model: model.map(str::to_string),
     };
     let human = format!("Review verdict: {}.", verdict.summary());
     gh.add_comment(n, &format!("{human}\n\n{}", record.to_line()))?;

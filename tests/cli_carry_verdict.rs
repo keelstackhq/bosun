@@ -48,7 +48,7 @@ fn two_hops() -> FakeGithub {
 }
 
 fn verdict(fake: &FakeGithub, sha: &str, session: &str, approved: bool) {
-    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0) };
+    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0), model: None };
     fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
 }
 
@@ -205,4 +205,20 @@ fn a_later_record_for_a_head_off_the_path_refuses() {
     verdict(&fake, OFF, "session_s", false); // judged before h was approved: no objection
     verdict(&fake, H, "session_r", true);
     assert!(carried(&fake));
+}
+
+#[test]
+fn review_models_at_base_limit_which_verdict_carries() {
+    let with = |model: Option<&str>, cfg: &str| {
+        let fake = world();
+        let r = Record::Verdict { session: "session_r".into(), head_sha: H.into(), approved: true, confidence: Some(0.95), major: Some(0), model: model.map(Into::into) };
+        fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
+        fake.content(".bosun/bosun.toml", B, cfg); fake.content(".bosun/bosun.toml", D, cfg);
+        carried(&fake)
+    };
+    let cfg = "[approvals]\nreview_models = [\"m-ok\"]\n";
+    assert!(with(Some("m-ok"), cfg));
+    assert!(!with(Some("m-other"), cfg));
+    assert!(!with(None, cfg));
+    assert!(with(None, "")); // unset: any model counts
 }

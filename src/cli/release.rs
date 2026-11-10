@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::ReleaseArgs;
-use crate::app::{App, Result, end_lease, notes, set_state};
+use crate::app::{App, Result, end_lease, set_state, trusted_notes};
 use crate::core::lease::leases_of;
 use crate::core::records::Note;
 use crate::core::state::State;
@@ -25,7 +25,7 @@ pub fn run(dir: Option<&Path>, args: &ReleaseArgs) -> CmdResult {
             "check the number; `bosun status` lists the tasks",
         )
     })?;
-    let comment_id = release_to(gh, n, &issue, session, &notes(gh, n)?, to)?;
+    let comment_id = release_to(gh, n, &issue, session, &trusted_notes(gh, n)?, to)?;
     Ok(Outcome::data(
         json!({"issue": n, "state": to.name(), "comment_id": comment_id}),
     ))

@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::ClaimArgs;
 use crate::app::{
-    App, active_issues, kill_switch, limits_from_default, main_red, notes, renew_lease, set_state,
-    settle_race, task_meta,
+    App, active_issues, kill_switch, limits_from_default, main_red, renew_lease, set_state,
+    settle_race, task_meta, trusted_notes,
 };
 use crate::cli::lesson;
 use crate::cli::status::process_red;
@@ -65,7 +65,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
 
     let state = state_of(&issue.labels);
     if state != Some(State::Ready) {
-        let cur = notes(gh, n)?;
+        let cur = trusted_notes(gh, n)?;
         // The caller's own lease, live or lapsed (not yet reaped): a long wait can outlive it.
         let mine = leases_of(n, &cur)
             .into_iter()
@@ -105,8 +105,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     // idempotent re-claim above, which is not new work.
     if !mainfix {
         let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
-        let spent =
-            registry::load(gh)?.map_or(0.0, |(_, reg)| spend_total(&reg, Some(now.day_start())));
+        let spent = spend_total(&registry::trusted_spend_notes(gh)?, Some(now.day_start()));
         if no_new_work(spent, daily) {
             return Err(BosunError::limit(
                 format!(
@@ -242,7 +241,7 @@ fn renew_lapsed(
         )
     };
     let fresh = gh.get_issue(n)?.ok_or_else(lost)?;
-    let held = leases_of(n, &notes(gh, n)?)
+    let held = leases_of(n, &trusted_notes(gh, n)?)
         .into_iter()
         .find(|o| o.session == session && o.is_live(now));
     match (state_of(&fresh.labels), held) {
@@ -258,7 +257,7 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
     let Some(fresh) = fresh.filter(|i| state_of(&i.labels) == Some(State::Claimed)) else {
         return Ok(());
     };
-    let theirs = notes(gh, n).map_err(|e| e.to_string())?;
+    let theirs = trusted_notes(gh, n).map_err(|e| e.to_string())?;
     if leases_of(n, &theirs)
         .iter()
         .any(|l| l.session != session && l.is_live(now))
@@ -268,7 +267,7 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
     set_state(gh, n, &fresh, State::Ready).map_err(|e| e.to_string())?;
     // A third claimer may have won while the state was `claimed` and posted its lease before our
     // `ready` write: its task must not be left `ready`. Look again and restore `claimed`.
-    let theirs = notes(gh, n).map_err(|e| e.to_string())?;
+    let theirs = trusted_notes(gh, n).map_err(|e| e.to_string())?;
     if leases_of(n, &theirs)
         .iter()
         .any(|l| l.session != session && l.is_live(now))

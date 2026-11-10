@@ -1,0 +1,1 @@
+- `src/github`: gate check runs — `create_check_run` and `update_check_run` (only `in_progress`, `success` or `failure`, never `neutral` or `skipped`), `check_runs_all` (`filter=all`), and `CheckRun.app_id` (spec §15, B2/T1).

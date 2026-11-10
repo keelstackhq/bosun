@@ -12,6 +12,7 @@ pub mod github;
 pub mod hooks;
 pub mod output;
 pub mod registry;
+pub mod schema;
 pub mod sessions;
 pub mod slack;
 pub mod time;
@@ -34,6 +35,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Msg(a) => cli::msg::run(dir, a),
         Command::Gate(a) => cli::gate::run(dir, a),
         Command::Approve(a) => cli::approve::run(dir, a),
+        Command::Keygen(a) => cli::keygen::run(dir, a),
         Command::RiskCheck(a) => cli::risk_check::run(dir, a),
         Command::TestIntegrity(a) => cli::test_integrity::run(dir, a),
         Command::ReviewPack(a) => cli::review_pack::run(dir, a),
@@ -67,5 +69,8 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Prereqs(a) => cli::prereqs::run(dir, a),
         Command::Adopt(a) => cli::adopt::run(dir, a),
         Command::Uninstall(a) => cli::uninstall::run(dir, a),
+        Command::Pin(a) => cli::pin::run(dir, a),
+        Command::SetupSnippet => cli::setup_snippet::run(),
+        Command::Schema(a) => cli::schema::run(a),
     }
 }

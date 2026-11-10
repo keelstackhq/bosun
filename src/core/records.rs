@@ -58,6 +58,9 @@ pub enum Record {
         at: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         issue: Option<u64>,
+        /// The model the session ran on (`budget record --pr`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     /// A question to the owner.
     Ask { session: String, question: String },
@@ -74,6 +77,9 @@ pub enum Record {
         /// Major findings in the verdict; a record without it never lets a delegate approve.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         major: Option<u32>,
+        /// The reviewer's self-declared model; `[approvals] review_models` limits which count.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     /// A failed fix round: the failure signature and the lines it changed (spec §4 stop rules).
     Failure {
@@ -317,6 +323,7 @@ mod tests {
             approved: true,
             confidence: Some(0.95),
             major: Some(1),
+            model: None,
         };
         assert_eq!(
             r.to_line(),

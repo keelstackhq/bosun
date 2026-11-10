@@ -47,7 +47,7 @@ fn hops(fake: FakeGithub) -> FakeGithub {
     fake
 }
 fn verdict(fake: &FakeGithub, sha: &str, session: &str, approved: bool) {
-    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0) };
+    let r = Record::Verdict { session: session.into(), head_sha: sha.into(), approved, confidence: Some(0.95), major: Some(0), model: None };
     fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line()));
 }
 fn two(fake: &FakeGithub, sha: &str) { verdict(fake, sha, "session_r", true); verdict(fake, sha, "session_s", true); }
@@ -148,7 +148,7 @@ const DSIG_PR2: &str = "5AGwpJkyHt3Z8i8eXXwQnNBQi5ygi+z/2j1bj7qwdGse4hZ1fKyU9039
 fn delegate_world(sha: &str, sig: &str, major: u32) -> FakeGithub {
     let fake = world_of("deny.toml"); fake.content(".bosun/risk.toml", D, "[[rule]]\nid = \"R-d\"\nwhy = \"d\"\napproval = \"delegate\"\npaths = [\"deny.toml\"]\n");
     fake.content(".bosun/approvers.toml", "refs/heads/main", "[[key]]\nid = \"k1\"\ned25519 = \"PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=\"\nrole = \"delegate\"\n");
-    let r = Record::Verdict { session: "session_r".into(), head_sha: sha.into(), approved: true, confidence: Some(0.95), major: Some(major) };
+    let r = Record::Verdict { session: "session_r".into(), head_sha: sha.into(), approved: true, confidence: Some(0.95), major: Some(major), model: None };
     fake.comment_by(1, "github-actions[bot]", &format!("Review verdict: x.\n\n{}", r.to_line())); signed(&fake, sha, sig); fake
 }
 #[test] fn a_delegate_signature_and_one_clean_verdict_on_h_carry() {

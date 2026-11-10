@@ -238,7 +238,7 @@ fn settings_hooks_run_bosun_hook_commands() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v: Value = common::one_object(&out.stdout);
     assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "deny");
 }
 

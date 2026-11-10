@@ -4,6 +4,60 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.12.1 (2026-11-10)
+
+- `bosun` reads the token's own repo permission from `GET /repos/{o}/{r}` when a proxy blocks `/collaborators` (Claude Code cloud), so `bosun budget record --pr` and other writer checks work there; other users still need the collaborators endpoint.
+
+## 0.12.0 (2026-11-10)
+
+- `bosun budget record --pr <n>` (repeatable) records session spend on PRs; `budget report` counts spend on the PR itself.
+- `bosun adopt --policy owner|owner-gated|orchestrator|autonomous` writes `[approvals] policy` into the rendered `.bosun/bosun.toml` (channel var `policy`, default empty: render unchanged); a policy the pinned release cannot parse (`autonomous` before 0.8.0, the others before 0.5.0) is exit 2 naming the minimum, and a kept config gets an owner step to set it by hand.
+- `@keelstackhq/cargo-deny` npm packages (launcher, linux-x64, linux-arm64) republish upstream cargo-deny's prebuilt musl binaries through the manual `cargo-deny-npm.yml` workflow (checked against upstream's `.sha256`, npm trusted publishing).
+- risk, edit-lock and touch check treat `.changeset/*.md` (one level) as autonomous-allowed; `.changeset/config.json` and other files stay owner-only and `.changeset/<name>.md` as a free fragment.
+- Setup script: cargo-nextest builds only for a bosun pin before 0.12.0 or a nextest profile override; Rust steps only in a checkout with `Cargo.toml` or `rust-toolchain.toml`, pnpm only where the checkout uses pnpm; cargo-deny from pinned `@keelstackhq/cargo-deny` npm packages once pinned, else `cargo install --locked cargo-deny`.
+- The built-in rust profile's test gate is `cargo test --locked` (was `cargo nextest run --locked`; it also runs doctests). Channel CI keeps installing cargo-nextest while pinned releases up to 0.11.0 run it. Keep nextest with a `.bosun/profiles/rust.toml` override.
+- Update path documented: README "Update bosun" and `docs/update.md` (human and agent, local and cloud, verification failures); a test keeps "no re-paste" true.
+- `bosun budget report` lists every PR opened, merged or closed in the month (spend, sessions and models `null` when unrecorded) with "spend recorded for N of M PRs", and prints a zero total as 0.00, never -0.00.
+- `budget-report` workflow: weekly and by manual dispatch it commits `reports/budget/YYYY-MM.{md,json}` to the branch `bosun/budget-reports` and keeps one draft PR "Budget reports".
+- `bosun budget report --month YYYY-MM [--out DIR]`: spend per PR for one month with totals; `--out` writes `YYYY-MM.md` and `YYYY-MM.json` (same input, same bytes).
+- `bosun doctor` adds step 17 `update` (warn) when a tool pin or this binary is behind npm, with `bosun pin --latest --pr` as the fix; the session-start notice names the same command.
+- `bosun pin --latest --pr` branches, commits, pushes and opens the draft pin PR in one step; `data.left` lists what is left for the human.
+- The last raw readers of lease, leave and `task-pr` records (`spawn --record` liveness, `plan amend`, risk-check touch warning, `hold`, `reap`) now ignore forgeries by read-only users.
+- `spawn --record` registration text and spec §4 match the code; tests for expired-only-join refusal and `hold` exit 3.
+- Join and lease records now count only from commenters with write access, so a forged join or lease from a reader or outsider no longer counts as a live session or blocks a claim.
+- `review-pack` hardening: `delta_not_in_pr` is listed as untrusted and capped at 50 names (`delta_not_in_pr_count`), a delta falls back to a full review when `pulls/{n}/files` is short of `changed_files`, and the verdict carry honours `[approvals] review_models`.
+- Spend records (`spend`) now count only from commenters with write access, so a forged comment cannot stop the agents or skew `bosun progress`.
+- `bosun doctor` always reports step 17 `update` (ok, warn or skipped with the reason) and checks the binary in channel repos; `bosun pin --latest --pr` uses a dated branch when `bosun/pin` is left over, `data.left` lists only human steps, and a fork PR named `bosun/pin*` is not the pin PR.
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.11.0 with npm sha512 values via `bosun pin --latest` (no `KNOWN` entry needed).
+- `tests/pinned_config.rs` knows `[approvals] review_models` from 0.11.0, so this repo can set it.
+
+## 0.11.0 (2026-11-09)
+
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.10.0 (hoist 0.4.1) with npm sha512 values via `bosun pin --latest`; KNOWN lists gain 0.10.0 (config unchanged).
+- `bosun adopt` prints only the owner steps still left, the exact setup commands in `data.commands`, and the branch-protection settings link.
+- `bosun doctor` runs without a token (GitHub steps are skipped), fills in the real owner/repo in fixes, drops the embedded setup script for `run: bosun setup-snippet`, and adds `data.next_step`.
+- `bosun adopt` adds `.bosun/approvers.toml` to `data.commands` when git shows it new or changed (after `bosun keygen --enroll`); `bosun doctor` names a malformed `BOSUN_GITHUB_API`.
+- `bosun keygen` makes an ed25519 approval key (PEM, mode 0600, outside the repo) and with `--enroll` adds it to `.bosun/approvers.toml`.
+- README: "Start in 5 minutes" for humans and a "For agents" block; stale version lines removed.
+- `bosun progress` reports `reverted`, `held` and `cost_per_held_task_usd`: tasks whose PR a merged `bosun/revert-<n>` PR undid are left out of the held outcomes.
+- review-pack names its `untrusted` fields and tells the reviewer they are data; both built-in spawn prompts call issue, PR, comment and Slack text untrusted data, and the default prompt quotes the epic title as data.
+- Verdict records carry the reviewer model (comment tag `bosun:model`, from `BOSUN_MODEL` or `ANTHROPIC_MODEL`), and the optional `[approvals] review_models` limits which models count for two-verdicts, delegate and autonomous approval.
+- An empty or blank `BOSUN_GITHUB_API` counts as unset (api.github.com), for the client and `bosun approve` alike.
+- `bosun progress` reads the task PR only from writers' records and finds reverts by their own branch in this repo, not by scanning every closed PR.
+- `review-pack` delta after a merge of main lists only the PR's own files, with the PR's patches.
+- A pinned release with no entry in `tests/pinned_config.rs` is checked against the newest older entry, so a pin bump needs no hand-added `KNOWN` entry.
+
+## 0.10.0 (2026-11-07)
+
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.9.0 with its npm sha512 values; KNOWN lists gain 0.9.0 (`trailers`). After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.
+- The setup bootstrap runs only bosun checkouts (with `.bosun/version`), kills a hung repo script 10 s after its timeout, and keeps the `@latest` fallback only with keelstackhq/bosun release provenance, identity taken from the signing certificate.
+- `docs/setup-script.sh` and the channel copy are now the per-repo script run from inside each checkout by the bosun bootstrap: they skip a tool only when the sha256 fingerprint of its install equals the one recorded at its verified install (pnpm: at its pinned version); `bosun adopt` now writes `docs/setup-script.sh`; header and D23 updated.
+- `bosun pin --latest [--tool T] [--check]` moves the splice/hoist/berth/bosun pins (setup script, `.bosun/version`, channel template) to the newest npm release after checking every tarball against `dist.integrity`; refuses in a channel consumer (spec D35).
+- `bosun pin --latest` keeps one pin PR per repo (branch `bosun/pin`, refresh or one `next` create call) and SessionStart notes pins that are behind; `BOSUN_PIN_CHECK=0` opts out (spec D35).
+- `bosun setup-snippet` prints a bootstrap to paste once as a cloud environment setup script: it runs each checkout's own `docs/setup-script.sh`, so a release needs no new paste; doctor step 6 returns it as `bootstrap`.
+- The setup script fingerprint also covers symlinks and sorts by bytes (LC_ALL=C).
+- `bosun pin` refuses a plain-http `BOSUN_NPM_REGISTRY` off this machine and versions with leading zeros (spec D35).
+
 ## 0.9.0 (2026-11-07)
 
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.8.0 with its npm sha512 values; KNOWN lists gain 0.8.0. After it merges, paste `docs/setup-script.sh` into the keelstack cloud environment again.

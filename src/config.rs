@@ -31,6 +31,41 @@ pub struct Config {
     /// `[trailers]`: commit trailers for traceability (spec §4). Release ordering as for `intake`:
     /// set it only once `.bosun/version` pins a release that reads it.
     pub trailers: Trailers,
+    /// `[checks]`: where the gates are posted (spec §15, D33). Release ordering as for `intake`:
+    /// set it only once `.bosun/version` pins a release that reads it.
+    pub checks: Checks,
+}
+
+/// How bosun posts `risk-check`, `review-verdict` and `main-open`: commit statuses (today),
+/// statuses and App check runs (`dual`, the transition), or App check runs only (`checks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckMode {
+    #[default]
+    Statuses,
+    Dual,
+    Checks,
+}
+
+impl CheckMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CheckMode::Statuses => "statuses",
+            CheckMode::Dual => "dual",
+            CheckMode::Checks => "checks",
+        }
+    }
+}
+
+/// `[checks]`: `app_id` and `app_slug` name the gate App; required unless `mode = "statuses"`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Checks {
+    pub mode: CheckMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_slug: Option<String>,
 }
 
 impl Default for Config {
@@ -45,6 +80,7 @@ impl Default for Config {
             approvals: Approvals::default(),
             intake: false,
             trailers: Trailers::default(),
+            checks: Checks::default(),
         }
     }
 }
@@ -133,6 +169,10 @@ pub struct Approvals {
     pub bootstrap_until: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy: Option<Policy>,
+    /// Exact reviewer model ids whose verdicts count for two-verdicts, delegate and autonomous
+    /// approval. Unset: any model counts. A new model id stops counting until enrolled here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_models: Option<Vec<String>>,
 }
 
 impl Approvals {
@@ -304,6 +344,22 @@ impl Config {
                     format!("{file}: approvals.bootstrap_until {d:?} is not a YYYY-MM-DD date"),
                     format!(
                         "edit {file}: set approvals.bootstrap_until to a date like \"2026-11-30\", or remove it"
+                    ),
+                ));
+            }
+        }
+        let k = &c.checks;
+        if k.mode != CheckMode::Statuses {
+            let id_ok = k.app_id.is_some_and(|i| i > 0);
+            let slug_ok = k.app_slug.as_deref().is_some_and(|s| !s.trim().is_empty());
+            if !id_ok || !slug_ok {
+                return Err(BosunError::error(
+                    format!(
+                        "{file}: checks.mode = {:?} needs checks.app_id and checks.app_slug",
+                        k.mode.as_str()
+                    ),
+                    format!(
+                        "edit {file}: set checks.app_id (a positive number) and checks.app_slug to the gate App's id and slug, or set checks.mode = \"statuses\""
                     ),
                 ));
             }

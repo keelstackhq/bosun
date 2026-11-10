@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
 use crate::core::guard::{
-    ChildTask, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
-    prereqs_lock_for, tool_rules,
+    ChildTask, Script, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock,
+    prereqs_lock, prereqs_lock_for, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
@@ -23,7 +23,20 @@ pub fn deny(reason: &str) -> String {
 /// The hook fails closed on a bosun bug: a panic would exit 101, which Claude Code treats as a
 /// non-blocking error and lets the tool call run.
 pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
-    guarded(|| judge(cwd, input))
+    guarded(|| {
+        let out = judge(cwd, input);
+        let dir = cwd
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok());
+        let tool = input.get("tool_name").and_then(Value::as_str);
+        match (dir, tool) {
+            (Some(d), Some(t)) => {
+                let tool_input = input.get("tool_input").unwrap_or(&Value::Null);
+                super::refusal::apply(&d, t, tool_input, out)
+            }
+            _ => out,
+        }
+    })
 }
 
 /// Run `f`; a panic becomes a deny. While `f` runs, a panic prints one short line to stderr
@@ -81,7 +94,8 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         }
     }
     if tool == "Bash" {
-        // Edit-lock for the files a command plainly writes (`> f`, `tee f`, `cp .. f`, `sed -i`).
+        // Edit-lock for the files a command plainly writes (`> f`, `tee f`, `cp .. f`, `sed -i`),
+        // then repeat-lock; script files are read last, after every other lock.
         let command = tool_input
             .get("command")
             .and_then(Value::as_str)
@@ -93,7 +107,12 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
                 Err(e) => eprintln!("bosun: warning: edit-lock skipped: {e}"),
             }
         }
-        return repeat_lock(&dir, input, &tool_input);
+        let repeat = repeat_lock(&dir, input, &tool_input);
+        let read = |p: &str| read_script(&dir, p);
+        if let Some(why) = script_rules(command, &read, &branch_at, &default) {
+            return Some(deny(&why));
+        }
+        return repeat;
     }
     if let Some(file) = repeat_file(&dir, input) {
         // Another tool call (an edit between test runs) ends the run of repeats.
@@ -106,6 +125,57 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             eprintln!("bosun: warning: edit-lock skipped: {e}");
             None
         }
+    }
+}
+
+/// A script the merge-lock scans, relative to `dir`: at most 1 MiB is read (procfs files report
+/// size 0, so the size is not trusted), as lossy UTF-8. A directory or a missing path is
+/// `None`; a device, FIFO, socket, a file under /proc, /sys or /dev, or more than 1 MiB is
+/// `Unreadable`. A denial may quote a script line, as for any command.
+fn read_script(dir: &Path, path: &str) -> Option<Script> {
+    use std::io::Read;
+    const MAX: u64 = 1 << 20;
+    let file = dir.join(path);
+    let meta = std::fs::metadata(&file).ok()?;
+    if meta.is_dir() {
+        return None;
+    }
+    let real = std::fs::canonicalize(&file).unwrap_or(file.clone());
+    if ["/proc", "/sys", "/dev"]
+        .iter()
+        .any(|r| real.starts_with(r))
+    {
+        return Some(Script::Unreadable("a /proc, /sys or /dev file"));
+    }
+    if !meta.is_file() {
+        return Some(Script::Unreadable("not a regular file"));
+    }
+    // Open without blocking (a path swapped for a FIFO after the check must not hang the
+    // hook), then judge the opened file itself.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        const O_NONBLOCK: i32 = 0x0004;
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+        const O_NONBLOCK: i32 = 0o4000;
+        options.custom_flags(O_NONBLOCK);
+    }
+    let opened = options.open(&file);
+    if opened
+        .as_ref()
+        .is_ok_and(|f| !f.metadata().is_ok_and(|m| m.is_file()))
+    {
+        return Some(Script::Unreadable("not a regular file"));
+    }
+    let mut buf = Vec::new();
+    let read = opened.and_then(|f| f.take(MAX + 1).read_to_end(&mut buf));
+    match read {
+        Err(_) => Some(Script::Unreadable("it cannot be opened")),
+        Ok(n) if n as u64 > MAX => Some(Script::Unreadable("larger than 1 MiB")),
+        Ok(_) => Some(Script::Text(String::from_utf8_lossy(&buf).into_owned())),
     }
 }
 

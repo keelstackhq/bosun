@@ -45,7 +45,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
                 "depth": m.depth, "expires": m.expires.to_string()}),
             );
         }
-        spend = spend_total(&notes, Some(now.day_start()));
+        spend = spend_total(&registry::trusted_spend_notes(gh)?, Some(now.day_start()));
     }
 
     let held: Vec<_> = active_issues(gh)?

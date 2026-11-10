@@ -35,6 +35,8 @@ fn step_6_prints_the_setup_script_and_names_the_environment() {
     assert_eq!(it["status"], "ok", "{it}");
     assert_eq!(it["content"], script);
     assert_eq!(it["environment"], "keelstack");
+    assert_eq!(it["run"], "bosun setup-snippet");
+    assert!(it["fix"].as_str().unwrap().contains("bosun setup-snippet"));
     assert!(it["fix"].as_str().unwrap().contains("keelstack"));
     assert!(it["detail"].as_str().unwrap().contains("keelstack"));
 }

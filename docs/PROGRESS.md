@@ -21,6 +21,8 @@ History (one line per task) is in `docs/progress-done.md`; agents do not read it
 
 Human-only items, in order. Each has the exact action.
 
+0. **Budget reports workflow (phone ok).** Settings > Actions > General > Workflow permissions: tick "Allow GitHub Actions to create and approve pull requests" (the budget-report workflow makes one draft PR). Verify: run the workflow by hand; the PR "Budget reports" appears.
+
 1. **Repo settings (checklist steps 3 and 5).** After the S10 PRs merge, from a checkout of main
    with an admin token: `hoist plan --area github`, then `hoist apply --area github --yes`. It
    sets auto-merge, delete-branch-on-merge and the required checks `ci-ok`, `risk-check`,
@@ -30,8 +32,9 @@ Human-only items, in order. Each has the exact action.
    B60205` (an owner's open issue with it halts bosun). `BOSUN_HALT` is optional; a token that
    cannot read it (403) gets no signal from it.
 2. **Cloud environment setup script (checklist step 6, D23).** claude.ai/code → environment
-   settings → setup script: paste `docs/setup-script.sh` (again after each pin bump: it now
-   installs `@keelstackhq/bosun@0.3.0` from npm), in every environment, the owner's included.
+   settings → setup script: paste the bootstrap (`bosun setup-snippet`, or the README) once in
+   every environment, the owner's included; it runs each checkout's `docs/setup-script.sh`, so
+   a pin bump needs no new paste.
 3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
    `data.routines`: janitor (every hour, Haiku), curator (daily, Sonnet), notify (every
    hour, Haiku; only with `[slack]`). Create them in claude.ai → Routines.
@@ -151,3 +154,12 @@ Human-only items, in order. Each has the exact action.
     `circleci-only`, main-health has no weekly GitHub run: in the repo's CircleCI project settings →
     Triggers, add a scheduled pipeline on `main`, weekly (for example Monday 03:17 UTC), so the
     bosun workflow runs every gate on all of main; its `ci-ok`/`bosun-ok` status feeds main-health.
+12. **cargo-deny on npm (fast setup task 3, computer).** After the `claude/cargo-deny-npm` PR
+    merges, with the commands in `docs/releasing.md`, "cargo-deny on npm": publish a `0.0.0`
+    placeholder of `@keelstackhq/cargo-deny`, `@keelstackhq/cargo-deny-linux-x64` and
+    `@keelstackhq/cargo-deny-linux-arm64` with your npm login, from a temp dir, never from
+    `npm/cargo-deny*` (npm adds a trusted publisher only to an existing package); add the trusted
+    publisher for each (repo `keelstackhq/bosun`, workflow `cargo-deny-npm.yml`, environment
+    `release`); then run the workflow once on `main` with `version` 0.20.2 or newer and
+    approve the `release` deployment. Verify: `npm view @keelstackhq/cargo-deny@<v> version`.
+    Plan task 4 then pins it in the setup scripts.

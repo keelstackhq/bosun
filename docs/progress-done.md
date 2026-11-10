@@ -345,3 +345,46 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-06 · operating-model #3 · R-weaken risk rule (base/head compare, capability weaken) · PR #428
 - 2026-11-06 · commit trailers follow-up · pre-create check, case-insensitive keys, #123 body, spec note · PR #431
 - 2026-11-06 · test: KNOWN_POLICIES in tests/pinned_config.rs lists `[approvals] policy` values per pinned release
+- 2026-11-07 · pin bosun 0.9.0 (.bosun/version, setup script, KNOWN lists)
+- 2026-11-07 · bootstrap hardening: bosun checkouts only, provenance for @latest, timeout -k
+- 2026-11-07 · per-repo setup script · run from the bootstrap inside the checkout; warm runs skip pinned tools
+- 2026-11-07 · `bosun pin --latest` (PR1 of tool pin automation): verified npm pins, `--check`, D35 · `tests/cli_pin.rs` 7/7
+- 2026-11-07 · pin PR dedupe + SessionStart pin notice (PR2 of tool pin automation), D35 · `tests/cli_pin_pr.rs` 3/3, `tests/cli_hook_pin.rs` 3/3
+- 2026-11-07 · paste-once setup bootstrap (`bosun setup-snippet`, README, adopt doc §9)
+- 2026-11-07 · setup fingerprint: symlinks, LC_ALL=C; D23 boundary note
+- 2026-11-07 · pin hardening: https-only `BOSUN_NPM_REGISTRY`, no leading zeros (D35) · `tests/cli_pin_registry.rs`
+- 2026-11-08 · pin bosun 0.10.0, hoist 0.4.1 (bosun pin --latest; KNOWN lists)
+- 2026-11-08 · adopt next steps · owner_steps trimmed, data.commands added, settings link · PR #451
+- 2026-11-08 · doctor first run · doctor runs offline, names the exact fix, data.next_step · PR #452
+- 2026-11-08 · first-run follow-ups · adopt key in git add, doctor no-token items, bad API URL · PR #458
+- 2026-11-08 · keygen · `bosun keygen [--enroll]` replaces the two openssl commands · PR #450
+- 2026-11-08 · readme quickstart · README start-in-5-minutes and for-agents blocks · PR #455
+- 2026-11-08 · operating-model audit · drift fixes (hooks on R-gate, D-017 policy, gate-missed, error.fix), candidates re-ranked with build and defer decisions
+- 2026-11-08 · operating-model · round-end state: merged, waiting for the owner, deferred, follow-ups
+- 2026-11-08 · operating-model #9 · `bosun progress` reports `reverted`, `held` and `cost_per_held_task_usd`, leaving out tasks whose PR was reverted
+- 2026-11-08 · operating-model #10 · review pack lists `untrusted` fields with a reviewer instruction; default spawn prompt marks issue, PR, comment and Slack text as data
+- 2026-11-08 · operating-model #8 · verdicts record the reviewer model; `[approvals] review_models` resets trust on a model swap
+- 2026-11-08 · github client · empty BOSUN_GITHUB_API counts as unset
+- 2026-11-08 · operating-model #9 · held outcomes: writers' task-pr only, revert lookup by head
+- 2026-11-08 · operating-model #15 · review-pack delta shows only the PR's own files after a main merge
+- 2026-11-08 · operating-model #16 · pinned-config tables fall back to the newest older release
+- 2026-11-09 · budget record --pr · spend per PR without task issues; report counts PR spend · PR #476
+- 2026-11-10 · adopt policy · `bosun adopt --policy` writes `[approvals] policy` (autonomous mode in one step) · PR #480
+- 2026-11-10 · fast setup 3 · `@keelstackhq/cargo-deny` npm packages and `cargo-deny-npm.yml` (owner publishes first) · PR #481
+- 2026-11-10 · CS-8 · bosun code knows `.changeset/` (risk allowlist, edit lock, touch check) · PR #484
+- 2026-11-10 · fast setup task 2 · setup script skips absent stacks, no nextest build, cargo-deny npm pin slots · PR #483
+- 2026-11-10 · fast-setup 1 · default rust test gate is `cargo test`; channel CI keeps cargo-nextest for older pins
+- 2026-11-09 · update 3 · README "Update bosun", docs/update.md, no-re-paste test · PR #477
+- 2026-11-09 · budget report 3 · every PR of the month in the report, zero total fixed · PR #470
+- 2026-11-09 · budget report 2 · `budget-report.yml` keeps monthly reports on `bosun/budget-reports` · PR #469
+- 2026-11-09 · budget report 1 · `bosun budget report`, monthly spend per PR (md + json) · PR #465
+- 2026-11-09 · update 2 · `bosun doctor` update-available warning · PR #475
+- 2026-11-09 · update 1 · `bosun pin --latest --pr`, one-step pin PR · PR #474
+- 2026-11-09 · records · last raw lease and task-pr readers move to writers' records
+- 2026-11-10 · fix · record-text follow-up to #473 · PR #479
+- 2026-11-09 · registry · join and lease records count only from writers
+- 2026-11-09 · operating-model follow-ups · review-pack delta cap fallback, delta_not_in_pr untrusted and capped, carry filters review_models
+- 2026-11-09 · budget · spend records count only from writers
+- 2026-11-09 · update 4 · pin and doctor polish (dated branch, step 17 always, human-only left) · PR #478
+- 2026-11-09 · pin bosun 0.11.0 (bosun pin --latest)
+- 2026-11-09 · pinned config · 0.11.0 approvals row (review_models); no setup-script paste after a pin

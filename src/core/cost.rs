@@ -15,12 +15,18 @@ pub fn in_window(at: Timestamp, since: Timestamp, now: Timestamp) -> bool {
 
 /// Round dollars to 6 decimals so sums of cents do not print as `0.30000000000000004`.
 pub fn round_usd(usd: f64) -> f64 {
-    (usd * 1e6).round() / 1e6
+    // `+ 0.0` turns a negative zero (the sum of nothing, a tiny negative) into 0.0.
+    (usd * 1e6).round() / 1e6 + 0.0
 }
 
 /// `total / count`, `None` when `count` is 0.
 pub fn per_task(total: f64, count: usize) -> Option<f64> {
     (count > 0).then(|| round_usd(total / count as f64))
+}
+
+/// The PR number a `bosun revert` branch (`bosun/revert-<n>`) reverts.
+pub fn revert_target(head_ref: &str) -> Option<u64> {
+    head_ref.strip_prefix("bosun/revert-")?.parse().ok()
 }
 
 /// Mean of the task costs, `None` when there are none.
@@ -48,6 +54,21 @@ mod tests {
         assert_eq!(mean(&[]), None);
         assert_eq!(per_task(9.0, 2), Some(4.5));
         assert_eq!(mean(&[1.0, 2.0, 3.0]), Some(2.0));
+    }
+
+    #[test]
+    fn revert_target_reads_the_bosun_revert_branch() {
+        assert_eq!(revert_target("bosun/revert-30"), Some(30));
+        assert_eq!(revert_target("bosun/revert-x"), None);
+        assert_eq!(revert_target("feat/revert-30"), None);
+    }
+
+    #[test]
+    fn no_negative_zero() {
+        let none: f64 = Vec::<f64>::new().iter().sum();
+        assert!(round_usd(none).is_sign_positive() && round_usd(-0.0).is_sign_positive());
+        assert!(round_usd(-1e-9).is_sign_positive());
+        assert_eq!(format!("{}", round_usd(-0.0)), "0");
     }
 
     #[test]

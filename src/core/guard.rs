@@ -10,6 +10,8 @@ use crate::core::glob;
 use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
+mod interp;
+pub use interp::{Script, script_rules};
 mod writes;
 pub use writes::bash_writes;
 
@@ -50,7 +52,7 @@ fn own_leases<'a>(leases: &'a [Lease], me: &str) -> Vec<&'a Lease> {
 fn own_touch_lock(path: &str, exists: bool, leases: &[Lease], me: &str) -> Option<String> {
     let own = own_leases(leases, me);
     let first = own.first()?;
-    if !exists || path.starts_with("changelog.d/") || path.starts_with("docs/progress.d/") {
+    if !exists || crate::core::touch::is_fragment(path) {
         return None;
     }
     let touch: Vec<String> = own.iter().flat_map(|l| l.touch.clone()).collect();
@@ -498,6 +500,14 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         if let Some(why) = check(&inner, branch_at, default_branch, depth + 1) {
             return Some(why);
         }
+    }
+    let here = Target {
+        dir: Some(&[]),
+        branch_at,
+        default_branch,
+    };
+    if let Some(why) = interp::inline_rule(&split_heredocs(command).0, &here) {
+        return Some(why);
     }
     // `cd` moves later git commands: `Some(args)` as `-C` options, `None` when the directory
     // cannot be told (git commands then count as on the default branch: fail closed). A `cd`
@@ -1599,7 +1609,7 @@ fn split_heredocs(command: &str) -> (String, Vec<String>) {
         };
         let reads = shell_words(line)
             .iter()
-            .any(|w| SHELLS.contains(&base(w)) || sql_client(w));
+            .any(|w| SHELLS.contains(&base(w)) || interp::is_runner(w) || sql_client(w));
         if let Some(delim) = delim.filter(|d| !d.is_empty() && !reads) {
             skip = Some((delim, dash, quote.is_some()));
         }
@@ -4505,6 +4515,11 @@ mod tests {
         assert_eq!(edit_lock("Cargo.lock", true, &mine, "me"), None);
         // Fragments and new files are always free.
         assert_eq!(edit_lock("changelog.d/x.md", true, &mine, "me"), None);
+        assert_eq!(edit_lock(".changeset/x.md", true, &mine, "me"), None);
+        // The changesets README and config are not fragments.
+        assert!(edit_lock(".changeset/README.md", true, &mine, "me").is_some());
+        assert!(edit_lock(".changeset/config.json", true, &mine, "me").is_some());
+        assert!(edit_lock(".changeset/sub/x.md", true, &mine, "me").is_some());
         assert_eq!(edit_lock("docs/progress.d/x.md", true, &mine, "me"), None);
         assert_eq!(edit_lock("src/new.rs", false, &mine, "me"), None);
         // An existing file outside the touch is denied, naming issue, globs and the fix.

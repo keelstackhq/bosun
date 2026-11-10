@@ -8,6 +8,8 @@ pub mod answer;
 pub mod approve;
 pub mod ask;
 pub mod budget;
+mod budget_pr;
+pub mod budget_report;
 pub mod carry_over;
 pub mod ci_log;
 pub mod claim;
@@ -20,11 +22,14 @@ pub mod init;
 pub mod intake;
 pub mod intake_file;
 pub mod join;
+pub mod keygen;
 pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
 pub mod msg;
 pub mod notify;
+pub mod pin;
+pub mod pin_pr;
 pub mod plan;
 pub mod plan_pr;
 pub mod pr;
@@ -39,6 +44,7 @@ pub mod resume;
 pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
+pub mod schema;
 pub mod spawn;
 pub mod spawn_relay;
 pub mod stamps;
@@ -54,6 +60,7 @@ pub mod gate;
 pub mod gate_missed;
 pub mod main_health;
 pub mod review_ci;
+pub mod setup_snippet;
 pub mod stop;
 pub mod test_integrity;
 pub mod uninstall;
@@ -106,6 +113,8 @@ pub enum Command {
     Gate(GateArgs),
     /// Owner only (BOSUN_OWNER_TOKEN): list the PRs that wait for an owner and approve them.
     Approve(ApproveArgs),
+    /// Make an ed25519 approval key (PEM, mode 0600, outside the repo); `--enroll` adds it to .bosun/approvers.toml.
+    Keygen(KeygenArgs),
     /// Judge a PR with the risk rules of its base branch.
     RiskCheck(PrArg),
     /// Refuse deleted tests, new skips and fewer assertions.
@@ -178,6 +187,12 @@ pub enum Command {
     Adopt(AdoptArgs),
     /// Take back what `bosun adopt` wrote (only files whose bytes are still adopt's).
     Uninstall(UninstallArgs),
+    /// Move the tool pins (setup script, .bosun/version, channel template) to the newest verified npm release.
+    Pin(PinArgs),
+    /// Print the bootstrap to paste once as a cloud environment's setup script.
+    SetupSnippet,
+    /// The output contract as JSON Schema: the envelope and each command's `data`.
+    Schema(SchemaArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -226,6 +241,9 @@ pub const COMMANDS: &[&str] = &[
     "prereqs",
     "adopt",
     "uninstall",
+    "pin",
+    "setup-snippet",
+    "schema",
 ];
 
 impl Command {
@@ -243,6 +261,7 @@ impl Command {
             Command::Msg(_) => "msg",
             Command::Gate(_) => "gate",
             Command::Approve(_) => "approve",
+            Command::Keygen(_) => "keygen",
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
@@ -274,11 +293,14 @@ impl Command {
             Command::HandoffPr(_) => "handoff-pr",
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
+            Command::Budget(BudgetCmd::Report(_)) => "budget report",
             Command::Result(_) => "result",
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
+            Command::Pin(_) => "pin",
+            Command::SetupSnippet => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
             Command::Intake(a) => match a.cmd {
@@ -292,8 +314,18 @@ impl Command {
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
             Command::Prereqs(_) => "prereqs",
+            Command::Schema(_) => "schema",
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct SchemaArgs {
+    /// The command, e.g. `claim` or `verdict post`; default: every command.
+    pub command: Vec<String>,
+    /// Output format.
+    #[arg(long, default_value = "json", value_parser = ["json"])]
+    pub format: String,
 }
 
 #[derive(Debug, Args)]
@@ -459,6 +491,23 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct KeygenArgs {
+    /// Where to write the private key PEM (default ~/.bosun/approver.pem). Never overwritten, and
+    /// never inside any git worktree. A relative path is relative to `-C` when given.
+    #[arg(long, value_name = "PEM")]
+    pub out: Option<std::path::PathBuf>,
+    /// Key id for .bosun/approvers.toml (default `<role>-<YYYY-MM>`); A-Z a-z 0-9 . _ - only.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// The key's role: `owner` (default) or `delegate`.
+    #[arg(long, value_parser = ["owner", "delegate"])]
+    pub role: Option<String>,
+    /// Append the key to <repo>/.bosun/approvers.toml (created when missing).
+    #[arg(long)]
+    pub enroll: bool,
 }
 
 #[derive(Debug, Args)]
@@ -691,6 +740,18 @@ pub enum BudgetCmd {
     Record(BudgetRecordArgs),
     /// Compare today's spend with the daily budget; at 100 % return the sessions to stop.
     Check,
+    /// One month of spend per PR, with totals; `--out DIR` also writes DIR/YYYY-MM.md and .json.
+    Report(BudgetReportArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BudgetReportArgs {
+    /// The month as YYYY-MM (UTC); default: the current month.
+    #[arg(long)]
+    pub month: Option<String>,
+    /// Write DIR/YYYY-MM.md and DIR/YYYY-MM.json.
+    #[arg(long)]
+    pub out: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -705,8 +766,19 @@ pub struct ProgressArgs {
 
 #[derive(Debug, Args)]
 pub struct BudgetRecordArgs {
-    pub issue: u64,
-    #[arg(long, value_parser = ["claude-sessions", "generic"])]
+    /// The task issue (leave out with --pr).
+    #[arg(conflicts_with = "pr")]
+    pub issue: Option<u64>,
+    /// A PR the session made (repeatable): the cost is split evenly over the PRs and recorded on each.
+    #[arg(long, value_name = "N", conflicts_with = "issue")]
+    pub pr: Vec<u64>,
+    /// With --pr: the cost in USD, instead of reading it from the session.
+    #[arg(long, requires = "pr")]
+    pub usd: Option<f64>,
+    /// With --pr: the session that spent it (an orchestrator recording for a child); default: the id in the get_session result, else the caller.
+    #[arg(long, requires = "pr")]
+    pub session: Option<String>,
+    #[arg(long, default_value = "claude-sessions", value_parser = ["claude-sessions", "generic"])]
     pub provider: String,
     #[arg(long)]
     pub from: Option<String>,
@@ -968,6 +1040,9 @@ pub struct AdoptArgs {
     /// Pin .bosun/version to this X.Y.Z (default: this binary's version).
     #[arg(long, value_name = "X.Y.Z")]
     pub bosun_version: Option<String>,
+    /// Write `[approvals] policy` into .bosun/bosun.toml (spec §8); the pinned release must know it.
+    #[arg(long, value_parser = ["owner", "owner-gated", "orchestrator", "autonomous"])]
+    pub policy: Option<String>,
     /// Show what would change; write nothing and change nothing on GitHub.
     #[arg(long)]
     pub dry_run: bool,
@@ -1057,3 +1132,19 @@ pub struct NotifyArgs {
 pub const RESULT_OUTCOMES: [&str; 4] = ["merged", "partial", "blocked", "needs-human"];
 /// Default `bosun wait --timeout` in seconds.
 pub const WAIT_TIMEOUT_SECS: u64 = 1800;
+
+#[derive(Debug, Args)]
+pub struct PinArgs {
+    /// Move the tool pins to the newest npm release (required; the only mode).
+    #[arg(long, required = true)]
+    pub latest: bool,
+    /// Only this tool (repeatable); default: splice, hoist, berth and bosun.
+    #[arg(long, value_name = "TOOL", value_parser = ["splice", "hoist", "berth", "bosun"])]
+    pub tool: Vec<String>,
+    /// List the tools that are behind; download no tarball, write nothing.
+    #[arg(long)]
+    pub check: bool,
+    /// Also branch `bosun/pin`, commit, push and open the draft PR; prints what is left for you.
+    #[arg(long, conflicts_with = "check")]
+    pub pr: bool,
+}

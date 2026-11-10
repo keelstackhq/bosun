@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::path::Path;
 
 const NOW: &str = "2026-11-06T10:00:00Z";
-const ALL: [&str; 13] = [
+const ALL: [&str; 14] = [
     ".bosun/bosun.toml",
     ".bosun/version",
     ".bosun/limits.toml",
@@ -21,6 +21,7 @@ const ALL: [&str; 13] = [
     ".github/workflows/main-open.yml",
     ".github/workflows/main-health.yml",
     ".claude/settings.json",
+    "docs/setup-script.sh",
 ];
 
 fn adopt(fake: &FakeGithub, dir: &Path, extra: &[&str]) -> (i32, Value) {
@@ -173,6 +174,13 @@ fn writes_files_labels_registry_and_manifest() {
         fnv1a_hex(read(t.path(), ".bosun/version").as_bytes())
     );
     assert!(m.files.iter().all(|f| f.path != ".bosun/adopt.toml"));
+    assert!(m.files.iter().any(|f| f.path == "docs/setup-script.sh"));
+    let sh = std::process::Command::new("bash")
+        .args(["-n", "docs/setup-script.sh"])
+        .current_dir(t.path())
+        .status()
+        .unwrap();
+    assert!(sh.success(), "docs/setup-script.sh is not valid bash");
 }
 
 #[test]
@@ -276,7 +284,7 @@ fn every_template_renders_for_each_stack_set() {
             let stacks: Vec<String> = stacks.iter().map(|s| s.to_string()).collect();
             let vars = vars_for("app", "alice", "0.7.0", &stacks, own_ci);
             let files = render_all(&vars).unwrap_or_else(|e| panic!("{stacks:?}: {e}"));
-            assert!(files.len() >= 14);
+            assert!(files.len() >= 15);
             for (path, text) in files {
                 assert!(!text.contains("{%"), "{path}: tag left");
                 assert!(

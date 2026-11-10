@@ -4,17 +4,69 @@
 /// The defaults, used when neither the env nor `hoist.toml` names any.
 pub const DEFAULT_REQUIRED: [&str; 4] = ["ci-ok", "risk-check", "review-verdict", "main-open"];
 
-/// `[github] required_checks` of a `hoist.toml` text: a non-empty array of strings, else `None`.
-pub fn hoist_required(hoist_toml: &str) -> Option<Vec<String>> {
+/// Where a required check must come from (hoist.toml table form, spec §15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckSource {
+    /// A plain string entry: any status or check run of that name.
+    Any,
+    /// `app = "<slug>"`: a check run of that GitHub App.
+    App(String),
+    /// `integration_id = <id>`: a check run of the App with that id (15368 is GitHub Actions).
+    Integration(u64),
+}
+
+/// One entry of `[github] required_checks`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredCheck {
+    pub context: String,
+    pub source: CheckSource,
+}
+
+fn required_entry(v: &toml::Value) -> Option<RequiredCheck> {
+    if let Some(s) = v.as_str() {
+        return Some(RequiredCheck {
+            context: s.into(),
+            source: CheckSource::Any,
+        });
+    }
+    let t = v.as_table()?;
+    if t.keys()
+        .any(|k| !["context", "app", "integration_id"].contains(&k.as_str()))
+    {
+        return None;
+    }
+    let context = t.get("context")?.as_str()?.to_string();
+    let source = match (t.get("app"), t.get("integration_id")) {
+        (None, None) => CheckSource::Any,
+        (Some(a), None) => CheckSource::App(a.as_str()?.to_string()),
+        (None, Some(i)) => CheckSource::Integration(u64::try_from(i.as_integer()?).ok()?),
+        (Some(_), Some(_)) => return None,
+    };
+    Some(RequiredCheck { context, source })
+}
+
+/// `[github] required_checks` of a `hoist.toml` text with each entry's source: a non-empty array
+/// of strings or `{ context, app | integration_id }` tables, else `None` (any bad entry).
+pub fn hoist_required_sources(hoist_toml: &str) -> Option<Vec<RequiredCheck>> {
     let doc: toml::Table = hoist_toml.parse().ok()?;
-    let list: Vec<String> = doc
+    let list: Vec<RequiredCheck> = doc
         .get("github")?
         .get("required_checks")?
         .as_array()?
         .iter()
-        .map(|v| v.as_str().map(String::from))
+        .map(required_entry)
         .collect::<Option<_>>()?;
     (!list.is_empty()).then_some(list)
+}
+
+/// The contexts of `[github] required_checks` (see `hoist_required_sources`).
+pub fn hoist_required(hoist_toml: &str) -> Option<Vec<String>> {
+    Some(
+        hoist_required_sources(hoist_toml)?
+            .into_iter()
+            .map(|c| c.context)
+            .collect(),
+    )
 }
 
 /// The env value (comma-separated, empty entries dropped) is the explicit full override. Else the
