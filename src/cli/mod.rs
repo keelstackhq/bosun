@@ -44,6 +44,7 @@ pub mod resume;
 pub mod revert;
 pub mod review_pack;
 pub mod risk_check;
+pub mod schema;
 pub mod spawn;
 pub mod spawn_relay;
 pub mod stamps;
@@ -190,6 +191,8 @@ pub enum Command {
     Pin(PinArgs),
     /// Print the bootstrap to paste once as a cloud environment's setup script.
     SetupSnippet,
+    /// The output contract as JSON Schema: the envelope and each command's `data`.
+    Schema(SchemaArgs),
 }
 
 /// Top-level command names, in `--help` order.
@@ -240,6 +243,7 @@ pub const COMMANDS: &[&str] = &[
     "uninstall",
     "pin",
     "setup-snippet",
+    "schema",
 ];
 
 impl Command {
@@ -310,8 +314,18 @@ impl Command {
             Command::ReviewCi(_) => "review-ci",
             Command::Notify(_) => "notify",
             Command::Prereqs(_) => "prereqs",
+            Command::Schema(_) => "schema",
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct SchemaArgs {
+    /// The command, e.g. `claim` or `verdict post`; default: every command.
+    pub command: Vec<String>,
+    /// Output format.
+    #[arg(long, default_value = "json", value_parser = ["json"])]
+    pub format: String,
 }
 
 #[derive(Debug, Args)]

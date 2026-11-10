@@ -41,13 +41,20 @@ pub fn bosun() -> Command {
     cmd
 }
 
-/// Parse stdout as exactly one JSON object.
+/// Parse stdout as exactly one JSON object. An envelope must match `bosun schema` (strict: every
+/// `data` key of an ok result is in the schema), so the schema cannot drift from the code.
 pub fn one_object(stdout: &[u8]) -> Value {
     let text = std::str::from_utf8(stdout).expect("utf-8 stdout");
     let mut stream = serde_json::Deserializer::from_str(text).into_iter::<Value>();
     let first = stream.next().expect("one JSON value").expect("valid JSON");
     assert!(stream.next().is_none(), "more than one JSON value: {text}");
     assert!(first.is_object(), "not an object: {text}");
+    let envelope = first.get("version").is_some() && first.get("exit_code").is_some();
+    if let Err(e) = schema_check::check_envelope(&first)
+        && envelope
+    {
+        panic!("the envelope does not match `bosun schema`: {e}\n{text}");
+    }
     first
 }
 
@@ -83,6 +90,7 @@ pub fn lease_note(session: &str, expires: &str, touch: &str) -> String {
 
 pub mod fake;
 pub mod npm;
+pub mod schema_check;
 pub mod stamps;
 
 /// One empty directory per test process (not a git repo, no .bosun/).

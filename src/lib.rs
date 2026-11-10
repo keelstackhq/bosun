@@ -12,6 +12,7 @@ pub mod github;
 pub mod hooks;
 pub mod output;
 pub mod registry;
+pub mod schema;
 pub mod sessions;
 pub mod slack;
 pub mod time;
@@ -70,5 +71,6 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Uninstall(a) => cli::uninstall::run(dir, a),
         Command::Pin(a) => cli::pin::run(dir, a),
         Command::SetupSnippet => cli::setup_snippet::run(),
+        Command::Schema(a) => cli::schema::run(a),
     }
 }
