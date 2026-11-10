@@ -178,4 +178,28 @@ fn a_task_session_marker_reaches_the_callers_hook() {
     assert_eq!(out.status.code(), Some(4));
     let out = hook(tmp.path(), "session_me", &write_outside());
     assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
+    // The caller's own `bosun status` clears its task session's marker once the halt lifts.
+    fake.variable("BOSUN_HALT", "0");
+    let (code, v) = cmd(&fake, tmp.path(), &["status"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(markers(tmp.path()), 0);
+}
+
+#[test]
+fn a_main_red_halt_is_shown_but_leaves_writes_open() {
+    let fake = FakeGithub::start();
+    fake.issue(9, "main red", &["bosun:main-red"], "x");
+    fake.issue(7, "task", &["bosun:state/ready"], "x");
+    let tmp = repo();
+    let (code, v) = cmd(&fake, tmp.path(), &["claim", "7"]);
+    assert_eq!(code, 4, "{v}");
+    assert_eq!(markers(tmp.path()), 1);
+    let out = hook(tmp.path(), "session_me", &write_outside());
+    let hso = &out["hookSpecificOutput"];
+    assert!(hso["permissionDecision"].is_null(), "{out}");
+    let ctx = hso["additionalContext"].as_str().unwrap();
+    assert!(
+        ctx.contains("mainfix") && !ctx.contains("halt lifted"),
+        "{ctx}"
+    );
 }

@@ -15,6 +15,9 @@ pub struct Refusal {
     /// The hook already injected it once.
     #[serde(default)]
     pub shown: bool,
+    /// A kill-switch halt: writes are refused while it stands.
+    #[serde(default)]
+    pub lock: bool,
 }
 
 pub const HALTED: u8 = 4;
@@ -22,6 +25,12 @@ pub const HALTED: u8 = 4;
 /// Exits that stick: halted, needs-human, limit; conflict only on claim.
 pub fn sticky(command: &str, exit_code: u8) -> bool {
     matches!(exit_code, 4..=6) || (exit_code == 3 && command == "claim")
+}
+
+/// Whether a refusal locks writes: only a kill-switch halt (its message names the halt issue
+/// or `BOSUN_HALT`). Main-red and process-red halts leave writes open for the fix they ask for.
+pub fn locks(exit_code: u8, message: &str) -> bool {
+    exit_code == HALTED && message.to_ascii_lowercase().contains("halt")
 }
 
 /// Whether `session`'s marker belongs to the hook's `caller`: the same id, or a task session
@@ -60,7 +69,7 @@ fn names(fix: &str, command: &str) -> bool {
 
 /// The context line the hook injects for one refusal.
 pub fn context(r: &Refusal) -> String {
-    let halt = if r.exit_code == HALTED {
+    let halt = if r.lock {
         "; writes and pushes are refused until `bosun status` shows the halt lifted"
     } else {
         ""
@@ -173,6 +182,7 @@ mod tests {
             fix: fix.into(),
             at: "t".into(),
             shown: false,
+            lock: exit_code == HALTED,
         }
     }
 
@@ -186,6 +196,22 @@ mod tests {
         assert!(!sticky("claim", 1));
         assert!(!sticky("claim", 2));
         assert!(!sticky("claim", 0));
+    }
+
+    #[test]
+    fn only_kill_switch_halts_lock() {
+        assert!(locks(
+            4,
+            "halt issue #3 by o is open: the owner stopped all work"
+        ));
+        assert!(locks(4, "BOSUN_HALT=1: the owner stopped all work"));
+        assert!(locks(4, "cannot read the bosun:halt issues: 500"));
+        assert!(!locks(
+            4,
+            "main is red (#9); only mainfix tasks can be claimed"
+        ));
+        assert!(!locks(4, "waves pause while process is red (#9)"));
+        assert!(!locks(5, "halt"));
     }
 
     #[test]
@@ -228,6 +254,9 @@ mod tests {
             c.contains("wait for #3") && c.contains("bosun status"),
             "{c}"
         );
+        let mut red = r("claim", 4, "wait for #9");
+        red.lock = false;
+        assert!(!context(&red).contains("halt lifted"));
         let c = context(&r("pr", 6, "x"));
         assert!(
             c.contains("exit 6 (limit)") && !c.contains("halt lifted"),

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::core::refusal::{Refusal, clears, context, halted_deny, is_write, mine, sticky};
+use crate::core::refusal::{Refusal, clears, context, halted_deny, is_write, locks, mine, sticky};
 use crate::core::repeat::repeat_key;
 use crate::ctx::{hostname, session_id};
 use crate::hooks::git_out;
@@ -70,6 +70,7 @@ pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
                 fix: e.fix.clone(),
                 at: now_text(),
                 shown: false,
+                lock: locks(e.exit.code(), &e.message),
             };
             let file = store.join(format!("{}.json", repeat_key(&session, command, "")));
             if let Err(e) = write(&file, &r) {
@@ -78,7 +79,7 @@ pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
         }
         Ok(out) => {
             for (file, r) in all(&store) {
-                if r.session == session && clears(&r, command, &out.data) {
+                if mine(&r.session, &session) && clears(&r, command, &out.data) {
                     let _ = std::fs::remove_file(file);
                 }
             }
@@ -116,7 +117,7 @@ pub fn apply(cwd: &Path, tool: &str, tool_input: &Value, out: Option<String>) ->
         return out;
     }
     if is_write(tool, tool_input)
-        && let Some((_, r)) = marks.iter().find(|(_, r)| r.exit_code == 4)
+        && let Some((_, r)) = marks.iter().find(|(_, r)| r.lock)
     {
         return Some(super::pre_tool_use::deny(&halted_deny(r)));
     }
@@ -124,7 +125,10 @@ pub fn apply(cwd: &Path, tool: &str, tool_input: &Value, out: Option<String>) ->
     for (file, r) in marks.iter_mut().filter(|(_, r)| !r.shown) {
         lines.push(context(r));
         r.shown = true;
-        if let Err(e) = write(file, r) {
+        // A marker a command cleared meanwhile stays gone.
+        if file.exists()
+            && let Err(e) = write(file, r)
+        {
             eprintln!("bosun: warning: cannot update the refusal marker: {e}");
         }
     }
