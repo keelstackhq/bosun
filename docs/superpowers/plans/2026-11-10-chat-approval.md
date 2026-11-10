@@ -335,3 +335,6 @@ record by the T2 rules (`count_chat`), keep signatures working; tests in `tests/
   (readable by the Actions token), not the org-membership API. Spec §8 has it.
 - T2 minors left: no test for the failed-read path; an empty `owners.toml` also turns on the
   fallback; §8 refers to the T6 guard ahead of T6.
+- T8 (#486) minors left for a follow-up: a kept non-table `ci = "none"` reads as github (exit 0,
+  Config::parse rejects later); a circleci-only kept checkout still gets a hand step; `gate
+  ci-minutes` exits 1 on an invalid bosun.toml (not in spec).
