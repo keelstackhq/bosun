@@ -59,6 +59,12 @@ pub fn judge_pr(gh: &dyn Github, pull: &Pull, red: Option<u64>) -> Result<bool> 
     Ok(post(gh, pull, red, mainfix)?.pass)
 }
 
+/// No-CI mode: judge one PR against `red` without posting a status.
+pub fn judge_local(gh: &dyn Github, pull: &Pull, red: Option<u64>) -> Result<Verdict> {
+    let mainfix = red.is_some() && is_mainfix(gh, pull)?;
+    Ok(judge(red, mainfix))
+}
+
 fn post(gh: &dyn Github, pull: &Pull, red: Option<u64>, mainfix: bool) -> Result<Verdict> {
     let v = judge(red, mainfix);
     let state = if v.pass { "success" } else { "failure" };

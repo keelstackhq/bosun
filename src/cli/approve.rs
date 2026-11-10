@@ -18,12 +18,13 @@ use crate::cli::risk_check::{
     autonomous_clean, autonomous_inputs, decisive_review, dismissed_review, enrolled_keys,
     owner_comment, owner_logins, review_models,
 };
-use crate::config::{CONFIG_FILE, Config};
+use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
     TRUSTED_CREATOR, api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud,
-    only_r_ci, parse_target, policy_line, readiness, signed_comment, signed_message,
-    signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
+    only_r_ci, parse_ready_summary, parse_target, policy_line, readiness, signed_comment,
+    signed_message, signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
+    summary_readiness,
 };
 use crate::core::ask;
 use crate::core::records::{PrHead, Record};
@@ -114,7 +115,7 @@ fn hold(gh: &dyn Github, p: &Pull, board: &mut Board) -> Result<bool> {
 /// The open PRs whose risk-check waits for an owner, split into ready and waiting, by number.
 /// Statuses, check runs and files all describe the head sha read with the PR. With `lenient`
 /// (a tokenless listing) a failed read skips that PR, or the whole list, into `skipped`.
-fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
+fn board(gh: &dyn Github, lenient: bool, no_ci: bool) -> Result<Board> {
     let mut pulls = match gh.list_pulls(None, IssueState::Open) {
         Ok(p) => p,
         Err(e) if lenient => {
@@ -129,12 +130,12 @@ fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     };
     pulls.sort_by_key(|p| p.number);
     if !lenient {
-        return board_of(gh, pulls);
+        return board_of(gh, pulls, no_ci);
     }
     let mut all = Board::default();
     for p in pulls {
         let n = p.number;
-        match board_of(gh, vec![p]) {
+        match board_of(gh, vec![p], no_ci) {
             Ok(b) => {
                 all.ready.extend(b.ready);
                 all.waiting.extend(b.waiting);
@@ -146,10 +147,26 @@ fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     Ok(all)
 }
 
-/// The board of `pulls`, in their order.
-fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
+/// No-CI readiness of `p`: from its newest ready summary for the head (spec §4).
+fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
+    let comments = gh.list_comments(p.number)?;
+    let newest = (comments.iter().rev()).find(|c| parse_ready_summary(&c.body, &p.head_sha));
+    Ok(summary_readiness(newest.map(|c| c.body.as_str())))
+}
+
+/// The board of `pulls`, in their order. With `no_ci`, readiness comes from the ready summary.
+fn board_of(gh: &dyn Github, pulls: Vec<Pull>, no_ci: bool) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
+        if no_ci {
+            let (r, verdict) = summary_of(gh, &p)?;
+            if let Readiness::Ready(risk) = r
+                && !hold(gh, &p, &mut board)?
+            {
+                board.ready.push(ready_of(gh, p, risk, verdict)?);
+            }
+            continue;
+        }
         let statuses: Vec<Stat> = gh
             .status_history(&p.head_sha)?
             .into_iter()
@@ -175,25 +192,34 @@ fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
             Readiness::NotWaiting => {}
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
             Readiness::Ready(_) if hold(gh, &p, &mut board)? => {}
-            Readiness::Ready(risk) => board.ready.push(Ready {
-                verdict: (statuses.iter())
+            Readiness::Ready(risk) => {
+                let verdict = (statuses.iter())
                     .find(|s| s.context == "review-verdict" && s.creator == TRUSTED_CREATOR)
                     .map(|s| s.description.clone())
-                    .unwrap_or_default(),
-                pr: p.number,
-                title: p.title.clone(),
-                files: gh
-                    .compare_files(&p.base_sha, &p.head_sha)?
-                    .into_iter()
-                    .map(|f| f.filename)
-                    .collect(),
-                head_sha: p.head_sha,
-                base_sha: p.base_sha,
-                risk,
-            }),
+                    .unwrap_or_default();
+                board.ready.push(ready_of(gh, p, risk, verdict)?);
+            }
         }
     }
     Ok(board)
+}
+
+fn ready_of(gh: &dyn Github, p: Pull, risk: Vec<String>, verdict: String) -> Result<Ready> {
+    let files = gh.compare_files(&p.base_sha, &p.head_sha)?;
+    Ok(Ready {
+        verdict,
+        pr: p.number,
+        title: p.title.clone(),
+        files: files.into_iter().map(|f| f.filename).collect(),
+        head_sha: p.head_sha,
+        base_sha: p.base_sha,
+        risk,
+    })
+}
+
+/// No CI in this checkout's config (`[ci] provider = "none"`): the board reads ready summaries.
+fn no_ci(ctx: &Ctx) -> bool {
+    Config::load(&ctx.dir).is_ok_and(|c| c.ci_provider() == CiProvider::None)
 }
 
 pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
@@ -270,7 +296,7 @@ fn exec(
 ) -> CmdResult {
     let now = &ctx.now.to_string();
     if args.list {
-        let mut b = board(gh, tokenless)?;
+        let mut b = board(gh, tokenless, no_ci(ctx))?;
         // Held by the owner at this head (PostToolUse answers): not asked again until it moves.
         let (held, ready): (Vec<Ready>, Vec<Ready>) = std::mem::take(&mut b.ready)
             .into_iter()
@@ -321,7 +347,7 @@ fn exec(
         ));
     }
 
-    let b = board(gh, false)?;
+    let b = board(gh, false, no_ci(ctx))?;
     targets.sort_unstable();
     targets.dedup();
     let mut not_ready = Vec::new();

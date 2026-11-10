@@ -306,3 +306,57 @@ fn chat_later_hold_wins() {
     let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
     refused(&fake, r, 5);
 }
+
+#[test]
+fn chat_slack_hold_wins() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    answer(tmp.path(), Q, "hold", 1, HEAD);
+    let env = [("BOSUN_ORIGIN", "slack")];
+    let args = ["--slack-user", "U0ADA1"];
+    let r = chat(&fake, tmp.path(), "session_tag", &args, &env);
+    refused(&fake, r, 5);
+}
+
+/// A reviewer's own verdict comment (no record: nothing applies it without CI).
+fn verdict_comment(fake: &FakeGithub) {
+    let v = bosun::core::verdict::Verdict::parse(
+        &json!({"pr": 1, "head_sha": HEAD, "verdict": "approve", "confidence": 0.95,
+            "findings": []})
+        .to_string(),
+    )
+    .unwrap();
+    let body = bosun::core::verdict::comment_body(&v, "session_rev", None);
+    fake.comment_by(1, "rev", &body);
+}
+
+/// `setup` with the reviewer's verdict as a comment only, not a record.
+fn setup_comment_only(ci: Option<&str>) -> FakeGithub {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "Closes #7");
+    fake.pull_as_issue(1, "change");
+    fake.pull_set(1, "head", json!({"sha": HEAD, "ref": "feature"}));
+    fake.issue(7, "task", &[], "task\n<!-- bosun:task {} -->");
+    fake.comment(7, &lease_note("session_w", LIVE, "src/**"));
+    fake.issue(REG, "bosun registry", &["bosun:registry"], "");
+    join(&fake, "session_orch", "spawned", None, 1);
+    if let Some(c) = ci {
+        fake.content(".bosun/bosun.toml", "base0000", c);
+    }
+    verdict_comment(&fake);
+    fake
+}
+
+#[test]
+fn chat_no_ci_reads_verdict_comments() {
+    let tmp = repo();
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    // With CI, only the applied record counts.
+    let fake = setup_comment_only(None);
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    refused(&fake, r, 5);
+    let fake = setup_comment_only(Some("[ci]\nprovider = \"none\"\n"));
+    let (code, v) = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(chat_comments(&fake).len(), 1);
+}

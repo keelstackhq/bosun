@@ -1,6 +1,7 @@
 //! The reviewer's verdict (spec §7): shape, validation and the rule that decides approval.
 
 use crate::core::meta::linked_issues;
+use crate::core::risk::VERDICT_MIN_CONFIDENCE;
 use serde::{Deserialize, Serialize};
 
 /// A verdict approves only at or above this confidence.
@@ -224,6 +225,45 @@ pub fn comment_json(body: &str) -> Option<&str> {
     Some(fenced[..end.unwrap_or(fenced.len())].trim())
 }
 
+/// No-CI mode: the reviewer sessions whose newest verdict comment on PR `pr` at `head` is clean
+/// (approve, confidence at least [`VERDICT_MIN_CONFIDENCE`], no blocker or major), unedited, not
+/// `excluded`, with a session and, when `models` is set, one of those models. Like a refused
+/// record, any session whose newest verdict there is not clean blocks: then none count.
+/// `comments` are `(body, unedited)` oldest first, from writers only.
+pub fn comment_clean<'a>(
+    comments: impl IntoIterator<Item = (&'a str, bool)>,
+    pr: u64,
+    head: &str,
+    excluded: &[String],
+    models: Option<&[String]>,
+) -> Vec<String> {
+    let mut newest: Vec<(String, bool, bool)> = Vec::new();
+    for (body, unedited) in comments {
+        let Some(v) = comment_json(body).and_then(|t| Verdict::parse(t).ok()) else {
+            continue;
+        };
+        if v.pr != pr || v.head_sha != head {
+            continue;
+        }
+        let session = comment_session(body).unwrap_or("unknown");
+        let clean = effective(&v).approve
+            && v.count("major") == 0
+            && v.confidence >= VERDICT_MIN_CONFIDENCE;
+        let model_ok =
+            models.is_none_or(|m| comment_model(body).is_some_and(|x| m.iter().any(|y| y == x)));
+        let counts =
+            unedited && model_ok && session != "unknown" && !excluded.iter().any(|e| e == session);
+        newest.retain(|(s, ..)| s != session);
+        newest.push((session.to_string(), clean, counts));
+    }
+    if newest.iter().any(|(_, clean, _)| !clean) {
+        return Vec::new();
+    }
+    (newest.into_iter())
+        .filter_map(|(s, _, counts)| counts.then_some(s))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,6 +288,51 @@ mod tests {
             escalate_risk: false,
             chunks_reviewed: vec![],
         }
+    }
+
+    #[test]
+    fn comment_clean_newest_per_session_and_blocks() {
+        let c = |s: &str, x: &Verdict| comment_body(x, s, Some("m1"));
+        let ok = v("approve", 0.95, &[]);
+        let (a, b) = (
+            c("s_a", &ok),
+            c("s_b", &v("request-changes", 0.9, &["major"])),
+        );
+        let low = c("s_a", &v("approve", 0.86, &[]));
+        let ex = vec!["s_w".to_string()];
+        assert_eq!(
+            comment_clean([(a.as_str(), true)], 1, "abc", &ex, None),
+            ["s_a"]
+        );
+        assert!(comment_clean([(a.as_str(), true)], 2, "abc", &ex, None).is_empty());
+        assert!(comment_clean([(a.as_str(), true)], 1, "abd", &ex, None).is_empty());
+        assert!(comment_clean([(a.as_str(), false)], 1, "abc", &ex, None).is_empty());
+        let w = c("s_w", &ok);
+        assert!(comment_clean([(w.as_str(), true)], 1, "abc", &ex, None).is_empty());
+        let two = [(a.as_str(), true), (b.as_str(), true)];
+        assert!(comment_clean(two, 1, "abc", &ex, None).is_empty());
+        assert!(
+            comment_clean(
+                [(a.as_str(), true), (low.as_str(), true)],
+                1,
+                "abc",
+                &ex,
+                None
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            comment_clean(
+                [(low.as_str(), true), (a.as_str(), true)],
+                1,
+                "abc",
+                &ex,
+                None
+            ),
+            ["s_a"]
+        );
+        let m2 = vec!["m2".to_string()];
+        assert!(comment_clean([(a.as_str(), true)], 1, "abc", &ex, Some(&m2)).is_empty());
     }
 
     #[test]

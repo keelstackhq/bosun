@@ -1,0 +1,1 @@
+- Chat approval T9: no-CI `pr --ready`; `approve --list`/`--chat` read local checks.
