@@ -153,6 +153,14 @@ fn every_npm_package_is_a_known_one() {
     found.sort();
     let mut want: Vec<String> = PLATFORMS.iter().map(|p| format!("bosun-{}", p.0)).collect();
     want.push("bosun".into());
+    // Upstream cargo-deny republished (cargo-deny-npm.yml), outside bosun's release.
+    for p in [
+        "cargo-deny",
+        "cargo-deny-linux-x64",
+        "cargo-deny-linux-arm64",
+    ] {
+        want.push(p.into());
+    }
     want.sort();
     assert_eq!(found, want);
 }
@@ -160,7 +168,17 @@ fn every_npm_package_is_a_known_one() {
 #[test]
 fn pnpm_workspace_lists_the_npm_packages() {
     let text = fs::read_to_string(root().join("pnpm-workspace.yaml")).unwrap();
-    assert!(text.lines().any(|l| l.trim() == "- npm/*"), "{text}");
+    // Each bosun package by path; npm/cargo-deny* is not bosun's, so hoist must not release it.
+    let listed: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("- "))
+        .collect();
+    let mut want: Vec<String> = PLATFORMS
+        .iter()
+        .map(|p| format!("npm/bosun-{}", p.0))
+        .collect();
+    want.insert(0, "npm/bosun".into());
+    assert_eq!(listed, want, "{text}");
     assert!(text.contains("linkWorkspacePackages: true"));
 }
 
@@ -303,7 +321,7 @@ fn release_job_builds_the_bosun_binary_and_ci_runs_the_launcher_tests() {
     );
     let ci = workflow("ci.yml");
     assert!(
-        ci.contains("node --test npm/bosun/test/*.test.js"),
+        ci.contains("node --test npm/*/test/*.test.js"),
         "ci.yml runs the launcher tests"
     );
 }

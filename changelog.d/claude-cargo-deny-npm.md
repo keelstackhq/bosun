@@ -1,0 +1,1 @@
+- `@keelstackhq/cargo-deny` npm packages (launcher, linux-x64, linux-arm64) republish upstream cargo-deny's prebuilt musl binaries through the manual `cargo-deny-npm.yml` workflow (checked against upstream's `.sha256`, npm trusted publishing).

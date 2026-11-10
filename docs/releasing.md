@@ -32,7 +32,7 @@ So a merge to `main` never tags, releases or publishes until the owner sets the 
    CHANGELOG.md and `## Done` in `docs/progress-done.md`. Merge it before the release PR is made or updated,
    so step 1 moves those entries under the new version (folding after it would leave them under
    an empty Unreleased).
-1. Change the version in `Cargo.toml` and in all six `npm/*/package.json` files (including the
+1. Change the version in `Cargo.toml` and in all six `npm/bosun*/package.json` files (including the
    launcher's `optionalDependencies`). Add a `## <version> (<date>)` section to `CHANGELOG.md` (the heading hoist writes and reads the release notes from), then run
    `pnpm install --lockfile-only`. `hoist release prepare` does this in a release PR (branch
    `hoist/release`). `tests/release_config.rs` fails when the files disagree.
@@ -139,3 +139,40 @@ For v0.1.0, an agent opened one PR, and the owner approved it on its head SHA (R
 - changes `docs/setup-script.sh` to install `@keelstackhq/bosun@0.1.0` with the other tools,
   instead of `cargo install --git … --branch main`;
 - updates the Status in `docs/PROGRESS.md`.
+
+## cargo-deny on npm (not part of the bosun release)
+
+`.github/workflows/cargo-deny-npm.yml` republishes upstream cargo-deny's prebuilt Linux binaries
+(the `cargo-deny-<version>-{x86_64,aarch64}-unknown-linux-musl.tar.gz` assets of the
+EmbarkStudios/cargo-deny GitHub releases), so setup scripts install cargo-deny in seconds instead
+of building it (145 s). Three packages, all `MIT OR Apache-2.0` like upstream:
+
+- `@keelstackhq/cargo-deny-linux-x64` and `@keelstackhq/cargo-deny-linux-arm64`: upstream's
+  binary, unchanged, in `bin/cargo-deny`, with upstream's `LICENSE-*` files;
+- `@keelstackhq/cargo-deny`: the launcher (`npm/cargo-deny/bin/cargo-deny.js`, bin `cargo-deny`).
+
+The npm version is the upstream version. The owner starts each run by hand, on `main`
+(Actions → cargo-deny-npm → Run workflow, input `version`), and approves the `release`
+deployment. The run checks each tarball against upstream's `.sha256`, runs `cargo-deny
+--version`, sets the version in the three `package.json` files, and publishes the platform
+packages, then the launcher, through npm trusted publishing with provenance. A re-run skips what
+npm already has. `pnpm-workspace.yaml` lists the bosun packages one by one and leaves
+`npm/cargo-deny*` out, so hoist never releases these packages with bosun.
+
+One-time setup (owner, computer): npm adds a trusted publisher only to a package that exists, so
+publish a first version of each new package with your own npm login (for example a `0.0.0`
+placeholder), then add the trusted publisher (repo `keelstackhq/bosun`, workflow
+`cargo-deny-npm.yml`, environment `release`):
+
+```bash
+npm install -g npm@12.2.0 && npm login
+for p in cargo-deny-linux-x64 cargo-deny-linux-arm64 cargo-deny; do
+  npm trust github "@keelstackhq/$p" --repo keelstackhq/bosun --file cargo-deny-npm.yml \
+    --env release --allow-publish
+done
+```
+
+(Or on npmjs.com: each package → Settings → Trusted Publisher → GitHub Actions, the same values.)
+
+Then run the workflow once with version 0.20.2 or newer. Check the result with
+`npm view @keelstackhq/cargo-deny version`.

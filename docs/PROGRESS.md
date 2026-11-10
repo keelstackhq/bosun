@@ -154,3 +154,12 @@ Human-only items, in order. Each has the exact action.
     `circleci-only`, main-health has no weekly GitHub run: in the repo's CircleCI project settings →
     Triggers, add a scheduled pipeline on `main`, weekly (for example Monday 03:17 UTC), so the
     bosun workflow runs every gate on all of main; its `ci-ok`/`bosun-ok` status feeds main-health.
+12. **cargo-deny on npm (fast setup task 3, computer).** After the `claude/cargo-deny-npm` PR
+    merges: publish a first version (for example a `0.0.0` placeholder) of
+    `@keelstackhq/cargo-deny`, `@keelstackhq/cargo-deny-linux-x64` and
+    `@keelstackhq/cargo-deny-linux-arm64` with your npm login (npm adds a trusted publisher only
+    to an existing package); add the trusted publisher for each (repo `keelstackhq/bosun`,
+    workflow `cargo-deny-npm.yml`, environment `release`; commands in `docs/releasing.md`,
+    "cargo-deny on npm"); then run the workflow once on `main` with `version` 0.20.2 or newer and
+    approve the `release` deployment. Verify: `npm view @keelstackhq/cargo-deny@<v> version`.
+    Plan task 4 then pins it in the setup scripts.

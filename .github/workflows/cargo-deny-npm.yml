@@ -1,0 +1,104 @@
+name: cargo-deny-npm
+
+# Republishes upstream cargo-deny's prebuilt Linux binaries (EmbarkStudios/cargo-deny GitHub
+# releases, the static musl tarballs) on npm, so setup scripts install it in seconds instead of
+# building it from source (docs/superpowers/specs/2026-11-10-fast-setup-design.md):
+# - @keelstackhq/cargo-deny-linux-x64 and -linux-arm64: upstream's binary, unchanged, in bin/;
+# - @keelstackhq/cargo-deny: the launcher (npm/cargo-deny/bin/cargo-deny.js).
+# Manual runs only, from main, in environment `release` (the owner approves each run). Each
+# tarball is checked against upstream's .sha256 before anything is published; npm trusted
+# publishing (OIDC, no token) with provenance. Platform packages first, then the launcher. A
+# re-run skips what npm already has. Not part of bosun's release (hoist does not see npm/cargo-deny*).
+# See docs/releasing.md, "cargo-deny on npm".
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Upstream cargo-deny version to republish, e.g. 0.20.2 (the release tag, no v)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# ci-minutes: allow concurrency a publish run is never cancelled, the next one waits for it
+concurrency:
+  group: cargo-deny-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: The version is x.y.z
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version must be x.y.z (an upstream cargo-deny release tag), got: $VERSION"
+            exit 1
+          fi
+      - name: Download upstream's tarballs and check them against its .sha256
+        run: |
+          base="https://github.com/EmbarkStudios/cargo-deny/releases/download/${VERSION}"
+          mkdir -p dl
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            tarball="cargo-deny-${VERSION}-${target}.tar.gz"
+            curl -fsSL --retry 3 -o "dl/$tarball" "$base/$tarball"
+            curl -fsSL --retry 3 -o "dl/$tarball.sha256" "$base/$tarball.sha256"
+            # Upstream's .sha256 holds the hash (with or without a file name): check it as ours.
+            hash=$(awk '{ print $1; exit }' "dl/$tarball.sha256")
+            (cd dl && echo "$hash  $tarball" | sha256sum -c -)
+          done
+      - name: Put the binaries and upstream's licenses into the packages
+        run: |
+          for pair in x64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl; do
+            arch="${pair%%:*}"
+            target="${pair#*:}"
+            dir="npm/cargo-deny-linux-$arch"
+            top="cargo-deny-${VERSION}-${target}"
+            mkdir -p "$dir/bin" "x/$arch"
+            tar -xzf "dl/$top.tar.gz" -C "x/$arch"
+            install -m 755 "x/$arch/$top/cargo-deny" "$dir/bin/cargo-deny"
+            cp "x/$arch/$top"/LICENSE* "$dir/"
+            file "$dir/bin/cargo-deny"
+          done
+          cp x/x64/cargo-deny-"${VERSION}"-x86_64-unknown-linux-musl/LICENSE* npm/cargo-deny/
+          file npm/cargo-deny-linux-x64/bin/cargo-deny | grep -E 'x86-64.*(statically linked|static-pie linked)'
+          file npm/cargo-deny-linux-arm64/bin/cargo-deny | grep -E 'aarch64.*(statically linked|static-pie linked)'
+      - name: Smoke test (cargo-deny --version)
+        run: |
+          got=$(npm/cargo-deny-linux-x64/bin/cargo-deny --version)
+          echo "$got"
+          test "$got" = "cargo-deny ${VERSION}"
+      # npm >= 11.5.1 and Node >= 22.14.0 do the OIDC exchange for trusted publishing.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+      - run: npm install -g npm@12.2.0
+      - name: Set the version in the three packages
+        run: |
+          for p in cargo-deny-linux-x64 cargo-deny-linux-arm64; do
+            (cd "npm/$p" && npm pkg set "version=$VERSION")
+          done
+          (cd npm/cargo-deny && npm pkg set "version=$VERSION" \
+            "optionalDependencies.@keelstackhq/cargo-deny-linux-x64=$VERSION" \
+            "optionalDependencies.@keelstackhq/cargo-deny-linux-arm64=$VERSION")
+      - name: Publish (platform packages, then the launcher)
+        run: |
+          for p in cargo-deny-linux-x64 cargo-deny-linux-arm64 cargo-deny; do
+            if npm view "@keelstackhq/$p@$VERSION" version >/dev/null 2>&1; then
+              echo "@keelstackhq/$p@$VERSION is on npm already; skipped"
+              continue
+            fi
+            (cd "npm/$p" && npm publish --provenance --access public)
+          done
