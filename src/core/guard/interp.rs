@@ -211,6 +211,42 @@ pub enum Script {
 
 const STDIN: &[&str] = &["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
 
+/// Whether a heredoc feeds the stdin of the command that names `path`: one on that command
+/// itself, or on an earlier stage of the same pipeline (`cat <<'EOF' | python3 /dev/stdin`).
+/// Pipelines end at `;`, `&&`, `||`, a newline and a lone `&`; the `&` of `>&`, `<&` and `&>`
+/// is part of a redirection.
+fn heredoc_feeds(command: &str, path: &str) -> bool {
+    let c: Vec<char> = command.chars().collect();
+    let (mut pipelines, mut cur) = (Vec::new(), String::new());
+    let mut i = 0;
+    while i < c.len() {
+        let (ch, next, prev) = (c[i], c.get(i + 1).copied(), i.checked_sub(1).map(|p| c[p]));
+        let redir_amp = ch == '&' && (matches!(prev, Some('>' | '<')) || next == Some('>'));
+        let ends = match ch {
+            ';' | '\n' => 1,
+            '&' if next == Some('&') => 2,
+            '|' if next == Some('|') => 2,
+            '&' if !redir_amp => 1,
+            _ => 0,
+        };
+        if ends > 0 {
+            pipelines.push(std::mem::take(&mut cur));
+            i += ends;
+            continue;
+        }
+        cur.push(ch);
+        i += 1;
+    }
+    pipelines.push(cur);
+    pipelines.iter().any(|p| {
+        let stages: Vec<&str> = p.split('|').collect();
+        stages
+            .iter()
+            .position(|s| s.contains(path))
+            .is_some_and(|at| stages[..=at].iter().any(|s| s.contains("<<")))
+    })
+}
+
 /// A `#!` line that runs a shell, also with arguments (`#!/bin/bash -e`, `#!/usr/bin/env sh`).
 fn shell_shebang(first: &str) -> bool {
     first.strip_prefix("#!").is_some_and(|l| {
@@ -235,8 +271,9 @@ pub fn script_rules(
         default_branch,
     };
     for ScriptPath { path, shell, first } in script_paths(command, 0) {
-        // stdin by name: a heredoc there is in the command text, which `inline_rule` scans.
-        if STDIN.contains(&path.as_str()) && command.contains("<<") {
+        // stdin by name, fed by a heredoc: the body is in the command text, which
+        // `inline_rule` scans. A heredoc in another command does not count.
+        if STDIN.contains(&path.as_str()) && heredoc_feeds(command, &path) {
             continue;
         }
         let code = match read(&path) {
@@ -280,7 +317,7 @@ mod tests {
 
     fn script(cmd: &str, body: &str) -> Option<String> {
         let read = |p: &str| {
-            if p.ends_with("big.py") {
+            if p.ends_with("big.py") || p == "/dev/stdin" {
                 return Some(Script::Unreadable("larger than 1 MiB"));
             }
             let known = ["x.py", "x.sh", "x.mjs", "x.php", "x.ts", "x.rb"];
@@ -323,6 +360,28 @@ mod tests {
             None,
             "an argument is data"
         );
+        assert!(
+            script("python3 /dev/stdin < run.py; cat <<EOF\nx\nEOF", "").is_some(),
+            "a heredoc in another segment does not feed stdin"
+        );
+        assert_eq!(
+            script("python3 /dev/stdin <<'EOF'\nprint(1)\nEOF", ""),
+            None
+        );
+        for cmd in [
+            "python3 /dev/stdin 2>&1 <<'EOF'\nprint(1)\nEOF",
+            "python3 /dev/stdin &>out.log <<'EOF'\nprint(1)\nEOF",
+            "cat <<'EOF' | python3 /dev/stdin\nprint(1)\nEOF",
+        ] {
+            assert_eq!(script(cmd, ""), None, "{cmd}");
+        }
+        for cmd in [
+            "python3 /dev/stdin & cat <<EOF\nx\nEOF",
+            "python3 /dev/stdin | cat <<EOF\nx\nEOF",
+            "python3 /dev/stdin < run.py && cat <<EOF\nx\nEOF",
+        ] {
+            assert!(script(cmd, "").is_some(), "{cmd}");
+        }
     }
 
     #[test]

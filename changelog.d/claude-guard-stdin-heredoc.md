@@ -1,0 +1,1 @@
+- the merge-lock skips a `/dev/stdin` script only when a heredoc on its own segment feeds it
