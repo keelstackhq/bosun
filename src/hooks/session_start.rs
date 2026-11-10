@@ -29,7 +29,9 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> String {
     // After compaction the summary may have lost the state: add it back (spec §4).
     let state = match dir.as_deref() {
         Some(d) if input.get("source").and_then(Value::as_str) == Some("compact") => {
-            format!("\n{}", super::compact::state_block(d))
+            super::compact::safe_block(d)
+                .map(|b| format!("\n{b}"))
+                .unwrap_or_default()
         }
         _ => String::new(),
     };

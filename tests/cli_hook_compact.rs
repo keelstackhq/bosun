@@ -214,3 +214,24 @@ fn session_start_on_startup_has_no_state_block() {
         .unwrap();
     assert!(!text.contains("bosun state"), "{text}");
 }
+
+#[test]
+fn detached_head_is_named_and_the_newest_lease_drives_the_next_step() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    fake.issue(5, "older", &["bosun:state/claimed"], "x");
+    fake.comment(5, &lease_note("session_me", LIVE, "docs/**"));
+    fake.issue(6, "newer", &["bosun:state/claimed"], "x");
+    fake.comment(
+        6,
+        &lease_note("session_me", "2026-10-22T10:40:00Z", "src/**"),
+    );
+    git(tmp.path(), &["checkout", "-q", "--detach"]);
+    let o = hook(
+        Some(&fake),
+        tmp.path(),
+        "pre-compact",
+        &input(tmp.path(), "PreCompact"),
+    );
+    assert!(o.stdout.contains("branch (detached)"), "{}", o.stdout);
+    assert!(o.stdout.contains("`bosun pr 6`"), "{}", o.stdout);
+}
