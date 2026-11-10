@@ -23,7 +23,7 @@ pub fn role(origin: &str) -> Role {
 }
 
 const ORCHESTRATOR: &str = "Split work into dedicated sessions (`bosun spawn`, models from `[models]`). Archive each child once its `result` is in. When context runs long, pick: /compact or start fresh (relay, spec §5.2); tell the owner which and why.";
-const WORKER: &str = "Use superpowers (brainstorm, then plan; subagent-driven-development, TDD) and caveman, with `[models]` subagents. Report in at most 10 lines. Spawn no sessions. At the end run `bosun budget record --pr <n> --from -` (your get_session result on stdin, or `--usd N`) for each PR you made; an orchestrator does it for a child it archives. When context runs long, pick: compact or start fresh (write handoff notes first); say which.";
+const WORKER: &str = "Use superpowers (brainstorm, then plan; subagent-driven-development, TDD) and caveman, with `[models]` subagents. Report in at most 10 lines. Spawn no sessions. At the end run `bosun budget record --pr <n> --from -` (your get_session result on stdin, or `--usd N`) for each PR you made without a task issue; for a task, `bosun budget record <issue> --from -`. An orchestrator does it for a child it archives (`--session <child>`). When context runs long, pick: compact or start fresh (write handoff notes first); say which.";
 const ALL: &str = "Caveman style everywhere, chat with the owner included. Max token efficiency: write only what is needed.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

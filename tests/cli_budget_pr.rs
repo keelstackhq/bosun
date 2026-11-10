@@ -165,3 +165,46 @@ fn bad_input_is_refused_with_nothing_written() {
     );
     assert_eq!(spends(&fake, 20)[0]["usd"], 2.0);
 }
+
+#[test]
+fn kill_switch_applies_to_pr_records() {
+    let fake = seeded();
+    fake.variable("BOSUN_HALT", "1");
+    assert_eq!(record(&fake, "", &["--pr", "20", "--usd", "1"]).0, 4);
+    assert!(spends(&fake, 20).is_empty());
+}
+
+#[test]
+fn model_and_session_fallbacks() {
+    let fake = seeded();
+    let meta = r#"{"id":"s_id","external_metadata":{"last_served_model":"m_last"},"usage":{"cost_usd":1.0}}"#;
+    assert_eq!(record(&fake, meta, &["--pr", "20", "--from", "-"]).0, 0);
+    let s = spends(&fake, 20);
+    assert_eq!(
+        (s[0]["session"].clone(), s[0]["model"].clone()),
+        (json!("s_id"), json!("m_last"))
+    );
+    let top = r#"{"model":"m_top","usage":{"cost_usd":1.0}}"#;
+    assert_eq!(record(&fake, top, &["--pr", "21", "--from", "-"]).0, 0);
+    assert_eq!(spends(&fake, 21)[0]["model"], "m_top");
+    assert_eq!(spends(&fake, 21)[0]["session"], "session_o");
+    assert_eq!(
+        record(
+            &fake,
+            top,
+            &[
+                "--pr",
+                "20",
+                "--session",
+                "x",
+                "--model",
+                "m_flag",
+                "--from",
+                "-"
+            ]
+        )
+        .0,
+        0
+    );
+    assert_eq!(spends(&fake, 20)[1]["model"], "m_flag");
+}

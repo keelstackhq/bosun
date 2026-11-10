@@ -82,7 +82,7 @@ pub fn facts(notes: &[Note]) -> (Vec<String>, Vec<String>, f64, usize) {
 /// not counted again from the PR, and a PR counts one spend record per session (the first).
 pub fn merge_spend(task: Vec<Note>, pr: Vec<Note>) -> Vec<Note> {
     let session = |n: &Note| match parse_record(&n.body) {
-        Some(Record::Spend { session, .. }) => Some(session),
+        Some(Record::Spend { session, usd, .. }) if usd.is_finite() && usd >= 0.0 => Some(session),
         _ => None,
     };
     let mut seen: BTreeSet<String> = task.iter().filter_map(session).collect();
