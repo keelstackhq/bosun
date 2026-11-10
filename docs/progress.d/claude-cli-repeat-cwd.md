@@ -1,1 +1,1 @@
-- 2026-11-10 · #524 follow-up · the CLI repeat counter is keyed to the hook's repo; deny parsed from JSON · PR #TBD
+- 2026-11-10 · #528 (#524 follow-up) · the CLI repeat counter is keyed to the hook's repo; deny parsed from JSON · PR #529
