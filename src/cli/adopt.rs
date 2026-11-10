@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::AdoptArgs;
 use super::init::{has_ci_ok_job_except, is_semver};
 use crate::app::Result;
+use crate::config::CiProvider;
 use crate::core::adopt::{MANIFEST_PATH, Manifest, fnv1a_hex};
 use crate::core::pin::parse_semver;
 use crate::core::render::{Vars, render};
@@ -164,6 +165,9 @@ fn detect_ci(root: &Path) -> &'static str {
         "none"
     }
 }
+
+/// The first release whose config parser knows `[ci] provider` (spec §9).
+const CI_MIN: &str = "0.12.0";
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
 fn policy_min(value: &str) -> &'static str {
@@ -345,6 +349,13 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
             ));
         }
     }
+    let ci_ok = parse_semver(&version) >= parse_semver(CI_MIN);
+    if a.ci.is_some() && !ci_ok {
+        return Err(BosunError::usage(
+            format!("bosun {version} cannot parse `[ci] provider`; its gates would fail"),
+            format!("pin bosun {CI_MIN} or later (--bosun-version {CI_MIN}), or drop --ci"),
+        ));
+    }
     let stacks: Vec<String> = if a.stack.is_empty() {
         detect(&root)
     } else {
@@ -401,12 +412,15 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         .ok()
         .flatten()
         .and_then(|b| String::from_utf8_lossy(&b).parse::<toml::Table>().ok())
-        .and_then(|t| Some(t.get("ci")?.get("provider")?.as_str()?.to_string()));
-    let ci =
+        .and_then(|t| Some(t.get("ci")?.get("provider")?.as_str()?.to_string()))
+        .filter(|p| CiProvider::parse(p).is_some());
+    // Older pins would reject the table: write it only for a release that reads it.
+    let ci: Option<String> = ci_ok.then(|| {
         a.ci.clone()
             .or(kept_ci)
-            .unwrap_or_else(|| detect_ci(&root).to_string());
-    vars.set("ci_provider", ci.as_str());
+            .unwrap_or_else(|| detect_ci(&root).to_string())
+    });
+    vars.set("ci_provider", ci.as_deref().unwrap_or(""));
 
     if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
         return Err(BosunError::error(

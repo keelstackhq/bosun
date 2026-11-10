@@ -161,7 +161,7 @@ fn ci_of(t: &toml::Table) -> Option<&str> {
 #[test]
 fn adopt_no_ci_writes_none() {
     let tmp = tempfile::tempdir().unwrap();
-    let (code, v) = adopt(tmp.path(), &[]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("none"));
     assert_eq!(v["data"]["ci"], "none");
@@ -173,7 +173,7 @@ fn adopt_with_workflows_writes_github() {
     let wf = tmp.path().join(".github/workflows");
     std::fs::create_dir_all(&wf).unwrap();
     std::fs::write(wf.join("ci.yml"), "name: ci\non: push\njobs: {}\n").unwrap();
-    let (code, v) = adopt(tmp.path(), &[]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("github"));
 }
@@ -182,7 +182,7 @@ fn adopt_with_workflows_writes_github() {
 fn adopt_circleci_dir_writes_circleci() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join(".circleci")).unwrap();
-    let (code, v) = adopt(tmp.path(), &[]);
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("circleci"));
 }
@@ -190,7 +190,36 @@ fn adopt_circleci_dir_writes_circleci() {
 #[test]
 fn adopt_ci_flag_overrides_detection() {
     let tmp = tempfile::tempdir().unwrap();
-    let (code, v) = adopt(tmp.path(), &["--ci", "github"]);
+    let (code, v) = adopt(tmp.path(), &["--ci", "github", "--bosun-version", "0.12.0"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("github"));
+}
+
+#[test]
+fn adopt_old_pin_writes_no_ci_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.11.0"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(ci_of(&config(tmp.path())).is_none());
+    assert!(v["data"]["ci"].is_null());
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.11.0", "--ci", "none"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("0.12.0"));
+}
+
+#[test]
+fn adopt_rerun_keeps_written_ci() {
+    let tmp = tempfile::tempdir().unwrap();
+    let args = ["--bosun-version", "0.12.0"];
+    assert_eq!(adopt(tmp.path(), &args).0, 0);
+    // Adopt's own workflows now exist; delete the config so it renders again.
+    std::fs::remove_file(tmp.path().join(".bosun/bosun.toml")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/bosun.toml"),
+        "project = \"x\"\n[ci]\nprovider = \"circleci\"\n",
+    )
+    .unwrap();
+    let (code, v) = adopt(tmp.path(), &args);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ci"], "circleci");
 }
