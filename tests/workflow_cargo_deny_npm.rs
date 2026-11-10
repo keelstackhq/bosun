@@ -142,6 +142,16 @@ fn sets_the_version_then_publishes_the_platform_packages_before_the_launcher() {
             "{dep}"
         );
     }
+    // A re-run skips a version on npm only when it holds the file it ships; a version without it
+    // (say, a hand publish from the committed package.json) fails the run: npm versions are final.
+    assert!(
+        y.contains("npm pack \"@keelstackhq/$p@$VERSION\" --dry-run --json"),
+        "{y}"
+    );
+    assert!(
+        y.contains("::error::@keelstackhq/$p@$VERSION is on npm without $want"),
+        "{y}"
+    );
     // npm >= 11.5.1 does the OIDC exchange, as in release.yml.
     assert!(y.contains("npm install -g npm@12.2.0"), "{y}");
 }

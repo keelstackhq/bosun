@@ -160,12 +160,18 @@ npm already has. `pnpm-workspace.yaml` lists the bosun packages one by one and l
 `npm/cargo-deny*` out, so hoist never releases these packages with bosun.
 
 One-time setup (owner, computer): npm adds a trusted publisher only to a package that exists, so
-publish a first version of each new package with your own npm login (for example a `0.0.0`
-placeholder), then add the trusted publisher (repo `keelstackhq/bosun`, workflow
-`cargo-deny-npm.yml`, environment `release`):
+publish a `0.0.0` placeholder of each new package with your own npm login, then add the trusted
+publisher (repo `keelstackhq/bosun`, workflow `cargo-deny-npm.yml`, environment `release`).
+Never `npm publish` inside `npm/cargo-deny*`: its `package.json` carries a real version without
+the binary, npm versions are final, and the workflow then fails for that version.
 
 ```bash
 npm install -g npm@12.2.0 && npm login
+for p in cargo-deny-linux-x64 cargo-deny-linux-arm64 cargo-deny; do
+  d=$(mktemp -d)
+  printf '{"name":"@keelstackhq/%s","version":"0.0.0","license":"MIT OR Apache-2.0","description":"placeholder"}\n' "$p" > "$d/package.json"
+  (cd "$d" && npm publish --access public)
+done
 for p in cargo-deny-linux-x64 cargo-deny-linux-arm64 cargo-deny; do
   npm trust github "@keelstackhq/$p" --repo keelstackhq/bosun --file cargo-deny-npm.yml \
     --env release --allow-publish

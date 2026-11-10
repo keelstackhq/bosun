@@ -97,8 +97,17 @@ jobs:
         run: |
           for p in cargo-deny-linux-x64 cargo-deny-linux-arm64 cargo-deny; do
             if npm view "@keelstackhq/$p@$VERSION" version >/dev/null 2>&1; then
-              echo "@keelstackhq/$p@$VERSION is on npm already; skipped"
-              continue
+              # Skip only a complete earlier publish: npm versions are final, so one without the
+              # binary (or launcher) can never be fixed and the run must say so.
+              want=bin/cargo-deny
+              [ "$p" = cargo-deny ] && want=bin/cargo-deny.js
+              if npm pack "@keelstackhq/$p@$VERSION" --dry-run --json \
+                | jq -e --arg f "$want" '.[0].files | any(.path == $f)' >/dev/null; then
+                echo "@keelstackhq/$p@$VERSION is on npm already; skipped"
+                continue
+              fi
+              echo "::error::@keelstackhq/$p@$VERSION is on npm without $want; publish a newer upstream version"
+              exit 1
             fi
             (cd "npm/$p" && npm publish --provenance --access public)
           done
