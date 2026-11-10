@@ -1,5 +1,5 @@
 //! The `data` of an `ok` envelope, per command (notation: see `super`): `<command> = <notation>;`.
-//! A notation that is another command's name reuses that command's shape. Hooks print the hook
+//! An entry ends at `;` and a newline, so a literal may hold `;` or ` = `. A notation that is another command's name reuses that command's shape. Hooks print the hook
 //! protocol, no envelope, so they have no entry.
 
 pub const DATA: &str = r#"
@@ -171,6 +171,6 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     touch: [str]}], live_sessions: [{session: str, origin: str, area: str | null, depth: int,
     expires: str}], budget_pct: num, daily_usd: num, spend_today_usd: num,
     archive_error?: str};
-schema = {format: "json", command?: str, schema?: {..}, envelope?: {..},
-    commands?: {[str]: any}};
+schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
+    commands?: {[str]: any}, ts?: str};
 "#;

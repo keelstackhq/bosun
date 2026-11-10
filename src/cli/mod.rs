@@ -191,7 +191,7 @@ pub enum Command {
     Pin(PinArgs),
     /// Print the bootstrap to paste once as a cloud environment's setup script.
     SetupSnippet,
-    /// The output contract as JSON Schema: the envelope and each command's `data`.
+    /// The output contract as JSON Schema or TypeScript: the envelope and each command's `data`.
     Schema(SchemaArgs),
 }
 
@@ -323,8 +323,8 @@ impl Command {
 pub struct SchemaArgs {
     /// The command, e.g. `claim` or `verdict post`; default: every command.
     pub command: Vec<String>,
-    /// Output format.
-    #[arg(long, default_value = "json", value_parser = ["json"])]
+    /// `json`: JSON Schema; `ts`: TypeScript declarations in `data.ts`.
+    #[arg(long, default_value = "json", value_parser = ["json", "ts"])]
     pub format: String,
 }
 

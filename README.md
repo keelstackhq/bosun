@@ -146,6 +146,31 @@ manual dispatch, and commits `reports/budget/YYYY-MM.md` and `.json` to the bran
 `bosun/budget-reports` (one draft PR "Budget reports", never merged). It needs the setting
 Actions > allow GitHub Actions to create pull requests.
 
+## Using bosun from code (Code Mode)
+
+A harness with one `exec` tool and typed `tools.*` calls (or an MCP `outputSchema`) can read the
+whole contract up front: `bosun schema` prints JSON Schema of the envelope and of each command's
+`data`, `bosun schema claim` one command, and `bosun schema --format ts` TypeScript declarations
+in the string `data.ts`. Those declarations type the results only: the `bosun.*` functions are for
+the harness to implement (a subprocess, as below). Every call prints one envelope; branch on
+`exit_code` and do what `error.fix` says:
+
+```ts
+import { execFileSync } from "node:child_process";
+
+function run<C extends string, D>(cmd: C, ...args: string[]): bosun.Envelope<C, D> {
+  try {
+    return JSON.parse(execFileSync("bosun", [...cmd.split(" "), ...args], { encoding: "utf8" }));
+  } catch (e: any) {
+    return JSON.parse(e.stdout); // non-zero exit: still one envelope on stdout
+  }
+}
+const r = run<"claim", bosun.ClaimData>("claim", "42");
+if (r.ok) console.log(r.data.lease.touch);
+else if (r.exit_code === 4) throw new Error(`halted: ${r.error.fix}`); // stop all work
+else console.log(`exit ${r.exit_code}, next step: ${r.error.fix}`); // e.g. 3: pick another task or retry
+```
+
 ## Owner controls
 
 - **Approve a high-risk PR.** The session asks you with a form in the Claude Code chat (repo, PR,

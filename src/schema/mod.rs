@@ -8,13 +8,14 @@
 //! is strict: every key is listed.
 
 mod data;
+pub mod ts;
 
 use serde_json::{Map, Value, json};
 
 use data::DATA;
 
 fn entries() -> impl Iterator<Item = (&'static str, &'static str)> {
-    DATA.split(';')
+    DATA.split(";\n")
         .filter_map(|e| e.split_once(" = "))
         .map(|(n, d)| (n.trim(), d.trim()))
 }

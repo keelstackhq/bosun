@@ -1,0 +1,1 @@
+- 2026-11-10 · #500 part 3 · `bosun schema --format ts` + README Code Mode section · PR for #500
