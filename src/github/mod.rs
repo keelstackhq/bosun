@@ -8,8 +8,8 @@ use http::{Http, enc};
 use serde_json::{Value, json};
 use types::RawGitCommit;
 pub use types::{
-    CheckRun, Comment, Compare, GitCommit, GitTree, Issue, Job, Label, PrFile, Pull, Review,
-    Status, TreeEntry,
+    CheckRun, Comment, Compare, GateRun, GitCommit, GitTree, Issue, Job, Label, PrFile, Pull,
+    Review, RunState, Status, TreeEntry,
 };
 
 pub use crate::output::BosunError;
@@ -157,7 +157,14 @@ pub trait Github {
     fn statuses(&self, sha: &str) -> Result<Vec<Status>>;
     /// Every status of `sha`, newest first (not only the newest per context), with its creator.
     fn status_history(&self, sha: &str) -> Result<Vec<Status>>;
+    /// GitHub's default view: the newest check run per name and App.
     fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>>;
+    /// Every check run of `sha` (`filter=all`), superseded ones too, each with its App.
+    fn check_runs_all(&self, sha: &str) -> Result<Vec<CheckRun>>;
+    /// Create a gate check run (a token of the App that owns it); returns the run's id.
+    fn create_check_run(&self, run: &GateRun) -> Result<u64>;
+    /// Move run `id` to `run`'s state and output (the head sha cannot change).
+    fn update_check_run(&self, id: u64, run: &GateRun) -> Result<()>;
     /// A file at a ref; `None` when it is missing or is a directory.
     fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>>;
     /// `method` is `SQUASH`, `MERGE` or `REBASE`; `node_id` is the pull request's.
@@ -269,6 +276,30 @@ pub struct Release {
 }
 
 const STATUS_STATES: [&str; 4] = ["success", "failure", "pending", "error"];
+
+/// GitHub's limit on a check run's `output.summary`, in characters.
+const SUMMARY_MAX: usize = 65_535;
+
+/// Name, status, conclusion and output of a gate run; never `neutral` or `skipped` (UC-B2-6).
+fn check_run_body(run: &GateRun) -> Value {
+    let summary: String = run.summary.chars().take(SUMMARY_MAX).collect();
+    let mut body = json!({
+        "name": run.name,
+        "output": {"title": run.title, "summary": summary},
+    });
+    match run.state {
+        RunState::Pending => body["status"] = json!("in_progress"),
+        RunState::Success | RunState::Failure => {
+            body["status"] = json!("completed");
+            body["conclusion"] = json!(if run.state == RunState::Success {
+                "success"
+            } else {
+                "failure"
+            });
+        }
+    }
+    body
+}
 const MERGE_METHODS: [&str; 3] = ["SQUASH", "MERGE", "REBASE"];
 const AUTO_MERGE: &str = "mutation($id: ID!, $method: PullRequestMergeMethod!) { \
     enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) \
@@ -811,6 +842,34 @@ impl Github for LiveGithub {
     fn check_runs(&self, sha: &str) -> Result<Vec<CheckRun>> {
         let path = self.path(&format!("/commits/{}/check-runs?per_page=100", enc(sha)));
         self.parse_all("check run", self.http.get_all_in(&path, "check_runs")?)
+    }
+
+    fn check_runs_all(&self, sha: &str) -> Result<Vec<CheckRun>> {
+        let path = self.path(&format!(
+            "/commits/{}/check-runs?filter=all&per_page=100",
+            enc(sha)
+        ));
+        self.parse_all("check run", self.http.get_all_in(&path, "check_runs")?)
+    }
+
+    fn create_check_run(&self, run: &GateRun) -> Result<u64> {
+        let mut body = check_run_body(run);
+        body["head_sha"] = json!(run.head_sha);
+        let v = self
+            .http
+            .send_json("POST", &self.path("/check-runs"), &body)?;
+        v["id"].as_u64().ok_or_else(|| {
+            BosunError::error(
+                format!("GitHub created check run {:?} without an id", run.name),
+                "re-run the gate; if it repeats, check the App's Checks permission",
+            )
+        })
+    }
+
+    fn update_check_run(&self, id: u64, run: &GateRun) -> Result<()> {
+        let path = self.path(&format!("/check-runs/{id}"));
+        self.http.send_json("PATCH", &path, &check_run_body(run))?;
+        Ok(())
     }
 
     fn file_at(&self, path: &str, git_ref: &str) -> Result<Option<String>> {
