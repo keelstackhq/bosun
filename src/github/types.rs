@@ -259,6 +259,8 @@ pub struct CheckRun {
     pub app: String,
     /// Id of that App (15368 for GitHub Actions); 0 if unknown.
     pub app_id: u64,
+    /// `output.title`; `""` when the run has none.
+    pub title: String,
 }
 
 #[derive(Deserialize)]
@@ -275,6 +277,14 @@ struct RawCheckRun {
     completed_at: Option<String>,
     #[serde(default)]
     app: Option<AppRef>,
+    #[serde(default)]
+    output: Option<RunOutput>,
+}
+
+#[derive(Deserialize)]
+struct RunOutput {
+    #[serde(default)]
+    title: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -297,6 +307,7 @@ impl From<RawCheckRun> for CheckRun {
             completed_at: r.completed_at,
             app,
             app_id,
+            title: r.output.and_then(|o| o.title).unwrap_or_default(),
         }
     }
 }

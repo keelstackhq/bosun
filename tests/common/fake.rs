@@ -544,6 +544,23 @@ impl FakeGithub {
         );
     }
 
+    /// A completed check run of App `slug` (id `app_id`) with `output.title` `title`.
+    pub fn app_run(
+        &self,
+        sha: &str,
+        name: &str,
+        conclusion: &str,
+        title: &str,
+        slug: &str,
+        app_id: u64,
+    ) {
+        self.check_run(sha, name, "completed", Some(conclusion));
+        let mut s = self.state.lock().unwrap();
+        let last = s.check_runs.get_mut(sha).unwrap().last_mut().unwrap();
+        last["app"] = json!({"slug": slug, "id": app_id});
+        last["output"] = json!({"title": title, "summary": title});
+    }
+
     /// Check runs the client creates belong to App `slug` with id `id`
     /// (default `keelstackhq-bosun-gate`, 4242).
     pub fn check_runs_as_app(&self, slug: &str, id: u64) {

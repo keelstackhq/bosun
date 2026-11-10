@@ -206,7 +206,7 @@ pub fn is_verdict(s: &Status) -> bool {
 
 /// Whether `sha` has a `review-verdict`; an error, no statuses (risk-check posted one) or 100+ count as yes.
 pub fn has_verdict(gh: &dyn Github, sha: &str) -> bool {
-    !gh.statuses(sha)
+    !crate::github::gate::gate_statuses(gh, sha)
         .is_ok_and(|l| (1..100).contains(&l.len()) && !l.iter().any(is_verdict))
 }
 
@@ -325,6 +325,9 @@ pub(crate) fn carry_approval(
             continue;
         };
         comments.sort_by_key(|c| c.id);
+        for c in &mut comments {
+            c.user = crate::github::gate::record_author(&c.user);
+        }
         reviews.sort_by_key(|r| r.id);
         let approval = match found.counted() {
             None => Some(None),
