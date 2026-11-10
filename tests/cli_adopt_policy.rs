@@ -158,13 +158,51 @@ fn ci_of(t: &toml::Table) -> Option<&str> {
     t.get("ci")?.get("provider")?.as_str()
 }
 
+const GH_WORKFLOWS: [&str; 5] = [
+    ".github/workflows/bosun.yml",
+    ".github/workflows/risk.yml",
+    ".github/workflows/verdict.yml",
+    ".github/workflows/main-open.yml",
+    ".github/workflows/main-health.yml",
+];
+
 #[test]
-fn adopt_no_ci_writes_none() {
+fn adopt_default_writes_github_with_its_workflows() {
     let tmp = tempfile::tempdir().unwrap();
     let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
     assert_eq!(code, 0, "{v}");
+    assert_eq!(ci_of(&config(tmp.path())), Some("github"));
+    assert_eq!(v["data"]["ci"], "github");
+    assert_eq!(v["data"]["workflows_skipped"], serde_json::json!([]));
+    for w in GH_WORKFLOWS {
+        assert!(tmp.path().join(w).is_file(), "{w}");
+    }
+}
+
+#[test]
+fn adopt_ci_none_skips_github_workflows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let args = ["--ci", "none", "--bosun-version", "0.12.0"];
+    let (code, v) = adopt(tmp.path(), &args);
+    assert_eq!(code, 0, "{v}");
     assert_eq!(ci_of(&config(tmp.path())), Some("none"));
     assert_eq!(v["data"]["ci"], "none");
+    assert_eq!(
+        v["data"]["workflows_skipped"],
+        serde_json::json!(GH_WORKFLOWS)
+    );
+    for w in GH_WORKFLOWS {
+        assert!(!tmp.path().join(w).exists(), "{w}");
+        assert!(!v["data"]["changes"].to_string().contains(w), "{w}");
+    }
+    // A rerun without --ci keeps none and still skips them.
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["workflows_skipped"],
+        serde_json::json!(GH_WORKFLOWS)
+    );
+    assert!(!tmp.path().join(GH_WORKFLOWS[0]).exists());
 }
 
 #[test]

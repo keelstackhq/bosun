@@ -147,8 +147,10 @@ pub fn vars_for(
     v
 }
 
-/// The CI provider of a checkout: `github` when it has Actions workflows, else `circleci` when it
-/// has `.circleci/`, else `none` (spec §9).
+/// The CI provider of a checkout: `circleci` when it has `.circleci/` and no Actions workflows,
+/// else `github`, the CI adopt installs (spec §11). `none` comes only from `--ci none`.
+/// A CircleCI repo with an unrelated workflow (say a release job) detects as `github`: pass
+/// `--ci circleci` there.
 fn detect_ci(root: &Path) -> &'static str {
     let has_workflows = std::fs::read_dir(root.join(".github/workflows")).is_ok_and(|d| {
         d.flatten().any(|e| {
@@ -157,16 +159,15 @@ fn detect_ci(root: &Path) -> &'static str {
                 .is_some_and(|x| x == "yml" || x == "yaml")
         })
     });
-    if has_workflows {
-        "github"
-    } else if root.join(".circleci").is_dir() {
+    if !has_workflows && root.join(".circleci").is_dir() {
         "circleci"
     } else {
-        "none"
+        "github"
     }
 }
 
-/// The first release whose config parser knows `[ci] provider` (spec §9).
+/// The first release whose config parser knows `[ci] provider` (spec §9). Keep in sync with the
+/// `ci` key in `KNOWN` of `tests/pinned_config.rs` and the minimum in spec §11.
 const CI_MIN: &str = "0.12.0";
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
@@ -449,6 +450,16 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     if !owner.is_empty() {
         tpls.push(OWNERS);
     }
+    // Without CI, adopt installs no GitHub workflows (spec §11).
+    let workflows_skipped: Vec<&str> = if ci.as_deref() == Some("none") {
+        tpls.iter()
+            .map(|t| t.path)
+            .filter(|p| p.starts_with(".github/workflows/"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    tpls.retain(|t| !workflows_skipped.contains(&t.path));
     let mut changes: Vec<Value> = Vec::new();
     let mut writes: Vec<(&Tpl, String)> = Vec::new();
     for t in &tpls {
@@ -593,6 +604,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         "stacks": stacks,
         "policy": a.policy,
         "ci": ci,
+        "workflows_skipped": workflows_skipped,
         "dry_run": a.dry_run,
         "changes": changes,
         "labels": labels,
