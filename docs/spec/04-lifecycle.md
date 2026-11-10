@@ -90,10 +90,15 @@ Conflict avoidance (three layers):
 SessionStart also gives the session its rules (no GitHub call): `Session rules (<role>): <role text> <all text>`; the role comes from the origin: `BOSUN_ORIGIN` wins, else `CLAUDE_CODE_CHILD_SESSION=1` means `spawned`, else `local`; an invalid `BOSUN_ORIGIN` falls back to the child-session check; `spawned` is `worker`, every other origin `orchestrator`. The text comes from `.bosun/session-rules.toml` at the git top level (keys `orchestrator`, `worker`, `all`; a missing file or key keeps the built-in text; an unknown key or bad TOML falls back to the defaults with a note naming the file and error). The block is appended on both the registered path and the could-not-reach-GitHub path.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
    It judges a Bash command's plain file writes the same way (`core::guard::bash_writes`): the
-   literal targets of `> f`, `>> f`, `tee f`, the last operand of `cp`, `mv` and `install`, and
-   the files of `sed -i` (after the script, or all operands with `-e`/`-f`); heredoc bodies are
-   data, `>&N` and `/dev/*` are skipped. Still not a sandbox. Known misses: expanded paths
-   (`> $f`), `2> f`, `cp -t DIR`, a directory destination (judged as the directory), writes
+   literal targets of `> f`, `>> f`, `N> f`, `&> f` and glued `x>f`, `tee f`, the last operand
+   of `cp`, `mv` and `install` (operands end at the first redirection), and the files of `sed -i`
+   (also in a cluster like `-ni`; after the script, or all operands with `-e`/`-f`), for the
+   command word after assignments, wrappers (`if`, `then`, `{`, `(`) and runners with their
+   options (`sudo -u x`, `env`, `time`); a heredoc body that no shell or interpreter on its line
+   reads is data, `>&N`, `/dev/*` and quoted words with spaces are skipped. Still not a sandbox.
+   Known misses: relative targets after any `cd`, `pushd` or `popd` (skipped: the hook cannot
+   tell where they land), expanded paths (`> $f`), `>| f`, `cp -t DIR` and
+   `--target-directory` (skipped), a directory destination (judged as the directory), writes
    inside interpreters or scripts, and every other writer (`dd of=`, `rsync`, `tar -x`, `git
    checkout -- f`, `patch`).
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
