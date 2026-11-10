@@ -43,6 +43,23 @@ cloud sessions install, and the optional Routines: create them from `data.routin
 `BOSUN_ROUTINES_OK=1`). Then write your first plan: section 6 of
 [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md), the long version, which also has undo.
 
+## Fresh cloud repo, full autonomy
+
+No CI, no key, no approvers file. The owner answers one chat form per gated PR (spec §8):
+
+1. Paste `bosun setup-snippet` once as the cloud environment's setup script.
+2. In the repo: `bosun adopt --policy autonomous --owner <login>`; commit, push, merge the setup PR.
+   Autonomous needs a pin that reads it (adopt checks); set `[ci] provider = "none"` in
+   `.bosun/bosun.toml` for a repo without CI.
+3. Approve by chat: the orchestrator asks (repo, PR, head SHA), then `bosun approve <pr> --chat`
+   posts the record for that head. No signing key; `.bosun/approvers.toml` is optional.
+4. Merge: with `provider = "none"` the orchestrator runs `bosun merge <pr>` (it re-checks every
+   gate on the exact head). With CI, auto-merge does it.
+
+Opt out of chat records with `[approvals] chat = false` in `.bosun/bosun.toml`. The key is known
+from release 0.12.0: pin that release first (the setup PR that moves `.bosun/version`), then set
+the key in a later PR; an older pin rejects it.
+
 ## For agents
 
 Read [AGENTS.md](AGENTS.md). Every command prints one JSON object (`ok`, `exit_code`, `data`,
@@ -149,9 +166,10 @@ Actions > allow GitHub Actions to create pull requests.
 ## Owner controls
 
 - **Approve a high-risk PR.** The session asks you with a form in the Claude Code chat (repo, PR,
-  head SHA; approve or hold); on approve the orchestrator posts the signed `bosun approve`
-  comment for that exact head (`bosun approve <pr>@<head> --sign-key <pem>`), the `risk`
-  workflow re-runs and `risk-check` turns green (D-012, spec §8, signed approvals). Fallback:
+  head SHA; approve or hold); on approve the orchestrator runs `bosun approve <pr> --chat`,
+  which posts the chat record for that exact head; `risk-check` counts it like your own comment
+  (spec §8, chat records). A signed `bosun approve <pr>@<head> --sign-key <pem>` still works
+  when you enrolled a key (D-012). Fallback:
   comment on the PR yourself, as a login in `governance/owners.toml`, with exactly
   `/bosun approve <head sha>` (the full 40-character SHA of the current head). A new push needs
   a new approval. A GitHub

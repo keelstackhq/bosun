@@ -1,0 +1,1 @@
+- Chat approval T11: docs for the full-autonomy setup, optional approvers file, `[approvals] chat` opt-out and the guard's prose limit; spec §4/§8 wording.

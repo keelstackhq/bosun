@@ -18,7 +18,8 @@ Do these on a computer first; the phone steps come after.
    them from the setup script (section 9).
 2. **Claude GitHub App.** Install it on the repo (GitHub → Settings → GitHub Apps). Cloud
    sessions reach GitHub through it.
-3. **Approval key.** Signed approvals need an ed25519 key. It signs for you, but the
+3. **Approval key (optional).** Chat approvals (section 9, item 4) need no key and no
+   `.bosun/approvers.toml`; skip this step then. Signed approvals need an ed25519 key. It signs for you, but the
    orchestrator session that posts approvals holds it: run this in that session's container
    (the key goes to `~/.bosun/approver.pem`, mode 0600, never inside the repo):
 
@@ -242,7 +243,11 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    reviewer runs `bosun verdict comment --from -` with the verdict JSON; the `verdict` workflow
    checks the comment and posts `review-verdict`. `bosun verdict post` works only outside the
    cloud.
-4. **Approvals.** By chat form (section 6), signed with a key in `.bosun/approvers.toml`. Who may
+4. **Approvals.** By chat form (section 6). The orchestrator records your answer with
+   `bosun approve <pr> --chat`; `risk-check` counts the record as your own comment, so no key and
+   no `.bosun/approvers.toml` is needed (the file is optional). A signature from a key in that
+   file still counts. `[approvals] chat = false` turns records off; the key is known from release
+   0.12.0, so pin that release in `.bosun/version` first and set the key in a later PR. Who may
    approve after bootstrap mode is `[approvals] policy` in `.bosun/bosun.toml`: `owner`
    (default), `owner-gated` (the orchestrator, only when R-ci alone matches and no workflow
    changes, e.g. `deny.toml`) or `orchestrator`. Workflow changes always need you. Bootstrap mode
@@ -255,7 +260,13 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    when every verdict on the exact head is clean and one is from an independent reviewer session, for a PR that
    closes an open task leased by its author. Everything else (workflows, `.bosun`, `channel/`,
    root files such as `Cargo.toml`, secrets, releases, tags, key or owner changes) still needs you.
-5. **Permission checks (Claude Code behaviour, not bosun's).** Each cloud session asks for its
+5. **Fresh repo, no CI, full autonomy.** Paste `bosun setup-snippet` once, then
+   `bosun adopt --policy autonomous --owner <login>`, commit and merge the setup PR. Add
+   `[ci] provider = "none"` under `[ci]` in `.bosun/bosun.toml` (`github` is the default;
+   `circleci` is the other value). With `none`, `bosun pr --ready` judges risk, verdict and
+   approval locally and the orchestrator merges with `bosun merge <pr>` (D-019): gates are
+   re-checked on the exact head, and a moved head is exit 3.
+6. **Permission checks (Claude Code behaviour, not bosun's).** Each cloud session asks for its
    own permissions. An orchestrator's go
    does not carry over to a child it spawns: a child that pushes or opens a PR can wait for your
    go in that child's own session. Open the child in the Claude app when it blocks.

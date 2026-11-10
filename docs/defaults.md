@@ -65,6 +65,7 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | Value | Default | Evidence |
 | ----- | ------- | -------- |
 | Approve confidence | >= 0.85 | Estimate (Q4). Below it, a second look is cheaper than a bad merge. Review with mode (a) data. |
+| Chat approval (`[approvals] chat`) | true (on) | Owner decision (plan 2026-11-10): one chat answer approves from the first PR, no key. Set `false` to ignore chat records. Known from release 0.12.0. |
 | Mode (b) agreement | 18 of 20 | Estimate (Q4). 90 % agreement on recorded PRs before the CI review may replace the subagent. |
 | PR run budget | 10 min | A wave of 6 agents waits on CI; 10 min keeps a fix round under an hour. Estimate. |
 | Merge queue budget | 15 min | It runs the full test suite and mutants; one queue entry per 15 min still merges a day's tasks. |
