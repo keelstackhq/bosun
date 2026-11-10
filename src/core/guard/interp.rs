@@ -4,7 +4,7 @@
 
 use super::{
     BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule, git_rule,
-    http_rule, literal_path, nested, shell_words, unwrap_runners,
+    http_rule, literal_path, nested, segments_with_sep, shell_words, unwrap_runners,
 };
 
 /// Interpreters and shells whose code or script the scan reads (a version suffix is dropped:
@@ -235,8 +235,12 @@ pub fn script_rules(
         default_branch,
     };
     for ScriptPath { path, shell, first } in script_paths(command, 0) {
-        // stdin by name: a heredoc there is in the command text, which `inline_rule` scans.
-        if STDIN.contains(&path.as_str()) && command.contains("<<") {
+        // stdin by name, fed by a heredoc on the same segment: the body is in the command
+        // text, which `inline_rule` scans. A heredoc elsewhere does not count.
+        let heredoc_fed = segments_with_sep(command)
+            .iter()
+            .any(|(s, _)| s.contains(path.as_str()) && s.contains("<<"));
+        if STDIN.contains(&path.as_str()) && heredoc_fed {
             continue;
         }
         let code = match read(&path) {
@@ -280,7 +284,7 @@ mod tests {
 
     fn script(cmd: &str, body: &str) -> Option<String> {
         let read = |p: &str| {
-            if p.ends_with("big.py") {
+            if p.ends_with("big.py") || p == "/dev/stdin" {
                 return Some(Script::Unreadable("larger than 1 MiB"));
             }
             let known = ["x.py", "x.sh", "x.mjs", "x.php", "x.ts", "x.rb"];
@@ -322,6 +326,14 @@ mod tests {
             script("python3 x.py big.py", "print(1)"),
             None,
             "an argument is data"
+        );
+        assert!(
+            script("python3 /dev/stdin < run.py; cat <<EOF\nx\nEOF", "").is_some(),
+            "a heredoc in another segment does not feed stdin"
+        );
+        assert_eq!(
+            script("python3 /dev/stdin <<'EOF'\nprint(1)\nEOF", ""),
+            None
         );
     }
 
