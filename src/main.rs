@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     // The CLI counts its own calls: a loop inside one script is one tool call for the hook.
     let args: Vec<String> = std::env::args().skip(1).collect();
     let repeated = (!is_hook)
-        .then(|| bosun::hooks::cli_repeat::check(dir.as_deref(), &args))
+        .then(|| bosun::hooks::cli_repeat::check(&args))
         .flatten();
     let result = match repeated {
         Some(e) => Err(e),

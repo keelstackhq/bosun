@@ -21,14 +21,9 @@ fn dir_of(dir: &Path) -> Option<PathBuf> {
     Some(dir.join(common).join("bosun").join("cli-repeat"))
 }
 
-fn cwd(dir: Option<&Path>) -> Option<PathBuf> {
-    dir.map(Path::to_path_buf)
-        .or_else(|| std::env::current_dir().ok())
-}
-
 /// Count this call (`args` without the program name); the refusal when it ran too often in a
 /// row. A warning goes to stderr. Any I/O failure skips the count.
-pub fn check(dir: Option<&Path>, args: &[String]) -> Option<BosunError> {
+pub fn check(args: &[String]) -> Option<BosunError> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let ci = ["CI", "GITHUB_ACTIONS", "CIRCLECI"]
         .iter()
@@ -37,7 +32,8 @@ pub fn check(dir: Option<&Path>, args: &[String]) -> Option<BosunError> {
     if !cli_counts(env("CLAUDECODE").as_deref(), ci) || is_poll(&command) {
         return None;
     }
-    let store = cwd(dir).as_deref().and_then(dir_of)?;
+    // The shell's directory, not `-C`: the hook resets from the repo the session runs in.
+    let store = dir_of(&std::env::current_dir().ok()?)?;
     let session = caller();
     let file = store.join(format!("{}.json", repeat_key(&session, "", "")));
     let prev: Option<Repeat> = std::fs::read(&file)

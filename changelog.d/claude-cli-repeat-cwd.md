@@ -1,0 +1,1 @@
+- The CLI repeat counter lives in the repo bosun runs in, not the `-C` directory, so the hook's next tool call resets it; the hook reads a deny from the parsed hook output.

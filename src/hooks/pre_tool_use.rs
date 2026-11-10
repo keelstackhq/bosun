@@ -35,7 +35,8 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
                 let out = super::refusal::apply(&d, t, tool_input, out);
                 let denied = out
                     .as_deref()
-                    .is_some_and(|o| o.contains("\"permissionDecision\""));
+                    .and_then(|o| serde_json::from_str::<Value>(o).ok())
+                    .is_some_and(|v| v["hookSpecificOutput"]["permissionDecision"] == "deny");
                 if !denied {
                     super::cli_repeat::reset(&d, t, tool_input);
                 }

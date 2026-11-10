@@ -207,3 +207,22 @@ fn a_denied_tool_call_does_not_reset_the_count() {
     );
     assert_eq!(run(tmp.path(), "s", CALL).0, 6);
 }
+
+/// `-C <other repo>` still counts in the repo the shell (and so the hook) runs in, so the
+/// hook's next tool call resets it.
+#[test]
+fn a_call_with_dash_c_counts_where_the_hook_resets() {
+    let here = repo();
+    let other = repo();
+    let o = other.path().to_str().unwrap();
+    let call = ["-C", o, "release", "999"];
+    for _ in 0..4 {
+        run(here.path(), "s", &call);
+    }
+    assert!(!other.path().join(".git/bosun/cli-repeat").exists());
+    hook(
+        here.path(),
+        &json!({"tool_name": "Read", "tool_input": {"file_path": "x"}}),
+    );
+    assert_ne!(run(here.path(), "s", &call).0, 6);
+}
