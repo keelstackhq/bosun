@@ -1,0 +1,1 @@
+- 2026-11-10 · #500 part 1 · `bosun schema`: envelope + top-command data shapes, drift-checked in tests · PR closes part of #500
