@@ -1,1 +1,0 @@
-- `bosun hook pre-compact` prints the session's bosun state (leases, branch, open PR, last refusal, next step) for the compaction summary, and the SessionStart hook adds it back after a compaction; wired as the PreCompact hook, it never blocks (spec §4).

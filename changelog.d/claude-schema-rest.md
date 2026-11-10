@@ -1,1 +1,0 @@
-- `bosun schema` describes the `data` of every command (no `{..}` left); the test check also covers `error.kind` and an empty `next` on failures.

@@ -388,3 +388,18 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-09 · update 4 · pin and doctor polish (dated branch, step 17 always, human-only left) · PR #478
 - 2026-11-09 · pin bosun 0.11.0 (bosun pin --latest)
 - 2026-11-09 · pinned config · 0.11.0 approvals row (review_models); no setup-script paste after a pin
+- 2026-11-10 · plan fix · B4 UCs renumbered so the app-checks plan imports · PR #509
+- 2026-11-10 · B2/T1 · check-run client in src/github (create, update, filter=all, app_id) · PR #521
+- 2026-11-10 · B2/T2 · `[checks]` config and the hoist.toml table form of required_checks · PR #523
+- 2026-11-10 · B2/T3 · gate writer with statuses, dual and checks modes · PR #526
+- 2026-11-10 · B2/T4 · read gates and verdict records back by App; [checks] in R-weaken · PR #530
+- 2026-11-10 · B2/T5 · checks-mode refusals and the doctor pin check; unreadable required_checks flagged · PR #532
+- 2026-11-10 · #524 (#502 PR 2) · the CLI counts its own calls, so an in-script loop trips the repeat limit · PR #525
+- 2026-11-10 · #528 (#524 follow-up) · the CLI repeat counter is keyed to the hook's repo; deny parsed from JSON · PR #529
+- 2026-11-10 · #510 · edit-lock judges plain Bash file writes like an Edit · PR #511
+- 2026-11-10 · #503 · merge-lock reads interpreter code and the scripts interpreters and shells run · PR #505
+- 2026-11-10 · #500 part 1 · `bosun schema`: envelope + top-command data shapes, drift-checked in tests · PR #507
+- 2026-11-10 · #500 part 2 · `bosun schema`: data shapes of all remaining commands, stricter error-envelope check · PR #522
+- 2026-11-10 · #500 part 3 · `bosun schema --format ts` + README Code Mode section · PR #527
+- 2026-11-10 · #502 PR 1 · sticky refusal markers shown by the PreToolUse hook; a kill-switch halt refuses writes · PR #506
+- 2026-11-10 · compaction · PreCompact state block and SessionStart re-injection after compaction · PR #533

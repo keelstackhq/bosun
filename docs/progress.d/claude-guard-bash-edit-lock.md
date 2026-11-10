@@ -1,1 +1,0 @@
-- 2026-11-10 · #510 · edit-lock judges plain Bash file writes like an Edit · PR #511

@@ -4,6 +4,23 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- Plan `2026-10-28-app-checks-team-owners.md`: the B4 UCs are numbered without gaps, so `bosun plan import` and `bosun prereqs` read it again.
+- `src/github`: gate check runs — `create_check_run` and `update_check_run` (only `in_progress`, `success` or `failure`, never `neutral` or `skipped`), `check_runs_all` (`filter=all`), and `CheckRun.app_id` (spec §15, B2/T1).
+- `.bosun/bosun.toml` `[checks]`: `mode = "statuses" | "dual" | "checks"` (default `statuses`) with `app_id` and `app_slug` (required unless `statuses`); hoist.toml `[github] required_checks` reads `{ context, app | integration_id }` tables beside strings (spec §15, B2/T2).
+- `risk-check`, `verdict post`/`apply`, `gate main-open`, `main-health` and `review-ci` post the gates through one writer: with `[checks] mode = "dual"` a status and a gate App check run (token from `BOSUN_APP_TOKEN`; missing, the run is skipped with `data.checks_skipped`), with `"checks"` only the check run (missing token: exit 1). Default `statuses` changes nothing (spec §15, B2/T3).
+- In `[checks] mode = "checks"`, bosun reads its gates back only from the gate App's check runs (`approve --list`, `pr --auto-merge`, risk-check carry, review-pack) and counts only verdict records written by `<app_slug>[bot]`, which `verdict apply` then writes with the App token, defused; a `[checks]` change is R-weaken evidence (spec §15, B2/T4).
+- In `[checks] mode = "checks"`, `bosun verdict post` is refused (use `bosun verdict comment`) and `bosun approve --main-open` is exit 3 (re-run the main-open workflow); `doctor` reads the hoist.toml table form of `required_checks` and flags an unreadable list, and `doctor --remote` warns when a gate is not pinned to the gate App or the token can list the Actions secrets; `[checks]` refuses GitHub Actions as the gate App, and the App's verdict record keeps its JSON line intact (spec §15, B2/T5).
+- The CLI counts its own calls per session: the same bosun call five times in a row with no other tool call in between (a loop inside one script) is refused with exit 6, as the repeat-lock refuses repeated Bash calls; polls are not counted.
+- The CLI repeat counter and the sticky refusal markers live in the repo bosun runs in, not the `-C` directory, so the hook resets and shows them; the hook reads a deny from the parsed hook output.
+- edit-lock judges plain Bash file writes (`> f`, `tee f`, `cp|mv|install .. f`, `sed -i f`) like an Edit.
+- merge-lock reads interpreter code (`python -c`, `node -e`, heredocs) and the scripts interpreters and shells run.
+- The merge-lock skips a `/dev/stdin` script only when a heredoc on its own segment feeds it.
+- `bosun schema [<command>]` prints the envelope contract and each command's `data` as JSON Schema (status, claim, gate, pr, verdict, risk-check, approve, spawn, wait, heartbeat and release described; the rest follow); tests check every envelope against it.
+- `bosun schema` describes the `data` of every command (no `{..}` left); the test check also covers `error.kind` and an empty `next` on failures.
+- `bosun schema --format ts` prints TypeScript declarations of the contract (`declare namespace bosun`, one typed function per command) in `data.ts`; `bosun schema <group>` names its subcommands; README "Using bosun from code (Code Mode)".
+- Sticky refusals: a bosun exit 4, 5 or 6 (3 from `claim`) leaves a per-session marker; the PreToolUse hook shows its fix on the next tool call and, while halted, refuses writes and pushes until `bosun status` shows the halt lifted, so a script that swallows an exit code cannot go on blind.
+- `bosun hook pre-compact` prints the session's bosun state (leases, branch, open PR, last refusal, next step) for the compaction summary, and the SessionStart hook adds it back after a compaction; wired as the PreCompact hook, it never blocks (spec §4).
+
 ## 0.12.1 (2026-11-10)
 
 - `bosun` reads the token's own repo permission from `GET /repos/{o}/{r}` when a proxy blocks `/collaborators` (Claude Code cloud), so `bosun budget record --pr` and other writer checks work there; other users still need the collaborators endpoint.

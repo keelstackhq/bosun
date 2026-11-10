@@ -1,1 +1,0 @@
-- In `[checks] mode = "checks"`, bosun reads its gates back only from the gate App's check runs (`approve --list`, `pr --auto-merge`, risk-check carry, review-pack) and counts only verdict records written by `<app_slug>[bot]`, which `verdict apply` then writes with the App token, defused; a `[checks]` change is R-weaken evidence (spec §15, B2/T4).

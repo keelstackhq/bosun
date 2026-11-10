@@ -1,1 +1,0 @@
-- 2026-11-10 · compaction · PreCompact state block and SessionStart re-injection after compaction

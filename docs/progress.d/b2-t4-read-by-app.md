@@ -1,1 +1,0 @@
-- 2026-11-10 · B2/T4 · read gates and verdict records back by App; [checks] in R-weaken
