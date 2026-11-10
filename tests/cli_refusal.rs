@@ -203,3 +203,69 @@ fn a_main_red_halt_is_shown_but_leaves_writes_open() {
         "{ctx}"
     );
 }
+
+#[test]
+fn a_lifted_kill_switch_unlocks_writes_while_main_is_red() {
+    let fake = FakeGithub::start();
+    fake.variable("BOSUN_HALT", "1");
+    fake.issue(9, "main red", &["bosun:main-red"], "x");
+    fake.issue(7, "task", &[], "x");
+    let tmp = repo();
+    let (code, v) = cmd(&fake, tmp.path(), &["claim", "7"]);
+    assert_eq!(code, 4, "{v}");
+    let out = hook(tmp.path(), "session_me", &write_outside());
+    assert_eq!(out["hookSpecificOutput"]["permissionDecision"], "deny");
+    fake.variable("BOSUN_HALT", "0");
+    let (code, v) = cmd(&fake, tmp.path(), &["status"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["main_red"], 9, "{v}");
+    assert_eq!(markers(tmp.path()), 0);
+    assert_eq!(
+        hook(tmp.path(), "session_me", &write_outside()),
+        Value::Null
+    );
+}
+
+/// Without `BOSUN_SESSION` both sides fall back to `local-<host>`; a refusal shown once and
+/// cleared is gone for good, and the same refusal again is shown again.
+#[test]
+fn a_local_host_marker_is_shown_once_and_cleared_for_good() {
+    let fake = FakeGithub::start();
+    fake.issue(4, "held", &[], "x");
+    fake.comment(4, &lease_note("session_other", LIVE, "src/**"));
+    let tmp = repo();
+    let run = |args: &[&str]| {
+        let out = bosun()
+            .current_dir(tmp.path())
+            .env("BOSUN_GITHUB_API", fake.url())
+            .env_remove("BOSUN_SESSION")
+            .env("HOSTNAME", "box")
+            .args(args)
+            .output()
+            .unwrap();
+        out.status.code().unwrap()
+    };
+    let local_hook = || {
+        let out = bosun()
+            .current_dir(tmp.path())
+            .env_remove("BOSUN_SESSION")
+            .env("HOSTNAME", "box")
+            .args(["hook", "pre-tool-use"])
+            .write_stdin(read(tmp.path()).to_string())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    assert_eq!(run(&["claim", "4", "--touch", "src/**"]), 3);
+    assert!(local_hook().contains("bosun refusal"));
+    assert_eq!(local_hook(), "", "shown once");
+    assert_eq!(run(&["claim", "4", "--touch", "src/**"]), 3);
+    assert!(
+        local_hook().contains("bosun refusal"),
+        "a new refusal shows again"
+    );
+    fake.issue(5, "free", &["bosun:state/ready"], "x");
+    assert_eq!(run(&["claim", "5", "--touch", "docs/**"]), 0);
+    assert_eq!(markers(tmp.path()), 0);
+    assert_eq!(local_hook(), "");
+}

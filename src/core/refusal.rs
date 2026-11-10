@@ -12,9 +12,6 @@ pub struct Refusal {
     pub exit_code: u8,
     pub fix: String,
     pub at: String,
-    /// The hook already injected it once.
-    #[serde(default)]
-    pub shown: bool,
     /// A kill-switch halt: writes are refused while it stands.
     #[serde(default)]
     pub lock: bool,
@@ -54,17 +51,18 @@ pub fn mine(session: &str, caller: &str) -> bool {
 }
 
 /// Whether a successful `command` (its `data`) clears `r`: the same command, a command the fix
-/// names as `bosun <command>`, or for a halt `bosun status` showing no halt and no main-red.
+/// names as `bosun <command>`, or `bosun status` showing the halt lifted: `halted: false`
+/// alone for a kill-switch lock, and also no main-red or process-red for any other exit 4.
 pub fn clears(r: &Refusal, command: &str, data: &Value) -> bool {
     if command == r.command || names(&r.fix, command) {
         return true;
     }
+    if command != "status" || r.exit_code != HALTED {
+        return false;
+    }
     let none = |k: &str| data.get(k).is_none_or(|v| v.is_null() || v == false);
-    command == "status"
-        && r.exit_code == HALTED
-        && data.get("halted") == Some(&Value::Bool(false))
-        && none("main_red")
-        && none("process_red")
+    data.get("halted") == Some(&Value::Bool(false))
+        && (r.lock || (none("main_red") && none("process_red")))
 }
 
 fn names(fix: &str, command: &str) -> bool {
@@ -192,7 +190,6 @@ mod tests {
             exit_code,
             fix: fix.into(),
             at: "t".into(),
-            shown: false,
             lock: exit_code == HALTED,
         }
     }
@@ -252,7 +249,12 @@ mod tests {
         let red = json!({"halted": false, "main_red": 12});
         let still = json!({"halted": true, "main_red": null});
         assert!(clears(&r("claim", 4, "wait"), "status", &lifted));
-        assert!(!clears(&r("claim", 4, "wait"), "status", &red));
+        // A lifted kill switch clears its lock even while main is red; a main-red halt waits.
+        assert!(clears(&r("claim", 4, "wait"), "status", &red));
+        let mut main_red = r("claim", 4, "wait for #12");
+        main_red.lock = false;
+        assert!(!clears(&main_red, "status", &red));
+        assert!(clears(&main_red, "status", &lifted));
         assert!(!clears(&r("claim", 4, "wait"), "status", &still));
         assert!(!clears(&r("pr", 6, "wait"), "status", &lifted));
     }

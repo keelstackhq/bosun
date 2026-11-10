@@ -69,10 +69,10 @@ pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
                 exit_code: e.exit.code(),
                 fix: e.fix.clone(),
                 at: now_text(),
-                shown: false,
                 lock: locks(e.exit.code(), &e.message, &e.fix),
             };
             let file = store.join(format!("{}.json", repeat_key(&session, command, "")));
+            let _ = std::fs::remove_file(shown_of(&file));
             if let Err(e) = write(&file, &r) {
                 eprintln!("bosun: warning: cannot write the refusal marker: {e}");
             }
@@ -80,12 +80,35 @@ pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
         Ok(out) => {
             for (file, r) in all(&store) {
                 if mine(&r.session, &session) && clears(&r, command, &out.data) {
-                    let _ = std::fs::remove_file(file);
+                    let _ = std::fs::remove_file(&file);
+                    let _ = std::fs::remove_file(shown_of(&file));
                 }
             }
         }
         Err(_) => {}
     }
+}
+
+/// `<key>.shown`: holds the marker's bytes once the hook injected it. The hook never rewrites
+/// the marker itself, so a marker a command removed cannot come back.
+fn shown_of(file: &Path) -> PathBuf {
+    file.with_extension("shown")
+}
+
+/// Whether the hook already injected this exact marker.
+fn was_shown(file: &Path) -> bool {
+    match (std::fs::read(file), std::fs::read(shown_of(file))) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn mark_shown(file: &Path) -> std::io::Result<()> {
+    let bytes = std::fs::read(file)?;
+    let shown = shown_of(file);
+    let tmp = shown.with_extension(format!("shown.tmp{}", std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, shown)
 }
 
 fn now_text() -> String {
@@ -122,14 +145,10 @@ pub fn apply(cwd: &Path, tool: &str, tool_input: &Value, out: Option<String>) ->
         return Some(super::pre_tool_use::deny(&halted_deny(r)));
     }
     let mut lines: Vec<String> = Vec::new();
-    for (file, r) in marks.iter_mut().filter(|(_, r)| !r.shown) {
+    for (file, r) in marks.iter().filter(|(f, _)| !was_shown(f)) {
         lines.push(context(r));
-        r.shown = true;
-        // A marker a command cleared meanwhile stays gone.
-        if file.exists()
-            && let Err(e) = write(file, r)
-        {
-            eprintln!("bosun: warning: cannot update the refusal marker: {e}");
+        if let Err(e) = mark_shown(file) {
+            eprintln!("bosun: warning: cannot mark the refusal marker shown: {e}");
         }
     }
     if lines.is_empty() {
