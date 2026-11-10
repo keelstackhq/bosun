@@ -26,21 +26,25 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> String {
     {
         eprintln!("bosun: trailers hook: {}", e.message);
     }
-    // After compaction the summary may have lost the state: add it back (spec §4).
-    let state = match dir.as_deref() {
-        Some(d) if input.get("source").and_then(Value::as_str) == Some("compact") => {
-            super::compact::safe_block(d)
-                .map(|b| format!("\n{b}"))
-                .unwrap_or_default()
-        }
-        _ => String::new(),
-    };
     let lessons = format!(
-        "{}{}{state}",
+        "{}{}",
         lessons_block(dir.as_deref()),
         pin_block(dir.as_deref())
     );
-    match context(dir.as_deref()) {
+    let registered = context(dir.as_deref());
+    // After compaction the summary may have lost the state: add it back (spec §4). Built after
+    // `context`, which refreshed the lease cache the block reads.
+    let lessons = match dir.as_deref() {
+        Some(d) if input.get("source").and_then(Value::as_str) == Some("compact") => {
+            let block = super::compact::safe_block(d);
+            format!(
+                "{lessons}{}",
+                block.map(|b| format!("\n{b}")).unwrap_or_default()
+            )
+        }
+        _ => lessons,
+    };
+    match registered {
         Ok(text) => output(&format!(
             "{text}{lessons}\n{}",
             rules_context(dir.as_deref())

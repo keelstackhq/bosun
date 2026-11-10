@@ -108,6 +108,7 @@ fn pre_compact_prints_the_state_block_as_plain_text() {
     let (fake, tmp) = (FakeGithub::start(), repo());
     leased(&fake);
     fake.pull(12, "my task", "feat/x", "Closes #5");
+    warm(&fake, tmp.path());
     let o = hook(
         Some(&fake),
         tmp.path(),
@@ -226,6 +227,7 @@ fn detached_head_is_named_and_the_newest_lease_drives_the_next_step() {
         &lease_note("session_me", "2026-10-22T10:40:00Z", "src/**"),
     );
     git(tmp.path(), &["checkout", "-q", "--detach"]);
+    warm(&fake, tmp.path());
     let o = hook(
         Some(&fake),
         tmp.path(),
@@ -234,4 +236,44 @@ fn detached_head_is_named_and_the_newest_lease_drives_the_next_step() {
     );
     assert!(o.stdout.contains("branch (detached)"), "{}", o.stdout);
     assert!(o.stdout.contains("`bosun pr 6`"), "{}", o.stdout);
+}
+
+/// A normal SessionStart, which writes the lease cache.
+fn warm(fake: &FakeGithub, repo: &Path) {
+    let mut i = input(repo, "SessionStart");
+    i["source"] = json!("startup");
+    assert_eq!(hook(Some(fake), repo, "session-start", &i).code, 0);
+}
+
+#[test]
+fn pre_compact_reads_leases_from_the_cache_only() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    leased(&fake);
+    let o = hook(
+        Some(&fake),
+        tmp.path(),
+        "pre-compact",
+        &input(tmp.path(), "PreCompact"),
+    );
+    assert!(o.stdout.contains("leases: none"), "{}", o.stdout);
+    let issue_reads = fake
+        .requests()
+        .iter()
+        .filter(|r| r.path.contains("/issues"))
+        .count();
+    assert_eq!(issue_reads, 0, "only the PR lookup may reach GitHub");
+}
+
+#[test]
+fn the_pre_compact_hook_entry_has_a_short_timeout() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for file in [
+        ".claude/settings.json",
+        "channel/pieces/core/files/.claude/settings.json",
+    ] {
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(file)).unwrap()).unwrap();
+        let h = &v["hooks"]["PreCompact"][0]["hooks"][0];
+        assert_eq!(h["timeout"], 15, "{file}");
+    }
 }

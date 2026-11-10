@@ -36,7 +36,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "out=$(bosun hook pre-compact) && printf '%s\\n' \"$out\"; exit 0"
+            "command": "out=$(bosun hook pre-compact) && printf '%s\\n' \"$out\"; exit 0",
+            "timeout": 15
           }
         ]
       }

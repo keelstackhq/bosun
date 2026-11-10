@@ -1,8 +1,11 @@
 //! The bosun state block that survives compaction (spec §4): `bosun hook pre-compact` prints it
 //! for the summary, and `bosun hook session-start` with source `compact` adds it back. It never
-//! blocks compaction and prints no secret: only ids, globs, branch names and shas.
+//! blocks compaction and prints no secret: only ids, globs, branch names and shas. Leases come
+//! from the lease cache only; the one GitHub call (the PR lookup) waits at most `PR_WAIT`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use super::{cache, git_out, refusal};
 use crate::app::App;
@@ -11,8 +14,11 @@ use crate::core::refusal::{context, mine};
 use crate::github::IssueState;
 use crate::time::Timestamp;
 
-/// PreCompact: plain text, which Claude Code adds to the summary instructions. A panic or any
-/// error still prints what is known; the hook always exits 0.
+/// The longest wait for the PR lookup; the settings entry caps the whole hook at 15 s.
+const PR_WAIT: Duration = Duration::from_secs(5);
+
+/// PreCompact: plain text, which Claude Code adds to the summary instructions. An error drops
+/// only what it touches; a panic prints nothing. The hook always exits 0.
 pub fn pre_compact(cwd: Option<&Path>) -> Option<String> {
     let dir = cwd
         .map(Path::to_path_buf)
@@ -90,38 +96,48 @@ fn state_block(dir: &Path) -> String {
 /// Own leases and the branch's open PR. Leases come from GitHub (through the cache), else the
 /// cache alone; the PR needs GitHub.
 fn remote(dir: &Path, me: &str, branch: Option<&str>) -> (Vec<Lease>, Option<OpenPr>) {
-    let own = |ls: Vec<Lease>| -> Vec<Lease> {
-        ls.into_iter().filter(|l| mine(&l.session, me)).collect()
-    };
-    let app = match App::load(Some(dir)) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("bosun: warning: pre-compact: {}", e.message);
-            return (own(cache::cached_live(dir, now())), None);
-        }
-    };
-    let file: Option<PathBuf> = cache::path(dir);
-    let leases = cache::leases(&app, file.as_deref()).unwrap_or_else(|e| {
-        eprintln!("bosun: warning: pre-compact: {e}");
-        cache::cached_live(dir, app.ctx.now)
-    });
+    let leases = cache::cached_live(dir, now())
+        .into_iter()
+        .filter(|l| mine(&l.session, me))
+        .collect();
     let pr = branch
         .filter(|b| !["main", "master", "HEAD"].contains(b))
-        .and_then(|b| {
-            let head = format!("{}:{b}", app.ctx.repo.owner);
+        .and_then(|b| open_pr(dir, b));
+    (leases, pr)
+}
+
+/// The branch's open PR from GitHub, in a thread so a slow API costs at most `PR_WAIT`.
+fn open_pr(dir: &Path, branch: &str) -> Option<OpenPr> {
+    let (tx, rx) = mpsc::channel();
+    let (dir, branch) = (dir.to_path_buf(), branch.to_string());
+    std::thread::spawn(move || {
+        let lookup = || -> Result<Option<OpenPr>, String> {
+            let app = App::load(Some(&dir)).map_err(|e| e.message)?;
+            let head = format!("{}:{branch}", app.ctx.repo.owner);
             let found = app.gh.list_pulls(Some(&head), IssueState::Open);
-            found
-                .map_err(|e| eprintln!("bosun: warning: pre-compact: {}", e.message))
-                .ok()?
+            Ok(found
+                .map_err(|e| e.message)?
                 .into_iter()
                 .next()
-        })
-        .map(|p| OpenPr {
-            number: p.number,
-            head: p.head_sha,
-            draft: p.draft,
-        });
-    (own(leases), pr)
+                .map(|p| OpenPr {
+                    number: p.number,
+                    head: p.head_sha,
+                    draft: p.draft,
+                }))
+        };
+        let _ = tx.send(lookup());
+    });
+    match rx.recv_timeout(PR_WAIT) {
+        Ok(Ok(pr)) => pr,
+        Ok(Err(e)) => {
+            eprintln!("bosun: warning: compaction state: {e}");
+            None
+        }
+        Err(_) => {
+            eprintln!("bosun: warning: compaction state: no PR lookup within {PR_WAIT:?}");
+            None
+        }
+    }
 }
 
 fn now() -> Timestamp {
