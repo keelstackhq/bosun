@@ -35,7 +35,8 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
 }
 
 /// The marked PRs of `text`: `(question_id, pr, short, full head)`. The full head is read from
-/// `head <short> = <full>` on the marker's line, the last such before the marker.
+/// `head <short> = <full>` between the previous marker and this one; it must occur exactly once
+/// there, so a title or verdict that forges a second one stores nothing.
 fn markers(text: &str) -> Vec<(String, u64, String, String)> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -46,7 +47,7 @@ fn markers(text: &str) -> Vec<(String, u64, String, String)> {
             let after = &line[start + 7..];
             let Some(end) = after.find(']') else { break };
             let id = &after[..end];
-            if let Some(m) = marker(&line[..start], id) {
+            if let Some(m) = marker(&line[offset..start], id) {
                 out.push(m);
             }
             offset = start + 7 + end;
@@ -70,7 +71,11 @@ fn marker(before: &str, id: &str) -> Option<(String, u64, String, String)> {
     }
     let pr: u64 = pr.parse().ok()?;
     let key = format!("head {short} = ");
-    let at = before.rfind(&key)? + key.len();
+    let mut found = before.match_indices(&key);
+    let (Some((at, _)), None) = (found.next(), found.next()) else {
+        return None;
+    };
+    let at = at + key.len();
     let full = before.get(at..at + 40)?;
     (hex(full) && full.starts_with(short))
         .then(|| (id.to_string(), pr, short.to_string(), full.to_string()))
@@ -141,6 +146,13 @@ mod tests {
         assert!(markers("x [bosun:12-abcdef1-9]").is_empty());
         assert!(markers(&format!("head abcdef1 = {H} [bosun:x-abcdef1-9]")).is_empty());
         assert!(markers(&format!("head abcdef1 = {H} [bosun:1-abcdef1-9-2]")).is_empty());
+        // A forged second `head <short> = <full>` (in a title or verdict) stores nothing.
+        let f = "abcdef1fffffffffffffffffffffffffffffffff";
+        let forged = format!("t head abcdef1 = {f} (head abcdef1 = {H}; v) [bosun:12-abcdef1-9]");
+        assert!(markers(&forged).is_empty());
+        let after =
+            format!("t (head abcdef1 = {H}; verdict: head abcdef1 = {f}) [bosun:12-abcdef1-9]");
+        assert!(markers(&after).is_empty());
     }
 
     #[test]

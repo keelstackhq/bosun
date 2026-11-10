@@ -203,6 +203,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             "run `bosun approve --list`, then the command in its data.approve_command",
         ));
     }
+    if args.chat {
+        return super::approve_chat::run(dir, args);
+    }
     if let Some(key) = &args.sign_key {
         return sign(dir, args, key);
     }
