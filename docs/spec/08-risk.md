@@ -336,7 +336,10 @@ High-risk PRs:
   `message`, `message_id` (8 hex characters of the SHA-256 of the shown pairs' sorted
   `<pr>@<head>` lines) and `message_pairs` (at most 10, the binding). Titles are untrusted and
   shown inert; only the latest relayed message is answerable, PR numbers come only from the
-  owner's chat, and each (id, pr) is signed at most once (design F7). `--list` shows each
+  owner's chat, and each (id, pr) is signed at most once (design F7). Each ready item has an
+  `ask` and `next` holds the owner question (AskUserQuestion, or `slack_post` for origin
+  `slack`; §14); a PR the owner held at its current head is in `data.held[]`, not asked
+  again (§14). `--list` shows each
   open PR whose `risk-check` status is `failure` with a description that starts `high risk,
   owner approval needed`, whose `review-verdict` is `success` and whose `ci-ok` is green. Only
   statuses created by `github-actions[bot]` count (anyone with write access can post a status
