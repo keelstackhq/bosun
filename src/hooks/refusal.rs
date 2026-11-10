@@ -53,6 +53,7 @@ fn all(dir: &Path) -> Vec<(PathBuf, Refusal)> {
 
 /// After a command (not a hook): a sticky refusal writes its marker; a success clears the
 /// session's markers it answers.
+/// `dir` is `None` in the CLI (the shell's repo, where the hook reads); tests pass a repo.
 pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
     let cwd = dir
         .map(Path::to_path_buf)
