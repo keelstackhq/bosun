@@ -152,7 +152,8 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
             BosunError::needs_human(
                 e.message,
                 format!(
-                    "the orchestrator runs `bosun approve --list`, asks the owner and records the answer (`bosun approve {pr}@{head} --chat --question <id>`); then rerun `{rerun}`"
+                    "the orchestrator runs `bosun approve --list`, asks the owner and records the answer (`bosun approve {pr}@{head} --chat --question <id>`), or: {}; then rerun `{rerun}`",
+                    e.fix
                 ),
             ),
             &data,

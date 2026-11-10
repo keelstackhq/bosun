@@ -295,6 +295,41 @@ fn approve_list_no_ci_ignores_non_writer_summary() {
 }
 
 #[test]
+fn ready_no_ci_draft_marked_ready() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.pull_set(20, "draft", json!(true));
+    verdict(&fake, "session_rev", "approve");
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert!(!fake.pull_is_draft(20));
+    assert_eq!(v["data"]["task_state"], "queued", "{v}");
+}
+
+#[test]
+fn ready_no_ci_draft_ccr_refusal_is_pending() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.pull_set(20, "draft", json!(true));
+    fake.graphql_status(
+        403,
+        "403 GraphQL is not available from Claude Code sessions",
+    );
+    verdict(&fake, "session_rev", "approve");
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ready"], "pending", "{v}");
+    assert_eq!(
+        v["next"][0]["tool"], "mcp__github__update_pull_request",
+        "{v}"
+    );
+    assert_eq!(v["next"][0]["args"]["draft"], false, "{v}");
+    assert!(fake.pull_is_draft(20));
+    assert_eq!(v["data"]["task_state"], Value::Null, "{v}");
+    // The rerun after the tool call does not post the summary again.
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    assert_eq!(summaries(&fake).len(), 1);
+}
+
+#[test]
 fn ready_no_ci_escalated_verdict_does_not_count() {
     let (fake, dir) = setup(false, Some(NO_CI));
     verdict_with(&fake, "session_rev", "approve", true);
