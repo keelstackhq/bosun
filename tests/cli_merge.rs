@@ -82,6 +82,10 @@ fn setup(high: bool, ci: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
 }
 
 fn verdict(fake: &FakeGithub) {
+    verdict_by(fake, "session_rev");
+}
+
+fn verdict_by(fake: &FakeGithub, session: &str) {
     let head = fake.pull_head(20);
     let v = Verdict::parse(
         &json!({"pr": 20, "head_sha": head, "verdict": "approve", "confidence": 0.95,
@@ -89,7 +93,7 @@ fn verdict(fake: &FakeGithub) {
         .to_string(),
     )
     .unwrap();
-    fake.comment_by(20, "rev", &comment_body(&v, "session_rev", None));
+    fake.comment_by(20, "rev", &comment_body(&v, session, None));
 }
 
 fn chat(fake: &FakeGithub) {
@@ -297,4 +301,50 @@ fn merge_already_merged_is_ok() {
     assert_eq!(v["data"]["merged"], true);
     assert!(merge_puts(&fake).is_empty());
     assert!(fake.labels_of(7).contains(&"bosun:state/merged".into()));
+}
+
+/// A stacked PR (base is not the default branch): exit 3, nothing merged, task unchanged.
+#[test]
+fn merge_stacked_base_refused() {
+    let (fake, dir) = setup(false, None);
+    green(&fake, None);
+    fake.pull_set(20, "base", json!({"sha": BASE, "ref": "claude/other"}));
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 3, "{v}");
+    assert!(merge_puts(&fake).is_empty());
+    assert!(fake.labels_of(7).contains(&"bosun:state/review".into()));
+}
+
+/// No CI, a ready summary, but the only verdict is the orchestrator's own: exit 5.
+#[test]
+fn merge_no_ci_verdict_only_from_merger_refused() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict_by(&fake, ORCH);
+    // The author's ready accepts it (another session); the merger's own verdict does not count.
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(merge_puts(&fake).is_empty());
+}
+
+#[test]
+fn merge_closed_unmerged_is_conflict() {
+    let (fake, dir) = setup(false, None);
+    fake.pull_set(20, "state", json!("closed"));
+    assert_eq!(merge(&fake, dir.path()).0, 3);
+    assert!(merge_puts(&fake).is_empty());
+}
+
+/// The token or proxy cannot merge: exit 5, the owner merges in the GitHub app.
+#[test]
+fn merge_forbidden_is_needs_human() {
+    let (fake, dir) = setup(false, None);
+    green(&fake, None);
+    fake.fail_path("/pulls/20/merge", 403);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"].as_str().unwrap().contains("GitHub app"),
+        "{v}"
+    );
 }

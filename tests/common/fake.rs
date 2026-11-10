@@ -580,7 +580,6 @@ impl FakeGithub {
         self.state.lock().unwrap().log_mode = mode;
     }
 
-    /// The merge method of the pull's enabled auto-merge, if any.
     /// Whether pull `number` is merged.
     pub fn merged(&self, number: u64) -> bool {
         let s = self.state.lock().unwrap();
@@ -589,6 +588,7 @@ impl FakeGithub {
             .any(|p| p["number"] == number && p["merged"] == true)
     }
 
+    /// The merge method of the pull's enabled auto-merge, if any.
     pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
         self.state.lock().unwrap().auto_merge.get(&number).cloned()
     }

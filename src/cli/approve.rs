@@ -157,15 +157,16 @@ fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
             Some("admin" | "write")
         ))
     };
-    for c in comments.iter().rev() {
+    for (i, c) in comments.iter().enumerate().rev() {
         if parse_ready_summary(&c.body, &p.head_sha) && writer(&c.user)? {
             let (r, verdict) = summary_readiness(Some(&c.body));
-            // A chat answer for this head after the summary: the owner already approved.
+            // A chat answer for this head after the summary: the owner already answered (display
+            // only; risk-check at `bosun merge` judges whether it counts).
             let answered = |c: &&crate::github::Comment| {
                 c.unedited() && parse_chat_record(&c.body, &p.head_sha).is_some()
             };
             if matches!(r, Readiness::Ready(_)) {
-                for a in comments.iter().filter(answered) {
+                for a in comments[i + 1..].iter().filter(answered) {
                     if writer(&a.user)? {
                         return Ok((Readiness::NotWaiting, verdict));
                     }

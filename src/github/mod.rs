@@ -868,7 +868,10 @@ impl Github for LiveGithub {
         let body = json!({"sha": sha, "merge_method": method});
         match self.http.send_json("PUT", &path, &body) {
             Ok(_) => Ok(()),
-            Err(e) if e.message.contains(": 405 ") || e.message.contains(": 409 ") => {
+            Err(e)
+                if crate::cli::merge::http_status(&e.message, 405)
+                    || crate::cli::merge::http_status(&e.message, 409) =>
+            {
                 Err(BosunError::conflict(
                     e.message,
                     format!(
