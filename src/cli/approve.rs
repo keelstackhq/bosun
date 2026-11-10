@@ -399,6 +399,13 @@ fn why_not(gh: &dyn Github, b: &Board, n: u64) -> Result<String> {
 /// that changes the main-open workflow (the base workflow cannot judge it). Exit 4 when main is
 /// red and the PR is no mainfix; exit 3 when the PR is closed, missing or changes no such file.
 fn post_main_open(gh: &dyn Github, n: u64) -> Result<PrHead> {
+    if crate::github::gate::checks_mode() {
+        // The owner's token cannot write the gate App's check run (spec §15, O4).
+        return Err(BosunError::conflict(
+            "`bosun approve --main-open` cannot post main-open in [checks] mode \"checks\"",
+            "re-run the main-open workflow (it posts main-open as the gate App)",
+        ));
+    }
     let pull = gh
         .get_pull(n)?
         .filter(|p| p.state == "open")

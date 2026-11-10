@@ -1,0 +1,1 @@
+- 2026-11-10 · B2/T5 · checks-mode refusals and the doctor pin check; unreadable required_checks flagged

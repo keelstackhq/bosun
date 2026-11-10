@@ -42,6 +42,13 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
     kill_switch(gh)?;
     match cmd {
         VerdictCmd::Post(FromArg { from }) => {
+            if crate::github::gate::checks_mode() {
+                // A session's token cannot write the gate App's check run (spec §15).
+                return Err(BosunError::error(
+                    "`bosun verdict post` cannot post review-verdict in [checks] mode \"checks\"",
+                    "post the verdict with `bosun verdict comment --from <file>`; the verdict workflow applies it",
+                ));
+            }
             let verdict = parse(&read_input(from)?)?;
             let pull = current_pull(gh, &verdict)?;
             require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;

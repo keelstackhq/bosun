@@ -352,6 +352,18 @@ impl Config {
         if k.mode != CheckMode::Statuses {
             let id_ok = k.app_id.is_some_and(|i| i > 0);
             let slug_ok = k.app_slug.as_deref().is_some_and(|s| !s.trim().is_empty());
+            let actions = k.app_id == Some(15368)
+                || k.app_slug
+                    .as_deref()
+                    .is_some_and(|s| s.trim().eq_ignore_ascii_case("github-actions"));
+            if actions {
+                return Err(BosunError::error(
+                    format!("{file}: checks.app_id or checks.app_slug names GitHub Actions"),
+                    format!(
+                        "edit {file}: set them to the dedicated gate App (spec §15); any workflow can post as GitHub Actions"
+                    ),
+                ));
+            }
             if !id_ok || !slug_ok {
                 return Err(BosunError::error(
                     format!(

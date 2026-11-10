@@ -34,6 +34,14 @@ pub const REQUIRED: [&str; 4] = checks::DEFAULT_REQUIRED;
 /// Read from the default branch, so a PR cannot change the checks that judge it.
 fn required(gh: &dyn Github, base: &str) -> Result<Vec<String>, BosunError> {
     let hoist = gh.file_at("hoist.toml", base)?;
+    if let Some(t) = hoist.as_deref()
+        && t.contains("required_checks")
+        && checks::hoist_required(t).is_none()
+    {
+        eprintln!(
+            "bosun: hoist.toml [github] required_checks cannot be read; using the defaults (run `bosun doctor`)"
+        );
+    }
     Ok(checks::required_checks(
         std::env::var("BOSUN_REQUIRED_CHECKS").ok().as_deref(),
         hoist.as_deref(),

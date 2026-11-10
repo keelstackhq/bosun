@@ -1562,8 +1562,14 @@ fn route(
         ("GET", ["rules", "branches", _]) => ok(if s.ruleset_checks.is_empty() {
             json!([{"type": "deletion"}])
         } else {
+            // `context@id` pins the check to the App with that integration id.
             let list: Vec<Value> = (s.ruleset_checks.iter())
-                .map(|c| json!({"context": c}))
+                .map(|c| match c.split_once('@') {
+                    Some((c, id)) => {
+                        json!({"context": c, "integration_id": id.parse::<u64>().unwrap()})
+                    }
+                    None => json!({"context": c}),
+                })
                 .collect();
             json!([{"type": "required_status_checks",
                 "parameters": {"required_status_checks": list}}])
@@ -1589,7 +1595,7 @@ fn route(
             let list = &s.environments[*name].1;
             ok(json!({"total_count": list.as_array().map_or(0, Vec::len), "branch_policies": list}))
         }
-        ("GET", p @ (["environments", ..] | ["actions", "secrets", _])) => {
+        ("GET", p @ (["environments", ..] | ["actions", "secrets", ..])) => {
             if s.present.contains(&p.join("/")) {
                 ok(json!({"name": "x"}))
             } else {

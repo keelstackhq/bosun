@@ -1,9 +1,9 @@
 ## 15. Trusted check source: App check runs (B2)
 
-Status: partly built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, item
-B2): the check-run client (T1), `[checks]` (T2), the gate writer (T3) and reading back by App
-(T4) are in; the checks-mode refusals and the doctor pin check (T5) are not. The default mode is `statuses`, so nothing
-changes until a repo sets `[checks]`. Until the ruleset switch (Transition, step 6), §7, §8 and §9
+Status: B2 built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`): the
+check-run client, `[checks]`, the gate writer, reading back by App, the checks-mode refusals and
+the doctor pin check. The workflows (B2W) are not switched yet. The default mode is `statuses`,
+so nothing changes until a repo sets `[checks]`. Until the ruleset switch (Transition, step 6), §7, §8 and §9
 describe what runs.
 
 **The problem.** `risk-check`, `review-verdict` and `main-open` are commit statuses that the
@@ -91,7 +91,7 @@ key goes only to the token step, the token only to the bosun step. main-health's
 
 **bosun changes (planned).**
 - `.bosun/bosun.toml` `[checks]`: `mode = "statuses" | "dual" | "checks"` (default `statuses`),
-  `app_id` and `app_slug` (required unless `statuses`). Workflows read it from the base like the
+  `app_id` and `app_slug` (required unless `statuses`; never GitHub Actions, id 15368 or slug `github-actions`, which any workflow can post as). Workflows read it from the base like the
   rest; unknown keys are errors, so a release that knows `[checks]` is pinned first.
 - The token comes from env `BOSUN_APP_TOKEN` (never argv, never printed). Missing in `checks`
   mode: exit 1, the fix names the token step and the `bosun-app` environment. In `dual` the status
@@ -120,17 +120,20 @@ key goes only to the token step, the token only to the bosun step. main-health's
 - Verdict records: in `checks` mode `verdict apply` writes the record with the App token, and
   only records by `<app_slug>[bot]` count (two verdicts, delegate, carry): the readers see that
   login as the trusted author and `github-actions[bot]` as nobody. The App's record body is
-  defused (`<!--` and `/bosun` are broken up) so it can never start a keyed job (UC-B2-7). This closes the §8
+  defused (`<!--` and `/bosun` are broken up in the text; the record line is JSON-escaped, `\u002f` and `\u003c`, so it reads back the same) so it can never start a keyed job (UC-B2-7). This closes the §8
   residual "a workflow can post a record as github-actions[bot]". Older records stop counting at
   the switch; an open PR's reviewer posts the verdict comment again.
 - `bosun verdict post` (a session's own token) cannot make the App's check run: in `checks` mode
   it is exit 1 with the fix `bosun verdict comment`. `bosun approve --main-open` (the owner's PAT)
   cannot either: in `checks` mode it is exit 3 with the fix "re-run the main-open workflow" (O4).
 - `bosun pr` and `doctor` read hoist.toml `required_checks` entries in both forms (string or
-  table, below). `doctor --remote` warns in `checks` mode when a gate context is not pinned to
-  `app_id` in the live required checks, and when the session's token can read the Actions
-  secrets list or the rulesets' bypass list (a sign it may hold the writes; no read proves a
-  write scope is absent, so the precondition below stays an owner check).
+  table, below); a `required_checks` key that cannot be read is a step-3 problem in `doctor` and
+  a stderr line in `bosun pr` (it would otherwise fall back to the defaults silently). `doctor
+  --remote` warns in `checks` mode (step 3, `warn`) when a gate context is not pinned to `app_id`
+  in the rulesets (`GET /rules/branches/<b>`, `integration_id`), and when the session's token can
+  list the Actions secrets (a sign it may hold the writes; no read proves a write scope is
+  absent, so the precondition below stays an owner check). The rulesets' bypass list is not
+  read: GitHub shows it only to admins, whom the secrets read already flags.
 - Tests use the fake GitHub only: check-run create and update, `app_id` on runs, a same-name run
   from github-actions that must not count, each mode, the missing token.
 

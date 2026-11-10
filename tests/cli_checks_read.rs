@@ -204,23 +204,25 @@ fn uc_b2_7_the_apps_verdict_record_is_defused() {
     );
     let file = dir.path().join("v.json");
     std::fs::write(&file, json).unwrap();
+    // checks mode: a session comments the verdict, the workflow applies it with the App token.
     let (code, v) = bosun_in(
         &fake,
         &dir,
-        &["verdict", "post", "--from", file.to_str().unwrap()],
+        &["verdict", "comment", "--from", file.to_str().unwrap()],
     );
     assert_eq!(code, 0, "{v}");
-    let posted = fake
-        .requests()
-        .into_iter()
-        .filter(|l| l.method == "POST" && l.path.ends_with("/issues/1/comments"));
+    let id = fake.comments_of(1)[0].id;
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = bosun_in(&fake, &dir, &["verdict", "apply", &id.to_string()]);
+    assert_eq!(code, 0, "{v}");
+    let posted = fake.requests().into_iter().filter(|l| {
+        l.method == "POST"
+            && l.path.ends_with("/issues/1/comments")
+            && l.headers[0].as_deref().unwrap_or("").contains(APP_TOKEN)
+    });
     let mut n = 0;
     for l in posted {
         n += 1;
-        assert!(
-            l.headers[0].as_deref().unwrap_or("").contains(APP_TOKEN),
-            "the App writes it"
-        );
         let body = l.body.unwrap();
         for bad in ["<!--", "/bosun approve", "/bosun recheck"] {
             assert!(!body.contains(bad), "{bad} in {body}");
