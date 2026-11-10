@@ -1,0 +1,1 @@
+- CS-8: bosun code knows `.changeset/` (risk allowlist, edit lock, touch check).
