@@ -129,7 +129,7 @@ fn change_in_one_package_tests_only_that_package() {
     r.change("b/src/lib.rs");
     let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
     assert_eq!(code, 0, "{v}");
-    assert_eq!(r.calls(), vec!["nextest run --locked -p b"]);
+    assert_eq!(r.calls(), vec!["test --locked -p b"]);
     assert_eq!(v["data"]["packages"], serde_json::json!(["b"]));
     assert_eq!(v["data"]["gate"], "test");
     assert_eq!(v["data"]["exit_status"], 0);
@@ -143,7 +143,7 @@ fn root_manifest_change_tests_the_workspace() {
     r.change("Cargo.toml");
     let (code, _, _) = r.gate(&["test", "--base", "main"], "0");
     assert_eq!(code, 0);
-    assert_eq!(r.calls(), vec!["nextest run --locked --workspace"]);
+    assert_eq!(r.calls(), vec!["test --locked --workspace"]);
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn all_flag_tests_the_workspace() {
     r.change("docs/x.md");
     let (code, _, _) = r.gate(&["test", "--base", "main", "--all"], "0");
     assert_eq!(code, 0);
-    assert_eq!(r.calls(), vec!["nextest run --locked --workspace"]);
+    assert_eq!(r.calls(), vec!["test --locked --workspace"]);
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn staged_and_untracked_changes_select_the_gate() {
     let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
     assert_eq!(code, 0, "{v}");
     assert_ne!(v["data"]["skipped"], true, "{v}");
-    assert_eq!(r.calls(), vec!["nextest run --locked -p b"]);
+    assert_eq!(r.calls(), vec!["test --locked -p b"]);
     assert_eq!(
         v["data"]["uncommitted"],
         serde_json::json!(["b/src/lib.rs"])
@@ -183,7 +183,7 @@ fn staged_and_untracked_changes_select_the_gate() {
     write(&r.root, "a/src/new.rs", "// untracked\n");
     let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
     assert_eq!(code, 0, "{v}");
-    assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
+    assert_eq!(r.calls(), vec!["test --locked -p a"]);
     assert_eq!(
         v["data"]["uncommitted"],
         serde_json::json!(["a/src/new.rs"])
@@ -196,7 +196,7 @@ fn an_unstaged_edit_of_a_tracked_file_selects_the_gate() {
     write(&r.root, "a/src/lib.rs", "// edited, not added\n");
     let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
     assert_eq!(code, 0, "{v}");
-    assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
+    assert_eq!(r.calls(), vec!["test --locked -p a"]);
     assert_eq!(
         v["data"]["uncommitted"],
         serde_json::json!(["a/src/lib.rs"])
@@ -275,6 +275,33 @@ fn repo_profile_overrides_the_built_in() {
     let (code, _, _) = r.gate(&["fmt", "--base", "main"], "0");
     assert_eq!(code, 0);
     assert_eq!(r.calls(), vec!["fmt --all"]);
+}
+
+/// The built-in test gate is `cargo test`; a repo that keeps nextest overrides it (spec §7).
+#[test]
+fn a_repo_override_keeps_nextest_for_the_test_gate() {
+    let r = repo();
+    let nextest = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n\
+                   [gates.test]\ncmd = [\"cargo\", \"nextest\", \"run\", \"--locked\"]\n\
+                   each_package = [\"-p\", \"{package}\"]\nall = [\"--workspace\"]\nwhen_no_package = \"skip\"\n";
+    write(&r.root, ".bosun/profiles/rust.toml", nextest);
+    // On the base too: a profile change outside every package would test the workspace.
+    git(&r.root, &["add", "."]);
+    git(&r.root, &["commit", "-q", "-m", "profile"]);
+    git(&r.root, &["branch", "-f", "main"]);
+    r.change("b/src/lib.rs");
+    let (code, v, _) = r.gate(&["test", "--base", "main"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(r.calls(), vec!["nextest run --locked -p b"]);
+    let (code, v, _) = r.gate(&["test", "--base", "main", "--all"], "0");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        r.calls(),
+        vec![
+            "nextest run --locked -p b",
+            "nextest run --locked --workspace"
+        ]
+    );
 }
 
 #[test]

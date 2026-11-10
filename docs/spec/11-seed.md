@@ -70,7 +70,7 @@ Seed steps (the seed plan in `docs/superpowers/plans/` splits each into PRs):
   overlapping touch returns exit 3.
 - S4: spawn and the 7 checks, wave plan, wait. Done when each check has a refusal test with exit 6.
 - S5: gate runner, rust profile and adapters, test-integrity. Done when `bosun gate test` runs
-  nextest on the affected packages only.
+  the test command (`cargo test`, nextest until 2026-11-10) on the affected packages only.
 - S6: risk-check from the base branch, ask. Done when a PR that edits risk.toml is high, evaluated
   with the base rules.
 - S7: review-pack, verdict post, pr (with `--auto-merge`). Done when a verdict below 0.85 does not

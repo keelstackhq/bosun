@@ -1,0 +1,1 @@
+- 2026-11-10 · fast-setup 1 · default rust test gate is `cargo test`; channel CI keeps cargo-nextest for older pins

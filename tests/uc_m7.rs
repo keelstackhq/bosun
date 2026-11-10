@@ -184,10 +184,7 @@ fn uc_m7_3_a_rust_change_runs_the_rust_profile_in_crates() {
     let r = repo();
     r.change(&["crates/a/src/lib.rs"]);
     let v = r.gate(&["test"]);
-    assert_eq!(
-        r.calls(),
-        vec!["cargo|<root>/crates|nextest run --locked -p a"]
-    );
+    assert_eq!(r.calls(), vec!["cargo|<root>/crates|test --locked -p a"]);
     assert_eq!(v["data"]["stack"], "crates/");
     assert_eq!(v["data"]["packages"], json!(["a"]));
 }
@@ -200,7 +197,7 @@ fn uc_m7_3_a_change_in_both_stacks_runs_both_and_lists_both() {
     assert_eq!(
         r.calls(),
         vec![
-            "cargo|<root>/crates|nextest run --locked -p a",
+            "cargo|<root>/crates|test --locked -p a",
             "fakepy|<root>/py|test --everything"
         ]
     );
@@ -221,7 +218,7 @@ fn uc_m7_3_all_runs_every_stack() {
     assert_eq!(
         r.calls(),
         vec![
-            "cargo|<root>/crates|nextest run --locked --workspace",
+            "cargo|<root>/crates|test --locked --workspace",
             "fakepy|<root>/py|test --everything"
         ]
     );
