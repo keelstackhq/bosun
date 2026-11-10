@@ -1821,6 +1821,8 @@ fn setup_scripts_install_cargo_nextest_only_for_old_pins_or_an_override() {
             ("0.11.0", None, true),
             ("0.12.0", None, false),
             ("0.13.1", None, false),
+            ("0.9.0", None, true),
+            ("1.0.0", None, false),
             (
                 "0.12.0",
                 Some("[gates.test]\ncmd = [\"cargo\", \"nextest\", \"run\"]\n"),
@@ -1842,6 +1844,45 @@ fn setup_scripts_install_cargo_nextest_only_for_old_pins_or_an_override() {
                 "{name} {pin} {profile:?}: {calls}"
             );
         }
+    }
+}
+
+/// Merge guard for the nextest skip. The setup scripts skip building cargo-nextest from the
+/// threshold release on, assuming that release's built-in rust profile no longer runs nextest
+/// (the `cargo test` default gate, PR #482). This FAILS while `profiles/rust.toml` still names
+/// nextest and the threshold is at or below the next minor after the package version, so the
+/// skip cannot merge before the profile change; it passes once the profile change lands.
+#[test]
+fn nextest_skip_threshold_waits_for_the_cargo_test_default_gate() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ver = |s: &str| -> Vec<u64> { s.split('.').map(|n| n.parse().unwrap()).collect() };
+    let cargo: toml::Table = fs::read_to_string(root.join("Cargo.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let pkg = ver(cargo["package"]["version"].as_str().unwrap());
+    let next_minor = vec![pkg[0], pkg[1] + 1, 0];
+    let profile: toml::Table = fs::read_to_string(root.join("profiles/rust.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let cmd = profile["gates"]["test"]["cmd"].as_array().unwrap();
+    let runs_nextest = cmd.iter().any(|a| a.as_str() == Some("nextest"));
+    for (name, script) in setup_scripts() {
+        let line = script
+            .lines()
+            .find(|l| l.contains("sort -V") && l.contains("BOSUN_VERSION"))
+            .unwrap_or_else(|| panic!("{name}: no nextest threshold line"));
+        let threshold = line
+            .split("\\n")
+            .nth(1)
+            .and_then(|s| s.split('\\').next())
+            .unwrap_or_else(|| panic!("{name}: cannot parse threshold in {line}"));
+        assert!(
+            !(runs_nextest && ver(threshold) <= next_minor),
+            "{name}: setup script skips cargo-nextest from {threshold}, but profiles/rust.toml \
+             still runs nextest; merge the cargo test default gate first"
+        );
     }
 }
 
@@ -1885,6 +1926,7 @@ fn setup_scripts_install_pnpm_only_where_the_checkout_uses_it() {
                 false,
             ),
             (&[("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")][..], true),
+            (&[("pnpm-workspace.yaml", "packages:\n  - a\n")][..], true),
             (
                 &[(
                     "package.json",

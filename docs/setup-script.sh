@@ -43,11 +43,11 @@ BOSUN_LINUX_X64_SHA512=2YqfSb3zK2MUuVA5Tjsa3MmFM1/3BCC9LcntsSph3OiVmLREzWhb4SRI6
 BOSUN_LINUX_ARM64_SHA512=cw/Hj+t7Tge3SOzg6VRCeuJk3zmNYAtZcAC/j2OywpwT8pWDyDSfAP3AEVx61YojSGD0utpO6GydTQR8T48eyw==
 
 # Stacks of this checkout: Rust steps run only with a Cargo.toml or a toolchain file, pnpm only
-# with a pnpm-lock.yaml or a package.json `packageManager` of pnpm.
+# with a pnpm-lock.yaml, a pnpm-workspace.yaml or a package.json `packageManager` of pnpm.
 HAS_RUST=""
 if [ -f Cargo.toml ] || [ -f rust-toolchain.toml ]; then HAS_RUST=1; fi
 HAS_PNPM=""
-if [ -f pnpm-lock.yaml ] || grep -Eq '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@' package.json 2>/dev/null; then HAS_PNPM=1; fi
+if [ -f pnpm-lock.yaml ] || [ -f pnpm-workspace.yaml ] || grep -Eq '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@' package.json 2>/dev/null; then HAS_PNPM=1; fi
 
 # Rust is not pinned here: the version is the `channel` of the checkout's rust-toolchain.toml.
 # Without one a Rust checkout warns, skips the pinned toolchain and still installs cargo-deny. A
@@ -107,7 +107,7 @@ fi
 # pnpm 12 ships a native binary; its install.js puts it in place.
 # From /: inside the checkout pnpm may follow package.json `packageManager` instead.
 if [ -z "$HAS_PNPM" ]; then
-  echo "setup-script: no pnpm-lock.yaml or packageManager pnpm@ in $PWD; skipping pnpm" >&2
+  echo "setup-script: no pnpm-lock.yaml, pnpm-workspace.yaml or packageManager pnpm@ in $PWD; skipping pnpm" >&2
 elif [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
   npm install -g "pnpm@${PNPM_VERSION}" ||
     echo "setup-script: npm install of pnpm@${PNPM_VERSION} failed; continuing" >&2
@@ -185,7 +185,7 @@ install_tool hoist "$HOIST_VERSION" "$HOIST_SHA512" "$HOIST_LINUX_X64_SHA512" "$
 install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$BERTH_LINUX_ARM64_SHA512"
 install_tool bosun "$BOSUN_VERSION" "$BOSUN_SHA512" "$BOSUN_LINUX_X64_SHA512" "$BOSUN_LINUX_ARM64_SHA512"
 # cargo-deny for the deps gate: the pinned npm packages when their pin is set, else (or when that
-# install fails) built by cargo. The test gate needs no tool beyond cargo. Only a verified install
+# install fails) built by cargo. The test gate's own tool (cargo-nextest) installs below. Only a verified install
 # (its recorded fingerprint) counts, not another cargo-deny on PATH.
 if [ -n "$HAS_RUST" ]; then
   if [ -n "$CARGO_DENY_VERSION" ]; then

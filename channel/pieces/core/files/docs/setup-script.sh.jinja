@@ -39,14 +39,14 @@ CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
 BOSUN_VERSION={% if bosun_version %}{{ bosun_version }}{% else %}{{ template.version }}{% endif %}
 # Stacks of this checkout: Rust steps run only with a Cargo.toml or a toolchain file, pnpm only
-# with a pnpm-lock.yaml or a package.json `packageManager` of pnpm.
+# with a pnpm-lock.yaml, a pnpm-workspace.yaml or a package.json `packageManager` of pnpm.
 HAS_RUST=""
 {% if "rust" in pieces %}for f in "{{ rust_path }}/Cargo.toml" Cargo.toml "{{ rust_path }}/rust-toolchain.toml" "{{ rust_path }}/rust-toolchain" rust-toolchain.toml rust-toolchain; do
   if [ -f "$f" ]; then HAS_RUST=1; break; fi
 done
 {% endif %}HAS_PNPM=""
 {% if "ts-pnpm" in pieces %}for d in "{{ ts_path }}" .; do
-  if [ -f "$d/pnpm-lock.yaml" ] || grep -Eq '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@' "$d/package.json" 2>/dev/null; then HAS_PNPM=1; break; fi
+  if [ -f "$d/pnpm-lock.yaml" ] || [ -f "$d/pnpm-workspace.yaml" ] || grep -Eq '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@' "$d/package.json" 2>/dev/null; then HAS_PNPM=1; break; fi
 done
 {% endif %}{% if "rust" in pieces %}
 # Rust is not pinned here: the version is the `channel` of the repo's rust-toolchain.toml (or the
@@ -115,7 +115,7 @@ fi
 # pnpm 12 ships a native binary; its install.js puts it in place.
 # From /: inside the checkout pnpm may follow package.json `packageManager` instead.
 if [ -z "$HAS_PNPM" ]; then
-  echo "setup-script: no pnpm-lock.yaml or packageManager pnpm@ in {{ ts_path }} or $PWD; skipping pnpm" >&2
+  echo "setup-script: no pnpm-lock.yaml, pnpm-workspace.yaml or packageManager pnpm@ in {{ ts_path }} or $PWD; skipping pnpm" >&2
 elif [ "$(cd / && pnpm --version 2>/dev/null)" != "$PNPM_VERSION" ]; then
   npm install -g "pnpm@${PNPM_VERSION}" ||
     echo "setup-script: npm install of pnpm@${PNPM_VERSION} failed; continuing" >&2
@@ -192,7 +192,7 @@ install_tool splice "$SPLICE_VERSION" "$SPLICE_SHA512" "$SPLICE_LINUX_X64_SHA512
 install_tool hoist "$HOIST_VERSION" "$HOIST_SHA512" "$HOIST_LINUX_X64_SHA512" "$HOIST_LINUX_ARM64_SHA512"
 install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$BERTH_LINUX_ARM64_SHA512"
 {% if "rust" in pieces %}# cargo-deny for the deps gate: the pinned npm packages when their pin is set, else (or when that
-# install fails) built by cargo. The test gate needs no tool beyond cargo. Only a verified install
+# install fails) built by cargo. The test gate's own tool (cargo-nextest) installs below. Only a verified install
 # (its recorded fingerprint) counts, not another cargo-deny on PATH.
 if [ -n "$HAS_RUST" ]; then
   if [ -n "$CARGO_DENY_VERSION" ]; then
