@@ -89,6 +89,13 @@ Conflict avoidance (three layers):
    of the session) it edits its record back and exits 3.
 SessionStart also gives the session its rules (no GitHub call): `Session rules (<role>): <role text> <all text>`; the role comes from the origin: `BOSUN_ORIGIN` wins, else `CLAUDE_CODE_CHILD_SESSION=1` means `spawned`, else `local`; an invalid `BOSUN_ORIGIN` falls back to the child-session check; `spawned` is `worker`, every other origin `orchestrator`. The text comes from `.bosun/session-rules.toml` at the git top level (keys `orchestrator`, `worker`, `all`; a missing file or key keeps the built-in text; an unknown key or bad TOML falls back to the defaults with a note naming the file and error). The block is appended on both the registered path and the could-not-reach-GitHub path.
 3. Edit hook: a PreToolUse hook blocks Edit and Write on a path that another live session claimed.
+   It judges a Bash command's plain file writes the same way (`core::guard::bash_writes`): the
+   literal targets of `> f`, `>> f`, `tee f`, the last operand of `cp`, `mv` and `install`, and
+   the files of `sed -i` (after the script, or all operands with `-e`/`-f`); heredoc bodies are
+   data, `>&N` and `/dev/*` are skipped. Still not a sandbox. Known misses: expanded paths
+   (`> $f`), `2> f`, `cp -t DIR`, a directory destination (judged as the directory), writes
+   inside interpreters or scripts, and every other writer (`dd of=`, `rsync`, `tar -x`, `git
+   checkout -- f`, `patch`).
    The hook reads live leases from `<git common dir>/bosun/leases.json` (refreshed after
    `BOSUN_LEASE_CACHE_SECS`, default 60). With GitHub down it uses a cache younger than the lease
    TTL, else it allows with a stderr warning. Paths outside the repo are never blocked. The edited path is matched as a literal path (brackets and braces included) against each lease glob.

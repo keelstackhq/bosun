@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
 use crate::core::guard::{
-    ChildTask, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
+    ChildTask, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
     prereqs_lock_for, tool_rules,
 };
 use crate::core::lease::leases_of;
@@ -81,6 +81,18 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         }
     }
     if tool == "Bash" {
+        // Edit-lock for the files a command plainly writes (`> f`, `tee f`, `cp .. f`, `sed -i`).
+        let command = tool_input
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        for path in bash_writes(command) {
+            match edit_reason(&dir, &path) {
+                Ok(Some(why)) => return Some(deny(&why)),
+                Ok(None) => {}
+                Err(e) => eprintln!("bosun: warning: edit-lock skipped: {e}"),
+            }
+        }
         return repeat_lock(&dir, input, &tool_input);
     }
     if let Some(file) = repeat_file(&dir, input) {

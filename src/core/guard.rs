@@ -10,6 +10,9 @@ use crate::core::glob;
 use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
+mod writes;
+pub use writes::bash_writes;
+
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates";
 

@@ -1,0 +1,1 @@
+- edit-lock judges plain Bash file writes (`> f`, `tee f`, `cp|mv|install .. f`, `sed -i f`) like an Edit
