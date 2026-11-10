@@ -1,0 +1,1 @@
+- `bosun approve <pr>@<head> --chat --question <id>` (or `--slack-user U...`) records the owner's chat approval; answers.json gets a lock and pruning.

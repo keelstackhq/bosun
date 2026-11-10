@@ -205,6 +205,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     if args.via_signer {
         return via_signer(dir, args);
     }
+    if args.chat {
+        return super::approve_chat::run(dir, args);
+    }
     if let Some(key) = &args.sign_key {
         return sign(dir, args, key);
     }

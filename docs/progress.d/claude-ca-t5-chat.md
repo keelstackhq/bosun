@@ -1,0 +1,1 @@
+- Chat approval T5: `approve --chat` records the chat approval comment.
