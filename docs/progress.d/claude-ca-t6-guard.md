@@ -1,0 +1,1 @@
+- 2026-11-10 · chat-approval T6 · PreToolUse guard against forged chat records
