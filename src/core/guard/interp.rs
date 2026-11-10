@@ -4,7 +4,7 @@
 
 use super::{
     BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule, git_rule,
-    http_rule, literal_path, shell_words,
+    http_rule, literal_path, shell_words, unwrap_runners,
 };
 
 /// Interpreters and shells whose code or script the scan reads (a version suffix is dropped:
@@ -27,8 +27,38 @@ pub(super) fn is_runner(word: &str) -> bool {
 }
 
 /// The command words of a command: the first word of each segment after assignments,
-/// wrappers, runners (`timeout 5`, `nice -n 5`) and their flags and numbers.
+/// wrappers and runners with their option values (`sudo -u root`, `timeout -s KILL 5`, as
+/// `unwrap_runners` reads them), and also, failing closed, after skipping every flag and number.
 fn command_words(words: &[String]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut s = 0;
+    for seg in words.split(|w| w == SEP) {
+        let all: Vec<&str> = seg.iter().map(String::as_str).collect();
+        let mut cmd: &[&str] = &all;
+        loop {
+            let wrapper = |w: &str| {
+                (w.contains('=') && !w.starts_with('-'))
+                    || (WRAPPERS.contains(&w) && !RUNNERS.iter().any(|r| r.0 == base(w)))
+            };
+            let skip = cmd.iter().take_while(|w| wrapper(w)).count();
+            let (rest, _, _) = unwrap_runners(&cmd[skip..]);
+            if rest.len() == cmd.len() {
+                break;
+            }
+            cmd = rest;
+        }
+        if !cmd.is_empty() {
+            out.push(s + all.len() - cmd.len());
+        }
+        s += seg.len() + 1;
+    }
+    out.extend(flag_skipped(words));
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn flag_skipped(words: &[String]) -> Vec<usize> {
     let (mut out, mut start) = (Vec::new(), true);
     for (i, w) in words.iter().enumerate() {
         if w == SEP {
@@ -226,6 +256,12 @@ mod tests {
             "cat <<'EOF' | python3.11\nos.system('gh pr merge 3')\nEOF",
             "env python3.12 - <<'EOF'\nos.system('git push --force')\nEOF",
             "timeout 5 node -e 'execSync(\"git tag v1\")'",
+            "sudo -u root python3 -c 'os.system(\"gh pr merge 3\")'",
+            "env -u FOO python3 -c 'os.system(\"gh pr merge 3\")'",
+            "timeout -s KILL 5 python3 -c 'os.system(\"gh pr merge 3\")'",
+            "exec -a x python3 -c 'os.system(\"gh pr merge 3\")'",
+            "time -f %e python3 -c 'os.system(\"gh pr merge 3\")'",
+            "stdbuf -o L python3 -c 'os.system(\"gh pr merge 3\")'",
         ] {
             let why = bash(cmd).unwrap_or_else(|| panic!("allowed: {cmd}"));
             assert!(
@@ -261,6 +297,7 @@ mod tests {
             "python x.py",
             "python3 -u x.py arg",
             "cd a && python3 ./x.py",
+            "sudo -u root python3 x.py",
         ] {
             let why = script(cmd, merge).unwrap_or_else(|| panic!("allowed: {cmd}"));
             assert!(why.contains("x.py") && why.contains("owner"), "{why}");
