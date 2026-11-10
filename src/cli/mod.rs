@@ -29,6 +29,7 @@ pub mod main_triage;
 pub mod msg;
 pub mod notify;
 pub mod pin;
+pub mod pin_pr;
 pub mod plan;
 pub mod plan_pr;
 pub mod pr;
@@ -1126,4 +1127,7 @@ pub struct PinArgs {
     /// List the tools that are behind; download no tarball, write nothing.
     #[arg(long)]
     pub check: bool,
+    /// Also branch `bosun/pin`, commit, push and open the draft PR; prints what is left for you.
+    #[arg(long, conflicts_with = "check")]
+    pub pr: bool,
 }

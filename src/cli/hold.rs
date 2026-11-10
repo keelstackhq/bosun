@@ -11,7 +11,7 @@ use super::prereqs::{Env, check_plan_path, post};
 use super::prereqs_gate::plan_of_task;
 use super::release::{release_to, require_lease};
 use super::{HoldArgs, LessonAddArgs, LessonCmd};
-use crate::app::{App, Result, default_branch, kill_switch, notes, task_meta};
+use crate::app::{App, Result, default_branch, kill_switch, task_meta, trusted_notes};
 use crate::core::lessons;
 use crate::core::plan;
 use crate::core::prereqs::{self as pq, HoldBox};
@@ -46,7 +46,7 @@ pub fn run(dir: Option<&Path>, args: &HoldArgs) -> CmdResult {
         .ok_or_else(only_plan)?;
     let plan_path = plan_of_task(gh, &meta)?.ok_or_else(only_plan)?;
     check_plan_path(&plan_path)?;
-    let comments = notes(gh, n)?;
+    let comments = trusted_notes(gh, n)?;
     require_lease(n, session, &comments)?;
 
     let mut warnings = Vec::new();

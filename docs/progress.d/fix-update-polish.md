@@ -1,0 +1,1 @@
+- 2026-11-09 · update 4 · pin and doctor polish (dated branch, step 17 always, human-only left) · PR #TBD

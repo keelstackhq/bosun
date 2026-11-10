@@ -1,0 +1,1 @@
+- `bosun doctor` adds step 17 `update` (warn) when a tool pin or this binary is behind npm, with `bosun pin --latest --pr` as the fix; the session-start notice names the same command.

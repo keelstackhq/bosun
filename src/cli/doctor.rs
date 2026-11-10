@@ -5,6 +5,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::app::{HALT_LABEL, halt_reason};
+use crate::cli::pin::Check;
 use crate::core::checks;
 use crate::ctx::Ctx;
 use crate::github::{EnvBranches, Github, IssueState, Live, LiveGithub};
@@ -1260,6 +1261,45 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         );
         items.push(it);
     }
+
+    items.push(match super::pin::update_check(root) {
+        Check::Skipped(why, fix) | Check::Failed(why, fix) => skipped(17, "update", &why, &fix),
+        Check::Current => item(
+            17,
+            "update",
+            None,
+            "pins and binary match npm latest".into(),
+            "",
+        ),
+        Check::Behind(u) => {
+            let mut parts = Vec::new();
+            if !u.moves.is_empty() {
+                parts.push(format!("tool pins behind npm: {}", u.moves.join(", ")));
+            }
+            let mut fix = if u.channel {
+                "splice update --channel bosun".to_string()
+            } else {
+                "bosun pin --latest --pr".to_string()
+            };
+            if let Some(v) = &u.cli {
+                let cmd = format!("npm i -g @keelstackhq/bosun@{v}");
+                let when = if u.moves.is_empty() {
+                    fix = cmd.clone();
+                    ""
+                } else {
+                    " after the pin PR merges"
+                };
+                parts.push(format!(
+                    "this machine runs bosun {}; run `{cmd}`{when}",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+            let mut it = item(17, "update", None, String::new(), &fix);
+            it["status"] = json!("warn");
+            it["detail"] = json!(parts.join("; "));
+            it
+        }
+    });
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     let envs = gh
