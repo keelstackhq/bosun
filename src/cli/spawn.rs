@@ -566,13 +566,21 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         }
     });
     // Every comment, no permission lookup: record must hand over even when the lookup fails.
-    // So a reader can forge joins under this session's id; the child's depth is the highest
-    // depth of any of them, so a forgery can only raise it (fail closed), never lower it.
+    // So a reader can forge joins under this session's id. The child's depth is the highest
+    // depth of any of them, so a forgery can only raise it (fail closed), never lower it. The
+    // spawner counts as registered while any of its joins is live; `leave` records are ignored
+    // (a forged one would unregister it), so a forged live join can only keep an expired
+    // spawner registered for this record, which still needs its lease.
     let (reg, reg_notes) = registry::ensure_own(gh)?;
     let all = members(&reg_notes);
-    all.iter()
-        .find(|m| &m.session == me && m.expires > now)
-        .ok_or_else(unregistered)?;
+    let registered = reg_notes.iter().any(|n| {
+        matches!(parse_record(&n.body),
+            Some(Record::Join { session, expires, .. }) if &session == me
+                && crate::time::parse_rfc3339(&expires).is_some_and(|e| e > now))
+    });
+    if !registered {
+        return Err(unregistered());
+    }
     let depth = (reg_notes.iter())
         .filter_map(|n| match parse_record(&n.body) {
             Some(Record::Join { session, depth, .. }) if &session == me => Some(depth),

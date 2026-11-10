@@ -8,7 +8,7 @@ use serde_json::json;
 use super::PrArg;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
 use super::verdict::CONTEXT as VERDICT;
-use crate::app::{App, Result, default_branch, default_ref, halt_reason, notes, task_meta};
+use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Form, OrchestratorCase, Policy, Role, orchestrator_counts,
@@ -805,7 +805,7 @@ fn out_of_touch(
     }
     let task = task?;
     // Only a warning: a failed read costs the warning, never the check.
-    let notes = match notes(app.gh.as_ref(), task) {
+    let notes = match trusted_notes(app.gh.as_ref(), task) {
         Ok(notes) => notes,
         Err(e) => {
             eprintln!(

@@ -1,0 +1,1 @@
+- 2026-11-09 · records · last raw lease and task-pr readers move to writers' records
