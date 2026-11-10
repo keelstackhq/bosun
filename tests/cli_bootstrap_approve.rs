@@ -233,6 +233,10 @@ fn excluded_paths_always_need_the_owner() {
             PLAIN,
         ),
         (
+            "channel/pieces/core/files/.github/workflows/risk.yml.jinja",
+            PLAIN,
+        ),
+        (
             ".github/workflows/ci.yml",
             "@@ -1,1 +1,1 @@\n-    environment: release\n+x",
         ),

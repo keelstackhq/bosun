@@ -149,7 +149,7 @@ fn hoist_requires_the_four_checks_and_bosun_ok_beside_a_repo_ci() {
 #[test]
 fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
     let wf = channel().join("pieces/core/files/.github/workflows");
-    for f in ["risk.yml", "verdict.yml"] {
+    for f in ["risk.yml.jinja", "verdict.yml.jinja"] {
         let y = fs::read_to_string(wf.join(f)).unwrap();
         assert!(!y.contains("cargo build"), "{f} builds bosun");
         assert!(
@@ -161,7 +161,7 @@ fn risk_and_verdict_run_the_pinned_release_not_pr_code() {
             "{f} checks out the PR head"
         );
     }
-    let risk = fs::read_to_string(wf.join("risk.yml")).unwrap();
+    let risk = fs::read_to_string(wf.join("risk.yml.jinja")).unwrap();
     assert!(risk.contains("ref: ${{ github.event.pull_request.base.sha || github.sha }}"));
     // An owner's review is read on the next run; `/bosun recheck` starts one without a push, and
     // no review event runs the PR's copy of the file (tests/workflows.rs scans every workflow).
@@ -256,9 +256,9 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows");
     let wf = channel().join("pieces/core/files/.github/workflows");
     for (f, theirs_name) in [
-        ("risk.yml", "risk.yml"),
-        ("verdict.yml", "verdict.yml"),
-        ("main-open.yml", "main-open.yml"),
+        ("risk.yml", "risk.yml.jinja"),
+        ("verdict.yml", "verdict.yml.jinja"),
+        ("main-open.yml", "main-open.yml.jinja"),
         ("main-health.yml", "main-health.yml.jinja"),
     ] {
         let theirs = fs::read_to_string(wf.join(theirs_name)).unwrap();
@@ -295,7 +295,7 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
             "{f}: job-level permissions"
         );
     }
-    for f in ["risk.yml", "verdict.yml"] {
+    for f in ["risk.yml.jinja", "verdict.yml.jinja"] {
         let y = fs::read_to_string(wf.join(f)).unwrap();
         assert_eq!(y.matches("actions/checkout@").count(), 1, "{f}");
         assert!(y.contains("persist-credentials: false"), "{f}");
@@ -329,7 +329,7 @@ fn consumer_workflows_keep_bosuns_triggers_permissions_and_env_only_scripts() {
     assert!(health.contains("github.event.workflow_run.event == 'push'"));
     assert!(health.contains("workflow_run.head_repository.full_name == github.repository"));
     // In a consumer repo the pinned-release steps are in bosun.yml; ci.yml is the repo's own.
-    for f in ["main-open.yml", "main-health.yml.jinja"] {
+    for f in ["main-open.yml.jinja", "main-health.yml.jinja"] {
         let y = fs::read_to_string(wf.join(f)).unwrap();
         assert!(y.contains("pinned-release steps as bosun.yml"), "{f}");
         assert!(!y.contains("job of ci.yml"), "{f}");

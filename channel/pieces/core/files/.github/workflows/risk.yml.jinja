@@ -1,4 +1,4 @@
-# Written by the bosun splice channel (owned).
+{% raw %}# Written by the bosun splice channel (owned).
 name: risk
 
 # Posts the required `risk-check` status (spec §8, D32). It runs again on a PR comment
@@ -55,7 +55,10 @@ jobs:
       (contains(github.event.comment.body, '/bosun recheck') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))))
     runs-on: ubuntu-latest
-    steps:
+{% endraw %}{% if bosun_app %}{% raw %}    environment:
+      name: bosun-app
+      deployment: false
+{% endraw %}{% endif %}{% raw %}    steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
@@ -67,10 +70,22 @@ jobs:
           printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::bad .bosun/version '$v'"; exit 1; }
           npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
           bosun --version
-      - name: bosun risk-check
+{% endraw %}{% if bosun_app %}{% raw %}      # The App token (spec §15, var bosun_app): the key goes to this step only, the token only to bosun.
+      - name: App token
+        id: app
+        # A missing or broken key never stops the gate: bosun falls back per [checks] mode.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BOSUN_APP_ID }}
+          private-key: ${{ secrets.BOSUN_APP_KEY }}
+          permission-checks: write
+{% endraw %}{% endif %}{% raw %}      - name: bosun risk-check
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BOSUN_REPO: ${{ github.repository }}
+{% endraw %}{% if bosun_app %}{% raw %}          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
+{% endraw %}{% endif %}{% raw %}          BOSUN_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
         # Exit 5 (needs-human) is the verdict, carried by the status; only errors fail the job.
         run: bosun risk-check "$PR" || test $? -eq 5
+{% endraw %}

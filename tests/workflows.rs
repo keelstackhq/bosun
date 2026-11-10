@@ -1149,7 +1149,7 @@ fn risk_rechecks_on_a_bosun_recheck_comment() {
     let yaml = fs::read_to_string(path).unwrap();
     let channel = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/channel/pieces/core/files/.github/workflows/risk.yml"
+        "/channel/pieces/core/files/.github/workflows/risk.yml.jinja"
     );
     let channel = fs::read_to_string(channel).unwrap();
     let recheck = "(contains(github.event.comment.body, '/bosun recheck') &&\n    \
@@ -1406,7 +1406,7 @@ fn the_secret_scan_catches_each_form_of_secret_use() {
 fn main_open_rejudges_when_a_draft_becomes_ready() {
     for rel in [
         ".github/workflows/main-open.yml",
-        "channel/pieces/core/files/.github/workflows/main-open.yml",
+        "channel/pieces/core/files/.github/workflows/main-open.yml.jinja",
     ] {
         let path = format!("{}/{rel}", env!("CARGO_MANIFEST_DIR"));
         let yaml = fs::read_to_string(path).unwrap();
@@ -1429,7 +1429,9 @@ fn main_open_rejudges_when_a_draft_becomes_ready() {
 /// The steps of a job: each `      - ` item with its lines.
 fn steps_of(job: &str) -> Vec<String> {
     let mut steps: Vec<String> = Vec::new();
-    for line in job.lines() {
+    // Jinja tags stripped: a channel template opens a step after `{% endif %}{% raw %}`.
+    for line in job.lines().map(strip_jinja) {
+        let line = line.as_str();
         if line.starts_with("      - ") {
             steps.push(String::new());
         } else if line.starts_with("    ") && !line.starts_with("      ") && !line.trim().is_empty()
@@ -1462,6 +1464,8 @@ fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
             "push",
             "schedule",
             "workflow_dispatch",
+            // The channel's circleci-only main-health: a CircleCI status on the default branch.
+            "status",
         ];
         if !ok.contains(&e.as_str()) {
             out.push(format!("runs on {e}"));
@@ -1519,9 +1523,10 @@ fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
             out.push("the key outside the token step".into());
         }
         if token {
-            let bosun = code.lines().any(|l| {
-                l.trim().starts_with("run: ./target/release/bosun ") || l.trim() == "run: |"
-            }) && code.contains("./target/release/bosun ");
+            // bosun's own copies run the pinned binary, the channel's the installed `bosun`.
+            let bosun = code.contains("run: ./target/release/bosun ")
+                || code.contains("run: bosun ")
+                || (code.contains("run: |") && code.contains("./target/release/bosun "));
             if !bosun || !code.contains("BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}") {
                 out.push("the token outside a bosun step's BOSUN_APP_TOKEN".into());
             }
@@ -1551,27 +1556,45 @@ fn the_gate_jobs_get_the_app_token_and_nothing_else_does() {
         ("main-health.yml", "report"),
     ];
     let mut problems = Vec::new();
+    let mut found = Vec::new();
     for (path, yaml) in all_workflows() {
         let (jobs, _) = jobs_of(&yaml);
+        // The channel's copies hold it behind the `bosun_app` var (Jinja stripped here).
+        let name = path
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .trim_end_matches(".jinja")
+            .to_string();
         for (id, job) in jobs {
             let keyed = environment_of(&job).as_deref() == Some("bosun-app");
-            let name = path.rsplit('/').next().unwrap().to_string();
-            let expected =
-                !path.contains("/channel/") && want.iter().any(|(f, j)| *f == name && *j == id);
-            if keyed != expected {
+            if !keyed {
+                if job.contains("secrets.BOSUN_APP_KEY") || job.contains("BOSUN_APP_TOKEN") {
+                    problems.push(format!("{path} job {id}: the App outside bosun-app"));
+                }
+                continue;
+            }
+            if !want.iter().any(|(f, j)| *f == name && *j == id) {
                 problems.push(format!(
-                    "{path} job {id}: bosun-app is {keyed}, want {expected}"
+                    "{path} job {id}: bosun-app on a job that is no gate"
                 ));
             }
-            if keyed {
-                if !job.contains("      deployment: false") {
-                    problems.push(format!("{path} job {id}: deployment not false"));
-                }
-                for p in app_job_problems(&yaml, &job) {
-                    problems.push(format!("{path} job {id}: {p}"));
-                }
-            } else if job.contains("secrets.BOSUN_APP_KEY") || job.contains("BOSUN_APP_TOKEN") {
-                problems.push(format!("{path} job {id}: the App outside bosun-app"));
+            found.push((path.contains("/channel/"), name.clone(), id.clone()));
+            if !job.contains("      deployment: false") {
+                problems.push(format!("{path} job {id}: deployment not false"));
+            }
+            for p in app_job_problems(&yaml, &job) {
+                problems.push(format!("{path} job {id}: {p}"));
+            }
+        }
+    }
+    for channel in [false, true] {
+        for (f, j) in want {
+            if !found
+                .iter()
+                .any(|(c, n, i)| *c == channel && n == f && i == j)
+            {
+                problems.push(format!("{f} job {j} (channel: {channel}): no bosun-app"));
             }
         }
     }

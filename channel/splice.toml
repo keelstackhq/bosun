@@ -22,6 +22,10 @@ own_ci = { prompt = "the repo has its own ci.yml and ci-ok job (1 or empty)", de
 # pins the channel's own release (empty bosun_version): a pinned release that predates the key
 # rejects it. Default empty: the render is unchanged.
 intake = { prompt = "require a valid .bosun/intake.toml before spawn (1 or empty)", default = "", pattern = "^1?$" }
+# Non-empty when the repo has the bosun GitHub App (spec section 15, O5): the gate jobs of risk,
+# verdict, main-open and main-health run in the `bosun-app` environment with an App token step.
+# Default empty: the workflows are unchanged (statuses mode).
+bosun_app = { prompt = "the gate jobs use the bosun App token from the bosun-app environment (1 or empty)", default = "", pattern = "^1?$" }
 # Non-empty to render `[approvals] policy` in .bosun/bosun.toml (spec section 8): owner,
 # owner-gated, orchestrator (release 0.5.0 on) or autonomous (0.8.0 on). With an explicit
 # bosun_version, pick only a value that release knows. Default empty: the render is unchanged.

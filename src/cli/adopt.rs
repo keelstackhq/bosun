@@ -79,18 +79,18 @@ fn templates() -> Vec<Tpl> {
         ),
         tpl!(
             ".github/workflows/risk.yml",
-            ".github/workflows/risk.yml",
-            false
+            ".github/workflows/risk.yml.jinja",
+            true
         ),
         tpl!(
             ".github/workflows/verdict.yml",
-            ".github/workflows/verdict.yml",
-            false
+            ".github/workflows/verdict.yml.jinja",
+            true
         ),
         tpl!(
             ".github/workflows/main-open.yml",
-            ".github/workflows/main-open.yml",
-            false
+            ".github/workflows/main-open.yml.jinja",
+            true
         ),
         tpl!(
             ".github/workflows/main-health.yml",
@@ -142,6 +142,7 @@ pub fn vars_for(
     v.set("own_ci", if own_ci { "1" } else { "" });
     v.set("intake", "");
     v.set("policy", "");
+    v.set("bosun_app", "");
     v
 }
 

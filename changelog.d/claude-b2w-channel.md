@@ -1,0 +1,1 @@
+- New splice var `bosun_app` (1 or empty): the channel's risk, verdict, main-open and main-health gate jobs run in the `bosun-app` environment with the App token step (`risk.yml`, `verdict.yml` and `main-open.yml` become templates); bootstrap mode also excludes the `.jinja` copies of risk and verdict.

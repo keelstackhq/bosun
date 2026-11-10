@@ -437,7 +437,7 @@ pub const APPROVAL_CODE_PATHS: [&str; 7] = [
 /// the required checks and the jobs with an environment; in bosun also every
 /// [`APPROVAL_CODE_PATHS`] entry (the code that checks it and verifies signatures). Apart from
 /// [`CRITICAL_PATHS`], so the window is never widened or reopened from inside it.
-pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
+pub const BOOTSTRAP_EXCLUDED: [&str; 13] = [
     // `.bosun/version` pins the gate release that runs the check.
     ".bosun/**",
     "governance/**",
@@ -451,6 +451,8 @@ pub const BOOTSTRAP_EXCLUDED: [&str; 11] = [
     // They run the approval check (root and channel copies).
     "**/workflows/risk.yml",
     "**/workflows/verdict.yml",
+    "**/workflows/risk.yml.jinja",
+    "**/workflows/verdict.yml.jinja",
 ];
 
 /// Why a bootstrap-mode approval cannot count: the excluded paths among `(path, previous path,
