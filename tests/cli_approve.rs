@@ -4,7 +4,7 @@ use common::fake::FakeGithub;
 use common::{bosun, one_object, run};
 use serde_json::{Value, json};
 
-const HINT: &str = "ask the owner with a form in the Claude Code chat (repo, PR, head; approve or hold); on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
+const HINT: &str = "ask the owner with the call in next (AskUserQuestion, or a Claude Tag thread post; each data.ready[].ask has the question id, text and options): repo, PR, head; approve or hold; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 const OWNER_TOKEN: &str = "canary-owner-token-7f3a";
 const WAITING: &str = "high risk, owner approval needed: R-gov, R-ci";
@@ -119,7 +119,7 @@ fn list_shows_ready_and_waiting_sorted_with_the_command() {
     let (code, v) = approve(&fake, &["--list"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["command"], "approve");
-    assert_eq!(v["next"], json!([]));
+    assert_eq!(v["next"][0]["tool"], "AskUserQuestion");
     let ready = v["data"]["ready"].as_array().unwrap();
     assert_eq!(ready.len(), 2);
     assert_eq!(ready[0]["pr"], 1);
