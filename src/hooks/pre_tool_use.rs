@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
 use crate::core::guard::{
-    ChildTask, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
+    ChildTask, Script, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
     prereqs_lock_for, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
@@ -69,15 +69,6 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
         return Some(deny(&why));
     }
-    if tool == "Bash" {
-        let command = tool_input
-            .get("command")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if let Some(why) = script_rules(command, &|p| read_script(&dir, p), &branch_at, &default) {
-            return Some(deny(&why));
-        }
-    }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
         // A registered child may create a new issue with a task marker for its own epic, and
         // nothing else: not edits, comments, other markers, other repos or the allow and
@@ -90,7 +81,17 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         }
     }
     if tool == "Bash" {
-        return repeat_lock(&dir, input, &tool_input);
+        // Script files are read last, so every other lock has judged the command first.
+        let repeat = repeat_lock(&dir, input, &tool_input);
+        let command = tool_input
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let read = |p: &str| read_script(&dir, p);
+        if let Some(why) = script_rules(command, &read, &branch_at, &default) {
+            return Some(deny(&why));
+        }
+        return repeat;
     }
     if let Some(file) = repeat_file(&dir, input) {
         // Another tool call (an edit between test runs) ends the run of repeats.
@@ -106,14 +107,35 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     }
 }
 
-/// A script the merge-lock scans: a regular UTF-8 file of at most 1 MiB, relative to `dir`.
-/// Its text is only matched, never printed.
-fn read_script(dir: &Path, path: &str) -> Option<String> {
+/// A script the merge-lock scans, relative to `dir`: at most 1 MiB is read (procfs files report
+/// size 0, so the size is not trusted), as lossy UTF-8. A directory or a missing path is
+/// `None`; a device, FIFO, socket, a file under /proc, /sys or /dev, or more than 1 MiB is
+/// `Unreadable`. A denial may quote a script line, as for any command.
+fn read_script(dir: &Path, path: &str) -> Option<Script> {
+    use std::io::Read;
+    const MAX: u64 = 1 << 20;
     let file = dir.join(path);
     let meta = std::fs::metadata(&file).ok()?;
-    (meta.is_file() && meta.len() <= 1 << 20)
-        .then(|| std::fs::read_to_string(&file).ok())
-        .flatten()
+    if meta.is_dir() {
+        return None;
+    }
+    let real = std::fs::canonicalize(&file).unwrap_or(file.clone());
+    if ["/proc", "/sys", "/dev"]
+        .iter()
+        .any(|r| real.starts_with(r))
+    {
+        return Some(Script::Unreadable("a /proc, /sys or /dev file"));
+    }
+    if !meta.is_file() {
+        return Some(Script::Unreadable("not a regular file"));
+    }
+    let mut buf = Vec::new();
+    let read = std::fs::File::open(&file).and_then(|f| f.take(MAX + 1).read_to_end(&mut buf));
+    match read {
+        Err(_) => Some(Script::Unreadable("it cannot be opened")),
+        Ok(n) if n as u64 > MAX => Some(Script::Unreadable("larger than 1 MiB")),
+        Ok(_) => Some(Script::Text(String::from_utf8_lossy(&buf).into_owned())),
+    }
 }
 
 /// `<git common dir>/bosun/repeat/<key>.json` of the session, agent and directory; `None`

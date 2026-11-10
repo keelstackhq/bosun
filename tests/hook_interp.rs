@@ -35,3 +35,17 @@ fn hook_reads_the_script_an_interpreter_runs() {
     assert_eq!(hook(tmp.path(), "node ok.mjs"), "");
     assert_eq!(hook(tmp.path(), "python3 -c 'print(1)'"), "");
 }
+
+#[test]
+fn hook_refuses_a_script_it_cannot_read_in_full() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("big.py"), vec![b'#'; (1 << 20) + 10]).unwrap();
+    for command in ["python3 big.py", "python3 /proc/self/pagemap"] {
+        let out = hook(tmp.path(), command);
+        let v: Value = serde_json::from_str(&out).expect("one JSON object");
+        let reason = v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap();
+        assert!(reason.contains("cannot scan"), "{command}: {reason}");
+    }
+}

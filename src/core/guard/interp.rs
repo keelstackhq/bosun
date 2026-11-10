@@ -4,7 +4,7 @@
 
 use super::{
     BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule, git_rule,
-    http_rule, literal_path, shell_words, unwrap_runners,
+    http_rule, literal_path, nested, shell_words, unwrap_runners,
 };
 
 /// Interpreters and shells whose code or script the scan reads (a version suffix is dropped:
@@ -159,33 +159,71 @@ pub(super) fn inline_rule(command: &str, target: &Target) -> Option<String> {
     code_rule(command, target).map(|why| refuse("interpreter code", why))
 }
 
+/// A script path in a command: the path, whether a shell runs it, and whether it is the
+/// script itself (the first operand or the command word) rather than a later argument.
+struct ScriptPath {
+    path: String,
+    shell: bool,
+    first: bool,
+}
+
 /// The literal paths an interpreter or shell is given in a command (also a `./x` or `/x`
-/// command word), with whether a shell runs it.
-fn script_paths(command: &str) -> Vec<(String, bool)> {
+/// command word), at every nesting level (`bash -c '..'`, `$( )`).
+fn script_paths(command: &str, depth: usize) -> Vec<ScriptPath> {
     let w = shell_words(command);
     let mut out = Vec::new();
     for i in command_words(&w) {
         let (word, name) = (&w[i], runner_name(&w[i]));
         if word.contains('/') && !RUNS.contains(&name) {
-            out.extend(literal_path(word).map(|p| (p, false)));
+            out.extend(literal_path(word).map(|path| ScriptPath {
+                path,
+                shell: false,
+                first: true,
+            }));
         }
         if RUNS.contains(&name) {
             let shell = SHELL_RUNS.contains(&name);
             let args = w[i + 1..].iter().take_while(|a| *a != SEP);
-            for a in args.filter(|a| !a.starts_with('-')).take(4) {
-                out.extend(literal_path(a).map(|p| (p, shell)));
+            for (k, a) in args.filter(|a| !a.starts_with('-')).take(4).enumerate() {
+                out.extend(literal_path(a).map(|path| ScriptPath {
+                    path,
+                    shell,
+                    first: k == 0,
+                }));
             }
+        }
+    }
+    if depth < MAX_DEPTH {
+        for inner in nested(command) {
+            out.extend(script_paths(&inner, depth + 1));
         }
     }
     out
 }
 
-/// The script rule: each script file an interpreter or shell runs, read through `read` (the
-/// hook reads a regular text file of at most 1 MiB; `None` skips it), is scanned like inline
-/// code; a shell script is also judged by the whole shell merge-lock.
+/// What the hook found at a script path.
+pub enum Script {
+    /// The text (lossy UTF-8) of a regular file of at most 1 MiB.
+    Text(String),
+    /// A file the hook will not read in full: why (too large, not a regular file, /proc).
+    Unreadable(&'static str),
+}
+
+/// A `#!` line that runs a shell, also with arguments (`#!/bin/bash -e`, `#!/usr/bin/env sh`).
+fn shell_shebang(first: &str) -> bool {
+    first.strip_prefix("#!").is_some_and(|l| {
+        l.split_whitespace()
+            .any(|w| SHELL_RUNS.contains(&runner_name(w)))
+    })
+}
+
+/// The script rule: each script file an interpreter or shell runs, read through `read`
+/// (`None`: no such file, skipped), is scanned like inline code; a shell script is also judged
+/// by the whole shell merge-lock. A script the hook cannot read in full is refused (a later
+/// argument, which may be data, is skipped).
 pub fn script_rules(
     command: &str,
-    read: &dyn Fn(&str) -> Option<String>,
+    read: &dyn Fn(&str) -> Option<Script>,
     branch_at: BranchAt,
     default_branch: &str,
 ) -> Option<String> {
@@ -194,13 +232,21 @@ pub fn script_rules(
         branch_at,
         default_branch,
     };
-    for (path, shell) in script_paths(command) {
-        let Some(code) = read(&path) else { continue };
-        let first = code.lines().next().unwrap_or("");
-        let shell = shell
-            || path.ends_with(".sh")
-            || path.ends_with(".bash")
-            || (first.starts_with("#!") && first.ends_with("sh"));
+    for ScriptPath { path, shell, first } in script_paths(command, 0) {
+        let code = match read(&path) {
+            None => continue,
+            Some(Script::Text(code)) => code,
+            Some(Script::Unreadable(_)) if !first => continue,
+            Some(Script::Unreadable(why)) => {
+                return Some(format!(
+                    "the script `{path}` is refused: the guard cannot scan it ({why}); run a \
+                     script file of at most 1 MiB, or ask the owner to run it"
+                ));
+            }
+        };
+        let line = code.lines().next().unwrap_or("");
+        let shell =
+            shell || path.ends_with(".sh") || path.ends_with(".bash") || shell_shebang(line);
         if shell && let Some(why) = check(&code, branch_at, default_branch, MAX_DEPTH / 2) {
             return Some(format!("in the script `{path}`: {why}"));
         }
@@ -228,10 +274,49 @@ mod tests {
 
     fn script(cmd: &str, body: &str) -> Option<String> {
         let read = |p: &str| {
-            (p.ends_with("x.py") || p.ends_with("x.sh") || p.ends_with("x.mjs") || p == "./run")
-                .then(|| body.to_string())
+            if p.ends_with("big.py") {
+                return Some(Script::Unreadable("larger than 1 MiB"));
+            }
+            let known = ["x.py", "x.sh", "x.mjs", "x.php", "x.ts", "x.rb"];
+            (known.iter().any(|k| p.ends_with(k)) || p == "./run")
+                .then(|| Script::Text(body.to_string()))
         };
         script_rules(cmd, &read, &|_| Some("feature".into()), "main")
+    }
+
+    #[test]
+    fn every_runner_and_nested_scripts_are_read() {
+        let merge = "system('gh pr merge 3')\n";
+        for cmd in [
+            "php x.php",
+            "nodejs x.mjs",
+            "ts-node x.ts",
+            "tsx x.ts",
+            "dash x.sh",
+            "ksh x.sh",
+            "source x.sh",
+            ". x.sh",
+            "bash -c 'python3 x.py'",
+            "echo $(node x.mjs)",
+        ] {
+            assert!(script(cmd, merge).is_some(), "allowed: {cmd}");
+        }
+        let shebang = "#!/bin/bash -e\ncd sub && git push origin main\n";
+        assert!(script("./run", shebang).is_some());
+    }
+
+    #[test]
+    fn a_script_the_hook_cannot_read_in_full_is_refused() {
+        let why = script("python3 big.py", "").expect("refused");
+        assert!(
+            why.contains("cannot scan") && why.contains("owner"),
+            "{why}"
+        );
+        assert_eq!(
+            script("python3 x.py big.py", "print(1)"),
+            None,
+            "an argument is data"
+        );
     }
 
     #[test]

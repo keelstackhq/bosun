@@ -11,7 +11,7 @@ use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
 mod interp;
-pub use interp::script_rules;
+pub use interp::{Script, script_rules};
 
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates";
