@@ -11,13 +11,10 @@ use serde_json::json;
 use super::ApproveArgs;
 use crate::app::{App, Result, default_branch, kill_switch};
 use crate::cli::answer::valid_slack_id;
-use crate::cli::risk_check::{
-    autonomous_clean, chat_enabled, owner_slack_ids, review_models, verdict_inputs,
-};
+use crate::cli::pr_no_ci::clean_by_other;
+use crate::cli::risk_check::{chat_enabled, owner_slack_ids};
 use crate::core::approve::{chat_comment, is_orchestrator, parse_target};
-use crate::core::meta::linked_issues_in;
 use crate::ctx::Origin;
-use crate::github::Pull;
 use crate::hooks::answers;
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -80,7 +77,7 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
             "show the owner the new head and record it only on their new answer",
         ));
     }
-    if !clean_verdict_by_other(app, &pull)? {
+    if clean_by_other(app, &pull)?.is_empty() {
         return Err(BosunError::needs_human(
             format!(
                 "no clean verdict on head {head} from a session other than the author and this one"
@@ -93,6 +90,13 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         Some(_) if app.ctx.origin != Origin::Slack || !joined_from_slack(&members, session) => {
             return Err(BosunError::needs_human(
                 "--slack-user records an answer given in a Claude Tag thread; this session's origin (and its registry join) is not slack",
+                ASK_AGAIN,
+            ));
+        }
+        // A hold of this head (any question, any channel) wins over a Slack approve too.
+        Some(_) if answers::held(&app.ctx.dir, pr, head) => {
+            return Err(BosunError::needs_human(
+                format!("the owner held #{pr} at {head}; nothing was recorded"),
                 ASK_AGAIN,
             ));
         }
@@ -141,15 +145,4 @@ fn stored_approve(dir: &Path, q: &str, pr: u64, head: &str) -> Result<()> {
         format!("no stored owner answer approving #{pr} at {head} for question {q:?}"),
         ASK_AGAIN,
     ))
-}
-
-/// A clean verdict on the head from a session that is neither a lease holder of a linked task
-/// (the author) nor this session (shared with D-017's rule, without its task requirement).
-fn clean_verdict_by_other(app: &App, pull: &Pull) -> Result<bool> {
-    let gh = app.gh.as_ref();
-    let linked = linked_issues_in(&pull.body, &app.ctx.repo.to_string());
-    let (comments, mut excluded) = verdict_inputs(gh, pull.number, &linked)?;
-    excluded.push(app.ctx.session.clone());
-    let models = review_models(gh, &pull.base_sha)?;
-    Ok(!autonomous_clean(&comments, &pull.head_sha, &excluded, models.as_deref()).is_empty())
 }

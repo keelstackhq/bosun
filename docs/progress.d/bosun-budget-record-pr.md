@@ -1,1 +1,0 @@
-- 2026-11-09 · budget record --pr · spend per PR without task issues; report counts PR spend · PR #476

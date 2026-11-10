@@ -1,1 +1,0 @@
-- `budget-report` workflow: weekly and by manual dispatch it commits `reports/budget/YYYY-MM.{md,json}` to the branch `bosun/budget-reports` and keeps one draft PR "Budget reports"

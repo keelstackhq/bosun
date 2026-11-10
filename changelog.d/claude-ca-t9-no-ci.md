@@ -1,0 +1,1 @@
+- `bosun pr --ready` with `[ci] provider = "none"` runs risk, verdict and main-open locally, posts one ready summary per head and queues the task for `bosun merge`; `approve --list` reads the summary.

@@ -9,6 +9,7 @@ use super::MainHealthArgs;
 use super::gate_missed::{self, Incident};
 use super::lesson::capture_lesson;
 use crate::app::{App, MAIN_RED_LABEL, notes, trusted_notes};
+use crate::config::CiProvider;
 use crate::core::meta::linked_issues;
 use crate::core::records::{Record, parse_record};
 use crate::core::state::State;
@@ -25,6 +26,11 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
         ));
     }
     let app = App::load(dir)?;
+    if app.ctx.config.ci_provider() == CiProvider::None {
+        return Ok(Outcome::data(
+            json!({"result": result, "skipped": "ci provider none"}),
+        ));
+    }
     let gh = app.gh.as_ref();
     let url = a.run_url.as_deref().unwrap_or("(no run URL given)");
     let is_red = matches!(result, "failure" | "timed_out" | "startup_failure");

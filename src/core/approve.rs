@@ -631,11 +631,85 @@ pub fn question_id(pr: u64, head: &str, unix: i64) -> String {
     format!("{pr}-{short}-{unix}")
 }
 
+/// No-CI mode (spec §4): the marker line of a `bosun pr --ready` summary, before the head.
+const READY_MARKER: &str = "<!-- bosun:ready v1 head=";
+
+/// The summary `bosun pr --ready` posts once per head without CI: gates, risk, verdict and
+/// approval, so a human can see why it may merge. `risk` is `normal` or `high: <ids>`.
+pub fn ready_summary(
+    head: &str,
+    gates: &[String],
+    risk: &str,
+    verdict: &str,
+    approval: Option<&str>,
+) -> String {
+    format!(
+        "/bosun ready {head}\n\n- gates: {}\n- risk: {risk}\n- verdict: {verdict}\n- approval: {}\n\n{READY_MARKER}{head} -->",
+        gates.join(", "),
+        approval.unwrap_or("none")
+    )
+}
+
+/// `body` is a ready summary of `head`: its first line and its marker both name it.
+pub fn parse_ready_summary(body: &str, head: &str) -> bool {
+    body.lines().next() == Some(format!("/bosun ready {head}").as_str())
+        && body
+            .lines()
+            .any(|l| l == format!("{READY_MARKER}{head} -->"))
+}
+
+/// Field `name` of a ready summary (`- name: value`).
+fn summary_field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
+    let prefix = format!("- {name}: ");
+    body.lines().find_map(|l| l.strip_prefix(prefix.as_str()))
+}
+
+/// No-CI readiness from the newest ready summary of the head (`None`: no summary): a high-risk
+/// head with no approval waits for the owner; the verdict was clean or no summary was posted.
+pub fn summary_readiness(summary: Option<&str>) -> (Readiness, String) {
+    let Some(body) = summary else {
+        return (Readiness::NotWaiting, String::new());
+    };
+    let verdict = summary_field(body, "verdict")
+        .unwrap_or_default()
+        .to_string();
+    let risk = summary_field(body, "risk").unwrap_or_default();
+    let waiting = risk.starts_with("high") && summary_field(body, "approval") == Some("none");
+    let r = if waiting {
+        Readiness::Ready(risk_ids(risk))
+    } else {
+        Readiness::NotWaiting
+    };
+    (r, verdict)
+}
+
 #[cfg(test)]
 mod tests {
 
     const H: &str = "abcdef1234567890abcdef1234567890abcdef12";
     const H2: &str = "1111111111111111111111111111111111111111";
+
+    #[test]
+    fn ready_summary_round_trips() {
+        let g = vec!["fmt".to_string(), "test".to_string()];
+        let b = ready_summary(H, &g, "high: R-gov, R-ci", "session_r", None);
+        assert!(b.starts_with(&format!("/bosun ready {H}\n")), "{b}");
+        assert!(
+            b.ends_with(&format!("<!-- bosun:ready v1 head={H} -->")),
+            "{b}"
+        );
+        assert!(parse_ready_summary(&b, H));
+        assert!(!parse_ready_summary(&b, H2));
+        assert!(!parse_ready_summary(&format!("x\n{b}"), H));
+        let (r, v) = summary_readiness(Some(&b));
+        assert_eq!(r, Readiness::Ready(vec!["R-gov".into(), "R-ci".into()]));
+        assert_eq!(v, "session_r");
+        let ok = ready_summary(H, &g, "high: R-gov", "s", Some("ada (chat)"));
+        assert_eq!(summary_readiness(Some(&ok)).0, Readiness::NotWaiting);
+        let low = ready_summary(H, &g, "normal", "s", None);
+        assert_eq!(summary_readiness(Some(&low)).0, Readiness::NotWaiting);
+        assert_eq!(summary_readiness(None).0, Readiness::NotWaiting);
+    }
 
     fn member(session: &str, origin: &str, parent: Option<&str>, depth: u32, id: u64) -> Member {
         Member {

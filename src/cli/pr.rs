@@ -11,6 +11,7 @@ use super::PrArgs;
 use super::reap::{EpicScope, close_done_epics};
 use super::stamps;
 use crate::app::{App, default_branch, kill_switch, set_state, sync_merged, trusted_notes};
+use crate::config::CiProvider;
 use crate::core::approve::TRUSTED_CREATOR;
 use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
@@ -125,7 +126,7 @@ fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, Bosu
 
 /// The `mcp__github__update_pull_request` call that sets the draft state, for a session whose
 /// proxy refuses GraphQL (D29: bosun returns the tool call in `next`).
-fn update_pull_call(app: &App, pr: u64, draft: bool) -> Next {
+pub(super) fn update_pull_call(app: &App, pr: u64, draft: bool) -> Next {
     Next {
         tool: "mcp__github__update_pull_request".into(),
         args: json!({
@@ -269,7 +270,11 @@ fn touch_check(
 
 /// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
 /// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
-fn check_local_gates(app: &App, issue: u64, pull: &Pull) -> Result<(), BosunError> {
+pub(super) fn check_local_gates(
+    app: &App,
+    issue: u64,
+    pull: &Pull,
+) -> Result<Vec<String>, BosunError> {
     let (n, dir) = (pull.number, app.ctx.dir.as_path());
     let local = stamps::head_sha(dir).ok_or_else(|| {
         BosunError::error(
@@ -297,12 +302,13 @@ fn check_local_gates(app: &App, issue: u64, pull: &Pull) -> Result<(), BosunErro
             "run bosun inside the repo checkout",
         )
     })?;
-    let missing: Vec<String> = stamps::ready_gates(dir)?
-        .into_iter()
+    let all = stamps::ready_gates(dir)?;
+    let missing: Vec<String> = (all.iter())
         .filter(|g| !stamps::has(dir, &tree, g))
+        .cloned()
         .collect();
     if missing.is_empty() {
-        return Ok(());
+        return Ok(all);
     }
     Err(BosunError::error(
         format!(
@@ -505,6 +511,9 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 format!("#{n} is {now}; --ready needs the task in review"),
                 "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
             ));
+        }
+        if super::pr_no_ci::provider_at(gh, &pull.base_sha)? == CiProvider::None {
+            return super::pr_no_ci::ready(&app, n, &issue, pull);
         }
         check_local_gates(&app, n, &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;

@@ -1,1 +1,0 @@
-- 2026-11-09 · registry · join and lease records count only from writers

@@ -90,7 +90,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             e.message
         );
     }
-    let out = judge(&app, pull.clone());
+    let out = judge(&app, pull.clone(), true);
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
         _ = gh.create_status(&pull.head_sha, CONTEXT, "error", UNFINISHED, None);
@@ -261,7 +261,12 @@ fn test_counts(path: &str, text: &str) -> [usize; 5] {
     ]
 }
 
-fn judge(app: &App, pull: Pull) -> CmdResult {
+/// No-CI mode (spec §4): judge `pull` as the risk workflow would, posting no status.
+pub fn evaluate_local(app: &App, pull: &Pull) -> CmdResult {
+    judge(app, pull.clone(), false)
+}
+
+fn judge(app: &App, pull: Pull, post: bool) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
@@ -546,9 +551,13 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
         (None, _) => format!("high risk, owner approval needed: {}", ids.join(", ")),
     };
     let state = if passed { "success" } else { "failure" };
-    gh.create_status(head, CONTEXT, state, &description, None)?;
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
-    let carried = carry_status(gh, &pull, &linked);
+    let carried = if post {
+        gh.create_status(head, CONTEXT, state, &description, None)?;
+        carry_status(gh, &pull, &linked)
+    } else {
+        None
+    };
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,

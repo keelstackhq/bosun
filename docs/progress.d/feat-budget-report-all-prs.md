@@ -1,1 +1,0 @@
-- 2026-11-09 · budget report 3 · every PR of the month in the report, zero total fixed · PR #470
