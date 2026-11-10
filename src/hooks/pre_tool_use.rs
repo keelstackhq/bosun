@@ -8,7 +8,7 @@ use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
 use crate::core::guard::{
     ChildTask, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
-    prereqs_lock_for, tool_rules,
+    prereqs_lock_for, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
@@ -69,6 +69,15 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
     if let Some(why) = tool_rules(tool, &tool_input, &branch_at, &default) {
         return Some(deny(&why));
     }
+    if tool == "Bash" {
+        let command = tool_input
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(why) = script_rules(command, &|p| read_script(&dir, p), &branch_at, &default) {
+            return Some(deny(&why));
+        }
+    }
     if let Some(why) = prereqs_lock(tool, &tool_input) {
         // A registered child may create a new issue with a task marker for its own epic, and
         // nothing else: not edits, comments, other markers, other repos or the allow and
@@ -95,6 +104,16 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             None
         }
     }
+}
+
+/// A script the merge-lock scans: a regular UTF-8 file of at most 1 MiB, relative to `dir`.
+/// Its text is only matched, never printed.
+fn read_script(dir: &Path, path: &str) -> Option<String> {
+    let file = dir.join(path);
+    let meta = std::fs::metadata(&file).ok()?;
+    (meta.is_file() && meta.len() <= 1 << 20)
+        .then(|| std::fs::read_to_string(&file).ok())
+        .flatten()
 }
 
 /// `<git common dir>/bosun/repeat/<key>.json` of the session, agent and directory; `None`

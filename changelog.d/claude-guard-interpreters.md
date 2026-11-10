@@ -1,0 +1,1 @@
+- merge-lock reads interpreter code (`python -c`, `node -e`, heredocs) and the scripts interpreters and shells run

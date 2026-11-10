@@ -10,6 +10,9 @@ use crate::core::glob;
 use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
+mod interp;
+pub use interp::script_rules;
+
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates";
 
@@ -495,6 +498,14 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         if let Some(why) = check(&inner, branch_at, default_branch, depth + 1) {
             return Some(why);
         }
+    }
+    let here = Target {
+        dir: Some(&[]),
+        branch_at,
+        default_branch,
+    };
+    if let Some(why) = interp::inline_rule(&split_heredocs(command).0, &here) {
+        return Some(why);
     }
     // `cd` moves later git commands: `Some(args)` as `-C` options, `None` when the directory
     // cannot be told (git commands then count as on the default branch: fail closed). A `cd`
