@@ -403,3 +403,4 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-10 · #500 part 3 · `bosun schema --format ts` + README Code Mode section · PR #527
 - 2026-11-10 · #502 PR 1 · sticky refusal markers shown by the PreToolUse hook; a kill-switch halt refuses writes · PR #506
 - 2026-11-10 · compaction · PreCompact state block and SessionStart re-injection after compaction · PR #533
+- 2026-11-10 · guard · stdin-device scripts skip the scan only when a heredoc feeds them · PR #531
