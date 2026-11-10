@@ -1716,7 +1716,11 @@ impl SetupSandbox {
         // `rustup show active-toolchain` fails: the image has no default toolchain.
         let show = "[ \"$1 $2\" != \"show active-toolchain\" ]";
         s.stub("bin", "rustup", &format!("{rec}\n{show}"));
-        s.stub("bin", "npm", "[ \"$1\" = pack ] && echo x.tgz; exit 0");
+        s.stub(
+            "bin",
+            "npm",
+            &format!("{rec}\n[ \"$1\" = pack ] && echo x.tgz; exit 0"),
+        );
         s.stub(
             "node22",
             "node",
@@ -1760,6 +1764,7 @@ impl SetupSandbox {
             .env("SETUP_NODE_BIN_DIR", self.path(node24_dir))
             .env("SETUP_NODE_LINK_DIR", self.path("link"))
             .env("SETUP_NODE_PROFILE", self.path("profile.sh"))
+            .env("SETUP_STATE_DIR", self.path("state"))
             .output()
             .unwrap();
         (
@@ -1780,12 +1785,25 @@ fn setup_scripts() -> Vec<(&'static str, String)> {
     ]
 }
 
-/// A checkout without a toolchain file (the script runs inside it): the
-/// cargo tools still install (with rustup's stable), and a failing tool never fails the script.
+/// The tool calls of a sandbox run: lines that start with `<tool> `.
+fn tool_calls(calls: &str, tool: &str) -> Vec<String> {
+    let p = format!("{tool} ");
+    calls
+        .lines()
+        .filter(|l| l.starts_with(&p))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A Rust checkout without a toolchain file (the script runs inside it): cargo-deny still
+/// installs (with rustup's stable), cargo-nextest never does (it built for minutes), and a failing
+/// tool never fails the script.
 #[test]
-fn setup_scripts_install_the_cargo_tools_without_a_toolchain_file() {
+fn setup_scripts_install_cargo_deny_without_a_toolchain_file() {
     for (name, script) in setup_scripts() {
+        let script = with_bosun_pin(&script, "0.12.0");
         let sb = SetupSandbox::new();
+        fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
         let (ok, err) = sb.run(&script, "node24");
         let calls = sb.calls();
         assert!(ok, "{name}: {err}");
@@ -1794,25 +1812,262 @@ fn setup_scripts_install_the_cargo_tools_without_a_toolchain_file() {
             "{name}: {calls}"
         );
         assert!(calls.contains("rustup default stable"), "{name}: {calls}");
-        assert!(
-            calls.contains("cargo install --locked cargo-nextest cargo-deny"),
+        assert_eq!(
+            tool_calls(&calls, "cargo"),
+            ["cargo install --locked cargo-deny"],
             "{name}: {calls}"
         );
+        assert!(!calls.contains("nextest"), "{name}: {calls}");
         assert!(err.contains("no rust-toolchain.toml"), "{name}: {err}");
-        assert!(
-            !err.contains("skipping the Rust toolchain install and the cargo tools"),
-            "{name}: {err}"
-        );
 
         // A failing cargo only warns.
         let sb = SetupSandbox::new();
+        fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
         sb.stub("bin", "cargo", "exit 101");
         let (ok, err) = sb.run(&script, "node24");
         assert!(ok, "{name}: {err}");
+        assert!(err.contains("cargo-deny failed"), "{name}: {err}");
+    }
+}
+
+/// The script with its `BOSUN_VERSION=` line set to `pin`.
+fn with_bosun_pin(script: &str, pin: &str) -> String {
+    let out: Vec<String> = script
+        .lines()
+        .map(|l| {
+            if l.starts_with("BOSUN_VERSION=") {
+                format!("BOSUN_VERSION={pin}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    assert!(out.iter().any(|l| l == &format!("BOSUN_VERSION={pin}")));
+    out.join("\n") + "\n"
+}
+
+/// cargo-nextest builds only while the pinned bosun's test gate runs it (before 0.12.0, spec
+/// §7) or a repo profile names nextest; a 0.12.0 or later pin skips it.
+#[test]
+fn setup_scripts_install_cargo_nextest_only_for_old_pins_or_an_override() {
+    for (name, script) in setup_scripts() {
+        for (pin, profile, want) in [
+            ("0.11.0", None, true),
+            ("0.12.0", None, false),
+            ("0.13.1", None, false),
+            ("0.9.0", None, true),
+            ("1.0.0", None, false),
+            (
+                "0.12.0",
+                Some("[gates.test]\ncmd = [\"cargo\", \"nextest\", \"run\"]\n"),
+                true,
+            ),
+        ] {
+            let sb = SetupSandbox::new();
+            fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+            if let Some(p) = profile {
+                fs::create_dir_all(sb.path("repo/.bosun/profiles")).unwrap();
+                fs::write(sb.path("repo/.bosun/profiles/rust.toml"), p).unwrap();
+            }
+            let (ok, err) = sb.run(&with_bosun_pin(&script, pin), "node24");
+            let calls = sb.calls();
+            assert!(ok, "{name} {pin}: {err}");
+            assert_eq!(
+                calls.contains("cargo install --locked cargo-nextest"),
+                want,
+                "{name} {pin} {profile:?}: {calls}"
+            );
+        }
+    }
+}
+
+/// Merge guard for the nextest skip. The setup scripts skip building cargo-nextest from the
+/// threshold release on, assuming that release's built-in rust profile no longer runs nextest
+/// (the `cargo test` default gate, PR #482). This FAILS while `profiles/rust.toml` still names
+/// nextest and the threshold is at or below the next minor after the package version, so the
+/// skip cannot merge before the profile change; it passes once the profile change lands.
+#[test]
+fn nextest_skip_threshold_waits_for_the_cargo_test_default_gate() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ver = |s: &str| -> Vec<u64> { s.split('.').map(|n| n.parse().unwrap()).collect() };
+    let cargo: toml::Table = fs::read_to_string(root.join("Cargo.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let pkg = ver(cargo["package"]["version"].as_str().unwrap());
+    let next_minor = vec![pkg[0], pkg[1] + 1, 0];
+    let profile: toml::Table = fs::read_to_string(root.join("profiles/rust.toml"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let cmd = profile["gates"]["test"]["cmd"].as_array().unwrap();
+    let runs_nextest = cmd.iter().any(|a| a.as_str() == Some("nextest"));
+    for (name, script) in setup_scripts() {
+        let line = script
+            .lines()
+            .find(|l| l.contains("sort -V") && l.contains("BOSUN_VERSION"))
+            .unwrap_or_else(|| panic!("{name}: no nextest threshold line"));
+        let threshold = line
+            .split("\\n")
+            .nth(1)
+            .and_then(|s| s.split('\\').next())
+            .unwrap_or_else(|| panic!("{name}: cannot parse threshold in {line}"));
         assert!(
-            err.contains("cargo-nextest and cargo-deny failed"),
+            !(runs_nextest && ver(threshold) <= next_minor),
+            "{name}: setup script skips cargo-nextest from {threshold}, but profiles/rust.toml \
+             still runs nextest; merge the cargo test default gate first"
+        );
+    }
+}
+
+/// A checkout with neither Cargo.toml nor rust-toolchain.toml (a ts-only repo) gets no rustup and
+/// no cargo step at all, and no Rust warning.
+#[test]
+fn setup_scripts_skip_rust_in_a_checkout_without_it() {
+    for (name, script) in setup_scripts() {
+        let sb = SetupSandbox::new();
+        let (ok, err) = sb.run(&script, "node24");
+        let calls = sb.calls();
+        assert!(ok, "{name}: {err}");
+        assert!(tool_calls(&calls, "rustup").is_empty(), "{name}: {calls}");
+        assert!(tool_calls(&calls, "cargo").is_empty(), "{name}: {calls}");
+        assert!(!err.contains("no rust-toolchain.toml"), "{name}: {err}");
+        assert!(!calls.contains("cargo-deny"), "{name}: {calls}");
+    }
+}
+
+/// pnpm installs only in a checkout that uses it: a pnpm-lock.yaml or a package.json whose
+/// `packageManager` names pnpm.
+#[test]
+fn setup_scripts_install_pnpm_only_where_the_checkout_uses_it() {
+    let pnpm_files = variant(&["rust", "ts-pnpm"], "");
+    let own =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
+            .unwrap();
+    let pnpm = "npm install -g pnpm@12.15.0";
+    for (name, script) in [
+        (
+            "channel+pnpm",
+            file(&pnpm_files, "docs/setup-script.sh").to_string(),
+        ),
+        ("bosun", own),
+    ] {
+        for (files, want) in [
+            (&[][..], false),
+            (&[("package.json", "{\"name\": \"a\"}")][..], false),
+            (
+                &[("package.json", "{\"packageManager\": \"npm@10.0.0\"}")][..],
+                false,
+            ),
+            (&[("pnpm-lock.yaml", "lockfileVersion: '9.0'\n")][..], true),
+            (&[("pnpm-workspace.yaml", "packages:\n  - a\n")][..], true),
+            (
+                &[(
+                    "package.json",
+                    "{\n  \"packageManager\": \"pnpm@12.15.0\"\n}",
+                )][..],
+                true,
+            ),
+        ] {
+            let sb = SetupSandbox::new();
+            for (f, text) in files {
+                fs::write(sb.path("repo").join(f), text).unwrap();
+            }
+            let (ok, err) = sb.run(&script, "node24");
+            let calls = sb.calls();
+            assert!(ok, "{name} {files:?}: {err}");
+            assert_eq!(calls.contains(pnpm), want, "{name} {files:?}: {calls}");
+        }
+    }
+}
+
+/// With its pin set, cargo-deny installs like the keelstackhq tools from the pinned
+/// `@keelstackhq/cargo-deny` packages; a mismatch warns and falls back to `cargo install`. Its
+/// pins ship empty: the npm packages are not published yet.
+#[test]
+fn setup_scripts_install_cargo_deny_from_its_pin_when_set() {
+    for (name, script) in setup_scripts() {
+        for v in [
+            "CARGO_DENY_VERSION=\"\"",
+            "CARGO_DENY_SHA512=\"\"",
+            "CARGO_DENY_LINUX_X64_SHA512=\"\"",
+            "CARGO_DENY_LINUX_ARM64_SHA512=\"\"",
+        ] {
+            assert!(script.lines().any(|l| l == v), "{name}: no {v}");
+        }
+        let pinned = script
+            .replacen(
+                "CARGO_DENY_VERSION=\"\"",
+                "CARGO_DENY_VERSION=\"0.20.2\"",
+                1,
+            )
+            .replacen("CARGO_DENY_SHA512=\"\"", "CARGO_DENY_SHA512=\"pin\"", 1);
+        let sb = SetupSandbox::new();
+        fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        let (ok, err) = sb.run(&pinned, "node24");
+        let calls = sb.calls();
+        assert!(ok, "{name}: {err}");
+        assert!(
+            calls.contains("npm pack --silent @keelstackhq/cargo-deny@0.20.2"),
+            "{name}: {calls}"
+        );
+        // The fake tarball matches no pin: the script warns and builds it instead.
+        assert!(
+            err.contains("@keelstackhq/cargo-deny@0.20.2 does not match its pinned sha512"),
             "{name}: {err}"
         );
+        assert!(
+            calls.contains("cargo install --locked cargo-deny"),
+            "{name}: {calls}"
+        );
+    }
+}
+
+/// `tool_fp` resolves `cargo-deny` like the other tools: command name = package name, and the
+/// `cargo-deny/` prefix does not match its `cargo-deny-linux-*` package.
+#[test]
+fn setup_scripts_skip_cargo_deny_at_its_recorded_fingerprint() {
+    for (name, script) in setup_scripts() {
+        let start = script.find("tool_pack() {").unwrap();
+        let end = script[start..].find("\n}\ninstall_tool ").unwrap();
+        let funcs = format!("{}\n", &script[start..start + end + 3]);
+        let call = "install_tool cargo-deny 0.20.2 a b c";
+        let rec =
+            "mkdir -p \"$SETUP_STATE_DIR\"; tool_fp cargo-deny \"$A\" >\"$REC\"; : >\"$LOG\"; ";
+        let run = |extra: &str| {
+            run_with_tool_tree("cargo-deny", "0.20.2", &format!("{funcs}{extra}{call}"))
+        };
+        let packed = "pack --silent @keelstackhq/cargo-deny@0.20.2";
+        assert!(run("").contains(packed), "{name}: no record");
+        assert!(run(rec).is_empty(), "{name}: recorded install re-fetched");
+        let log = run(&format!(
+            "{rec}echo x >>\"$ROOT/@keelstackhq/cargo-deny-linux-$A/bin/cargo-deny\"; "
+        ));
+        assert!(log.contains(packed), "{name}: {log}");
+
+        // The setup step: a verified install (its record) builds nothing; another cargo-deny on
+        // PATH, or none, falls back to `cargo install`.
+        let p = script.find("# cargo-deny for the deps gate").unwrap();
+        let blk = &script[p..p + script[p..].find("\n  fi\nfi\n").unwrap() + 8];
+        let pins = "HAS_RUST=1 BOSUN_VERSION=0.12.0 CARGO_DENY_VERSION=0.20.2 CARGO_DENY_SHA512=a \
+            CARGO_DENY_LINUX_X64_SHA512=b CARGO_DENY_LINUX_ARM64_SHA512=c\n\
+            cargo() { echo \"cargo $*\" >>\"$LOG\"; }\n";
+        let step = |extra: &str| {
+            run_with_tool_tree(
+                "cargo-deny",
+                "0.20.2",
+                &format!("{funcs}{pins}{extra}{blk}"),
+            )
+        };
+        assert!(
+            step(rec).is_empty(),
+            "{name}: a verified cargo-deny rebuilt"
+        );
+        let build = "cargo install --locked cargo-deny";
+        let log = step("");
+        assert!(log.contains(packed) && log.contains(build), "{name}: {log}");
+        let log = step(&format!("{rec}export PATH=\"$D/wrap:$PATH\"; "));
+        assert!(log.contains(build), "{name}: {log}");
     }
 }
 
