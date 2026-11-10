@@ -244,7 +244,7 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    checks the comment and posts `review-verdict`. `bosun verdict post` works only outside the
    cloud.
 4. **Approvals.** By chat form (section 6). The orchestrator records your answer with
-   `bosun approve <pr> --chat`; `risk-check` counts the record as your own comment, so no key and
+   `bosun approve <pr>@<head> --chat --question <id>`; `risk-check` counts the record as your own comment, so no key and
    no `.bosun/approvers.toml` is needed (the file is optional). A signature from a key in that
    file still counts. `[approvals] chat = false` turns records off; the key is known from release
    0.12.0, so pin that release in `.bosun/version` first and set the key in a later PR. Who may

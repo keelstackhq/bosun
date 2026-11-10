@@ -51,7 +51,7 @@ No CI, no key, no approvers file. The owner answers one chat form per gated PR (
 2. In the repo: `bosun adopt --policy autonomous --owner <login>`; commit, push, merge the setup PR.
    Autonomous needs a pin that reads it (adopt checks); set `[ci] provider = "none"` in
    `.bosun/bosun.toml` for a repo without CI.
-3. Approve by chat: the orchestrator asks (repo, PR, head SHA), then `bosun approve <pr> --chat`
+3. Approve by chat: the orchestrator asks (repo, PR, head SHA), then `bosun approve <pr>@<head> --chat --question <id>`
    posts the record for that head. No signing key; `.bosun/approvers.toml` is optional.
 4. Merge: with `provider = "none"` the orchestrator runs `bosun merge <pr>` (it re-checks every
    gate on the exact head). With CI, auto-merge does it.
@@ -166,7 +166,7 @@ Actions > allow GitHub Actions to create pull requests.
 ## Owner controls
 
 - **Approve a high-risk PR.** The session asks you with a form in the Claude Code chat (repo, PR,
-  head SHA; approve or hold); on approve the orchestrator runs `bosun approve <pr> --chat`,
+  head SHA; approve or hold); on approve the orchestrator runs `bosun approve <pr>@<head> --chat --question <id>`,
   which posts the chat record for that exact head; `risk-check` counts it like your own comment
   (spec §8, chat records). A signed `bosun approve <pr>@<head> --sign-key <pem>` still works
   when you enrolled a key (D-012). Fallback:

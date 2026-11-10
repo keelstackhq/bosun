@@ -76,7 +76,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   tick, edit or close the owner checklist issue (`bosun:prereqs`).
 - Owner approvals (D-012): the session asks the owner with a form in the Claude Code chat
   (`AskUserQuestion`: repo, PR, head SHA; approve or hold); a child session sends the request to
-  the orchestrator. On approve the orchestrator runs `bosun approve <pr> --chat` (the chat record
+  the orchestrator. On approve the orchestrator runs `bosun approve <pr>@<head> --chat --question <id>` (the chat record
   for that head; a signed `--sign-key` form still works). Only an orchestrator posts it; never
   write the `bosun:chat-approval` marker yourself. Never ask the owner to write a GitHub
   comment; their own `/bosun approve <sha>` comment is only a fallback. With `[ci] provider =
