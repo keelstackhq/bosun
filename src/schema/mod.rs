@@ -11,20 +11,23 @@ mod data;
 
 use serde_json::{Map, Value, json};
 
-use data::{DATA, UNDESCRIBED};
+use data::DATA;
+
+fn entries() -> impl Iterator<Item = (&'static str, &'static str)> {
+    DATA.split(';')
+        .filter_map(|e| e.split_once(" = "))
+        .map(|(n, d)| (n.trim(), d.trim()))
+}
 
 /// The command names with a schema, as the envelope's `command` names them.
 pub fn names() -> impl Iterator<Item = &'static str> {
-    DATA.iter().map(|(n, _)| *n).chain(UNDESCRIBED.split(", "))
+    entries().map(|(n, _)| n)
 }
 
-/// The `data` notation of a command (`{..}`: not described yet).
+/// The `data` notation of a command.
 pub fn data_of(command: &str) -> Option<&'static str> {
-    let found = DATA.iter().find(|(n, _)| *n == command).map(|(_, d)| *d);
-    found.or(UNDESCRIBED
-        .split(", ")
-        .any(|n| n == command)
-        .then_some("{..}"))
+    let d = entries().find(|(n, _)| *n == command)?.1;
+    Some(entries().find(|(n, _)| *n == d).map_or(d, |(_, same)| same))
 }
 
 /// A parsed notation.
@@ -199,24 +202,15 @@ pub fn to_json_schema(notation: &str) -> Result<Value, String> {
 }
 
 /// The `error` of a failed envelope.
-pub const ERROR: &str = "{kind: str, message: str, fix: str}";
+pub const ERROR: &str = r#"{kind: "error" | "usage" | "conflict" | "halted" | "needs-human" | "limit"
+    | "upstream", message: str, fix: str}"#;
 /// The `next` tool calls.
 pub const NEXT: &str = "[{tool: str, args: any}]";
 
 /// The envelope schema; `data` is the command's data schema (on `ok`), `command` its name.
 pub fn envelope(command: Option<&str>, data: Value) -> Value {
-    let kinds = [
-        "error",
-        "usage",
-        "conflict",
-        "halted",
-        "needs-human",
-        "limit",
-        "upstream",
-    ];
-    let error = json!({"type": "object", "required": ["kind", "message", "fix"], "properties": {
-        "kind": {"enum": kinds}, "message": {"type": "string"},
-        "fix": {"type": "string", "minLength": 1}}});
+    let mut error = to_json_schema(ERROR).expect("ERROR parses");
+    error["properties"]["fix"]["minLength"] = json!(1);
     let command = command.map_or(json!({"type": "string"}), |c| json!({"const": c}));
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -21,7 +21,7 @@ fn start(d: &Path, reg: &Registry, pin_check: Option<&str>) -> (String, String) 
     };
     let out = cmd.output().unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v: Value = common::one_object(&out.stdout);
     (
         v["hookSpecificOutput"]["additionalContext"]
             .as_str()

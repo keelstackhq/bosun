@@ -104,7 +104,7 @@ fn pre(fake: &FakeGithub, repo: &Path, tool: &str, input: Value) -> Out {
 
 fn denied(o: &Out) -> String {
     assert_eq!(o.code, 0, "{}", o.stderr);
-    let v: Value = serde_json::from_str(&o.stdout).expect("one JSON object");
+    let v: Value = common::one_object(o.stdout.as_bytes());
     assert_eq!(v.as_object().unwrap().len(), 1);
     let h = &v["hookSpecificOutput"];
     assert_eq!(h.as_object().unwrap().len(), 3);
@@ -269,7 +269,7 @@ fn session_start_joins_and_prints_the_context() {
     let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
     let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let v: Value = common::one_object(o.stdout.as_bytes());
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
     let text = v["hookSpecificOutput"]["additionalContext"]
         .as_str()
@@ -299,7 +299,7 @@ fn session_start_explains_when_github_is_unreachable() {
     let input = json!({"cwd": tmp.path().to_str().unwrap()});
     let o = hook(None, tmp.path(), T0, "session-start", &input);
     assert_eq!(o.code, 0);
-    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let v: Value = common::one_object(o.stdout.as_bytes());
     let text = v["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap();
@@ -369,7 +369,7 @@ fn rules_start_text(
     }
     let out = cmd.output().unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let v: Value = common::one_object(&out.stdout);
     let text = v["hookSpecificOutput"]["additionalContext"].as_str();
     (
         text.unwrap().to_string(),
@@ -437,7 +437,7 @@ const LESSONS: &str = "[[lesson]]\nid = \"L1\"\nrule = \"keep it small\"\neviden
 fn start_text(fake: Option<&FakeGithub>, tmp: &Path) -> String {
     let input = json!({"cwd": tmp.to_str().unwrap()});
     let o = hook(fake, tmp, T0, "session-start", &input);
-    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let v: Value = common::one_object(o.stdout.as_bytes());
     v["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .unwrap()
@@ -504,7 +504,7 @@ fn stop_as(origin: &str, fake: Option<&FakeGithub>, repo: &Path, input: Value) -
 
 fn blocked(o: &Out) -> String {
     assert_eq!(o.code, 0, "{}", o.stderr);
-    let v: Value = serde_json::from_str(&o.stdout).expect("one JSON object");
+    let v: Value = common::one_object(o.stdout.as_bytes());
     assert_eq!(v["decision"], "block", "{v}");
     v["reason"].as_str().unwrap().to_string()
 }
@@ -544,7 +544,7 @@ fn stop_blocks_a_live_lease_without_result_or_handoff() {
     leased(&fake);
     let o = stop(Some(&fake), tmp.path(), stop_in(tmp.path()));
     assert_eq!(o.code, 0, "{}", o.stderr);
-    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let v: Value = common::one_object(o.stdout.as_bytes());
     assert_eq!(v["decision"], "block");
     let reason = v["reason"].as_str().unwrap();
     assert!(
@@ -648,7 +648,7 @@ fn stop_warns_when_the_gate_record_is_stale_and_stays_silent_when_it_matches() {
     // No record, dirty tree: warn, never block.
     std::fs::write(dir.join("a.txt"), "2").unwrap();
     let o = stop(Some(&fake), dir, stop_in(dir));
-    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let v: Value = common::one_object(o.stdout.as_bytes());
     assert!(v["systemMessage"].as_str().unwrap().contains("bosun gate"));
     assert!(v.get("decision").is_none());
     // A record of this very tree: silent.
@@ -764,7 +764,7 @@ fn repeat_lock_warns_at_three_and_denies_at_five() {
     }
     let third = bash_in(r, "s1", " cargo test ");
     assert_eq!(third.code, 0, "{}", third.stderr);
-    let v: Value = serde_json::from_str(&third.stdout).unwrap();
+    let v: Value = common::one_object(third.stdout.as_bytes());
     let h = &v["hookSpecificOutput"];
     assert_eq!(h["hookEventName"], "PreToolUse");
     assert!(h.get("permissionDecision").is_none());
@@ -819,7 +819,7 @@ fn repeat_lock_counts_each_session_on_its_own() {
         allowed(&bash_in(r, "s1", "cargo test"));
         allowed(&bash_in(r, "s2", "cargo build"));
     }
-    let v: Value = serde_json::from_str(&bash_in(r, "s1", "cargo test").stdout).unwrap();
+    let v: Value = common::one_object(bash_in(r, "s1", "cargo test").stdout.as_bytes());
     assert!(
         v["hookSpecificOutput"]["additionalContext"].is_string(),
         "{v}"
