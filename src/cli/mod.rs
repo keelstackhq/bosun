@@ -27,6 +27,7 @@ pub mod keygen;
 pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
+pub mod merge;
 pub mod msg;
 pub mod notify;
 pub mod pin;
@@ -116,6 +117,8 @@ pub enum Command {
     Approve(ApproveArgs),
     /// Make an ed25519 approval key (PEM, mode 0600, outside the repo); `--enroll` adds it to .bosun/approvers.toml.
     Keygen(KeygenArgs),
+    /// Orchestrator only: re-check every gate on the PR's head and merge it (spec D13, D-019).
+    Merge(MergeArgs),
     /// Judge a PR with the risk rules of its base branch.
     RiskCheck(PrArg),
     /// Refuse deleted tests, new skips and fewer assertions.
@@ -260,6 +263,7 @@ impl Command {
             Command::Gate(_) => "gate",
             Command::Approve(_) => "approve",
             Command::Keygen(_) => "keygen",
+            Command::Merge(_) => "merge",
             Command::RiskCheck(_) => "risk-check",
             Command::TestIntegrity(_) => "test-integrity",
             Command::ReviewPack(_) => "review-pack",
@@ -480,6 +484,15 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct MergeArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// GitHub merge method.
+    #[arg(long, value_parser = ["squash", "merge", "rebase"], default_value = "squash")]
+    pub method: String,
 }
 
 #[derive(Debug, Args)]

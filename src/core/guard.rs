@@ -3072,6 +3072,28 @@ mod tests {
         assert!(bash("git commit -m x", "main").is_some());
     }
 
+    /// D-019: `bosun merge` (it checks the orchestrator and the gates itself) is allowed; every
+    /// other merge path stays refused (the MCP merge tool: `read_only_github_tools_skip_the_label_lock`).
+    #[test]
+    fn guard_allows_bosun_merge_denies_gh_merge() {
+        for cmd in [
+            "bosun merge 12",
+            "bosun merge 12 --method rebase",
+            "bosun -C . merge 3",
+        ] {
+            assert!(bash(cmd, "feature").is_none(), "{cmd}");
+            assert!(bash(cmd, "main").is_none(), "{cmd}");
+        }
+        for cmd in [
+            "gh pr merge 12 --squash",
+            "gh api -X PUT repos/o/r/pulls/12/merge -f sha=abc",
+            "curl -X PUT https://api.github.com/repos/o/r/pulls/12/merge",
+            "bosun merge 12 && gh pr merge 12",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+    }
+
     /// The hook's directory is on `main`; `/wt` (and anything below `-C /wt`) is a worktree on
     /// `feature`. Returns the options the rule asked about, and its verdict.
     fn in_worktree(cmd: &str) -> (Vec<Vec<String>>, Option<String>) {

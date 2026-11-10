@@ -94,7 +94,11 @@ fn check_state(statuses: &[Status], runs: &[CheckRun], ctx: &str) -> String {
 }
 
 /// `(context, state)` of every required check that is not green on `sha` (information only).
-fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+pub(super) fn not_green(
+    gh: &dyn Github,
+    base: &str,
+    sha: &str,
+) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
     Ok(required(gh, base)?
@@ -110,7 +114,7 @@ fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, Stri
 /// The gates a merge relies on: `(context, state)` of `risk-check` and `review-verdict` on `sha`.
 /// Only a commit status posted by `github-actions[bot]` counts; a check run or a status from
 /// anyone else with the same name is ignored (`missing`), as in `risk-check` itself.
-fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+pub(super) fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     Ok(["risk-check", "review-verdict"]
         .into_iter()
@@ -608,7 +612,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                         pull.number
                     ),
                     format!(
-                        "the orchestrator merges PR #{0} (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --ready`",
+                        "the orchestrator merges PR #{0} with `bosun merge {0}` (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --ready`",
                         pull.number
                     ),
                 )

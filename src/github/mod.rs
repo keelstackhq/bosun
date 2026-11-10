@@ -175,6 +175,9 @@ pub trait Github {
     fn required_status_checks(&self, branch: &str) -> Result<Live>;
     /// Auto-merge through the Claude Code cloud route; `method` is `merge`, `squash` or `rebase`.
     fn enable_auto_merge_rest(&self, number: u64, method: &str) -> Result<()>;
+    /// Merge PR `number` only while its head is `sha` (`PUT /pulls/{n}/merge`); a moved head
+    /// (409) or an unmergeable PR (405) is a conflict (exit 3).
+    fn merge_pull(&self, number: u64, sha: &str, method: &str) -> Result<()>;
     /// Whether the repo path `rest` (such as `/actions/secrets/NAME`) exists: 200 is `Some(true)`,
     /// 404 `Some(false)`, 403 (the token cannot read it) `None`.
     fn exists(&self, rest: &str) -> Result<Option<bool>>;
@@ -852,6 +855,32 @@ impl Github for LiveGithub {
         self.http
             .send_json("PUT", &path, &json!({"merge_method": method}))?;
         Ok(())
+    }
+
+    fn merge_pull(&self, number: u64, sha: &str, method: &str) -> Result<()> {
+        if !["merge", "squash", "rebase"].contains(&method) {
+            return Err(BosunError::usage(
+                format!("merge method {method:?} is not one GitHub accepts"),
+                "use merge, squash or rebase",
+            ));
+        }
+        let path = self.path(&format!("/pulls/{number}/merge"));
+        let body = json!({"sha": sha, "merge_method": method});
+        match self.http.send_json("PUT", &path, &body) {
+            Ok(_) => Ok(()),
+            Err(e)
+                if crate::cli::merge::http_status(&e.message, 405)
+                    || crate::cli::merge::http_status(&e.message, 409) =>
+            {
+                Err(BosunError::conflict(
+                    e.message,
+                    format!(
+                        "nothing was merged: rerun `bosun merge {number}` on the PR's current head once its checks pass"
+                    ),
+                ))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn failed_jobs(&self, sha: &str) -> Result<Vec<Job>> {
