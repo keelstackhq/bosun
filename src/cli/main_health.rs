@@ -1,6 +1,7 @@
 //! `bosun main-health --result R` (spec section 9): keeps one main-red issue open while main is
 //! red. It does not check the kill switch: it reports health and starts no work.
 
+use crate::github::gate::GateWriter;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -26,6 +27,7 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
     }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
+    let w = GateWriter::for_ctx(gh, &app.ctx);
     let url = a.run_url.as_deref().unwrap_or("(no run URL given)");
     let is_red = matches!(result, "failure" | "timed_out" | "startup_failure");
     let (mut opened, mut closed, mut lesson) = (false, false, Value::Null);
@@ -88,7 +90,7 @@ pub fn run(dir: Option<&Path>, a: &MainHealthArgs) -> CmdResult {
     let (mut rejudged, mut errors) = (0, Vec::new());
     if is_red || result == "success" {
         for pull in gh.list_pulls(None, IssueState::Open)? {
-            match judge_pr(gh, &pull, red) {
+            match judge_pr(gh, &w, &pull, red) {
                 Ok(_) => rejudged += 1,
                 Err(e) => errors.push(json!({"pr": pull.number, "error": e.message})),
             }

@@ -137,6 +137,7 @@ gate = {gate?: str, stack?: str | null, command?: [str], packages?: [str], exit_
     secs?: num, over_budget?: bool, skipped?: bool, reason?: str, stamp?: str | null,
     uncommitted?: [str], files?: [str], findings?: [any], base?: str, files_checked?: int,
     integrity?: str, head_sha?: str, main_red?: int | null, mainfix?: bool, pass?: bool, pr?: int,
+    checks_skipped?: bool,
     ci?: {base: str, event: str, provider: str}, runs?: [{gate: str, stack: str | null,
     command: [str], packages: [str], exit_status: int, secs: num, over_budget: bool,
     skipped: bool}]};
@@ -153,9 +154,9 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
     policy?: str, verdicts?: [str], autonomous_verdicts?: [str], delegate_verdicts?: [str],
-    delegate_blocked?: str | null};
+    delegate_blocked?: str | null, checks_skipped?: bool};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
-    task_state: str | null};
+    task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
 verdict apply = verdict post;
 pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,

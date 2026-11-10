@@ -2,6 +2,7 @@
 //! It posts the `main-open` commit status on the PR head. It does not check the kill switch: it
 //! is a check, not work.
 
+use crate::github::gate::GateWriter;
 use std::path::Path;
 
 use serde_json::json;
@@ -54,15 +55,15 @@ pub fn is_mainfix(gh: &dyn Github, pull: &Pull) -> Result<bool> {
 
 /// Judge one PR against `red` and post the `main-open` status on its head. Returns whether it
 /// passes. `bosun main-health` re-judges every open PR with this when main turns red or green.
-pub fn judge_pr(gh: &dyn Github, pull: &Pull, red: Option<u64>) -> Result<bool> {
+pub fn judge_pr(gh: &dyn Github, w: &GateWriter, pull: &Pull, red: Option<u64>) -> Result<bool> {
     let mainfix = red.is_some() && is_mainfix(gh, pull)?;
-    Ok(post(gh, pull, red, mainfix)?.pass)
+    Ok(post(w, pull, red, mainfix)?.pass)
 }
 
-fn post(gh: &dyn Github, pull: &Pull, red: Option<u64>, mainfix: bool) -> Result<Verdict> {
+fn post(w: &GateWriter, pull: &Pull, red: Option<u64>, mainfix: bool) -> Result<Verdict> {
     let v = judge(red, mainfix);
     let state = if v.pass { "success" } else { "failure" };
-    gh.create_status(&pull.head_sha, CONTEXT, state, &v.description, None)?;
+    w.post(&pull.head_sha, CONTEXT, state, &v.description)?;
     Ok(v)
 }
 
@@ -89,9 +90,13 @@ pub fn run(dir: Option<&Path>, pr: Option<u64>) -> CmdResult {
     })?;
     let red = main_red(gh)?;
     let mainfix = red.is_some() && is_mainfix(gh, &pull)?;
-    let v = post(gh, &pull, red, mainfix)?;
-    let data = json!({"pr": n, "head_sha": pull.head_sha, "main_red": red,
+    let w = GateWriter::for_ctx(gh, &app.ctx);
+    let v = post(&w, &pull, red, mainfix)?;
+    let mut data = json!({"pr": n, "head_sha": pull.head_sha, "main_red": red,
         "mainfix": mainfix, "pass": v.pass});
+    if w.checks_skipped() {
+        data["checks_skipped"] = json!(true);
+    }
     if v.pass {
         return Ok(Outcome::data(data));
     }

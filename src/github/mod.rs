@@ -1,6 +1,7 @@
 //! GitHub as the shared store: the `Github` trait and its live implementation (spec §1, D28).
 
 pub mod b64;
+pub mod gate;
 pub mod http;
 pub mod types;
 
