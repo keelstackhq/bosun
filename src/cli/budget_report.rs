@@ -8,7 +8,9 @@ use serde_json::json;
 
 use super::BudgetReportArgs;
 use crate::app::{App, spend_notes, task_meta, trusted_notes};
-use crate::core::budget_report::{Row, facts, in_month, markdown, outcome, parse_month, report};
+use crate::core::budget_report::{
+    Row, facts, in_month, markdown, merge_spend, outcome, parse_month, report,
+};
 use crate::core::cost::revert_target;
 use crate::core::records::{Note, Record, parse_record};
 use crate::github::IssueState;
@@ -74,11 +76,14 @@ pub fn run(dir: Option<&Path>, args: &BudgetReportArgs) -> CmdResult {
         let task = task_of.get(&pull.number);
         let (mut sessions, mut usd) = (None, None);
         let mut models = task.map_or_else(Vec::new, |(_, n)| facts(n).1);
-        if let Some((issue, _)) = task {
-            let (s, _, u, spends) = facts(&spend_notes(gh, *issue)?);
-            if spends > 0 {
-                (sessions, usd) = (Some(s), Some(u));
-            }
+        // Spend on the task issue plus spend on the PR itself, a session counted once.
+        let task_spend = match task {
+            Some((issue, _)) => spend_notes(gh, *issue)?,
+            None => Vec::new(),
+        };
+        let (s, _, u, spends) = facts(&merge_spend(task_spend, spend_notes(gh, pull.number)?));
+        if spends > 0 {
+            (sessions, usd) = (Some(s), Some(u));
         }
         models.extend(facts(&trusted_notes(gh, pull.number)?).1);
         models.sort();
