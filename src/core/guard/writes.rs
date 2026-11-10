@@ -15,6 +15,36 @@ fn is_redirect(word: &str) -> bool {
     })
 }
 
+/// A `>` inside quotes or after a backslash, which `shell_words` would no longer tell apart.
+const QUOTED_GT: char = '\u{1}';
+
+/// The command with every quoted or escaped `>` replaced by `QUOTED_GT`, so only a real
+/// redirection keeps its `>` (`grep '>' f` reads, `echo '>x'` writes nothing).
+fn mask_quoted(command: &str) -> String {
+    let (mut out, mut quote, mut chars) = (String::new(), None, command.chars());
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (None, '\'' | '"') => quote = Some(c),
+            (Some('\''), c) if c != '>' => {}
+            (_, '\\') => {
+                out.push(c);
+                if let Some(n) = chars.next() {
+                    out.push(if n == '>' { QUOTED_GT } else { n });
+                }
+                continue;
+            }
+            (Some(_), '>') => {
+                out.push(QUOTED_GT);
+                continue;
+            }
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// The file a redirection word writes: the rest of the word, or the next word.
 fn redirect<'a>(word: &'a str, next: Option<&'a String>) -> Option<&'a str> {
     if !is_redirect(word) {
@@ -64,7 +94,7 @@ fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
 /// expansions are skipped; after a `cd`, `pushd` or `popd` relative targets are skipped (the
 /// hook could not tell where they land).
 pub fn bash_writes(command: &str) -> Vec<String> {
-    let words = shell_words(&split_heredocs(command).0);
+    let words = shell_words(&mask_quoted(&split_heredocs(command).0));
     let (mut out, mut moved) = (Vec::new(), false);
     for seg in words.split(|w| w == SEP) {
         let mut found: Vec<String> = Vec::new();
@@ -129,7 +159,7 @@ pub fn bash_writes(command: &str) -> Vec<String> {
                 .filter(|p| !p.starts_with(['&', '(']) && !p.starts_with("/dev/"))
                 .map(|p| p.trim_end_matches(')').to_string())
                 .filter(|p| !moved_now || p.starts_with('/'))
-                .filter_map(|p| literal_path(&p)),
+                .filter_map(|p| literal_path(&p.replace(QUOTED_GT, ">"))),
         );
     }
     out
@@ -143,6 +173,8 @@ mod tests {
     fn plain_writes_are_found() {
         for (cmd, want) in [
             ("echo x > src/a.rs", vec!["src/a.rs"]),
+            ("echo 'a > b' > src/a.rs", vec!["src/a.rs"]),
+            ("grep '>' x >> 'src/o.rs'", vec!["src/o.rs"]),
             ("printf y >> docs/b.md && cat c", vec!["docs/b.md"]),
             ("cargo test 2>&1 | tee out.log", vec!["out.log"]),
             ("cp -r a b src/dest.rs", vec!["src/dest.rs"]),
@@ -202,6 +234,14 @@ mod tests {
             "sudo -D /tmp cp a README.md",
             "echo \"a>README.md\"",
             "tee >(wc -l)",
+            "grep '>' README.md",
+            "grep -c '>>' src/a.rs",
+            "rg '>' Cargo.toml",
+            "echo '>src/a.rs'",
+            "git commit -m '>x'",
+            "grep \">\" README.md",
+            "echo \\>x",
+            "echo '2>README.md'",
         ] {
             assert!(bash_writes(cmd).is_empty(), "{cmd}: {:?}", bash_writes(cmd));
         }

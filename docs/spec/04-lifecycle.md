@@ -95,7 +95,7 @@ SessionStart also gives the session its rules (no GitHub call): `Session rules (
    (also in a cluster like `-ni`; after the script, or all operands with `-e`/`-f`), for the
    command word after assignments, wrappers (`if`, `then`, `{`, `(`) and runners with their
    options (`sudo -u x`, `env`, `time`); a heredoc body that no shell or interpreter on its line
-   reads is data, `>&N`, `/dev/*` and quoted words with spaces are skipped. Still not a sandbox.
+   reads is data, `>&N`, `/dev/*` and a `>` inside quotes or after a backslash is data (`grep '>' f` reads). Still not a sandbox.
    Known misses: glued `x>f` (text before the `>` reads as an argument whose quotes are gone,
    such as a sed script `s/a>b/c/`), relative targets after any `cd`, `pushd`, `popd` or a
    runner that changes directory (`sudo -D`, `--chdir`; skipped: the hook cannot tell where
