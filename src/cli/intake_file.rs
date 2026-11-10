@@ -1,6 +1,7 @@
 //! `bosun intake check|sign|verify`: the intake file `.bosun/intake.toml` (spec section 3) and
-//! its detached signature `.bosun/intake.sig`. No GitHub access: everything is read from local
-//! files, so `verify` can run in provision.yml against its own checked-out main.
+//! its detached signature `.bosun/intake.sig`. Signatures need no GitHub access: everything is
+//! read from local files, so `verify --sig` can run in provision.yml against its own checked-out
+//! main. `verify --chat <issue>` reads the orchestrator's chat record on the intake issue.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -8,8 +9,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::{IntakeCheckArgs, IntakeSignArgs, IntakeVerifyArgs};
+use crate::app::{App, default_ref};
 use crate::cli::approve::read_key;
-use crate::core::approve::{APPROVERS_PATH, ApproverKey, Role, parse_approvers, verify_ed25519};
+use crate::cli::risk_check::{chat_enabled, fallback_owners, owner_logins};
+use crate::core::approve::{
+    APPROVERS_PATH, ApproverKey, Role, is_orchestrator, parse_approvers, parse_intake_chat_record,
+    verify_ed25519,
+};
 use crate::core::intake::{INTAKE_PATH, Intake, SigFile, intake_sha256, parse};
 use crate::github::b64;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -158,7 +164,7 @@ pub fn sign(dir: Option<&Path>, a: &IntakeSignArgs) -> CmdResult {
 }
 
 fn refuse(reason: &str, why: &str, fix: &str) -> BosunError {
-    BosunError::needs_human(format!("the intake signature does not count: {why}"), fix)
+    BosunError::needs_human(format!("the intake approval does not count: {why}"), fix)
         .with_data(json!({"reason": reason}))
 }
 
@@ -180,7 +186,16 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
     let text =
         std::fs::read_to_string(at(dir, &a.file)).map_err(|e| bad_intake(e.kind().to_string()))?;
     let intake = parse(&text).map_err(|e| bad_intake(e.message))?;
-    let sf = std::fs::read_to_string(at(dir, &a.sig))
+    if let Some(issue) = a.chat {
+        return verify_chat(dir, issue, &text, &intake);
+    }
+    let (Some(sig), Some(approvers)) = (&a.sig, &a.approvers) else {
+        return Err(BosunError::usage(
+            "--sig and --approvers, or --chat, are required",
+            "pass --sig SIGFILE --approvers PATH, or --chat ISSUE",
+        ));
+    };
+    let sf = std::fs::read_to_string(at(dir, sig))
         .map_err(|e| e.to_string())
         .and_then(|t| SigFile::parse(&t))
         .map_err(|e| {
@@ -239,7 +254,7 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
             fix,
         ));
     }
-    let ks = keys(dir, &a.approvers).map_err(|why| {
+    let ks = keys(dir, approvers).map_err(|why| {
         refuse(
             "bad_approvers",
             &format!("the approvers file is unusable ({why})"),
@@ -273,7 +288,77 @@ pub fn verify(dir: Option<&Path>, a: &IntakeVerifyArgs) -> CmdResult {
         ));
     }
     Ok(Outcome::data(
-        json!({"verified": true, "key": sf.key, "repo": sf.repo, "mode": sf.mode,
+        json!({"verified": true, "via": "signature", "key": sf.key, "repo": sf.repo, "mode": sf.mode,
         "nonce": sf.nonce, "expires": sf.expires, "intake": view(&intake)}),
     ))
+}
+
+/// `verify --chat`: the newest comment on `issue` that records the owner's chat yes to these
+/// intake bytes counts when unedited, written by an owner (owners on the default branch, else
+/// the no-owners fallback of risk-check), for an orchestrator session in the registry, and at
+/// most an hour old (spec section 8). `[approvals] chat = false` on the default branch turns it
+/// off. Failures are exit 5 with `data.reason`; a failed GitHub read errors (fail closed).
+fn verify_chat(dir: Option<&Path>, issue: u64, text: &str, intake: &Intake) -> CmdResult {
+    let fix = "ask the orchestrator to record the owner's chat yes on the intake issue again, or sign the intake (`bosun intake sign`) and pass --sig";
+    let app = App::load(dir)?;
+    let gh = app.gh.as_ref();
+    let main = default_ref(gh)?;
+    if !chat_enabled(gh, &main)? {
+        return Err(refuse(
+            "chat_off",
+            "chat records are off (`[approvals] chat = false` on the default branch)",
+            "sign the intake (`bosun intake sign`) and pass --sig",
+        ));
+    }
+    let sha = intake_sha256(text.as_bytes());
+    let comments = gh.list_comments(issue)?;
+    let mut found: Vec<_> = (comments.iter())
+        .filter_map(|c| parse_intake_chat_record(&c.body, &sha).map(|r| (c, r)))
+        .collect();
+    if found.is_empty() {
+        return Err(refuse(
+            "no_chat_record",
+            "the issue has no chat record for these intake bytes",
+            fix,
+        ));
+    }
+    found.sort_by_key(|(c, _)| std::cmp::Reverse(c.id));
+    let owners = owner_logins(gh, &main)?;
+    let members = crate::registry::load(gh)?
+        .map(|(_, notes)| crate::core::lease::members(&notes))
+        .unwrap_or_default();
+    let now = Timestamp::now();
+    let mut why = None;
+    for (c, r) in found {
+        let owner = if owners.is_empty() {
+            fallback_owners(gh, &c.user)?
+        } else {
+            owners.clone()
+        };
+        let made = parse_rfc3339(&c.created_at);
+        let reason = if !c.unedited() {
+            ("chat_edited", "it was edited")
+        } else if !owner.iter().any(|o| o.eq_ignore_ascii_case(&c.user)) {
+            ("chat_not_owner", "its author is not an owner")
+        } else if !is_orchestrator(&members, &r.session) {
+            (
+                "chat_not_orchestrator",
+                "its session is not an orchestrator in the registry",
+            )
+        } else if made.is_none_or(|t| t > now.plus_secs(MAX_SKEW_SECS)) {
+            ("issued_in_future", "it was written in the future")
+        } else if made.is_some_and(|t| now.0 - t.0 > MAX_EXPIRES_SECS as i64) {
+            ("expired", "it is more than an hour old")
+        } else {
+            let made = made.expect("checked above");
+            return Ok(Outcome::data(json!({"verified": true, "via": "chat",
+                "issue": issue, "comment": c.id, "approved_by": c.user, "session": r.session,
+                "repo": repo_of(intake), "mode": null, "nonce": format!("chat-{}", c.id),
+                "expires": made.plus_secs(MAX_EXPIRES_SECS as i64).to_string(),
+                "intake_sha256": sha, "intake": view(intake)})));
+        };
+        why.get_or_insert(reason);
+    }
+    let (reason, text) = why.expect("one record at least");
+    Err(refuse(reason, &format!("the chat record {text}"), fix))
 }

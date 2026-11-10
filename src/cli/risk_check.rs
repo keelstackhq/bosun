@@ -1026,10 +1026,10 @@ pub fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
 }
 
 /// `[approvals] chat` at base (unset: on). A config that does not parse turns chat off.
-fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
+pub(crate) fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
     Ok(match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => Config::parse(&t, CONFIG_FILE)
-            .map_err(|e| eprintln!("bosun: risk-check: chat records are off: {}", e.message))
+            .map_err(|e| eprintln!("bosun: chat records are off: {}", e.message))
             .is_ok_and(|c| c.approvals.chat_enabled()),
         None => true,
     })
