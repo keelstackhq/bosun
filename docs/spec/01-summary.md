@@ -73,9 +73,12 @@ commands are the one exception: their stdout follows the Claude Code hook protoc
 
 - `data` is the command's result. Its shape is per command: `bosun schema [<command>]` prints
   it as JSON Schema (`data.commands`, or `data.schema` for one command: the envelope with its
-  `data`), from the notation in `src/schema/data.rs`. The schema is open (new keys are not a
-  breaking change); the test helper checks every envelope the tests see against it strictly, so
-  it cannot drift from the code.
+  `data`), and `--format ts` as TypeScript declarations in the string `data.ts`
+  (`declare namespace bosun`, one `function verdictPost(...args: string[]):
+  Promise<Envelope<"verdict post", VerdictPostData>>` per command, for the harness to implement)
+  for Code Mode harnesses; both come from the notation in `src/schema/data.rs`. The schema is
+  open (new keys are not a breaking change); the test helper checks every envelope the tests see
+  against it strictly, so it cannot drift from the code.
 - `error` is `null` when `ok` is true. `kind` is the exit-code name of §1.1, except `upstream` (exit 1) for a GitHub 5xx that outlived the 3 attempts: retry the same command. `fix` is never empty.
 - `next` lists the tool calls the session must make (D29): `{"tool":"create_session","args":{..}}`.
 - The npm launcher (`@keelstackhq/bosun`, `npm/bosun`) keeps this contract when it cannot start the binary: it prints one envelope with `exit_code` 1 and a `fix`, and the message on stderr. That holds for `hook` commands too; Claude Code treats a hook's exit 1 as a non-blocking error.
