@@ -1,6 +1,6 @@
 # Chat approval, no-CI mode, setup auto-detect (design)
 
-Owner request 2026-11-10. Status: draft for owner approval.
+Owner request 2026-11-10. Status: approved by the owner 2026-11-10 with merge option (a).
 
 ## Intent
 
@@ -146,12 +146,12 @@ uncommitted repo files. So:
   record needs no prior file on main: risk-check reads owners from the PR's base, and without
   `governance/owners.toml` on main the record counts only for the repo owner (or org admins).
 
-## Open: owner decisions
+## Owner decisions (settled 2026-11-10)
 
 1. **Merging without CI.** Spec D13 and org decision D-008 say agents never merge; bosun only turns
    on auto-merge. Without required checks auto-merge cannot gate anything. Options:
    (a) a `bosun merge <pr>` command, orchestrator only, that re-checks section 2 and merges
-   (the hook keeps refusing every other merge path). Needs a D-008/D13 change. My pick.
+   (the hook keeps refusing every other merge path). Needs a D-008/D13 change. **Chosen by the owner.**
    (b) Without CI bosun stops at "ready" and the owner merges by tapping in the GitHub app. Keeps
    D13, adds a step outside the chat.
 2. **Org decisions.** D-008 and D-012 (and spec D13 for option 1a) need a PR in
