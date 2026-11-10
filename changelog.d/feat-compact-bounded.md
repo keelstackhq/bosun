@@ -1,0 +1,1 @@
+- The compaction state block reads leases from the cache only and waits at most 5 s for the PR lookup; the PreCompact hook entry has a 15 s timeout (spec §4).
