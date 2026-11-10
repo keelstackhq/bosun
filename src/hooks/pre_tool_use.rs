@@ -32,8 +32,14 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
         match (dir, tool) {
             (Some(d), Some(t)) => {
                 let tool_input = input.get("tool_input").unwrap_or(&Value::Null);
-                super::cli_repeat::reset(&d, t, tool_input);
-                super::refusal::apply(&d, t, tool_input, out)
+                let out = super::refusal::apply(&d, t, tool_input, out);
+                let denied = out
+                    .as_deref()
+                    .is_some_and(|o| o.contains("\"permissionDecision\""));
+                if !denied {
+                    super::cli_repeat::reset(&d, t, tool_input);
+                }
+                out
             }
             _ => out,
         }

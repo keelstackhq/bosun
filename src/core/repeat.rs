@@ -64,6 +64,30 @@ pub fn is_poll(command: &str) -> bool {
         .any(|p| line == *p || line.starts_with(&format!("{p} ")))
 }
 
+/// The CLI call as the counter sees it: `bosun` and the arguments without the global flags
+/// (`-C <dir>`, `--json`, `-v`, `--verbose`), so `bosun -C w wait` is still a poll.
+pub fn cli_command(args: &[String]) -> String {
+    let mut words = vec!["bosun"];
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-C" => {
+                it.next();
+            }
+            "--json" | "-v" | "--verbose" => {}
+            a if a.starts_with("-C") && a.len() > 2 => {}
+            a => words.push(a),
+        }
+    }
+    words.join(" ")
+}
+
+/// Whether the CLI counts its own calls: only under Claude Code (`CLAUDECODE=1`), whose hook
+/// resets the count, and never in CI, where nothing would.
+pub fn cli_counts(claudecode: Option<&str>, ci: bool) -> bool {
+    claudecode.map(str::trim) == Some("1") && !ci
+}
+
 /// The counter key of a session, agent and directory: 16 hex digits (FNV-1a), a safe file name.
 pub fn repeat_key(session: &str, agent: &str, dir: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -99,6 +123,29 @@ mod tests {
         let b = repeat_step(Some(a), "ls");
         assert_eq!(b.count, 2);
         assert_eq!(repeat_step(Some(b), "pwd").count, 1);
+    }
+
+    #[test]
+    fn cli_command_drops_global_flags() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            cli_command(&a(&["-C", "../w", "wait", "--pr", "5"])),
+            "bosun wait --pr 5"
+        );
+        assert_eq!(cli_command(&a(&["--json", "status", "-v"])), "bosun status");
+        assert_eq!(cli_command(&a(&["-C../w", "heartbeat"])), "bosun heartbeat");
+        assert!(is_poll(&cli_command(&a(&[
+            "-C", "w", "wait", "--child", "S"
+        ]))));
+        assert_eq!(cli_command(&a(&["pr", "5"])), "bosun pr 5");
+    }
+
+    #[test]
+    fn the_cli_counts_only_under_claude_code_outside_ci() {
+        assert!(cli_counts(Some("1"), false));
+        assert!(!cli_counts(Some("1"), true));
+        assert!(!cli_counts(None, false));
+        assert!(!cli_counts(Some("0"), false));
     }
 
     #[test]
