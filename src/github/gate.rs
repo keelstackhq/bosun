@@ -162,8 +162,19 @@ impl<'a> GateWriter<'a> {
 }
 
 /// `body` with no HTML comment opener and no `/bosun` command a workflow could match.
+/// The record line (after the last blank line) is JSON-escaped instead (`\u002f`, `\u003c`), so it
+/// reads back the same: a session name keeps matching its lease.
 pub fn defuse(body: &str) -> String {
-    body.replace("<!--", "<! --").replace("/bosun", "/ bosun")
+    let human = |t: &str| t.replace("<!--", "<! --").replace("/bosun", "/ bosun");
+    match body.rsplit_once("\n\n") {
+        Some((text, record)) if record.trim_start().starts_with('{') => {
+            let record = record
+                .replace('<', "\\u003c")
+                .replace("/bosun", "\\u002fbosun");
+            format!("{}\n\n{record}", human(text))
+        }
+        _ => human(body),
+    }
 }
 
 fn missing_token() -> BosunError {

@@ -91,7 +91,7 @@ key goes only to the token step, the token only to the bosun step. main-health's
 
 **bosun changes (planned).**
 - `.bosun/bosun.toml` `[checks]`: `mode = "statuses" | "dual" | "checks"` (default `statuses`),
-  `app_id` and `app_slug` (required unless `statuses`). Workflows read it from the base like the
+  `app_id` and `app_slug` (required unless `statuses`; never GitHub Actions, id 15368 or slug `github-actions`, which any workflow can post as). Workflows read it from the base like the
   rest; unknown keys are errors, so a release that knows `[checks]` is pinned first.
 - The token comes from env `BOSUN_APP_TOKEN` (never argv, never printed). Missing in `checks`
   mode: exit 1, the fix names the token step and the `bosun-app` environment. In `dual` the status
@@ -120,7 +120,7 @@ key goes only to the token step, the token only to the bosun step. main-health's
 - Verdict records: in `checks` mode `verdict apply` writes the record with the App token, and
   only records by `<app_slug>[bot]` count (two verdicts, delegate, carry): the readers see that
   login as the trusted author and `github-actions[bot]` as nobody. The App's record body is
-  defused (`<!--` and `/bosun` are broken up) so it can never start a keyed job (UC-B2-7). This closes the §8
+  defused (`<!--` and `/bosun` are broken up in the text; the record line is JSON-escaped, `\u002f` and `\u003c`, so it reads back the same) so it can never start a keyed job (UC-B2-7). This closes the §8
   residual "a workflow can post a record as github-actions[bot]". Older records stop counting at
   the switch; an open PR's reviewer posts the verdict comment again.
 - `bosun verdict post` (a session's own token) cannot make the App's check run: in `checks` mode
