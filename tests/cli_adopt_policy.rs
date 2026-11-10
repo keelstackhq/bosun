@@ -356,3 +356,26 @@ fn adopt_kept_config_with_bad_ci_is_an_error() {
         );
     }
 }
+
+#[test]
+fn adopt_kept_config_without_ci_is_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ci"], "github", "{v}");
+    assert!(
+        !v["data"]["owner_steps"].to_string().contains("[ci]"),
+        "{v}"
+    );
+}
+
+#[test]
+fn adopt_old_pin_keeps_unparsed_config_as_before() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "not = [toml\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.11.0"]);
+    assert_eq!(code, 0, "{v}");
+}

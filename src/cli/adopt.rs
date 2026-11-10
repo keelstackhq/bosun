@@ -419,15 +419,20 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     }
     // A rerun keeps the provider an earlier run wrote: adopt's own workflows would flip detection.
     let cfg = ".bosun/bosun.toml";
-    let kept_cfg = read_opt(&root.join(cfg))?
-        .map(|b| String::from_utf8_lossy(&b).parse::<toml::Table>())
-        .transpose()
-        .map_err(|e| {
-            BosunError::error(
-                format!("{cfg} does not parse: {e}"),
-                format!("fix {cfg} (or delete it), then rerun `bosun adopt`"),
-            )
-        })?;
+    // Only a pin that reads `[ci]` needs the kept file: older pins keep it unread, as before.
+    let kept_cfg = (if ci_ok {
+        read_opt(&root.join(cfg))?
+    } else {
+        None
+    })
+    .map(|b| String::from_utf8_lossy(&b).parse::<toml::Table>())
+    .transpose()
+    .map_err(|e| {
+        BosunError::error(
+            format!("{cfg} does not parse: {e}"),
+            format!("fix {cfg} (or delete it), then rerun `bosun adopt`"),
+        )
+    })?;
     let kept_ci = kept_cfg
         .as_ref()
         .and_then(|t| t.get("ci")?.get("provider"))
@@ -456,7 +461,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     // Older pins would reject the table: write it only for a release that reads it.
     let ci: Option<String> = ci_ok.then(|| {
         a.ci.clone()
-            .or(kept_ci)
+            .or(kept_ci.clone())
             .unwrap_or_else(|| detect_ci(&root).to_string())
     });
     vars.set("ci_provider", ci.as_deref().unwrap_or(""));
@@ -629,12 +634,8 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     if let Some(c) = ci.clone()
         && action_of(&changes, ".bosun/bosun.toml") == "kept"
     {
-        let held = read_opt(&root.join(".bosun/bosun.toml"))
-            .ok()
-            .flatten()
-            .and_then(|b| String::from_utf8_lossy(&b).parse::<toml::Table>().ok())
-            .and_then(|t| Some(t.get("ci")?.get("provider")?.as_str()? == c));
-        if held != Some(true) {
+        // A missing key is `github` (spec §9).
+        if kept_ci.as_deref().unwrap_or("github") != c {
             steps.insert(0, format!("Set provider = \"{c}\" under [ci] in .bosun/bosun.toml by hand (adopt keeps an existing file)."));
             ci = None;
         }
