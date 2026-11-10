@@ -1607,7 +1607,7 @@ fn split_heredocs(command: &str) -> (String, Vec<String>) {
         };
         let reads = shell_words(line)
             .iter()
-            .any(|w| SHELLS.contains(&base(w)) || sql_client(w));
+            .any(|w| SHELLS.contains(&base(w)) || interp::is_runner(w) || sql_client(w));
         if let Some(delim) = delim.filter(|d| !d.is_empty() && !reads) {
             skip = Some((delim, dash, quote.is_some()));
         }

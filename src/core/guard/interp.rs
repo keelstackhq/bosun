@@ -3,8 +3,8 @@
 //! into statements and words, and each `gh`/`git` word is judged like a shell command.
 
 use super::{
-    BranchAt, MAX_DEPTH, MERGE_FIX, SEP, Target, base, check, gh_rule, git_rule, http_rule,
-    literal_path, shell_words,
+    BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule, git_rule,
+    http_rule, literal_path, shell_words,
 };
 
 /// Interpreters and shells whose code or script the scan reads (a version suffix is dropped:
@@ -21,10 +21,36 @@ fn runner_name(word: &str) -> &str {
     if t.is_empty() { b } else { t }
 }
 
+/// Whether a word names an interpreter or shell this scan reads (`python3.12`, `tsx`).
+pub(super) fn is_runner(word: &str) -> bool {
+    RUNS.contains(&runner_name(word)) && word != "."
+}
+
+/// The command words of a command: the first word of each segment after assignments,
+/// wrappers, runners (`timeout 5`, `nice -n 5`) and their flags and numbers.
+fn command_words(words: &[String]) -> Vec<usize> {
+    let (mut out, mut start) = (Vec::new(), true);
+    for (i, w) in words.iter().enumerate() {
+        if w == SEP {
+            start = true;
+            continue;
+        }
+        let skip = (w.contains('=') && !w.starts_with('-'))
+            || WRAPPERS.contains(&w.as_str())
+            || RUNNERS.iter().any(|r| r.0 == base(w))
+            || w.starts_with('-')
+            || w.bytes().all(|c| c.is_ascii_digit());
+        if start && !skip {
+            out.push(i);
+            start = false;
+        }
+    }
+    out
+}
+
 pub(super) fn has_interpreter(command: &str) -> bool {
-    shell_words(command)
-        .iter()
-        .any(|w| RUNS.contains(&runner_name(w)) && w != ".")
+    let w = shell_words(command);
+    command_words(&w).into_iter().any(|i| is_runner(&w[i]))
 }
 
 /// The fix of a refusal: the same as the shell merge-lock, plus the owner.
@@ -35,13 +61,17 @@ fn refuse(what: &str, why: &str) -> String {
 }
 
 /// Cut code into statements at newlines and `;` outside brackets (a call spread over lines
-/// stays one statement).
+/// stays one statement), and at `&` and `|` anywhere (a shell chain inside a string).
 fn statements(code: &str) -> Vec<String> {
     let (mut out, mut cur, mut depth) = (Vec::new(), String::new(), 0usize);
     for c in code.chars() {
         match c {
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            '&' | '|' => {
+                out.push(std::mem::take(&mut cur));
+                continue;
+            }
             '\n' | ';' if depth == 0 => {
                 out.push(std::mem::take(&mut cur));
                 continue;
@@ -104,18 +134,11 @@ pub(super) fn inline_rule(command: &str, target: &Target) -> Option<String> {
 fn script_paths(command: &str) -> Vec<(String, bool)> {
     let w = shell_words(command);
     let mut out = Vec::new();
-    let mut start = true;
-    for (i, word) in w.iter().enumerate() {
-        if word == SEP {
-            start = true;
-            continue;
-        }
-        let name = runner_name(word);
-        if start && word.contains('/') && !RUNS.contains(&name) {
+    for i in command_words(&w) {
+        let (word, name) = (&w[i], runner_name(&w[i]));
+        if word.contains('/') && !RUNS.contains(&name) {
             out.extend(literal_path(word).map(|p| (p, false)));
         }
-        let assign = word.contains('=') && !word.starts_with('-');
-        start &= assign;
         if RUNS.contains(&name) {
             let shell = SHELL_RUNS.contains(&name);
             let args = w[i + 1..].iter().take_while(|a| *a != SEP);
@@ -149,7 +172,7 @@ pub fn script_rules(
             || path.ends_with(".bash")
             || (first.starts_with("#!") && first.ends_with("sh"));
         if shell && let Some(why) = check(&code, branch_at, default_branch, MAX_DEPTH / 2) {
-            return Some(format!("the script `{path}` runs a command that {why}"));
+            return Some(format!("in the script `{path}`: {why}"));
         }
         if let Some(why) = code_rule(&code, &target) {
             return Some(refuse(&format!("the script `{path}`"), why));
@@ -198,6 +221,11 @@ mod tests {
             r#"node -e 'q("enablePullRequestAutoMerge")'"#,
             "python3 - <<'EOF'\nimport subprocess\nsubprocess.run([\n  \"gh\",\n  \"pr\", \"merge\"])\nEOF",
             r#"python -c 'os.system(f"git push origin {branch}")'"#,
+            "python3.12 - <<'EOF'\nimport os\nos.system('gh pr merge 3')\nEOF",
+            "tsx <<'EOF'\nexecSync('gh pr merge 3')\nEOF",
+            "cat <<'EOF' | python3.11\nos.system('gh pr merge 3')\nEOF",
+            "env python3.12 - <<'EOF'\nos.system('git push --force')\nEOF",
+            "timeout 5 node -e 'execSync(\"git tag v1\")'",
         ] {
             let why = bash(cmd).unwrap_or_else(|| panic!("allowed: {cmd}"));
             assert!(
@@ -218,6 +246,9 @@ mod tests {
             r#"node -e 'execSync("git status && git log --oneline -3")'"#,
             "ruby -e 'puts 1'",
             "deno eval 'console.log(1)'",
+            "git push -u origin HEAD && sh -c 'echo $HOME'",
+            "git push -u origin claude/x && python3 -c 'print(1.5)'",
+            "git commit -F - <<'EOF'\nfix: python -c and gh pr merge refusals\nEOF",
         ] {
             assert_eq!(bash(cmd), None, "{cmd}");
         }
@@ -261,5 +292,13 @@ mod tests {
             "unreadable: skipped"
         );
         assert_eq!(script("cat x.py", "gh pr merge"), None, "not run");
+        for cmd in [
+            "grep -n python x.py",
+            "rg -n sh x.sh",
+            "git diff . x.sh",
+            "echo bash x.sh",
+        ] {
+            assert_eq!(script(cmd, "gh pr merge"), None, "not a runner: {cmd}");
+        }
     }
 }
