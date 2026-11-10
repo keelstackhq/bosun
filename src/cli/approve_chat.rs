@@ -2,7 +2,7 @@
 //! comment (spec section 8, chat approvals). It posts with the session's own token, also in
 //! the cloud: risk-check counts the record through the app. Refusals, in order: chat off, not
 //! an orchestrator, head moved, no clean verdict from another session, no stored owner answer
-//! (or, from Claude Tag, a Slack user who is not an owner).
+//! (or, from Claude Tag, a Slack user who is not an owner; `--slack-user` only from origin slack).
 
 use std::path::Path;
 
@@ -16,6 +16,7 @@ use crate::cli::risk_check::{
 };
 use crate::core::approve::{chat_comment, is_orchestrator, parse_target};
 use crate::core::meta::linked_issues_in;
+use crate::ctx::Origin;
 use crate::github::Pull;
 use crate::hooks::answers;
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -88,6 +89,12 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         ));
     }
     let question = match &args.slack_user {
+        Some(_) if app.ctx.origin != Origin::Slack => {
+            return Err(BosunError::needs_human(
+                "--slack-user records an answer given in a Claude Tag thread; this session's origin is not slack",
+                ASK_AGAIN,
+            ));
+        }
         Some(user) => {
             let ids = owner_slack_ids(gh, &default_branch(gh)?)?;
             if !valid_slack_id(user) || !ids.contains(user) {
