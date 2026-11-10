@@ -31,6 +31,7 @@ use crate::core::risk;
 use crate::ctx::{Ctx, Origin};
 use crate::gates::main_open::{is_mainfix, judge};
 use crate::github::{Github, IssueState, LiveGithub, Pull, b64};
+use crate::hooks::answers;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -266,7 +267,12 @@ fn exec(
 ) -> CmdResult {
     let now = &ctx.now.to_string();
     if args.list {
-        let b = board(gh, tokenless)?;
+        let mut b = board(gh, tokenless)?;
+        // Held by the owner at this head (PostToolUse answers): not asked again until it moves.
+        let (held, ready): (Vec<Ready>, Vec<Ready>) = std::mem::take(&mut b.ready)
+            .into_iter()
+            .partition(|r| answers::held(&ctx.dir, r.pr, &r.head_sha));
+        b.ready = ready;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
         let items: Vec<(u64, String, String)> = b
@@ -283,6 +289,8 @@ fn exec(
             "message": message,
             "message_pairs": message_pairs,
             "ready": b.ready.iter().map(ready_json).collect::<Vec<_>>(),
+            "held": held.iter().map(|r| json!({"pr": r.pr, "head_sha": r.head_sha}))
+                .collect::<Vec<_>>(),
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
             "approve_command": approve_command(&heads),
