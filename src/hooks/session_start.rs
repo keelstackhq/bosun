@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::cache;
 use super::session_rules::rules_context;
@@ -17,7 +17,7 @@ fn output(text: &str) -> String {
         .to_string()
 }
 
-pub fn run(cwd: Option<&Path>) -> String {
+pub fn run(cwd: Option<&Path>, input: &Value) -> String {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
@@ -26,8 +26,15 @@ pub fn run(cwd: Option<&Path>) -> String {
     {
         eprintln!("bosun: trailers hook: {}", e.message);
     }
+    // After compaction the summary may have lost the state: add it back (spec §4).
+    let state = match dir.as_deref() {
+        Some(d) if input.get("source").and_then(Value::as_str) == Some("compact") => {
+            format!("\n{}", super::compact::state_block(d))
+        }
+        _ => String::new(),
+    };
     let lessons = format!(
-        "{}{}",
+        "{}{}{state}",
         lessons_block(dir.as_deref()),
         pin_block(dir.as_deref())
     );

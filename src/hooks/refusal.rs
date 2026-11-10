@@ -90,6 +90,16 @@ pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
     }
 }
 
+/// This session's newest refusal marker (shown or not), offline.
+pub fn latest(cwd: &Path) -> Option<Refusal> {
+    let me = caller();
+    let store = dir_of(cwd)?;
+    let mine_only = all(&store).into_iter().map(|(_, r)| r);
+    mine_only
+        .filter(|r| mine(&r.session, &me))
+        .max_by(|a, b| a.at.cmp(&b.at))
+}
+
 /// `<key>.shown`: holds the marker's bytes once the hook injected it. The hook never rewrites
 /// the marker itself, so a marker a command removed cannot come back.
 fn shown_of(file: &Path) -> PathBuf {

@@ -30,7 +30,7 @@ docs/lessons.toml         the lessons store
 plans/*.md                plans in the plan format
 .github/workflows/        call only `bosun gate <name>`; cache through hoard
 .github/CODEOWNERS
-.claude/settings.json     hooks: bosun hook pre-tool-use, bosun hook session-start
+.claude/settings.json     hooks: bosun hook pre-tool-use, session-start, stop, pre-compact
 AGENTS.md                 no lessons; points to bosun commands
 REVIEW.md                 review rules for the verdict
 .splice/channels/bosun.toml   the channel record, kept fresh by the splice update bot
