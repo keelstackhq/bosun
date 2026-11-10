@@ -99,7 +99,7 @@ SessionStart also gives the session its rules (no GitHub call): `Session rules (
    Known misses: glued `x>f` (text before the `>` reads as an argument whose quotes are gone,
    such as a sed script `s/a>b/c/`), relative targets after any `cd`, `pushd`, `popd` or a
    runner that changes directory (`sudo -D`, `--chdir`; skipped: the hook cannot tell where
-   they land), expanded paths (`> $f`), `>| f`, `cp -t DIR` (also in a cluster, `-rt`) and
+   they land), expanded paths (`> $f`), `>| f`, a redirect inside a quoted command substitution (`"$(cmd > f)"`: its `>` reads as quoted), `cp -t DIR` (also in a cluster, `-rt`) and
    `--target-directory` (skipped), a directory destination (judged as the directory), writes
    inside interpreters or scripts, and every other writer (`dd of=`, `rsync`, `tar -x`, `git
    checkout -- f`, `patch`).
