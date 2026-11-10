@@ -73,13 +73,13 @@ batches).
 - `pub fn question_id(pr: u64, head: &str, unix: i64) -> String`.
 - `Approvals::chat_enabled(&self) -> bool` (None → true).
 
-- [ ] Tests: `chat_comment_round_trips` (parse(chat_comment(h,s,t,Some(q)),h) == Some{h,s,Some(q)});
+- [x] Tests: `chat_comment_round_trips` (parse(chat_comment(h,s,t,Some(q)),h) == Some{h,s,Some(q)});
   `parse_rejects_other_head`, `parse_rejects_missing_marker`, `parse_rejects_plain_approve`
   (`/bosun approve <h>` → None); `orchestrator_root_local_slack` (depth1/no parent → true;
   origin local/slack depth 2 → true; spawned depth 2 parent Some → false; `S/1` → false;
   unknown session → false); `question_id_format` (`question_id(12,"abcdef1234…",1700000000)
   == "12-abcdef1-1700000000"`); config `approvals_chat_defaults_true`, `approvals_chat_false_parses`. Run: FAIL.
-- [ ] Implement; PASS. Fragments. Commit, push, open PR.
+- [x] Implement; PASS. Fragments. Commit, push, open PR.
 
 ### Task 2: risk-check counts chat records (+ no-owners fallback)
 
@@ -102,7 +102,7 @@ comments, unless `chat_enabled()` is false. `pub fn fallback_owners(gh, author: 
 Result<Vec<String>>` used only when `owner_logins` is empty: user repo → `[owner.login]`; org
 repo → `[author]` if `org_role(org, author) == Some("admin")`, else `[]` (empty-owners path unchanged).
 
-- [ ] Tests (fake GitHub, gated PR, `risk-check` run): `chat_record_counts_as_owner`
+- [x] Tests (fake GitHub, gated PR, `risk-check` run): `chat_record_counts_as_owner`
   (owner comment via `comment_by` + registry `Join` root for `session_orch` → risk-check
   success, `data.approved_by` = owner); `chat_record_edited_or_stale_not_counted`;
   `chat_record_child_session_not_counted` (spawned depth 2, and `S/3`);
@@ -111,7 +111,7 @@ repo → `[author]` if `org_role(org, author) == Some("admin")`, else `[]` (empt
   `no_owners_file_org_admin_counts`, `no_owners_file_org_member_not_counted`;
   `via_app_author_still_counts` (cloud: comment `via_app: Some("claude")` counts for chat,
   unlike plain `/bosun approve`). Run: FAIL.
-- [ ] Implement; PASS; existing `tests/cli_risk*.rs`, `cli_signed_approve.rs` still pass. Spec §8. Fragments. Commit, push, PR.
+- [x] Implement; PASS; existing `tests/cli_risk*.rs`, `cli_signed_approve.rs` still pass. Spec §8. Fragments. Commit, push, PR.
 
 ### Task 3: `approve --list` returns `ask` + `next`
 
@@ -131,11 +131,11 @@ the `slack_post` shape from `src/cli/notify.rs:598`. **Produces:** each `ready[]
 `Approve #<pr> <short>` + `Hold`) when `ctx.origin != Slack`; for Slack the `slack_post`
 next with text ending `answer "approve <short>"`. Question header must stay ≤12 chars.
 
-- [ ] Tests: `list_one_ready_has_ask_and_next` (assert `next.tool == "AskUserQuestion"`,
+- [x] Tests: `list_one_ready_has_ask_and_next` (assert `next.tool == "AskUserQuestion"`,
   option labels, question contains full head and `acme/widget#12`); `list_two_ready_multiselect`;
   `list_slack_origin_next_is_slack_post` (`BOSUN_ORIGIN=slack`); `list_none_ready_no_next`
   (anti-goal: never block when nothing gated waits); question ids stable per `BOSUN_NOW`. Run: FAIL.
-- [ ] Implement; PASS; `tests/cli_approve*.rs` pass. Spec. Fragments. Commit, push, PR.
+- [x] Implement; PASS; `tests/cli_approve*.rs` pass. Spec. Fragments. Commit, push, PR.
 
 ### Task 4: PostToolUse hook stores AskUserQuestion answers; holds
 
@@ -158,10 +158,10 @@ same head; `data.held[]`). Test: `tests/cli_hook_answers.rs`.
   `pub fn answers::held(dir: &Path, pr: u64, head: &str) -> bool`;
   `pub struct Answer { pub answer: String, pub pr: u64, pub head: String, pub at: String }`.
 
-- [ ] Tests: `answer_approve_stored`, `answer_hold_stored`, `non_bosun_question_ignored`,
+- [x] Tests: `answer_approve_stored`, `answer_hold_stored`, `non_bosun_question_ignored`,
   `hook_output_is_hook_protocol` (no envelope, exit 0), `held_pr_not_reasked_same_head`,
   `held_pr_reasked_new_head`. Run: FAIL.
-- [ ] Implement (atomic write like `hooks/cache.rs:57`); PASS. Fragments. Commit, push, PR.
+- [x] Implement (atomic write like `hooks/cache.rs:57`); PASS. Fragments. Commit, push, PR.
 
 ### Task 5: `bosun approve <pr>@<head> --chat`
 
@@ -181,12 +181,12 @@ no stored `approve` answer for `--question` matching pr+head (non-Slack) → exi
 again; Slack: `--slack-user` not in `governance/owners.toml` slack ids (as `bosun answer`) →
 exit 5. On success: one comment, `data {pr, head_sha, comment_id, question_id}`.
 
-- [ ] Tests: `chat_records_comment` (body == `chat_comment(...)`, one comment);
+- [x] Tests: `chat_records_comment` (body == `chat_comment(...)`, one comment);
   `chat_child_refused` (`BOSUN_ORIGIN=spawned`, depth 2 → exit 5, fix contains `handoff-pr`,
   no comment); `chat_head_moved_refused`; `chat_without_clean_verdict_refused`;
   `chat_without_stored_answer_refused`; `chat_hold_answer_refused`; `chat_slack_owner_ok`,
   `chat_slack_non_owner_refused`; `chat_works_in_cloud` (`CLAUDE_CODE_REMOTE=true`, no owner token). Run: FAIL.
-- [ ] Implement; PASS. Spec §8. Fragments. Commit, push, PR.
+- [x] Implement; PASS. Spec §8. Fragments. Commit, push, PR.
 
 ### Task 6: PreToolUse guard against forged chat records
 
@@ -203,11 +203,11 @@ approval: run `bosun approve <pr>@<head> --chat`"); `fn carries_chat_form(text: 
 command carrying it → deny unless the command's first word list is `bosun approve … --chat`
 (no `;`, `&&`, `|`, `$(`, backtick).
 
-- [ ] Tests: `mcp_comment_with_marker_denied` (`add_issue_comment`, `update_issue_comment`,
+- [x] Tests: `mcp_comment_with_marker_denied` (`add_issue_comment`, `update_issue_comment`,
   `create_pull_request` body); `bash_gh_and_curl_marker_denied`; `bosun_approve_chat_allowed`;
   `bosun_approve_chat_chained_denied` (`bosun approve 1@h --chat && gh api ...`);
   `plain_comment_allowed`. Run: FAIL.
-- [ ] Implement; PASS. Spec §4 hook paragraph. Fragments. Commit, push, PR.
+- [x] Implement; PASS. Spec §4 hook paragraph. Fragments. Commit, push, PR.
 
 ### Task 7: user-scope hooks + session-start detection
 
@@ -228,12 +228,12 @@ session_start::unadopted(cwd: &Path) -> bool` (no `.bosun/version`). Un-adopted 
 `bosun is not set up here: run \`bosun adopt --policy autonomous --owner <login>\` and open
 the setup PR`; skips registry join and kill-switch calls (no network).
 
-- [ ] Tests: `install_hooks_into_empty_settings`, `install_hooks_idempotent` (run twice →
+- [x] Tests: `install_hooks_into_empty_settings`, `install_hooks_idempotent` (run twice →
   byte-identical), `install_hooks_keeps_existing_entries`; `session_start_unadopted_no_network`
   (fake GitHub records zero requests, context contains `bosun adopt`);
   `session_start_adopted_unchanged`; `duplicate_hook_same_tool_use_noop`;
   `doctor_unadopted_next_adopt`. Run: FAIL.
-- [ ] Implement; PASS. Spec. Fragments. Commit, push, PR.
+- [x] Implement; PASS. Spec. Fragments. Commit, push, PR.
 
 ### Task 8: `[ci] provider` config + adopt detection
 
@@ -252,10 +252,10 @@ the setup PR`; skips registry join and kill-switch calls (no network).
 Adopt writes `none` when the checkout has no `.github/workflows/*.y*ml` and no `.circleci/`,
 or `--ci none`.
 
-- [ ] Tests: `ci_provider_default_github`, `ci_provider_bad_value_error`,
+- [x] Tests: `ci_provider_default_github`, `ci_provider_bad_value_error`,
   `adopt_no_ci_writes_none`, `adopt_with_workflows_writes_github`, `main_health_skips_without_ci`,
   `ci_minutes_skips_without_ci`. Run: FAIL.
-- [ ] Implement; PASS. Spec §9 note. Fragments. Commit, push, PR.
+- [x] Implement; PASS. Spec §9 note. Fragments. Commit, push, PR.
 
 ### Task 9: no-CI `pr --ready` + `approve`/`main-open` read local checks
 
@@ -277,11 +277,11 @@ verdict from another session (exit 5) → chat record when gated (exit 5, `next`
 --list`) → main-open local judge → post summary once per head; no auto-merge, no status; task
 → queued; `data.merge_next: "bosun merge <pr>"`.
 
-- [ ] Tests: `ready_no_ci_missing_stamp_exit5`, `ready_no_ci_gated_without_chat_exit5`,
+- [x] Tests: `ready_no_ci_missing_stamp_exit5`, `ready_no_ci_gated_without_chat_exit5`,
   `ready_no_ci_posts_summary_once`, `ready_no_ci_no_status_no_auto_merge` (fake: zero status
   POSTs, `auto_merge_enabled` false), `ready_github_provider_unchanged`,
   `approve_list_no_ci_uses_summary`. Run: FAIL.
-- [ ] Implement; PASS. Spec §4. Fragments. Commit, push, PR.
+- [x] Implement; PASS. Spec §4. Fragments. Commit, push, PR.
 
 ### Task 10: `bosun merge <pr>` (owner decision a)
 
@@ -305,10 +305,10 @@ when gated + main-open; provider github/circleci → required checks `ci-ok`, `r
 (method default `squash`), then task → merged via the existing `pr`/`reap` path; `data {pr,
 head_sha, merged: true}`.
 
-- [ ] Tests: `merge_no_ci_ok`, `merge_head_moved_refused` (exit 3, no PUT), `merge_child_refused`,
+- [x] Tests: `merge_no_ci_ok`, `merge_head_moved_refused` (exit 3, no PUT), `merge_child_refused`,
   `merge_halted_exit4`, `merge_gated_without_chat_refused`, `merge_github_requires_green_checks`,
   `merge_github_already_clean_ok`, `guard_allows_bosun_merge_denies_gh_merge`. Run: FAIL.
-- [ ] Implement; PASS. Spec §1/§4. Fragments. Commit, push, PR.
+- [x] Implement; PASS. Spec §1/§4. Fragments. Commit, push, PR.
 
 ### Task 11: docs — migration + approvers optional
 
@@ -320,7 +320,7 @@ hooks, `.bosun/approvers.toml` optional, `[approvals] chat = false` opt-out, rel
 ordering), `docs/defaults.md` (chat default true), AGENTS.md approval lines,
 `docs/PROGRESS.md` Blocked: T0 decisions PR (owner, phone). Test: `tests/fragments.rs` passes.
 
-- [ ] Write; `cargo nextest run --locked --test fragments` PASS. Fragments. Commit, push, PR.
+- [x] Write; `cargo nextest run --locked --test fragments` PASS. Fragments. Commit, push, PR.
 
 ### Task 12: `bosun intake verify` accepts a chat record (D-014 as amended by decisions#19)
 
