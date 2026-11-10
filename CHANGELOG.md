@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `bosun` reads the token's own repo permission from `GET /repos/{o}/{r}` when a proxy blocks `/collaborators` (Claude Code cloud), so `bosun budget record --pr` and other writer checks work there; other users still need the collaborators endpoint.
+
 ## 0.12.0 (2026-11-10)
 
 - `bosun budget record --pr <n>` (repeatable) records session spend on PRs; `budget report` counts spend on the PR itself.
