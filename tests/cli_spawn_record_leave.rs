@@ -63,7 +63,8 @@ fn an_expired_join_alone_is_refused() {
         .output()
         .unwrap();
     let v = one_object(&out.stdout);
-    assert_ne!(out.status.code(), Some(0), "{v}");
+    assert_eq!(out.status.code(), Some(6), "{v}");
+    assert_eq!(v["data"]["name"], "depth", "{v}");
     assert!(
         !fake
             .comments_of(1)
