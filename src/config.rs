@@ -137,11 +137,18 @@ pub struct Approvals {
     /// approval. Unset: any model counts. A new model id stops counting until enrolled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_models: Option<Vec<String>>,
+    /// Whether a chat approval record counts as the owner's approval. Unset: true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat: Option<bool>,
 }
 
 impl Approvals {
     pub fn policy(&self) -> Policy {
         self.policy.unwrap_or_default()
+    }
+
+    pub fn chat_enabled(&self) -> bool {
+        self.chat.unwrap_or(true)
     }
 }
 

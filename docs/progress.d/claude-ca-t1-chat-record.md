@@ -1,0 +1,1 @@
+- 2026-11-10 · chat-approval T1 · chat record core (`chat_comment`, `parse_chat_record`, `is_orchestrator`, `question_id`) + `[approvals] chat`
