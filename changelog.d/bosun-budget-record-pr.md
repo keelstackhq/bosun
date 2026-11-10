@@ -1,1 +1,0 @@
-- `bosun budget record --pr <n>` (repeatable) records session spend on PRs; `budget report` counts spend on the PR itself

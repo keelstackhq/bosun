@@ -1,1 +1,0 @@
-- Fix: the last raw readers of lease, leave and `task-pr` records (`spawn --record` liveness, `plan amend`, risk-check touch warning, `hold`, `reap`) now ignore forgeries by read-only users.

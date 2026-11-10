@@ -108,7 +108,7 @@ impl Repo {
 }
 
 const PR: [(&str, &str); 2] = [("CIRCLECI", "true"), ("CIRCLE_BRANCH", "work")];
-const ALL: &str = "nextest run --locked --workspace";
+const ALL: &str = "test --locked --workspace";
 
 fn run(file: &str, env: &[(&str, &str)], args: &[&str]) -> (Repo, Value) {
     let r = repo();
@@ -121,7 +121,7 @@ fn run(file: &str, env: &[(&str, &str)], args: &[&str]) -> (Repo, Value) {
 fn pr_diffs_against_the_merge_base_with_origin_main() {
     let (r, v) = run("a/src/lib.rs", &PR, &["test"]);
     // b changed on main after the fork; only the PR's own change (package a) counts.
-    assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
+    assert_eq!(r.calls(), vec!["test --locked -p a"]);
     let fork = git(&r.root, &["merge-base", "HEAD", "origin/main"]);
     assert_eq!(v["data"]["ci"]["provider"], "circleci");
     assert_eq!(v["data"]["ci"]["event"], "pr");
@@ -174,7 +174,7 @@ fn github_and_local_runs_carry_no_ci_block() {
     let env = [("GITHUB_ACTIONS", "true")];
     let (r, v) = run("a/src/lib.rs", &env, &["test", "--base", "main"]);
     assert!(v["data"].get("ci").is_none(), "{v}");
-    assert_eq!(r.calls(), vec!["nextest run --locked -p a"]);
+    assert_eq!(r.calls(), vec!["test --locked -p a"]);
 }
 
 /// A queue sha older than the fork point must not set the base: W..HEAD would miss a test that
@@ -241,6 +241,6 @@ fn untrusted_queue_names_and_pull_requests_diff_like_prs() {
         let fork = git(&r.root, &["merge-base", "HEAD", "origin/main"]);
         assert_eq!(v["data"]["ci"]["event"], "pr", "{template}: {v}");
         assert_eq!(v["data"]["ci"]["base"], fork.as_str(), "{template}");
-        assert_eq!(r.calls(), vec!["nextest run --locked -p a"], "{template}");
+        assert_eq!(r.calls(), vec!["test --locked -p a"], "{template}");
     }
 }

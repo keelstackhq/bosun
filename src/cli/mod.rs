@@ -1048,6 +1048,10 @@ pub struct AdoptArgs {
     /// Write `[approvals] policy` into .bosun/bosun.toml (spec §8); the pinned release must know it.
     #[arg(long, value_parser = ["owner", "owner-gated", "orchestrator", "autonomous"])]
     pub policy: Option<String>,
+    /// Write `[ci] provider` (spec §9). Default: `circleci` when the repo has `.circleci/` and no
+    /// Actions workflows, else `github`. `none` installs no GitHub workflows. Needs pin 0.12.0+.
+    #[arg(long, value_parser = ["github", "circleci", "none"])]
+    pub ci: Option<String>,
     /// Show what would change; write nothing and change nothing on GitHub.
     #[arg(long)]
     pub dry_run: bool,

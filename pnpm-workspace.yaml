@@ -1,6 +1,13 @@
-# Makes the npm launcher in npm/* visible to hoist's release inference and to
+# Makes the npm launcher in npm/bosun* visible to hoist's release inference and to
 # `pnpm install --lockfile-only`, which `hoist release prepare` runs.
 packages:
-  - npm/*
+  # Listed one by one: npm/cargo-deny* (upstream cargo-deny, republished by cargo-deny-npm.yml)
+  # is never part of bosun's release, and hoist reads no `!` patterns.
+  - npm/bosun
+  - npm/bosun-linux-x64
+  - npm/bosun-linux-arm64
+  - npm/bosun-darwin-x64
+  - npm/bosun-darwin-arm64
+  - npm/bosun-win32-x64
 # Platform packages are not on the registry until they are published: resolve them here.
 linkWorkspacePackages: true

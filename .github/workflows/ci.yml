@@ -268,10 +268,10 @@ jobs:
             "$BOSUN" gate "$g" $all || { echo "::error::gate $g failed; later gates did not run"; exit 1; }
             echo "::endgroup::"
           done
-      # The npm launcher (npm/bosun) has no Rust; the runner's Node runs its tests. Last: PR code.
+      # The npm launchers (npm/*) have no Rust; the runner's Node runs their tests. Last: PR code.
       - if: steps.plan.outputs.setup == 'true'
         name: npm launcher tests
-        run: node --test npm/bosun/test/*.test.js
+        run: node --test npm/*/test/*.test.js
 
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).

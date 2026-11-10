@@ -1,1 +1,0 @@
-- 2026-11-09 · pinned config · 0.11.0 approvals row (review_models); no setup-script paste after a pin

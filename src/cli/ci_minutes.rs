@@ -7,6 +7,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::cli::gate::repo_root;
+use crate::config::{CiProvider, Config};
 use crate::core::ci_minutes::{self, Finding};
 use crate::output::{BosunError, CmdResult, Outcome};
 
@@ -48,6 +49,11 @@ pub fn findings_json(findings: &[Finding]) -> Vec<Value> {
 pub fn check(dir: Option<&Path>) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
+    if Config::load(&root)?.ci_provider() == CiProvider::None {
+        return Ok(Outcome::data(
+            json!({"gate": "ci-minutes", "skipped": "ci provider none", "files": [], "findings": []}),
+        ));
+    }
     let (files, findings) = scan(&root);
     let data = json!({"gate": "ci-minutes", "files": files, "findings": findings_json(&findings)});
     if findings.is_empty() {

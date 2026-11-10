@@ -494,7 +494,13 @@ pub fn bootstrap_excluded(
 }
 
 /// Autonomous mode (D-017) covers only these paths; every other changed path is the owner's.
-pub const AUTONOMOUS_ALLOWED: [&str; 4] = ["src/**", "tests/**", "docs/**", "changelog.d/**"];
+pub const AUTONOMOUS_ALLOWED: [&str; 5] = [
+    "src/**",
+    "tests/**",
+    "docs/**",
+    "changelog.d/**",
+    ".changeset/*.md",
+];
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
 /// and the files the review and the plans trust.
@@ -1147,9 +1153,15 @@ mod tests {
             "tests/cli_x.rs",
             "docs/spec/08-risk.md",
             "changelog.d/x.md",
+            ".changeset/x.md",
+            ".changeset/README.md",
         ];
         let no = [
             ".github/workflows/ci.yml",
+            // config.json picks the changelog generator the release runs with secrets.
+            ".changeset/config.json",
+            ".changeset/gen.js",
+            ".changeset/sub/x.md",
             ".github/actions/x/action.yml",
             ".bosun/risk.toml",
             "channel/pieces/core/files/src/a.rs",

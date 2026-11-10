@@ -148,3 +148,20 @@ fn doctor_reports_the_same_findings_as_step_14() {
     let tmp = repo(&[("ci.yml", GOOD)]);
     assert_eq!(doctor_step_14(tmp.path())["status"], "ok");
 }
+
+#[test]
+fn ci_minutes_skips_without_ci() {
+    let tmp = repo(&[(
+        "x.yml",
+        "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: []\n",
+    )]);
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/bosun.toml"),
+        "[ci]\nprovider = \"none\"\n",
+    )
+    .unwrap();
+    let (code, v) = gate(tmp.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], "ci provider none");
+}
