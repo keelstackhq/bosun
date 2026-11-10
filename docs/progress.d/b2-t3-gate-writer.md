@@ -1,1 +1,0 @@
-- 2026-11-10 · B2/T3 · gate writer with statuses, dual and checks modes

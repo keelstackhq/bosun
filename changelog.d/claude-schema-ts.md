@@ -1,1 +1,0 @@
-- `bosun schema --format ts` prints TypeScript declarations of the contract (`declare namespace bosun`, one typed function per command) in `data.ts`; `bosun schema <group>` names its subcommands; README "Using bosun from code (Code Mode)".

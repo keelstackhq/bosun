@@ -1,1 +1,0 @@
-- `.bosun/bosun.toml` `[checks]`: `mode = "statuses" | "dual" | "checks"` (default `statuses`) with `app_id` and `app_slug` (required unless `statuses`); hoist.toml `[github] required_checks` reads `{ context, app | integration_id }` tables beside strings (spec §15, B2/T2).

@@ -1,1 +1,0 @@
-- 2026-11-10 · #500 part 2 · `bosun schema`: data shapes of all remaining commands, stricter error-envelope check · PR for #500

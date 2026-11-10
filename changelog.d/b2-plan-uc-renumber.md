@@ -1,1 +1,0 @@
-- Plan `2026-10-28-app-checks-team-owners.md`: the B4 UCs are numbered without gaps, so `bosun plan import` and `bosun prereqs` read it again.

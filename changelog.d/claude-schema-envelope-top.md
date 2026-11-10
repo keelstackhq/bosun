@@ -1,1 +1,0 @@
-- `bosun schema [<command>]` prints the envelope contract and each command's `data` as JSON Schema (status, claim, gate, pr, verdict, risk-check, approve, spawn, wait, heartbeat and release described; the rest follow); tests check every envelope against it.
