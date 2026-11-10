@@ -76,9 +76,11 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   tick, edit or close the owner checklist issue (`bosun:prereqs`).
 - Owner approvals (D-012): the session asks the owner with a form in the Claude Code chat
   (`AskUserQuestion`: repo, PR, head SHA; approve or hold); a child session sends the request to
-  the orchestrator. On approve the orchestrator posts the signed `bosun approve` comment for that
-  head (`bosun approve <pr>@<head> --sign-key <pem>`). Never ask the owner to write a GitHub
-  comment; their own `/bosun approve <sha>` comment is only a fallback.
+  the orchestrator. On approve the orchestrator runs `bosun approve <pr>@<head> --chat --question <id>` (the chat record
+  for that head; a signed `--sign-key` form still works). Only an orchestrator posts it; never
+  write the `bosun:chat-approval` marker yourself. Never ask the owner to write a GitHub
+  comment; their own `/bosun approve <sha>` comment is only a fallback. With `[ci] provider =
+  "none"` the orchestrator merges with `bosun merge <pr>`.
 - Orchestrators relay approvals in batches: `bosun approve --list` gives `data.message`; keep its
   `data.message_pairs`, only the latest message is answerable, numbers come only from the owner.
 - The PreToolUse hook refuses destructive commands (`rm -rf /` or `~`, `mkfs`, `dd` to a device,
