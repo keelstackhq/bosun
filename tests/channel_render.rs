@@ -394,6 +394,37 @@ const ALL_GATES: [&str; 6] = [
 ];
 const BOSUN_YML: &str = ".github/workflows/bosun.yml";
 
+/// The built-in test gate is `cargo test` (spec §7), but CI runs the release pinned in
+/// `.bosun/version`, and releases up to 0.11.0 run nextest: the CI files keep installing
+/// cargo-nextest (also for a repo override) next to cargo-deny.
+#[test]
+fn ci_files_install_cargo_nextest_and_cargo_deny() {
+    for stack in [&["rust"][..], &["rust", "ts-pnpm"]] {
+        for ci in [&[][..], &["circleci"], &["circleci", "circleci-only"]] {
+            for own_ci in ["", "1"] {
+                let files = variant(&[stack, ci].concat(), own_ci);
+                let nextest = files
+                    .iter()
+                    .filter(|(n, _)| {
+                        n.starts_with(".github/workflows/") || n.starts_with(".circleci/")
+                    })
+                    .any(|(_, t)| t.contains("cargo-nextest"));
+                assert!(
+                    nextest,
+                    "{stack:?} {ci:?} {own_ci:?}: no cargo-nextest install"
+                );
+                let deny = files
+                    .iter()
+                    .filter(|(n, _)| {
+                        n.starts_with(".github/workflows/") || n.starts_with(".circleci/")
+                    })
+                    .any(|(_, t)| t.contains("cargo-deny"));
+                assert!(deny, "{stack:?} {ci:?} {own_ci:?}: no cargo-deny install");
+            }
+        }
+    }
+}
+
 #[test]
 fn rust_gates_install_the_toolchain_file_once() {
     for own_ci in ["", "1"] {
