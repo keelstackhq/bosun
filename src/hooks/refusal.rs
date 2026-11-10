@@ -70,7 +70,7 @@ pub fn record(dir: Option<&Path>, command: &str, result: &CmdResult) {
                 fix: e.fix.clone(),
                 at: now_text(),
                 shown: false,
-                lock: locks(e.exit.code(), &e.message),
+                lock: locks(e.exit.code(), &e.message, &e.fix),
             };
             let file = store.join(format!("{}.json", repeat_key(&session, command, "")));
             if let Err(e) = write(&file, &r) {

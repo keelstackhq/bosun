@@ -27,10 +27,21 @@ pub fn sticky(command: &str, exit_code: u8) -> bool {
     matches!(exit_code, 4..=6) || (exit_code == 3 && command == "claim")
 }
 
-/// Whether a refusal locks writes: only a kill-switch halt (its message names the halt issue
-/// or `BOSUN_HALT`). Main-red and process-red halts leave writes open for the fix they ask for.
-pub fn locks(exit_code: u8, message: &str) -> bool {
-    exit_code == HALTED && message.to_ascii_lowercase().contains("halt")
+/// The fixed phrases of a kill-switch halt (`app::halt_reason`), in its message or fix.
+const KILL_SWITCH: &[&str] = &[
+    "halt issue #",
+    "bosun:halt issues",
+    "BOSUN_HALT",
+    "stays halted",
+];
+
+/// Whether a refusal locks writes: only a kill-switch halt. Main-red and process-red halts
+/// leave writes open for the fix they ask for.
+pub fn locks(exit_code: u8, message: &str, fix: &str) -> bool {
+    exit_code == HALTED
+        && KILL_SWITCH
+            .iter()
+            .any(|p| message.contains(p) || fix.contains(p))
 }
 
 /// Whether `session`'s marker belongs to the hook's `caller`: the same id, or a task session
@@ -200,18 +211,21 @@ mod tests {
 
     #[test]
     fn only_kill_switch_halts_lock() {
+        let l = |m: &str| locks(4, m, "wait");
+        assert!(l("halt issue #3 by o is open: the owner stopped all work"));
+        assert!(l("BOSUN_HALT=1: the owner stopped all work"));
+        assert!(l("cannot read the bosun:halt issues: 500"));
+        assert!(l("cannot read the BOSUN_HALT variable: 500"));
+        let owners = "give the token Issues: read; bosun stays halted until it can read x";
         assert!(locks(
             4,
-            "halt issue #3 by o is open: the owner stopped all work"
+            "cannot read the owners on the default branch: 500",
+            owners
         ));
-        assert!(locks(4, "BOSUN_HALT=1: the owner stopped all work"));
-        assert!(locks(4, "cannot read the bosun:halt issues: 500"));
-        assert!(!locks(
-            4,
-            "main is red (#9); only mainfix tasks can be claimed"
-        ));
-        assert!(!locks(4, "waves pause while process is red (#9)"));
-        assert!(!locks(5, "halt"));
+        assert!(!l("main is red (#9); only mainfix tasks can be claimed"));
+        assert!(!l("waves pause while process is red (#9)"));
+        assert!(!l("api said: halted upstream"));
+        assert!(!locks(5, "BOSUN_HALT=1", "wait"));
     }
 
     #[test]
