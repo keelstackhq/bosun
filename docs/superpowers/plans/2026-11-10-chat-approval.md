@@ -338,3 +338,5 @@ record by the T2 rules (`count_chat`), keep signatures working; tests in `tests/
 - T8 (#486) minors left for a follow-up: a kept non-table `ci = "none"` reads as github (exit 0,
   Config::parse rejects later); a circleci-only kept checkout still gets a hand step; `gate
   ci-minutes` exits 1 on an invalid bosun.toml (not in spec).
+- T6 (#491): the guard also denies prose that names the marker or the chat form in PR bodies,
+  file pushes and `git commit -m` (workaround: --body-file / -F). T11 documents it in spec §4.
