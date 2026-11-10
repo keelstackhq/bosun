@@ -41,7 +41,7 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    `missing_gates`) or an unpushed head (exit 3) change nothing: run what the fix says. If
    `data.ready` is `pending`, make the `next` call (`mcp__github__update_pull_request`) and
    rerun. If bosun exits 5 with `already_clean`, the PR was already mergeable: hand it to the
-   orchestrator, which merges it (D-008). `bosun hold` and `bosun ask` put the task's PR back to draft. You never merge, tag or force-push (the
+   orchestrator, which merges it with `bosun merge <pr>` (D-008, D-019). `bosun hold` and `bosun ask` put the task's PR back to draft. You never merge, tag or force-push (the
    hooks refuse it).
 9. `bosun release <issue>` if you stop before the task is done.
 

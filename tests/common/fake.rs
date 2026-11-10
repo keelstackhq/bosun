@@ -581,6 +581,14 @@ impl FakeGithub {
     }
 
     /// The merge method of the pull's enabled auto-merge, if any.
+    /// Whether pull `number` is merged.
+    pub fn merged(&self, number: u64) -> bool {
+        let s = self.state.lock().unwrap();
+        s.pulls
+            .iter()
+            .any(|p| p["number"] == number && p["merged"] == true)
+    }
+
     pub fn auto_merge_enabled(&self, number: u64) -> Option<String> {
         self.state.lock().unwrap().auto_merge.get(&number).cloned()
     }
@@ -1299,6 +1307,31 @@ fn route(
             );
             s.pulls.push(p.clone());
             (201, p, vec![])
+        }
+        ("PUT", ["pulls", n, "merge"]) => {
+            let Some(p) = pull_pos(s, n) else {
+                return msg(404, "Not Found");
+            };
+            let pull = &s.pulls[p];
+            if pull["merged"] == true || pull["state"] != "open" {
+                return msg(405, "Pull Request is not mergeable");
+            }
+            if body["sha"].as_str() != pull["head"]["sha"].as_str() {
+                return msg(
+                    409,
+                    "Head branch was modified. Review and try the merge again.",
+                );
+            }
+            let method = body["merge_method"].as_str().unwrap_or("merge");
+            if !["merge", "squash", "rebase"].contains(&method) {
+                return msg(422, "Invalid merge_method");
+            }
+            s.pulls[p]["merged"] = json!(true);
+            s.pulls[p]["state"] = json!("closed");
+            s.pulls[p]["merge_commit_sha"] = json!("merged0000");
+            ok(
+                json!({"sha": "merged0000", "merged": true, "message": "Pull Request successfully merged"}),
+            )
         }
         ("GET", ["pulls", n]) => match pull_pos(s, n) {
             Some(p) => ok(s.pulls[p].clone()),

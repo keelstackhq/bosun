@@ -22,9 +22,9 @@ use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
     TRUSTED_CREATOR, api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud,
-    only_r_ci, parse_ready_summary, parse_target, policy_line, readiness, signed_comment,
-    signed_message, signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
-    summary_readiness,
+    only_r_ci, parse_chat_record, parse_ready_summary, parse_target, policy_line, readiness,
+    signed_comment, signed_message, signed_message_autonomous, signed_message_bootstrap,
+    signed_message_v2, summary_readiness,
 };
 use crate::core::ask;
 use crate::core::records::{PrHead, Record};
@@ -151,11 +151,27 @@ fn board(gh: &dyn Github, lenient: bool, no_ci: bool) -> Result<Board> {
 fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
     let comments = gh.list_comments(p.number)?;
     // The newest summary of the head by a repo writer (any other commenter could hide a PR).
+    let writer = |user: &str| -> Result<bool> {
+        Ok(matches!(
+            gh.permission(user)?.as_deref(),
+            Some("admin" | "write")
+        ))
+    };
     for c in comments.iter().rev() {
-        if parse_ready_summary(&c.body, &p.head_sha)
-            && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"))
-        {
-            return Ok(summary_readiness(Some(&c.body)));
+        if parse_ready_summary(&c.body, &p.head_sha) && writer(&c.user)? {
+            let (r, verdict) = summary_readiness(Some(&c.body));
+            // A chat answer for this head after the summary: the owner already approved.
+            let answered = |c: &&crate::github::Comment| {
+                c.unedited() && parse_chat_record(&c.body, &p.head_sha).is_some()
+            };
+            if matches!(r, Readiness::Ready(_)) {
+                for a in comments.iter().filter(answered) {
+                    if writer(&a.user)? {
+                        return Ok((Readiness::NotWaiting, verdict));
+                    }
+                }
+            }
+            return Ok((r, verdict));
         }
     }
     Ok(summary_readiness(None))

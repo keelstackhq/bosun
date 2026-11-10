@@ -1,0 +1,1 @@
+- `bosun merge <pr>` (orchestrator only, D-019): re-checks the gates on the exact head (no CI: ready summary, local risk, verdict, chat approval, main-open; CI: required checks green) and merges with `sha = head`; no-CI `approve --list` drops a PR once the owner answered in chat.
