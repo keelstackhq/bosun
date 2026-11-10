@@ -1,0 +1,1 @@
+- PreToolUse chat-lock: refuses MCP and Bash writes carrying a chat approval record, except `bosun approve … --chat`.

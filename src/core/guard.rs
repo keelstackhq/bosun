@@ -168,6 +168,11 @@ pub fn tool_rules(
         if READ_ONLY_GITHUB.contains(&name) {
             return None;
         }
+        if strings(input).iter().any(|t| carries_chat_form(t)) {
+            return Some(format!(
+                "`{tool}` writes a chat approval record: {CHAT_FIX}"
+            ));
+        }
         // A label tool is judged on its whole input; any other tool only on its label fields,
         // so a PR or issue body that names a state label in prose is not a label edit.
         let set = if name.contains("label") {
@@ -437,6 +442,54 @@ pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<Stri
     })
 }
 
+const CHAT_FIX: &str = "only an orchestrator records a chat approval: run \
+    `bosun approve <pr>@<head> --chat`";
+
+/// The chat approval marker, or the record's first line `/bosun approve <40-hex> chat`, anywhere
+/// in the text (any case, any spacing). Broader than `core::approve::parse_chat_record`, so
+/// whatever the risk-check counter would count, the guard refuses.
+static CHAT_FORM: LazyLock<Regex> = LazyLock::new(|| {
+    let marker = regex::escape(crate::core::approve::CHAT_MARKER);
+    Regex::new(&format!(
+        r"(?i){marker}|/bosun\s+approve\s+[0-9a-f]{{40}}\s+chat\b"
+    ))
+    .expect("chat form regex")
+});
+
+fn carries_chat_form(text: &str) -> bool {
+    CHAT_FORM.is_match(text)
+}
+
+/// Every string value in `v`, at any depth.
+fn strings(v: &Value) -> Vec<&str> {
+    match v {
+        Value::String(s) => vec![s.as_str()],
+        Value::Object(m) => m.values().flat_map(strings).collect(),
+        Value::Array(a) => a.iter().flat_map(strings).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Chat-lock (design "Guard against workers writing it"): a command that carries the chat form
+/// is refused unless it is one plain `bosun approve … --chat` (no `;`, `&`, `|`, `$`, backtick,
+/// group or newline), or read-only throughout with no `bosun` word (`bosun` is on the read-only
+/// allowlist). Best effort, like the label-lock: text in a file (`--body-file`, `--input`), a
+/// variable, or split by quotes is missed.
+fn chat_rule(command: &str) -> Option<String> {
+    if !carries_chat_form(command) {
+        return None;
+    }
+    let plain = !command.contains([';', '&', '|', '$', '`', '(', ')', '<', '>', '\n']);
+    let words = shell_words(command);
+    let approve_chat = plain
+        && words.first().map(String::as_str) == Some("bosun")
+        && words.get(1).map(String::as_str) == Some("approve")
+        && words.iter().any(|w| w == "--chat");
+    let reads = read_only(command, 0) && !words.iter().any(|w| base(w) == "bosun");
+    (!approve_chat && !reads)
+        .then(|| format!("the command writes a chat approval record: {CHAT_FIX}"))
+}
+
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
 fn label_fields(v: &Value) -> String {
     match v {
@@ -481,7 +534,8 @@ fn too_deep() -> String {
 }
 
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
-    decrypt_rule(command, 0)
+    chat_rule(command)
+        .or_else(|| decrypt_rule(command, 0))
         .or_else(|| destructive_rule(command, 0))
         .or_else(|| check(command, branch_at, default_branch, 0))
         .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
@@ -4540,5 +4594,143 @@ mod tests {
         assert!(why.contains("re-claim with valid globs"), "{why}");
         let only = [own(6, "me", &["src/[a"])];
         assert!(edit_lock("src/[a", true, &only, "me").is_some());
+    }
+
+    const H: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn chat_body() -> String {
+        crate::core::approve::chat_comment(H, "session_x", "2026-11-10T00:00:00Z", Some("q"))
+    }
+
+    fn mcp(tool: &str, input: Value) -> Option<String> {
+        tool_rules(tool, &input, &|_| Some("feat".into()), "main")
+    }
+
+    #[test]
+    fn mcp_comment_with_marker_denied() {
+        let body = chat_body();
+        let marker_only = format!("lgtm\n<!-- {} v1 -->", crate::core::approve::CHAT_MARKER);
+        let form_only = format!("/bosun approve {} chat", H.to_uppercase());
+        for (tool, input) in [
+            (
+                "add_issue_comment",
+                json!({"issue_number": 3, "body": body}),
+            ),
+            (
+                "update_issue_comment",
+                json!({"comment_id": 9, "body": marker_only}),
+            ),
+            (
+                "create_pull_request",
+                json!({"title": "x", "body": form_only}),
+            ),
+            (
+                "pull_request_review_write",
+                json!({"method": "create", "body": body}),
+            ),
+            ("issue_write", json!({"method": "update", "body": body})),
+            (
+                "add_comment_to_pending_review",
+                json!({"x": [{"body": body}]}),
+            ),
+        ] {
+            let why = mcp(&format!("mcp__github__{tool}"), input)
+                .unwrap_or_else(|| panic!("{tool} allowed"));
+            assert!(why.contains("bosun approve <pr>@<head> --chat"), "{why}");
+        }
+        // Reading is not writing.
+        let q = json!({"query": "bosun:chat-approval"});
+        assert_eq!(mcp("mcp__github__search_issues", q), None);
+    }
+
+    #[test]
+    fn plain_comment_allowed() {
+        let ok = [
+            "lgtm",
+            "/bosun approve 0123456789abcdef0123456789abcdef01234567",
+            "/bosun approve <head> chat",
+            "chat approvals are recorded by the orchestrator",
+        ];
+        for body in ok {
+            let input = json!({"issue_number": 3, "body": body});
+            assert_eq!(mcp("mcp__github__add_issue_comment", input), None, "{body}");
+            let cmd = format!("gh pr comment 3 --body '{body}'");
+            assert_eq!(bash(&cmd, "feat"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn guard_denies_every_record_the_counter_counts() {
+        use crate::core::approve::parse_chat_record;
+        let body = chat_body();
+        assert!(parse_chat_record(&body, H).is_some());
+        assert!(carries_chat_form(&body));
+        // Each line on its own carries the form: a record cannot be split past the guard.
+        assert!(
+            body.lines()
+                .filter(|l| !l.contains("Approved"))
+                .all(carries_chat_form)
+        );
+        let shouty = body.replace("bosun:chat-approval", "BOSUN:Chat-Approval");
+        assert!(carries_chat_form(&shouty));
+    }
+
+    #[test]
+    fn bash_gh_and_curl_marker_denied() {
+        let body = chat_body().replace('\n', "\\n");
+        let cmds = [
+            format!("gh api repos/o/r/issues/3/comments -f body='{body}'"),
+            format!("gh pr comment 3 --body \"{body}\""),
+            format!("gh issue comment 3 -b '/bosun approve {H} chat'"),
+            format!(
+                "curl -X POST -H 'Authorization: token x' https://api.github.com/repos/o/r/issues/3/comments -d '{{\"body\":\"{body}\"}}'"
+            ),
+            format!(
+                "gh api repos/o/r/issues/3/comments --input - <<'EOF'\n{{\"body\": \"/bosun approve {H} chat\"}}\nEOF"
+            ),
+            format!(
+                "bash -c \"gh pr comment 3 -b '<!-- bosun:chat-approval v1 session=s head={H} -->'\""
+            ),
+            format!("bosun handoff-pr 3 --note '/bosun approve {H} chat'"),
+            format!("git commit -m '/bosun approve {H} chat'"),
+        ];
+        for cmd in &cmds {
+            let why = bash(cmd, "feat").unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(why.contains("chat approval record"), "{cmd}: {why}");
+        }
+        // Read-only commands may name it.
+        assert_eq!(bash("grep -rn bosun:chat-approval src", "feat"), None);
+        assert_eq!(
+            bash(
+                "gh pr view 3 --json comments | grep 'bosun:chat-approval'",
+                "feat"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn bosun_approve_chat_allowed() {
+        for cmd in [
+            format!("bosun approve 12@{H} --chat"),
+            format!("bosun approve 12@{H} --chat --question 12-0123456-1700000000"),
+        ] {
+            assert_eq!(bash(&cmd, "feat"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn bosun_approve_chat_chained_denied() {
+        let tail = format!("gh api repos/o/r/issues/12/comments -f body='/bosun approve {H} chat'");
+        for cmd in [
+            format!("bosun approve 1@{H} --chat && {tail}"),
+            format!("bosun approve 1@{H} --chat; {tail}"),
+            format!("bosun approve 1@{H} --chat | {tail}"),
+            format!("bosun approve 1@{H} --chat\n{tail}"),
+            format!("bosun approve 1@{H} --chat --note \"$({tail})\""),
+            format!("bosun approve 1@{H} --chat --note '/bosun approve {H} chat' `true`"),
+        ] {
+            assert!(bash(&cmd, "feat").is_some(), "allowed: {cmd}");
+        }
     }
 }
