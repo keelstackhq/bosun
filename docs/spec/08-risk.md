@@ -193,7 +193,7 @@ High-risk PRs:
   drops the key to opt out.
 - Approval policy (D-014 draft, spec B6). `[approvals] policy = "owner" | "owner-gated" |
   "orchestrator"` (or `"autonomous"`, next bullet; default `owner`, fail safe: intake writes the policy explicitly for new and
-  adopted repos; another value is a parse error) says when an orchestrator approval (the
+  adopted repos, and `bosun adopt --policy` writes it, §11; another value is a parse error) says when an orchestrator approval (the
   bootstrap-form signature above, format unchanged) counts. Checks, in order, first failure wins
   (`orchestrator_counts` in `src/core/approve.rs`): the requirement is `owner`; no
   `BOOTSTRAP_EXCLUDED` hit; no changed `WORKFLOW_PATHS` file (`.github/workflows/**`,

@@ -45,6 +45,7 @@ creates the labels and the registry issue. It commits nothing; you commit and op
 ```bash
 bosun adopt --dry-run                          # see what would change; writes nothing
 bosun adopt --owner <your-github-login>        # stacks are detected; or --stack rust|ts-pnpm|other
+bosun adopt --owner <login> --policy autonomous   # also write [approvals] policy (section 9, item 4)
 ```
 
 The JSON gives the exact commands in `data.commands`: `git switch bosun-setup 2>/dev/null || git switch -c bosun-setup`, a `git add`
@@ -52,7 +53,10 @@ of the paths adopt wrote, `git commit -m "chore: set up bosun"`, `git push -u or
 then `bosun doctor`.
 
 Existing files are never overwritten (`kept` in `data.changes`). `--no-remote` needs no token and
-skips the labels and the registry issue. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
+skips the labels and the registry issue. `--policy owner|owner-gated|orchestrator|autonomous`
+writes `policy` under `[approvals]` in `.bosun/bosun.toml`; adopt refuses (exit 2) a policy the
+pinned release cannot parse (`autonomous` needs 0.8.0, the others 0.5.0), and when it keeps an
+existing `bosun.toml` an owner step tells you to set the line by hand. `.bosun/adopt.toml` records what adopt wrote; a rerun is a
 no-op. `data.owner_steps` lists only the steps still left for you (no owners step once `--owner` wrote the file; no key step once `.bosun/approvers.toml` has a key). Undo it with `bosun uninstall` (section 7).
 The rest of this section is the splice path.
 
@@ -244,7 +248,8 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    changes, e.g. `deny.toml`) or `orchestrator`. Workflow changes always need you. Bootstrap mode
    (D-012) ends on 2026-11-30; init writes `[approvals]` only without `--bosun-version`.
    Autonomous mode (D-017): `policy = "autonomous"` under an older pinned release is a parse
-   error (signatures do not count); set it only after pinning a release that knows it. The
+   error (signatures do not count); set it only after pinning a release that knows it
+   (`bosun adopt --policy autonomous` writes it and checks the pin). The
    orchestrator then approves PRs that change only `src/`, `tests/`, `docs/` or `changelog.d/`
    (not `docs/agents/`, plans, `*.jinja`, `build.rs`, `docs/lessons.toml`, `docs/setup-script.sh`, nor R-gate code, module roots or `#[path]` changes),
    when every verdict on the exact head is clean and one is from an independent reviewer session, for a PR that

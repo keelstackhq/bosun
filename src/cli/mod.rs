@@ -1014,6 +1014,9 @@ pub struct AdoptArgs {
     /// Pin .bosun/version to this X.Y.Z (default: this binary's version).
     #[arg(long, value_name = "X.Y.Z")]
     pub bosun_version: Option<String>,
+    /// Write `[approvals] policy` into .bosun/bosun.toml (spec §8); the pinned release must know it.
+    #[arg(long, value_parser = ["owner", "owner-gated", "orchestrator", "autonomous"])]
+    pub policy: Option<String>,
     /// Show what would change; write nothing and change nothing on GitHub.
     #[arg(long)]
     pub dry_run: bool,
