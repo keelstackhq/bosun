@@ -1,9 +1,9 @@
 ## 15. Trusted check source: App check runs (B2)
 
-Status: partly built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, item
-B2): the check-run client (T1), `[checks]` (T2), the gate writer (T3) and reading back by App
-(T4) are in; the checks-mode refusals and the doctor pin check (T5) are not. The default mode is `statuses`, so nothing
-changes until a repo sets `[checks]`. Until the ruleset switch (Transition, step 6), §7, §8 and §9
+Status: B2 built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`): the
+check-run client, `[checks]`, the gate writer, reading back by App, the checks-mode refusals and
+the doctor pin check. The workflows (B2W) are not switched yet. The default mode is `statuses`,
+so nothing changes until a repo sets `[checks]`. Until the ruleset switch (Transition, step 6), §7, §8 and §9
 describe what runs.
 
 **The problem.** `risk-check`, `review-verdict` and `main-open` are commit statuses that the
@@ -127,10 +127,13 @@ key goes only to the token step, the token only to the bosun step. main-health's
   it is exit 1 with the fix `bosun verdict comment`. `bosun approve --main-open` (the owner's PAT)
   cannot either: in `checks` mode it is exit 3 with the fix "re-run the main-open workflow" (O4).
 - `bosun pr` and `doctor` read hoist.toml `required_checks` entries in both forms (string or
-  table, below). `doctor --remote` warns in `checks` mode when a gate context is not pinned to
-  `app_id` in the live required checks, and when the session's token can read the Actions
-  secrets list or the rulesets' bypass list (a sign it may hold the writes; no read proves a
-  write scope is absent, so the precondition below stays an owner check).
+  table, below); a `required_checks` key that cannot be read is a step-3 problem in `doctor` and
+  a stderr line in `bosun pr` (it would otherwise fall back to the defaults silently). `doctor
+  --remote` warns in `checks` mode (step 3, `warn`) when a gate context is not pinned to `app_id`
+  in the rulesets (`GET /rules/branches/<b>`, `integration_id`), and when the session's token can
+  list the Actions secrets (a sign it may hold the writes; no read proves a write scope is
+  absent, so the precondition below stays an owner check). The rulesets' bypass list is not
+  read: GitHub shows it only to admins, whom the secrets read already flags.
 - Tests use the fake GitHub only: check-run create and update, `app_id` on runs, a same-name run
   from github-actions that must not count, each mode, the missing token.
 

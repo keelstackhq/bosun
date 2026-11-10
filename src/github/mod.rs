@@ -72,6 +72,9 @@ pub enum Probe {
     Gone,
 }
 
+/// A required check and the App it is pinned to (`integration_id`; `None`: any source).
+pub type Pin = (String, Option<u64>);
+
 /// Pages (of 100) that `recent_issues` reads.
 pub const RECENT_PAGES: usize = 5;
 
@@ -186,6 +189,8 @@ pub trait Github {
     /// Whether the repo path `rest` (such as `/actions/secrets/NAME`) exists: 200 is `Some(true)`,
     /// 404 `Some(false)`, 403 (the token cannot read it) `None`.
     fn exists(&self, rest: &str) -> Result<Option<bool>>;
+    /// The `(context, integration_id)` pairs the rulesets on `branch` require; `None` on 403.
+    fn ruleset_pins(&self, branch: &str) -> Result<Option<Vec<Pin>>>;
     /// Which branches may deploy to the environment `name`.
     fn environment_branches(&self, name: &str) -> Result<EnvBranches>;
 }
@@ -966,6 +971,32 @@ impl Github for LiveGithub {
             )
         })?;
         Ok(crate::core::text::squash_log(&text, head, tail, 20))
+    }
+
+    fn ruleset_pins(&self, branch: &str) -> Result<Option<Vec<Pin>>> {
+        let path = self.path(&format!("/rules/branches/{}", enc(branch)));
+        let Ok(rules) = self.http.get_json_or_forbidden(&path)? else {
+            return Ok(None);
+        };
+        let rules = rules.unwrap_or_default();
+        let checks = (rules.as_array().into_iter().flatten())
+            .filter(|r| r["type"] == "required_status_checks")
+            .flat_map(|r| {
+                r["parameters"]["required_status_checks"]
+                    .as_array()
+                    .cloned()
+            })
+            .flatten();
+        Ok(Some(
+            checks
+                .filter_map(|c| {
+                    Some((
+                        c["context"].as_str()?.to_string(),
+                        c["integration_id"].as_u64(),
+                    ))
+                })
+                .collect(),
+        ))
     }
 
     fn exists(&self, rest: &str) -> Result<Option<bool>> {

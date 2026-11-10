@@ -400,6 +400,48 @@ fn describe(it: &Value) -> String {
 }
 
 /// Add hoist's finding to a step, keeping the step's own problem and fix.
+/// In `[checks] mode = "checks"`: the gate contexts the live rulesets do not pin to the App, and
+/// a sign that the token may hold write scopes it should not (spec §15, Residuals).
+fn pin_warnings(gh: &dyn Github, ctx: &Ctx, branch: &str) -> Vec<String> {
+    let Some(app_id) = ctx
+        .config
+        .checks
+        .app_id
+        .filter(|_| crate::github::gate::checks_mode())
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    match gh.ruleset_pins(branch) {
+        Ok(Some(pins)) => {
+            let unpinned: Vec<&str> = ["risk-check", "review-verdict", "main-open"]
+                .into_iter()
+                .filter(|g| !pins.iter().any(|(c, id)| c == g && *id == Some(app_id)))
+                .collect();
+            if !unpinned.is_empty() {
+                out.push(format!(
+                    "{unpinned:?} not pinned to the gate App (integration_id {app_id}) in the rulesets: a status or another App's run would satisfy them; pin them in hoist.toml and run `hoist apply --area github`"
+                ));
+            }
+        }
+        Ok(None) => out.push("cannot read the rulesets' pins (403)".into()),
+        Err(e) => out.push(format!("cannot read the rulesets' pins: {}", e.message)),
+    }
+    if gh.exists("/actions/secrets").ok().flatten() == Some(true) {
+        out.push("this token can list the Actions secrets: it may hold write scopes an agent must not have (owner check H7)".into());
+    }
+    out
+}
+
+/// Mark `it` as a warning with `note` added, unless it is already missing (then only the note).
+fn warn_on(it: &mut Value, note: &str) {
+    let detail = format!("{}; {note}", it["detail"].as_str().unwrap_or(""));
+    it["detail"] = json!(detail);
+    if it["status"] == "ok" {
+        it["status"] = json!("warn");
+    }
+}
+
 fn append_problem(it: &mut Value, problem: &str, fix: &str) {
     let (detail, fix) = if it["status"] == "missing" {
         (
@@ -891,16 +933,20 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     )
     });
 
-    let hoist = read(root, "hoist.toml").and_then(|t| t.parse::<toml::Table>().ok());
-    let listed: Vec<String> = hoist
+    let hoist_text = read(root, "hoist.toml");
+    let hoist = hoist_text
         .as_ref()
-        .and_then(|h| h.get("github")?.get("required_checks")?.as_array().cloned())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
+        .and_then(|t| t.parse::<toml::Table>().ok());
+    // Strings and `{ context, app | integration_id }` tables (spec §15). A key that is there but
+    // cannot be read would silently fall back to the defaults, so it is a problem of its own.
+    let listed: Vec<String> = (hoist_text.as_deref())
+        .and_then(checks::hoist_required)
         .unwrap_or_default();
+    let unreadable = hoist.as_ref().is_some_and(|h| {
+        h.get("github")
+            .and_then(|g| g.get("required_checks"))
+            .is_some()
+    }) && listed.is_empty();
     let jobs = workflow_jobs(root);
     let has_job = |j: &str| jobs.iter().any(|x| x == j);
     let mut absent: Vec<&str> = checks::DEFAULT_REQUIRED.to_vec();
@@ -948,6 +994,8 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "required checks",
         if hoist.is_none() {
             Some("hoist.toml is missing or not valid TOML".into())
+        } else if unreadable {
+            Some("hoist.toml [github] required_checks cannot be read: use strings or { context, app } / { context, integration_id } tables".into())
         } else if !absent.is_empty() {
             Some(format!(
                 "hoist.toml [github] required_checks lacks {absent:?}"
@@ -1302,6 +1350,12 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     });
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
+    if let (true, Some(gh), Ok(Some(info))) = (remote, gh, &repo) {
+        let warnings = pin_warnings(gh, ctx, &info.default_branch);
+        if let Some(step3) = items.iter_mut().find(|i| i["step"] == 3) {
+            warnings.iter().for_each(|w| warn_on(step3, w));
+        }
+    }
     let envs = gh
         .filter(|_| remote)
         .map(|g| apply_environments(&mut items, g, &ctx.repo.to_string(), root));

@@ -192,6 +192,11 @@ fn trusted_app() -> Option<&'static (u64, String)> {
     TRUSTED_APP.get().and_then(Option::as_ref)
 }
 
+/// Whether `[checks] mode = "checks"` is in force for this process.
+pub fn checks_mode() -> bool {
+    trusted_app().is_some()
+}
+
 /// In `checks` mode the login that writes trusted verdict records, `<app_slug>[bot]`.
 pub fn record_bot() -> Option<String> {
     trusted_app().map(|(_, slug)| format!("{slug}[bot]"))
