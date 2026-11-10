@@ -162,7 +162,7 @@ depends: B2
   blocks: B2W
 - H3: Create the bosun-app environment, main only
   on: computer
-  steps: Repo Settings > Environments > New bosun-app; Deployment branches and tags > Selected > add branch rule main; no tags, no reviewers
+  steps: Repo Settings > Environments > New bosun-app; Deployment branches and tags > Selected > add branch rule main; no tags, no reviewers, no wait timer (any rule would hold every gate run)
   verify: environment bosun-app
   blocks: B2W
 - H4: Add the App id and key to the environment

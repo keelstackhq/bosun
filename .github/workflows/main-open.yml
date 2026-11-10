@@ -90,6 +90,8 @@ jobs:
       - if: steps.has.outputs.supported == 'true'
         name: App token
         id: app
+        # A missing or broken key never stops the gate: bosun falls back per [checks] mode.
+        continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ vars.BOSUN_APP_ID }}
