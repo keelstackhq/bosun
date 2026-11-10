@@ -268,6 +268,33 @@ fn approve_list_no_ci_uses_summary() {
 }
 
 #[test]
+fn approve_list_no_ci_ignores_non_writer_summary() {
+    let (fake, dir) = setup(true, Some(NO_CI));
+    verdict(&fake, "session_rev", "approve");
+    fake.allow_anonymous_reads();
+    let head = fake.pull_head(20);
+    fake.compare_file(BASE, &head, ".github/workflows/ci.yml", "@@ -0,0 +1 @@\n+x");
+    // A read-only user's copy of the summary neither stops bosun posting its own...
+    let body = bosun::core::approve::ready_summary(
+        &head,
+        &stamps::READY_GATES.map(String::from),
+        "high: R-ci",
+        "session_rev",
+        None,
+    );
+    fake.permission("eve", "read");
+    fake.comment_by(20, "eve", &body);
+    assert_eq!(ready(&fake, dir.path()).0, 5);
+    assert_eq!(summaries(&fake).len(), 2);
+    // ...nor, when newer and claiming an approval, hides the PR from the board.
+    let fake_ok = body.replace("- approval: none", "- approval: ada");
+    fake.comment_by(20, "eve", &fake_ok);
+    let (code, v) = run(&fake, dir.path(), &["approve", "--list"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["ready"].as_array().unwrap().len(), 1, "{v}");
+}
+
+#[test]
 fn ready_no_ci_escalated_verdict_does_not_count() {
     let (fake, dir) = setup(false, Some(NO_CI));
     verdict_with(&fake, "session_rev", "approve", true);

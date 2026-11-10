@@ -134,8 +134,14 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
     let body = ready_summary(&head, &gates, &risk_line, &verdicts.join(", "), approval);
     let comments = gh.list_comments(pr)?;
     // starts_with: the cloud agent proxy appends a footer to every comment.
-    let posted =
-        (comments.iter()).any(|c| c.body.starts_with(&body) && parse_ready_summary(&c.body, &head));
+    // Only a writer's copy counts, as `approve --list` reads only writers' summaries.
+    let mut posted = false;
+    for c in &comments {
+        if !posted && c.body.starts_with(&body) && parse_ready_summary(&c.body, &head) {
+            let p = gh.permission(&c.user)?;
+            posted = matches!(p.as_deref(), Some("admin" | "write"));
+        }
+    }
     if !posted {
         gh.add_comment(pr, &body)?;
     }
