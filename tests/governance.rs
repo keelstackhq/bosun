@@ -162,6 +162,8 @@ fn owners_name_the_repo_owner() {
 
 /// A Stop hook that exits non-zero blocks, so an old bosun (usage error, exit 2) must not.
 const STOP_WRAPPER: &str = "out=$(bosun hook stop) && printf '%s\\n' \"$out\"; exit 0";
+const PRE_COMPACT_WRAPPER: &str =
+    "out=$(bosun hook pre-compact) && printf '%s\\n' \"$out\"; exit 0";
 
 fn sh_with_bosun(dir: &Path) -> std::process::Output {
     let path = format!(
@@ -206,7 +208,7 @@ fn stop_wrapper_passes_the_hook_output_through() {
 fn settings_hooks_run_bosun_hook_commands() {
     let settings: Value = serde_json::from_str(&read(".claude/settings.json")).unwrap();
     let mut commands = Vec::new();
-    for event in ["SessionStart", "Stop", "PreToolUse"] {
+    for event in ["SessionStart", "Stop", "PreToolUse", "PreCompact"] {
         for group in settings["hooks"][event].as_array().unwrap() {
             for h in group["hooks"].as_array().unwrap() {
                 commands.push(h["command"].as_str().unwrap().to_string());
@@ -218,7 +220,8 @@ fn settings_hooks_run_bosun_hook_commands() {
         vec![
             "bosun hook session-start",
             STOP_WRAPPER,
-            "bosun hook pre-tool-use"
+            "bosun hook pre-tool-use",
+            PRE_COMPACT_WRAPPER
         ]
     );
     assert_eq!(

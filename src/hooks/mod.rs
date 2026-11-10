@@ -13,6 +13,7 @@ use crate::output::{CmdResult, Outcome};
 
 pub mod cache;
 pub mod cli_repeat;
+pub mod compact;
 pub mod pre_tool_use;
 pub mod refusal;
 pub mod session_rules;
@@ -38,7 +39,8 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
         .or_else(|| input.get("cwd").and_then(Value::as_str).map(PathBuf::from));
     match cmd {
         HookCmd::PreToolUse => pre_tool_use::run(cwd.as_deref(), &input),
-        HookCmd::SessionStart => Some(session_start::run(cwd.as_deref())),
+        HookCmd::SessionStart => Some(session_start::run(cwd.as_deref(), &input)),
+        HookCmd::PreCompact => compact::pre_compact(cwd.as_deref()),
         HookCmd::Stop => stop::run(cwd.as_deref(), &input),
     }
 }

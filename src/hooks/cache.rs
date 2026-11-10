@@ -75,6 +75,14 @@ pub fn cached_issue(dir: &Path, session: &str, now: Timestamp) -> Option<u64> {
         .map(|l| l.issue)
 }
 
+/// The live leases in the cache, offline; empty when there is no cache.
+pub fn cached_live(dir: &Path, now: Timestamp) -> Vec<Lease> {
+    let leases = path(dir).and_then(|f| read(&f)).map(|(_, ls)| ls);
+    let mut live = leases.unwrap_or_default();
+    live.retain(|l| l.is_live(now));
+    live
+}
+
 /// Read the live leases from GitHub and store them in the cache (when there is one).
 pub fn refresh(app: &App, file: Option<&Path>) -> Result<Vec<Lease>> {
     let issues: Vec<_> = active_issues(app.gh.as_ref())?
