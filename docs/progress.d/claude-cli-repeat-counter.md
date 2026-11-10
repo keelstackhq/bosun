@@ -1,0 +1,1 @@
+- 2026-11-10 · #524 (#502 PR 2) · the CLI counts its own calls, so an in-script loop trips the repeat limit · PR #525

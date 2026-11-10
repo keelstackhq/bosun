@@ -18,7 +18,7 @@ fn dir_of(dir: &Path) -> Option<PathBuf> {
 }
 
 /// This process's session (D31), without loading the repo context.
-fn caller() -> String {
+pub(crate) fn caller() -> String {
     let env = |k: &str| std::env::var(k).ok();
     session_id(
         env("BOSUN_SESSION").as_deref(),

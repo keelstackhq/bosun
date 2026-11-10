@@ -29,6 +29,8 @@ pub fn bosun() -> Command {
         .env_remove("GITHUB_ACTIONS")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("CIRCLECI")
+        .env_remove("CI")
+        .env_remove("CLAUDECODE")
         .env_remove("CIRCLE_BRANCH")
         .env_remove("BOSUN_HALT")
         .env_remove("BOSUN_MODEL")
