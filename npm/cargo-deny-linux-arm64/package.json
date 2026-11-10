@@ -1,0 +1,24 @@
+{
+  "name": "@keelstackhq/cargo-deny-linux-arm64",
+  "version": "0.20.2",
+  "description": "Upstream cargo-deny binary for Linux arm64 (the aarch64-unknown-linux-musl release asset of EmbarkStudios/cargo-deny)",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keelstackhq/bosun.git",
+    "directory": "npm/cargo-deny-linux-arm64"
+  },
+  "homepage": "https://github.com/EmbarkStudios/cargo-deny",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

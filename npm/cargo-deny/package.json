@@ -1,0 +1,28 @@
+{
+  "name": "@keelstackhq/cargo-deny",
+  "version": "0.20.2",
+  "description": "Upstream cargo-deny (EmbarkStudios/cargo-deny) prebuilt Linux binaries, republished on npm (launcher)",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keelstackhq/bosun.git",
+    "directory": "npm/cargo-deny"
+  },
+  "homepage": "https://github.com/EmbarkStudios/cargo-deny",
+  "bin": {
+    "cargo-deny": "bin/cargo-deny.js"
+  },
+  "files": [
+    "bin/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "@keelstackhq/cargo-deny-linux-x64": "0.20.2",
+    "@keelstackhq/cargo-deny-linux-arm64": "0.20.2"
+  }
+}
