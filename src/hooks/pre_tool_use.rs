@@ -32,6 +32,7 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> Option<String> {
         match (dir, tool) {
             (Some(d), Some(t)) => {
                 let tool_input = input.get("tool_input").unwrap_or(&Value::Null);
+                super::cli_repeat::reset(&d, t, tool_input);
                 super::refusal::apply(&d, t, tool_input, out)
             }
             _ => out,

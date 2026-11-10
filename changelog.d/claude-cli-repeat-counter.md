@@ -1,0 +1,1 @@
+- The CLI counts its own calls per session: the same bosun call five times in a row with no other tool call in between (a loop inside one script) is refused with exit 6, as the repeat-lock refuses repeated Bash calls; polls are not counted.

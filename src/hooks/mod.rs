@@ -12,6 +12,7 @@ use crate::cli::HookCmd;
 use crate::output::{CmdResult, Outcome};
 
 pub mod cache;
+pub mod cli_repeat;
 pub mod pre_tool_use;
 pub mod refusal;
 pub mod session_rules;
