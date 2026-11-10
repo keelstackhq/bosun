@@ -94,6 +94,7 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
         )
     };
     let mut doc = match std::fs::read_to_string(&path) {
+        Ok(t) if t.trim().is_empty() => json!({}),
         Ok(t) => serde_json::from_str(&t).map_err(|e| bad(format!("not valid JSON ({e})")))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(e) => return Err(bad(e.to_string())),
@@ -104,7 +105,10 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
             std::fs::create_dir_all(dir).map_err(|e| bad(e.to_string()))?;
         }
         let text = serde_json::to_string_pretty(&doc).map_err(|e| bad(e.to_string()))?;
-        std::fs::write(&path, format!("{text}\n")).map_err(|e| bad(e.to_string()))?;
+        let tmp = path.with_extension("json.bosun-tmp");
+        std::fs::write(&tmp, format!("{text}\n"))
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|e| bad(e.to_string()))?;
     }
     Ok(Outcome::data(
         json!({"settings": shown.to_string(), "added": added}),

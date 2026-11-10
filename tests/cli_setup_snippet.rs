@@ -439,3 +439,21 @@ fn install_hooks_refuses_invalid_json_and_matches_the_repo_settings() {
         assert_eq!(commands(&user, e), commands(&repo, e), "{e}");
     }
 }
+
+#[test]
+fn install_hooks_wrong_shapes_exit_1_untouched_and_empty_file_is_ok() {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("settings.json");
+    for bad in ["[]", r#"{"hooks":[]}"#, r#"{"hooks":{"Stop":{}}}"#] {
+        fs::write(&f, bad).unwrap();
+        let out = bosun()
+            .args(["setup-snippet", "--install-hooks", "--settings"])
+            .arg(&f)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{bad}");
+        assert_eq!(fs::read_to_string(&f).unwrap(), bad);
+    }
+    fs::write(&f, "").unwrap();
+    assert_eq!(install(&f)["data"]["added"].as_array().unwrap().len(), 4);
+}
