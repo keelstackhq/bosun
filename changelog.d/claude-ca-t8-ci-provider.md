@@ -1,1 +1,1 @@
-- `[ci] provider = "github"|"circleci"|"none"` config key (missing = github); `none` makes `main-health` and `gate ci-minutes` no-ops (`data.skipped`); `bosun adopt` detects it (workflows, `.circleci/`) or takes `--ci`.
+- `[ci] provider = "github"|"circleci"|"none"` config key (missing = github); `none` makes `main-health` and `gate ci-minutes` no-ops (`data.skipped`); `bosun adopt` writes `github` (or `circleci` when only `.circleci/`), `--ci none` installs no GitHub workflows (`data.workflows_skipped`); R-weaken flags `ci.provider` set to `none`.
