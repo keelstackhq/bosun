@@ -37,6 +37,7 @@ fn list(fake: &FakeGithub, origin: Option<&str>) -> Value {
         cmd.env("BOSUN_ORIGIN", o);
     }
     let out = cmd.output().unwrap();
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("canary-owner-token"));
     let v = one_object(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{v}");
     v
