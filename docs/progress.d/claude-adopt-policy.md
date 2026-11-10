@@ -1,1 +1,0 @@
-- 2026-11-10 · adopt policy · `bosun adopt --policy` writes `[approvals] policy` (autonomous mode in one step)

@@ -4,6 +4,27 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `bosun budget record --pr <n>` (repeatable) records session spend on PRs; `budget report` counts spend on the PR itself.
+- `bosun adopt --policy owner|owner-gated|orchestrator|autonomous` writes `[approvals] policy` into the rendered `.bosun/bosun.toml` (channel var `policy`, default empty: render unchanged); a policy the pinned release cannot parse (`autonomous` before 0.8.0, the others before 0.5.0) is exit 2 naming the minimum, and a kept config gets an owner step to set it by hand.
+- `@keelstackhq/cargo-deny` npm packages (launcher, linux-x64, linux-arm64) republish upstream cargo-deny's prebuilt musl binaries through the manual `cargo-deny-npm.yml` workflow (checked against upstream's `.sha256`, npm trusted publishing).
+- risk, edit-lock and touch check treat `.changeset/*.md` (one level) as autonomous-allowed; `.changeset/config.json` and other files stay owner-only and `.changeset/<name>.md` as a free fragment.
+- Setup script: cargo-nextest builds only for a bosun pin before 0.12.0 or a nextest profile override; Rust steps only in a checkout with `Cargo.toml` or `rust-toolchain.toml`, pnpm only where the checkout uses pnpm; cargo-deny from pinned `@keelstackhq/cargo-deny` npm packages once pinned, else `cargo install --locked cargo-deny`.
+- The built-in rust profile's test gate is `cargo test --locked` (was `cargo nextest run --locked`; it also runs doctests). Channel CI keeps installing cargo-nextest while pinned releases up to 0.11.0 run it. Keep nextest with a `.bosun/profiles/rust.toml` override.
+- Update path documented: README "Update bosun" and `docs/update.md` (human and agent, local and cloud, verification failures); a test keeps "no re-paste" true.
+- `bosun budget report` lists every PR opened, merged or closed in the month (spend, sessions and models `null` when unrecorded) with "spend recorded for N of M PRs", and prints a zero total as 0.00, never -0.00.
+- `budget-report` workflow: weekly and by manual dispatch it commits `reports/budget/YYYY-MM.{md,json}` to the branch `bosun/budget-reports` and keeps one draft PR "Budget reports".
+- `bosun budget report --month YYYY-MM [--out DIR]`: spend per PR for one month with totals; `--out` writes `YYYY-MM.md` and `YYYY-MM.json` (same input, same bytes).
+- `bosun doctor` adds step 17 `update` (warn) when a tool pin or this binary is behind npm, with `bosun pin --latest --pr` as the fix; the session-start notice names the same command.
+- `bosun pin --latest --pr` branches, commits, pushes and opens the draft pin PR in one step; `data.left` lists what is left for the human.
+- The last raw readers of lease, leave and `task-pr` records (`spawn --record` liveness, `plan amend`, risk-check touch warning, `hold`, `reap`) now ignore forgeries by read-only users.
+- `spawn --record` registration text and spec §4 match the code; tests for expired-only-join refusal and `hold` exit 3.
+- Join and lease records now count only from commenters with write access, so a forged join or lease from a reader or outsider no longer counts as a live session or blocks a claim.
+- `review-pack` hardening: `delta_not_in_pr` is listed as untrusted and capped at 50 names (`delta_not_in_pr_count`), a delta falls back to a full review when `pulls/{n}/files` is short of `changed_files`, and the verdict carry honours `[approvals] review_models`.
+- Spend records (`spend`) now count only from commenters with write access, so a forged comment cannot stop the agents or skew `bosun progress`.
+- `bosun doctor` always reports step 17 `update` (ok, warn or skipped with the reason) and checks the binary in channel repos; `bosun pin --latest --pr` uses a dated branch when `bosun/pin` is left over, `data.left` lists only human steps, and a fork PR named `bosun/pin*` is not the pin PR.
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.11.0 with npm sha512 values via `bosun pin --latest` (no `KNOWN` entry needed).
+- `tests/pinned_config.rs` knows `[approvals] review_models` from 0.11.0, so this repo can set it.
+
 ## 0.11.0 (2026-11-09)
 
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.10.0 (hoist 0.4.1) with npm sha512 values via `bosun pin --latest`; KNOWN lists gain 0.10.0 (config unchanged).

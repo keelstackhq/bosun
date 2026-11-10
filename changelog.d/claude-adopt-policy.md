@@ -1,1 +1,0 @@
-- `bosun adopt --policy owner|owner-gated|orchestrator|autonomous` writes `[approvals] policy` into the rendered `.bosun/bosun.toml` (channel var `policy`, default empty: render unchanged); a policy the pinned release cannot parse (`autonomous` before 0.8.0, the others before 0.5.0) is exit 2 naming the minimum, and a kept config gets an owner step to set it by hand.

@@ -1,1 +1,0 @@
-- `tests/pinned_config.rs` knows `[approvals] review_models` from 0.11.0, so this repo can set it.

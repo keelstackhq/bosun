@@ -1,1 +1,0 @@
-- 2026-11-10 · fast setup 3 · `@keelstackhq/cargo-deny` npm packages and `cargo-deny-npm.yml` (owner publishes first) · PR #481

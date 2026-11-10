@@ -1,1 +1,0 @@
-- Spend records (`spend`) now count only from commenters with write access, so a forged comment cannot stop the agents or skew `bosun progress`.

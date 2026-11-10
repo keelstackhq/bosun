@@ -1,1 +1,0 @@
-- `bosun pin --latest --pr` branches, commits, pushes and opens the draft pin PR in one step; `data.left` lists what is left for the human.
