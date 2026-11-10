@@ -67,6 +67,14 @@ naming repo, `#pr`, inert title, risk ids, short and full head, verdict, ending 
 `Approve #<pr> <short>` per PR for the first 3 ready PRs plus `Hold`, multi-select when more
 than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post` ending
 `answer "approve <short>…"`. Nothing ready, no `next`.
+The PostToolUse hook (`bosun hook post-tool-use`, matcher `AskUserQuestion`, in
+`.claude/settings.json` and the core channel piece) stores the answer to each marked PR in
+`<git common dir>/bosun/answers.json` (`question_id -> {answer, pr, head, at}`; head read from
+`head <short> = <full>` on the marker's line). A picked `Approve #<pr> <short>` stores
+`approve`; `Hold` stores `hold` for every PR of the question, even with approves picked (Hold
+wins); an unpicked PR stores nothing. It never denies and prints nothing. `--list` moves a PR
+held at its current head to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
+head asks again. `approve --chat` (T5) needs a stored `approve` for the question and head.
 
 **App check runs (B2, §15).** Once per org, mostly from a computer, as H1-H7 of
 `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, in this order: H1 create the App
