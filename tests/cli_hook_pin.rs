@@ -66,7 +66,11 @@ fn nothing_behind_or_a_channel_consumer_adds_nothing() {
     let ch = d.path().join(".splice/channels/bosun.toml");
     std::fs::create_dir_all(ch.parent().unwrap()).unwrap();
     std::fs::write(ch, "").unwrap();
-    assert!(!start(d.path(), &reg, None).0.contains("tool pins behind"));
+    let (text, err) = start(d.path(), &reg, None);
+    assert!(!text.contains("tool pins behind"));
+    // A channel repo makes no npm request at SessionStart (spec 04).
+    assert!(reg.log.lock().unwrap().is_empty(), "{:?}", reg.log);
+    assert!(!err.contains("pin check"), "{err}");
 }
 
 #[test]

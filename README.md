@@ -60,6 +60,18 @@ cargo install keel-bosun        # installs the binary `bosun`
 From source (Rust 1.97): `cargo install --path .` (package `keel-bosun`, binary `bosun`).
 Releases: `docs/releasing.md`.
 
+## Update bosun
+
+```bash
+bosun doctor                       # step 17 "update" says when something is behind
+bosun pin --latest --pr            # verifies npm, pins, branch, commit, push, draft PR; prints what is left
+npm i -g @keelstackhq/bosun@<new>  # your machine, after the owner approves and the PR merges
+```
+
+Cloud environments need nothing: the next session runs the merged `docs/setup-script.sh`, and the setup snippet
+is pasted once and never again. Steps for humans and agents, and what to do when verification fails:
+[docs/update.md](docs/update.md).
+
 ## Cloud sessions: paste once
 
 Paste this as the setup script of the Claude Code cloud environment (claude.ai/code >
@@ -175,6 +187,7 @@ Actions > allow GitHub Actions to create pull requests.
   Every command that starts or changes work exits 4 until you close the issue. The repo variable
   `BOSUN_HALT=1` also halts, where the token can read it.
 
+- Update bosun: [docs/update.md](docs/update.md)
 - Adopt bosun on an existing repo (also cloud sessions and Claude Tag): [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md)
 - CI minutes: [docs/ci-minutes.md](docs/ci-minutes.md)
 - Design: [docs/spec.md](docs/spec.md)

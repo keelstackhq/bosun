@@ -1,0 +1,1 @@
+- `bosun doctor` always reports step 17 `update` (ok, warn or skipped with the reason) and checks the binary in channel repos; `bosun pin --latest --pr` uses a dated branch when `bosun/pin` is left over, `data.left` lists only human steps, and a fork PR named `bosun/pin*` is not the pin PR.
