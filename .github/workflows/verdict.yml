@@ -88,7 +88,6 @@ jobs:
           app-id: ${{ vars.BOSUN_APP_ID }}
           private-key: ${{ secrets.BOSUN_APP_KEY }}
           permission-checks: write
-          permission-pull-requests: write
       - name: bosun verdict apply
         env:
           GITHUB_TOKEN: ${{ github.token }}

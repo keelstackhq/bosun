@@ -1510,10 +1510,8 @@ fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
                 .map(str::trim)
                 .filter(|l| l.starts_with("permission-"))
                 .collect();
-            let allowed = [
-                "permission-checks: write",
-                "permission-pull-requests: write",
-            ];
+            // Dual mode: the App writes check runs only (the record comment joins in checks mode).
+            let allowed = ["permission-checks: write"];
             if perms.is_empty() || perms.iter().any(|p| !allowed.contains(p)) {
                 out.push(format!("token not downscoped: {perms:?}"));
             }
