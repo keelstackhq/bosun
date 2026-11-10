@@ -61,6 +61,20 @@ the held task; `replaces` never releases another task's hold).
 titles and the reply `approve 12 15`), `data.message_id` (8 hex of the SHA-256 of the shown pairs'
 sorted `<pr>@<head>` lines) and `data.message_pairs`. Only the latest relayed message is
 answerable; PR numbers come only from the owner's chat; each (id, pr) is signed at most once (§8).
+Each `data.ready[]` item also has `ask` (`question_id` `<pr>-<short head>-<unix now>`, `question`
+naming repo, `#pr`, inert title, risk ids, short and full head, verdict, ending `[bosun:<id>]`;
+`options` `Approve <short>`, `Hold`). `next` is one `AskUserQuestion` (header `Approve`, options
+`Approve #<pr> <short>` per PR for the first 3 ready PRs plus `Hold`, multi-select when more
+than one; `data.ask_more` counts the rest) or, for origin `slack`, a `slack_post` ending
+`answer "approve <short>…"`. Nothing ready, no `next`.
+The PostToolUse hook (`bosun hook post-tool-use`, matcher `AskUserQuestion`, in
+`.claude/settings.json` and the core channel piece) stores the answer to each marked PR in
+`<git common dir>/bosun/answers.json` (`question_id -> {answer, pr, head, at}`; head read from
+`head <short> = <full>` on the marker's line). A picked `Approve #<pr> <short>` stores
+`approve`; `Hold` stores `hold` for every PR of the question, even with approves picked (Hold
+wins); an unpicked PR stores nothing. It never denies and prints nothing. `--list` moves a PR
+held at its current head to `data.held[]` (`{pr, head_sha}`) and does not ask it again; a new
+head asks again. `approve --chat` (T5) needs a stored `approve` for the question and head.
 
 **App check runs (B2, §15).** Once per org, mostly from a computer, as H1-H7 of
 `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, in this order: H1 create the App

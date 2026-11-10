@@ -6,6 +6,7 @@ use clap::{Args, Parser, Subcommand};
 pub mod adopt;
 pub mod answer;
 pub mod approve;
+pub mod approve_chat;
 pub mod ask;
 pub mod budget;
 mod budget_pr;
@@ -275,6 +276,7 @@ impl Command {
             Command::Lesson(LessonCmd::Capture(_)) => "lesson capture",
             Command::Lesson(LessonCmd::Triage(_)) => "lesson triage",
             Command::Hook(HookCmd::PreToolUse) => "hook pre-tool-use",
+            Command::Hook(HookCmd::PostToolUse) => "hook post-tool-use",
             Command::Hook(HookCmd::SessionStart) => "hook session-start",
             Command::Hook(HookCmd::Stop) => "hook stop",
             Command::Doctor(_) => "doctor",
@@ -523,6 +525,21 @@ pub struct ApproveArgs {
     /// the default branch; an owner key only.
     #[arg(long, requires = "sign_key")]
     pub bootstrap: bool,
+    /// Record the owner's chat answer for one `<pr>@<head>` as a chat approval comment (an
+    /// orchestrator only; spec section 8).
+    #[arg(long, conflicts_with_all = ["list", "main_open", "sign_key"])]
+    pub chat: bool,
+    /// With --chat: the question id the owner answered (`data.ready[].ask.question_id`).
+    #[arg(
+        long,
+        value_name = "ID",
+        requires = "chat",
+        conflicts_with = "slack_user"
+    )]
+    pub question: Option<String>,
+    /// With --chat: the owner's Slack user ID who answered in the Claude Tag thread.
+    #[arg(long, value_name = "U...", requires = "chat")]
+    pub slack_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -714,6 +731,8 @@ pub struct LessonTriageArgs {
 pub enum HookCmd {
     /// PreToolUse: edit-lock, label-lock, merge-lock.
     PreToolUse,
+    /// PostToolUse: store the owner's answer to a bosun AskUserQuestion.
+    PostToolUse,
     /// SessionStart: join and print the session context.
     SessionStart,
     /// Stop: block once while the lease has no result or handoff; warn on a stale gate.

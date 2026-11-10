@@ -1,0 +1,1 @@
+- `bosun hook post-tool-use`: stores the owner's AskUserQuestion answer (approve / hold, Hold wins); `approve --list` skips PRs held at the same head (`data.held[]`).

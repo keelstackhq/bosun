@@ -11,7 +11,9 @@ use serde_json::Value;
 use crate::cli::HookCmd;
 use crate::output::{CmdResult, Outcome};
 
+pub mod answers;
 pub mod cache;
+pub mod post_tool_use;
 pub mod pre_tool_use;
 pub mod session_rules;
 pub mod session_start;
@@ -36,6 +38,7 @@ pub fn run(dir: Option<&Path>, cmd: &HookCmd) -> Option<String> {
         .or_else(|| input.get("cwd").and_then(Value::as_str).map(PathBuf::from));
     match cmd {
         HookCmd::PreToolUse => pre_tool_use::run(cwd.as_deref(), &input),
+        HookCmd::PostToolUse => post_tool_use::run(cwd.as_deref(), &input),
         HookCmd::SessionStart => Some(session_start::run(cwd.as_deref())),
         HookCmd::Stop => stop::run(cwd.as_deref(), &input),
     }

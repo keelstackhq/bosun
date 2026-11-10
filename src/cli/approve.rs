@@ -21,15 +21,17 @@ use crate::cli::risk_check::{
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
-    api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud, only_r_ci, parse_target,
-    policy_line, readiness, signed_comment, signed_message, signed_message_autonomous,
-    signed_message_bootstrap, signed_message_v2,
+    TRUSTED_CREATOR, api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud,
+    only_r_ci, parse_target, policy_line, readiness, signed_comment, signed_message,
+    signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
 };
+use crate::core::ask;
 use crate::core::records::{PrHead, Record};
 use crate::core::risk;
-use crate::ctx::Ctx;
+use crate::ctx::{Ctx, Origin};
 use crate::gates::main_open::{is_mainfix, judge};
 use crate::github::{Github, IssueState, LiveGithub, Pull, b64};
+use crate::hooks::answers;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 
@@ -43,6 +45,8 @@ struct Ready {
     base_sha: String,
     risk: Vec<String>,
     files: Vec<String>,
+    /// The newest Actions `review-verdict` description on the head.
+    verdict: String,
 }
 
 /// GitHub's compare API lists at most this many files and does not say when it cut the list.
@@ -79,7 +83,7 @@ const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on a
 /// Shown with every list: an approval comment counts only when posted with a plain user token, as
 /// this command does (an owner review counts too). The Claude GitHub tool posts through an app and
 /// adds a footer, so its comments never count.
-const LIST_HINT: &str = "ask the owner with a form in the Claude Code chat (repo, PR, head; approve or hold); on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
+const LIST_HINT: &str = "ask the owner with the call in next (AskUserQuestion, or a Claude Tag thread post; each data.ready[].ask has the question id, text and options): repo, PR, head; approve or hold; on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 #[derive(Default)]
 struct Board {
@@ -172,6 +176,10 @@ fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
             Readiness::Waiting(why) => board.waiting.push((p.number, why)),
             Readiness::Ready(_) if hold(gh, &p, &mut board)? => {}
             Readiness::Ready(risk) => board.ready.push(Ready {
+                verdict: (statuses.iter())
+                    .find(|s| s.context == "review-verdict" && s.creator == TRUSTED_CREATOR)
+                    .map(|s| s.description.clone())
+                    .unwrap_or_default(),
                 pr: p.number,
                 title: p.title.clone(),
                 files: gh
@@ -194,6 +202,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             "approve needs PR@HEAD arguments, --list or --main-open PR",
             "run `bosun approve --list`, then the command in its data.approve_command",
         ));
+    }
+    if args.chat {
+        return super::approve_chat::run(dir, args);
     }
     if let Some(key) = &args.sign_key {
         return sign(dir, args, key);
@@ -223,7 +234,7 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
         // Read-only and tokenless: no secret is sent, so any BOSUN_GITHUB_API will do.
         let ctx = Ctx::load(dir)?;
         let gh = LiveGithub::anonymous(&ctx.repo.owner, &ctx.repo.name);
-        return exec(&gh, args, targets, &ctx.now.to_string(), cloud, true);
+        return exec(&gh, args, targets, &ctx, cloud, true);
     }
     let token = std::env::var(TOKEN_VAR)
         .ok()
@@ -246,20 +257,25 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     }
     let ctx = Ctx::load(dir)?;
     let gh = LiveGithub::with_token(&token, &ctx.repo.owner, &ctx.repo.name);
-    let now = ctx.now.to_string();
-    redact(&token, exec(&gh, args, targets, &now, cloud, false))
+    redact(&token, exec(&gh, args, targets, &ctx, cloud, false))
 }
 
 fn exec(
     gh: &dyn Github,
     args: &ApproveArgs,
     mut targets: Vec<(u64, String)>,
-    now: &str,
+    ctx: &Ctx,
     cloud: bool,
     tokenless: bool,
 ) -> CmdResult {
+    let now = &ctx.now.to_string();
     if args.list {
-        let b = board(gh, tokenless)?;
+        let mut b = board(gh, tokenless)?;
+        // Held by the owner at this head (PostToolUse answers): not asked again until it moves.
+        let (held, ready): (Vec<Ready>, Vec<Ready>) = std::mem::take(&mut b.ready)
+            .into_iter()
+            .partition(|r| answers::held(&ctx.dir, r.pr, &r.head_sha));
+        b.ready = ready;
         let heads: Vec<(u64, String)> =
             b.ready.iter().map(|r| (r.pr, r.head_sha.clone())).collect();
         let items: Vec<(u64, String, String)> = b
@@ -276,6 +292,8 @@ fn exec(
             "message": message,
             "message_pairs": message_pairs,
             "ready": b.ready.iter().map(ready_json).collect::<Vec<_>>(),
+            "held": held.iter().map(|r| json!({"pr": r.pr, "head_sha": r.head_sha}))
+                .collect::<Vec<_>>(),
             "waiting": b.waiting.iter().map(|(pr, why)| json!({"pr": pr, "why": why}))
                 .collect::<Vec<_>>(),
             "approve_command": approve_command(&heads),
@@ -292,7 +310,7 @@ fn exec(
         if !b.skipped.is_empty() {
             data["skipped_fix"] = json!(SKIPPED_FIX);
         }
-        return Ok(Outcome::data(data));
+        return Ok(ask_next(ctx, &b.ready, data));
     }
     kill_switch(gh)?;
     if let Some(n) = args.main_open {
@@ -378,6 +396,43 @@ fn approve_one(gh: &dyn Github, pr: u64, sha: &str, base: &str) -> Result<(u64, 
     ))
 }
 
+/// Each ready item gains its `ask`; `next` asks the owner: one AskUserQuestion, or a Claude Tag
+/// thread post. Nothing ready, no `next`.
+fn ask_next(ctx: &Ctx, ready: &[Ready], mut data: Value) -> Outcome {
+    let repo = ctx.repo.to_string();
+    let unix = ctx.now.0;
+    let items: Vec<ask::Item> = (ready.iter())
+        .map(|r| ask::Item {
+            pr: r.pr,
+            title: &r.title,
+            head: &r.head_sha,
+            risk: &r.risk,
+            verdict: &r.verdict,
+        })
+        .collect();
+    for (i, item) in items.iter().enumerate() {
+        data["ready"][i]["ask"] = ask::ask(&repo, item, unix);
+    }
+    let out = if ctx.origin == Origin::Slack {
+        ask::slack_text(&repo, &items).map(|text| {
+            let mut a = json!({"text": text});
+            let channel = ctx.config.slack.as_ref().map(|s| s.channel.trim());
+            if let Some(c) = channel.filter(|c| !c.is_empty()) {
+                a["channel"] = json!(c);
+            }
+            ("slack_post", a)
+        })
+    } else {
+        data["ask_more"] = json!(items.len().saturating_sub(ask::MAX_ASKED));
+        ask::ask_user_question(&repo, &items, unix).map(|a| ("AskUserQuestion", a))
+    };
+    let o = Outcome::data(data);
+    match out {
+        Some((tool, a)) => o.with_next(tool, a),
+        None => o,
+    }
+}
+
 fn ready_json(r: &Ready) -> Value {
     json!({"pr": r.pr, "title": r.title, "head_sha": r.head_sha,
         "risk_from_status": r.risk, "files": r.files,
@@ -458,9 +513,11 @@ fn redact(token: &str, result: CmdResult) -> CmdResult {
     let scrub_json = |v: Value| serde_json::from_str(&scrub(&v.to_string())).unwrap_or(Value::Null);
     match result {
         Ok(mut o) => {
-            // `next` is not scrubbed: approve never sets it.
-            debug_assert!(o.next.is_empty(), "approve returns no next items");
+            // Only list mode sets `next` (the owner question); it is scrubbed like `data`.
             o.data = scrub_json(o.data);
+            for n in &mut o.next {
+                n.args = scrub_json(n.args.take());
+            }
             Ok(o)
         }
         Err(mut e) => {
