@@ -11,7 +11,8 @@ use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
     ChildTask, Script, bash_writes, child_task_create, config_fetch_risk, edit_lock, edited_path,
-    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
+    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, records_chat_approval, script_rules,
+    tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -122,6 +123,12 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
                 Ok(None) => {}
                 Err(e) => eprintln!("bosun: warning: edit-lock skipped: {e}"),
             }
+        }
+        if records_chat_approval(command) && !orchestrator(&dir) {
+            return Some(deny(
+                "only an orchestrator session records a chat approval (`bosun approve \
+                 <pr>@<head> --chat`); a child hands the question to its orchestrator",
+            ));
         }
         let repeat = repeat_lock(&dir, input, &tool_input);
         let read = |p: &str| read_script(&dir, p);
@@ -591,6 +598,22 @@ fn registered_child(dir: &Path, write: &ChildTask) -> bool {
             && l.touch.is_empty()
             && l.is_live(app.ctx.now)
     })
+}
+
+/// Whether this session is an orchestrator by its live join in the trusted registry notes.
+/// Any doubt (no repo, no GitHub, no registry, no join) is no.
+fn orchestrator(dir: &Path) -> bool {
+    let Ok(app) = App::load(Some(dir)) else {
+        return false;
+    };
+    let Ok(Some((_, notes))) = crate::registry::load(app.gh.as_ref()) else {
+        return false;
+    };
+    let live: Vec<_> = crate::core::lease::members(&notes)
+        .into_iter()
+        .filter(|m| m.expires >= app.ctx.now)
+        .collect();
+    crate::core::approve::is_orchestrator(&live, &app.ctx.session)
 }
 
 /// [`plan_tick_edit`] on a path as the tool gave it (absolute or relative to `dir`).

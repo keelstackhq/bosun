@@ -1,0 +1,1 @@
+- 2026-11-18 · chat-approval T6 · PreToolUse chat-lock against forged chat records; only an orchestrator runs bosun approve --chat · this PR
