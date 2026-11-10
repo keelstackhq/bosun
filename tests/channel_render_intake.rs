@@ -76,6 +76,7 @@ fn vars<'a>(
         ("ts_path", "."),
         ("own_ci", ""),
         ("intake", intake),
+        ("policy", ""),
     ]
 }
 

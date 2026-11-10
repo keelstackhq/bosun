@@ -9,6 +9,7 @@ use super::AdoptArgs;
 use super::init::{has_ci_ok_job_except, is_semver};
 use crate::app::Result;
 use crate::core::adopt::{MANIFEST_PATH, Manifest, fnv1a_hex};
+use crate::core::pin::parse_semver;
 use crate::core::render::{Vars, render};
 use crate::core::state::State;
 use crate::ctx::{RepoId, git_out, parse_remote_url, parse_repo};
@@ -140,7 +141,17 @@ pub fn vars_for(
     v.set("ts_path", ".");
     v.set("own_ci", if own_ci { "1" } else { "" });
     v.set("intake", "");
+    v.set("policy", "");
     v
+}
+
+/// The first release whose config parser knows `[approvals] policy = value` (spec §8).
+fn policy_min(value: &str) -> &'static str {
+    if value == "autonomous" {
+        "0.8.0"
+    } else {
+        "0.5.0"
+    }
 }
 
 fn detect(root: &Path) -> Vec<String> {
@@ -303,6 +314,17 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
             "pass a release such as 0.7.0",
         ));
     }
+    if let Some(p) = a.policy.as_deref() {
+        let min = policy_min(p);
+        if parse_semver(&version) < parse_semver(min) {
+            return Err(BosunError::usage(
+                format!(
+                    "bosun {version} cannot parse `[approvals] policy = \"{p}\"`; its gates would fail"
+                ),
+                format!("pin bosun {min} or later (--bosun-version {min}), or drop --policy {p}"),
+            ));
+        }
+    }
     let stacks: Vec<String> = if a.stack.is_empty() {
         detect(&root)
     } else {
@@ -350,7 +372,10 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         |r| r.name.clone(),
     );
     let own_ci = has_ci_ok_job_except(&root, "bosun.yml");
-    let vars = vars_for(&project, &owner, &version, &stacks, own_ci);
+    let mut vars = vars_for(&project, &owner, &version, &stacks, own_ci);
+    if let Some(p) = &a.policy {
+        vars.set("policy", p.as_str());
+    }
 
     if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
         return Err(BosunError::error(
@@ -483,14 +508,36 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
                 r.owner, r.name
             )
         });
+    let mut steps = owner_steps(
+        own_ci,
+        owner_listed,
+        owners_file,
+        has_key,
+        settings_url.as_deref(),
+    );
+    // A kept config never gets the policy from adopt: say so unless it already holds it.
+    if let Some(p) = a.policy.as_deref() {
+        let cfg = ".bosun/bosun.toml";
+        let set = read_opt(&root.join(cfg)).ok().flatten().is_some_and(|b| {
+            String::from_utf8_lossy(&b)
+                .parse::<toml::Table>()
+                .ok()
+                .and_then(|t| Some(t.get("approvals")?.get("policy")?.as_str()? == p))
+                .unwrap_or(false)
+        });
+        if action_of(&changes, cfg) == "kept" && !set {
+            steps.insert(0, format!("Set policy = \"{p}\" under [approvals] in {cfg} by hand (adopt keeps an existing file)."));
+        }
+    }
     Ok(Outcome::data(json!({
         "stacks": stacks,
+        "policy": a.policy,
         "dry_run": a.dry_run,
         "changes": changes,
         "labels": labels,
         "registry": registry_out,
         "commands": if a.dry_run { Vec::new() } else { commands(&changes, uncommitted(&root, ".bosun/approvers.toml")) },
-        "owner_steps": owner_steps(own_ci, owner_listed, owners_file, has_key, settings_url.as_deref()),
+        "owner_steps": steps,
     })))
 }
 
