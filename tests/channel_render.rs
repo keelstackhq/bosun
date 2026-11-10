@@ -1767,6 +1767,7 @@ fn tool_calls(calls: &str, tool: &str) -> Vec<String> {
 #[test]
 fn setup_scripts_install_cargo_deny_without_a_toolchain_file() {
     for (name, script) in setup_scripts() {
+        let script = with_bosun_pin(&script, "0.12.0");
         let sb = SetupSandbox::new();
         fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
         let (ok, err) = sb.run(&script, "node24");
@@ -1783,7 +1784,6 @@ fn setup_scripts_install_cargo_deny_without_a_toolchain_file() {
             "{name}: {calls}"
         );
         assert!(!calls.contains("nextest"), "{name}: {calls}");
-        assert!(!script.contains("cargo-nextest"), "{name}");
         assert!(err.contains("no rust-toolchain.toml"), "{name}: {err}");
 
         // A failing cargo only warns.
@@ -1793,6 +1793,55 @@ fn setup_scripts_install_cargo_deny_without_a_toolchain_file() {
         let (ok, err) = sb.run(&script, "node24");
         assert!(ok, "{name}: {err}");
         assert!(err.contains("cargo-deny failed"), "{name}: {err}");
+    }
+}
+
+/// The script with its `BOSUN_VERSION=` line set to `pin`.
+fn with_bosun_pin(script: &str, pin: &str) -> String {
+    let out: Vec<String> = script
+        .lines()
+        .map(|l| {
+            if l.starts_with("BOSUN_VERSION=") {
+                format!("BOSUN_VERSION={pin}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    assert!(out.iter().any(|l| l == &format!("BOSUN_VERSION={pin}")));
+    out.join("\n") + "\n"
+}
+
+/// cargo-nextest builds only while the pinned bosun's test gate runs it (before 0.12.0, spec
+/// §7) or a repo profile names nextest; a 0.12.0 or later pin skips it.
+#[test]
+fn setup_scripts_install_cargo_nextest_only_for_old_pins_or_an_override() {
+    for (name, script) in setup_scripts() {
+        for (pin, profile, want) in [
+            ("0.11.0", None, true),
+            ("0.12.0", None, false),
+            ("0.13.1", None, false),
+            (
+                "0.12.0",
+                Some("[gates.test]\ncmd = [\"cargo\", \"nextest\", \"run\"]\n"),
+                true,
+            ),
+        ] {
+            let sb = SetupSandbox::new();
+            fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+            if let Some(p) = profile {
+                fs::create_dir_all(sb.path("repo/.bosun/profiles")).unwrap();
+                fs::write(sb.path("repo/.bosun/profiles/rust.toml"), p).unwrap();
+            }
+            let (ok, err) = sb.run(&with_bosun_pin(&script, pin), "node24");
+            let calls = sb.calls();
+            assert!(ok, "{name} {pin}: {err}");
+            assert_eq!(
+                calls.contains("cargo install --locked cargo-nextest"),
+                want,
+                "{name} {pin} {profile:?}: {calls}"
+            );
+        }
     }
 }
 
@@ -1924,7 +1973,7 @@ fn setup_scripts_skip_cargo_deny_at_its_recorded_fingerprint() {
         // PATH, or none, falls back to `cargo install`.
         let p = script.find("# cargo-deny for the deps gate").unwrap();
         let blk = &script[p..p + script[p..].find("\n  fi\nfi\n").unwrap() + 8];
-        let pins = "HAS_RUST=1 CARGO_DENY_VERSION=0.20.2 CARGO_DENY_SHA512=a \
+        let pins = "HAS_RUST=1 BOSUN_VERSION=0.12.0 CARGO_DENY_VERSION=0.20.2 CARGO_DENY_SHA512=a \
             CARGO_DENY_LINUX_X64_SHA512=b CARGO_DENY_LINUX_ARM64_SHA512=c\n\
             cargo() { echo \"cargo $*\" >>\"$LOG\"; }\n";
         let step = |extra: &str| {

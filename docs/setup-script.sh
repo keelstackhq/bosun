@@ -200,6 +200,14 @@ if [ -n "$HAS_RUST" ]; then
   else
     echo "setup-script: no cargo found; skipping cargo-deny" >&2
   fi
+  # cargo-nextest only while the pinned bosun's test gate runs it (releases before 0.12.0, spec
+  # §7) or a repo profile names it: `cargo install` builds it from source (minutes).
+  if command -v cargo >/dev/null 2>&1 &&
+    { [ "$(printf '%s\n0.12.0\n' "$BOSUN_VERSION" | sort -V | head -n1)" != 0.12.0 ] ||
+      grep -qs nextest .bosun/profiles/rust.toml; }; then
+    cargo install --locked cargo-nextest ||
+      echo "setup-script: cargo install of cargo-nextest failed; continuing without it" >&2
+  fi
 fi
 
 bosun --version || echo "setup-script: bosun is not installed" >&2
