@@ -369,7 +369,7 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-08 · operating-model #15 · review-pack delta shows only the PR's own files after a main merge
 - 2026-11-08 · operating-model #16 · pinned-config tables fall back to the newest older release
 - 2026-11-09 · budget record --pr · spend per PR without task issues; report counts PR spend · PR #476
-- 2026-11-10 · adopt policy · `bosun adopt --policy` writes `[approvals] policy` (autonomous mode in one step)
+- 2026-11-10 · adopt policy · `bosun adopt --policy` writes `[approvals] policy` (autonomous mode in one step) · PR #480
 - 2026-11-10 · fast setup 3 · `@keelstackhq/cargo-deny` npm packages and `cargo-deny-npm.yml` (owner publishes first) · PR #481
 - 2026-11-10 · CS-8 · bosun code knows `.changeset/` (risk allowlist, edit lock, touch check) · PR #484
 - 2026-11-10 · fast setup task 2 · setup script skips absent stacks, no nextest build, cargo-deny npm pin slots · PR #483
