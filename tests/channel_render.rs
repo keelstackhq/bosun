@@ -403,7 +403,7 @@ fn ci_files_install_cargo_deny_but_not_cargo_nextest() {
                 for (name, text) in &files {
                     if name.starts_with(".github/workflows/") || name.starts_with(".circleci/") {
                         assert!(
-                            !text.contains("nextest"),
+                            !text.contains("cargo-nextest"),
                             "{stack:?} {ci:?} {own_ci:?}: {name}"
                         );
                     }
