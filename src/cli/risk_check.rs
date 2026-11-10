@@ -476,10 +476,19 @@ fn judge(app: &App, pull: Pull) -> CmdResult {
     let carried = if passed_on_head {
         None
     } else {
-        default_branch(gh).ok().and_then(|branch| {
-            let approve = |h: &str| approval_on(gh, &need, h).ok();
-            carry_approval(gh, &pull, &branch, &owners, &approve)
-        })
+        // With no owners file a carried chat record stands for the fallback owners: their
+        // withdrawal on a later head must stop it too (a failed read is no carry).
+        let carry_owners = match need.chat_author {
+            Some(author) if owners.is_empty() => fallback_owners(gh, author).ok(),
+            _ => Some(owners.clone()),
+        };
+        default_branch(gh)
+            .ok()
+            .zip(carry_owners)
+            .and_then(|(branch, o)| {
+                let approve = |h: &str| approval_on(gh, &need, h).ok();
+                carry_approval(gh, &pull, &branch, &o, &approve)
+            })
     };
     let Found {
         mut approved_by,

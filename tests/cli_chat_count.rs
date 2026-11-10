@@ -191,3 +191,28 @@ fn no_owners_file_org_member_not_counted() {
     fake.comment_by(1, "ada", &format!("/bosun approve {HEAD}"));
     refused(&fake);
 }
+
+#[test]
+fn chat_record_after_a_dismissal_counts_only_when_newer() {
+    let setup = |at: &str| {
+        let fake = high_pr(true);
+        fake.review(1, "ada", "CHANGES_REQUESTED", HEAD);
+        fake.review(1, "ada", "DISMISSED", HEAD);
+        fake.dismiss_event(1, 2, "2026-11-10T09:30:00Z");
+        fake.comment_at(1, "ada", &chat(HEAD, "session_orch"), at);
+        fake.last_comment(|c| c.via_app = Some("claude".into()));
+        fake
+    };
+    refused(&setup("2026-11-10T09:00:00Z"));
+    assert_eq!(approved(&setup("2026-11-10T09:45:00Z")), "ada");
+}
+
+#[test]
+fn chat_counts_on_trust_file_changes() {
+    // Option A: the record is the owner's word, like the owner's own comment (spec §8).
+    let fake = high_pr(true);
+    let patch = Some("@@ -1,1 +1,2 @@\n+[[owner]]");
+    fake.pull_file(1, "governance/owners.toml", "modified", 1, 0, patch);
+    app_comment(&fake, "ada", &chat(HEAD, "session_orch"));
+    assert_eq!(approved(&fake), "ada");
+}
