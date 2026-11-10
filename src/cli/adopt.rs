@@ -216,6 +216,7 @@ fn owner_steps(
     kept_owners: Option<&str>,
     has_key: bool,
     settings_url: Option<&str>,
+    no_ci: bool,
 ) -> Vec<String> {
     // With a ci.yml of its own, bosun's aggregate job is `bosun-ok` and `ci-ok` stays yours.
     let first = if own_ci { "bosun-ok" } else { "ci-ok" };
@@ -237,9 +238,17 @@ fn owner_steps(
         || "the default branch".to_string(),
         |u| format!("the default branch at {u}"),
     );
-    v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    if no_ci {
+        v.push(format!("Set branch protection on {place} requiring a pull request and no required checks (ci provider none: bosun runs its gates locally; merges go through `bosun merge` once it ships)."));
+    } else {
+        v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    }
     v.push("Cloud sessions: paste `bosun setup-snippet` once as the setup script of your Claude Code environment (claude.ai/code > Environments); it never needs a change.".to_string());
-    v.push("Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string());
+    v.push(if no_ci {
+        "Run the commands in `data.commands`, then open the setup PR and merge it yourself.".to_string()
+    } else {
+        "Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string()
+    });
     v.push("Run `bosun doctor --remote` to see what is still missing.".to_string());
     v
 }
@@ -409,12 +418,41 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         vars.set("policy", p.as_str());
     }
     // A rerun keeps the provider an earlier run wrote: adopt's own workflows would flip detection.
-    let kept_ci = read_opt(&root.join(".bosun/bosun.toml"))
-        .ok()
-        .flatten()
-        .and_then(|b| String::from_utf8_lossy(&b).parse::<toml::Table>().ok())
-        .and_then(|t| Some(t.get("ci")?.get("provider")?.as_str()?.to_string()))
-        .filter(|p| CiProvider::parse(p).is_some());
+    let cfg = ".bosun/bosun.toml";
+    let kept_cfg = read_opt(&root.join(cfg))?
+        .map(|b| String::from_utf8_lossy(&b).parse::<toml::Table>())
+        .transpose()
+        .map_err(|e| {
+            BosunError::error(
+                format!("{cfg} does not parse: {e}"),
+                format!("fix {cfg} (or delete it), then rerun `bosun adopt`"),
+            )
+        })?;
+    let kept_ci = kept_cfg
+        .as_ref()
+        .and_then(|t| t.get("ci")?.get("provider"))
+        .map(|p| {
+            p.as_str()
+                .filter(|p| CiProvider::parse(p).is_some())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    BosunError::error(
+                        format!("{cfg}: ci.provider {p} is not a known CI provider"),
+                        format!("edit {cfg}: set ci.provider to \"github\", \"circleci\" or \"none\", or remove it"),
+                    )
+                })
+        })
+        .transpose()?;
+    // A kept config never gets `[ci]` from adopt; skipping the workflows would leave a repo
+    // with neither CI nor `none`.
+    if a.ci.as_deref() == Some("none") && kept_cfg.is_some() && kept_ci.as_deref() != Some("none") {
+        return Err(BosunError::usage(
+            format!("{cfg} exists without `[ci] provider = \"none\"`; adopt keeps that file"),
+            format!(
+                "set provider = \"none\" under [ci] in {cfg} by hand, then rerun `bosun adopt --ci none`"
+            ),
+        ));
+    }
     // Older pins would reject the table: write it only for a release that reads it.
     let ci: Option<String> = ci_ok.then(|| {
         a.ci.clone()
@@ -570,7 +608,22 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         owners_file,
         has_key,
         settings_url.as_deref(),
+        !workflows_skipped.is_empty(),
     );
+    let stale: Vec<&str> = workflows_skipped
+        .iter()
+        .copied()
+        .filter(|p| root.join(p).exists())
+        .collect();
+    if !stale.is_empty() {
+        steps.insert(
+            0,
+            format!(
+                "ci provider none: delete {} if they should not run (adopt leaves them).",
+                stale.join(" ")
+            ),
+        );
+    }
     // A kept config never gets `[ci]` from adopt: say so, and do not claim it was written.
     let mut ci = ci;
     if let Some(c) = ci.clone()

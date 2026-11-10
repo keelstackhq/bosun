@@ -266,7 +266,10 @@ fn adopt_kept_config_without_ci_gets_owner_step() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
     std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
-    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0", "--ci", "none"]);
+    let (code, v) = adopt(
+        tmp.path(),
+        &["--bosun-version", "0.12.0", "--ci", "circleci"],
+    );
     assert_eq!(code, 0, "{v}");
     assert!(v["data"]["ci"].is_null(), "{v}");
     assert!(
@@ -275,4 +278,81 @@ fn adopt_kept_config_without_ci_gets_owner_step() {
             .unwrap()
             .contains("[ci]")
     );
+}
+
+#[test]
+fn adopt_ci_none_with_kept_config_without_it_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "project = \"x\"\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0", "--ci", "none"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("[ci]"), "{v}");
+    assert!(!tmp.path().join(".bosun/adopt.toml").exists());
+    assert!(!tmp.path().join(GH_WORKFLOWS[0]).exists());
+}
+
+#[test]
+fn adopt_ci_none_owner_steps_name_no_required_checks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, v) = adopt(tmp.path(), &["--ci", "none", "--bosun-version", "0.12.0"]);
+    assert_eq!(code, 0, "{v}");
+    let steps = v["data"]["owner_steps"].to_string();
+    for check in ["ci-ok", "risk-check", "review-verdict", "main-open"] {
+        assert!(!steps.contains(check), "{check}: {steps}");
+    }
+    assert!(steps.contains("bosun merge"), "{steps}");
+}
+
+#[test]
+fn adopt_ci_none_dry_run_skips_workflows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let args = ["--ci", "none", "--bosun-version", "0.12.0", "--dry-run"];
+    let (code, v) = adopt(tmp.path(), &args);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        v["data"]["workflows_skipped"],
+        serde_json::json!(GH_WORKFLOWS)
+    );
+    assert!(
+        !v["data"]["changes"]
+            .to_string()
+            .contains(".github/workflows")
+    );
+    assert!(!tmp.path().join(".bosun").exists());
+}
+
+#[test]
+fn adopt_ci_none_over_existing_workflows_keeps_and_names_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let wf = tmp.path().join(GH_WORKFLOWS[0]);
+    std::fs::create_dir_all(wf.parent().unwrap()).unwrap();
+    std::fs::write(&wf, "name: old\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &["--ci", "none", "--bosun-version", "0.12.0"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(std::fs::read_to_string(&wf).unwrap(), "name: old\n");
+    assert_eq!(
+        v["data"]["workflows_skipped"],
+        serde_json::json!(GH_WORKFLOWS)
+    );
+    let steps = v["data"]["owner_steps"].to_string();
+    assert!(steps.contains(GH_WORKFLOWS[0]), "{steps}");
+}
+
+#[test]
+fn adopt_kept_config_with_bad_ci_is_an_error() {
+    for text in [
+        "project = \"x\"\n[ci]\nprovider = \"jenkins\"\n",
+        "not = [toml\n",
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+        std::fs::write(tmp.path().join(".bosun/bosun.toml"), text).unwrap();
+        let (code, v) = adopt(tmp.path(), &["--bosun-version", "0.12.0"]);
+        assert_eq!(code, 1, "{text}: {v}");
+        assert!(
+            v["error"]["fix"].as_str().unwrap().contains("bosun.toml"),
+            "{v}"
+        );
+    }
 }
