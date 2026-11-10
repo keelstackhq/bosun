@@ -1520,7 +1520,7 @@ fn chat_approver(
 
 /// The owners a chat record counts for when the base has no owners file: the repo's owner for
 /// a user repo; for an org repo the PR author when an admin of the repo; else none.
-fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
+pub(crate) fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
     let Some(owner) = gh.repo_info()?.and_then(|r| r.owner) else {
         return Ok(Vec::new());
     };
@@ -1536,10 +1536,10 @@ fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
 }
 
 /// `[approvals] chat` at base (unset: on). A config that does not parse turns chat off.
-fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
+pub(crate) fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
     Ok(match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => Config::parse(&t, CONFIG_FILE)
-            .map_err(|e| eprintln!("bosun: risk-check: chat records are off: {}", e.message))
+            .map_err(|e| eprintln!("bosun: chat records are off: {}", e.message))
             .is_ok_and(|c| c.approvals.chat_enabled()),
         None => true,
     })
@@ -1559,14 +1559,18 @@ fn chat_comment_by<'a>(
             && approve::parse_chat_record(&c.body, head).is_some_and(|r| {
                 // The session must have been live when the record was written: an expired
                 // join (or an unreadable time) is no orchestrator (fail closed).
-                let at = parse_rfc3339(&c.created_at);
-                let live: Vec<Member> = (members.iter())
-                    .filter(|m| at.is_some_and(|t| m.expires >= t))
-                    .cloned()
-                    .collect();
-                approve::is_orchestrator(&live, &r.session)
+                approve::is_orchestrator(&live_at(members, &c.created_at), &r.session)
             })
     })
+}
+
+/// The members whose join had not expired at `created_at`; none when the time is unreadable.
+pub(crate) fn live_at(members: &[Member], created_at: &str) -> Vec<Member> {
+    let at = parse_rfc3339(created_at);
+    (members.iter())
+        .filter(|m| at.is_some_and(|t| m.expires >= t))
+        .cloned()
+        .collect()
 }
 
 /// A decisive review in this state withdraws the owner's approvals (anyone with write access can

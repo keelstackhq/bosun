@@ -1,0 +1,1 @@
+- `bosun intake verify FILE --chat <issue>` counts the orchestrator's chat record of the owner's yes on the intake issue, by the same rules as chat approval of a PR head.
