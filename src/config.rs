@@ -31,6 +31,9 @@ pub struct Config {
     /// `[trailers]`: commit trailers for traceability (spec §4). Release ordering as for `intake`:
     /// set it only once `.bosun/version` pins a release that reads it.
     pub trailers: Trailers,
+    /// `[ci] provider` (spec §9): which CI the repo runs. Release ordering as for `intake`: set
+    /// it only once `.bosun/version` pins a release that reads it.
+    pub ci: Ci,
 }
 
 impl Default for Config {
@@ -45,6 +48,7 @@ impl Default for Config {
             approvals: Approvals::default(),
             intake: false,
             trailers: Trailers::default(),
+            ci: Ci::default(),
         }
     }
 }
@@ -151,6 +155,35 @@ impl Approvals {
 #[serde(deny_unknown_fields, default)]
 pub struct Trailers {
     pub require: bool,
+}
+
+/// `[ci] provider`: `github` (default, also when the key is missing), `circleci` or `none`.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Ci {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CiProvider {
+    #[default]
+    Github,
+    Circleci,
+    None,
+}
+
+impl CiProvider {
+    pub const NAMES: [&'static str; 3] = ["github", "circleci", "none"];
+
+    pub fn parse(s: &str) -> Option<CiProvider> {
+        match s {
+            "github" => Some(CiProvider::Github),
+            "circleci" => Some(CiProvider::Circleci),
+            "none" => Some(CiProvider::None),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -312,7 +345,26 @@ impl Config {
                 ));
             }
         }
+        if let Some(p) = &c.ci.provider
+            && CiProvider::parse(p).is_none()
+        {
+            return Err(BosunError::error(
+                format!("{file}: ci.provider {p:?} is not a known CI provider"),
+                format!(
+                    "edit {file}: set ci.provider to \"github\", \"circleci\" or \"none\", or remove it"
+                ),
+            ));
+        }
         Ok(c)
+    }
+
+    /// The CI provider; a missing key is `github` (validated in `parse`).
+    pub fn ci_provider(&self) -> CiProvider {
+        self.ci
+            .provider
+            .as_deref()
+            .and_then(CiProvider::parse)
+            .unwrap_or_default()
     }
 
     /// Read `<root>/.bosun/bosun.toml`; a missing file gives the defaults.

@@ -248,6 +248,7 @@ fn every_variant_renders_to_files_that_parse() {
                     ("own_ci", own_ci),
                     ("intake", ""),
                     ("policy", ""),
+                    ("ci_provider", ""),
                 ]
                 .into_iter()
                 .map(|(k, v)| (k, v.to_string()))
@@ -344,6 +345,7 @@ fn variant_at(stack: &[&str], own_ci: &str, ts_path: &str) -> Vec<(String, Strin
         ("own_ci", own_ci),
         ("intake", ""),
         ("policy", ""),
+        ("ci_provider", ""),
     ]
     .into_iter()
     .map(|(k, v)| (k, v.to_string()))
@@ -1645,6 +1647,7 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             ("own_ci", ""),
             ("intake", ""),
             ("policy", ""),
+            ("ci_provider", ""),
         ]
         .into_iter()
         .map(|(k, v)| (k, v.to_string()))

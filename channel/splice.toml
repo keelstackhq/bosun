@@ -26,3 +26,6 @@ intake = { prompt = "require a valid .bosun/intake.toml before spawn (1 or empty
 # owner-gated, orchestrator (release 0.5.0 on) or autonomous (0.8.0 on). With an explicit
 # bosun_version, pick only a value that release knows. Default empty: the render is unchanged.
 policy = { prompt = "approval policy (empty: none written, the default owner)", default = "", pattern = "^(owner|owner-gated|orchestrator|autonomous)?$" }
+# Non-empty to render `[ci] provider` in .bosun/bosun.toml (spec section 9): github, circleci or
+# none. Release ordering as for `policy`: the pinned release must read `[ci]`. Default empty: unchanged.
+ci_provider = { prompt = "CI provider (empty: none written, the default github)", default = "", pattern = "^(github|circleci|none)?$" }

@@ -146,3 +146,31 @@ fn relay_waves_and_the_cloud_environment_parse() {
     assert_eq!(c.cloud.environment_id.as_deref(), Some("env_1"));
     assert!(Limits::parse("[waves]\nrelay_waves = 0\n", "x").is_err());
 }
+
+#[test]
+fn ci_provider_default_github() {
+    use bosun::config::CiProvider;
+    assert_eq!(Config::default().ci_provider(), CiProvider::Github);
+    assert_eq!(
+        Config::parse("", "x").unwrap().ci_provider(),
+        CiProvider::Github
+    );
+    for (v, want) in [
+        ("github", CiProvider::Github),
+        ("circleci", CiProvider::Circleci),
+        ("none", CiProvider::None),
+    ] {
+        let c = Config::parse(&format!("[ci]\nprovider = \"{v}\"\n"), "x").unwrap();
+        assert_eq!(c.ci_provider(), want);
+    }
+}
+
+#[test]
+fn ci_provider_bad_value_error() {
+    let e = Config::parse("[ci]\nprovider = \"jenkins\"\n", "bosun.toml").unwrap_err();
+    assert!(e.message.contains("jenkins"), "{}", e.message);
+    for v in ["github", "circleci", "none"] {
+        assert!(e.fix.contains(v), "{}", e.fix);
+    }
+    assert!(Config::parse("[ci]\nother = 1\n", "x").is_err());
+}

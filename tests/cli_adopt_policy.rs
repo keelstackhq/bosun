@@ -153,3 +153,44 @@ fn the_template_adds_only_the_policy_lines() {
     );
     assert!(!config("", "").contains("policy"));
 }
+
+fn ci_of(t: &toml::Table) -> Option<&str> {
+    t.get("ci")?.get("provider")?.as_str()
+}
+
+#[test]
+fn adopt_no_ci_writes_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, v) = adopt(tmp.path(), &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ci_of(&config(tmp.path())), Some("none"));
+    assert_eq!(v["data"]["ci"], "none");
+}
+
+#[test]
+fn adopt_with_workflows_writes_github() {
+    let tmp = tempfile::tempdir().unwrap();
+    let wf = tmp.path().join(".github/workflows");
+    std::fs::create_dir_all(&wf).unwrap();
+    std::fs::write(wf.join("ci.yml"), "name: ci\non: push\njobs: {}\n").unwrap();
+    let (code, v) = adopt(tmp.path(), &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ci_of(&config(tmp.path())), Some("github"));
+}
+
+#[test]
+fn adopt_circleci_dir_writes_circleci() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".circleci")).unwrap();
+    let (code, v) = adopt(tmp.path(), &[]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ci_of(&config(tmp.path())), Some("circleci"));
+}
+
+#[test]
+fn adopt_ci_flag_overrides_detection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (code, v) = adopt(tmp.path(), &["--ci", "github"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(ci_of(&config(tmp.path())), Some("github"));
+}
