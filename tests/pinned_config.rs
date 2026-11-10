@@ -110,6 +110,23 @@ const KNOWN: &[(&str, &[&str])] = &[
             "session",
         ],
     ),
+    (
+        "0.21.0",
+        &[
+            "project",
+            "stack",
+            "review",
+            "slack",
+            "cloud",
+            "prices",
+            "approvals",
+            "intake",
+            "trailers",
+            "checks",
+            "session",
+            "ci",
+        ],
+    ),
 ];
 
 /// The `.bosun/limits.toml` keys (`table.key`) each pinned release accepts.
@@ -461,7 +478,8 @@ fn policy_known_follows_the_release_table() {
 #[test]
 fn an_unlisted_release_falls_back_to_the_newest_older_entry() {
     // Key sets only grow, so the newest older release is a safe subset: no hand-added entry.
-    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.13.0"));
+    assert_eq!(known_for(KNOWN, "0.99.0"), known_for(KNOWN, "0.21.0"));
+    assert_eq!(known_for(KNOWN, "0.20.0"), known_for(KNOWN, "0.13.0"));
     assert_eq!(known_for(KNOWN, "0.12.0"), known_for(KNOWN, "0.10.0"));
     assert_eq!(
         known_for(KNOWN_LIMITS, "0.9.3"),

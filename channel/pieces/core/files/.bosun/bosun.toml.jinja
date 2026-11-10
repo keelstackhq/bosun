@@ -10,6 +10,10 @@ profile = "rust"
 [[stack]]
 path = "{{ ts_path }}"
 profile = "ts-pnpm"
+{% endif %}{% if ci_provider %}
+[ci]
+# Which CI the repo runs (spec §9): github, circleci or none (bosun then checks locally).
+provider = "{{ ci_provider }}"
 {% endif %}
 [review]
 # "subagent" (mode a): a fresh subagent reviews each PR (spec §7).

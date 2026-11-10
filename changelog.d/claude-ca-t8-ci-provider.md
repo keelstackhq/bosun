@@ -1,0 +1,1 @@
+- `[ci] provider = "github"|"circleci"|"none"` config key (missing = github); `none` makes `main-health` and `gate ci-minutes` no-ops (`data.skipped`); `bosun adopt` detects it (workflows, `.circleci/`) or takes `--ci`.

@@ -251,6 +251,7 @@ fn every_variant_renders_to_files_that_parse() {
                     ("policy_pin_checked", ""),
                     // Both renders of the App switch, without more variants.
                     ("bosun_app", if owner.is_empty() { "" } else { "1" }),
+                    ("ci_provider", ""),
                 ]
                 .into_iter()
                 .map(|(k, v)| (k, v.to_string()))
@@ -349,6 +350,7 @@ fn variant_at(stack: &[&str], own_ci: &str, ts_path: &str) -> Vec<(String, Strin
         ("policy", ""),
         ("policy_pin_checked", ""),
         ("bosun_app", ""),
+        ("ci_provider", ""),
     ]
     .into_iter()
     .map(|(k, v)| (k, v.to_string()))
@@ -1690,6 +1692,7 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             ("policy", ""),
             ("policy_pin_checked", ""),
             ("bosun_app", ""),
+            ("ci_provider", ""),
         ]
         .into_iter()
         .map(|(k, v)| (k, v.to_string()))

@@ -144,7 +144,27 @@ pub fn vars_for(
     v.set("policy", "");
     v.set("policy_pin_checked", "");
     v.set("bosun_app", "");
+    v.set("ci_provider", "");
     v
+}
+
+/// The CI provider of a checkout: `github` when it has Actions workflows, else `circleci` when it
+/// has `.circleci/`, else `none` (spec §9).
+fn detect_ci(root: &Path) -> &'static str {
+    let has_workflows = std::fs::read_dir(root.join(".github/workflows")).is_ok_and(|d| {
+        d.flatten().any(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x == "yml" || x == "yaml")
+        })
+    });
+    if has_workflows {
+        "github"
+    } else if root.join(".circleci").is_dir() {
+        "circleci"
+    } else {
+        "none"
+    }
 }
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
@@ -410,6 +430,17 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         // The policy_min check above refused a pin that cannot parse it.
         vars.set("policy_pin_checked", "1");
     }
+    // A rerun keeps the provider an earlier run wrote: adopt's own workflows would flip detection.
+    let kept_ci = read_opt(&root.join(".bosun/bosun.toml"))
+        .ok()
+        .flatten()
+        .and_then(|b| String::from_utf8_lossy(&b).parse::<toml::Table>().ok())
+        .and_then(|t| Some(t.get("ci")?.get("provider")?.as_str()?.to_string()));
+    let ci =
+        a.ci.clone()
+            .or(kept_ci)
+            .unwrap_or_else(|| detect_ci(&root).to_string());
+    vars.set("ci_provider", ci.as_str());
 
     if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
         return Err(BosunError::error(
@@ -570,6 +601,7 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     Ok(Outcome::data(json!({
         "stacks": stacks,
         "policy": a.policy,
+        "ci": ci,
         "dry_run": a.dry_run,
         "changes": changes,
         "labels": labels,
