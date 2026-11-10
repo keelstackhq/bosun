@@ -571,8 +571,8 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
     // spawner counts as registered while any of its joins is live; `leave` records are ignored
     // (a forged one would unregister it, and the session's own leave too: record follows a
     // spawn this session just made through the trusted checks). A forged live join can keep
-    // an expired spawner registered for this record only; it raises no depth and grants no
-    // spawn, which the trusted checks decide.
+    // an expired spawner registered for this record only; it can raise the depth, never lower it,
+    // and grants no spawn, which the trusted checks decide.
     let (reg, reg_notes) = registry::ensure_own(gh)?;
     let all = members(&reg_notes);
     let registered = reg_notes.iter().any(|n| {
