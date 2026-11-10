@@ -282,6 +282,8 @@ pub struct LiveGithub {
     http: Http,
     owner: String,
     repo: String,
+    /// The token's login (`GET /user`), looked up once; `None` when unknown.
+    login: std::sync::OnceLock<Option<String>>,
 }
 
 impl LiveGithub {
@@ -291,6 +293,7 @@ impl LiveGithub {
             http: Http::from_env()?,
             owner: owner.to_string(),
             repo: repo.to_string(),
+            login: std::sync::OnceLock::new(),
         })
     }
 
@@ -300,6 +303,7 @@ impl LiveGithub {
             http: Http::with_env_url(token),
             owner: owner.to_string(),
             repo: repo.to_string(),
+            login: std::sync::OnceLock::new(),
         }
     }
 
@@ -314,7 +318,36 @@ impl LiveGithub {
             http: Http::new(base_url, token, max_sleep_ms),
             owner: owner.to_string(),
             repo: repo.to_string(),
+            login: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The token's login (`GET /user`), once per client; `None` when GitHub will not say.
+    fn own_login(&self) -> Option<String> {
+        self.login
+            .get_or_init(|| {
+                let v = self.http.get_json("/user").ok().flatten()?;
+                v["login"].as_str().map(str::to_string)
+            })
+            .clone()
+    }
+
+    /// The token's own permission from `GET /repos/o/r` `permissions`, named like the
+    /// collaborators endpoint's `permission` (maintain is `write`, triage is `read`).
+    fn own_permission(&self) -> Result<Option<String>> {
+        let v = self.http.get_json(&self.path(""))?.unwrap_or_default();
+        let p = &v["permissions"];
+        let has = |k: &str| p[k].as_bool() == Some(true);
+        Ok(if has("admin") {
+            Some("admin")
+        } else if has("maintain") || has("push") {
+            Some("write")
+        } else if has("triage") || has("pull") {
+            Some("read")
+        } else {
+            None
+        }
+        .map(str::to_string))
     }
 
     fn path(&self, rest: &str) -> String {
@@ -480,10 +513,15 @@ impl Github for LiveGithub {
 
     fn permission(&self, user: &str) -> Result<Option<String>> {
         let path = self.path(&format!("/collaborators/{}/permission", enc(user)));
-        Ok(self
-            .http
-            .get_json(&path)?
-            .and_then(|v| v["permission"].as_str().map(str::to_string)))
+        match self.http.get_json(&path) {
+            Ok(v) => Ok(v.and_then(|v| v["permission"].as_str().map(str::to_string))),
+            // A proxy (Claude Code cloud) may block /collaborators; the repo document still
+            // holds the token's own rights, so only the token's own login falls back to it.
+            Err(e) if self.own_login().as_deref() == Some(user) => {
+                self.own_permission().map_err(|_| e)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn get_comment(&self, id: u64) -> Result<Option<Comment>> {

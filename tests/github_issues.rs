@@ -5,6 +5,7 @@ mod common;
 use bosun::github::{Github, IssuePatch, IssueState, LiveGithub, PatchState, Variable};
 use common::TOKEN_CANARY;
 use common::fake::FakeGithub;
+use serde_json::json;
 
 fn setup() -> (FakeGithub, LiveGithub) {
     let fake = FakeGithub::start();
@@ -112,4 +113,75 @@ fn variable_found_and_missing() {
     assert_eq!(gh.variable("NOPE").unwrap(), Variable::Unset);
     fake.fail_path("/actions/variables/HIDDEN", 403);
     assert_eq!(gh.variable("HIDDEN").unwrap(), Variable::Forbidden);
+}
+
+const PROXY_403: &str = "Access to this GitHub API path is not permitted through this proxy.";
+
+fn proxy_blocks_collaborators(fake: &FakeGithub, me: &str) {
+    fake.viewer(me);
+    fake.fail_path_message("/permission", 403, PROXY_403);
+}
+
+#[test]
+fn permission_of_self_comes_from_the_repo_when_collaborators_is_blocked() {
+    let (fake, gh) = setup();
+    proxy_blocks_collaborators(&fake, "me");
+    for (perms, want) in [
+        (
+            json!({"admin": true, "maintain": true, "push": true, "pull": true}),
+            "admin",
+        ),
+        (
+            json!({"admin": false, "maintain": true, "push": true, "pull": true}),
+            "write",
+        ),
+        (json!({"admin": false, "push": true, "pull": true}), "write"),
+        (
+            json!({"admin": false, "push": false, "triage": true, "pull": true}),
+            "read",
+        ),
+        (json!({"admin": false, "push": false, "pull": true}), "read"),
+    ] {
+        fake.repo_set("permissions", perms);
+        assert_eq!(gh.permission("me").unwrap().as_deref(), Some(want));
+    }
+    fake.repo_set(
+        "permissions",
+        json!({"admin": false, "push": false, "pull": false}),
+    );
+    assert_eq!(gh.permission("me").unwrap(), None);
+    // the login is looked up once per client
+    let users = fake.requests().iter().filter(|r| r.path == "/user").count();
+    assert_eq!(users, 1);
+}
+
+#[test]
+fn permission_of_another_user_is_still_refused_when_collaborators_is_blocked() {
+    let (fake, gh) = setup();
+    proxy_blocks_collaborators(&fake, "me");
+    fake.repo_set(
+        "permissions",
+        json!({"admin": true, "push": true, "pull": true}),
+    );
+    let e = gh.permission("someone").unwrap_err();
+    assert!(
+        e.message.contains("not permitted through this proxy"),
+        "{}",
+        e.message
+    );
+}
+
+#[test]
+fn permission_uses_collaborators_when_it_answers() {
+    let (fake, gh) = setup();
+    fake.viewer("me");
+    fake.permission("me", "read");
+    fake.repo_set(
+        "permissions",
+        json!({"admin": true, "push": true, "pull": true}),
+    );
+    assert_eq!(gh.permission("me").unwrap().as_deref(), Some("read"));
+    fake.permission("other", "admin");
+    assert_eq!(gh.permission("other").unwrap().as_deref(), Some("admin"));
+    assert!(fake.requests().iter().all(|r| r.path != "/user"));
 }
