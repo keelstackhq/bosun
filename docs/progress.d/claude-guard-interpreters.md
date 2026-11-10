@@ -1,0 +1,1 @@
+- 2026-11-10 · #503 · merge-lock reads interpreter code and the scripts interpreters and shells run · PR #505
