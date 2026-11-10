@@ -1,0 +1,1 @@
+- `bosun approve --list`: each ready PR has an `ask` (question id, text, options); `next` holds the AskUserQuestion (or Claude Tag `slack_post`) for the owner.
