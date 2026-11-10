@@ -368,3 +368,23 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-08 · operating-model #9 · held outcomes: writers' task-pr only, revert lookup by head
 - 2026-11-08 · operating-model #15 · review-pack delta shows only the PR's own files after a main merge
 - 2026-11-08 · operating-model #16 · pinned-config tables fall back to the newest older release
+- 2026-11-09 · budget record --pr · spend per PR without task issues; report counts PR spend · PR #476
+- 2026-11-10 · adopt policy · `bosun adopt --policy` writes `[approvals] policy` (autonomous mode in one step)
+- 2026-11-10 · fast setup 3 · `@keelstackhq/cargo-deny` npm packages and `cargo-deny-npm.yml` (owner publishes first) · PR #481
+- 2026-11-10 · CS-8 · bosun code knows `.changeset/` (risk allowlist, edit lock, touch check) · PR #484
+- 2026-11-10 · fast setup task 2 · setup script skips absent stacks, no nextest build, cargo-deny npm pin slots · PR #483
+- 2026-11-10 · fast-setup 1 · default rust test gate is `cargo test`; channel CI keeps cargo-nextest for older pins
+- 2026-11-09 · update 3 · README "Update bosun", docs/update.md, no-re-paste test · PR #477
+- 2026-11-09 · budget report 3 · every PR of the month in the report, zero total fixed · PR #470
+- 2026-11-09 · budget report 2 · `budget-report.yml` keeps monthly reports on `bosun/budget-reports` · PR #469
+- 2026-11-09 · budget report 1 · `bosun budget report`, monthly spend per PR (md + json) · PR #465
+- 2026-11-09 · update 2 · `bosun doctor` update-available warning · PR #475
+- 2026-11-09 · update 1 · `bosun pin --latest --pr`, one-step pin PR · PR #474
+- 2026-11-09 · records · last raw lease and task-pr readers move to writers' records
+- 2026-11-10 · fix · record-text follow-up to #473 · PR #479
+- 2026-11-09 · registry · join and lease records count only from writers
+- 2026-11-09 · operating-model follow-ups · review-pack delta cap fallback, delta_not_in_pr untrusted and capped, carry filters review_models
+- 2026-11-09 · budget · spend records count only from writers
+- 2026-11-09 · update 4 · pin and doctor polish (dated branch, step 17 always, human-only left) · PR #478
+- 2026-11-09 · pin bosun 0.11.0 (bosun pin --latest)
+- 2026-11-09 · pinned config · 0.11.0 approvals row (review_models); no setup-script paste after a pin
