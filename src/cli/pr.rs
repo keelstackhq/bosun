@@ -689,7 +689,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                         pull.number
                     ),
                     format!(
-                        "the orchestrator merges PR #{0} (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --ready`",
+                        "the orchestrator merges PR #{0} with `bosun merge {0}` (hand it over; you never merge), or its next push makes auto-merge possible again: push, then rerun `bosun pr {n} --ready`",
                         pull.number
                     ),
                 )

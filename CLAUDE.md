@@ -52,7 +52,8 @@ Run the fast checks before every commit.
 - **stdout is exactly one JSON object** `{version:1, command, ok, exit_code, data, error, next}`,
   also for errors and usage errors. `error.fix` is never empty. Logs go to stderr. Only `bosun hook`
   writes the Claude Code hook protocol instead.
-- **Agents never merge, tag or force-push** (spec D13). bosun only turns on auto-merge.
+- **Agents never merge, tag or force-push** (spec D13). bosun turns on auto-merge; the one
+  exception is `bosun merge` (D-019): orchestrator only, gates re-checked on the exact head.
 - **bosun never calls claude-code-remote tools** (D29): it returns them in `next`.
 - **`src/core` does no I/O** (no `std::fs`, `std::process`, `std::net`, no `crate::github`).
 - **Tests never reach a real API.** Use `tests/common`: it clears `GITHUB_TOKEN`, `GH_TOKEN`
