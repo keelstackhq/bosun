@@ -1,0 +1,1 @@
+- `bosun` reads the token's own repo permission from `GET /repos/{o}/{r}` when a proxy blocks `/collaborators` (Claude Code cloud), so `bosun budget record --pr` and other writer checks work there; other users still need the collaborators endpoint.

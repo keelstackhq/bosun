@@ -143,7 +143,8 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
   `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or
-  admin) permission on the repo (`GET collaborators/{user}/permission`; `author_association` is no
+  admin) permission on the repo (`GET collaborators/{user}/permission`; when a proxy refuses that path, the token's own login
+  alone falls back to `GET /repos/{o}/{r}` `permissions`, maintain as write; `author_association` is no
   proof, since a workflow token sees an org member as `CONTRIBUTOR`), it sits on the PR its JSON names, and the JSON is valid; a
   `head_sha` that is no longer the head is exit 3, and a comment is refused when a newer verdict
   comment for the same head from the same reviewer session exists (another session's is a second verdict, not a replacement) (the workflow also runs one comment per PR at a time; with 3+ verdict comments at once a pending run can be replaced, which leaves risk-check red until that verdict is posted again). The
