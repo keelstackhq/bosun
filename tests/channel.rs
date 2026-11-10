@@ -467,8 +467,8 @@ fn setup_scripts_install_the_keelstackhq_tools_checked_against_their_pinned_inte
     };
     assert_eq!(
         pins(&own).len(),
-        9,
-        "splice, hoist, berth: launcher, linux-x64, linux-arm64"
+        12,
+        "splice, hoist, berth, cargo-deny: launcher, linux-x64, linux-arm64"
     );
     assert_eq!(
         pins(&own),

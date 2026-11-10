@@ -1,0 +1,1 @@
+- Setup script: cargo-nextest builds only for a bosun pin before 0.12.0 or a nextest profile override; Rust steps only in a checkout with `Cargo.toml` or `rust-toolchain.toml`, pnpm only where the checkout uses pnpm; cargo-deny from pinned `@keelstackhq/cargo-deny` npm packages once pinned, else `cargo install --locked cargo-deny`.
