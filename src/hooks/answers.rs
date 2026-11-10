@@ -77,15 +77,18 @@ pub fn store(dir: &Path, items: &[(String, Answer)]) -> std::io::Result<()> {
     }
     let at = |v: &Value| v.get("at").and_then(Value::as_str).and_then(parse_rfc3339);
     if let Some(newest) = map.values().filter_map(at).max() {
-        map.retain(|_, v| at(v).is_some_and(|t| t.0 >= newest.0 - KEEP_SECS));
+        // An entry without a readable `at` is kept: only known-old answers go.
+        map.retain(|_, v| at(v).is_none_or(|t| t.0 >= newest.0 - KEEP_SECS));
     }
     let tmp = file.with_extension(format!("json.tmp{}", std::process::id()));
     std::fs::write(&tmp, Value::Object(map).to_string())?;
     std::fs::rename(&tmp, &file)
 }
 
-/// An exclusive lock file, removed on drop. A lock older than 10 s is stale (a killed hook).
-struct Lock(PathBuf);
+/// An exclusive lock file holding this holder's token, removed on drop only while it still holds
+/// that token. A lock older than 10 s is stale (a killed hook); a lost race on a stale lock can
+/// lose one answer, which fails closed (the owner is asked again).
+struct Lock(PathBuf, String);
 
 impl Lock {
     fn take(path: &Path) -> std::io::Result<Lock> {
@@ -95,7 +98,12 @@ impl Lock {
                 .create_new(true)
                 .open(path)
             {
-                Ok(_) => return Ok(Lock(path.to_path_buf())),
+                Ok(mut f) => {
+                    use std::io::Write;
+                    let token = format!("{}-{:?}", std::process::id(), std::thread::current().id());
+                    f.write_all(token.as_bytes())?;
+                    return Ok(Lock(path.to_path_buf(), token));
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     let stale = std::fs::metadata(path)
                         .and_then(|m| m.modified())
@@ -115,7 +123,9 @@ impl Lock {
 
 impl Drop for Lock {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        if std::fs::read_to_string(&self.0).is_ok_and(|t| t == self.1) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 }
 

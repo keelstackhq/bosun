@@ -258,3 +258,19 @@ fn chat_slack_non_owner_refused() {
     );
     refused(&fake, r, 5);
 }
+
+#[test]
+fn chat_slack_user_needs_slack_origin() {
+    // An owner's Slack ID is public in owners.toml: a non-Slack orchestrator cannot use it to
+    // skip the stored answer.
+    let (fake, tmp) = (setup(), repo());
+    let local = [("BOSUN_ORIGIN", "local")];
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_orch",
+        &["--slack-user", "U0ADA1"],
+        &local,
+    );
+    refused(&fake, r, 5);
+}
