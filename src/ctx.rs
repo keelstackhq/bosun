@@ -187,6 +187,7 @@ impl Ctx {
                 "set BOSUN_NOW to an RFC 3339 time such as 2026-10-22T09:00:00Z, or unset it",
             )
         })?;
+        crate::github::gate::trust(&config.checks);
         Ok(Ctx {
             limits: Limits::load(&root)?,
             session: session_id(

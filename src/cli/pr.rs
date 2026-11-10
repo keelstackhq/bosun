@@ -110,7 +110,7 @@ fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, Stri
 /// Only a commit status posted by `github-actions[bot]` counts; a check run or a status from
 /// anyone else with the same name is ignored (`missing`), as in `risk-check` itself.
 fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
-    let statuses = gh.statuses(sha)?;
+    let statuses = crate::github::gate::gate_statuses(gh, sha)?;
     Ok(["risk-check", "review-verdict"]
         .into_iter()
         .map(|ctx| {

@@ -728,8 +728,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
 fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) -> Option<String> {
     let head = pull.head_sha.as_str();
     // A carried status on top of a real verdict (a run was cancelled mid-post) is repaired first.
-    let top = gh
-        .statuses(head)
+    let top = crate::github::gate::gate_statuses(gh, head)
         .ok()
         .and_then(|l| l.into_iter().find(is_verdict));
     if let Some(s) = top.filter(|s| s.description.starts_with(CARRIED)) {
@@ -758,7 +757,7 @@ const UNSURE: &str = "carry withdrawn: could not confirm no verdict raced it";
 /// that raced us: the newest is posted again. If that fails, or the history is unreadable: withdraw.
 fn settle(gh: &dyn Github, w: &GateWriter, head: &str, ours: &str) -> bool {
     let post = |state: &str, text: &str| w.post(head, VERDICT, state, text);
-    let seen = gh.status_history(head).map(|l| {
+    let seen = crate::github::gate::gate_history(gh, head).map(|l| {
         l.into_iter()
             .find(|s| is_verdict(s) && s.description != ours && !s.description.starts_with(CARRIED))
     });
@@ -1045,6 +1044,10 @@ fn owners_withdrawn(gh: &dyn Github, pr: u64, head: &str, owners: &[String]) -> 
 pub fn verdict_inputs(gh: &dyn Github, n: u64, ls: &[u64]) -> Result<(Vec<Comment>, Vec<String>)> {
     let mut comments = gh.list_comments(n)?;
     comments.sort_by_key(|c| c.id);
+    // In checks mode only the gate App's records count (UC-B2-4).
+    for c in &mut comments {
+        c.user = crate::github::gate::record_author(&c.user);
+    }
     let mut excluded = Vec::new();
     for i in ls {
         let notes = gh.list_comments(*i)?;

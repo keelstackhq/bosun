@@ -3,9 +3,12 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
-use super::{GateRun, Github, LiveGithub, Result, RunState};
-use crate::config::CheckMode;
+use super::{CheckRun, Comment, GateRun, Github, LiveGithub, Result, RunState, Status};
+use crate::config::{CheckMode, Checks};
+use crate::core::approve::TRUSTED_CREATOR;
+use crate::core::risk::VERDICT_AUTHOR;
 use crate::output::BosunError;
 
 /// Env var holding the gate App's installation token (never argv, never printed).
@@ -54,6 +57,17 @@ impl<'a> GateWriter<'a> {
     /// True when `dual` mode skipped a check run because the App token was missing.
     pub fn checks_skipped(&self) -> bool {
         self.skipped.get()
+    }
+
+    /// Write the verdict record comment on `n`. In `checks` mode the App writes it (only its
+    /// records count then) and the body is defused: an App comment starts workflows, so it never
+    /// carries `<!--`, `/bosun approve` or `/bosun recheck` (UC-B2-7).
+    pub fn add_record(&self, n: u64, body: &str) -> Result<Comment> {
+        if self.mode != CheckMode::Checks {
+            return self.gh.add_comment(n, body);
+        }
+        let app = self.app.as_deref().ok_or_else(missing_token)?;
+        app.add_comment(n, &defuse(body))
     }
 
     /// Post `state` (`pending`, `success`, `failure` or `error`) of `context` on `sha`.
@@ -128,8 +142,9 @@ impl<'a> GateWriter<'a> {
             summary,
         };
         let key = (sha.to_string(), context.to_string());
-        let open = self.pending.borrow_mut().remove(&key);
-        // The verdict completes the run that `pending` opened in this process.
+        let open = self.pending.borrow().get(&key).copied();
+        // The verdict completes the run that `pending` opened in this process; a failed PATCH
+        // keeps the id, so the `error` post retries that run instead of leaving it open.
         let id = match open {
             Some(id) => {
                 app.update_check_run(id, &run)?;
@@ -139,9 +154,16 @@ impl<'a> GateWriter<'a> {
         };
         if run_state == RunState::Pending {
             self.pending.borrow_mut().insert(key, id);
+        } else {
+            self.pending.borrow_mut().remove(&key);
         }
         Ok(())
     }
+}
+
+/// `body` with no HTML comment opener and no `/bosun` command a workflow could match.
+pub fn defuse(body: &str) -> String {
+    body.replace("<!--", "<! --").replace("/bosun", "/ bosun")
 }
 
 fn missing_token() -> BosunError {
@@ -151,4 +173,78 @@ fn missing_token() -> BosunError {
             "run the job in the `bosun-app` environment with the actions/create-github-app-token step and pass its token as {APP_TOKEN_ENV}"
         ),
     )
+}
+
+/// The gate App bosun trusts for its own gates: set (from `[checks]` in `checks` mode) once per
+/// process by `Ctx::load`; unset, the statuses are the authority, as in `statuses` and `dual`.
+static TRUSTED_APP: OnceLock<Option<(u64, String)>> = OnceLock::new();
+
+/// Record which App's check runs (and verdict records) count, from `[checks]`.
+pub fn trust(checks: &Checks) {
+    let app = match (checks.mode, checks.app_id, &checks.app_slug) {
+        (CheckMode::Checks, Some(id), Some(slug)) => Some((id, slug.clone())),
+        _ => None,
+    };
+    _ = TRUSTED_APP.set(app);
+}
+
+fn trusted_app() -> Option<&'static (u64, String)> {
+    TRUSTED_APP.get().and_then(Option::as_ref)
+}
+
+/// In `checks` mode the login that writes trusted verdict records, `<app_slug>[bot]`.
+pub fn record_bot() -> Option<String> {
+    trusted_app().map(|(_, slug)| format!("{slug}[bot]"))
+}
+
+/// The author a verdict-record reader sees (UC-B2-4): in `checks` mode the App's comments read
+/// as [`VERDICT_AUTHOR`] and `github-actions[bot]`'s as nobody; otherwise unchanged.
+pub fn record_author(user: &str) -> String {
+    match record_bot() {
+        Some(bot) if user.eq_ignore_ascii_case(&bot) => VERDICT_AUTHOR.to_string(),
+        Some(_) if user.eq_ignore_ascii_case(VERDICT_AUTHOR) => String::new(),
+        _ => user.to_string(),
+    }
+}
+
+/// Every post of the gates on `sha`, newest first, as statuses. In `checks` mode these are the
+/// trusted App's check runs only (creator [`TRUSTED_CREATOR`]); statuses and other Apps' runs
+/// never count (UC-B2-3). Otherwise the status history, as before.
+pub fn gate_history(gh: &dyn Github, sha: &str) -> Result<Vec<Status>> {
+    let Some((id, _)) = trusted_app() else {
+        return gh.status_history(sha);
+    };
+    let mut runs: Vec<CheckRun> = (gh.check_runs_all(sha)?.into_iter())
+        .filter(|r| r.app_id == *id)
+        .collect();
+    runs.sort_by_key(|r| std::cmp::Reverse(r.id));
+    Ok(runs.into_iter().map(as_status).collect())
+}
+
+/// As [`gate_history`], the newest per context (the combined status in `statuses` and `dual`).
+pub fn gate_statuses(gh: &dyn Github, sha: &str) -> Result<Vec<Status>> {
+    if trusted_app().is_none() {
+        return gh.statuses(sha);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let all = gate_history(gh, sha)?;
+    Ok(all
+        .into_iter()
+        .filter(|s| seen.insert(s.context.clone()))
+        .collect())
+}
+
+fn as_status(r: CheckRun) -> Status {
+    let state = match (r.status.as_str(), r.conclusion.as_deref()) {
+        ("completed", Some("success")) => "success",
+        ("completed", _) if r.title.starts_with("error:") => "error",
+        ("completed", _) => "failure",
+        _ => "pending",
+    };
+    Status {
+        context: r.name,
+        state: state.into(),
+        description: r.title,
+        creator: TRUSTED_CREATOR.into(),
+    }
 }

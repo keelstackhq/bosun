@@ -141,8 +141,7 @@ pub(crate) fn build(gh: &dyn Github, repo: &str, n: u64, full: bool) -> Result<V
                 delta_fallback = Some("too many verdict records".to_string());
                 break;
             }
-            if gh
-                .statuses(&head_sha)?
+            if crate::github::gate::gate_statuses(gh, &head_sha)?
                 .iter()
                 .any(|s| s.context == "review-verdict" && s.state == "success")
             {

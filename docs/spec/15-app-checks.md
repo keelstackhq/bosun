@@ -1,8 +1,8 @@
 ## 15. Trusted check source: App check runs (B2)
 
 Status: partly built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, item
-B2): the check-run client (T1), `[checks]` (T2) and the gate writer (T3) are in; reading back by
-App (T4) and the checks-mode refusals (T5) are not. The default mode is `statuses`, so nothing
+B2): the check-run client (T1), `[checks]` (T2), the gate writer (T3) and reading back by App
+(T4) are in; the checks-mode refusals and the doctor pin check (T5) are not. The default mode is `statuses`, so nothing
 changes until a repo sets `[checks]`. Until the ruleset switch (Transition, step 6), §7, §8 and §9
 describe what runs.
 
@@ -113,9 +113,14 @@ key goes only to the token step, the token only to the bosun step. main-health's
   they are the authority until the switch. Readers: risk-check (pending repair, carry), `bosun
   approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (in `checks` mode a gate
   context counts only as a check run of the App and `ci-ok` only from github-actions; in
-  `statuses` and `dual` a status or check run, as today).
+  `statuses` and `dual` a status or check run, as today). `Ctx::load` records the trusted App
+  once per process; `gate_statuses` and `gate_history` (`src/github/gate.rs`) give the App's runs
+  as statuses (title as the description, an `error:` title as `error`, an open run as `pending`),
+  so the readers keep their logic. `bosun pr --auto-merge` reports the gates from them.
 - Verdict records: in `checks` mode `verdict apply` writes the record with the App token, and
-  only records by `<app_slug>[bot]` count (two verdicts, delegate, carry). This closes the §8
+  only records by `<app_slug>[bot]` count (two verdicts, delegate, carry): the readers see that
+  login as the trusted author and `github-actions[bot]` as nobody. The App's record body is
+  defused (`<!--` and `/bosun` are broken up) so it can never start a keyed job (UC-B2-7). This closes the §8
   residual "a workflow can post a record as github-actions[bot]". Older records stop counting at
   the switch; an open PR's reviewer posts the verdict comment again.
 - `bosun verdict post` (a session's own token) cannot make the App's check run: in `checks` mode

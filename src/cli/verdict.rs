@@ -221,7 +221,7 @@ pub(crate) fn record(
         model: model.map(str::to_string),
     };
     let human = format!("Review verdict: {}.", verdict.summary());
-    gh.add_comment(n, &format!("{human}\n\n{}", record.to_line()))?;
+    w.add_record(n, &format!("{human}\n\n{}", record.to_line()))?;
 
     let target = if verdict.escalate_risk {
         Some(State::NeedsHuman)

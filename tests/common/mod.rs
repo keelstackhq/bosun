@@ -18,6 +18,7 @@ pub fn bosun() -> Command {
     // An empty directory, so no test reads this repo's own .bosun/ files.
     cmd.current_dir(empty_dir());
     cmd.env_remove("GH_TOKEN")
+        .env_remove("BOSUN_APP_TOKEN")
         .env("GITHUB_TOKEN", TOKEN_CANARY)
         .env("BOSUN_GITHUB_API", "http://127.0.0.1:9")
         .env("BOSUN_REPO", "acme/widget")

@@ -141,7 +141,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
         Kind::Config => {
             let gated = |k: &str| {
                 k == "stack"
-                    || ["approvals.", "prices.", "review."]
+                    || ["approvals.", "checks.", "prices.", "review."]
                         .iter()
                         .any(|p| k.starts_with(p))
             };

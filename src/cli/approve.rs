@@ -146,8 +146,7 @@ fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
 fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
-        let statuses: Vec<Stat> = gh
-            .status_history(&p.head_sha)?
+        let statuses: Vec<Stat> = crate::github::gate::gate_history(gh, &p.head_sha)?
             .into_iter()
             .map(|s| Stat {
                 context: s.context,
@@ -671,7 +670,7 @@ fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<(Option<String>
         Policy::Orchestrator | Policy::Autonomous => true,
         Policy::Owner => return refuse("approval policy owner: only the owner approves".into()),
         Policy::OwnerGated => {
-            let stats: Vec<Stat> = (gh.statuses(head)?.into_iter())
+            let stats: Vec<Stat> = (crate::github::gate::gate_statuses(gh, head)?.into_iter())
                 .map(|s| Stat {
                     context: s.context,
                     state: s.state,
