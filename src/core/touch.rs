@@ -99,8 +99,17 @@ pub struct Changed {
     pub previous: Option<String>,
 }
 
-/// Files a PR may always change: the per-branch fragments (CLAUDE.md), which never conflict.
-const FRAGMENTS: [&str; 2] = ["changelog.d/*.md", "docs/progress.d/*.md"];
+/// A per-PR fragment: `changelog.d/*.md`, `docs/progress.d/*.md` or a changeset
+/// `.changeset/<name>.md` (not `README.md`, `config.json` or a subdirectory file).
+pub fn is_fragment(path: &str) -> bool {
+    let one_level = |dir: &str| {
+        path.strip_prefix(dir)
+            .is_some_and(|f| !f.contains('/') && f.ends_with(".md"))
+    };
+    one_level("changelog.d/")
+        || one_level("docs/progress.d/")
+        || (one_level(".changeset/") && path != ".changeset/README.md")
+}
 
 /// The paths of `changed` that no `touch` glob covers: files that are modified, removed or
 /// renamed (a rename checks the old name only; its new path is effectively added). Added and
@@ -109,8 +118,7 @@ const FRAGMENTS: [&str; 2] = ["changelog.d/*.md", "docs/progress.d/*.md"];
 pub fn outside(changed: &[Changed], touch: &[String]) -> Vec<String> {
     // A bad glob is dropped alone; the rest still count.
     let globs = parsed(&companions(touch));
-    let free = parsed(&FRAGMENTS.map(String::from));
-    let covered = |p: &str| globs.iter().chain(&free).any(|g| g.matches(p));
+    let covered = |p: &str| is_fragment(p) || globs.iter().any(|g| g.matches(p));
     let mut out: Vec<String> = Vec::new();
     for c in changed {
         // A rename's new path is effectively added: only the old name is edited.
@@ -353,12 +361,23 @@ w/pnpm-lock.yaml pnpm-lock.yaml x-Cargo.toml"
             c("src/new.rs", "added", None),
             c("Cargo.lock", "modified", None),
             c("changelog.d/x.md", "modified", None),
+            c(".changeset/x.md", "modified", None),
+            c(".changeset/README.md", "modified", None),
+            c(".changeset/config.json", "removed", None),
             c("src/b.rs", "renamed", Some("lib/old.rs")),
             c("lib/z.rs", "removed", None),
             c("lib/copy.rs", "copied", Some("lib/src.rs")),
         ];
         // The bad glob is dropped alone.
         let touch = s(&["src/a.rs", "src/b.rs", "Cargo.toml", "[bad"]);
-        assert_eq!(outside(&changed, &touch), s(&["lib/old.rs", "lib/z.rs"]));
+        assert_eq!(
+            outside(&changed, &touch),
+            s(&[
+                ".changeset/README.md",
+                ".changeset/config.json",
+                "lib/old.rs",
+                "lib/z.rs"
+            ])
+        );
     }
 }

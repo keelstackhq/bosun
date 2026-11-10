@@ -1,0 +1,1 @@
+- risk, edit-lock and touch check treat `.changeset/**` as autonomous-allowed and `.changeset/<name>.md` as a free fragment
