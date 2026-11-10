@@ -1203,7 +1203,8 @@ fn block_of<'a>(yaml: &'a str, start: &str, end: &str) -> &'a str {
 /// Each secret bosun's workflows read, and the environment that holds it. Each environment's
 /// deployment branch policy allows only `main`, so a PR's own `on: pull_request` workflow (which
 /// can read repository secrets) cannot read these.
-const SECRET_ENVIRONMENTS: [(&str, &str); 3] = [
+const SECRET_ENVIRONMENTS: [(&str, &str); 4] = [
+    ("BOSUN_APP_KEY", "bosun-app"),
     ("HOIST_RELEASE_TOKEN", "release-pr"),
     ("SPLICE_BOT_TOKEN", "splice-bot"),
     ("ANTHROPIC_API_KEY", "review"),
@@ -1423,4 +1424,197 @@ fn main_open_rejudges_when_a_draft_becomes_ready() {
             "{rel}"
         );
     }
+}
+
+/// The steps of a job: each `      - ` item with its lines.
+fn steps_of(job: &str) -> Vec<String> {
+    let mut steps: Vec<String> = Vec::new();
+    for line in job.lines() {
+        if line.starts_with("      - ") {
+            steps.push(String::new());
+        } else if line.starts_with("    ") && !line.starts_with("      ") && !line.trim().is_empty()
+        {
+            // A job key after `steps:` ends the list.
+            if !steps.is_empty() && !line.trim_start().starts_with('#') {
+                break;
+            }
+        }
+        if let Some(s) = steps.last_mut() {
+            s.push_str(line);
+            s.push('\n');
+        }
+    }
+    steps
+}
+
+/// The full sha of actions/create-github-app-token that the workflows pin (v3.3.0).
+const APP_TOKEN_ACTION: &str =
+    "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
+
+/// What is wrong with a job that holds the App key (environment `bosun-app`, spec §15).
+fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in events(yaml) {
+        let ok = [
+            "pull_request_target",
+            "issue_comment",
+            "workflow_run",
+            "push",
+            "schedule",
+            "workflow_dispatch",
+        ];
+        if !ok.contains(&e.as_str()) {
+            out.push(format!("runs on {e}"));
+        }
+    }
+    if events(yaml).iter().any(|e| e == "workflow_run")
+        && !(yaml.contains("    branches: [main]")
+            && job.contains("github.event.workflow_run.event == 'push'")
+            && job.contains(
+                "github.event.workflow_run.head_repository.full_name == github.repository",
+            ))
+    {
+        out.push("workflow_run job without the main-health filter".into());
+    }
+    let refs = [
+        "ref: ${{ github.event.pull_request.base.sha }}",
+        "ref: ${{ github.event.pull_request.base.sha || github.sha }}",
+        "ref: ${{ github.sha }}",
+    ];
+    let steps = steps_of(job);
+    for step in &steps {
+        let code: String = step.lines().map(code_of).collect::<Vec<_>>().join("\n");
+        if code.contains("actions/checkout@") {
+            let r = code.lines().map(str::trim).find(|l| l.starts_with("ref:"));
+            if !r.is_some_and(|r| refs.contains(&r)) {
+                out.push(format!("checkout of {r:?}"));
+            }
+        }
+        let key = code.contains("secrets.BOSUN_APP_KEY");
+        let token = code.contains("steps.app.outputs.token");
+        if code.contains("actions/create-github-app-token") {
+            if !code.contains(APP_TOKEN_ACTION) {
+                out.push("token action not pinned by the known full sha".into());
+            }
+            if !code.contains("app-id: ${{ vars.BOSUN_APP_ID }}")
+                || !code.contains("private-key: ${{ secrets.BOSUN_APP_KEY }}")
+                || !code.contains("id: app")
+            {
+                out.push("token step without its id, app-id or key".into());
+            }
+            let perms: Vec<&str> = code
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with("permission-"))
+                .collect();
+            let allowed = [
+                "permission-checks: write",
+                "permission-pull-requests: write",
+            ];
+            if perms.is_empty() || perms.iter().any(|p| !allowed.contains(p)) {
+                out.push(format!("token not downscoped: {perms:?}"));
+            }
+        } else if key {
+            out.push("the key outside the token step".into());
+        }
+        if token {
+            let bosun = code.lines().any(|l| {
+                l.trim().starts_with("run: ./target/release/bosun ") || l.trim() == "run: |"
+            }) && code.contains("./target/release/bosun ");
+            if !bosun || !code.contains("BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}") {
+                out.push("the token outside a bosun step's BOSUN_APP_TOKEN".into());
+            }
+        }
+    }
+    if steps
+        .iter()
+        .filter(|s| s.contains(APP_TOKEN_ACTION))
+        .count()
+        != 1
+    {
+        out.push("not exactly one token step".into());
+    }
+    out
+}
+
+/// B2W (spec §15 Transition step 3): the gate jobs of bosun's workflows hold the App key in the
+/// `bosun-app` environment, run base or default-branch code only, and give the key only to the
+/// token step and the token only to bosun. Jobs that run repo code never name it.
+#[test]
+fn the_gate_jobs_get_the_app_token_and_nothing_else_does() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/.github/workflows/");
+    let want = [
+        ("risk.yml", "risk"),
+        ("verdict.yml", "verdict"),
+        ("main-open.yml", "judge"),
+        ("main-health.yml", "report"),
+    ];
+    let mut problems = Vec::new();
+    for (path, yaml) in all_workflows() {
+        let (jobs, _) = jobs_of(&yaml);
+        for (id, job) in jobs {
+            let keyed = environment_of(&job).as_deref() == Some("bosun-app");
+            let name = path.rsplit('/').next().unwrap().to_string();
+            let expected =
+                !path.contains("/channel/") && want.iter().any(|(f, j)| *f == name && *j == id);
+            if keyed != expected {
+                problems.push(format!(
+                    "{path} job {id}: bosun-app is {keyed}, want {expected}"
+                ));
+            }
+            if keyed {
+                if !job.contains("      deployment: false") {
+                    problems.push(format!("{path} job {id}: deployment not false"));
+                }
+                for p in app_job_problems(&yaml, &job) {
+                    problems.push(format!("{path} job {id}: {p}"));
+                }
+            } else if job.contains("secrets.BOSUN_APP_KEY") || job.contains("BOSUN_APP_TOKEN") {
+                problems.push(format!("{path} job {id}: the App outside bosun-app"));
+            }
+        }
+    }
+    assert!(problems.is_empty(), "{problems:#?}");
+    // UC-B2W-2: the jobs that run repo code ask for no checks or statuses write.
+    let ci = fs::read_to_string(format!("{root}ci.yml")).unwrap();
+    let health = fs::read_to_string(format!("{root}main-health.yml")).unwrap();
+    let nightly = block_of(&health, "\n  nightly:", "\n  report:");
+    for (what, text) in [("ci.yml", ci.as_str()), ("nightly", nightly)] {
+        for w in ["checks: write", "statuses: write"] {
+            assert!(!text.contains(w), "{what} asks for {w}");
+        }
+    }
+}
+
+/// The scan itself: a PR event, the PR head, a stray key or token, an unpinned action.
+#[test]
+fn the_app_job_scan_catches_each_problem() {
+    let job = |on: &str, steps: &str| {
+        let yaml = format!("name: x\non:\n{on}\njobs:\n  j:\n    runs-on: x\n    steps:\n{steps}");
+        let (jobs, _) = jobs_of(&yaml);
+        app_job_problems(&yaml, &jobs[0].1)
+    };
+    let token = format!(
+        "      - id: app\n        uses: {APP_TOKEN_ACTION}\n        with:\n          app-id: ${{{{ vars.BOSUN_APP_ID }}}}\n          private-key: ${{{{ secrets.BOSUN_APP_KEY }}}}\n          permission-checks: write\n"
+    );
+    let bosun = "      - env:\n          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}\n        run: ./target/release/bosun risk-check \"$PR\"\n";
+    let base = "      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.base.sha }}\n";
+    let good = format!("{base}{token}{bosun}");
+    let target = "  pull_request_target:\n";
+    assert_eq!(job(target, &good), Vec::<String>::new());
+    assert!(job("  pull_request:\n", &good)[0].contains("runs on pull_request"));
+    let head = good.replace("pull_request.base.sha", "pull_request.head.sha");
+    assert!(job(target, &head)[0].contains("checkout"));
+    let stray = format!("{good}      - run: echo ${{{{ secrets.BOSUN_APP_KEY }}}}\n");
+    assert!(job(target, &stray)[0].contains("key outside"));
+    let leak = format!(
+        "{good}      - env:\n          T: ${{{{ steps.app.outputs.token }}}}\n        run: curl x\n"
+    );
+    assert!(job(target, &leak)[0].contains("token outside"));
+    let tag = good.replace("@64ab729a6294000f5aa4a4bc0b73d1f32bc45510", "@v3");
+    assert!(job(target, &tag).iter().any(|p| p.contains("pinned")));
+    let wide = good.replace("permission-checks: write", "permission-contents: write");
+    assert!(job(target, &wide)[0].contains("downscoped"));
+    let run = "  workflow_run:\n    workflows: [ci]\n";
+    assert!(job(run, &good.replace("pull_request.base.sha", "sha"))[0].contains("filter"));
 }

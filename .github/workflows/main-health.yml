@@ -55,6 +55,9 @@ jobs:
       (github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
+    environment:
+      name: bosun-app
+      deployment: false
     steps:
       # github.sha is the head of the default branch for workflow_run and schedule events.
       - uses: actions/checkout@v4
@@ -101,10 +104,20 @@ jobs:
             echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::warning::the pinned bosun has no main-health command yet; running the shell fallback"
           fi
+      # The App token (spec §15): the key goes to this step only, the token only to bosun.
+      - if: steps.has.outputs.supported == 'true'
+        name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BOSUN_APP_ID }}
+          private-key: ${{ secrets.BOSUN_APP_KEY }}
+          permission-checks: write
       - if: steps.has.outputs.supported == 'true'
         name: bosun main-health
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
           BOSUN_REPO: ${{ github.repository }}
           RESULT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || needs.nightly.result }}
           RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}

@@ -35,6 +35,9 @@ jobs:
     if: >-
       github.event.issue.pull_request && contains(github.event.comment.body, '<!-- bosun:verdict -->')
     runs-on: ubuntu-latest
+    environment:
+      name: bosun-app
+      deployment: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -75,9 +78,19 @@ jobs:
           shared-key: bosun-bin
       - if: steps.pin.outputs.version == ''
         run: cargo build --release --locked --bin bosun
+      # The App token (spec §15): the key goes to this step only, the token only to bosun.
+      - name: App token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BOSUN_APP_ID }}
+          private-key: ${{ secrets.BOSUN_APP_KEY }}
+          permission-checks: write
+          permission-pull-requests: write
       - name: bosun verdict apply
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
           BOSUN_REPO: ${{ github.repository }}
           BOSUN_SESSION: verdict-workflow
           COMMENT: ${{ github.event.comment.id }}
@@ -88,6 +101,7 @@ jobs:
       - name: bosun risk-check
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
           BOSUN_REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
         run: |
