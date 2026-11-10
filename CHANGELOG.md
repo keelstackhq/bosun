@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.13.0 (2026-11-10)
+
 - Plan `2026-10-28-app-checks-team-owners.md`: the B4 UCs are numbered without gaps, so `bosun plan import` and `bosun prereqs` read it again.
 - `src/github`: gate check runs — `create_check_run` and `update_check_run` (only `in_progress`, `success` or `failure`, never `neutral` or `skipped`), `check_runs_all` (`filter=all`), and `CheckRun.app_id` (spec §15, B2/T1).
 - `.bosun/bosun.toml` `[checks]`: `mode = "statuses" | "dual" | "checks"` (default `statuses`) with `app_id` and `app_slug` (required unless `statuses`); hoist.toml `[github] required_checks` reads `{ context, app | integration_id }` tables beside strings (spec §15, B2/T2).
