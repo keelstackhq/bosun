@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
 use crate::core::guard::{
-    ChildTask, Script, child_task_create, edit_lock, edited_path, foreign_lock, prereqs_lock,
-    prereqs_lock_for, script_rules, tool_rules,
+    ChildTask, Script, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock,
+    prereqs_lock, prereqs_lock_for, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
@@ -101,12 +101,20 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         }
     }
     if tool == "Bash" {
-        // Script files are read last, so every other lock has judged the command first.
-        let repeat = repeat_lock(&dir, input, &tool_input);
+        // Edit-lock for the files a command plainly writes (`> f`, `tee f`, `cp .. f`, `sed -i`),
+        // then repeat-lock; script files are read last, after every other lock.
         let command = tool_input
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or("");
+        for path in bash_writes(command) {
+            match edit_reason(&dir, &path) {
+                Ok(Some(why)) => return Some(deny(&why)),
+                Ok(None) => {}
+                Err(e) => eprintln!("bosun: warning: edit-lock skipped: {e}"),
+            }
+        }
+        let repeat = repeat_lock(&dir, input, &tool_input);
         let read = |p: &str| read_script(&dir, p);
         if let Some(why) = script_rules(command, &read, &branch_at, &default) {
             return Some(deny(&why));
@@ -149,8 +157,28 @@ fn read_script(dir: &Path, path: &str) -> Option<Script> {
     if !meta.is_file() {
         return Some(Script::Unreadable("not a regular file"));
     }
+    // Open without blocking (a path swapped for a FIFO after the check must not hang the
+    // hook), then judge the opened file itself.
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        const O_NONBLOCK: i32 = 0x0004;
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+        const O_NONBLOCK: i32 = 0o4000;
+        options.custom_flags(O_NONBLOCK);
+    }
+    let opened = options.open(&file);
+    if opened
+        .as_ref()
+        .is_ok_and(|f| !f.metadata().is_ok_and(|m| m.is_file()))
+    {
+        return Some(Script::Unreadable("not a regular file"));
+    }
     let mut buf = Vec::new();
-    let read = std::fs::File::open(&file).and_then(|f| f.take(MAX + 1).read_to_end(&mut buf));
+    let read = opened.and_then(|f| f.take(MAX + 1).read_to_end(&mut buf));
     match read {
         Err(_) => Some(Script::Unreadable("it cannot be opened")),
         Ok(n) if n as u64 > MAX => Some(Script::Unreadable("larger than 1 MiB")),

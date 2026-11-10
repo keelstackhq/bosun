@@ -295,3 +295,56 @@ fn the_child_check_reads_the_lease_record_and_its_author() {
     );
     assert!(bash_denied(&fake, tmp.path(), &create(META)));
 }
+
+/// Run the hook as `session_me` for a Bash command; `Some(reason)` when it denies.
+fn bash(fake: &FakeGithub, repo: &Path, command: &str) -> Option<String> {
+    let input = json!({"session_id": "s", "tool_name": "Bash", "cwd": repo.to_str().unwrap(),
+        "tool_input": {"command": command}});
+    let out = bosun()
+        .current_dir(repo)
+        .env("BOSUN_SESSION", "session_me")
+        .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["hook", "pre-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: Value = serde_json::from_str(&stdout).ok()?;
+    (v["hookSpecificOutput"]["permissionDecision"] == "deny").then(|| {
+        v["hookSpecificOutput"]["permissionDecisionReason"]
+            .as_str()
+            .unwrap()
+            .into()
+    })
+}
+
+#[test]
+fn bash_writes_are_judged_like_edits() {
+    let (fake, tmp) = setup("session_me", "src/core/**");
+    let r = tmp.path();
+    for cmd in [
+        "echo x > src/cli/b.rs",
+        "cargo test | tee src/cli/b.rs",
+        "cp /tmp/x src/cli/b.rs",
+        "sed -i 's/x/y/' src/cli/b.rs",
+    ] {
+        let why = bash(&fake, r, cmd).unwrap_or_else(|| panic!("allowed: {cmd}"));
+        assert!(
+            why.starts_with("src/cli/b.rs is outside your lease"),
+            "{why}"
+        );
+    }
+    for cmd in [
+        "echo x > src/core/a.rs",
+        "echo x > /tmp/out.log",
+        "cat src/cli/b.rs",
+        "echo x > changelog.d/x.md",
+    ] {
+        assert_eq!(bash(&fake, r, cmd), None, "{cmd}");
+    }
+    let (fake, tmp) = setup("session_other", "src/cli/**");
+    let why = bash(&fake, tmp.path(), "echo x >> src/cli/b.rs").expect("foreign lease");
+    assert!(why.contains("claimed"), "{why}");
+}

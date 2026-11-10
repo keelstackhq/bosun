@@ -49,3 +49,22 @@ fn hook_refuses_a_script_it_cannot_read_in_full() {
         assert!(reason.contains("cannot scan"), "{command}: {reason}");
     }
 }
+
+#[test]
+fn hook_reads_heredoc_stdin_inline_and_never_blocks_on_a_fifo() {
+    let tmp = tempfile::tempdir().unwrap();
+    for command in [
+        "python3 - <<'EOF'\nprint(1)\nEOF",
+        "python3 /dev/stdin <<'EOF'\nprint(1)\nEOF",
+    ] {
+        assert_eq!(hook(tmp.path(), command), "", "{command}");
+    }
+    let merge = "python3 /dev/stdin <<'EOF'\nimport os\nos.system('gh pr merge 3')\nEOF";
+    assert!(hook(tmp.path(), merge).contains("interpreter code"));
+    let fifo = tmp.path().join("f.sh");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if made.is_ok_and(|s| s.success()) {
+        let out = hook(tmp.path(), "bash f.sh");
+        assert!(out.contains("not a regular file"), "{out}");
+    }
+}

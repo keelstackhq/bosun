@@ -209,6 +209,8 @@ pub enum Script {
     Unreadable(&'static str),
 }
 
+const STDIN: &[&str] = &["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+
 /// A `#!` line that runs a shell, also with arguments (`#!/bin/bash -e`, `#!/usr/bin/env sh`).
 fn shell_shebang(first: &str) -> bool {
     first.strip_prefix("#!").is_some_and(|l| {
@@ -233,6 +235,10 @@ pub fn script_rules(
         default_branch,
     };
     for ScriptPath { path, shell, first } in script_paths(command, 0) {
+        // stdin by name: a heredoc there is in the command text, which `inline_rule` scans.
+        if STDIN.contains(&path.as_str()) && command.contains("<<") {
+            continue;
+        }
         let code = match read(&path) {
             None => continue,
             Some(Script::Text(code)) => code,
