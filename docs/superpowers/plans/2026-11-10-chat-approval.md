@@ -321,3 +321,17 @@ ordering), `docs/defaults.md` (chat default true), AGENTS.md approval lines,
 `docs/PROGRESS.md` Blocked: T0 decisions PR (owner, phone). Test: `tests/fragments.rs` passes.
 
 - [ ] Write; `cargo nextest run --locked --test fragments` PASS. Fragments. Commit, push, PR.
+
+### Task 12: `bosun intake verify` accepts a chat record (D-014 as amended by decisions#19)
+
+Follow-up from T2 (PR #488): spec §8 already says intake verify accepts the orchestrator's chat
+record of the owner's yes (signature optional); the command needs GitHub reads it lacks today.
+Gated, opus, depends on T2. One PR ≤400 lines: read the intake issue's comments, count a chat
+record by the T2 rules (`count_chat`), keep signatures working; tests in `tests/cli_intake*.rs`.
+
+## Notes from landed tasks
+
+- T2 (#488): with no owners file, the org-repo fallback uses the repo `admin` permission
+  (readable by the Actions token), not the org-membership API. Spec §8 has it.
+- T2 minors left: no test for the failed-read path; an empty `owners.toml` also turns on the
+  fallback; §8 refers to the T6 guard ahead of T6.
