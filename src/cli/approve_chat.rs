@@ -89,9 +89,10 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         ));
     }
     let question = match &args.slack_user {
-        Some(_) if app.ctx.origin != Origin::Slack => {
+        // Both the env origin and the registry join: BOSUN_ORIGIN alone is set by the session.
+        Some(_) if app.ctx.origin != Origin::Slack || !joined_from_slack(&members, session) => {
             return Err(BosunError::needs_human(
-                "--slack-user records an answer given in a Claude Tag thread; this session's origin is not slack",
+                "--slack-user records an answer given in a Claude Tag thread; this session's origin (and its registry join) is not slack",
                 ASK_AGAIN,
             ));
         }
@@ -116,11 +117,21 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
     Ok(json!({"pr": pr, "head_sha": head, "comment_id": c.id, "question_id": question}))
 }
 
+/// Whether `session`'s newest registry join has origin `slack`.
+fn joined_from_slack(members: &[crate::core::lease::Member], session: &str) -> bool {
+    (members.iter())
+        .filter(|m| m.session == session)
+        .max_by_key(|m| m.comment_id)
+        .is_some_and(|m| m.origin == "slack")
+}
+
 /// The owner's stored answer to `q` must be `approve` for exactly `pr` at `head`, and the id must
 /// name them (`<pr>-<short head>-<unix>`). The file is only a guard against confused workers.
 fn stored_approve(dir: &Path, q: &str, pr: u64, head: &str) -> Result<()> {
     let prefix = format!("{pr}-{}-", &head[..7]);
+    // A hold of this head (any question) wins over an earlier approve.
     let ok = q.starts_with(&prefix)
+        && !answers::held(dir, pr, head)
         && answers::get(dir, q)
             .is_some_and(|a| a.answer == "approve" && a.pr == pr && a.head == head);
     if ok {

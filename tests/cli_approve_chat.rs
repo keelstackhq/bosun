@@ -274,3 +274,35 @@ fn chat_slack_user_needs_slack_origin() {
     );
     refused(&fake, r, 5);
 }
+
+#[test]
+fn chat_slack_user_needs_slack_join() {
+    // BOSUN_ORIGIN=slack alone does not do: session_orch joined the registry as spawned.
+    let (fake, tmp) = (setup(), repo());
+    let slack = [("BOSUN_ORIGIN", "slack")];
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_orch",
+        &["--slack-user", "U0ADA1"],
+        &slack,
+    );
+    refused(&fake, r, 5);
+}
+
+#[test]
+fn chat_later_hold_wins() {
+    let (fake, tmp) = (setup(), repo());
+    let file = tmp
+        .path()
+        .join(git(tmp.path(), &["rev-parse", "--git-common-dir"]))
+        .join("bosun/answers.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let v = json!({
+        Q: {"answer": "approve", "pr": 1, "head": HEAD, "at": NOW},
+        "1-0123456-1762769000": {"answer": "hold", "pr": 1, "head": HEAD, "at": NOW},
+    });
+    std::fs::write(file, v.to_string()).unwrap();
+    let r = chat(&fake, tmp.path(), "session_orch", &["--question", Q], &[]);
+    refused(&fake, r, 5);
+}

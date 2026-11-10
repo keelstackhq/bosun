@@ -163,6 +163,16 @@ mod tests {
             .collect();
         threads.into_iter().for_each(|t| t.join().unwrap());
         assert!(get(d, "old").is_none());
+        // An entry without a readable time is kept.
+        let file = path(d).unwrap();
+        let mut m = read(&file);
+        m.insert(
+            "odd".into(),
+            json!({"answer": "hold", "pr": 9, "head": "h", "at": "?"}),
+        );
+        std::fs::write(&file, Value::Object(m).to_string()).unwrap();
+        store(d, &[("new".into(), a(10, "2026-11-10T00:00:00Z"))]).unwrap();
+        assert!(get(d, "odd").is_some());
         assert!((0..8).all(|i| get(d, &format!("q{i}")).is_some()));
     }
 }
