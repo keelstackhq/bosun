@@ -1,0 +1,1 @@
+- 2026-11-10 · user-scope hooks + un-adopted session-start · PR (T7)

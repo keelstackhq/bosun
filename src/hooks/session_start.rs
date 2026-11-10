@@ -17,10 +17,24 @@ fn output(text: &str) -> String {
         .to_string()
 }
 
+/// True when the repo at `cwd` has no `.bosun/version`: bosun was never set up here.
+pub fn unadopted(cwd: &Path) -> bool {
+    let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
+        .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
+    !root.join(".bosun/version").exists()
+}
+
+const NOT_SET_UP: &str = "bosun is not set up here: run `bosun adopt --policy autonomous \
+    --owner <login>` (the owner's GitHub login) and open the setup PR. Until then bosun has no \
+    registry, leases or approvals in this repo.";
+
 pub fn run(cwd: Option<&Path>) -> String {
     let dir = cwd
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok());
+    if dir.as_deref().is_some_and(unadopted) {
+        return output(NOT_SET_UP);
+    }
     if let Some(d) = dir.as_deref()
         && let Err(e) = crate::cli::trailers::install(d)
     {

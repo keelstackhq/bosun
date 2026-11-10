@@ -22,7 +22,15 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
+/// A set-up repo (has `.bosun/version`).
 fn repo() -> tempfile::TempDir {
+    let tmp = bare_repo();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.9.0\n").unwrap();
+    tmp
+}
+
+fn bare_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     git(tmp.path(), &["init", "-q", "-b", "main"]);
     let url = "https://github.com/acme/widget.git";
@@ -873,4 +881,40 @@ fn repeat_lock_fails_open_when_it_cannot_write() {
         allowed(&out);
         assert!(out.stderr.contains("repeat-lock skipped"), "{}", out.stderr);
     }
+}
+
+#[test]
+fn session_start_unadopted_no_network() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        text.contains("bosun adopt --policy autonomous --owner"),
+        "{text}"
+    );
+    assert!(!text.contains("could not reach GitHub"), "{text}");
+    let s = fake.state.lock().unwrap();
+    assert!(
+        s.comments.is_empty() && s.issues.is_empty(),
+        "no registry join"
+    );
+}
+
+#[test]
+fn session_start_adopted_unchanged() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    leased(&fake);
+    let input = json!({"cwd": tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    let v: Value = serde_json::from_str(&o.stdout).unwrap();
+    let text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("you are session session_me"), "{text}");
+    assert!(!text.contains("bosun adopt"), "{text}");
 }
