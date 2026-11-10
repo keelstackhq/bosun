@@ -1,1 +1,0 @@
-- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.11.0 with npm sha512 values via `bosun pin --latest` (no `KNOWN` entry needed).

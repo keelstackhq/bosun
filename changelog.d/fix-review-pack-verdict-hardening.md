@@ -1,1 +1,0 @@
-- `review-pack` hardening: `delta_not_in_pr` is listed as untrusted and capped at 50 names (`delta_not_in_pr_count`), a delta falls back to a full review when `pulls/{n}/files` is short of `changed_files`, and the verdict carry honours `[approvals] review_models`.

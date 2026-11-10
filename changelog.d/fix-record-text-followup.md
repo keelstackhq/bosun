@@ -1,1 +1,0 @@
-- Fix: `spawn --record` registration text and spec §4 match the code; tests for expired-only-join refusal and `hold` exit 3.

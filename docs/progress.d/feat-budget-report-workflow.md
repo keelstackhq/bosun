@@ -1,1 +1,0 @@
-- 2026-11-09 · budget report 2 · `budget-report.yml` keeps monthly reports on `bosun/budget-reports` · PR #469
