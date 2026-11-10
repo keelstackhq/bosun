@@ -150,8 +150,15 @@ fn board(gh: &dyn Github, lenient: bool, no_ci: bool) -> Result<Board> {
 /// No-CI readiness of `p`: from its newest ready summary for the head (spec §4).
 fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
     let comments = gh.list_comments(p.number)?;
-    let newest = (comments.iter().rev()).find(|c| parse_ready_summary(&c.body, &p.head_sha));
-    Ok(summary_readiness(newest.map(|c| c.body.as_str())))
+    // The newest summary of the head by a repo writer (any other commenter could hide a PR).
+    for c in comments.iter().rev() {
+        if parse_ready_summary(&c.body, &p.head_sha)
+            && matches!(gh.permission(&c.user)?.as_deref(), Some("admin" | "write"))
+        {
+            return Ok(summary_readiness(Some(&c.body)));
+        }
+    }
+    Ok(summary_readiness(None))
 }
 
 /// The board of `pulls`, in their order. With `no_ci`, readiness comes from the ready summary.

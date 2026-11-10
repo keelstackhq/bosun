@@ -48,12 +48,17 @@ pub fn clean_by_other(app: &App, pull: &Pull) -> Result<Vec<String>> {
             kept.push((c.body.as_str(), c.unedited()));
         }
     }
+    // An approval must list every chunk of the review pack, as `verdict apply` requires.
+    let pack = super::review_pack::build(gh, &app.ctx.repo.to_string(), pull.number, false)?;
+    let chunks = pack["chunks"].as_array().map_or(0, Vec::len);
+    let models = models.as_deref();
     Ok(comment_clean(
         kept,
         pull.number,
         head,
         &excluded,
-        models.as_deref(),
+        models,
+        chunks,
     ))
 }
 
@@ -128,9 +133,9 @@ pub fn ready(app: &App, n: u64, issue: &Issue, mut pull: Pull) -> CmdResult {
     data["approval"] = json!(approval);
     let body = ready_summary(&head, &gates, &risk_line, &verdicts.join(", "), approval);
     let comments = gh.list_comments(pr)?;
-    let posted = comments
-        .iter()
-        .any(|c| c.body == body && parse_ready_summary(&c.body, &head));
+    // starts_with: the cloud agent proxy appends a footer to every comment.
+    let posted =
+        (comments.iter()).any(|c| c.body.starts_with(&body) && parse_ready_summary(&c.body, &head));
     if !posted {
         gh.add_comment(pr, &body)?;
     }

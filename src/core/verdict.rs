@@ -227,7 +227,8 @@ pub fn comment_json(body: &str) -> Option<&str> {
 
 /// No-CI mode: the reviewer sessions whose newest verdict comment on PR `pr` at `head` is clean
 /// (approve, confidence at least [`VERDICT_MIN_CONFIDENCE`], no blocker or major), unedited, not
-/// `excluded`, with a session and, when `models` is set, one of those models. Like a refused
+/// `excluded`, with a session and, when `models` is set, one of those models. Not escalated, and
+/// listing every chunk `1..=chunks` of the review pack (as the applier requires). Like a refused
 /// record, any session whose newest verdict there is not clean blocks: then none count.
 /// `comments` are `(body, unedited)` oldest first, from writers only.
 pub fn comment_clean<'a>(
@@ -236,6 +237,7 @@ pub fn comment_clean<'a>(
     head: &str,
     excluded: &[String],
     models: Option<&[String]>,
+    chunks: usize,
 ) -> Vec<String> {
     let mut newest: Vec<(String, bool, bool)> = Vec::new();
     for (body, unedited) in comments {
@@ -246,7 +248,10 @@ pub fn comment_clean<'a>(
             continue;
         }
         let session = comment_session(body).unwrap_or("unknown");
+        let listed = |k: u32| v.chunks_reviewed.contains(&k) || comment_chunks(body).contains(&k);
         let clean = effective(&v).approve
+            && !v.escalate_risk
+            && (chunks <= 1 || (1..=chunks as u32).all(listed))
             && v.count("major") == 0
             && v.confidence >= VERDICT_MIN_CONFIDENCE;
         let model_ok =
@@ -301,23 +306,24 @@ mod tests {
         let low = c("s_a", &v("approve", 0.86, &[]));
         let ex = vec!["s_w".to_string()];
         assert_eq!(
-            comment_clean([(a.as_str(), true)], 1, "abc", &ex, None),
+            comment_clean([(a.as_str(), true)], 1, "abc", &ex, None, 1),
             ["s_a"]
         );
-        assert!(comment_clean([(a.as_str(), true)], 2, "abc", &ex, None).is_empty());
-        assert!(comment_clean([(a.as_str(), true)], 1, "abd", &ex, None).is_empty());
-        assert!(comment_clean([(a.as_str(), false)], 1, "abc", &ex, None).is_empty());
+        assert!(comment_clean([(a.as_str(), true)], 2, "abc", &ex, None, 1).is_empty());
+        assert!(comment_clean([(a.as_str(), true)], 1, "abd", &ex, None, 1).is_empty());
+        assert!(comment_clean([(a.as_str(), false)], 1, "abc", &ex, None, 1).is_empty());
         let w = c("s_w", &ok);
-        assert!(comment_clean([(w.as_str(), true)], 1, "abc", &ex, None).is_empty());
+        assert!(comment_clean([(w.as_str(), true)], 1, "abc", &ex, None, 1).is_empty());
         let two = [(a.as_str(), true), (b.as_str(), true)];
-        assert!(comment_clean(two, 1, "abc", &ex, None).is_empty());
+        assert!(comment_clean(two, 1, "abc", &ex, None, 1).is_empty());
         assert!(
             comment_clean(
                 [(a.as_str(), true), (low.as_str(), true)],
                 1,
                 "abc",
                 &ex,
-                None
+                None,
+                1
             )
             .is_empty()
         );
@@ -327,12 +333,25 @@ mod tests {
                 1,
                 "abc",
                 &ex,
-                None
+                None,
+                1
             ),
             ["s_a"]
         );
+        let mut esc = ok.clone();
+        esc.escalate_risk = true;
+        let e = c("s_a", &esc);
+        assert!(comment_clean([(e.as_str(), true)], 1, "abc", &ex, None, 1).is_empty());
+        assert!(comment_clean([(a.as_str(), true)], 1, "abc", &ex, None, 2).is_empty());
+        let mut all = ok.clone();
+        all.chunks_reviewed = vec![1, 2];
+        let full = c("s_a", &all);
+        assert_eq!(
+            comment_clean([(full.as_str(), true)], 1, "abc", &ex, None, 2),
+            ["s_a"]
+        );
         let m2 = vec!["m2".to_string()];
-        assert!(comment_clean([(a.as_str(), true)], 1, "abc", &ex, Some(&m2)).is_empty());
+        assert!(comment_clean([(a.as_str(), true)], 1, "abc", &ex, Some(&m2), 1).is_empty());
     }
 
     #[test]
