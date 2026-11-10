@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::AdoptArgs;
 use super::init::{has_ci_ok_job_except, is_semver};
 use crate::app::Result;
+use crate::config::CiProvider;
 use crate::core::adopt::{MANIFEST_PATH, Manifest, fnv1a_hex};
 use crate::core::pin::parse_semver;
 use crate::core::render::{Vars, render};
@@ -142,8 +143,32 @@ pub fn vars_for(
     v.set("own_ci", if own_ci { "1" } else { "" });
     v.set("intake", "");
     v.set("policy", "");
+    v.set("ci_provider", "");
     v
 }
+
+/// The CI provider of a checkout: `circleci` when it has `.circleci/` and no Actions workflows,
+/// else `github`, the CI adopt installs (spec §11). `none` comes only from `--ci none`.
+/// A CircleCI repo with an unrelated workflow (say a release job) detects as `github`: pass
+/// `--ci circleci` there.
+fn detect_ci(root: &Path) -> &'static str {
+    let has_workflows = std::fs::read_dir(root.join(".github/workflows")).is_ok_and(|d| {
+        d.flatten().any(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x == "yml" || x == "yaml")
+        })
+    });
+    if !has_workflows && root.join(".circleci").is_dir() {
+        "circleci"
+    } else {
+        "github"
+    }
+}
+
+/// The first release whose config parser knows `[ci] provider` (spec §9). Keep in sync with the
+/// `ci` key in `KNOWN` of `tests/pinned_config.rs` and the minimum in spec §11.
+const CI_MIN: &str = "0.12.0";
 
 /// The first release whose config parser knows `[approvals] policy = value` (spec §8).
 fn policy_min(value: &str) -> &'static str {
@@ -191,6 +216,7 @@ fn owner_steps(
     kept_owners: Option<&str>,
     has_key: bool,
     settings_url: Option<&str>,
+    no_ci: bool,
 ) -> Vec<String> {
     // With a ci.yml of its own, bosun's aggregate job is `bosun-ok` and `ci-ok` stays yours.
     let first = if own_ci { "bosun-ok" } else { "ci-ok" };
@@ -212,9 +238,17 @@ fn owner_steps(
         || "the default branch".to_string(),
         |u| format!("the default branch at {u}"),
     );
-    v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    if no_ci {
+        v.push(format!("Set branch protection on {place} requiring a pull request and no required checks (ci provider none: bosun runs its gates locally; merges go through `bosun merge` once it ships)."));
+    } else {
+        v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    }
     v.push("Cloud sessions: paste `bosun setup-snippet` once as the setup script of your Claude Code environment (claude.ai/code > Environments); it never needs a change.".to_string());
-    v.push("Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string());
+    v.push(if no_ci {
+        "Run the commands in `data.commands`, then open the setup PR and merge it yourself.".to_string()
+    } else {
+        "Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string()
+    });
     v.push("Run `bosun doctor --remote` to see what is still missing.".to_string());
     v
 }
@@ -325,6 +359,13 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
             ));
         }
     }
+    let ci_ok = parse_semver(&version) >= parse_semver(CI_MIN);
+    if a.ci.is_some() && !ci_ok {
+        return Err(BosunError::usage(
+            format!("bosun {version} cannot parse `[ci] provider`; its gates would fail"),
+            format!("pin bosun {CI_MIN} or later (--bosun-version {CI_MIN}), or drop --ci"),
+        ));
+    }
     let stacks: Vec<String> = if a.stack.is_empty() {
         detect(&root)
     } else {
@@ -376,6 +417,54 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     if let Some(p) = &a.policy {
         vars.set("policy", p.as_str());
     }
+    // A rerun keeps the provider an earlier run wrote: adopt's own workflows would flip detection.
+    let cfg = ".bosun/bosun.toml";
+    // Only a pin that reads `[ci]` needs the kept file: older pins keep it unread, as before.
+    let kept_cfg = (if ci_ok {
+        read_opt(&root.join(cfg))?
+    } else {
+        None
+    })
+    .map(|b| String::from_utf8_lossy(&b).parse::<toml::Table>())
+    .transpose()
+    .map_err(|e| {
+        BosunError::error(
+            format!("{cfg} does not parse: {e}"),
+            format!("fix {cfg} (or delete it), then rerun `bosun adopt`"),
+        )
+    })?;
+    let kept_ci = kept_cfg
+        .as_ref()
+        .and_then(|t| t.get("ci")?.get("provider"))
+        .map(|p| {
+            p.as_str()
+                .filter(|p| CiProvider::parse(p).is_some())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    BosunError::error(
+                        format!("{cfg}: ci.provider {p} is not a known CI provider"),
+                        format!("edit {cfg}: set ci.provider to \"github\", \"circleci\" or \"none\", or remove it"),
+                    )
+                })
+        })
+        .transpose()?;
+    // A kept config never gets `[ci]` from adopt; skipping the workflows would leave a repo
+    // with neither CI nor `none`.
+    if a.ci.as_deref() == Some("none") && kept_cfg.is_some() && kept_ci.as_deref() != Some("none") {
+        return Err(BosunError::usage(
+            format!("{cfg} exists without `[ci] provider = \"none\"`; adopt keeps that file"),
+            format!(
+                "set provider = \"none\" under [ci] in {cfg} by hand, then rerun `bosun adopt --ci none`"
+            ),
+        ));
+    }
+    // Older pins would reject the table: write it only for a release that reads it.
+    let ci: Option<String> = ci_ok.then(|| {
+        a.ci.clone()
+            .or(kept_ci.clone())
+            .unwrap_or_else(|| detect_ci(&root).to_string())
+    });
+    vars.set("ci_provider", ci.as_deref().unwrap_or(""));
 
     if let Some(link) = symlink_in(&root, MANIFEST_PATH) {
         return Err(BosunError::error(
@@ -404,6 +493,16 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     if !owner.is_empty() {
         tpls.push(OWNERS);
     }
+    // Without CI, adopt installs no GitHub workflows (spec §11).
+    let workflows_skipped: Vec<&str> = if ci.as_deref() == Some("none") {
+        tpls.iter()
+            .map(|t| t.path)
+            .filter(|p| p.starts_with(".github/workflows/"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    tpls.retain(|t| !workflows_skipped.contains(&t.path));
     let mut changes: Vec<Value> = Vec::new();
     let mut writes: Vec<(&Tpl, String)> = Vec::new();
     for t in &tpls {
@@ -514,7 +613,33 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         owners_file,
         has_key,
         settings_url.as_deref(),
+        !workflows_skipped.is_empty(),
     );
+    let stale: Vec<&str> = workflows_skipped
+        .iter()
+        .copied()
+        .filter(|p| root.join(p).exists())
+        .collect();
+    if !stale.is_empty() {
+        steps.insert(
+            0,
+            format!(
+                "ci provider none: delete {} if they should not run (adopt leaves them).",
+                stale.join(" ")
+            ),
+        );
+    }
+    // A kept config never gets `[ci]` from adopt: say so, and do not claim it was written.
+    let mut ci = ci;
+    if let Some(c) = ci.clone()
+        && action_of(&changes, ".bosun/bosun.toml") == "kept"
+    {
+        // A missing key is `github` (spec §9).
+        if kept_ci.as_deref().unwrap_or("github") != c {
+            steps.insert(0, format!("Set provider = \"{c}\" under [ci] in .bosun/bosun.toml by hand (adopt keeps an existing file)."));
+            ci = None;
+        }
+    }
     // A kept config never gets the policy from adopt: say so unless it already holds it.
     if let Some(p) = a.policy.as_deref() {
         let cfg = ".bosun/bosun.toml";
@@ -532,6 +657,8 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     Ok(Outcome::data(json!({
         "stacks": stacks,
         "policy": a.policy,
+        "ci": ci,
+        "workflows_skipped": workflows_skipped,
         "dry_run": a.dry_run,
         "changes": changes,
         "labels": labels,

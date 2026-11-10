@@ -77,6 +77,7 @@ fn vars<'a>(
         ("own_ci", ""),
         ("intake", intake),
         ("policy", ""),
+        ("ci_provider", ""),
     ]
 }
 

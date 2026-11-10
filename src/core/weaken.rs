@@ -155,6 +155,16 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             for (k, new) in fh.iter().filter(|(k, _)| gated(k) && !fb.contains_key(*k)) {
                 add(k, "(none)", &show(new));
             }
+            // Switching CI off drops every CI check; another provider or the default is fine.
+            if let Some(new) = fh.get("ci.provider").filter(|n| n.as_str() == Some("none"))
+                && fb.get("ci.provider") != Some(new)
+            {
+                add(
+                    "ci.provider",
+                    &fb.get("ci.provider").map_or("(none)".into(), show),
+                    &show(new),
+                );
+            }
         }
         Kind::Deny => {
             let adds = |l: &str| {
@@ -889,6 +899,23 @@ mod tests {
             ),
             ["deny.toml: graph.all-features true → false"]
         );
+    }
+
+    #[test]
+    fn ci_provider_none_is_a_finding() {
+        let c = ".bosun/bosun.toml";
+        let gh = "project = \"p\"\n[ci]\nprovider = \"github\"\n";
+        assert_eq!(
+            t(c, gh, &gh.replace("github", "none")),
+            [".bosun/bosun.toml: ci.provider github → none"]
+        );
+        assert_eq!(
+            t(c, "project = \"p\"\n", &gh.replace("github", "none")),
+            [".bosun/bosun.toml: ci.provider (none) → none"]
+        );
+        // Another provider, or dropping the key (github), keeps CI on.
+        assert!(t(c, gh, &gh.replace("github", "circleci")).is_empty());
+        assert!(t(c, &gh.replace("github", "none"), "project = \"p\"\n").is_empty());
     }
 
     #[test]
