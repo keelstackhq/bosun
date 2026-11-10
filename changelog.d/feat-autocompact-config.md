@@ -1,0 +1,1 @@
+- `[session] autocompact_pct` (1-100) in `.bosun/bosun.toml` makes `bosun setup-snippet` print `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<n>` and where it takes effect (spec §5).

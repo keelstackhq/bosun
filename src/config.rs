@@ -34,6 +34,18 @@ pub struct Config {
     /// `[checks]`: where the gates are posted (spec §15, D33). Release ordering as for `intake`:
     /// set it only once `.bosun/version` pins a release that reads it.
     pub checks: Checks,
+    /// `[session]`: Claude Code session settings bosun hands out (spec §5). Release ordering as
+    /// for `intake`: set it only once `.bosun/version` pins a release that reads it.
+    pub session: Session,
+}
+
+/// `[session]`: `autocompact_pct` (1-100) is the auto-compact trigger `bosun setup-snippet`
+/// prints as `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`; unset keeps Claude Code's default.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct Session {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autocompact_pct: Option<u8>,
 }
 
 /// How bosun posts `risk-check`, `review-verdict` and `main-open`: commit statuses (today),
@@ -81,6 +93,7 @@ impl Default for Config {
             intake: false,
             trailers: Trailers::default(),
             checks: Checks::default(),
+            session: Session::default(),
         }
     }
 }
@@ -347,6 +360,17 @@ impl Config {
                     ),
                 ));
             }
+        }
+        if c.session
+            .autocompact_pct
+            .is_some_and(|p| !(1..=100).contains(&p))
+        {
+            return Err(BosunError::error(
+                format!("{file}: session.autocompact_pct must be 1-100"),
+                format!(
+                    "edit {file}: set session.autocompact_pct to a number from 1 to 100, or remove it"
+                ),
+            ));
         }
         let k = &c.checks;
         if k.mode != CheckMode::Statuses {

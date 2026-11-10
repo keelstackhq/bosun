@@ -71,6 +71,16 @@ per_task_usd = 25
 
 With `max_live_sessions = 1` the same code path runs: the root session does all the work in waves.
 
+Session size: `[session] autocompact_pct` (optional, 1-100, in `.bosun/bosun.toml`; 0 or more than
+100 is exit 1 naming the key) makes `bosun setup-snippet` add `data.autocompact` `{export, env,
+paste_into, alternative}`: `export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<n>`, the same as an env map,
+where it goes (the cloud environment's environment variables, or the shell that starts `claude`)
+and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100000-1000000 tokens) as the alternative. The bootstrap
+script does not change. Not the setup script (its exports end with its shell) and not
+`.claude/settings.json` `env` (the Claude Code docs say it applies to every session but not that
+it moves the auto-compact point, and Anthropic-hosted sessions do not apply it). The variable only
+lowers the trigger. Unset prints nothing. Release ordering as for `intake`.
+
 Janitor, resume, results:
 - Janitor (Routine, every hour, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
   `bosun notify` (only when `.bosun/bosun.toml` has a `[slack]` table; without one the prompt `bosun doctor` prints leaves it out).
