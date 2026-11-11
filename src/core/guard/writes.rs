@@ -166,8 +166,11 @@ pub fn bash_writes(command: &str) -> Vec<String> {
     }
     // Masking hides a `>` inside a quoted substitution (`"$(cmd > f)"`): judge those commands
     // on their own, unless a `cd` before it makes relative paths unknown. `$(( ))` is arithmetic.
+    let mut from = 0;
     for inner in substitutions(&code, false) {
-        let at = code.find(inner.as_str()).unwrap_or(0);
+        // Spans come in order: search from the end of the last one, not the first occurrence.
+        let at = code[from..].find(inner.as_str()).map_or(from, |p| p + from);
+        from = at + inner.len();
         if arithmetic(&inner) || moves_before(&code[..at]) {
             continue;
         }

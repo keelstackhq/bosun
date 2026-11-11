@@ -100,11 +100,21 @@ fn quoted_value(s: &str) -> Option<usize> {
 /// The command with the prose values of prose flags replaced by `"x"`.
 pub fn strip_prose(command: &str) -> String {
     let out = strip(command);
-    if edits_labels(&out) {
-        command.to_string()
-    } else {
+    if simple_git_or_gh(&out) && !edits_labels(&out) {
         out
+    } else {
+        command.to_string()
     }
+}
+
+/// Whether the text, outside the prose values, is one simple `git` or `gh` command (after
+/// `VAR=x` words): no newline, `;`, `&`, `|`, `#`, `$`, backtick, `<`, `>`, parens or backslash.
+fn simple_git_or_gh(text: &str) -> bool {
+    const BAD: &[char] = &['\n', ';', '&', '|', '#', '$', '`', '<', '>', '(', ')', '\\'];
+    let first = text
+        .split_whitespace()
+        .find(|w| !(w.contains('=') && !w.starts_with('-')));
+    !text.contains(BAD) && matches!(first, Some("git" | "gh"))
 }
 
 /// Whether any word outside the prose values may edit labels: a word with `label` (any case,

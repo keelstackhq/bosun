@@ -1,1 +1,1 @@
-- Guard round 3: fail closed on a heredoc body line that starts with the delimiter, any label word or short l flag disables prose stripping, real heredoc required for stdin feeding, arithmetic only skipped when exact; data-argument relaxation dropped
+- Guard round 4: prose stripping only for one simple git or gh command (no newline, separators, comment, expansion outside the value)
