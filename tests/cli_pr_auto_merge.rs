@@ -218,3 +218,19 @@ fn an_unstable_answer_names_the_failing_checks() {
     assert!(fix.contains("failing"), "{fix}");
     assert_not_enabled(&fake);
 }
+
+#[test]
+fn a_plain_issue_without_state_gets_auto_merge() {
+    let fake = FakeGithub::start();
+    fake.issue(7, "plain", &[], "Just an issue.");
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.enforce_checks(&ALL);
+    for c in ALL {
+        fake.status("sha20", c, "success", "");
+    }
+    let dir = repo();
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
+    assert_eq!(v["data"]["task_state"], Value::Null, "{v}");
+}

@@ -507,7 +507,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let mut gates = Vec::new();
     let mut enforced = None;
     if args.ready {
-        if state != Some(State::Review) {
+        // A plain issue has no bosun state: nothing to gate on, nothing to move.
+        if state.is_some() && state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
             return Err(BosunError::conflict(
                 format!("#{n} is {now}; --ready needs the task in review"),
@@ -627,9 +628,11 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
             Err(e) => return Err(after_ready(e, marked_ready, pull.number, n)),
         };
-        let fresh = gh.get_issue(n)?.unwrap_or(issue);
-        set_state(gh, n, &fresh, State::Queued)?;
-        state = Some(State::Queued);
+        if state.is_some() {
+            let fresh = gh.get_issue(n)?.unwrap_or(issue);
+            set_state(gh, n, &fresh, State::Queued)?;
+            state = Some(State::Queued);
+        }
     }
     Ok(Outcome::data(json!({
         "pr": pull.number, "head_sha": pull.head_sha, "created": created,

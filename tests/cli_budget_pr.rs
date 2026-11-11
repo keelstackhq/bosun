@@ -208,3 +208,34 @@ fn model_and_session_fallbacks() {
     );
     assert_eq!(spends(&fake, 20)[1]["model"], "m_flag");
 }
+
+#[test]
+fn a_task_pr_is_refused_and_nothing_is_written() {
+    let fake = seeded();
+    fake.issue(10, "task", &[REVIEW], "Do it.");
+    fake.pull(22, "t", "feat/22", "Closes #10\n<!-- bosun:task-pr 10 -->");
+    let (code, v) = record(&fake, "", &["--pr", "22", "--usd", "1"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("budget record 10"),
+        "{v}"
+    );
+    assert!(spends(&fake, 22).is_empty());
+    // Together with a plain PR, still nothing is written.
+    assert_eq!(
+        record(&fake, "", &["--pr", "20", "--pr", "22", "--usd", "1"]).0,
+        3
+    );
+    assert!(spends(&fake, 20).is_empty());
+}
+
+#[test]
+fn the_session_id_of_the_input_is_the_fallback_without_the_flag() {
+    let fake = seeded();
+    let nested = r#"{"session":{"id":"s_nested"},"usage":{"cost_usd":1.0}}"#;
+    assert_eq!(record(&fake, nested, &["--pr", "20", "--from", "-"]).0, 0);
+    assert_eq!(spends(&fake, 20)[0]["session"], "s_nested");
+}

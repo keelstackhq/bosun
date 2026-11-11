@@ -1,0 +1,1 @@
+- `bosun pr <issue> --ready` works for plain issues without a state; `budget record --pr` refuses task PRs; plain `pin --latest` picks the dated branch; WORKER rule and compaction warnings fixed

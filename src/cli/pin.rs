@@ -349,6 +349,10 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
             return Ok(Outcome::data(data));
         }
         Ok((repo, None, base)) => {
+            // A stale `bosun/pin` left on origin or here gets the dated name, as with --pr.
+            let head = super::pin_pr::free_branch(&root)?;
+            d.insert("branch".into(), json!(head));
+            call["head"] = json!(head);
             call["owner"] = json!(repo.owner);
             call["repo"] = json!(repo.name);
             call["base"] = json!(base);
