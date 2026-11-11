@@ -1,0 +1,1 @@
+- 2026-11-11 · modes PR 1a: [mode] parse, bosun mode, booster commands registered

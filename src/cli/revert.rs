@@ -37,9 +37,12 @@ fn git_ok(dir: &Path, args: &[&str], fix: &str) -> Result<String, BosunError> {
 }
 
 pub fn run(dir: Option<&Path>, args: &RevertArgs) -> CmdResult {
-    let app = App::load(dir)?;
+    open_revert(&App::load(dir)?, args.pr)
+}
+
+/// Open the kind/mainfix PR that reverts merged PR `n` (never merges, never forces).
+pub fn open_revert(app: &App, n: u64) -> CmdResult {
     let gh = app.gh.as_ref();
-    let n = args.pr;
     kill_switch(gh)?;
     let pull = gh.get_pull(n)?.ok_or_else(|| {
         BosunError::error(

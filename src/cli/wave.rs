@@ -18,8 +18,15 @@ use crate::core::wave::{TaskInfo, plan, plan_single};
 use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 
+/// `bosun wave tick <epic>`: not built yet (plan PR 6).
+pub fn tick(_dir: Option<&Path>, _cmd: &WaveCmd) -> CmdResult {
+    Err(super::not_built("wave tick", "6"))
+}
+
 pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
-    let WaveCmd::Plan(EpicArg { epic }) = cmd;
+    let WaveCmd::Plan(EpicArg { epic }) = cmd else {
+        return tick(dir, cmd);
+    };
     let app = App::load(dir)?;
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
     let Some(epic_issue) = gh.get_issue(*epic)? else {

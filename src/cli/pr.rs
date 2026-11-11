@@ -133,7 +133,7 @@ fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, Bosu
 
 /// The `mcp__github__update_pull_request` call that sets the draft state, for a session whose
 /// proxy refuses GraphQL (D29: bosun returns the tool call in `next`).
-fn update_pull_call(app: &App, pr: u64, draft: bool) -> Next {
+pub fn update_pull_call(app: &App, pr: u64, draft: bool) -> Next {
     Next {
         tool: "mcp__github__update_pull_request".into(),
         args: json!({

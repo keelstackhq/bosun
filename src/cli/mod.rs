@@ -13,9 +13,11 @@ pub mod budget_report;
 pub mod carry_over;
 pub mod ci_log;
 pub mod claim;
+pub mod digest;
 pub mod doctor;
 pub mod handoff;
 pub mod handoff_pr;
+pub mod heal;
 pub mod heartbeat;
 pub mod hold;
 pub mod init;
@@ -26,6 +28,8 @@ pub mod keygen;
 pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
+pub mod metrics;
+pub mod mode;
 pub mod msg;
 pub mod notify;
 pub mod pin;
@@ -130,6 +134,14 @@ pub enum Command {
     CiLog(CiLogArgs),
     /// Show sessions, leases, tasks by state, halt, main-red and budget.
     Status,
+    /// Print the effective mode, its knobs and which source set each (offline).
+    Mode,
+    /// Fix what is red on open PRs (and main) as the mode allows.
+    Heal(HealArgs),
+    /// The owner's daily digest; `--answer` parses the owner's reply into approvals.
+    Digest(DigestArgs),
+    /// Red-CI rate, lead time, cost and owner touches over the last N days.
+    Metrics(MetricsArgs),
     /// Ask the owner a question on an issue (sets needs-human).
     Ask(AskArgs),
     /// Record a human step found mid-run: the owner's checklist gets a box, the task waits.
@@ -195,6 +207,16 @@ pub enum Command {
     Schema(SchemaArgs),
 }
 
+/// The stub error of a command that a later plan PR builds.
+pub(crate) fn not_built(cmd: &str, pr: &str) -> crate::output::BosunError {
+    crate::output::BosunError::error(
+        format!("`bosun {cmd}` is not built yet"),
+        format!(
+            "it lands in plan PR {pr} (docs/superpowers/plans/2026-11-11-modes-booster.md); do the step by hand until then"
+        ),
+    )
+}
+
 /// Top-level command names, in `--help` order.
 pub const COMMANDS: &[&str] = &[
     "join",
@@ -215,6 +237,10 @@ pub const COMMANDS: &[&str] = &[
     "pr",
     "ci-log",
     "status",
+    "mode",
+    "heal",
+    "digest",
+    "metrics",
     "ask",
     "hold",
     "lesson",
@@ -257,6 +283,7 @@ impl Command {
             Command::Reap => "reap",
             Command::Spawn(_) => "spawn",
             Command::Wave(WaveCmd::Plan(_)) => "wave plan",
+            Command::Wave(WaveCmd::Tick(_)) => "wave tick",
             Command::Wait(_) => "wait",
             Command::Msg(_) => "msg",
             Command::Gate(_) => "gate",
@@ -271,6 +298,10 @@ impl Command {
             Command::Pr(_) => "pr",
             Command::CiLog(_) => "ci-log",
             Command::Status => "status",
+            Command::Mode => "mode",
+            Command::Heal(_) => "heal",
+            Command::Digest(_) => "digest",
+            Command::Metrics(_) => "metrics",
             Command::Ask(_) => "ask",
             Command::Hold(_) => "hold",
             Command::Answer(_) => "answer",
@@ -441,6 +472,38 @@ pub struct SpawnArgs {
 pub enum WaveCmd {
     /// The next set of tasks of an epic that can run in parallel.
     Plan(EpicArg),
+    /// Spawn the ready entries of an epic and archive finished children, as the mode allows.
+    Tick(EpicArg),
+}
+
+#[derive(Debug, Args)]
+pub struct HealArgs {
+    /// Only this PR.
+    #[arg(long)]
+    pub pr: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct DigestArgs {
+    /// Parse the owner's reply (see `--from`) instead of printing the digest.
+    #[arg(long)]
+    pub answer: bool,
+    /// The reply text: `-` for stdin, or a file.
+    #[arg(long, default_value = "-")]
+    pub from: String,
+    /// With --answer: sign the owner's reply with this key (as `answer --chat`).
+    #[arg(long, value_name = "PEM")]
+    pub sign_key: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct MetricsArgs {
+    /// The window in days.
+    #[arg(long, default_value_t = 30)]
+    pub days: u32,
+    /// List the rules a curator could propose to loosen.
+    #[arg(long)]
+    pub propose: bool,
 }
 
 #[derive(Debug, Args)]

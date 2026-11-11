@@ -173,6 +173,12 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     touch: [str]}], live_sessions: [{session: str, origin: str, area: str | null, depth: int,
     expires: str}], budget_pct: num, daily_usd: num, spend_today_usd: num,
     archive_error?: str};
+mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
+    brake_note: str};
+heal = {};
+digest = {};
+metrics = {};
+wave tick = {};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
     commands?: {[str]: any}, ts?: str};
 "#;
