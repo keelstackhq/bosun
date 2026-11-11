@@ -1,0 +1,1 @@
+- Gate workflows and channel templates mint the App token with `client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}` instead of the deprecated `app-id`.

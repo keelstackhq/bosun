@@ -64,7 +64,7 @@ covers the rest: such a PR edits `.github/workflows/**`, which is R-ci and on th
 scope, so PR code it runs (tests, build scripts) cannot post either.
 
 **The key lives in an environment.** Jobs get the token with `actions/create-github-app-token`
-(pinned by full sha; `app-id: ${{ vars.BOSUN_APP_ID }}`, `private-key: ${{ secrets.BOSUN_APP_KEY }}`,
+(pinned by full sha; `client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}`, `private-key: ${{ secrets.BOSUN_APP_KEY }}`,
 `permission-*` inputs downscope it per job). The key is a secret of the environment `bosun-app`
 only, never a repo or org secret (those reach a same-repo PR's `pull_request` workflow). The
 environment's deployment branch policy is "Selected branches and tags" with exactly `main`, no
