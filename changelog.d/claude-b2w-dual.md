@@ -1,0 +1,1 @@
+- `.bosun/bosun.toml` sets `[checks] mode = "dual"` with the gate App (`keelstackhq-bosun-gate`, id 5696830): the gates post statuses and App check runs (spec §15 Transition step 3); `tests/pinned_config.rs` knows the 0.13.0 keys.

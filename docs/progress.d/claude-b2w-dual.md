@@ -1,0 +1,1 @@
+- 2026-11-11 · B2W/T1: [checks] dual mode with the gate App

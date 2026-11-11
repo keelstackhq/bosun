@@ -20,3 +20,10 @@ policy = "owner-gated"
 [cloud]
 # The shared cloud environment "keelstack" (spec §5.2): a relayed root starts there.
 environment_id = "env_014hvpWkGQxciwPhBBysjvGr"
+
+[checks]
+# The transition (spec §15, step 3): statuses stay the authority (the ruleset requires them) and
+# the gate App posts the same gates as check runs. `checks` only after the ruleset pins the App.
+mode = "dual"
+app_id = 5696830
+app_slug = "keelstackhq-bosun-gate"

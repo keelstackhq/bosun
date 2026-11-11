@@ -85,8 +85,8 @@ then the ruleset pins the sources and the statuses stop (§15, Transition).
   depends: T1
   size: 20
   risk: high
-- T4: Switch to checks mode and retire D32
-  touch: .bosun/bosun.toml, docs/spec/01-summary.md, docs/spec/07-gates.md, docs/spec/08-risk.md, docs/spec/15-app-checks.md
+- T4: Switch to checks mode and retire D32; verdict.yml's token step gains `permission-pull-requests: write` (the App writes the record in checks mode)
+  touch: .bosun/bosun.toml, .github/workflows/verdict.yml, tests/workflows.rs, docs/spec/01-summary.md, docs/spec/07-gates.md, docs/spec/08-risk.md, docs/spec/15-app-checks.md
   depends: T3
   size: 60
   risk: high

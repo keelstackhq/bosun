@@ -160,7 +160,9 @@ or different source as drift.
 5. hoist ships pinning; hoist.toml lists the four checks with their sources. hoist.toml is
    R-gov and on the critical floor by then (B2/T6), so no agent PR can unpin a check.
 6. Owner step H5: `hoist apply --area github` switches the ruleset (now the check runs count).
-7. `[checks] mode = "checks"`: statuses stop. Never before step 6: an unpinned ruleset would wait
+7. `[checks] mode = "checks"`: statuses stop. The same PR adds `permission-pull-requests: write`
+   to verdict.yml's token step (in checks mode the App writes the verdict record comment; dual
+   asks only `permission-checks: write`). Never before step 6: an unpinned ruleset would wait
    for statuses that no longer come, and every PR would block. Before it, a forge probe: a
    probe branch's `pull_request` job posts a `risk-check` check run and status with
    `GITHUB_TOKEN` (success), and its PR must stay blocked. That proves the pin, and O6's
