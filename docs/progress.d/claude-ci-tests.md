@@ -1,0 +1,1 @@
+- 2026-11-11 · next-round PR4: CI tsc step on the shipped .d.ts, checks-mode carry-over tests, golden gate-workflow snapshots

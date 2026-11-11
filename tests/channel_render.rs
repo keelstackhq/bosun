@@ -1664,6 +1664,9 @@ mod circleci;
 #[path = "channel_render/app.rs"]
 mod app;
 
+#[path = "channel_render/golden.rs"]
+mod golden;
+
 /// D-012: bootstrap mode reaches consumers only when their pinned bosun reads `[approvals]`. An
 /// empty `bosun_version` pins the channel's own release (0.3.0 or later from this channel on),
 /// so `.bosun/bosun.toml` gets `bootstrap_until`; a repo pinning an explicit version does not
