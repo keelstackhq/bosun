@@ -4,7 +4,7 @@
 
 use super::{
     BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule, git_rule,
-    http_rule, literal_path, nested, shell_words, unwrap_runners,
+    heredoc_at, http_rule, literal_path, nested, shell_words, unwrap_runners,
 };
 
 /// Interpreters and shells whose code or script the scan reads (a version suffix is dropped:
@@ -245,7 +245,7 @@ fn heredoc_feeds(command: &str, path: &str) -> bool {
             .position(|s| s.contains(path))
             .is_some_and(|at| {
                 let feeds = |(i, s): (usize, &&str)| {
-                    s.contains("<<") && !input_redirect(s) && (i == at || heredoc_only(s))
+                    heredoc_at(s).is_some() && !input_redirect(s) && (i == at || heredoc_only(s))
                 };
                 stages[..=at].iter().enumerate().any(feeds)
             })
@@ -416,6 +416,8 @@ mod tests {
             "cat <<'EOF' < evil.py | python3 /dev/stdin\nprint(1)\nEOF",
             "cat <<'EOF' 0< evil.py | python3 /dev/stdin\nprint(1)\nEOF",
             "python3 /dev/stdin <<'EOF' < evil.py\nprint(1)\nEOF",
+            "cat '<<' evil.py | python3 /dev/stdin\nprint(1)",
+            "cat \"<<\" evil.py | python3 /dev/stdin\nprint(1)",
             "cat -n <<'EOF' a/evil.py 2>&1 | python3 /dev/stdin\nprint(1)\nEOF",
         ] {
             assert!(script(cmd, "").is_some(), "{cmd}");

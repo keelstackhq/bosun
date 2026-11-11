@@ -1,1 +1,1 @@
-- Guard review fixes: heredoc ends at a delimiter plus paren, no prose when a label edit is present, narrow data-argument rule, input redirects, arithmetic and cd order in substitutions
+- Guard round 3: fail closed on a heredoc body line that starts with the delimiter, any label word or short l flag disables prose stripping, real heredoc required for stdin feeding, arithmetic only skipped when exact; data-argument relaxation dropped

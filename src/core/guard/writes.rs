@@ -168,7 +168,7 @@ pub fn bash_writes(command: &str) -> Vec<String> {
     // on their own, unless a `cd` before it makes relative paths unknown. `$(( ))` is arithmetic.
     for inner in substitutions(&code, false) {
         let at = code.find(inner.as_str()).unwrap_or(0);
-        if inner.starts_with('(') || moves_before(&code[..at]) {
+        if arithmetic(&inner) || moves_before(&code[..at]) {
             continue;
         }
         for path in bash_writes(&inner) {
@@ -178,6 +178,19 @@ pub fn bash_writes(command: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether a substitution body is `$(( .. ))` arithmetic: its first paren closes at the very
+/// end (`$((cmd) > f)` is a substitution of a subshell, not arithmetic).
+fn arithmetic(inner: &str) -> bool {
+    let mut depth = 0;
+    for (i, c) in inner.char_indices() {
+        depth += i32::from(c == '(') - i32::from(c == ')');
+        if depth == 0 {
+            return i == inner.len() - 1 && inner.starts_with('(');
+        }
+    }
+    false
 }
 
 /// Whether a `cd`, `pushd`, `popd` or a directory-changing runner comes in the text.
@@ -235,6 +248,7 @@ mod tests {
             ("echo \"x $(a | tee src/f.rs) y\"", vec!["src/f.rs"]),
             ("echo $(cmd > src/f.rs)", vec!["src/f.rs"]),
             ("echo \"$(cmd > src/f.rs)\"; cd /tmp", vec!["src/f.rs"]),
+            ("echo \"$((cmd) > src/f.rs)\"", vec!["src/f.rs"]),
             ("echo \"$(cd /tmp; a > /abs/f.rs)\"", vec!["/abs/f.rs"]),
         ] {
             assert_eq!(bash_writes(cmd), want, "{cmd}");

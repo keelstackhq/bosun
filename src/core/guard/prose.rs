@@ -3,17 +3,9 @@
 //! and `gh pr|issue create|comment|edit|review|close|reopen` is data; `--label` and
 //! `--add-label` are never prose.
 
-const FLAGS: &[&str] = &["-m", "-b", "-t", "--message", "--body", "--title"];
+use super::shell_words;
 
-/// Words that mean the text may edit labels: then no prose is data.
-const LABEL_EDITS: &[&str] = &[
-    "--label",
-    "--add-label",
-    "--remove-label",
-    "gh label",
-    "labels",
-    "labelable",
-];
+const FLAGS: &[&str] = &["-m", "-b", "-t", "--message", "--body", "--title"];
 
 /// Whether the words before a flag start a command whose prose flags are data: `git commit|tag`
 /// (the verb after global options such as `-C dir`, `-c k=v`) and `gh pr|issue create|comment|..`
@@ -107,10 +99,27 @@ fn quoted_value(s: &str) -> Option<usize> {
 
 /// The command with the prose values of prose flags replaced by `"x"`.
 pub fn strip_prose(command: &str) -> String {
-    let short = command.split_whitespace().any(|w| w.starts_with("-l"));
-    if short || LABEL_EDITS.iter().any(|w| command.contains(w)) {
-        return command.to_string();
+    let out = strip(command);
+    if edits_labels(&out) {
+        command.to_string()
+    } else {
+        out
     }
+}
+
+/// Whether any word outside the prose values may edit labels: a word with `label` (any case,
+/// quotes removed, so `--add-label`, `gh label`, `labels`) or, for a gh command, a short flag
+/// cluster with `l` (`-l`, `-dl`).
+fn edits_labels(text: &str) -> bool {
+    let words = shell_words(text);
+    let gh = words.iter().any(|w| w == "gh" || w.ends_with("/gh"));
+    words.iter().any(|w| {
+        w.to_lowercase().contains("label")
+            || (gh && w.starts_with('-') && !w.starts_with("--") && w.contains('l'))
+    })
+}
+
+fn strip(command: &str) -> String {
     let (mut out, mut quote, mut i) = (String::new(), None, 0);
     let b = command.as_bytes();
     while i < command.len() {

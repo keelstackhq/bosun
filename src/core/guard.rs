@@ -1590,10 +1590,12 @@ fn split_heredocs(command: &str) -> (String, Vec<String>) {
         if let Some((delim, dash, quoted)) = &skip {
             let l = line.trim_end_matches('\n');
             let l = if *dash { l.trim_start_matches('\t') } else { l };
-            if l == delim
-                || l.strip_prefix(delim.as_str())
-                    .is_some_and(|r| r.starts_with(')'))
-            {
+            // Bash ends a heredoc inside `$( )` at `EOF)`: a body line that starts with the
+            // delimiter and more is not plain data; fail closed and judge the body as code.
+            if l != delim && l.starts_with(delim.as_str()) {
+                return (command.to_string(), Vec::new());
+            }
+            if l == delim {
                 skip = None;
                 code.push_str(line);
             } else if !quoted {
@@ -2410,7 +2412,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t == "env" || t.starts_with("env."))),
                 n if INTERPS.contains(&n) && after.iter().any(|a| ENV_READS.iter().any(|e| a.contains(e) && (*e != "environ" || runs_code(n, after)))) => true,
                 _ if i == 0 && tgt(rest[0]) => true,
-                n if (SHELLS.contains(&n) || n == ".") && after.iter().enumerate().any(|(j, a)| tgt(a) && !data_arg(n, after, j, &tgt)) => true,
+                n if (SHELLS.contains(&n) || n == ".") && after.iter().any(|a| tgt(a)) => true,
                 n if SHELLS.contains(&n) && mentions => {
                     let interp = INTERPS.contains(&n);
                     let code = runs_code(n, after);
@@ -2426,21 +2428,6 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         }
     }
     None
-}
-
-/// Whether argument `j` of a shell or interpreter is plain data for the script before it: a
-/// data file (by extension) after a script file, with no option anywhere (options take code or
-/// values: `-e`, `-I`, `-O`), and not for runners that run their argument (`deno run`, `php`).
-fn data_arg(cmd: &str, after: &[&str], j: usize, tgt: &dyn Fn(&str) -> bool) -> bool {
-    const DATA: &[&str] = &[".json", ".md", ".txt", ".yml", ".yaml", ".toml", ".csv"];
-    const SCRIPT: &[&str] = &[".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".sh"];
-    let ends = |w: &str, exts: &[&str]| exts.iter().any(|e| w.ends_with(e));
-    !matches!(cmd, "deno" | "bun" | "php" | "xargs" | "eval")
-        && ends(after[j], DATA)
-        && !after.iter().any(|w| w.starts_with('-'))
-        && after[..j]
-            .iter()
-            .any(|w| ends(w, SCRIPT) && !tgt(w) && !w.starts_with(['<', '>']))
 }
 
 fn heredoc_at(line: &str) -> Option<usize> {
@@ -2470,10 +2457,10 @@ fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
         if let Some((delim, dash)) = &skip {
             let l = line.trim_end_matches('\n');
             let l = if *dash { l.trim_start_matches('\t') } else { l };
-            if l == delim
-                || l.strip_prefix(delim.as_str())
-                    .is_some_and(|r| r.starts_with(')'))
-            {
+            if l != delim && l.starts_with(delim.as_str()) {
+                return (command.to_string(), bodies, targets);
+            }
+            if l == delim {
                 skip = None;
                 out.push_str(line);
             } else {
@@ -3655,42 +3642,6 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_lock_allows_data_arguments_to_scripts_but_not_the_written_script() {
-        let w = "cat > c.json <<'EOF'\n{\"a\":\"sops -d f\"}\nEOF\n";
-        for run in [
-            "python3 probe.py c.json",
-            "node run.js c.json",
-            "bash run.sh c.json",
-        ] {
-            assert_eq!(bash(&format!("{w}{run}"), "x"), None, "{run}");
-        }
-        for run in [
-            "python3 c.json",
-            "bash c.json",
-            "./c.json",
-            "sh < c.json",
-            "source c.json",
-            ". c.json",
-            "python3 -W ignore c.json",
-            "bash --rcfile /dev/null c.json",
-            "python3 c.json c.json",
-            "python3 -u probe.py c.json",
-            "perl -e 'do shift' c.json",
-            "node -e 'x' c.json",
-            "ruby -e 'load ARGV[0]' c.json",
-            "bash -O extglob c.json",
-            "ruby -I lib c.json",
-            "deno run c.json",
-            "bun run c.json",
-            "php -f c.json",
-        ] {
-            assert!(bash(&format!("{w}{run}"), "x").is_some(), "{run}");
-        }
-        let w = "cat > c.py <<'EOF'\nsops -d f\nEOF\n";
-        assert!(bash(&format!("{w}python3 probe.py c.py"), "x").is_some());
-    }
-
-    #[test]
     fn label_lock_treats_unquoted_heredoc_prose_as_data() {
         for cmd in [
             "cat >> docs/x.md <<EOF\nThe bosun:state/ready label (see `bosun status`) is set by bosun.\nEOF",
@@ -4587,6 +4538,38 @@ mod tests {
             ("src/..", 0),
         ] {
             assert_eq!(key_root(root), want, "{root}");
+        }
+    }
+
+    #[test]
+    fn a_heredoc_body_line_that_starts_with_the_delimiter_is_judged_as_code() {
+        // Bash ends the first heredoc at the plain `EOF` line, so the next line runs.
+        for hidden in ["gh pr merge 3", "sops -d f", "echo x > src/a.rs"] {
+            let cmd = format!("cat <<'EOF'\nEOF)\ncat <<'Z'\nEOF\n{hidden}\nZ");
+            let (code, _) = split_heredocs(&cmd);
+            assert!(code.contains(hidden), "{cmd}");
+            let (text, _, _) = strip_data_heredocs(&cmd);
+            assert!(text.contains(hidden), "{cmd}");
+        }
+        for hidden in ["gh pr merge 3", "sops -d f"] {
+            let cmd = format!("cat <<'EOF'\nEOF)\ncat <<'Z'\nEOF\n{hidden}\nZ");
+            assert!(bash(&cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn label_lock_keeps_prose_when_any_word_edits_labels() {
+        let s = "git commit -m 'bosun:state/x'";
+        for tail in [
+            "gh pr create -t t -b b -dl \"$(git log -1 --format=%s)\"",
+            "gh issue create -t x -b y \"-l\" \"$(git log -1 --format=%s)\"",
+            "gh issue create -t x -b y \\-l \"$(git log -1 --format=%s)\"",
+            "gh -R o/r label edit bug --name \"$(git log -1 --format=%s)\"",
+            "gh  label create \"$(git log -1 --format=%s)\"",
+            "gh issue edit 3 --add-\"label\" \"$(git log -1 --format=%s)\"",
+        ] {
+            let cmd = format!("{s} && {tail}");
+            assert!(bash(&cmd, "x").is_some(), "{cmd}");
         }
     }
 

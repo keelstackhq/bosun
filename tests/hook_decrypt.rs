@@ -11,7 +11,6 @@ const CASES: &[(&str, bool)] = &[
     ("echo $SOPS_AGE_KEY", true), ("npx sops -d f", true), ("sops --version", false),
     ("hoist secrets check --remote", false), ("git commit -m \"docs: sops decrypt\"", false),
     ("cat > d.md <<'EOF'\nrun sops -d f\nEOF", false),
-    ("cat > c.json <<'EOF'\nsops -d f\nEOF\npython3 probe.py c.json", false),
     ("cat > f.sh <<'EOF'\nsops -d f\nEOF\nbash f.sh", true),
     ("git commit -m \"$(cat <<'EOF'\nfix bosun:state/review label\nEOF\n)\"", false),
 ];
