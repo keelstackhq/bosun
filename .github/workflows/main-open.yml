@@ -38,6 +38,9 @@ jobs:
       github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
       github.event.label.name == 'bosun:kind/mainfix'
     runs-on: ubuntu-latest
+    environment:
+      name: bosun-app
+      deployment: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -83,10 +86,22 @@ jobs:
             echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::warning::the pinned bosun has no gate main-open command yet; running the shell fallback"
           fi
+      # The App token (spec §15): the key goes to this step only, the token only to bosun.
+      - if: steps.has.outputs.supported == 'true'
+        name: App token
+        id: app
+        # A missing or broken key never stops the gate: bosun falls back per [checks] mode.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BOSUN_APP_ID }}
+          private-key: ${{ secrets.BOSUN_APP_KEY }}
+          permission-checks: write
       - if: steps.has.outputs.supported == 'true'
         name: bosun gate main-open
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
           BOSUN_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         # Exit 4 (halted) is the verdict, carried by the status; only errors fail the job.

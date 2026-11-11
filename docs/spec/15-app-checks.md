@@ -68,7 +68,11 @@ scope, so PR code it runs (tests, build scripts) cannot post either.
 `permission-*` inputs downscope it per job). The key is a secret of the environment `bosun-app`
 only, never a repo or org secret (those reach a same-repo PR's `pull_request` workflow). The
 environment's deployment branch policy is "Selected branches and tags" with exactly `main`, no
-tags. Jobs say `environment: { name: bosun-app, deployment: false }`.
+tags, and no other protection rule (no required reviewers, no wait timer): the gate jobs run
+on every PR event and comment, so any rule would hold each run. Jobs say
+`environment: { name: bosun-app, deployment: false }`. The token step has
+`continue-on-error: true`: a missing or broken key never stops the gate job, so `statuses` mode
+ignores it, `dual` skips the check run (one stderr line) and `checks` exits 1 (no token).
 
 Why it holds: GitHub gives environment secrets only to a job whose ref passes the policy. Since
 2025-12-08 (GitHub changelog 2025-11-07, "Actions pull_request_target and environment branch
