@@ -76,22 +76,8 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Before anything is downloaded or written.
-pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
-    let app = App::load(Some(root))?;
-    kill_switch(app.gh.as_ref())?;
-    if let Some((n, head)) = find_open(app.gh.as_ref(), &app.ctx.repo.to_string())? {
-        return Ok(Pre::Open(n, head));
-    }
-    let base = default_branch(app.gh.as_ref())?;
-    let on = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    if on != base {
-        return Err(BosunError::conflict(
-            format!("on {on}, not the default branch {base}"),
-            format!("run `git switch {base}` (up to date), then rerun"),
-        ));
-    }
-    // `bosun/pin` is free, else one dated name (an earlier pin's branch has no open PR here).
+/// `bosun/pin` is free, else one dated name (an earlier pin's branch has no open PR here).
+pub fn free_branch(root: &Path) -> Result<String, BosunError> {
     let taken = |b: &str| {
         git(
             root,
@@ -112,6 +98,25 @@ pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
             "delete both names locally (`git branch -D <name>`) and on origin (the owner, on GitHub's Branches page), then rerun".to_string(),
         ));
     };
+    Ok(branch)
+}
+
+/// Before anything is downloaded or written.
+pub fn preflight(root: &Path) -> Result<Pre, BosunError> {
+    let app = App::load(Some(root))?;
+    kill_switch(app.gh.as_ref())?;
+    if let Some((n, head)) = find_open(app.gh.as_ref(), &app.ctx.repo.to_string())? {
+        return Ok(Pre::Open(n, head));
+    }
+    let base = default_branch(app.gh.as_ref())?;
+    let on = git(root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if on != base {
+        return Err(BosunError::conflict(
+            format!("on {on}, not the default branch {base}"),
+            format!("run `git switch {base}` (up to date), then rerun"),
+        ));
+    }
+    let branch = free_branch(root)?;
     if !git(root, &["status", "--porcelain"])?.is_empty() {
         return Err(BosunError::conflict(
             "the working tree has changes",

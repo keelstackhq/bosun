@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use super::BudgetRecordArgs;
 use super::budget::{read_input, usd_of};
 use crate::app::{App, kill_switch, spend_notes};
+use crate::core::meta::{linked_issues_in, parse_task_meta};
 use crate::core::records::{Record, parse_record};
+use crate::core::state::state_of;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::sessions::usage;
 
@@ -60,11 +62,25 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     // alone, so a retry after a failed write adds only what is missing.
     let (mut todo, mut done) = (Vec::new(), Vec::new());
     for &pr in &prs {
-        if gh.get_pull(pr)?.is_none() {
+        let Some(pull) = gh.get_pull(pr)? else {
             return Err(BosunError::error(
                 format!("PR #{pr} does not exist"),
                 "check the number; pass --pr once per PR the session made",
             ));
+        };
+        // A task's spend goes to its issue: the per-task cap and the daily guard see only those.
+        for n in linked_issues_in(&pull.body, &ctx.repo.to_string()) {
+            let is_task = gh.get_issue(n)?.is_some_and(|i| {
+                state_of(&i.labels).is_some() || parse_task_meta(i.body_text()).is_some()
+            });
+            if is_task {
+                return Err(BosunError::conflict(
+                    format!("PR #{pr} is the PR of task #{n}: its spend belongs on the task"),
+                    format!(
+                        "run `bosun budget record {n} --from -` instead (--pr is for PRs without a task issue)"
+                    ),
+                ));
+            }
         }
         let seen = spend_notes(gh, pr)?.iter().any(|n| {
             matches!(parse_record(&n.body), Some(Record::Spend { session: s, .. }) if s == session)

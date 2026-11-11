@@ -47,10 +47,17 @@ fn a_group_names_its_subcommands() {
     assert!(fix.contains("<post|comment|apply>"), "{fix}");
 }
 
-/// When `tsc` is on PATH (the dev container has it), the declarations compile.
+/// When `tsc` is on PATH (the dev container has it), the declarations compile. Without it the test
+/// skips, unless `BOSUN_REQUIRE_TSC=1` (ci.yml's types step), which makes a missing `tsc` a failure.
 #[test]
 fn ts_compiles_when_tsc_is_there() {
-    let Ok(tsc) = which_tsc() else { return };
+    let Ok(tsc) = which_tsc() else {
+        assert!(
+            std::env::var("BOSUN_REQUIRE_TSC").as_deref() != Ok("1"),
+            "BOSUN_REQUIRE_TSC=1 but tsc is not on PATH"
+        );
+        return;
+    };
     let (_, v) = schema_cmd(&["--format", "ts"]);
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("bosun.d.ts");

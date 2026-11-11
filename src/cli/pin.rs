@@ -237,6 +237,19 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         return super::pin_pr::publish(&root, pre.unwrap(), &[], "", "", data, None);
     }
 
+    // Plain path: the open pin PR and the free branch name, before anything is written (both
+    // names taken refuses here, dropping nothing).
+    let plain = if pre.is_none() && !changed.is_empty() {
+        let found = open_pin_pr(&root);
+        let free = super::pin_pr::free_branch(&root);
+        if !matches!(&found, Ok((_, Some(_), _))) {
+            free.clone()?;
+        }
+        Some((found, free))
+    } else {
+        None
+    };
+
     // Verify and rewrite in memory; write only when everything passed.
     let tpl_path = root.join(TEMPLATE);
     let mut tpl = match std::fs::read_to_string(&tpl_path) {
@@ -334,7 +347,7 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
             .map(|(_, m)| m.version.as_str());
         return super::pin_pr::publish(&root, pre, &files, &title, &body, data, to);
     }
-    let found = open_pin_pr(&root);
+    let (found, free) = plain.expect("plain path");
     let d = data.as_object_mut().expect("object");
     let mut call =
         json!({"head": BRANCH, "base": "main", "draft": true, "title": title, "body": body});
@@ -349,6 +362,10 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
             return Ok(Outcome::data(data));
         }
         Ok((repo, None, base)) => {
+            // A stale `bosun/pin` left on origin or here gets the dated name, as with --pr.
+            let head = free?;
+            d.insert("branch".into(), json!(head));
+            call["head"] = json!(head);
             call["owner"] = json!(repo.owner);
             call["repo"] = json!(repo.name);
             call["base"] = json!(base);
@@ -357,6 +374,9 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         Err(e) => {
             d.insert("pr".into(), Value::Null);
             d.insert("pr_lookup".into(), json!(e.message));
+            let head = free?;
+            d.insert("branch".into(), json!(head));
+            call["head"] = json!(head);
             if let Ok(ctx) = crate::ctx::Ctx::load(Some(&root)) {
                 call["owner"] = json!(ctx.repo.owner);
                 call["repo"] = json!(ctx.repo.name);
