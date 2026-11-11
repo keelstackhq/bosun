@@ -223,3 +223,41 @@ fn a_fork_pr_named_like_the_pin_branch_is_not_the_pin_pr() {
     assert_ne!(v["data"]["pr"]["number"], 7, "{v}");
     assert!(fake.pull_is_draft(8), "a new PR was opened");
 }
+
+#[test]
+fn plain_latest_proposes_the_dated_name_when_a_stale_branch_is_on_origin() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["push", "-q", "origin", "main:bosun/pin"]);
+    let out = bosun()
+        .env("BOSUN_NPM_REGISTRY", &e.reg.base)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(e.work.path())
+        .args(["pin", "--latest"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(v["data"]["branch"], "bosun/pin-20261022", "{v}");
+    assert_eq!(v["next"][0]["args"]["head"], "bosun/pin-20261022", "{v}");
+}
+
+#[test]
+fn plain_latest_with_both_names_taken_refuses_and_writes_nothing() {
+    let (e, fake) = (Env::new(), FakeGithub::start());
+    git(e.work.path(), &["branch", "bosun/pin"]);
+    git(e.work.path(), &["branch", "bosun/pin-20261022"]);
+    let out = bosun()
+        .env("BOSUN_NPM_REGISTRY", &e.reg.base)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(e.work.path())
+        .args(["pin", "--latest"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(3), "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(e.reg.tarballs(), 0);
+}

@@ -93,8 +93,7 @@ fn state_block(dir: &Path) -> String {
     lines.join("\n")
 }
 
-/// Own leases and the branch's open PR. Leases come from GitHub (through the cache), else the
-/// cache alone; the PR needs GitHub.
+/// Own leases and the branch's open PR. Leases come from the cache alone; the PR needs GitHub.
 fn remote(dir: &Path, me: &str, branch: Option<&str>) -> (Vec<Lease>, Option<OpenPr>) {
     let leases = cache::cached_live(dir, now())
         .into_iter()
@@ -133,7 +132,11 @@ fn open_pr(dir: &Path, branch: &str) -> Option<OpenPr> {
             eprintln!("bosun: warning: compaction state: {e}");
             None
         }
-        Err(_) => {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            eprintln!("bosun: warning: compaction state: the PR lookup thread died");
+            None
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
             eprintln!("bosun: warning: compaction state: no PR lookup within {PR_WAIT:?}");
             None
         }
