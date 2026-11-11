@@ -30,7 +30,7 @@ profile has three adapters:
 | ---- | ---- | ------- |
 | fmt | cargo fmt --check | prettier --check {files} |
 | lint | cargo clippy --all-targets -- -D warnings | eslint --max-warnings 0 {files} |
-| types | (in lint) | tsc -b |
+| types | (in lint) | tsc -b (bosun's own ci.yml: a step runs pinned `tsc` on the shipped `bosun schema --format ts` declarations) |
 | test | cargo test --locked -p {packages} | vitest run --project {packages} |
 | deps | cargo deny check | bosun deps-check |
 | mutants | cargo mutants --in-diff {diff} | stryker run --incremental |
