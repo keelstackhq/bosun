@@ -272,15 +272,19 @@ jobs:
       - if: steps.plan.outputs.setup == 'true'
         name: npm launcher tests
         run: node --test npm/*/test/*.test.js
-      # The shipped declarations (`bosun schema --format ts`) must compile: the test skips without
-      # tsc on PATH, so put a pinned one there. Last: PR code (the test builds and runs it).
+      # The declarations `bosun schema --format ts` prints must compile: that test skips without tsc
+      # on PATH, so put a pinned one there and require it (BOSUN_REQUIRE_TSC=1), and fail unless
+      # exactly one test ran. Last: PR code (the test builds and runs it).
       - if: steps.plan.outputs.setup == 'true'
-        name: types (tsc on the shipped .d.ts)
+        name: types (tsc on the declarations bosun schema prints)
+        env:
+          BOSUN_REQUIRE_TSC: "1"
         run: |
           npm install --prefix "$RUNNER_TEMP/tsc" --no-save --ignore-scripts typescript@6.0.2
           export PATH="$RUNNER_TEMP/tsc/node_modules/.bin:$PATH"
           tsc --version | grep -qx 'Version 6.0.2'
-          cargo test --locked --test cli_schema_ts ts_compiles_when_tsc_is_there
+          cargo test --locked --test cli_schema_ts -- --exact ts_compiles_when_tsc_is_there | tee "$RUNNER_TEMP/tsc.log"
+          grep -q '^test result: ok. 1 passed; 0 failed' "$RUNNER_TEMP/tsc.log"
 
   # One stable required check for branch protection, the same name as in the other keelstackhq
   # repos: it fails unless every job above succeeded (also when one was skipped or cancelled).

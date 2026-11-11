@@ -1,1 +1,1 @@
-- CI type-checks the shipped bosun.d.ts with a pinned tsc; tests for the checks-mode verdict carry and golden snapshots of the four channel gate workflows
+- CI type-checks the declarations `bosun schema --format ts` prints with a pinned tsc; tests for the checks-mode verdict carry and golden snapshots of the four channel gate workflows

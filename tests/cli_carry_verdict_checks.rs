@@ -161,3 +161,26 @@ fn a_raced_verdict_is_posted_again_as_a_check_run_and_the_carry_is_dropped() {
             .all(|s| s["context"] != "review-verdict")
     );
 }
+
+#[test]
+fn an_unreadable_history_withdraws_the_carry_with_a_failure_check_run() {
+    let fake = world();
+    // The carry is posted, then reading the history back (settle) fails: the carry is withdrawn.
+    // Three requests to a `check-runs` path come before the carry's POST; reads after it fail.
+    fake.after_requests("check-runs", 3, move |s| {
+        s.fail_paths.push((format!("{H2}/check-runs"), 500));
+    });
+    let v = go(&fake);
+    assert_eq!(v["data"]["verdict_carried_from"], Value::Null, "{v}");
+    let last = verdict_runs(&fake).pop().unwrap();
+    assert_eq!(last["conclusion"], "failure");
+    assert_eq!(
+        last["output"]["title"],
+        "carry withdrawn: could not confirm no verdict raced it"
+    );
+    assert!(
+        fake.statuses_of(H2)
+            .iter()
+            .all(|s| s["context"] != "review-verdict")
+    );
+}
