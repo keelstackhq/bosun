@@ -777,13 +777,17 @@ pub fn allowed_findings(
                 out.push(format!("{name} (all files): {e} {o} → {n}"));
             }
         }
-        // Same entries, different order or structure: the owner judges it.
+        // Any other change to the initializer (order, structure, an entry dropped from an
+        // `&&` or a tuple swap beside a shrink) can widen too: the owner judges it.
         let sorted = |m: &BTreeMap<String, Vec<String>>| {
             let mut v = m.get(&format!("{name}=")).cloned().unwrap_or_default();
             v.sort();
             v
         };
-        if old == new && !entries.is_empty() && sorted(whole.0) != sorted(whole.1) {
+        let grew = new
+            .iter()
+            .any(|(e, n)| old.get(e).copied().unwrap_or(0) < *n);
+        if !grew && !entries.is_empty() && sorted(whole.0) != sorted(whole.1) {
             out.push(format!("{name} (all files): order or structure changed"));
         }
     }
@@ -1384,9 +1388,34 @@ mod tests {
                 && got.iter().any(|g| g.contains("'x'")),
             "{got:?}"
         );
-        // A shrink is no finding; lifetimes are no char literals; multibyte text never panics.
-        assert!(
-            f("const AUTONOMOUS_ALLOWED: &'static [&'static str] = &[\"docs/**\"];").is_empty()
+        // A shrink changes the initializer: the owner judges it; lifetimes are no char literals.
+        assert_eq!(
+            f("const AUTONOMOUS_ALLOWED: [&'static str; 1] = [\"docs/**\"];"),
+            ["AUTONOMOUS_ALLOWED (all files): order or structure changed"]
+        );
+        // A dropped conjunct, a swap beside a shrink and a raised quotient all count.
+        let ch = |b: &str, h: &str| allowed_findings(&allowed_lists(b), &allowed_lists(h));
+        let x = "X_ALLOWED (all files): order or structure changed";
+        assert_eq!(
+            ch(
+                "const X_ALLOWED: bool = (CI) && (OWNER);",
+                "const X_ALLOWED: bool = (CI);"
+            ),
+            [x]
+        );
+        assert_eq!(
+            ch(
+                "const X_ALLOWED: T = &[(\"a\", true), (\"b\", false), (\"c\", false)];",
+                "const X_ALLOWED: T = &[(\"a\", false), (\"b\", true)];"
+            ),
+            [x]
+        );
+        assert_eq!(
+            ch(
+                "const X_ALLOWED: u32 = (30) / (10);",
+                "const X_ALLOWED: u32 = (30);"
+            ),
+            [x]
         );
         assert!(f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"docs/**\", \"a]\"]; // é\nconst Z: &str = \"\\é\"; const C: char = 'é';").is_empty());
         // A scalar or a declaration without a value records no unrelated code.
