@@ -13,7 +13,7 @@ fn judge_if(path: &str) -> String {
 fn a_mainfix_label_judges_a_draft() {
     for path in [
         ".github/workflows/main-open.yml",
-        "channel/pieces/core/files/.github/workflows/main-open.yml",
+        "channel/pieces/core/files/.github/workflows/main-open.yml.jinja",
     ] {
         let cond = judge_if(path);
         assert!(

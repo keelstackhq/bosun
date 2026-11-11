@@ -248,6 +248,8 @@ fn every_variant_renders_to_files_that_parse() {
                     ("own_ci", own_ci),
                     ("intake", ""),
                     ("policy", ""),
+                    // Both renders of the App switch, without more variants.
+                    ("bosun_app", if owner.is_empty() { "" } else { "1" }),
                 ]
                 .into_iter()
                 .map(|(k, v)| (k, v.to_string()))
@@ -344,6 +346,7 @@ fn variant_at(stack: &[&str], own_ci: &str, ts_path: &str) -> Vec<(String, Strin
         ("own_ci", own_ci),
         ("intake", ""),
         ("policy", ""),
+        ("bosun_app", ""),
     ]
     .into_iter()
     .map(|(k, v)| (k, v.to_string()))
@@ -1658,6 +1661,9 @@ fn bosun_trusted_deps_passes_before_the_ts_stack_exists() {
 #[path = "channel_render/circleci.rs"]
 mod circleci;
 
+#[path = "channel_render/app.rs"]
+mod app;
+
 /// D-012: bootstrap mode reaches consumers only when their pinned bosun reads `[approvals]`. An
 /// empty `bosun_version` pins the channel's own release (0.3.0 or later from this channel on),
 /// so `.bosun/bosun.toml` gets `bootstrap_until`; a repo pinning an explicit version does not
@@ -1676,6 +1682,7 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             ("own_ci", ""),
             ("intake", ""),
             ("policy", ""),
+            ("bosun_app", ""),
         ]
         .into_iter()
         .map(|(k, v)| (k, v.to_string()))

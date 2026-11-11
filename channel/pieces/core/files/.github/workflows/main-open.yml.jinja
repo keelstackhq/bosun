@@ -1,4 +1,4 @@
-# Written by the bosun splice channel (owned).
+{% raw %}# Written by the bosun splice channel (owned).
 name: main-open
 
 # Judges the required `main-open` status (spec §9): while an issue labelled bosun:main-red is open,
@@ -39,7 +39,10 @@ jobs:
       github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
       github.event.label.name == 'bosun:kind/mainfix'
     runs-on: ubuntu-latest
-    steps:
+{% endraw %}{% if bosun_app %}{% raw %}    environment:
+      name: bosun-app
+      deployment: false
+{% endraw %}{% endif %}{% raw %}    steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -84,11 +87,23 @@ jobs:
             echo "supported=false" >> "$GITHUB_OUTPUT"
             echo "::warning::the pinned bosun has no gate main-open command yet; running the shell fallback"
           fi
+{% endraw %}{% if bosun_app %}{% raw %}      # The App token (spec §15, var bosun_app): the key goes to this step only, the token only to bosun.
       - if: steps.has.outputs.supported == 'true'
+        name: App token
+        id: app
+        # A missing or broken key never stops the gate: bosun falls back per [checks] mode.
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.BOSUN_APP_ID }}
+          private-key: ${{ secrets.BOSUN_APP_KEY }}
+          permission-checks: write
+{% endraw %}{% endif %}{% raw %}      - if: steps.has.outputs.supported == 'true'
         name: bosun gate main-open
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          BOSUN_REPO: ${{ github.repository }}
+{% endraw %}{% if bosun_app %}{% raw %}          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
+{% endraw %}{% endif %}{% raw %}          BOSUN_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         # Exit 4 (halted) is the verdict, carried by the status; only errors fail the job.
         run: ./target/release/bosun gate main-open --pr "$PR" || test $? -eq 4
@@ -113,3 +128,4 @@ jobs:
           fi
           echo "$state: $desc"
           gh api "repos/$GITHUB_REPOSITORY/statuses/$sha" -f state="$state" -f context=main-open -f description="$desc" >/dev/null
+{% endraw %}

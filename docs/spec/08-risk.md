@@ -180,7 +180,7 @@ High-risk PRs:
   `src/cli/risk_check.rs`) every `APPROVAL_CODE_PATHS` entry (`src/**`, `Cargo.toml`,
   `Cargo.lock`, `build.rs` in any directory, `.cargo/**`, `npm/**`: the code of the check and of
   signature verification, derived from the same list so the two never drift), the channel's
-  `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow
+  `.bosun/**`, `release.yml` and every `splice.yml`, `risk.yml` and `verdict.yml` workflow (also as `.jinja`)
   (root and channel copies), nor a `.github/workflows/**` file whose diff adds or removes a line
   naming `environment:` (or is not shown), nor matches R-secrets; inside the window it also never counts on a PR that matches R-gov or R-prod-write (`bootstrap mode (D-012) never covers ...`), after it the policy decides as below. The list is separate from
   `CRITICAL_PATHS`, so the window can never be widened or reopened from inside it. Otherwise a
