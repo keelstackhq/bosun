@@ -327,3 +327,21 @@ fn src_under_fixtures_is_not_built() {
     file(&fake, "tests/fixtures/src/a.rs", Some(T), Some(""));
     no_weakening(&fake);
 }
+
+#[test]
+fn a_grown_or_swapped_allowed_list_is_a_weakening() {
+    let old = "pub const PATHS_ALLOWED: [&str; 1] = [\"docs/**\"];\n";
+    let fake = pr();
+    file(
+        &fake,
+        "src/a.rs",
+        Some(old),
+        Some("pub const PATHS_ALLOWED: [&str; 1] = [\"**\"];\n"),
+    );
+    assert!(evidence(&fake).contains("PATHS_ALLOWED: (none) → \\\"**\\\""));
+    // The same list moved to another file is no weakening.
+    let fake = pr();
+    file(&fake, "src/a.rs", Some(old), Some(""));
+    file(&fake, "src/b.rs", Some(""), Some(old));
+    no_weakening(&fake);
+}

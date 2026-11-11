@@ -555,58 +555,140 @@ pub fn cfg_off(line: &str) -> bool {
     false
 }
 
-static ITEM_DECL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+(\w+)").expect("decl regex")
+static ALLOWED_DECL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:const|static)\s+(\w*_ALLOWED)\b[^=]*=").expect("allowed regex")
 });
-static ALLOWED_NAME: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(?:const|static)\s+(\w*_ALLOWED)\b").expect("allowed regex"));
-static STRING_LIT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""(?:[^"\\]|\\.)*""#).expect("string regex"));
 
-/// A Rust `const` or `static` list named `*_ALLOWED` with more string entries added than
-/// removed: adding an entry widens what it allows. The list is known from its declaration in the
-/// hunk or from the hunk header (git names the enclosing item); it ends at `];`.
-fn allowed_growth(path: &str, patch: &str) -> Vec<String> {
-    let mut lists: Vec<(String, usize, usize)> = Vec::new();
-    let mut cur: Option<String> = None;
-    for line in patch.lines() {
-        if line.starts_with("@@") {
-            let header = line.splitn(3, "@@").nth(2).unwrap_or_default();
-            cur = ALLOWED_NAME.captures(header).map(|c| c[1].to_string());
-            continue;
-        }
-        let (tag, body) = line.split_at(line.len().min(1));
-        let mut text = body;
-        if let Some(c) = ITEM_DECL.captures(body) {
-            let name = &c[1];
-            cur = name.ends_with("_ALLOWED").then(|| name.to_string());
-            text = body.split_once('=').map_or("", |(_, r)| r);
-        }
-        if let Some(name) = &cur
-            && matches!(tag, "-" | "+")
+/// Rust code with comments dropped and every string or char literal replaced by `\0N\0`, the
+/// index into the returned literals; brackets inside literals and comments then never count.
+fn mask_literals(text: &str) -> (String, Vec<String>) {
+    let (c, mut out, mut lits) = (text.as_bytes(), String::new(), Vec::new());
+    let mut i = 0;
+    let mut lit = |out: &mut String, s: &str| {
+        out.push_str(&format!("\0{}\0", lits.len()));
+        lits.push(s.to_string());
+    };
+    while i < c.len() {
+        let rest = &text[i..];
+        if rest.starts_with("//") {
+            i += rest.find('\n').unwrap_or(rest.len());
+        } else if let Some(body) = rest.strip_prefix("/*") {
+            i += body.find("*/").map_or(rest.len(), |e| e + 4);
+        } else if let Some(h) = (rest.starts_with('r') || rest.starts_with("br"))
+            .then(|| {
+                rest.trim_start_matches('b')[1..]
+                    .bytes()
+                    .take_while(|b| *b == b'#')
+                    .count()
+            })
+            .filter(|h| rest.trim_start_matches('b')[1 + h..].starts_with('"'))
+            .filter(|_| i == 0 || !(c[i - 1].is_ascii_alphanumeric() || c[i - 1] == b'_'))
         {
-            let n = STRING_LIT.find_iter(text).count();
-            let i = match lists.iter().position(|(l, ..)| l == name) {
-                Some(i) => i,
-                None => {
-                    lists.push((name.clone(), 0, 0));
-                    lists.len() - 1
-                }
-            };
-            if tag == "-" {
-                lists[i].1 += n
-            } else {
-                lists[i].2 += n
+            // A raw string ends at `"` and as many `#`.
+            let start = rest.len() - rest.trim_start_matches('b').len() + 2 + h;
+            let end = format!("\"{}", "#".repeat(h));
+            let len = rest[start..]
+                .find(&end)
+                .map_or(rest.len(), |e| start + e + end.len());
+            lit(&mut out, &rest[..len]);
+            i += len;
+        } else if rest.starts_with('"') || rest.starts_with("b\"") {
+            let mut j = if rest.starts_with('b') { 2 } else { 1 };
+            while j < rest.len() && rest.as_bytes()[j] != b'"' {
+                j += if rest.as_bytes()[j] == b'\\' { 2 } else { 1 };
             }
-        }
-        if body.contains("];") {
-            cur = None;
+            let len = (j + 1).min(rest.len());
+            lit(&mut out, &rest[..len]);
+            i += len;
+        } else if let Some(len) = char_literal(rest) {
+            lit(&mut out, &rest[..len]);
+            i += len;
+        } else {
+            let ch = rest.chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
         }
     }
-    (lists.into_iter())
-        .filter(|(_, d, a)| a > d)
-        .map(|(name, d, a)| format!("{path}: {name} entries {d} → {a}"))
-        .collect()
+    (out, lits)
+}
+
+/// The length of the char literal `rest` starts with (`'a'`, `'\n'`, `'\''`); `None` for a
+/// lifetime (`'a`) or anything else.
+fn char_literal(rest: &str) -> Option<usize> {
+    let body = rest.strip_prefix('\'')?;
+    if let Some(esc) = body.strip_prefix('\\') {
+        let skip = esc.chars().next()?.len_utf8();
+        return esc.get(skip..)?.find('\'').map(|e| 3 + skip + e);
+    }
+    let ch = body.chars().next()?;
+    body[ch.len_utf8()..]
+        .starts_with('\'')
+        .then(|| 2 + ch.len_utf8())
+}
+
+/// The entries of every Rust `const` or `static` list named `*_ALLOWED` in a file: the items of
+/// the first `[ ]` after its `=` (`[..]`, `&[..]`, `vec![..]`), whitespace-trimmed, comments
+/// dropped. Adding or swapping in an entry widens what the list allows.
+pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
+    let (code, lits) = mask_literals(text);
+    let unmask = |s: &str| {
+        let mut parts = s.split('\0');
+        let mut out = parts.next().unwrap_or_default().to_string();
+        while let (Some(n), Some(after)) = (parts.next(), parts.next()) {
+            out.push_str(
+                n.parse::<usize>()
+                    .ok()
+                    .and_then(|n| lits.get(n))
+                    .map_or("", |l| l),
+            );
+            out.push_str(after);
+        }
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for cap in ALLOWED_DECL.captures_iter(&code) {
+        let after = cap.get(0).map_or(0, |m| m.end());
+        let Some(open) = code[after..].find('[').map(|o| after + o) else {
+            continue;
+        };
+        let (mut depth, mut start, list) =
+            (0usize, open + 1, out.entry(cap[1].to_string()).or_default());
+        for (k, ch) in code[open..].char_indices().map(|(k, ch)| (open + k, ch)) {
+            match ch {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth = depth.saturating_sub(1),
+                ',' if depth == 1 => {}
+                _ => continue,
+            }
+            if depth == 0 || ch == ',' {
+                let item = unmask(&code[start..k]);
+                if !item.is_empty() {
+                    list.push(item);
+                }
+                start = k + 1;
+            }
+            if depth == 0 {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Entries at head that no `*_ALLOWED` list of that name had at base (lists merged over the PR,
+/// so a list moved between files is no finding); a new list counts as empty at base.
+pub fn allowed_findings(
+    base: &BTreeMap<String, Vec<String>>,
+    head: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, entries) in head {
+        let old = base.get(name).map(Vec::as_slice).unwrap_or_default();
+        for e in entries.iter().filter(|e| !old.contains(e)) {
+            out.push(format!("{name}: (none) → {e}"));
+        }
+    }
+    out
 }
 
 /// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
@@ -660,7 +742,6 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
         if r > a {
             out.push(format!("{path}: #![forbid/deny] {r} → {a}"));
         }
-        out.extend(allowed_growth(path, patch));
     }
     if ["oxlint", "eslintrc", "eslint.config"]
         .iter()
@@ -1148,45 +1229,39 @@ mod tests {
     }
 
     #[test]
-    fn allowed_lists_that_grow() {
-        // An entry added inside a list (the hunk header names it) widens what it allows.
-        let grown = "@@ -499,7 +499,8 @@ pub const AUTONOMOUS_ALLOWED: [&str; 5] = [\n     \"docs/**\",\n+    \"src/**\",\n ];\n";
+    fn allowed_lists_that_grow_or_swap() {
+        let base = "pub const AUTONOMOUS_ALLOWED: [&str; 2] = [\n    \"docs/**\", // \"x\" ];\n    \"a]\",\n];\nconst X_DENIED: &[&str] = &[\"a\"];";
+        let b = allowed_lists(base);
+        assert_eq!(b["AUTONOMOUS_ALLOWED"], ["\"docs/**\"", "\"a]\""]);
+        assert!(!b.contains_key("X_DENIED"));
+        let f = |head: &str| allowed_findings(&b, &allowed_lists(head));
+        // Same entries, reordered, reformatted or commented: no finding.
+        assert!(f("mod m {\n    pub(crate) static AUTONOMOUS_ALLOWED: &[&str] = &[\"a]\", /* \"q\", */\n \"docs/**\"];\n}").is_empty());
+        // A swap widens as much as an addition; a non-literal entry counts.
         assert_eq!(
-            p("src/core/risk.rs", grown),
-            ["src/core/risk.rs: AUTONOMOUS_ALLOWED entries 0 → 1"]
+            f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"**\", \"a]\"];"),
+            ["AUTONOMOUS_ALLOWED: (none) → \"**\""]
         );
-        // The declaration in the hunk, one-line lists, statics and slices count too.
-        let decl = "@@\n-const X_ALLOWED: [&str; 1] = [\"a\"];\n+const X_ALLOWED: [&str; 2] = [\"a\", \"b\"];\n";
-        assert_eq!(p("src/a.rs", decl), ["src/a.rs: X_ALLOWED entries 1 → 2"]);
-        let multi = "@@\n static PATHS_ALLOWED: &[&str] = &[\n-    \"a\",\n+    \"a\", \"b\",\n+    \"c\",\n ];\n";
         assert_eq!(
-            p("src/a.rs", multi),
-            ["src/a.rs: PATHS_ALLOWED entries 1 → 3"]
+            f(
+                "impl A {\n    const AUTONOMOUS_ALLOWED: [&str; 3] = [\"docs/**\", \"a]\", SRC_GLOB];\n}"
+            ),
+            ["AUTONOMOUS_ALLOWED: (none) → SRC_GLOB"]
         );
-        // A rename, a shrink or another list is no finding; after `];` the list ends.
+        // `vec![..]` inside a LazyLock, raw strings, and a brand-new list.
+        let v =
+            "static NEW_ALLOWED: LazyLock<Vec<&str>> = LazyLock::new(|| vec![r#\"a\"]\"#, 'x']);";
+        assert_eq!(
+            f(v),
+            [
+                "NEW_ALLOWED: (none) → r#\"a\"]\"#",
+                "NEW_ALLOWED: (none) → 'x'"
+            ]
+        );
+        // A shrink is no finding; lifetimes do not start a char literal.
         assert!(
-            p(
-                "src/a.rs",
-                "@@\n const X_ALLOWED: [&str; 1] = [\n-    \"a\",\n+    \"b\",\n ];\n"
-            )
-            .is_empty()
+            f("const AUTONOMOUS_ALLOWED: &'static [&'static str] = &[\"docs/**\"];").is_empty()
         );
-        assert!(
-            p(
-                "src/a.rs",
-                "@@ const X_ALLOWED: [&str; 2] = [\n-    \"a\",\n ];\n"
-            )
-            .is_empty()
-        );
-        assert!(p("src/a.rs", "@@\n const X_ALLOWED: [&str; 1] = [\n     \"a\",\n ];\n+const OTHER: [&str; 1] = [\"b\"];\n").is_empty());
-        assert!(
-            p(
-                "src/a.rs",
-                "@@ const X_DENIED: [&str; 2] = [\n+    \"b\",\n ];\n"
-            )
-            .is_empty()
-        );
-        assert!(p("docs/a.md", grown).is_empty());
     }
 
     #[test]
