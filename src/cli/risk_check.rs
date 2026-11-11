@@ -426,7 +426,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
-        orchestrator_window(gh, base, &today[..10], pr, &excluded)?
+        orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
     } else {
         (
             Err("signed approvals do not count on this PR".into()),
@@ -1185,7 +1185,7 @@ fn orchestrator_window(
     base: &str,
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
-    excluded: &[String],
+    (excluded, capabilities): (&[String], &[String]),
 ) -> Result<(std::result::Result<String, String>, bool)> {
     let (files, matches, requirement) = pr;
     let approvals = match gh.file_at(CONFIG_FILE, base)? {
@@ -1214,6 +1214,7 @@ fn orchestrator_window(
         rules: &rules,
         workflows: &workflows,
         autonomous_excluded: &autonomous_excluded,
+        capabilities,
     });
     Ok((counts, approvals.policy() == Policy::Autonomous))
 }

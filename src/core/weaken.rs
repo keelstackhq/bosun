@@ -555,6 +555,60 @@ pub fn cfg_off(line: &str) -> bool {
     false
 }
 
+static ITEM_DECL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+(\w+)").expect("decl regex")
+});
+static ALLOWED_NAME: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(?:const|static)\s+(\w*_ALLOWED)\b").expect("allowed regex"));
+static STRING_LIT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""(?:[^"\\]|\\.)*""#).expect("string regex"));
+
+/// A Rust `const` or `static` list named `*_ALLOWED` with more string entries added than
+/// removed: adding an entry widens what it allows. The list is known from its declaration in the
+/// hunk or from the hunk header (git names the enclosing item); it ends at `];`.
+fn allowed_growth(path: &str, patch: &str) -> Vec<String> {
+    let mut lists: Vec<(String, usize, usize)> = Vec::new();
+    let mut cur: Option<String> = None;
+    for line in patch.lines() {
+        if line.starts_with("@@") {
+            let header = line.splitn(3, "@@").nth(2).unwrap_or_default();
+            cur = ALLOWED_NAME.captures(header).map(|c| c[1].to_string());
+            continue;
+        }
+        let (tag, body) = line.split_at(line.len().min(1));
+        let mut text = body;
+        if let Some(c) = ITEM_DECL.captures(body) {
+            let name = &c[1];
+            cur = name.ends_with("_ALLOWED").then(|| name.to_string());
+            text = body.split_once('=').map_or("", |(_, r)| r);
+        }
+        if let Some(name) = &cur
+            && matches!(tag, "-" | "+")
+        {
+            let n = STRING_LIT.find_iter(text).count();
+            let i = match lists.iter().position(|(l, ..)| l == name) {
+                Some(i) => i,
+                None => {
+                    lists.push((name.clone(), 0, 0));
+                    lists.len() - 1
+                }
+            };
+            if tag == "-" {
+                lists[i].1 += n
+            } else {
+                lists[i].2 += n
+            }
+        }
+        if body.contains("];") {
+            cur = None;
+        }
+    }
+    (lists.into_iter())
+        .filter(|(_, d, a)| a > d)
+        .map(|(name, d, a)| format!("{path}: {name} entries {d} → {a}"))
+        .collect()
+}
+
 /// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
 /// switches and Rust threshold constants.
 pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> {
@@ -606,6 +660,7 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
         if r > a {
             out.push(format!("{path}: #![forbid/deny] {r} → {a}"));
         }
+        out.extend(allowed_growth(path, patch));
     }
     if ["oxlint", "eslintrc", "eslint.config"]
         .iter()
@@ -1090,6 +1145,48 @@ mod tests {
             .is_empty()
         );
         assert!(p("src/a.rs", "@@\n-const MIN_X: u8 = 3;\n+const MIN_X: u8 = 4;\n-const MAX_X: u8 = 3;\n+const MAX_X: u8 = 2;\n").is_empty());
+    }
+
+    #[test]
+    fn allowed_lists_that_grow() {
+        // An entry added inside a list (the hunk header names it) widens what it allows.
+        let grown = "@@ -499,7 +499,8 @@ pub const AUTONOMOUS_ALLOWED: [&str; 5] = [\n     \"docs/**\",\n+    \"src/**\",\n ];\n";
+        assert_eq!(
+            p("src/core/risk.rs", grown),
+            ["src/core/risk.rs: AUTONOMOUS_ALLOWED entries 0 → 1"]
+        );
+        // The declaration in the hunk, one-line lists, statics and slices count too.
+        let decl = "@@\n-const X_ALLOWED: [&str; 1] = [\"a\"];\n+const X_ALLOWED: [&str; 2] = [\"a\", \"b\"];\n";
+        assert_eq!(p("src/a.rs", decl), ["src/a.rs: X_ALLOWED entries 1 → 2"]);
+        let multi = "@@\n static PATHS_ALLOWED: &[&str] = &[\n-    \"a\",\n+    \"a\", \"b\",\n+    \"c\",\n ];\n";
+        assert_eq!(
+            p("src/a.rs", multi),
+            ["src/a.rs: PATHS_ALLOWED entries 1 → 3"]
+        );
+        // A rename, a shrink or another list is no finding; after `];` the list ends.
+        assert!(
+            p(
+                "src/a.rs",
+                "@@\n const X_ALLOWED: [&str; 1] = [\n-    \"a\",\n+    \"b\",\n ];\n"
+            )
+            .is_empty()
+        );
+        assert!(
+            p(
+                "src/a.rs",
+                "@@ const X_ALLOWED: [&str; 2] = [\n-    \"a\",\n ];\n"
+            )
+            .is_empty()
+        );
+        assert!(p("src/a.rs", "@@\n const X_ALLOWED: [&str; 1] = [\n     \"a\",\n ];\n+const OTHER: [&str; 1] = [\"b\"];\n").is_empty());
+        assert!(
+            p(
+                "src/a.rs",
+                "@@ const X_DENIED: [&str; 2] = [\n+    \"b\",\n ];\n"
+            )
+            .is_empty()
+        );
+        assert!(p("docs/a.md", grown).is_empty());
     }
 
     #[test]
