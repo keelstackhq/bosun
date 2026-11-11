@@ -2,7 +2,8 @@
 //! them like an Edit. Only literal paths count; the rest is a known miss.
 
 use super::{
-    RUNNERS, SEP, WRAPPERS, base, literal_path, shell_words, split_heredocs, unwrap_runners,
+    RUNNERS, SEP, WRAPPERS, base, literal_path, shell_words, split_heredocs, substitutions,
+    unwrap_runners,
 };
 
 /// Whether a word is a redirection: `>f`, `>>f`, `N>f`, `&>f`. A word with other text before
@@ -94,7 +95,8 @@ fn command_of(seg: &[String]) -> (&str, Vec<&str>, bool) {
 /// expansions are skipped; after a `cd`, `pushd` or `popd` relative targets are skipped (the
 /// hook could not tell where they land).
 pub fn bash_writes(command: &str) -> Vec<String> {
-    let words = shell_words(&mask_quoted(&split_heredocs(command).0));
+    let code = split_heredocs(command).0;
+    let words = shell_words(&mask_quoted(&code));
     let (mut out, mut moved) = (Vec::new(), false);
     for seg in words.split(|w| w == SEP) {
         let mut found: Vec<String> = Vec::new();
@@ -162,6 +164,17 @@ pub fn bash_writes(command: &str) -> Vec<String> {
                 .filter_map(|p| literal_path(&p.replace(QUOTED_GT, ">"))),
         );
     }
+    // Masking hides a `>` inside a quoted substitution (`"$(cmd > f)"`): judge those commands
+    // on their own, unless a `cd` makes relative paths unknown.
+    if !moved {
+        for inner in substitutions(&code, false) {
+            for path in bash_writes(&inner) {
+                if !out.contains(&path) {
+                    out.push(path);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -206,6 +219,9 @@ mod tests {
             ("(cp a src/b.rs)", vec!["src/b.rs"]),
             ("{ cp a src/b.rs; }", vec!["src/b.rs"]),
             ("cd /tmp/w && cp a /abs/b.rs", vec!["/abs/b.rs"]),
+            ("echo \"$(cmd > src/f.rs)\"", vec!["src/f.rs"]),
+            ("echo \"x $(a | tee src/f.rs) y\"", vec!["src/f.rs"]),
+            ("echo $(cmd > src/f.rs)", vec!["src/f.rs"]),
         ] {
             assert_eq!(bash_writes(cmd), want, "{cmd}");
         }
@@ -242,6 +258,9 @@ mod tests {
             "grep \">\" README.md",
             "echo \\>x",
             "echo '2>README.md'",
+            "echo \"$(grep '>' README.md)\"",
+            "echo '$(cmd > README.md)'",
+            "cd /tmp && echo \"$(cmd > README.md)\"",
         ] {
             assert!(bash_writes(cmd).is_empty(), "{cmd}: {:?}", bash_writes(cmd));
         }

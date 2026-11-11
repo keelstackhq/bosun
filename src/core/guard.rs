@@ -11,6 +11,7 @@ use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
 mod interp;
+mod prose;
 pub use interp::{Script, script_rules};
 mod writes;
 pub use writes::bash_writes;
@@ -489,7 +490,10 @@ fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Optio
     decrypt_rule(command, 0)
         .or_else(|| destructive_rule(command, 0))
         .or_else(|| check(command, branch_at, default_branch, 0))
-        .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
+        .or_else(|| {
+            let prose = prose::strip_prose(command);
+            (prose.contains(STATE) && !read_only(&prose, 0)).then(label_reason)
+        })
 }
 
 fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
@@ -2402,7 +2406,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t == "env" || t.starts_with("env."))),
                 n if INTERPS.contains(&n) && after.iter().any(|a| ENV_READS.iter().any(|e| a.contains(e) && (*e != "environ" || runs_code(n, after)))) => true,
                 _ if i == 0 && tgt(rest[0]) => true,
-                n if (SHELLS.contains(&n) || n == ".") && after.iter().any(|a| tgt(a)) => true,
+                n if (SHELLS.contains(&n) || n == ".") && after.iter().enumerate().any(|(j, a)| tgt(a) && !script_arg(&after[..j], &tgt)) => true,
                 n if SHELLS.contains(&n) && mentions => {
                     let interp = INTERPS.contains(&n);
                     let code = runs_code(n, after);
@@ -2418,6 +2422,16 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether the words before an argument hold the script that a shell or interpreter runs (the
+/// first word, after options that take no value), so a later written file is only its data.
+fn script_arg(before: &[&str], tgt: &dyn Fn(&str) -> bool) -> bool {
+    const FLAGS: &[&str] = &["-u", "-B", "-I", "-E", "-s", "-S", "-q", "-O", "-e", "-x"];
+    before
+        .iter()
+        .find(|w| !FLAGS.contains(w))
+        .is_some_and(|w| !w.starts_with(['-', '<', '>', '&']) && !tgt(w))
 }
 
 fn heredoc_at(line: &str) -> Option<usize> {
@@ -3582,6 +3596,59 @@ mod tests {
         ] {
             let cmd = format!("cat <<EOF\n{body}\nEOF");
             assert!(bash(&cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn label_lock_treats_prose_flag_heredocs_as_data() {
+        for cmd in [
+            "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review label\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review `gh issue edit 1 --add-label bosun:state/x`\nEOF\n)\"",
+            "gh pr create --title t --body \"$(cat <<'EOF'\nfix bosun:state/review\n\nmore\nEOF\n)\"",
+            "gh issue comment 3 --body \"$(cat <<'EOF'\nbosun:state/review\nEOF\n)\"",
+            "git commit -m 'docs: bosun:state/review'",
+            "gh pr create --body 'about bosun:state/review' --title \"t\"",
+        ] {
+            assert_eq!(bash(cmd, "x"), None, "{cmd}");
+        }
+        for cmd in [
+            "gh pr edit 3 --add-label \"$(cat <<'EOF'\nbosun:state/x\nEOF\n)\"",
+            "gh pr create --body \"$(cat <<'EOF'\nx\nEOF\n)\" --label bosun:state/x",
+            "gh issue edit 3 --add-label bosun:state/x",
+            "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\" && gh issue edit 3 --add-label bosun:state/x",
+            "git commit -m \"$(cat <<EOF\nbosun:state/x $USER\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nbosun:state/x\nEOF\n) $(gh label create bosun:state/y)\"",
+            "git commit -m \"$(cat <<'EOF'\nbosun:state/x\nEOF\n; gh label create bosun:state/y)\"",
+            "git commit -m \"$(sh <<'EOF'\ngh label create bosun:state/y\nEOF\n)\"",
+            "git commit -m \"bosun:state/x $(gh label create bosun:state/y)\"",
+            "git commit -m 'x' --add-label 'bosun:state/y'",
+        ] {
+            assert!(bash(cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn decrypt_lock_allows_data_arguments_to_scripts_but_not_the_written_script() {
+        let w = "cat > c.json <<'EOF'\n{\"a\":\"sops -d f\"}\nEOF\n";
+        for run in [
+            "python3 probe.py c.json",
+            "python3 -u probe.py c.json",
+            "bash run.sh c.json",
+        ] {
+            assert_eq!(bash(&format!("{w}{run}"), "x"), None, "{run}");
+        }
+        for run in [
+            "python3 c.json",
+            "bash c.json",
+            "./c.json",
+            "sh < c.json",
+            "source c.json",
+            ". c.json",
+            "python3 -W ignore c.json",
+            "bash --rcfile /dev/null c.json",
+            "python3 c.json c.json",
+        ] {
+            assert!(bash(&format!("{w}{run}"), "x").is_some(), "{run}");
         }
     }
 

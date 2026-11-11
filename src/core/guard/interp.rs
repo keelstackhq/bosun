@@ -243,8 +243,31 @@ fn heredoc_feeds(command: &str, path: &str) -> bool {
         stages
             .iter()
             .position(|s| s.contains(path))
-            .is_some_and(|at| stages[..=at].iter().any(|s| s.contains("<<")))
+            .is_some_and(|at| {
+                let feeds =
+                    |(i, s): (usize, &&str)| s.contains("<<") && (i == at || heredoc_only(s));
+                stages[..=at].iter().enumerate().any(feeds)
+            })
     })
+}
+
+/// Whether a stage with a heredoc reads only it: no operand after the command word besides
+/// options and redirections (`cat <<'EOF' evil.py` prints evil.py too).
+fn heredoc_only(stage: &str) -> bool {
+    let (mut skip, mut operands) = (false, 0);
+    for w in shell_words(stage).iter().skip(1) {
+        let glued = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        let op = glued.trim_start_matches(['<', '>', '-']);
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        if glued.starts_with(['<', '>']) {
+            skip = op.is_empty() && !glued.starts_with(">&");
+        } else if !w.starts_with('-') {
+            operands += 1;
+        }
+    }
+    operands == 0
 }
 
 /// A `#!` line that runs a shell, also with arguments (`#!/bin/bash -e`, `#!/usr/bin/env sh`).
@@ -379,6 +402,8 @@ mod tests {
             "python3 /dev/stdin & cat <<EOF\nx\nEOF",
             "python3 /dev/stdin | cat <<EOF\nx\nEOF",
             "python3 /dev/stdin < run.py && cat <<EOF\nx\nEOF",
+            "cat <<'EOF' evil.py | python3 /dev/stdin\nprint(1)\nEOF",
+            "cat -n <<'EOF' a/evil.py 2>&1 | python3 /dev/stdin\nprint(1)\nEOF",
         ] {
             assert!(script(cmd, "").is_some(), "{cmd}");
         }
