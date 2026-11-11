@@ -678,8 +678,13 @@ pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
         // The `=` at depth 0 of the type; a `;`, `,`, `{` or closing bracket first means none.
         let mut depth = 0usize;
         let mut eq = None;
+        let mut prev = ' ';
         for (k, ch) in code[after..].char_indices() {
+            // The `>` of `->` (a fn pointer type) closes nothing.
+            let arrow = ch == '>' && prev == '-';
+            prev = ch;
             match ch {
+                _ if arrow => {}
                 '[' | '(' | '<' => depth += 1,
                 ']' | ')' | '>' if depth > 0 => depth -= 1,
                 '=' if depth == 0 => {
@@ -729,6 +734,13 @@ pub fn allowed_findings(
         m
     };
     let mut out = Vec::new();
+    // A list gone at head (deleted, renamed, inlined) no longer limits anything it fed.
+    for (name, _) in base
+        .iter()
+        .filter(|(n, v)| !head.contains_key(*n) && !v.is_empty())
+    {
+        out.push(format!("{name} (all files): list → (removed)"));
+    }
     for (name, entries) in head {
         let old = count(base.get(name).map(Vec::as_slice).unwrap_or_default());
         for (e, n) in count(entries) {
@@ -1339,6 +1351,14 @@ mod tests {
         assert!(
             !s.contains_key("T_ALLOWED") && !s.contains_key("N_ALLOWED"),
             "{s:?}"
+        );
+        // `->` in a fn pointer type closes no bracket.
+        let fp = allowed_lists("const F_ALLOWED: &[(&str, fn(&str) -> bool)] = &[(\"**\", f)];");
+        assert_eq!(fp["F_ALLOWED"], ["\"**\"", "f"]);
+        // A list gone at head is a finding.
+        assert_eq!(
+            f("const AUTONOMOUS_GLOBS: &[&str] = &[\"**\"];"),
+            ["AUTONOMOUS_ALLOWED (all files): list → (removed)"]
         );
     }
 
