@@ -1711,6 +1711,8 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
 /// versions: raw splice renders a comment and no `[approvals] policy` there, so an old pin never
 /// meets a value it cannot parse. `policy_pin_checked` (set by `bosun adopt`, which refuses a
 /// pin that is too old) writes it. The channel's own release (empty pin) writes it as before.
+/// Upgrade path: a consumer on 0.12/0.13 with a pin and a policy had the key rendered; with
+/// `policy_pin_checked` unset the key now goes away (comment instead), set it keeps the old render.
 #[test]
 fn an_explicit_pin_writes_the_policy_only_when_checked() {
     for (pin, checked, written) in [
@@ -1718,6 +1720,7 @@ fn an_explicit_pin_writes_the_policy_only_when_checked() {
         ("0.8.0", "", false),
         ("0.8.0", "1", true),
         ("", "", true),
+        ("", "1", true),
     ] {
         let vars: BTreeMap<&str, String> = [
             ("project", "app"),
@@ -1750,6 +1753,16 @@ fn an_explicit_pin_writes_the_policy_only_when_checked() {
         if !written {
             assert!(text.contains("Add it by hand"), "{text}");
         }
+        // The bootstrap block stays tied to the empty pin alone.
+        let until = config
+            .get("approvals")
+            .and_then(|a| a.get("bootstrap_until"))
+            .is_some();
+        assert_eq!(
+            until,
+            pin.is_empty(),
+            "pin {pin:?} checked {checked:?}: {text}"
+        );
     }
 }
 
