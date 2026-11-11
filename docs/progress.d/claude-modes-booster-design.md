@@ -1,1 +1,1 @@
-- 2026-11-11 · modes booster design · spec and 10-PR plan for the mode ladder
+- 2026-11-11 · modes booster design · spec and 11-PR plan for the mode ladder

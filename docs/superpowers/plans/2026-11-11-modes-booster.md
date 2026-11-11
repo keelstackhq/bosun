@@ -127,6 +127,23 @@ Touch: `.bosun/bosun.toml`, `docs/PROGRESS.md`. Size ~5. After a release with PR
 in `.bosun/version` (owner release). R-gov and R-weaken. `booster` only after two weeks of
 `steady` metrics on target.
 
+### PR 10 — user docs, quickstart, migration (docs only, last)
+
+Touch: `README.md`, `docs/spec.md`, `docs/defaults.md`, `docs/operating-model.md`,
+`docs/adopt-existing-repo.md`, `docs/prerequisites.md`, `docs/quickstart.md` (new). Size ~400.
+After every implementation PR (1a-9), so it describes what shipped. Low risk (no risk path; if
+the `docs/setup-script.sh` header must change, that line is R-gov and goes to the owner).
+
+- [ ] Update every doc the modes change: README, spec index, defaults, operating model, setup
+  (prerequisites) and adopt docs.
+- [ ] `docs/quickstart.md`: per mode, the exact `[mode]` config and commands, for each
+  environment: local Claude Code CLI, web/cloud sessions (`[cloud]`, environment id, setup
+  script), Claude in Slack. Short and copy-pasteable.
+- [ ] Migration section: a repo already on bosun moves one step: pin a release that reads
+  `[mode]`, `bosun mode` to check, PR setting `[mode] name` (owner approves: R-gov, R-weaken),
+  watch `bosun metrics` against the targets, next step. Marks each owner step (phone/computer,
+  D-009).
+
 ### O1 (optional, owner) — non-gate command registry
 
 Touch: `src/lib.rs`, `src/cli/mod.rs`, `src/cli/commands.rs` (new), `.bosun/risk.toml`,
@@ -142,5 +159,6 @@ the owner takes spec open point 2.
 | B | 2, 3, 4, 5, 6 | disjoint touch: hooks; heal; digest; metrics; wave/spawn. Spec files 07, 09, 14, 18, 05 |
 | C | 7 (after 3, 6), 8 (after 5) | 7 shares spec 09 and `cli/spawn.rs`; 8 shares metrics files |
 | D | 9, O1 | owner; 9 after a release |
+| E | 10 | docs; after all others |
 
-Count: 10 PRs (+ O1 optional). Owner approval: 1a, 1b, 2, 4, 7, 9, O1. Low risk: 3, 5, 6, 8.
+Count: 11 PRs (+ O1 optional). Owner approval: 1a, 1b, 2, 4, 7, 9, O1. Low risk: 3, 5, 6, 8, 10.
