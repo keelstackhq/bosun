@@ -7,53 +7,6 @@ use super::shell_words;
 
 const FLAGS: &[&str] = &["-m", "-b", "-t", "--message", "--body", "--title"];
 
-/// Whether the words before a flag start a command whose prose flags are data: `git commit|tag`
-/// (the verb after global options such as `-C dir`, `-c k=v`) and `gh pr|issue create|comment|..`
-/// (after `-R repo`), after leading `VAR=x` assignments.
-fn prose_command(before: &str) -> bool {
-    let seg = before
-        .rsplit([';', '&', '|', '\n', '('])
-        .next()
-        .unwrap_or("");
-    let words: Vec<&str> = seg
-        .split_whitespace()
-        .skip_while(|a| a.contains('=') && !a.starts_with('-'))
-        .collect();
-    // The next word that is not an option (or the value of one in `takes`), from `at`.
-    let word = |mut at: usize, takes: &[&str]| {
-        while let Some(a) = words.get(at) {
-            if takes.contains(a) {
-                at += 2;
-            } else if a.starts_with('-') {
-                at += 1;
-            } else {
-                return Some((*a, at + 1));
-            }
-        }
-        None
-    };
-    match words.first() {
-        Some(&"git") => {
-            let takes = ["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
-            matches!(word(1, &takes), Some(("commit" | "tag", _)))
-        }
-        Some(&"gh") => {
-            let takes = ["-R", "--repo"];
-            word(1, &takes).is_some_and(|(a, at)| {
-                matches!(a, "pr" | "issue")
-                    && matches!(
-                        word(at, &takes),
-                        Some((
-                            "create" | "comment" | "edit" | "review" | "close" | "reopen",
-                            _
-                        ))
-                    )
-            })
-        }
-        _ => false,
-    }
-}
-
 /// The end of a `"$(cat <<'EOF' .. EOF\n)"` value that starts at `s`: only a `cat` of a
 /// quoted-delimiter heredoc, closed by `)"` right after the delimiter line.
 fn heredoc_value(s: &str) -> Option<usize> {
@@ -100,21 +53,92 @@ fn quoted_value(s: &str) -> Option<usize> {
 /// The command with the prose values of prose flags replaced by `"x"`.
 pub fn strip_prose(command: &str) -> String {
     let out = strip(command);
-    if simple_git_or_gh(&out) && !edits_labels(&out) {
+    if simple_command(&out) && !edits_labels(&out) {
         out
     } else {
         command.to_string()
     }
 }
 
-/// Whether the text, outside the prose values, is one simple `git` or `gh` command (after
-/// `VAR=x` words): no newline, `;`, `&`, `|`, `#`, `$`, backtick, `<`, `>`, parens or backslash.
-fn simple_git_or_gh(text: &str) -> bool {
+/// Whether the text, outside the prose values, is one plain `git commit|tag` or
+/// `gh pr|issue VERB` command that starts with those words (no `VAR=`, no global option such as
+/// `git -c`) and uses only the flags on its allowlist; any other flag (`-e`, `-t`, `-F`,
+/// `--cleanup`, `-R`) may run an editor or read a file, so the text is not prose. No newline,
+/// `;`, `&`, `|`, `#`, `$`, backtick, `<`, `>`, parens or backslash outside the values either.
+fn simple_command(text: &str) -> bool {
     const BAD: &[char] = &['\n', ';', '&', '|', '#', '$', '`', '<', '>', '(', ')', '\\'];
-    let first = text
-        .split_whitespace()
-        .find(|w| !(w.contains('=') && !w.starts_with('-')));
-    !text.contains(BAD) && matches!(first, Some("git" | "gh"))
+    if text.contains(BAD) {
+        return false;
+    }
+    let w = shell_words(text);
+    let w: Vec<&str> = w.iter().map(String::as_str).collect();
+    // Flags with a value, flags without, whether operands (a number, branch or tag) are allowed.
+    let (rest, val, bare, operands): (&[&str], &[&str], &[&str], bool) = match w.as_slice() {
+        ["git", "commit", rest @ ..] => (
+            rest,
+            &["-m", "--message"],
+            &[
+                "-a",
+                "--all",
+                "-s",
+                "--signoff",
+                "--allow-empty",
+                "-q",
+                "--quiet",
+            ],
+            false,
+        ),
+        ["git", "tag", rest @ ..] => (rest, &["-m", "--message"], &["-a"], true),
+        ["gh", "pr" | "issue", "create", rest @ ..] => (
+            rest,
+            &[
+                "-t", "--title", "-b", "--body", "-B", "--base", "-H", "--head",
+            ],
+            &["-d", "--draft"],
+            false,
+        ),
+        [
+            "gh",
+            "pr" | "issue",
+            "edit" | "comment" | "close" | "reopen",
+            rest @ ..,
+        ] => (
+            rest,
+            &[
+                "-t", "--title", "-b", "--body", "-B", "--base", "-H", "--head",
+            ],
+            &["-d", "--draft"],
+            true,
+        ),
+        ["gh", "pr", "review", rest @ ..] => (
+            rest,
+            &["-b", "--body"],
+            &["-c", "--comment", "-r", "--request-changes"],
+            true,
+        ),
+        _ => return false,
+    };
+    let mut i = 0;
+    while let Some(a) = rest.get(i) {
+        i += 1;
+        if !a.starts_with('-') {
+            if !operands {
+                return false;
+            }
+        } else if let Some((name, _)) = a.split_once('=').filter(|(n, _)| n.starts_with("--")) {
+            if !val.contains(&name) {
+                return false;
+            }
+        } else if val.contains(a) {
+            i += 1;
+            if i > rest.len() {
+                return false;
+            }
+        } else if !bare.contains(a) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Whether any word outside the prose values may edit labels: a word with `label` (any case,
@@ -150,9 +174,7 @@ fn strip(command: &str) -> String {
             } else {
                 ""
             };
-            if prose_command(&command[..i])
-                && let Some(len) = heredoc_value(value).or_else(|| quoted_value(value))
-            {
+            if let Some(len) = heredoc_value(value).or_else(|| quoted_value(value)) {
                 let skipped = after.len() - value.len();
                 out.push_str(flag);
                 out.push_str(if glued { "=" } else { " " });
@@ -207,18 +229,32 @@ mod tests {
     }
 
     #[test]
-    fn the_git_verb_is_found_after_global_options() {
-        assert_eq!(
-            strip_prose("git -C d commit -m 'a'"),
-            "git -C d commit -m \"x\""
-        );
-        assert_eq!(
-            strip_prose("git -c alias.y=z y -m 'a'"),
-            "git -c alias.y=z y -m 'a'"
-        );
-        assert_eq!(
-            strip_prose("git -c alias.y=tag y tag -m 'a'"),
-            "git -c alias.y=tag y tag -m 'a'"
-        );
+    fn only_plain_commands_with_allowlisted_flags_are_prose() {
+        for c in [
+            "git commit -m 'a'",
+            "git commit -a -s --allow-empty -m 'a'",
+            "git tag -a v1 -m 'a'",
+            "gh pr create -t 'a' --body='b' -B main -d",
+            "gh issue comment 3 --body 'a'",
+        ] {
+            assert_ne!(strip_prose(c), c, "{c}");
+        }
+        for c in [
+            "git -C d commit -m 'a'",
+            "git -c core.editor=sh commit -e -m 'a'",
+            "GIT_EDITOR=sh git commit -e -m 'a'",
+            "git commit -e -m 'a'",
+            "git commit -t tmpl -m 'a'",
+            "git commit -F f -m 'a'",
+            "git commit --cleanup=x -m 'a'",
+            "git commit --amend -m 'a'",
+            "git commit -m 'a' file",
+            "gh pr create -F f -t 'a'",
+            "gh -R o/r issue comment 3 --body 'a'",
+            "gh pr review 3 -a -b 'a'",
+            "gh pr create --fill -t 'a'",
+        ] {
+            assert_eq!(strip_prose(c), c, "{c}");
+        }
     }
 }

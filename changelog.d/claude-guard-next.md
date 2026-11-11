@@ -1,1 +1,1 @@
-- Guard round 4: prose stripping only for one simple git or gh command (no newline, separators, comment, expansion outside the value)
+- Guard: prose stripping only for plain git commit|tag and gh pr|issue commands with allowlisted flags (no -c, VAR=, editor or file flags)
