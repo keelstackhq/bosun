@@ -1500,11 +1500,12 @@ fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
             if !code.contains(APP_TOKEN_ACTION) {
                 out.push("token action not pinned by the known full sha".into());
             }
-            if !code.contains("app-id: ${{ vars.BOSUN_APP_ID }}")
+            if !code.contains("client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}")
                 || !code.contains("private-key: ${{ secrets.BOSUN_APP_KEY }}")
                 || !code.contains("id: app")
+                || code.contains("app-id:")
             {
-                out.push("token step without its id, app-id or key".into());
+                out.push("token step without its id, client-id or key".into());
             }
             if !code.contains("continue-on-error: true") {
                 out.push("a token failure stops the gate job".into());
@@ -1619,7 +1620,7 @@ fn the_app_job_scan_catches_each_problem() {
         app_job_problems(&yaml, &jobs[0].1)
     };
     let token = format!(
-        "      - id: app\n        uses: {APP_TOKEN_ACTION}\n        with:\n          app-id: ${{{{ vars.BOSUN_APP_ID }}}}\n          private-key: ${{{{ secrets.BOSUN_APP_KEY }}}}\n          permission-checks: write\n        continue-on-error: true\n"
+        "      - id: app\n        uses: {APP_TOKEN_ACTION}\n        with:\n          client-id: ${{{{ vars.BOSUN_APP_CLIENT_ID }}}}\n          private-key: ${{{{ secrets.BOSUN_APP_KEY }}}}\n          permission-checks: write\n        continue-on-error: true\n"
     );
     let bosun = "      - env:\n          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}\n        run: ./target/release/bosun risk-check \"$PR\"\n";
     let base = "      - uses: actions/checkout@v4\n        with:\n          ref: ${{ github.event.pull_request.base.sha }}\n";
@@ -1641,6 +1642,11 @@ fn the_app_job_scan_catches_each_problem() {
     assert!(job(target, &wide)[0].contains("downscoped"));
     let strict = good.replace("        continue-on-error: true\n", "");
     assert!(job(target, &strict)[0].contains("stops the gate"));
+    let old = good.replace(
+        "          client-id:",
+        "          app-id: x\n          client-id:",
+    );
+    assert!(job(target, &old).iter().any(|p| p.contains("client-id")));
     let run = "  workflow_run:\n    workflows: [ci]\n";
     assert!(job(run, &good.replace("pull_request.base.sha", "sha"))[0].contains("filter"));
 }

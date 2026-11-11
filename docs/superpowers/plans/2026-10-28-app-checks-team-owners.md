@@ -165,9 +165,9 @@ depends: B2
   steps: Repo Settings > Environments > New bosun-app; Deployment branches and tags > Selected > add branch rule main; no tags, no reviewers, no wait timer (any rule would hold every gate run)
   verify: environment bosun-app
   blocks: B2W
-- H4: Add the App id and key to the environment
+- H4: Add the App client id and key to the environment
   on: computer
-  steps: gh variable set BOSUN_APP_ID --env bosun-app --body <app id>; gh secret set BOSUN_APP_KEY --env bosun-app < key.pem; never as a repo or org secret
+  steps: gh variable set BOSUN_APP_CLIENT_ID --env bosun-app --body <client id> (App settings > General > Client ID); gh secret set BOSUN_APP_KEY --env bosun-app < key.pem; never as a repo or org secret
   verify: secret bosun-app/BOSUN_APP_KEY
   blocks: B2W
 - H5: Switch the ruleset to the pinned sources

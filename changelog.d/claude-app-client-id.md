@@ -1,0 +1,1 @@
+- Gate workflows and channel templates mint the App token with `client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}` instead of the deprecated `app-id`; consumers with the App: set `BOSUN_APP_CLIENT_ID` (the App's client id) in the `bosun-app` environment before taking this channel update, as `BOSUN_APP_ID` is no longer read.

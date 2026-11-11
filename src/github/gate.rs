@@ -181,7 +181,7 @@ fn missing_token() -> BosunError {
     BosunError::error(
         format!("[checks] mode = \"checks\" needs the gate App token in {APP_TOKEN_ENV}"),
         format!(
-            "run the job in the `bosun-app` environment with the actions/create-github-app-token step and pass its token as {APP_TOKEN_ENV}"
+            "run the job in the `bosun-app` environment with the actions/create-github-app-token step (`client-id` from the `BOSUN_APP_CLIENT_ID` variable, `private-key` from `BOSUN_APP_KEY`) and pass its token as {APP_TOKEN_ENV}"
         ),
     )
 }
