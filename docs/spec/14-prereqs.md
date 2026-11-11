@@ -67,10 +67,10 @@ answerable; PR numbers come only from the owner's chat; each (id, pr) is signed 
 (the permissions of §15, webhook off, installed on the chosen repos only); H2 generate its
 private key; H3 create the environment `bosun-app` whose deployment branch policy allows only
 `main`, with no other protection rule (no required reviewers, no wait timer: they would hold
-every gate run); H4 set the variable `BOSUN_APP_CLIENT_ID` (the App's client id) and the secret
-`BOSUN_APP_KEY` in that environment, never as a repo or org secret; H6 release B2 and pin it; H7 check that the agents' credential
-has no Administration, Environments or Secrets write; H5, after the dual phase, switch the
-ruleset with `hoist apply --area github`. A repo in another org makes its own App.
+every gate run); H4 set the variable `BOSUN_APP_CLIENT_ID` (the App's client id) and the
+secret `BOSUN_APP_KEY` in that environment, never as a repo or org secret; H6 release B2 and pin
+it; H7 check that the agents' credential has no Administration, Environments or Secrets write;
+H5, after the dual phase, switch the ruleset with `hoist apply --area github`. A repo in another org makes its own App.
 
 **Zero-touch onboarding.** With an intake file (spec §3, §11), the per-repo human steps become
 one-time org steps: the Claude GitHub App and the provisioner app on all repositories, the shared

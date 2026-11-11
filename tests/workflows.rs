@@ -1642,6 +1642,11 @@ fn the_app_job_scan_catches_each_problem() {
     assert!(job(target, &wide)[0].contains("downscoped"));
     let strict = good.replace("        continue-on-error: true\n", "");
     assert!(job(target, &strict)[0].contains("stops the gate"));
+    let old = good.replace(
+        "          client-id:",
+        "          app-id: x\n          client-id:",
+    );
+    assert!(job(target, &old).iter().any(|p| p.contains("client-id")));
     let run = "  workflow_run:\n    workflows: [ci]\n";
     assert!(job(run, &good.replace("pull_request.base.sha", "sha"))[0].contains("filter"));
 }
