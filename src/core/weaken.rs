@@ -715,6 +715,18 @@ pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
                 _ => {}
             }
         }
+        // The whole initializer too, under `NAME=`: same entries in another order or
+        // structure (`!`, `&&` to `||`, values swapped between tuples) still change it.
+        // Formatting (whitespace, a trailing comma) is no change.
+        let mut whole: String = code[eq..end]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        for (from, to) in [(",]", "]"), (",)", ")"), (",}", "}")] {
+            whole = whole.replace(from, to);
+        }
+        let whole = unmask(&whole);
+        out.entry(format!("{}=", &cap[1])).or_default().push(whole);
         let list = out.entry(cap[1].to_string()).or_default();
         let atoms = code[eq..end].split(['[', ']', '(', ')', '{', '}', ',']);
         // `&`, `&mut`, `||` and a macro's `!` are syntax, not entries.
@@ -741,6 +753,13 @@ pub fn allowed_findings(
         v.iter().for_each(|e| *m.entry(e.clone()).or_default() += 1);
         m
     };
+    let lists = |m: &'_ BTreeMap<String, Vec<String>>| {
+        m.iter()
+            .filter(|(n, _)| !n.ends_with('='))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let (whole, (base, head)) = ((base, head), (&lists(base), &lists(head)));
     let mut out = Vec::new();
     // A list gone at head (deleted, renamed, inlined) no longer limits anything it fed.
     for (name, _) in base
@@ -751,11 +770,21 @@ pub fn allowed_findings(
     }
     for (name, entries) in head {
         let old = count(base.get(name).map(Vec::as_slice).unwrap_or_default());
-        for (e, n) in count(entries) {
-            let o = old.get(&e).copied().unwrap_or(0);
-            if n > o {
+        let new = count(entries);
+        for (e, n) in &new {
+            let o = old.get(e).copied().unwrap_or(0);
+            if *n > o {
                 out.push(format!("{name} (all files): {e} {o} → {n}"));
             }
+        }
+        // Same entries, different order or structure: the owner judges it.
+        let sorted = |m: &BTreeMap<String, Vec<String>>| {
+            let mut v = m.get(&format!("{name}=")).cloned().unwrap_or_default();
+            v.sort();
+            v
+        };
+        if old == new && !entries.is_empty() && sorted(whole.0) != sorted(whole.1) {
+            out.push(format!("{name} (all files): order or structure changed"));
         }
     }
     out
@@ -1306,8 +1335,17 @@ mod tests {
         assert!(!b.contains_key("X_DENIED"));
         let f = |head: &str| allowed_findings(&b, &allowed_lists(head));
         let one = |e: &str| vec![format!("AUTONOMOUS_ALLOWED (all files): {e} 0 → 1")];
-        // Same entries, reordered, reformatted or commented: no finding.
-        assert!(f("mod m {\n    pub(crate) static AUTONOMOUS_ALLOWED: &[&str] = &[\"a]\", /* \"q\", */\n \"docs/**\"];\n}").is_empty());
+        // Same entries, reformatted or commented: no finding; reordered: the owner judges.
+        assert!(
+            f("pub const AUTONOMOUS_ALLOWED: [&str; 2] = [\"docs/**\", /* \"q\", */ \"a]\"];")
+                .is_empty()
+        );
+        assert_eq!(
+            f(
+                "mod m {\n    pub(crate) static AUTONOMOUS_ALLOWED: &[&str] = &[\"a]\", /* \"q\", */\n \"docs/**\"];\n}"
+            ),
+            ["AUTONOMOUS_ALLOWED (all files): order or structure changed"]
+        );
         // A swap widens as much as an addition; a non-literal entry or initializer counts.
         assert_eq!(
             f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"**\", \"a]\"];"),
@@ -1350,7 +1388,7 @@ mod tests {
         assert!(
             f("const AUTONOMOUS_ALLOWED: &'static [&'static str] = &[\"docs/**\"];").is_empty()
         );
-        assert!(f("const AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\"]; // é\nconst Z: &str = \"\\é\"; const C: char = 'é';").is_empty());
+        assert!(f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"docs/**\", \"a]\"]; // é\nconst Z: &str = \"\\é\"; const C: char = 'é';").is_empty());
         // A scalar or a declaration without a value records no unrelated code.
         let s = allowed_lists(
             "const RETRIES_ALLOWED: u32 = 3;\n#[derive(Debug)]\nstruct S;\ntrait T { const T_ALLOWED: &'static [&'static str]; }\nfn g<const N_ALLOWED: usize>() { let a = [1]; }",
@@ -1376,6 +1414,32 @@ mod tests {
             (neg["B_ALLOWED"][0].as_str(), neg["S_ALLOWED"][0].as_str()),
             ("!STRICT", "\"a  b\"")
         );
+        // Same entries in another order or structure.
+        let changed = |h: &str| {
+            allowed_findings(
+                &allowed_lists(&format!("const S_ALLOWED: X = {h};")),
+                &allowed_lists(&format!(
+                    "const S_ALLOWED: X = {};",
+                    "&[(\"a\", true), (\"b\", false)]"
+                )),
+            )
+        };
+        for h in [
+            "&[(\"a\", false), (\"b\", true)]",
+            "&[(\"b\", false), (\"a\", true)]",
+        ] {
+            assert_eq!(
+                changed(h),
+                ["S_ALLOWED (all files): order or structure changed"],
+                "{h}"
+            );
+        }
+        assert!(changed("&[(\"a\", true), (\"b\", false)]").is_empty());
+        let ops = allowed_findings(
+            &allowed_lists("const O_ALLOWED: bool = (CI) && (OWNER);"),
+            &allowed_lists("const O_ALLOWED: bool = (CI) || (OWNER);"),
+        );
+        assert_eq!(ops, ["O_ALLOWED (all files): order or structure changed"]);
         // A list gone or emptied at head is a finding.
         assert_eq!(
             f("const AUTONOMOUS_ALLOWED: &[&str] = &[];"),
