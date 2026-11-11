@@ -14,11 +14,15 @@ profile = "ts-pnpm"
 [review]
 # "subagent" (mode a): a fresh subagent reviews each PR (spec §7).
 mode = "subagent"
-{% if bosun_version %}{% if policy %}
+{% if bosun_version %}{% if policy %}{% if policy_pin_checked %}
 [approvals]
 # Who may approve (spec §8); the pinned release must know this value.
 policy = "{{ policy }}"
-{% endif %}{% else %}
+{% else %}
+# `policy = "{{ policy }}"` under [approvals] is not written: the explicit bosun_version pin
+# may predate it (owner, owner-gated, orchestrator: 0.5.0; autonomous: 0.8.0) and a release that
+# cannot parse it fails every gate. Add it by hand once the pin reads it (spec §8).
+{% endif %}{% endif %}{% else %}
 [approvals]
 # Bootstrap mode (D-012, spec §8): until this day (UTC, inclusive) an owner key's
 # `--bootstrap` signature counts as the owner on owner-class PRs outside the excluded paths.

@@ -124,6 +124,7 @@ fn the_template_adds_only_the_policy_lines() {
         let mut vars = vars_for("app", "", "0.11.0", &["rust".to_string()], false);
         vars.set("bosun_version", bosun_version);
         vars.set("policy", policy);
+        vars.set("policy_pin_checked", "1");
         let files = render_all(&vars).unwrap();
         files
             .into_iter()

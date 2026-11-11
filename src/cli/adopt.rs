@@ -142,6 +142,7 @@ pub fn vars_for(
     v.set("own_ci", if own_ci { "1" } else { "" });
     v.set("intake", "");
     v.set("policy", "");
+    v.set("policy_pin_checked", "");
     v.set("bosun_app", "");
     v
 }
@@ -376,6 +377,8 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
     let mut vars = vars_for(&project, &owner, &version, &stacks, own_ci);
     if let Some(p) = &a.policy {
         vars.set("policy", p.as_str());
+        // The policy_min check above refused a pin that cannot parse it.
+        vars.set("policy_pin_checked", "1");
     }
 
     if let Some(link) = symlink_in(&root, MANIFEST_PATH) {

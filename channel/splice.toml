@@ -28,5 +28,9 @@ intake = { prompt = "require a valid .bosun/intake.toml before spawn (1 or empty
 bosun_app = { prompt = "the gate jobs use the bosun App token from the bosun-app environment (1 or empty)", default = "", pattern = "^1?$" }
 # Non-empty to render `[approvals] policy` in .bosun/bosun.toml (spec section 8): owner,
 # owner-gated, orchestrator (release 0.5.0 on) or autonomous (0.8.0 on). With an explicit
-# bosun_version, pick only a value that release knows. Default empty: the render is unchanged.
+# bosun_version, the template cannot compare versions, so the policy is written only with
+# policy_pin_checked; else a comment asks for it by hand. Default empty: the render is unchanged.
 policy = { prompt = "approval policy (empty: none written, the default owner)", default = "", pattern = "^(owner|owner-gated|orchestrator|autonomous)?$" }
+# Non-empty when the caller has checked that the explicit bosun_version reads `policy` (`bosun adopt`
+# does, exit 2 otherwise). Without it, an explicit pin renders a comment and no policy.
+policy_pin_checked = { prompt = "the pinned bosun_version reads the policy (1 or empty)", default = "", pattern = "^1?$" }
