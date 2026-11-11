@@ -1503,6 +1503,7 @@ fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
             if !code.contains("client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}")
                 || !code.contains("private-key: ${{ secrets.BOSUN_APP_KEY }}")
                 || !code.contains("id: app")
+                || code.contains("app-id:")
             {
                 out.push("token step without its id, client-id or key".into());
             }
