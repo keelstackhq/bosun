@@ -3646,6 +3646,8 @@ mod tests {
             "git -c alias.y='!sh' y tag -m 'bosun:state/x'",
             "gh pr create --body \"$(cat <<'EOF'\nbosun:state/x\nEOF\n)\" --add-label foo",
             "git commit -m 'bosun:state/x'; gh label create bosun:state/y",
+            "git commit -m 'bosun:state/x' && gh issue create -t x -b y -l \"$(git log -1 --format=%s)\"",
+            "git commit -m 'bosun:state/x' && gh issue create -t x -b y --label=\"$(git log -1 --format=%s)\"",
             "git commit -m \"$(cat <<'EOF'\nx\nEOF)\"; rm bosun:state/y\nEOF\n)\"",
         ] {
             assert!(bash(cmd, "x").is_some(), "{cmd}");

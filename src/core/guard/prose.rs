@@ -107,7 +107,8 @@ fn quoted_value(s: &str) -> Option<usize> {
 
 /// The command with the prose values of prose flags replaced by `"x"`.
 pub fn strip_prose(command: &str) -> String {
-    if LABEL_EDITS.iter().any(|w| command.contains(w)) {
+    let short = command.split_whitespace().any(|w| w.starts_with("-l"));
+    if short || LABEL_EDITS.iter().any(|w| command.contains(w)) {
         return command.to_string();
     }
     let (mut out, mut quote, mut i) = (String::new(), None, 0);
@@ -179,6 +180,8 @@ mod tests {
             "git commit -m 'a' && gh issue edit 3 --add-label \"$(x)\"",
             "git commit -m 'a'; gh api r/labels",
             "git commit -m 'a'; gh label create x",
+            "git commit -m 'a' && gh issue create -t x -b y -l \"$(x)\"",
+            "git commit -m 'a' && gh issue create -t x -b y -lfoo",
         ] {
             assert_eq!(strip_prose(c), c);
         }
