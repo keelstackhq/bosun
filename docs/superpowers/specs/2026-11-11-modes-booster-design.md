@@ -44,9 +44,13 @@ Owner pain on two repos: PRs too small, CI red too often, too many owner approva
   R-prod-write, R-gate, R-weaken; R-gov files inside the allowlist (`src/core/session_rules.rs`,
   a `docs/**/CLAUDE.md`) could pass an orchestrator signature. Plan PR 1b adds R-gov, so the
   "owner in every mode" line below holds.
-- **Mode and digest code are gate code.** `src/core/mode.rs` (decides the effective policy)
-  and `src/{core,cli}/digest.rs` (turns an owner answer into approvals) join R-gate in both rule
-  files (`.bosun/risk.toml`, `src/core/risk_default.toml`).
+- **Code that acts without the owner is gate code.** `src/core/mode.rs` (effective policy),
+  `src/{core,cli}/digest.rs` (owner answers), `src/{core,cli}/heal.rs` (fixers, revert
+  auto-merge), `src/{core,cli}/metrics.rs` (brake, curator targets) and the spawn decisions
+  (`src/core/spawn.rs`, `src/core/wave.rs`, `src/cli/wave.rs`) join R-gate in both rule files
+  (`.bosun/risk.toml`, `src/core/risk_default.toml`).
+- **No half release.** Until the weaken check lands (plan PR 1b), `[mode] name` other than
+  `gatekeeper` is a parse error.
 - **In bosun itself** all of `src/**` is critical (`APPROVAL_CODE_PATHS`): every gated src PR
   needs the owner whatever the mode, and D-017 adds little. The fast lane pays off in consumer
   repos (the two repos with the pain); in bosun the gain is helpers and fewer gated PRs.
@@ -120,10 +124,13 @@ which source set each (explicit, preset, default) and the brake state.
      existing stop rules (same signature 3x, empty fix round) still block; then it goes to the
      digest as needs-human.
    - `heal_main`: on an open main-red issue `bosun heal` names the first bad PR
-     (`main-triage`, or the only PR merged since green) and runs `bosun revert`. `revert-pr`
-     leaves it a draft mainfix; `revert-auto` marks it ready with auto-merge once a reviewer
-     verdict is in. risk-check still judges the revert diff: reverting a tightening is R-weaken
-     and waits for the owner.
+     (`main-triage`, or the only PR merged since green) and opens its revert (the `bosun revert`
+     code). `revert-pr` leaves it a draft mainfix; `revert-auto` marks it ready with auto-merge
+     only when the revert diff is checked to be the exact inverse of the merged PR, a clean
+     verdict is in, and the reverted PR needed no owner. Rule (risk-check, built-in `R-revert`,
+     owner): reverting a PR that had an owner-class match (R-weaken, R-gate, R-gov, ...) needs
+     the owner again, and so does a revert that is not the exact inverse. Weaken heuristics
+     are only a second net.
    - Verdict carry over merge-only heads: exists (`carry_verdict`, D-017 C7). No change.
 4. **Approvals only where they matter, batched — kept.** `approvals_batch = "daily"`:
    `bosun digest` (orchestrator, once a day at a fixed UTC hour) lists every owner-waiting PR
@@ -131,7 +138,8 @@ which source set each (explicit, preset, default) and the brake state.
    D-012 chat form ("approve 12 15", "raise 7 +20"). The orchestrator posts the signed approvals
    for the exact heads; a head that moved since the digest drops out and is listed the next
    day. Mainfix PRs and release-environment taps never wait for the digest. This is D-009's
-   "batched chat approvals" made mechanical.
+   "batched chat approvals" made mechanical. The digest signs nothing: approvals come back as
+   `next` calls `bosun approve <pr> --head <sha>` for the orchestrator (the key holder).
 5. **Spawn and archive — kept, via `next`.** `spawn_auto = "on"`: `bosun wave tick <epic>`
    returns `create_session` calls for ready wave entries while every spawn check passes
    (limits, budget < 80 %, no lease conflict, brake off) and `archive_session` for children whose
@@ -153,12 +161,13 @@ which source set each (explicit, preset, default) and the brake state.
    It is R-weaken, so the owner decides. Never proposed: R-weaken, R-secrets, R-prod-write,
    R-gov, workflow paths.
 
-**Brake.** `brake = "on"`: `bosun metrics` (janitor) sets the `bosun:brake` label on the registry
-issue when, over 7 days, main went red twice, two PRs were reverted, or red-CI rate is 10 points
-over the mode's target. While on, the repo acts one step stricter for helpers only:
-`spawn_auto` off, `heal_pr` at most `notify`, and the digest leads with "brake on". Approval
-policy is not touched by the brake (risk-check never reads metrics). `bosun metrics` removes the label after 3 days
-without a trip; lifting returns to the owner-approved file, so no approval is needed.
+**Brake.** `brake = "on"`: the brake is recomputed on every read (`bosun heal`, `wave tick`,
+`digest`, `mode`) from GitHub data; nothing is stored, so no agent can lift it. It is on when,
+over 7 days, main went red twice, two PRs were reverted, or red-CI rate is 10 points over the
+mode's target. While on, the repo acts one step stricter for helpers only: `spawn_auto` off,
+`heal_pr` at most `notify`, and the digest leads with "brake on". Approval policy is not
+touched by the brake (risk-check never reads metrics). It ends by itself when the 7-day window
+is clean again; that returns to the owner-approved file, so no approval is needed.
 
 ## Target numbers per mode
 
@@ -191,8 +200,8 @@ A "touch" is one owner answer: one digest reply counts once however many PRs it 
 2. **Module registration is R-gate.** Plan PR 1a works around it once. A lasting fix (a non-gate
    registry file for non-gate commands) changes the gate boundary: owner's call, listed as
    optional PR O1.
-3. **Revert verdict.** `revert-auto` still waits for a reviewer verdict. A mechanical check
-   (diff equals the exact inverse of the merged PR) could replace it later.
+3. **Revert verdict.** `revert-auto` needs the exact-inverse check and a reviewer verdict. The
+   verdict could be dropped later for exact inverses of PRs that needed no owner.
 4. **Thresholds** (brake, propose at 10 blocks / 0 catches, 2 heal rounds, targets) are
    estimates; they go to `docs/defaults.md` and get reviewed after 30 days of metrics.
 5. **Org decision.** The ladder should become a keelstackhq decision (all repos) once one repo

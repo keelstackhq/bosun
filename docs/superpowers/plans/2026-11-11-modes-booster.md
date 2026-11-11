@@ -33,30 +33,36 @@ high; one task, at most 400 lines.
 
 Touch: `src/config.rs`, `src/core/mod.rs`, `src/core/mode.rs` (new), `src/lib.rs`,
 `src/cli/mod.rs`, `src/cli/mode.rs` (new), stubs `src/cli/{heal,digest,metrics}.rs` and
-`src/core/{heal,digest,metrics}.rs`, `tests/pinned_config.rs`, `docs/spec/18-modes.md` (new),
-`docs/spec.md`. Size ~350.
+`src/core/{heal,digest,metrics}.rs`, `src/cli/revert.rs`, `src/cli/pr.rs`,
+`tests/pinned_config.rs`, `docs/spec/18-modes.md` (new), `docs/spec.md`. Size ~380.
 
 - [ ] `[mode]` parses (`name` + helper-knob overrides); unknown mode or knob, and `policy`
-  under `[mode]`, are parse errors.
+  under `[mode]`, are parse errors. Until 1b, any `name` but `gatekeeper` is a parse error
+  ("not active yet"), so no release can carry a lighter mode without its weaken check.
 - [ ] `core::mode`: presets table, resolve (explicit > preset > default) with source per knob,
-  `brake_active(labels)` helper (used by PRs 3 and 6, so they need not touch mode.rs).
+  pure `brake(window)` (trip rules over metric counts; no label, nothing stored).
 - [ ] Register `mode`, `heal`, `digest`, `metrics` and `wave tick` in `src/lib.rs` and
   `src/cli/mod.rs` with their final arg structs (`--days`, `--propose`, `--answer`, ...), so
-  PRs 3-8 never touch either file; stubs exit 1 with a `fix` naming the plan PR.
-- [ ] `bosun mode` prints effective knobs, sources, brake.
+  later PRs never touch either file; stubs exit 1 with a `fix` naming the plan PR.
+- [ ] Make pub the helpers PR 3b calls: open a revert PR (`cli/revert.rs`), mark ready and turn
+  on auto-merge (`cli/pr.rs`). No behaviour change.
+- [ ] `bosun mode` prints effective knobs and sources.
 
 ### PR 1b — policy resolution, weaken, deny set, rules (gated, owner)
 
 Touch: `src/config.rs`, `src/core/weaken.rs`, `src/core/risk.rs`, `src/core/risk_default.toml`,
-`.bosun/risk.toml`, `docs/spec/08-risk.md`, `docs/defaults.md`. Size ~250. After 1a.
+`.bosun/risk.toml`, `docs/spec/08-risk.md`, `docs/defaults.md`. Size ~280. After 1a.
 R-gov (`.bosun/**`).
 
 - [ ] `Config::parse` fills `approvals.policy` from the preset when the key is unset;
-  `data.policy_source` in risk-check and `approve` names explicit or preset.
+  `data.policy_source` in risk-check and `approve` names explicit or preset. Lifts 1a's
+  gatekeeper-only guard.
 - [ ] weaken: mode down the ladder, `push_gates` push → ready, `brake` on → off are findings.
 - [ ] `AUTONOMOUS_DENIED_RULES` gains R-gov (test: an allowlisted R-gov file goes to the owner).
-- [ ] R-gate (both rule files) gains `src/core/mode.rs`, `src/core/digest.rs`,
-  `src/cli/digest.rs` (with `/**`); `tests/governance.rs` keeps the files equal.
+- [ ] R-gate (both rule files, with `/**`) gains every file that acts without the owner:
+  `src/core/mode.rs`, `src/{core,cli}/digest.rs`, `src/{core,cli}/heal.rs`,
+  `src/{core,cli}/metrics.rs`, `src/core/spawn.rs`, `src/core/wave.rs`, `src/cli/wave.rs`;
+  `tests/governance.rs` keeps the files equal.
 
 ### PR 2 — gates before push (gated, owner)
 
@@ -66,47 +72,70 @@ scripts), `docs/spec/07-gates.md`. Size ~200.
 - [ ] `push_gates = "push"`: refuse `git push` when the pushed tree lacks a passing stamp for a
   CI gate of the profile; `fix` is the gate loop. `ready`: no change.
 
-### PR 3 — self-heal: red PR and red main
-
-Touch: `src/core/heal.rs`, `src/cli/heal.rs`, `docs/spec/09-main-health.md`. Size ~450.
-
-- [ ] `bosun heal`: failing `ci-ok` heads → `send_message` (notify) or `create_session` fixer
-  for a dead lease (spawn); at most 2 rounds; existing stop rules apply; then needs-human.
-- [ ] Open main-red → first bad PR (main-triage or the only merge since green) → `bosun revert`;
-  `revert-auto` marks it ready with auto-merge once a verdict is in. Brake caps at notify.
-
 ### PR 4 — daily approval digest (gated, owner)
 
-Touch: `src/core/digest.rs`, `src/cli/digest.rs`, `docs/spec/14-prereqs.md`. Size ~350.
+Touch: `src/core/digest.rs`, `src/cli/digest.rs`, `docs/spec/14-prereqs.md`. Size ~300.
 
 - [ ] One D-012 form: owner-waiting PRs (repo, PR, head SHA, rule, why), open asks, budget asks.
 - [ ] Parse the answer ("approve 12 15", "raise 7 +20"); a moved head drops out. Mainfix and
-  release taps bypass. Reuses the `approve --list` query (if a helper must go pub, that line
-  goes in PR 1a). Gate code after 1b (R-gate). A "raise" counts only with a verified
-  enrolled-owner signature (as `answer --chat`).
+  release taps bypass. Approvals come back as `next` calls `bosun approve <pr> --head <sha>`
+  for the orchestrator (the key holder signs; digest signs nothing, so no `approve.rs` touch).
+  A "raise" counts only with a verified enrolled-owner signature (as `answer --chat`).
 
-### PR 5 — metrics and brake
+### PR 5 — metrics and brake (gated, owner)
 
 Touch: `src/core/metrics.rs`, `src/cli/metrics.rs`, `docs/spec/18-modes.md`, `docs/defaults.md`.
-Size ~450. Run early: it measures the gatekeeper baseline.
+Size ~380. Run early: it measures the gatekeeper baseline.
 
 - [ ] Lead time, red-CI rate, cost per merged PR, owner touches per day, blocks per rule with
   outcome (`caught`/`passed`).
-- [ ] Brake: set/remove `bosun:brake` on the registry issue (thresholds in defaults.md).
+- [ ] Brake recomputed on every read from GitHub data (`cli::metrics::window` + `mode::brake`);
+  nothing an agent can remove. Thresholds in defaults.md. `bosun mode` shows it.
 
-### PR 6 — auto spawn and archive
+### PR 3a — self-heal: red PR (gated, owner)
+
+Touch: `src/core/heal.rs`, `src/cli/heal.rs`, `docs/spec/09-main-health.md`. Size ~220.
+After 5 (brake).
+
+- [ ] `bosun heal`: failing `ci-ok` heads → `send_message` (notify) or `create_session` fixer
+  for a dead lease (spawn); at most 2 rounds; existing stop rules apply; then needs-human.
+  Brake caps at notify.
+
+### PR 6 — auto spawn and archive (gated, owner)
 
 Touch: `src/core/wave.rs`, `src/cli/wave.rs`, `src/core/spawn.rs`, `src/cli/spawn.rs`,
-`docs/spec/05-spawn.md`. Size ~350.
+`docs/spec/05-spawn.md`. Size ~350. After 5 (brake).
 
 - [ ] `bosun wave tick <epic>`: `create_session` per ready entry while spawn checks pass and no
   brake; `archive_session` for children with a recorded result and a merged or closed PR.
 
+### PR 8 — curator loosening proposals (gated, owner)
+
+Touch: `src/core/metrics.rs`, `src/cli/metrics.rs`, `docs/spec/06-learning.md`. Size ~250.
+After PR 5.
+
+- [ ] `bosun metrics --propose`: rules with ≥ 10 blocks and no catch in 30 days, never the floor
+  rules; draft PR body text with evidence. The PR it leads to is R-weaken (owner).
+- [ ] Blocked (owner): curator Routine prompt runs it weekly when `curator_loosen = "propose"`.
+
+### PR 3b — self-heal: red main, revert rule (gated, owner)
+
+Touch: `src/core/heal.rs`, `src/cli/heal.rs`, `src/core/risk.rs`, `src/cli/risk_check.rs`,
+`docs/spec/09-main-health.md`, `docs/spec/08-risk.md`. Size ~350. After 3a and 1b.
+
+- [ ] Open main-red → first bad PR (main-triage or the only merge since green) → revert PR via
+  the 1a helper. `revert-auto` readies it with auto-merge (1a helper) only when all hold:
+  the revert diff is the exact inverse of the merged PR's diff (checked, not assumed), a clean
+  verdict is in, and the reverted PR needed no owner.
+- [ ] risk-check: built-in `R-revert` (owner) on a PR with the `bosun:revert N` marker when PR N
+  had an owner-class match (R-weaken, R-gate, R-gov, or any owner requirement), or when the
+  diff is not the exact inverse. Weaken heuristics stay as a second net, not the rule.
+
 ### PR 7 — budget per feature (gated, owner)
 
 Touch: `src/core/plan.rs`, `src/core/meta.rs`, `src/core/budget.rs`, `src/cli/budget.rs`,
-`src/cli/claim.rs`, `src/cli/spawn.rs`, `docs/plan-format.md`, `docs/spec/09-main-health.md`.
-Size ~350. After PR 3 (spec 09) and PR 6 (`src/cli/spawn.rs`).
+`src/cli/claim.rs`, `src/cli/spawn.rs`, `docs/plan-format.md`, `docs/spec/05-spawn.md`.
+Size ~350. After PR 6 (`src/cli/spawn.rs`, spec 05).
 
 - [ ] `budget_usd:` per item; `plan import` estimates when missing from the budget report;
   `plan check` (no GitHub) uses the `per_task_usd` fallback. `warn` at 80 %; `ask` also
@@ -123,7 +152,7 @@ After PR 5.
 
 ### PR 9 — bosun moves to `steady` (owner)
 
-Touch: `.bosun/bosun.toml`, `docs/PROGRESS.md`. Size ~5. After a release with PRs 1a-6 is pinned
+Touch: `.bosun/bosun.toml`, `docs/PROGRESS.md`. Size ~5. After a release with PRs 1a-8 is pinned
 in `.bosun/version` (owner release). R-gov and R-weaken. `booster` only after two weeks of
 `steady` metrics on target.
 
@@ -131,7 +160,7 @@ in `.bosun/version` (owner release). R-gov and R-weaken. `booster` only after tw
 
 Touch: `README.md`, `docs/spec.md`, `docs/defaults.md`, `docs/operating-model.md`,
 `docs/adopt-existing-repo.md`, `docs/prerequisites.md`, `docs/quickstart.md` (new). Size ~400.
-After every implementation PR (1a-9), so it describes what shipped. Low risk (no risk path; if
+After every implementation PR (1a-9, 3a, 3b), so it describes what shipped. Low risk (no risk path; if
 the `docs/setup-script.sh` header must change, that line is R-gov and goes to the owner).
 
 - [ ] Update every doc the modes change: README, spec index, defaults, operating model, setup
@@ -155,10 +184,12 @@ the owner takes spec open point 2.
 
 | Wave | PRs | Why no shared file |
 | ---- | --- | ------------------ |
-| A | 1a, then 1b | 1a registers every module, command and arg; 1b shares `src/config.rs` |
-| B | 2, 3, 4, 5, 6 | disjoint touch: hooks; heal; digest; metrics; wave/spawn. Spec files 07, 09, 14, 18, 05 |
-| C | 7 (after 3, 6), 8 (after 5) | 7 shares spec 09 and `cli/spawn.rs`; 8 shares metrics files |
-| D | 9, O1 | owner; 9 after a release |
-| E | 10 | docs; after all others |
+| A | 1a, then 1b | 1a registers every module, command, arg and helper; 1b shares `src/config.rs` |
+| B | 2, 4, 5 | hooks/guard, spec 07; digest, spec 14; metrics, spec 18, defaults |
+| C | 3a, 6, 8 (after 5) | heal, spec 09; wave/spawn, spec 05; metrics files, spec 06 |
+| D | 3b (after 3a), 7 (after 6) | heal + risk, specs 09/08; plan/meta/budget/claim/spawn, spec 05, plan-format |
+| E | 9, O1 | owner; 9 after a release |
+| F | 10 | docs; after all others |
 
-Count: 11 PRs (+ O1 optional). Owner approval: 1a, 1b, 2, 4, 7, 9, O1. Low risk: 3, 5, 6, 8, 10.
+Count: 12 PRs (1a, 1b, 2, 3a, 3b, 4-10) + O1 optional. Owner approval: every PR but 10 (all
+touch `src/**`, critical in bosun, or `.bosun/**`). Low risk: 10.
