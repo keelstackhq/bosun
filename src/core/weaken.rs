@@ -556,7 +556,9 @@ pub fn cfg_off(line: &str) -> bool {
 }
 
 static ALLOWED_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:const|static(?:\s+mut)?)\s+(\w*_ALLOWED)\b").expect("allowed regex")
+    // Rust's whitespace includes U+200E and U+200F; `r#` makes a raw identifier.
+    Regex::new(r"\b(?:const|static(?:[\s\x{200E}\x{200F}]+mut)?)[\s\x{200E}\x{200F}]+(?:r#)?(\w*_ALLOWED)\b")
+        .expect("allowed regex")
 });
 
 /// Rust code with comments dropped (block comments nest) and every string or char literal
@@ -572,9 +574,12 @@ fn mask_literals(text: &str) -> (String, Vec<String>) {
             .is_some_and(|c| c.is_alphanumeric() || c == '_');
         let len = if rest.starts_with("//") {
             i += rest.find('\n').unwrap_or(rest.len());
+            out.push(' ');
             continue;
         } else if rest.starts_with("/*") {
+            // A comment separates tokens (`const/**/X`).
             i += block_comment(rest);
+            out.push(' ');
             continue;
         } else if let Some(len) = string_literal(rest, ident_before).or_else(|| char_literal(rest))
         {
@@ -664,13 +669,14 @@ pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
     let (code, lits) = mask_literals(text);
     let unmask = |s: &str| {
         let mut parts = s.split('\0');
-        let mut out = parts.next().unwrap_or_default().to_string();
+        // Whitespace is normalised in code only, never inside a literal.
+        let code = |c: &str| c.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut out = code(parts.next().unwrap_or_default());
         while let (Some(n), Some(after)) = (parts.next(), parts.next()) {
             let lit = n.parse::<usize>().ok().and_then(|n| lits.get(n));
-            out.push_str(lit.map_or("", |l| l));
-            out.push_str(after);
+            out = format!("{out} {} {}", lit.map_or("", |l| l), code(after));
         }
-        out.split_whitespace().collect::<Vec<_>>().join(" ")
+        out.trim().to_string()
     };
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for cap in ALLOWED_NAME.captures_iter(&code) {
@@ -714,7 +720,9 @@ pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
         // `&`, `&mut`, `||` and a macro's `!` are syntax, not entries.
         let entry = |a: &str| {
             let a = unmask(a);
-            let a = a.trim_matches(|c: char| "&|!* ".contains(c));
+            // A trailing `!` is a macro's; a leading one is negation and stays.
+            let a = a.trim_start_matches(|c: char| "&|* ".contains(c));
+            let a = a.trim_end_matches(|c: char| "&|!* ".contains(c));
             a.strip_prefix("mut ").unwrap_or(a).to_string()
         };
         list.extend(atoms.map(entry).filter(|a| !a.is_empty()));
@@ -737,7 +745,7 @@ pub fn allowed_findings(
     // A list gone at head (deleted, renamed, inlined) no longer limits anything it fed.
     for (name, _) in base
         .iter()
-        .filter(|(n, v)| !head.contains_key(*n) && !v.is_empty())
+        .filter(|(n, v)| head.get(*n).is_none_or(Vec::is_empty) && !v.is_empty())
     {
         out.push(format!("{name} (all files): list → (removed)"));
     }
@@ -1355,7 +1363,24 @@ mod tests {
         // `->` in a fn pointer type closes no bracket.
         let fp = allowed_lists("const F_ALLOWED: &[(&str, fn(&str) -> bool)] = &[(\"**\", f)];");
         assert_eq!(fp["F_ALLOWED"], ["\"**\"", "f"]);
-        // A list gone at head is a finding.
+        // A hidden declaration still counts; negation is part of an entry.
+        let hidden = "const/**/AUTONOMOUS_ALLOWED: &[&str] = &[\"**\"];\nconst r#AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\"];\nconst\u{200E}AUTONOMOUS_ALLOWED: &[&str] = &[\"x\"];";
+        let got = f(hidden);
+        assert!(
+            got.iter().any(|g| g.contains("\"**\"")) && got.iter().any(|g| g.contains("\"x\"")),
+            "{got:?}"
+        );
+        let neg =
+            allowed_lists("const B_ALLOWED: bool = !STRICT;\nconst S_ALLOWED: &str = \"a  b\";");
+        assert_eq!(
+            (neg["B_ALLOWED"][0].as_str(), neg["S_ALLOWED"][0].as_str()),
+            ("!STRICT", "\"a  b\"")
+        );
+        // A list gone or emptied at head is a finding.
+        assert_eq!(
+            f("const AUTONOMOUS_ALLOWED: &[&str] = &[];"),
+            ["AUTONOMOUS_ALLOWED (all files): list → (removed)"]
+        );
         assert_eq!(
             f("const AUTONOMOUS_GLOBS: &[&str] = &[\"**\"];"),
             ["AUTONOMOUS_ALLOWED (all files): list → (removed)"]
