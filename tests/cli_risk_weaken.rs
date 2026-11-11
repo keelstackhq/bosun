@@ -338,7 +338,7 @@ fn a_grown_or_swapped_allowed_list_is_a_weakening() {
         Some(old),
         Some("pub const PATHS_ALLOWED: [&str; 1] = [\"**\"];\n"),
     );
-    assert!(evidence(&fake).contains("PATHS_ALLOWED: (none) → \\\"**\\\""));
+    assert!(evidence(&fake).contains("PATHS_ALLOWED (all files): \\\"**\\\" 0 → 1"));
     // The same list moved to another file is no weakening.
     let fake = pr();
     file(&fake, "src/a.rs", Some(old), Some(""));

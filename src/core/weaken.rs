@@ -555,61 +555,91 @@ pub fn cfg_off(line: &str) -> bool {
     false
 }
 
-static ALLOWED_DECL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:const|static)\s+(\w*_ALLOWED)\b[^=]*=").expect("allowed regex")
+static ALLOWED_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:const|static(?:\s+mut)?)\s+(\w*_ALLOWED)\b").expect("allowed regex")
 });
 
-/// Rust code with comments dropped and every string or char literal replaced by `\0N\0`, the
-/// index into the returned literals; brackets inside literals and comments then never count.
+/// Rust code with comments dropped (block comments nest) and every string or char literal
+/// replaced by `\0N\0`, the index into the returned literals, so brackets inside literals and
+/// comments never count.
 fn mask_literals(text: &str) -> (String, Vec<String>) {
-    let (c, mut out, mut lits) = (text.as_bytes(), String::new(), Vec::new());
-    let mut i = 0;
-    let mut lit = |out: &mut String, s: &str| {
-        out.push_str(&format!("\0{}\0", lits.len()));
-        lits.push(s.to_string());
-    };
-    while i < c.len() {
+    let (mut out, mut lits, mut i) = (String::new(), Vec::new(), 0);
+    while i < text.len() {
         let rest = &text[i..];
-        if rest.starts_with("//") {
+        let ident_before = text[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let len = if rest.starts_with("//") {
             i += rest.find('\n').unwrap_or(rest.len());
-        } else if let Some(body) = rest.strip_prefix("/*") {
-            i += body.find("*/").map_or(rest.len(), |e| e + 4);
-        } else if let Some(h) = (rest.starts_with('r') || rest.starts_with("br"))
-            .then(|| {
-                rest.trim_start_matches('b')[1..]
-                    .bytes()
-                    .take_while(|b| *b == b'#')
-                    .count()
-            })
-            .filter(|h| rest.trim_start_matches('b')[1 + h..].starts_with('"'))
-            .filter(|_| i == 0 || !(c[i - 1].is_ascii_alphanumeric() || c[i - 1] == b'_'))
+            continue;
+        } else if rest.starts_with("/*") {
+            i += block_comment(rest);
+            continue;
+        } else if let Some(len) = string_literal(rest, ident_before).or_else(|| char_literal(rest))
         {
-            // A raw string ends at `"` and as many `#`.
-            let start = rest.len() - rest.trim_start_matches('b').len() + 2 + h;
-            let end = format!("\"{}", "#".repeat(h));
-            let len = rest[start..]
-                .find(&end)
-                .map_or(rest.len(), |e| start + e + end.len());
-            lit(&mut out, &rest[..len]);
-            i += len;
-        } else if rest.starts_with('"') || rest.starts_with("b\"") {
-            let mut j = if rest.starts_with('b') { 2 } else { 1 };
-            while j < rest.len() && rest.as_bytes()[j] != b'"' {
-                j += if rest.as_bytes()[j] == b'\\' { 2 } else { 1 };
-            }
-            let len = (j + 1).min(rest.len());
-            lit(&mut out, &rest[..len]);
-            i += len;
-        } else if let Some(len) = char_literal(rest) {
-            lit(&mut out, &rest[..len]);
-            i += len;
+            len
         } else {
             let ch = rest.chars().next().unwrap_or(' ');
             out.push(ch);
             i += ch.len_utf8();
-        }
+            continue;
+        };
+        out.push_str(&format!("\0{}\0", lits.len()));
+        lits.push(rest[..len].to_string());
+        i += len;
     }
     (out, lits)
+}
+
+/// The length of the (nested) block comment `rest` starts with.
+fn block_comment(rest: &str) -> usize {
+    let (mut j, mut depth) = (2, 1);
+    while j < rest.len() && depth > 0 {
+        if rest[j..].starts_with("/*") {
+            (depth, j) = (depth + 1, j + 2);
+        } else if rest[j..].starts_with("*/") {
+            (depth, j) = (depth - 1, j + 2);
+        } else {
+            j += rest[j..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    j.min(rest.len())
+}
+
+/// The length of the string literal `rest` starts with: plain, `b`/`c`, raw `r#".."#` and
+/// `br`/`cr` raw. A prefix right after an identifier character is no prefix.
+fn string_literal(rest: &str, ident_before: bool) -> Option<usize> {
+    for prefix in ["br", "cr", "r", "b", "c", ""] {
+        if !rest.starts_with(prefix) || ident_before && !prefix.is_empty() {
+            continue;
+        }
+        let after = &rest[prefix.len()..];
+        if prefix.ends_with('r') {
+            let h = after.bytes().take_while(|b| *b == b'#').count();
+            let Some(body) = after[h..].strip_prefix('"') else {
+                continue;
+            };
+            let end = format!("\"{}", "#".repeat(h));
+            let len = body.find(&end).map_or(body.len(), |e| e + end.len());
+            return Some(prefix.len() + h + 1 + len);
+        }
+        let Some(body) = after.strip_prefix('"') else {
+            continue;
+        };
+        let mut chars = body.char_indices();
+        while let Some((k, ch)) = chars.next() {
+            match ch {
+                '\\' => {
+                    chars.next();
+                }
+                '"' => return Some(prefix.len() + 1 + k + 1),
+                _ => {}
+            }
+        }
+        return Some(rest.len());
+    }
+    None
 }
 
 /// The length of the char literal `rest` starts with (`'a'`, `'\n'`, `'\''`); `None` for a
@@ -626,66 +656,86 @@ fn char_literal(rest: &str) -> Option<usize> {
         .then(|| 2 + ch.len_utf8())
 }
 
-/// The entries of every Rust `const` or `static` list named `*_ALLOWED` in a file: the items of
-/// the first `[ ]` after its `=` (`[..]`, `&[..]`, `vec![..]`), whitespace-trimmed, comments
-/// dropped. Adding or swapping in an entry widens what the list allows.
+/// The entries of every Rust `const` or `static` named `*_ALLOWED` in a file: its whole
+/// initializer (from the `=` to the `;`) split at brackets and commas, comments dropped,
+/// whitespace normalised. So `&["a", B]`, `vec![..]`, both branches of an `if` and a bare
+/// `OTHER` all count, each as its text; a declaration with no `=` (trait, generic) has none.
 pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
     let (code, lits) = mask_literals(text);
     let unmask = |s: &str| {
         let mut parts = s.split('\0');
         let mut out = parts.next().unwrap_or_default().to_string();
         while let (Some(n), Some(after)) = (parts.next(), parts.next()) {
-            out.push_str(
-                n.parse::<usize>()
-                    .ok()
-                    .and_then(|n| lits.get(n))
-                    .map_or("", |l| l),
-            );
+            let lit = n.parse::<usize>().ok().and_then(|n| lits.get(n));
+            out.push_str(lit.map_or("", |l| l));
             out.push_str(after);
         }
         out.split_whitespace().collect::<Vec<_>>().join(" ")
     };
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for cap in ALLOWED_DECL.captures_iter(&code) {
+    for cap in ALLOWED_NAME.captures_iter(&code) {
         let after = cap.get(0).map_or(0, |m| m.end());
-        let Some(open) = code[after..].find('[').map(|o| after + o) else {
-            continue;
-        };
-        let (mut depth, mut start, list) =
-            (0usize, open + 1, out.entry(cap[1].to_string()).or_default());
-        for (k, ch) in code[open..].char_indices().map(|(k, ch)| (open + k, ch)) {
+        // The `=` at depth 0 of the type; a `;`, `,`, `{` or closing bracket first means none.
+        let mut depth = 0usize;
+        let mut eq = None;
+        for (k, ch) in code[after..].char_indices() {
+            match ch {
+                '[' | '(' | '<' => depth += 1,
+                ']' | ')' | '>' if depth > 0 => depth -= 1,
+                '=' if depth == 0 => {
+                    eq = Some(after + k + 1);
+                    break;
+                }
+                ']' | ')' | '>' | ';' | ',' | '{' | '}' if depth == 0 => break,
+                _ => {}
+            }
+        }
+        let Some(eq) = eq else { continue };
+        let mut depth = 0usize;
+        let mut end = code.len();
+        for (k, ch) in code[eq..].char_indices() {
             match ch {
                 '[' | '(' | '{' => depth += 1,
                 ']' | ')' | '}' => depth = depth.saturating_sub(1),
-                ',' if depth == 1 => {}
-                _ => continue,
-            }
-            if depth == 0 || ch == ',' {
-                let item = unmask(&code[start..k]);
-                if !item.is_empty() {
-                    list.push(item);
+                ';' if depth == 0 => {
+                    end = eq + k;
+                    break;
                 }
-                start = k + 1;
-            }
-            if depth == 0 {
-                break;
+                _ => {}
             }
         }
+        let list = out.entry(cap[1].to_string()).or_default();
+        let atoms = code[eq..end].split(['[', ']', '(', ')', '{', '}', ',']);
+        // `&`, `&mut`, `||` and a macro's `!` are syntax, not entries.
+        let entry = |a: &str| {
+            let a = unmask(a);
+            let a = a.trim_matches(|c: char| "&|!* ".contains(c));
+            a.strip_prefix("mut ").unwrap_or(a).to_string()
+        };
+        list.extend(atoms.map(entry).filter(|a| !a.is_empty()));
     }
     out
 }
 
-/// Entries at head that no `*_ALLOWED` list of that name had at base (lists merged over the PR,
-/// so a list moved between files is no finding); a new list counts as empty at base.
+/// Entries that occur more often at head than at base in the `*_ALLOWED` lists of one name,
+/// merged over the PR (a list moved between files is no finding; a new list counts as empty).
 pub fn allowed_findings(
     base: &BTreeMap<String, Vec<String>>,
     head: &BTreeMap<String, Vec<String>>,
 ) -> Vec<String> {
+    let count = |v: &[String]| {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        v.iter().for_each(|e| *m.entry(e.clone()).or_default() += 1);
+        m
+    };
     let mut out = Vec::new();
     for (name, entries) in head {
-        let old = base.get(name).map(Vec::as_slice).unwrap_or_default();
-        for e in entries.iter().filter(|e| !old.contains(e)) {
-            out.push(format!("{name}: (none) → {e}"));
+        let old = count(base.get(name).map(Vec::as_slice).unwrap_or_default());
+        for (e, n) in count(entries) {
+            let o = old.get(&e).copied().unwrap_or(0);
+            if n > o {
+                out.push(format!("{name} (all files): {e} {o} → {n}"));
+            }
         }
     }
     out
@@ -1235,32 +1285,60 @@ mod tests {
         assert_eq!(b["AUTONOMOUS_ALLOWED"], ["\"docs/**\"", "\"a]\""]);
         assert!(!b.contains_key("X_DENIED"));
         let f = |head: &str| allowed_findings(&b, &allowed_lists(head));
+        let one = |e: &str| vec![format!("AUTONOMOUS_ALLOWED (all files): {e} 0 → 1")];
         // Same entries, reordered, reformatted or commented: no finding.
         assert!(f("mod m {\n    pub(crate) static AUTONOMOUS_ALLOWED: &[&str] = &[\"a]\", /* \"q\", */\n \"docs/**\"];\n}").is_empty());
-        // A swap widens as much as an addition; a non-literal entry counts.
+        // A swap widens as much as an addition; a non-literal entry or initializer counts.
         assert_eq!(
             f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"**\", \"a]\"];"),
-            ["AUTONOMOUS_ALLOWED: (none) → \"**\""]
+            one("\"**\"")
         );
         assert_eq!(
             f(
                 "impl A {\n    const AUTONOMOUS_ALLOWED: [&str; 3] = [\"docs/**\", \"a]\", SRC_GLOB];\n}"
             ),
-            ["AUTONOMOUS_ALLOWED: (none) → SRC_GLOB"]
+            one("SRC_GLOB")
         );
-        // `vec![..]` inside a LazyLock, raw strings, and a brand-new list.
-        let v =
-            "static NEW_ALLOWED: LazyLock<Vec<&str>> = LazyLock::new(|| vec![r#\"a\"]\"#, 'x']);";
         assert_eq!(
-            f(v),
-            [
-                "NEW_ALLOWED: (none) → r#\"a\"]\"#",
-                "NEW_ALLOWED: (none) → 'x'"
-            ]
+            f("const AUTONOMOUS_ALLOWED: &[&str] = OTHER;\n#[test]\nfn t() { [\"z\"]; }"),
+            one("OTHER")
         );
-        // A shrink is no finding; lifetimes do not start a char literal.
+        // Nested block comments end where Rust ends them.
+        assert_eq!(
+            f(
+                "const AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\", /* /* */ ] */ \"evil\"];"
+            ),
+            one("\"evil\"")
+        );
+        // Both branches count; so does a duplicate entry.
+        let got = f(
+            "const AUTONOMOUS_ALLOWED: &[&str] = if cfg!(x) { &[\"docs/**\", \"a]\"] } else { &[\"evil\"] };",
+        );
+        assert!(got.contains(&one("\"evil\"")[0]), "{got:?}");
+        let dup = "const AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\", \"a]\"];";
+        assert_eq!(f(dup), ["AUTONOMOUS_ALLOWED (all files): \"a]\" 1 → 2"]);
+        // `vec![..]` in a LazyLock, raw, C and byte strings, a brand-new list.
+        let v = "static NEW_ALLOWED: LazyLock<Vec<&str>> = LazyLock::new(|| vec![r#\"a\"]\"#, cr\"b]\", 'x']);";
+        let got = f(v);
+        assert!(
+            got.iter().any(|g| g.contains("r#\"a\"]\"#"))
+                && got.iter().any(|g| g.contains("cr\"b]\""))
+                && got.iter().any(|g| g.contains("'x'")),
+            "{got:?}"
+        );
+        // A shrink is no finding; lifetimes are no char literals; multibyte text never panics.
         assert!(
             f("const AUTONOMOUS_ALLOWED: &'static [&'static str] = &[\"docs/**\"];").is_empty()
+        );
+        assert!(f("const AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\"]; // é\nconst Z: &str = \"\\é\"; const C: char = 'é';").is_empty());
+        // A scalar or a declaration without a value records no unrelated code.
+        let s = allowed_lists(
+            "const RETRIES_ALLOWED: u32 = 3;\n#[derive(Debug)]\nstruct S;\ntrait T { const T_ALLOWED: &'static [&'static str]; }\nfn g<const N_ALLOWED: usize>() { let a = [1]; }",
+        );
+        assert_eq!(s["RETRIES_ALLOWED"], ["3"]);
+        assert!(
+            !s.contains_key("T_ALLOWED") && !s.contains_key("N_ALLOWED"),
+            "{s:?}"
         );
     }
 
