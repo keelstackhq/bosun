@@ -11,6 +11,7 @@ use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
 mod interp;
+mod prose;
 pub use interp::{Script, script_rules};
 mod writes;
 pub use writes::bash_writes;
@@ -489,7 +490,10 @@ fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Optio
     decrypt_rule(command, 0)
         .or_else(|| destructive_rule(command, 0))
         .or_else(|| check(command, branch_at, default_branch, 0))
-        .or_else(|| (command.contains(STATE) && !read_only(command, 0)).then(label_reason))
+        .or_else(|| {
+            let prose = prose::strip_prose(command);
+            (prose.contains(STATE) && !read_only(&prose, 0)).then(label_reason)
+        })
 }
 
 fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
@@ -1585,7 +1589,13 @@ fn split_heredocs(command: &str) -> (String, Vec<String>) {
     for line in command.split_inclusive('\n') {
         if let Some((delim, dash, quoted)) = &skip {
             let l = line.trim_end_matches('\n');
-            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+            let l = if *dash { l.trim_start_matches('\t') } else { l };
+            // Bash ends a heredoc inside `$( )` at `EOF)`: a body line that starts with the
+            // delimiter and more is not plain data; fail closed and judge the body as code.
+            if l != delim && l.starts_with(delim.as_str()) {
+                return (command.to_string(), Vec::new());
+            }
+            if l == delim {
                 skip = None;
                 code.push_str(line);
             } else if !quoted {
@@ -2446,7 +2456,11 @@ fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
     for line in command.split_inclusive('\n') {
         if let Some((delim, dash)) = &skip {
             let l = line.trim_end_matches('\n');
-            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+            let l = if *dash { l.trim_start_matches('\t') } else { l };
+            if l != delim && l.starts_with(delim.as_str()) {
+                return (command.to_string(), bodies, targets);
+            }
+            if l == delim {
                 skip = None;
                 out.push_str(line);
             } else {
@@ -3586,6 +3600,67 @@ mod tests {
     }
 
     #[test]
+    fn label_lock_treats_prose_flag_heredocs_as_data() {
+        for cmd in [
+            "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review label\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review `gh issue view 1`\nEOF\n)\"",
+            "git commit -m \"$(cat <<-'EOF'\n\tfix bosun:state/review\n\tEOF\n)\"",
+            "git commit --message=\"$(cat <<'EOF'\nbosun:state/review\nEOF\n)\"",
+            "gh pr create --body='about bosun:state/x'",
+            "gh pr create --title t --body \"$(cat <<'EOF'\nfix bosun:state/review\n\nmore\nEOF\n)\"",
+            "gh issue comment 3 --body \"$(cat <<'EOF'\nbosun:state/review\nEOF\n)\"",
+            "git commit -m 'docs: bosun:state/review'",
+            "gh pr create --body 'about bosun:state/review' --title \"t\"",
+        ] {
+            assert_eq!(bash(cmd, "x"), None, "{cmd}");
+        }
+        for cmd in [
+            "gh pr edit 3 --add-label \"$(cat <<'EOF'\nbosun:state/x\nEOF\n)\"",
+            "gh pr create --body \"$(cat <<'EOF'\nx\nEOF\n)\" --label bosun:state/x",
+            "gh issue edit 3 --add-label bosun:state/x",
+            "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\" && gh issue edit 3 --add-label bosun:state/x",
+            "git commit -m \"$(cat <<EOF\nbosun:state/x $USER\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nbosun:state/x\nEOF\n) $(gh label create bosun:state/y)\"",
+            "git commit -m \"$(cat <<'EOF'\nbosun:state/x\nEOF\n; gh label create bosun:state/y)\"",
+            "git commit -m \"$(sh <<'EOF'\ngh label create bosun:state/y\nEOF\n)\"",
+            "git commit -m \"bosun:state/x $(gh label create bosun:state/y)\"",
+            "git commit -m 'x' --add-label 'bosun:state/y'",
+            "FOO=1 git -C sub commit -m 'bosun:state/x'",
+            "gh -R o/r issue comment 3 --body 'bosun:state/x'",
+            "git -c core.editor=sh commit -e -m 'gh issue edit 5 --add-label bosun:state/x'",
+            "GIT_EDITOR=sh git commit -e -m 'gh issue edit 5 --add-label bosun:state/x'",
+            "git -c core.hooksPath=/tmp/h commit -m 'bosun:state/x'",
+            "git --config-env=core.editor=ED commit -m 'bosun:state/x'",
+            "git commit -e -m 'bosun:state/x'",
+            "git commit -t tmpl -m 'bosun:state/x'",
+            "git commit -F f -m 'bosun:state/x'",
+            "git commit --cleanup=x -m 'bosun:state/x'",
+            "git commit --no-verify -m 'bosun:state/x'",
+            "gh pr create -F f -t 'bosun:state/x'",
+            "git commit -m \"$(cat <<'EOF'\nx\nEOF)\"; gh issue edit 3 --add-label bosun:state/x\nEOF\n)\"",
+            "git commit -m 'bosun:state/x' && gh issue edit 3 --add-label \"$(git log -1 --format=%s)\"",
+            "git commit -m 'bosun:state/x' && gh api repos/o/r/issues/3/labels -f labels[]=\"$(git log -1 --format=%s)\"",
+            "git -c alias.y='!sh' y tag -m 'bosun:state/x'",
+            "gh pr create --body \"$(cat <<'EOF'\nbosun:state/x\nEOF\n)\" --add-label foo",
+            "git commit -m 'bosun:state/x'; gh label create bosun:state/y",
+            "echo hi # ; git commit -m '\ngh issue edit 3 --add-label bosun:state/x #'",
+            "cat <<'X'\ngit commit -m '\nX\ngh issue edit 3 --add-label bosun:state/x #'",
+            "echo x # git commit -m \"$(cat <<'EOF'\nbosun:state/x\nEOF\n)\"\ngh issue edit 3 --add-label bosun:state/x",
+            "echo $'\\'' ; git commit -m '\ngh issue edit 3 --add-label bosun:state/x #'",
+            "G=gh; git commit -m 'bosun:state/x'; $G issue create -l y",
+            "G=gh\ngit commit -m 'bosun:state/x'\n$G issue create -l y",
+            "git commit -m 'bosun:state/x' # x",
+            "git commit -m 'bosun:state/x' && gh issue edit 3 --add-label y",
+            "git commit -m 'bosun:state/x' > x",
+            "git commit -m 'bosun:state/x' && gh issue create -t x -b y -l \"$(git log -1 --format=%s)\"",
+            "git commit -m 'bosun:state/x' && gh issue create -t x -b y --label=\"$(git log -1 --format=%s)\"",
+            "git commit -m \"$(cat <<'EOF'\nx\nEOF)\"; rm bosun:state/y\nEOF\n)\"",
+        ] {
+            assert!(bash(cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
     fn label_lock_treats_unquoted_heredoc_prose_as_data() {
         for cmd in [
             "cat >> docs/x.md <<EOF\nThe bosun:state/ready label (see `bosun status`) is set by bosun.\nEOF",
@@ -4482,6 +4557,38 @@ mod tests {
             ("src/..", 0),
         ] {
             assert_eq!(key_root(root), want, "{root}");
+        }
+    }
+
+    #[test]
+    fn a_heredoc_body_line_that_starts_with_the_delimiter_is_judged_as_code() {
+        // Bash ends the first heredoc at the plain `EOF` line, so the next line runs.
+        for hidden in ["gh pr merge 3", "sops -d f", "echo x > src/a.rs"] {
+            let cmd = format!("cat <<'EOF'\nEOF)\ncat <<'Z'\nEOF\n{hidden}\nZ");
+            let (code, _) = split_heredocs(&cmd);
+            assert!(code.contains(hidden), "{cmd}");
+            let (text, _, _) = strip_data_heredocs(&cmd);
+            assert!(text.contains(hidden), "{cmd}");
+        }
+        for hidden in ["gh pr merge 3", "sops -d f"] {
+            let cmd = format!("cat <<'EOF'\nEOF)\ncat <<'Z'\nEOF\n{hidden}\nZ");
+            assert!(bash(&cmd, "x").is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn label_lock_keeps_prose_when_any_word_edits_labels() {
+        let s = "git commit -m 'bosun:state/x'";
+        for tail in [
+            "gh pr create -t t -b b -dl \"$(git log -1 --format=%s)\"",
+            "gh issue create -t x -b y \"-l\" \"$(git log -1 --format=%s)\"",
+            "gh issue create -t x -b y \\-l \"$(git log -1 --format=%s)\"",
+            "gh -R o/r label edit bug --name \"$(git log -1 --format=%s)\"",
+            "gh  label create \"$(git log -1 --format=%s)\"",
+            "gh issue edit 3 --add-\"label\" \"$(git log -1 --format=%s)\"",
+        ] {
+            let cmd = format!("{s} && {tail}");
+            assert!(bash(&cmd, "x").is_some(), "{cmd}");
         }
     }
 

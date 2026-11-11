@@ -4,7 +4,7 @@
 
 use super::{
     BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule, git_rule,
-    http_rule, literal_path, nested, shell_words, unwrap_runners,
+    heredoc_at, http_rule, literal_path, nested, shell_words, unwrap_runners,
 };
 
 /// Interpreters and shells whose code or script the scan reads (a version suffix is dropped:
@@ -243,8 +243,41 @@ fn heredoc_feeds(command: &str, path: &str) -> bool {
         stages
             .iter()
             .position(|s| s.contains(path))
-            .is_some_and(|at| stages[..=at].iter().any(|s| s.contains("<<")))
+            .is_some_and(|at| {
+                let feeds = |(i, s): (usize, &&str)| {
+                    heredoc_at(s).is_some() && !input_redirect(s) && (i == at || heredoc_only(s))
+                };
+                stages[..=at].iter().enumerate().any(feeds)
+            })
     })
+}
+
+/// Whether a stage has an input redirection besides its heredoc (`< f`, `0< f`, `<<< s`),
+/// which may replace the heredoc on stdin.
+fn input_redirect(stage: &str) -> bool {
+    shell_words(stage).iter().any(|w| {
+        let w = w.trim_start_matches(|c: char| c.is_ascii_digit());
+        w.starts_with("<<<") || (w.starts_with('<') && !w.starts_with("<<"))
+    })
+}
+
+/// Whether a stage with a heredoc reads only it: no operand after the command word besides
+/// options and redirections (`cat <<'EOF' evil.py` prints evil.py too).
+fn heredoc_only(stage: &str) -> bool {
+    let (mut skip, mut operands) = (false, 0);
+    for w in shell_words(stage).iter().skip(1) {
+        let glued = w.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        let op = glued.trim_start_matches(['<', '>', '-']);
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        if glued.starts_with(['<', '>']) {
+            skip = op.is_empty() && !glued.starts_with(">&");
+        } else if !w.starts_with('-') {
+            operands += 1;
+        }
+    }
+    operands == 0
 }
 
 /// A `#!` line that runs a shell, also with arguments (`#!/bin/bash -e`, `#!/usr/bin/env sh`).
@@ -379,6 +412,13 @@ mod tests {
             "python3 /dev/stdin & cat <<EOF\nx\nEOF",
             "python3 /dev/stdin | cat <<EOF\nx\nEOF",
             "python3 /dev/stdin < run.py && cat <<EOF\nx\nEOF",
+            "cat <<'EOF' evil.py | python3 /dev/stdin\nprint(1)\nEOF",
+            "cat <<'EOF' < evil.py | python3 /dev/stdin\nprint(1)\nEOF",
+            "cat <<'EOF' 0< evil.py | python3 /dev/stdin\nprint(1)\nEOF",
+            "python3 /dev/stdin <<'EOF' < evil.py\nprint(1)\nEOF",
+            "cat '<<' evil.py | python3 /dev/stdin\nprint(1)",
+            "cat \"<<\" evil.py | python3 /dev/stdin\nprint(1)",
+            "cat -n <<'EOF' a/evil.py 2>&1 | python3 /dev/stdin\nprint(1)\nEOF",
         ] {
             assert!(script(cmd, "").is_some(), "{cmd}");
         }
