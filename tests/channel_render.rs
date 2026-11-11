@@ -248,6 +248,7 @@ fn every_variant_renders_to_files_that_parse() {
                     ("own_ci", own_ci),
                     ("intake", ""),
                     ("policy", ""),
+                    ("policy_pin_checked", ""),
                     // Both renders of the App switch, without more variants.
                     ("bosun_app", if owner.is_empty() { "" } else { "1" }),
                 ]
@@ -346,6 +347,7 @@ fn variant_at(stack: &[&str], own_ci: &str, ts_path: &str) -> Vec<(String, Strin
         ("own_ci", own_ci),
         ("intake", ""),
         ("policy", ""),
+        ("policy_pin_checked", ""),
         ("bosun_app", ""),
     ]
     .into_iter()
@@ -1685,6 +1687,7 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             ("own_ci", ""),
             ("intake", ""),
             ("policy", ""),
+            ("policy_pin_checked", ""),
             ("bosun_app", ""),
         ]
         .into_iter()
@@ -1701,6 +1704,52 @@ fn bootstrap_until_renders_only_for_the_channel_version() {
             want,
             "bosun_version={bosun_version:?}: {config:?}"
         );
+    }
+}
+
+/// An explicit `bosun_version` may predate the policy key, and the template cannot compare
+/// versions: raw splice renders a comment and no `[approvals] policy` there, so an old pin never
+/// meets a value it cannot parse. `policy_pin_checked` (set by `bosun adopt`, which refuses a
+/// pin that is too old) writes it. The channel's own release (empty pin) writes it as before.
+#[test]
+fn an_explicit_pin_writes_the_policy_only_when_checked() {
+    for (pin, checked, written) in [
+        ("0.4.0", "", false),
+        ("0.8.0", "", false),
+        ("0.8.0", "1", true),
+        ("", "", true),
+    ] {
+        let vars: BTreeMap<&str, String> = [
+            ("project", "app"),
+            ("owner", ""),
+            ("bosun_version", pin),
+            ("template.version", "0.8.0"),
+            ("rust_path", "."),
+            ("ts_path", "."),
+            ("own_ci", ""),
+            ("intake", ""),
+            ("policy", "autonomous"),
+            ("policy_pin_checked", checked),
+            ("bosun_app", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
+        let files = render_channel(&["core", "rust"], &vars);
+        let text = file(&files, ".bosun/bosun.toml");
+        let config: toml::Table = text.parse().unwrap();
+        let policy = config
+            .get("approvals")
+            .and_then(|a| a.get("policy"))
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            policy.is_some(),
+            written,
+            "pin {pin:?} checked {checked:?}: {text}"
+        );
+        if !written {
+            assert!(text.contains("Add it by hand"), "{text}");
+        }
     }
 }
 

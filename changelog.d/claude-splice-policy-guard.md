@@ -1,0 +1,1 @@
+- Splice channel: an explicit bosun_version no longer renders `[approvals] policy` unless `policy_pin_checked` is set (`bosun adopt` sets it); a comment asks for it by hand.

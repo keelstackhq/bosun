@@ -142,6 +142,7 @@ pub fn vars_for(
     v.set("own_ci", if own_ci { "1" } else { "" });
     v.set("intake", "");
     v.set("policy", "");
+    v.set("policy_pin_checked", "1");
     v.set("bosun_app", "");
     v
 }
