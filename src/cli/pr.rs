@@ -507,12 +507,14 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     let mut gates = Vec::new();
     let mut enforced = None;
     if args.ready {
-        // A plain issue has no bosun state: nothing to gate on, nothing to move.
-        if state.is_some() && state != Some(State::Review) {
+        // A plain issue (no state label, no task metadata) has nothing to gate on or move; a task
+        // that lost its state label keeps the refusal.
+        let plain = state.is_none() && parse_task_meta(issue.body_text()).is_none();
+        if !plain && state != Some(State::Review) {
             let now = state.map_or("without a state".to_string(), |s| s.name().to_string());
             return Err(BosunError::conflict(
                 format!("#{n} is {now}; --ready needs the task in review"),
-                "an escalated or blocked task needs the owner: wait for the owner's answer, then rerun",
+                "an escalated or blocked task needs the owner: wait for the owner's answer (the owner restores a missing state label), then rerun",
             ));
         }
         check_local_gates(&app, n, &pull)?;
@@ -628,7 +630,7 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             }
             Err(e) => return Err(after_ready(e, marked_ready, pull.number, n)),
         };
-        if state.is_some() {
+        if !plain {
             let fresh = gh.get_issue(n)?.unwrap_or(issue);
             set_state(gh, n, &fresh, State::Queued)?;
             state = Some(State::Queued);

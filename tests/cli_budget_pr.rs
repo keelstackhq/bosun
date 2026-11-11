@@ -213,6 +213,9 @@ fn model_and_session_fallbacks() {
 fn a_task_pr_is_refused_and_nothing_is_written() {
     let fake = seeded();
     fake.issue(10, "task", &[REVIEW], "Do it.");
+    for n in [22, 23] {
+        fake.issue(n, "PR", &[], "");
+    }
     fake.pull(22, "t", "feat/22", "Closes #10\n<!-- bosun:task-pr 10 -->");
     let (code, v) = record(&fake, "", &["--pr", "22", "--usd", "1"]);
     assert_eq!(code, 3, "{v}");
@@ -238,4 +241,33 @@ fn the_session_id_of_the_input_is_the_fallback_without_the_flag() {
     let nested = r#"{"session":{"id":"s_nested"},"usage":{"cost_usd":1.0}}"#;
     assert_eq!(record(&fake, nested, &["--pr", "20", "--from", "-"]).0, 0);
     assert_eq!(spends(&fake, 20)[0]["session"], "s_nested");
+}
+
+#[test]
+fn marker_only_and_label_less_task_prs_are_refused() {
+    let fake = seeded();
+    fake.issue(
+        10,
+        "task",
+        &[],
+        r#"<!-- bosun:task {"item":"M4","task":"T1"} -->"#,
+    );
+    fake.issue(11, "task", &[REVIEW], "Do it.");
+    fake.pull(22, "t", "feat/22", "<!-- bosun:task-pr 11 -->");
+    fake.pull(23, "t", "feat/23", "Closes #10");
+    for n in [22, 23] {
+        let (code, v) = record(&fake, "", &["--pr", &n.to_string(), "--usd", "1"]);
+        assert_eq!(code, 3, "{n} {v}");
+        assert!(spends(&fake, n).is_empty());
+    }
+}
+
+#[test]
+fn a_plain_pr_closing_a_plain_issue_is_recorded() {
+    let fake = seeded();
+    fake.issue(12, "plain", &[], "Just an issue.");
+    fake.issue(24, "PR 24", &[], "");
+    fake.pull(24, "t", "feat/24", "Closes #12");
+    assert_eq!(record(&fake, "", &["--pr", "24", "--usd", "1"]).0, 0);
+    assert_eq!(spends(&fake, 24).len(), 1);
 }

@@ -234,3 +234,27 @@ fn a_plain_issue_without_state_gets_auto_merge() {
     assert_eq!(fake.auto_merge_enabled(20).as_deref(), Some("SQUASH"));
     assert_eq!(v["data"]["task_state"], Value::Null, "{v}");
 }
+
+#[test]
+fn a_task_with_metadata_but_no_state_label_keeps_the_refusal() {
+    let fake = FakeGithub::start();
+    fake.issue(
+        7,
+        "task",
+        &[],
+        "<!-- bosun:task {\"item\":\"M4\",\"task\":\"T1\"} -->",
+    );
+    fake.pull(20, "t", "claude/t7", "Closes #7");
+    fake.enforce_checks(&ALL);
+    let dir = repo();
+    let (code, v) = run(&fake, dir.path());
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("without a state")
+    );
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+    assert_eq!(fake.auto_merge_enabled(20), None);
+}
