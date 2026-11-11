@@ -555,6 +555,245 @@ pub fn cfg_off(line: &str) -> bool {
     false
 }
 
+static ALLOWED_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    // Rust's whitespace includes U+200E and U+200F; `r#` makes a raw identifier.
+    Regex::new(r"\b(?:const|static(?:[\s\x{200E}\x{200F}]+mut)?)[\s\x{200E}\x{200F}]+(?:r#)?(\w*_ALLOWED)\b")
+        .expect("allowed regex")
+});
+
+/// Rust code with comments dropped (block comments nest) and every string or char literal
+/// replaced by `\0N\0`, the index into the returned literals, so brackets inside literals and
+/// comments never count.
+fn mask_literals(text: &str) -> (String, Vec<String>) {
+    let (mut out, mut lits, mut i) = (String::new(), Vec::new(), 0);
+    while i < text.len() {
+        let rest = &text[i..];
+        let ident_before = text[..i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let len = if rest.starts_with("//") {
+            i += rest.find('\n').unwrap_or(rest.len());
+            out.push(' ');
+            continue;
+        } else if rest.starts_with("/*") {
+            // A comment separates tokens (`const/**/X`).
+            i += block_comment(rest);
+            out.push(' ');
+            continue;
+        } else if let Some(len) = string_literal(rest, ident_before).or_else(|| char_literal(rest))
+        {
+            len
+        } else {
+            let ch = rest.chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+            continue;
+        };
+        out.push_str(&format!("\0{}\0", lits.len()));
+        lits.push(rest[..len].to_string());
+        i += len;
+    }
+    (out, lits)
+}
+
+/// The length of the (nested) block comment `rest` starts with.
+fn block_comment(rest: &str) -> usize {
+    let (mut j, mut depth) = (2, 1);
+    while j < rest.len() && depth > 0 {
+        if rest[j..].starts_with("/*") {
+            (depth, j) = (depth + 1, j + 2);
+        } else if rest[j..].starts_with("*/") {
+            (depth, j) = (depth - 1, j + 2);
+        } else {
+            j += rest[j..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    j.min(rest.len())
+}
+
+/// The length of the string literal `rest` starts with: plain, `b`/`c`, raw `r#".."#` and
+/// `br`/`cr` raw. A prefix right after an identifier character is no prefix.
+fn string_literal(rest: &str, ident_before: bool) -> Option<usize> {
+    for prefix in ["br", "cr", "r", "b", "c", ""] {
+        if !rest.starts_with(prefix) || ident_before && !prefix.is_empty() {
+            continue;
+        }
+        let after = &rest[prefix.len()..];
+        if prefix.ends_with('r') {
+            let h = after.bytes().take_while(|b| *b == b'#').count();
+            let Some(body) = after[h..].strip_prefix('"') else {
+                continue;
+            };
+            let end = format!("\"{}", "#".repeat(h));
+            let len = body.find(&end).map_or(body.len(), |e| e + end.len());
+            return Some(prefix.len() + h + 1 + len);
+        }
+        let Some(body) = after.strip_prefix('"') else {
+            continue;
+        };
+        let mut chars = body.char_indices();
+        while let Some((k, ch)) = chars.next() {
+            match ch {
+                '\\' => {
+                    chars.next();
+                }
+                '"' => return Some(prefix.len() + 1 + k + 1),
+                _ => {}
+            }
+        }
+        return Some(rest.len());
+    }
+    None
+}
+
+/// The length of the char literal `rest` starts with (`'a'`, `'\n'`, `'\''`); `None` for a
+/// lifetime (`'a`) or anything else.
+fn char_literal(rest: &str) -> Option<usize> {
+    let body = rest.strip_prefix('\'')?;
+    if let Some(esc) = body.strip_prefix('\\') {
+        let skip = esc.chars().next()?.len_utf8();
+        return esc.get(skip..)?.find('\'').map(|e| 3 + skip + e);
+    }
+    let ch = body.chars().next()?;
+    body[ch.len_utf8()..]
+        .starts_with('\'')
+        .then(|| 2 + ch.len_utf8())
+}
+
+/// The entries of every Rust `const` or `static` named `*_ALLOWED` in a file: its whole
+/// initializer (from the `=` to the `;`) split at brackets and commas, comments dropped,
+/// whitespace normalised. So `&["a", B]`, `vec![..]`, both branches of an `if` and a bare
+/// `OTHER` all count, each as its text; a declaration with no `=` (trait, generic) has none.
+pub fn allowed_lists(text: &str) -> BTreeMap<String, Vec<String>> {
+    let (code, lits) = mask_literals(text);
+    let unmask = |s: &str| {
+        let mut parts = s.split('\0');
+        // Whitespace is normalised in code only, never inside a literal.
+        let code = |c: &str| c.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut out = code(parts.next().unwrap_or_default());
+        while let (Some(n), Some(after)) = (parts.next(), parts.next()) {
+            let lit = n.parse::<usize>().ok().and_then(|n| lits.get(n));
+            out = format!("{out} {} {}", lit.map_or("", |l| l), code(after));
+        }
+        out.trim().to_string()
+    };
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for cap in ALLOWED_NAME.captures_iter(&code) {
+        let after = cap.get(0).map_or(0, |m| m.end());
+        // The `=` at depth 0 of the type; a `;`, `,`, `{` or closing bracket first means none.
+        let mut depth = 0usize;
+        let mut eq = None;
+        let mut prev = ' ';
+        for (k, ch) in code[after..].char_indices() {
+            // The `>` of `->` (a fn pointer type) closes nothing.
+            let arrow = ch == '>' && prev == '-';
+            prev = ch;
+            match ch {
+                _ if arrow => {}
+                '[' | '(' | '<' => depth += 1,
+                ']' | ')' | '>' if depth > 0 => depth -= 1,
+                '=' if depth == 0 => {
+                    eq = Some(after + k + 1);
+                    break;
+                }
+                ']' | ')' | '>' | ';' | ',' | '{' | '}' if depth == 0 => break,
+                _ => {}
+            }
+        }
+        let Some(eq) = eq else { continue };
+        let mut depth = 0usize;
+        let mut end = code.len();
+        for (k, ch) in code[eq..].char_indices() {
+            match ch {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth = depth.saturating_sub(1),
+                ';' if depth == 0 => {
+                    end = eq + k;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        // The whole initializer too, under `NAME=`: same entries in another order or
+        // structure (`!`, `&&` to `||`, values swapped between tuples) still change it.
+        // Formatting (whitespace, a trailing comma) is no change.
+        let mut whole: String = code[eq..end]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        for (from, to) in [(",]", "]"), (",)", ")"), (",}", "}")] {
+            whole = whole.replace(from, to);
+        }
+        let whole = unmask(&whole);
+        out.entry(format!("{}=", &cap[1])).or_default().push(whole);
+        let list = out.entry(cap[1].to_string()).or_default();
+        let atoms = code[eq..end].split(['[', ']', '(', ')', '{', '}', ',']);
+        // `&`, `&mut`, `||` and a macro's `!` are syntax, not entries.
+        let entry = |a: &str| {
+            let a = unmask(a);
+            // A trailing `!` is a macro's; a leading one is negation and stays.
+            let a = a.trim_start_matches(|c: char| "&|* ".contains(c));
+            let a = a.trim_end_matches(|c: char| "&|!* ".contains(c));
+            a.strip_prefix("mut ").unwrap_or(a).to_string()
+        };
+        list.extend(atoms.map(entry).filter(|a| !a.is_empty()));
+    }
+    out
+}
+
+/// Entries that occur more often at head than at base in the `*_ALLOWED` lists of one name,
+/// merged over the PR (a list moved between files is no finding; a new list counts as empty).
+pub fn allowed_findings(
+    base: &BTreeMap<String, Vec<String>>,
+    head: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let count = |v: &[String]| {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        v.iter().for_each(|e| *m.entry(e.clone()).or_default() += 1);
+        m
+    };
+    let lists = |m: &'_ BTreeMap<String, Vec<String>>| {
+        m.iter()
+            .filter(|(n, _)| !n.ends_with('='))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let (whole, (base, head)) = ((base, head), (&lists(base), &lists(head)));
+    let mut out = Vec::new();
+    // A list gone at head (deleted, renamed, inlined) no longer limits anything it fed.
+    for (name, _) in base
+        .iter()
+        .filter(|(n, v)| head.get(*n).is_none_or(Vec::is_empty) && !v.is_empty())
+    {
+        out.push(format!("{name} (all files): list → (removed)"));
+    }
+    for (name, entries) in head {
+        let old = count(base.get(name).map(Vec::as_slice).unwrap_or_default());
+        let new = count(entries);
+        for (e, n) in &new {
+            let o = old.get(e).copied().unwrap_or(0);
+            if *n > o {
+                out.push(format!("{name} (all files): {e} {o} → {n}"));
+            }
+        }
+        // Any other change to the initializer (order, structure, an entry dropped from an
+        // `&&` or a tuple swap beside a shrink) can widen too: the owner judges it.
+        let sorted = |m: &BTreeMap<String, Vec<String>>| {
+            let mut v = m.get(&format!("{name}=")).cloned().unwrap_or_default();
+            v.sort();
+            v
+        };
+        let grew = new
+            .iter()
+            .any(|(e, n)| old.get(e).copied().unwrap_or(0) < *n);
+        if !grew && !entries.is_empty() && sorted(whole.0) != sorted(whole.1) {
+            out.push(format!("{name} (all files): order or structure changed"));
+        }
+    }
+    out
+}
+
 /// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
 /// switches and Rust threshold constants.
 pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> {
@@ -1090,6 +1329,155 @@ mod tests {
             .is_empty()
         );
         assert!(p("src/a.rs", "@@\n-const MIN_X: u8 = 3;\n+const MIN_X: u8 = 4;\n-const MAX_X: u8 = 3;\n+const MAX_X: u8 = 2;\n").is_empty());
+    }
+
+    #[test]
+    fn allowed_lists_that_grow_or_swap() {
+        let base = "pub const AUTONOMOUS_ALLOWED: [&str; 2] = [\n    \"docs/**\", // \"x\" ];\n    \"a]\",\n];\nconst X_DENIED: &[&str] = &[\"a\"];";
+        let b = allowed_lists(base);
+        assert_eq!(b["AUTONOMOUS_ALLOWED"], ["\"docs/**\"", "\"a]\""]);
+        assert!(!b.contains_key("X_DENIED"));
+        let f = |head: &str| allowed_findings(&b, &allowed_lists(head));
+        let one = |e: &str| vec![format!("AUTONOMOUS_ALLOWED (all files): {e} 0 → 1")];
+        // Same entries, reformatted or commented: no finding; reordered: the owner judges.
+        assert!(
+            f("pub const AUTONOMOUS_ALLOWED: [&str; 2] = [\"docs/**\", /* \"q\", */ \"a]\"];")
+                .is_empty()
+        );
+        assert_eq!(
+            f(
+                "mod m {\n    pub(crate) static AUTONOMOUS_ALLOWED: &[&str] = &[\"a]\", /* \"q\", */\n \"docs/**\"];\n}"
+            ),
+            ["AUTONOMOUS_ALLOWED (all files): order or structure changed"]
+        );
+        // A swap widens as much as an addition; a non-literal entry or initializer counts.
+        assert_eq!(
+            f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"**\", \"a]\"];"),
+            one("\"**\"")
+        );
+        assert_eq!(
+            f(
+                "impl A {\n    const AUTONOMOUS_ALLOWED: [&str; 3] = [\"docs/**\", \"a]\", SRC_GLOB];\n}"
+            ),
+            one("SRC_GLOB")
+        );
+        assert_eq!(
+            f("const AUTONOMOUS_ALLOWED: &[&str] = OTHER;\n#[test]\nfn t() { [\"z\"]; }"),
+            one("OTHER")
+        );
+        // Nested block comments end where Rust ends them.
+        assert_eq!(
+            f(
+                "const AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\", /* /* */ ] */ \"evil\"];"
+            ),
+            one("\"evil\"")
+        );
+        // Both branches count; so does a duplicate entry.
+        let got = f(
+            "const AUTONOMOUS_ALLOWED: &[&str] = if cfg!(x) { &[\"docs/**\", \"a]\"] } else { &[\"evil\"] };",
+        );
+        assert!(got.contains(&one("\"evil\"")[0]), "{got:?}");
+        let dup = "const AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\", \"a]\"];";
+        assert_eq!(f(dup), ["AUTONOMOUS_ALLOWED (all files): \"a]\" 1 → 2"]);
+        // `vec![..]` in a LazyLock, raw, C and byte strings, a brand-new list.
+        let v = "static NEW_ALLOWED: LazyLock<Vec<&str>> = LazyLock::new(|| vec![r#\"a\"]\"#, cr\"b]\", 'x']);";
+        let got = f(v);
+        assert!(
+            got.iter().any(|g| g.contains("r#\"a\"]\"#"))
+                && got.iter().any(|g| g.contains("cr\"b]\""))
+                && got.iter().any(|g| g.contains("'x'")),
+            "{got:?}"
+        );
+        // A shrink changes the initializer: the owner judges it; lifetimes are no char literals.
+        assert_eq!(
+            f("const AUTONOMOUS_ALLOWED: [&'static str; 1] = [\"docs/**\"];"),
+            ["AUTONOMOUS_ALLOWED (all files): order or structure changed"]
+        );
+        // A dropped conjunct, a swap beside a shrink and a raised quotient all count.
+        let ch = |b: &str, h: &str| allowed_findings(&allowed_lists(b), &allowed_lists(h));
+        let x = "X_ALLOWED (all files): order or structure changed";
+        assert_eq!(
+            ch(
+                "const X_ALLOWED: bool = (CI) && (OWNER);",
+                "const X_ALLOWED: bool = (CI);"
+            ),
+            [x]
+        );
+        assert_eq!(
+            ch(
+                "const X_ALLOWED: T = &[(\"a\", true), (\"b\", false), (\"c\", false)];",
+                "const X_ALLOWED: T = &[(\"a\", false), (\"b\", true)];"
+            ),
+            [x]
+        );
+        assert_eq!(
+            ch(
+                "const X_ALLOWED: u32 = (30) / (10);",
+                "const X_ALLOWED: u32 = (30);"
+            ),
+            [x]
+        );
+        assert!(f("const AUTONOMOUS_ALLOWED: [&str; 2] = [\"docs/**\", \"a]\"]; // é\nconst Z: &str = \"\\é\"; const C: char = 'é';").is_empty());
+        // A scalar or a declaration without a value records no unrelated code.
+        let s = allowed_lists(
+            "const RETRIES_ALLOWED: u32 = 3;\n#[derive(Debug)]\nstruct S;\ntrait T { const T_ALLOWED: &'static [&'static str]; }\nfn g<const N_ALLOWED: usize>() { let a = [1]; }",
+        );
+        assert_eq!(s["RETRIES_ALLOWED"], ["3"]);
+        assert!(
+            !s.contains_key("T_ALLOWED") && !s.contains_key("N_ALLOWED"),
+            "{s:?}"
+        );
+        // `->` in a fn pointer type closes no bracket.
+        let fp = allowed_lists("const F_ALLOWED: &[(&str, fn(&str) -> bool)] = &[(\"**\", f)];");
+        assert_eq!(fp["F_ALLOWED"], ["\"**\"", "f"]);
+        // A hidden declaration still counts; negation is part of an entry.
+        let hidden = "const/**/AUTONOMOUS_ALLOWED: &[&str] = &[\"**\"];\nconst r#AUTONOMOUS_ALLOWED: &[&str] = &[\"docs/**\", \"a]\"];\nconst\u{200E}AUTONOMOUS_ALLOWED: &[&str] = &[\"x\"];";
+        let got = f(hidden);
+        assert!(
+            got.iter().any(|g| g.contains("\"**\"")) && got.iter().any(|g| g.contains("\"x\"")),
+            "{got:?}"
+        );
+        let neg =
+            allowed_lists("const B_ALLOWED: bool = !STRICT;\nconst S_ALLOWED: &str = \"a  b\";");
+        assert_eq!(
+            (neg["B_ALLOWED"][0].as_str(), neg["S_ALLOWED"][0].as_str()),
+            ("!STRICT", "\"a  b\"")
+        );
+        // Same entries in another order or structure.
+        let changed = |h: &str| {
+            allowed_findings(
+                &allowed_lists(&format!("const S_ALLOWED: X = {h};")),
+                &allowed_lists(&format!(
+                    "const S_ALLOWED: X = {};",
+                    "&[(\"a\", true), (\"b\", false)]"
+                )),
+            )
+        };
+        for h in [
+            "&[(\"a\", false), (\"b\", true)]",
+            "&[(\"b\", false), (\"a\", true)]",
+        ] {
+            assert_eq!(
+                changed(h),
+                ["S_ALLOWED (all files): order or structure changed"],
+                "{h}"
+            );
+        }
+        assert!(changed("&[(\"a\", true), (\"b\", false)]").is_empty());
+        let ops = allowed_findings(
+            &allowed_lists("const O_ALLOWED: bool = (CI) && (OWNER);"),
+            &allowed_lists("const O_ALLOWED: bool = (CI) || (OWNER);"),
+        );
+        assert_eq!(ops, ["O_ALLOWED (all files): order or structure changed"]);
+        // A list gone or emptied at head is a finding.
+        assert_eq!(
+            f("const AUTONOMOUS_ALLOWED: &[&str] = &[];"),
+            ["AUTONOMOUS_ALLOWED (all files): list → (removed)"]
+        );
+        assert_eq!(
+            f("const AUTONOMOUS_GLOBS: &[&str] = &[\"**\"];"),
+            ["AUTONOMOUS_ALLOWED (all files): list → (removed)"]
+        );
     }
 
     #[test]

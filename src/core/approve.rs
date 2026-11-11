@@ -419,6 +419,8 @@ pub struct OrchestratorCase<'a> {
     pub workflows: &'a [String],
     /// `risk::autonomous_excluded` output: owner-only under [`Policy::Autonomous`].
     pub autonomous_excluded: &'a [String],
+    /// The PR's capabilities (labels and linked task metadata, plus `weaken` for findings).
+    pub capabilities: &'a [String],
 }
 
 /// `Ok(label for the status)` when an orchestrator approval can count, else `Err(why)`.
@@ -426,6 +428,10 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
     // A weakened gate is the owner's under every policy and in the window (owner decision).
     if c.rules.contains(&"R-weaken") {
         return Err("a PR that weakens a gate (R-weaken) always needs the owner".into());
+    }
+    // The capability counts too, whatever rule id carries it.
+    if c.capabilities.iter().any(|x| x == "weaken") {
+        return Err("a PR with the weaken capability always needs the owner".into());
     }
     // D-017 decides first: its own exclusions only, and risk-check adds the verdict condition.
     if c.policy == Policy::Autonomous {
@@ -562,6 +568,7 @@ mod tests {
             rules: &["R-ci"],
             workflows: &[],
             autonomous_excluded: &[],
+            capabilities: &[],
         }
     }
 
@@ -612,6 +619,18 @@ mod tests {
                 let why = orchestrator_counts(&c).unwrap_err();
                 assert!(why.contains("R-weaken"), "{p:?} {until:?}: {why}");
             }
+        }
+    }
+
+    #[test]
+    fn the_weaken_capability_never_counts_for_the_orchestrator() {
+        let caps = vec!["weaken".to_string()];
+        for p in [Policy::Orchestrator, Policy::Autonomous] {
+            let mut c = case(p, Some("2026-11-30"), "2026-11-10");
+            c.rules = &["R-gate-loosen"];
+            c.capabilities = &caps;
+            let why = orchestrator_counts(&c).unwrap_err();
+            assert!(why.contains("weaken"), "{p:?}: {why}");
         }
     }
 

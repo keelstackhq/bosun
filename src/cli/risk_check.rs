@@ -170,6 +170,7 @@ fn builtin_base(path: &str) -> Option<&'static str> {
 /// root, a TS/JS test file. Also every deleted test file.
 fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> Result<Vec<String>> {
     let (mut out, mut c) = (Vec::new(), [[0usize; 5]; 2]);
+    let mut lists: [std::collections::BTreeMap<String, Vec<String>>; 2] = Default::default();
     // A cap on reads: past it the owner judges, no quota is burnt and nothing errors.
     let many = files.iter().filter(|f| code_file(&f.filename)).count();
     if many > 100 {
@@ -195,6 +196,11 @@ fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> R
                 Ok(Some(t)) if t.len() <= 1 << 20 => {
                     let r = test_counts(path, &t);
                     (0..5).for_each(|i| c[side][i] += r[i]);
+                    if path.to_ascii_lowercase().ends_with(".rs") {
+                        for (k, v) in weaken::allowed_lists(&t) {
+                            lists[side].entry(k).or_default().extend(v);
+                        }
+                    }
                 }
                 Ok(None) => {}
                 _ => out.push(format!(
@@ -203,6 +209,7 @@ fn test_findings(gh: &dyn Github, files: &[PrFile], base: &str, head: &str) -> R
             }
         }
     }
+    out.extend(weaken::allowed_findings(&lists[0], &lists[1]));
     let names = ["tests", "assertions", "skips", "only", "cfg switch-offs"];
     for (i, what) in names.iter().enumerate() {
         let (o, n) = (c[0][i], c[1][i]);
@@ -426,7 +433,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
-        orchestrator_window(gh, base, &today[..10], pr, &excluded)?
+        orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
     } else {
         (
             Err("signed approvals do not count on this PR".into()),
@@ -1185,7 +1192,7 @@ fn orchestrator_window(
     base: &str,
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
-    excluded: &[String],
+    (excluded, capabilities): (&[String], &[String]),
 ) -> Result<(std::result::Result<String, String>, bool)> {
     let (files, matches, requirement) = pr;
     let approvals = match gh.file_at(CONFIG_FILE, base)? {
@@ -1214,6 +1221,7 @@ fn orchestrator_window(
         rules: &rules,
         workflows: &workflows,
         autonomous_excluded: &autonomous_excluded,
+        capabilities,
     });
     Ok((counts, approvals.policy() == Policy::Autonomous))
 }
