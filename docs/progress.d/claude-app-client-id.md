@@ -1,0 +1,1 @@
+- 2026-11-11 · next-round: create-github-app-token uses client-id (BOSUN_APP_CLIENT_ID) in the 4 gate workflows and templates
