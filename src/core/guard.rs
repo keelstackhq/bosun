@@ -1589,7 +1589,11 @@ fn split_heredocs(command: &str) -> (String, Vec<String>) {
     for line in command.split_inclusive('\n') {
         if let Some((delim, dash, quoted)) = &skip {
             let l = line.trim_end_matches('\n');
-            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+            let l = if *dash { l.trim_start_matches('\t') } else { l };
+            if l == delim
+                || l.strip_prefix(delim.as_str())
+                    .is_some_and(|r| r.starts_with(')'))
+            {
                 skip = None;
                 code.push_str(line);
             } else if !quoted {
@@ -2406,7 +2410,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 "jq" => after.iter().any(|a| a.contains("$ENV") || a.split(|c: char| !(c.is_alphanumeric() || matches!(c, '_' | '.'))).any(|t| t == "env" || t.starts_with("env."))),
                 n if INTERPS.contains(&n) && after.iter().any(|a| ENV_READS.iter().any(|e| a.contains(e) && (*e != "environ" || runs_code(n, after)))) => true,
                 _ if i == 0 && tgt(rest[0]) => true,
-                n if (SHELLS.contains(&n) || n == ".") && after.iter().enumerate().any(|(j, a)| tgt(a) && !script_arg(&after[..j], &tgt)) => true,
+                n if (SHELLS.contains(&n) || n == ".") && after.iter().enumerate().any(|(j, a)| tgt(a) && !data_arg(n, after, j, &tgt)) => true,
                 n if SHELLS.contains(&n) && mentions => {
                     let interp = INTERPS.contains(&n);
                     let code = runs_code(n, after);
@@ -2424,14 +2428,19 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
     None
 }
 
-/// Whether the words before an argument hold the script that a shell or interpreter runs (the
-/// first word, after options that take no value), so a later written file is only its data.
-fn script_arg(before: &[&str], tgt: &dyn Fn(&str) -> bool) -> bool {
-    const FLAGS: &[&str] = &["-u", "-B", "-I", "-E", "-s", "-S", "-q", "-O", "-e", "-x"];
-    before
-        .iter()
-        .find(|w| !FLAGS.contains(w))
-        .is_some_and(|w| !w.starts_with(['-', '<', '>', '&']) && !tgt(w))
+/// Whether argument `j` of a shell or interpreter is plain data for the script before it: a
+/// data file (by extension) after a script file, with no option anywhere (options take code or
+/// values: `-e`, `-I`, `-O`), and not for runners that run their argument (`deno run`, `php`).
+fn data_arg(cmd: &str, after: &[&str], j: usize, tgt: &dyn Fn(&str) -> bool) -> bool {
+    const DATA: &[&str] = &[".json", ".md", ".txt", ".yml", ".yaml", ".toml", ".csv"];
+    const SCRIPT: &[&str] = &[".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".sh"];
+    let ends = |w: &str, exts: &[&str]| exts.iter().any(|e| w.ends_with(e));
+    !matches!(cmd, "deno" | "bun" | "php" | "xargs" | "eval")
+        && ends(after[j], DATA)
+        && !after.iter().any(|w| w.starts_with('-'))
+        && after[..j]
+            .iter()
+            .any(|w| ends(w, SCRIPT) && !tgt(w) && !w.starts_with(['<', '>']))
 }
 
 fn heredoc_at(line: &str) -> Option<usize> {
@@ -2460,7 +2469,11 @@ fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
     for line in command.split_inclusive('\n') {
         if let Some((delim, dash)) = &skip {
             let l = line.trim_end_matches('\n');
-            if (if *dash { l.trim_start_matches('\t') } else { l }) == delim {
+            let l = if *dash { l.trim_start_matches('\t') } else { l };
+            if l == delim
+                || l.strip_prefix(delim.as_str())
+                    .is_some_and(|r| r.starts_with(')'))
+            {
                 skip = None;
                 out.push_str(line);
             } else {
@@ -3603,7 +3616,12 @@ mod tests {
     fn label_lock_treats_prose_flag_heredocs_as_data() {
         for cmd in [
             "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review label\nEOF\n)\"",
-            "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review `gh issue edit 1 --add-label bosun:state/x`\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nfix bosun:state/review `gh issue view 1`\nEOF\n)\"",
+            "git commit -m \"$(cat <<-'EOF'\n\tfix bosun:state/review\n\tEOF\n)\"",
+            "git commit --message=\"$(cat <<'EOF'\nbosun:state/review\nEOF\n)\"",
+            "gh pr create --body='about bosun:state/x'",
+            "FOO=1 git -C sub commit -m 'bosun:state/x'",
+            "gh -R o/r issue comment 3 --body 'bosun:state/x'",
             "gh pr create --title t --body \"$(cat <<'EOF'\nfix bosun:state/review\n\nmore\nEOF\n)\"",
             "gh issue comment 3 --body \"$(cat <<'EOF'\nbosun:state/review\nEOF\n)\"",
             "git commit -m 'docs: bosun:state/review'",
@@ -3622,6 +3640,13 @@ mod tests {
             "git commit -m \"$(sh <<'EOF'\ngh label create bosun:state/y\nEOF\n)\"",
             "git commit -m \"bosun:state/x $(gh label create bosun:state/y)\"",
             "git commit -m 'x' --add-label 'bosun:state/y'",
+            "git commit -m \"$(cat <<'EOF'\nx\nEOF)\"; gh issue edit 3 --add-label bosun:state/x\nEOF\n)\"",
+            "git commit -m 'bosun:state/x' && gh issue edit 3 --add-label \"$(git log -1 --format=%s)\"",
+            "git commit -m 'bosun:state/x' && gh api repos/o/r/issues/3/labels -f labels[]=\"$(git log -1 --format=%s)\"",
+            "git -c alias.y='!sh' y tag -m 'bosun:state/x'",
+            "gh pr create --body \"$(cat <<'EOF'\nbosun:state/x\nEOF\n)\" --add-label foo",
+            "git commit -m 'bosun:state/x'; gh label create bosun:state/y",
+            "git commit -m \"$(cat <<'EOF'\nx\nEOF)\"; rm bosun:state/y\nEOF\n)\"",
         ] {
             assert!(bash(cmd, "x").is_some(), "{cmd}");
         }
@@ -3632,7 +3657,7 @@ mod tests {
         let w = "cat > c.json <<'EOF'\n{\"a\":\"sops -d f\"}\nEOF\n";
         for run in [
             "python3 probe.py c.json",
-            "python3 -u probe.py c.json",
+            "node run.js c.json",
             "bash run.sh c.json",
         ] {
             assert_eq!(bash(&format!("{w}{run}"), "x"), None, "{run}");
@@ -3647,9 +3672,20 @@ mod tests {
             "python3 -W ignore c.json",
             "bash --rcfile /dev/null c.json",
             "python3 c.json c.json",
+            "python3 -u probe.py c.json",
+            "perl -e 'do shift' c.json",
+            "node -e 'x' c.json",
+            "ruby -e 'load ARGV[0]' c.json",
+            "bash -O extglob c.json",
+            "ruby -I lib c.json",
+            "deno run c.json",
+            "bun run c.json",
+            "php -f c.json",
         ] {
             assert!(bash(&format!("{w}{run}"), "x").is_some(), "{run}");
         }
+        let w = "cat > c.py <<'EOF'\nsops -d f\nEOF\n";
+        assert!(bash(&format!("{w}python3 probe.py c.py"), "x").is_some());
     }
 
     #[test]

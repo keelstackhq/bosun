@@ -165,17 +165,29 @@ pub fn bash_writes(command: &str) -> Vec<String> {
         );
     }
     // Masking hides a `>` inside a quoted substitution (`"$(cmd > f)"`): judge those commands
-    // on their own, unless a `cd` makes relative paths unknown.
-    if !moved {
-        for inner in substitutions(&code, false) {
-            for path in bash_writes(&inner) {
-                if !out.contains(&path) {
-                    out.push(path);
-                }
+    // on their own, unless a `cd` before it makes relative paths unknown. `$(( ))` is arithmetic.
+    for inner in substitutions(&code, false) {
+        let at = code.find(inner.as_str()).unwrap_or(0);
+        if inner.starts_with('(') || moves_before(&code[..at]) {
+            continue;
+        }
+        for path in bash_writes(&inner) {
+            if !out.contains(&path) {
+                out.push(path);
             }
         }
     }
     out
+}
+
+/// Whether a `cd`, `pushd`, `popd` or a directory-changing runner comes in the text.
+fn moves_before(text: &str) -> bool {
+    shell_words(&mask_quoted(text))
+        .split(|w| w == SEP)
+        .any(|seg| {
+            let (cmd, _, moved) = command_of(seg);
+            moved || matches!(cmd, "cd" | "pushd" | "popd")
+        })
 }
 
 #[cfg(test)]
@@ -222,6 +234,8 @@ mod tests {
             ("echo \"$(cmd > src/f.rs)\"", vec!["src/f.rs"]),
             ("echo \"x $(a | tee src/f.rs) y\"", vec!["src/f.rs"]),
             ("echo $(cmd > src/f.rs)", vec!["src/f.rs"]),
+            ("echo \"$(cmd > src/f.rs)\"; cd /tmp", vec!["src/f.rs"]),
+            ("echo \"$(cd /tmp; a > /abs/f.rs)\"", vec!["/abs/f.rs"]),
         ] {
             assert_eq!(bash_writes(cmd), want, "{cmd}");
         }
@@ -261,6 +275,9 @@ mod tests {
             "echo \"$(grep '>' README.md)\"",
             "echo '$(cmd > README.md)'",
             "cd /tmp && echo \"$(cmd > README.md)\"",
+            "echo \"$((1 > 2))\"",
+            "echo $((a>b))",
+            "echo \"$(cd /tmp; a > README.md)\"",
         ] {
             assert!(bash_writes(cmd).is_empty(), "{cmd}: {:?}", bash_writes(cmd));
         }

@@ -5,21 +5,59 @@
 
 const FLAGS: &[&str] = &["-m", "-b", "-t", "--message", "--body", "--title"];
 
-/// Whether the words before a flag start a command whose prose flags are data.
+/// Words that mean the text may edit labels: then no prose is data.
+const LABEL_EDITS: &[&str] = &[
+    "--label",
+    "--add-label",
+    "--remove-label",
+    "gh label",
+    "labels",
+    "labelable",
+];
+
+/// Whether the words before a flag start a command whose prose flags are data: `git commit|tag`
+/// (the verb after global options such as `-C dir`, `-c k=v`) and `gh pr|issue create|comment|..`
+/// (after `-R repo`), after leading `VAR=x` assignments.
 fn prose_command(before: &str) -> bool {
     let seg = before
         .rsplit([';', '&', '|', '\n', '('])
         .next()
         .unwrap_or("");
-    let w: Vec<&str> = seg.split_whitespace().collect();
-    match w.as_slice() {
-        ["git", rest @ ..] => rest.iter().any(|a| matches!(*a, "commit" | "tag")),
-        [
-            "gh",
-            "pr" | "issue",
-            "create" | "comment" | "edit" | "review" | "close" | "reopen",
-            ..,
-        ] => true,
+    let words: Vec<&str> = seg
+        .split_whitespace()
+        .skip_while(|a| a.contains('=') && !a.starts_with('-'))
+        .collect();
+    // The next word that is not an option (or the value of one in `takes`), from `at`.
+    let word = |mut at: usize, takes: &[&str]| {
+        while let Some(a) = words.get(at) {
+            if takes.contains(a) {
+                at += 2;
+            } else if a.starts_with('-') {
+                at += 1;
+            } else {
+                return Some((*a, at + 1));
+            }
+        }
+        None
+    };
+    match words.first() {
+        Some(&"git") => {
+            let takes = ["-C", "-c", "--git-dir", "--work-tree", "--namespace"];
+            matches!(word(1, &takes), Some(("commit" | "tag", _)))
+        }
+        Some(&"gh") => {
+            let takes = ["-R", "--repo"];
+            word(1, &takes).is_some_and(|(a, at)| {
+                matches!(a, "pr" | "issue")
+                    && matches!(
+                        word(at, &takes),
+                        Some((
+                            "create" | "comment" | "edit" | "review" | "close" | "reopen",
+                            _
+                        ))
+                    )
+            })
+        }
         _ => false,
     }
 }
@@ -39,12 +77,16 @@ fn heredoc_value(s: &str) -> Option<usize> {
     }
     loop {
         let (line, next) = body.split_once('\n').unwrap_or((body, ""));
-        if (if dash {
+        let bare = if dash {
             line.trim_start_matches('\t')
         } else {
             line
-        }) == delim
-        {
+        };
+        // Bash ends a heredoc inside `$( )` at `EOF)` too: such a line is not plain data.
+        if bare.starts_with(delim) && bare != delim {
+            return None;
+        }
+        if bare == delim {
             let tail = next.trim_start_matches([' ', '\t', '\n']);
             return tail.starts_with(")\"").then(|| s.len() - tail.len() + 2);
         }
@@ -65,6 +107,9 @@ fn quoted_value(s: &str) -> Option<usize> {
 
 /// The command with the prose values of prose flags replaced by `"x"`.
 pub fn strip_prose(command: &str) -> String {
+    if LABEL_EDITS.iter().any(|w| command.contains(w)) {
+        return command.to_string();
+    }
     let (mut out, mut quote, mut i) = (String::new(), None, 0);
     let b = command.as_bytes();
     while i < command.len() {
@@ -114,4 +159,44 @@ pub fn strip_prose(command: &str) -> String {
         i += c.len_utf8();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_prose;
+
+    #[test]
+    fn a_heredoc_that_bash_ends_at_a_delimiter_with_a_paren_is_not_prose() {
+        let c = "git commit -m \"$(cat <<'EOF'\nx\nEOF)\"; rm y\nEOF\n)\"";
+        assert_eq!(strip_prose(c), c);
+        let ok = "git commit -m \"$(cat <<'EOF'\nx\nEOF\n)\"";
+        assert_eq!(strip_prose(ok), "git commit -m \"x\"");
+    }
+
+    #[test]
+    fn any_label_edit_word_keeps_the_text_unchanged() {
+        for c in [
+            "git commit -m 'a' && gh issue edit 3 --add-label \"$(x)\"",
+            "git commit -m 'a'; gh api r/labels",
+            "git commit -m 'a'; gh label create x",
+        ] {
+            assert_eq!(strip_prose(c), c);
+        }
+    }
+
+    #[test]
+    fn the_git_verb_is_found_after_global_options() {
+        assert_eq!(
+            strip_prose("git -C d commit -m 'a'"),
+            "git -C d commit -m \"x\""
+        );
+        assert_eq!(
+            strip_prose("git -c alias.y=z y -m 'a'"),
+            "git -c alias.y=z y -m 'a'"
+        );
+        assert_eq!(
+            strip_prose("git -c alias.y=tag y tag -m 'a'"),
+            "git -c alias.y=tag y tag -m 'a'"
+        );
+    }
 }

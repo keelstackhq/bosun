@@ -1,1 +1,1 @@
-- Guard: heredoc and quoted prose values (commit message, PR body) that name a state label pass the label-lock; a data file written by a heredoc is no longer refused as a script argument; edit-lock sees writes inside quoted command substitutions; a heredoc plus a file operand is not heredoc-only
+- Guard review fixes: heredoc ends at a delimiter plus paren, no prose when a label edit is present, narrow data-argument rule, input redirects, arithmetic and cd order in substitutions
