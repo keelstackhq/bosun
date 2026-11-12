@@ -489,19 +489,60 @@ fn too_deep() -> String {
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
     decrypt_rule(command, 0)
         .or_else(|| destructive_rule(command, 0))
-        .or_else(|| check(command, branch_at, default_branch, 0))
+        .or_else(|| check(command, branch_at, default_branch, 0, None))
         .or_else(|| {
             let prose = prose::strip_prose(command);
             (prose.contains(STATE) && !read_only(&prose, 0)).then(label_reason)
         })
 }
 
-fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
+/// A `git push` the merge-lock lets through (push-gates, spec §7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Push {
+    /// `-C` options of the shell's `cd`s and git's own `-C`; `None`: the guard cannot tell.
+    pub dir: Option<Vec<String>>,
+    /// The local refs pushed (refspec sources); empty: the current branch.
+    pub srcs: Vec<String>,
+}
+
+/// Where the walk reports each push it lets through.
+pub(crate) type PushSink<'a> = &'a dyn Fn(Push);
+
+/// Every `git push` of `command` that the merge-lock allows, in shell scripts it runs and code
+/// it runs too (the same walk as the merge-lock). A refused command may list fewer.
+pub fn pushes(
+    command: &str,
+    read: &dyn Fn(&str) -> Option<Script>,
+    default_branch: &str,
+) -> Vec<Push> {
+    let found = std::cell::RefCell::new(Vec::new());
+    let sink = |p: Push| found.borrow_mut().push(p);
+    // The branch only decides refusals, which `tool_rules` already made.
+    let branch_at = |_: &[String]| Some(String::new());
+    let _ = check(command, &branch_at, default_branch, 0, Some(&sink));
+    let _ = interp::script_walk(command, read, &branch_at, default_branch, Some(&sink));
+    // A shell script is walked as shell and scanned as code: keep each push once.
+    let mut out: Vec<Push> = Vec::new();
+    for p in found.into_inner() {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+fn check(
+    command: &str,
+    branch_at: BranchAt,
+    default_branch: &str,
+    depth: usize,
+    sink: Option<PushSink>,
+) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some(too_deep());
     }
     for inner in nested(command) {
-        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1) {
+        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1, sink) {
             return Some(why);
         }
     }
@@ -509,6 +550,7 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         dir: Some(&[]),
         branch_at,
         default_branch,
+        sink,
     };
     if let Some(why) = interp::inline_rule(&split_heredocs(command).0, &here) {
         return Some(why);
@@ -548,6 +590,7 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
                 dir: dir.as_deref(),
                 branch_at,
                 default_branch,
+                sink,
             };
             if let Some(why) = merge_rule(&words, segment, &target) {
                 return Some(format!(
@@ -1339,6 +1382,7 @@ struct Target<'a> {
     dir: Option<&'a [String]>,
     branch_at: BranchAt<'a>,
     default_branch: &'a str,
+    sink: Option<PushSink<'a>>,
 }
 
 /// The segments of a command with the separator that ends each one (`&&`, `||`, `;`, `|`,
@@ -2666,11 +2710,14 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         i += step;
     }
     let (sub, rest) = (args.get(i).copied()?, &args[(i + 1).min(args.len())..]);
-    let on_default = match target.dir.filter(|_| known) {
+    let at: Option<Vec<String>> = target
+        .dir
+        .filter(|_| known)
+        .map(|d| d.iter().cloned().chain(opts).collect());
+    let on_default = match &at {
         None => true,
-        Some(dir) => {
-            let all: Vec<String> = dir.iter().cloned().chain(opts).collect();
-            match (target.branch_at)(&all) {
+        Some(all) => {
+            match (target.branch_at)(all) {
                 Some(b) => b == default_branch,
                 // A moved target git cannot read (a failed `cd`, a missing `-C` dir) may
                 // leave git where the shell started: fail closed.
@@ -2726,6 +2773,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             if to_default || (refs.is_empty() && on_default) {
                 return Some("push to the default branch");
             }
+            if let Some(sink) = target.sink {
+                let srcs = refs.iter().map(|r| r.split(':').next().unwrap_or(r));
+                sink(Push {
+                    dir: at,
+                    srcs: srcs.map(str::to_string).collect(),
+                });
+            }
             None
         }
         "tag" => {
@@ -2768,6 +2822,52 @@ mod tests {
             &|_| Some(branch.into()),
             "main",
         )
+    }
+
+    fn push(dir: Option<&[&str]>, srcs: &[&str]) -> Push {
+        Push {
+            dir: dir.map(|d| d.iter().map(|s| s.to_string()).collect()),
+            srcs: srcs.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn pushes_names_where_each_push_runs_and_what_it_pushes() {
+        let none = |_: &str| None;
+        let cases: Vec<(&str, Vec<Push>)> = vec![
+            ("git status && cargo test", vec![]),
+            ("git push", vec![push(Some(&[]), &[])]),
+            (
+                "git push -u origin claude/x",
+                vec![push(Some(&[]), &["claude/x"])],
+            ),
+            (
+                "git push origin HEAD:claude/x",
+                vec![push(Some(&[]), &["HEAD"])],
+            ),
+            (
+                "cd ../w && git push origin",
+                vec![push(Some(&["-C", "../w"]), &[])],
+            ),
+            (
+                "git -C ../w push origin y",
+                vec![push(Some(&["-C", "../w"]), &["y"])],
+            ),
+            (
+                "cd ../w | true; git push origin x",
+                vec![push(None, &["x"])],
+            ),
+            ("git -C \"$D\" push origin x", vec![push(None, &["x"])]),
+            ("git push --force origin x", vec![]),
+        ];
+        for (cmd, want) in cases {
+            assert_eq!(pushes(cmd, &none, "main"), want, "{cmd}");
+        }
+        let script = |p: &str| (p == "ship.sh").then(|| Script::Text("git push origin z\n".into()));
+        assert_eq!(
+            pushes("bash ship.sh", &script, "main"),
+            vec![push(Some(&[]), &["z"])]
+        );
     }
 
     #[test]

@@ -177,3 +177,14 @@ worktrees keep their own), the fingerprint being the sha256 of `git status --por
 the same tree no longer vouches for it. The Stop hook adds a `systemMessage` (never a block) when
 the tree is not what that record saw: another head or fingerprint, or no record and uncommitted
 changes. A clean tree with no record, or a tree equal to the record, is silent.
+
+Gates before push (`[mode] push_gates`, default `ready`; `push` from `steady` up): under `push`
+the PreToolUse hook refuses a Bash `git push` when the tree of a pushed ref lacks a stamp for
+a ready gate (the stamps `bosun pr --ready` reads, §4); the reason names the missing gates and
+the `for g in ..; do bosun gate $g || break; done` loop. Pushes are found by the merge-lock's
+walk (`core::guard::pushes`: nested commands, shell scripts it runs, interpreter code) and are
+read where git runs: the hook directory moved by `cd dir &&` and `git -C dir`. The pushed ref
+is each refspec source (`HEAD` when none is named); the mode is read from the
+`.bosun/bosun.toml` of that checkout, and a config that is missing or does not parse leaves
+the push to the other locks. A push whose directory the guard cannot tell is refused under
+`push`. `ready`: no change.
