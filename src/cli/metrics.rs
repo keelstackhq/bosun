@@ -34,7 +34,7 @@ fn ts(t: &Option<String>) -> Option<Timestamp> {
     t.as_deref().and_then(parse_rfc3339)
 }
 
-fn ci(gh: &dyn Github, sha: &str) -> Result<Option<HeadCi>> {
+fn ci(gh: &dyn Github, sha: &str, excuse: bool) -> Result<Option<HeadCi>> {
     let runs: Vec<CiRun> = gh
         .check_runs_all(sha)?
         .into_iter()
@@ -46,7 +46,7 @@ fn ci(gh: &dyn Github, sha: &str) -> Result<Option<HeadCi>> {
             conclusion: r.conclusion,
         })
         .collect();
-    Ok(ci_head(&runs))
+    Ok(ci_head(&runs, excuse))
 }
 
 fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
@@ -57,14 +57,17 @@ fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
         // A fork's heads are not ours to count; its merge into main is.
         let mut heads = Vec::new();
         if pull.head_repo.eq_ignore_ascii_case(&repo) {
-            for sha in gh.pull_commits(pull.number)? {
-                heads.extend(ci(gh, &sha)?);
+            let shas = gh.pull_commits(pull.number)?;
+            for (i, sha) in shas.iter().enumerate() {
+                // Superseded heads (run cancelled by the push) and a draft's head (`ci` not run).
+                heads.extend(ci(gh, sha, i + 1 < shas.len() || pull.draft)?);
             }
         } else if pull.merged_at.is_none() {
             continue;
         }
         let main_red = match (&pull.merged_at, &pull.merge_commit_sha) {
-            (Some(_), Some(sha)) => ci(gh, sha)?.is_some_and(|h| h.failing),
+            // Pushes to main never cancel each other: any red `ci-ok` there is red.
+            (Some(_), Some(sha)) => ci(gh, sha, false)?.is_some_and(|h| h.failing),
             _ => false,
         };
         out.push(Facts {

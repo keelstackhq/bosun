@@ -52,14 +52,17 @@ gatekeeper has no target). Nothing is stored. `bosun metrics` computes it on eve
 (`data.brake`, in every mode; `knob` says whether the mode applies it); `bosun mode` stays
 offline and prints `brake: null`; heal, digest and wave tick read it through
 `cli::metrics::window`. Sources: check runs of the GitHub Actions app, on merge commits of
-main (what main-health judges) and on the commits of own-branch PRs. A commit is a pushed head
-when its `ci-ok` passed or failed together with another job; a `ci-ok` that fails alone (a run
-cancelled by a newer push, a draft) is none. Every run of the commit counts, so a green rerun
-cannot erase a failure; commit statuses and other apps never count. A revert is a merged PR by a
+main (what main-health judges) and on the commits of own-branch PRs. A commit with a green or
+red `ci-ok` is a pushed head. A `ci-ok` that failed while no other job of that app failed is
+excused only on a PR commit a newer push superseded (its run was cancelled) and on the head of
+a draft: elsewhere it is red, also when a hand-cancelled run made it fail, and always on main.
+Every run of the commit counts, so a green rerun cannot erase a failure; commit statuses and
+other apps never count. A revert is a merged PR by a
 writer from a `bosun/revert-N` branch (the name cannot change) or with the `bosun:revert N`
-marker. Main-red issues are not read: closing one cannot lift the brake. Known gaps: a rebase of
-a PR branch drops its old commits from the list, and a workflow on a PR branch can post
-same-app `ci-ok` runs that dilute the rate (neither hides a red main or a revert).
+marker. Main-red issues are not read: closing one cannot lift the brake. Known gaps (they lower
+only the red-CI rate, never main red or reverts): a rebase of a PR branch drops its old commits
+from the list, a hand-cancel followed by a new push is excused, and a workflow on a PR branch
+can post same-app `ci-ok` runs that dilute the rate.
 
 ### Revert (plan PR 3b)
 

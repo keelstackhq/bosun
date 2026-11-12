@@ -75,11 +75,19 @@ fn a_green_rerun_still_counts_and_other_sources_do_not() {
     pr(&fake, 23, "", &["h23a", "h23b"]);
     fake.check_run_by("h23a", "ci", "cancelled", ACTIONS);
     fake.check_run_by("h23a", "ci-ok", "failure", ACTIONS);
-    fake.check_run_by("h23b", "ci-ok", "failure", ACTIONS);
+    fake.check_run_by("h23b", "ci-ok", "success", ACTIONS);
+    pr(&fake, 25, "", &["h25"]);
+    fake.pull_set(25, "draft", json!(true));
+    fake.check_run_by("h25", "ci", "skipped", ACTIONS);
+    fake.check_run_by("h25", "ci-ok", "failure", ACTIONS);
+    // A hand-cancelled run on the last head of a ready PR stays red.
+    pr(&fake, 26, "", &["h26"]);
+    fake.check_run_by("h26", "ci", "cancelled", ACTIONS);
+    fake.check_run_by("h26", "ci-ok", "failure", ACTIONS);
     let d = metrics(&fake, &[]);
     assert_eq!(
         d["red_ci"],
-        json!({"failing_heads": 1, "pushed_heads": 1, "rate_pct": 100.0})
+        json!({"failing_heads": 2, "pushed_heads": 3, "rate_pct": 66.7})
     );
 }
 
@@ -102,6 +110,18 @@ fn only_a_writers_revert_marker_counts() {
     let d = metrics(&fake, &[]);
     assert_eq!(d["brake"]["window"]["reverts"], 2);
     assert_eq!(d["brake"]["on"], true);
+}
+
+#[test]
+fn a_cancelled_main_run_still_counts_red() {
+    let fake = FakeGithub::start();
+    for n in [12, 13] {
+        pr(&fake, n, "", &[]);
+        merged(&fake, n, "2026-11-10T10:00:00Z");
+        fake.check_run_by(&format!("m{n}"), "ci", "cancelled", ACTIONS);
+        fake.check_run_by(&format!("m{n}"), "ci-ok", "failure", ACTIONS);
+    }
+    assert_eq!(metrics(&fake, &[])["brake"]["window"]["main_red"], 2);
 }
 
 #[test]

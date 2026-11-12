@@ -18,21 +18,21 @@ pub struct HeadCi {
     pub at: Option<Timestamp>,
 }
 
-/// Completed runs of the Actions app only. A head is red when a `ci-ok` run failed and another
-/// job of the same commit failed too: a cancelled run (a newer push) or a draft fails `ci-ok`
-/// alone and is no pushed head. `None` when the commit has neither a green nor a red `ci-ok`.
-pub fn ci_head(runs: &[CiRun]) -> Option<HeadCi> {
-    let mine: Vec<&CiRun> = (runs.iter())
-        .filter(|r| r.app == TRUSTED_APP && r.completed)
-        .collect();
-    let red = |r: &&&CiRun| {
+/// Completed runs of the Actions app only; every run counts, so a green rerun cannot erase a
+/// red one. A failed `ci-ok` is red unless `excuse` holds and it failed alone (no other job of
+/// the commit failed): the caller excuses a head a newer push superseded (its run was
+/// cancelled) and the head of a draft. `None` when the commit has no green and no red `ci-ok`.
+pub fn ci_head(runs: &[CiRun], excuse: bool) -> Option<HeadCi> {
+    let done = |r: &&CiRun| r.app == TRUSTED_APP && r.completed;
+    let red = |r: &&CiRun| {
         matches!(
             r.conclusion.as_deref(),
             Some("failure" | "timed_out" | "startup_failure")
         )
     };
-    let (ok, jobs): (Vec<&CiRun>, Vec<&CiRun>) = mine.into_iter().partition(|r| r.name == "ci-ok");
-    let failing = ok.iter().any(|r| red(&r)) && jobs.iter().any(|r| red(&r));
+    let (ok, jobs): (Vec<&CiRun>, Vec<&CiRun>) =
+        runs.iter().filter(done).partition(|r| r.name == "ci-ok");
+    let failing = ok.iter().any(red) && !(excuse && !jobs.iter().any(red));
     let green = ok
         .iter()
         .any(|r| r.conclusion.as_deref() == Some("success"));
