@@ -636,6 +636,10 @@ fn check(
                 }),
             };
             if let Some(why) = merge_rule(&words, segment, &target) {
+                if why == PUSH_ALONE {
+                    let fix = alone_fix(&words);
+                    return Some(format!("`{}` is refused ({fix})", segment.trim()));
+                }
                 return Some(format!(
                     "`{}` is refused ({why}): {MERGE_FIX}",
                     segment.trim()
@@ -2714,7 +2718,19 @@ const GIT_ALIAS: &str = "a git alias hides the command it runs";
 
 const PUSH_CONFIG: &str = "git config sets where this push goes (`remote.<r>.push`, `remote.<r>.mirror` or `push.default`); name the refspec, as in `git push -u origin claude/fix-1`";
 
-const PUSH_ALONE: &str = "a push without `src:dst` goes where git config says, which another command here may change; run the push as its own command, or name both sides, as in `git push -u origin claude/fix-1:claude/fix-1`";
+const PUSH_ALONE: &str =
+    "a push without `src:dst` goes where git config says, which another command here may change";
+
+/// `PUSH_ALONE` with the way out for this push: its own branch as `b:b`.
+fn alone_fix(words: &[&str]) -> String {
+    let after = words.iter().skip_while(|w| **w != "push").skip(1);
+    let plain: Vec<&str> = after.copied().filter(|w| !w.starts_with('-')).collect();
+    let b = plain
+        .get(1)
+        .map_or("<branch>", |b| b.trim_matches(['\'', '"']));
+    let b = b.split(':').next().unwrap_or(b);
+    format!("{PUSH_ALONE}; run the push as its own command, or name both sides: `{b}:{b}`")
+}
 
 const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`";
 
@@ -4014,6 +4030,8 @@ mod tests {
         }
         assert!(bash("git send-pack origin HEAD", "main").is_some());
         assert!(bash("git push origin @", "main").is_some());
+        let why = bash("true && git push -u origin claude/x", "feature").unwrap();
+        assert!(why.contains("`claude/x:claude/x`"), "{why}");
     }
 
     /// The guard cannot parse these unquoted heredoc bodies exactly (a `)` inside a quote, a

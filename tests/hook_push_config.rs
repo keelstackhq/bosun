@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 fn git(dir: &Path, args: &[&str]) {
     let cfg = ["-c", "user.name=t", "-c", "user.email=t@example.com"];
     let out = Command::new("git")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .arg("-C")
         .arg(dir)
         .args(cfg)
@@ -62,6 +64,8 @@ fn hook(cwd: &Path, command: &str) -> Option<String> {
         .env("BOSUN_SESSION", "session_me")
         .env("BOSUN_NOW", "2026-11-12T10:00:00Z")
         .env("BOSUN_GITHUB_API", fake.url())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .args(["hook", "pre-tool-use"])
         .write_stdin(input.to_string())
         .output()
