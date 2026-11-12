@@ -713,7 +713,25 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     let paths: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.previous_filename.as_deref()))
         .collect();
-    let mut hit = risk::autonomous_excluded(&paths, &[]);
+    // The base rules, as risk-check reads them: a rule match in the deny set (R-gov) refuses too.
+    let rules = match gh.file_at(".bosun/risk.toml", &pull.base_sha)? {
+        Some(t) => risk::Rules::parse(&t)
+            .map_err(|e| BosunError::error(format!(".bosun/risk.toml at base: {e}"), fix))?,
+        None => risk::Rules::defaults(),
+    };
+    let changed: Vec<_> = (files.iter())
+        .map(|f| risk::ChangedFile {
+            path: f.filename.clone(),
+            previous_path: f.previous_filename.clone(),
+            added_lines: f
+                .patch
+                .as_deref()
+                .map(risk::added_lines)
+                .unwrap_or_default(),
+        })
+        .collect();
+    let matches = risk::evaluate(&rules, &changed, &[], &[]);
+    let mut hit = risk::autonomous_excluded(&paths, &matches);
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();

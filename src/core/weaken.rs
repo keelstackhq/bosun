@@ -103,7 +103,7 @@ fn parse(text: Option<&str>) -> Option<Value> {
 /// `[mode]` (spec §18): a move down the ladder, and an effective `push_gates` push → ready or
 /// `brake` on → off. Helper knobs change who acts, not what passes: no finding.
 fn mode_findings(b: &Value, h: &Value, add: &mut impl FnMut(&str, &str, &str)) {
-    use super::mode::{Brake, ModeConfig, PushGates, Source, preset, resolve};
+    use super::mode::{ModeConfig, Source, preset, resolve};
     let eff = |v: &Value| match v.get("mode") {
         None => Some(resolve(&ModeConfig::default())),
         Some(m) => m.clone().try_into::<ModeConfig>().ok().map(|m| resolve(&m)),
@@ -116,30 +116,32 @@ fn mode_findings(b: &Value, h: &Value, add: &mut impl FnMut(&str, &str, &str)) {
     if n.mode > o.mode {
         add("mode", o.mode.as_str(), n.mode.as_str());
     }
-    // A move up the ladder may turn these off by its preset (gatekeeper has no brake); an
-    // override looser than the new mode's preset is still a finding.
-    let up = n.mode < o.mode;
-    let p = preset(n.mode);
-    let (op, np) = (o.knobs.push_gates, n.knobs.push_gates);
-    let explicit = |s: Source| s == Source::Explicit;
-    if (op.value, np.value) == (PushGates::Push, PushGates::Ready)
-        && (!up || explicit(np.source) && p.push_gates == PushGates::Push)
-    {
-        add("mode.push_gates", "push", "ready");
+    // Looser = lower in the knob's order. A move up the ladder may loosen these by its preset
+    // (gatekeeper has no brake); an override looser than the new mode's preset still counts.
+    let (up, p) = (n.mode < o.mode, preset(n.mode));
+    macro_rules! looser {
+        ($($f:ident),+) => {$(
+            let (ov, nv) = (o.knobs.$f, n.knobs.$f);
+            if nv.value < ov.value && (!up || nv.source == Source::Explicit && nv.value < p.$f) {
+                add(concat!("mode.", stringify!($f)), ov.value.as_str(), nv.value.as_str());
+            }
+        )+};
     }
-    let (ob, nb) = (o.knobs.brake, n.knobs.brake);
-    if (ob.value, nb.value) == (Brake::On, Brake::Off)
-        && (!up || explicit(nb.source) && p.brake == Brake::On)
-    {
-        add("mode.brake", "on", "off");
-    }
+    looser!(push_gates, brake, budget_feature);
 }
 
 /// Findings from a gate file's text at base and head. A missing side (an added or deleted file)
-/// counts as empty; an unparseable head is a finding, an unparseable base gives none.
+/// counts as empty; an unparseable head is a finding, an unparseable base gives none (but
+/// `.bosun/bosun.toml`, where it counts as empty).
 pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<String> {
-    let (Some(kind), Some(b)) = (kind(path), parse(base)) else {
+    let Some(kind) = kind(path) else {
         return Vec::new();
+    };
+    // An unparseable `.bosun/bosun.toml` base counts as empty, so `[mode]` is still judged.
+    let b = match parse(base) {
+        Some(b) => b,
+        None if kind == Kind::Config => Value::Table(Default::default()),
+        None => return Vec::new(),
     };
     let Some(h) = parse(head) else {
         return vec![format!("{path}: toml parses → (unparseable)")];

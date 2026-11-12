@@ -39,7 +39,14 @@ fn a_lighter_mode_is_a_weaken_finding_and_a_tighter_one_is_not() {
     assert_eq!(w(b, off), [format!("{C}: mode.brake on → off")]);
     // Restating the tighter mode's own preset is no finding.
     assert!(w(STEADY, "[mode]\nname = \"gatekeeper\"\nbrake = \"off\"\n").is_empty());
-    // A base [mode] that does not parse counts as gatekeeper.
+    // Removing an explicit policy under a looser preset is a finding.
+    let own = "[mode]\nname = \"booster\"\n[approvals]\npolicy = \"owner\"\n";
+    assert_eq!(
+        w(own, b),
+        [format!("{C}: approvals.policy owner → (removed)")]
+    );
+    // A base that is not TOML, or whose [mode] does not parse, counts as gatekeeper.
+    assert!(w("[mode\n", b).contains(&format!("{C}: mode gatekeeper → booster")));
     assert_eq!(
         w("[mode]\nname = \"x\"\n", b),
         [format!("{C}: mode gatekeeper → booster")]
@@ -57,6 +64,13 @@ fn loosening_overrides_are_findings_and_helper_knobs_are_not() {
     assert_eq!(
         w(s, "[mode]\nname = \"steady\"\nbrake = \"off\"\n"),
         [format!("{C}: mode.brake on → off")]
+    );
+    assert_eq!(
+        w(
+            "[mode]\nname = \"booster\"\n",
+            "[mode]\nname = \"booster\"\nbudget_feature = \"warn\"\n"
+        ),
+        [format!("{C}: mode.budget_feature ask → warn")]
     );
     // Helper knobs change who acts, not what passes (the file is R-gov anyway).
     assert!(
