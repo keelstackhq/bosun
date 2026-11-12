@@ -207,16 +207,6 @@ pub enum Command {
     Schema(SchemaArgs),
 }
 
-/// The stub error of a command that a later plan PR builds.
-pub(crate) fn not_built(cmd: &str, pr: &str) -> crate::output::BosunError {
-    crate::output::BosunError::error(
-        format!("`bosun {cmd}` is not built yet"),
-        format!(
-            "it lands in plan PR {pr} (docs/superpowers/plans/2026-11-11-modes-booster.md); do the step by hand until then"
-        ),
-    )
-}
-
 /// Top-level command names, in `--help` order.
 pub const COMMANDS: &[&str] = &[
     "join",

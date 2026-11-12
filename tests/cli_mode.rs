@@ -80,15 +80,6 @@ fn bosun_mode_prints_knobs_offline() {
 }
 
 #[test]
-fn stubs_exit_1_with_a_fix() {
-    let out = bosun().arg("heal").output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    let v = one_object(&out.stdout);
-    let fix = v["error"]["fix"].as_str().unwrap();
-    assert!(fix.contains("plan PR 3a"), "{fix}");
-}
-
-#[test]
 fn a_non_default_override_parses() {
     for k in [
         "heal_main = \"revert-auto\"",
