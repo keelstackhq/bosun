@@ -81,12 +81,19 @@ fn capped(have: &[Raise], day: i64, usd: u64, base: f64, span: (i64, i64)) -> Op
     if have.iter().any(|h| h.day == day) {
         return Some("a raise is already counted for that digest day (one a day)".into());
     }
-    let near: u64 = have
-        .iter()
-        .filter(|h| (day + span.0..=day + span.1).contains(&h.day))
-        .map(|h| h.usd)
-        .sum();
-    ((near + usd) as f64 > base).then(|| {
+    let sum = |f: &dyn Fn(&Raise) -> bool| {
+        have.iter()
+            .filter(|h| f(h))
+            .fold(0u64, |a, h| a.saturating_add(h.usd))
+    };
+    let all = sum(&|_| true);
+    if all.saturating_add(usd) as f64 > 2.0 * base {
+        return Some(format!(
+            "+{usd} is over the cap: raises in all total ${all}+{usd} against twice the base budget ${base:.2} (more needs an R-gov plan PR)"
+        ));
+    }
+    let near = sum(&|h| (day + span.0..=day + span.1).contains(&h.day));
+    (near.saturating_add(usd) as f64 > base).then(|| {
         format!(
             "+{usd} is over the cap: raises within 7 days total ${near}+{usd} against the base budget ${base:.2} (more needs an R-gov plan PR)"
         )

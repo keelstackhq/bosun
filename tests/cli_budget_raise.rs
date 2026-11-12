@@ -93,7 +93,7 @@ fn raise(fake: &FakeGithub, now: &str, input: &str) -> (i32, Value) {
     let r = run_env(fake, now, "acme/widget", &args, input);
     // The fake stamps every comment with a fixed time; GitHub would stamp `now`.
     for c in fake.state.lock().unwrap().comments.iter_mut() {
-        if c.body.contains(r#""bosun":"raise""#) && c.created_at.starts_with("2026-10") {
+        if c.body.contains(r#""bosun":"raise""#) && c.created_at.starts_with("2026-10-22T10:00:") {
             c.created_at = now.into();
         }
     }
@@ -305,6 +305,31 @@ fn raises_within_seven_days_are_capped_at_the_base_budget() {
     }
     let (code, v) = claim(&fake);
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn raises_are_capped_at_twice_the_base_budget_in_all() {
+    // Days 1, 8 and 15, each the whole base: the third is refused (lifetime 2x base).
+    let days = [
+        "2026-10-29T06:00:00Z",
+        "2026-11-05T06:00:00Z",
+        "2026-11-12T06:00:00Z",
+    ];
+    let fake = spent_more(210);
+    let mut refused = vec![];
+    for at in days {
+        let input = signed(&fake, at, "acme/widget", "raise 10 +100");
+        let (_, v) = raise(&fake, at, &input);
+        refused.push(v["data"]["refused"].clone());
+    }
+    assert_eq!(refused[1], json!([]));
+    let why = refused[2][0]["why"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(why.contains("in all"), "{refused:?}");
+    // 310 spent of 300 (base 100 + 200): still over, the third adds nothing.
+    assert_eq!(claim(&fake).0, 5);
 }
 
 #[test]
