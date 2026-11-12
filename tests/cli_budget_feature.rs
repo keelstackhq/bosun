@@ -70,6 +70,14 @@ fn cfg_dir(mode: &str) -> tempfile::TempDir {
     d
 }
 
+/// The mode on the default branch, where claim, spawn and import read it.
+fn on_main(fake: &FakeGithub, mode: &str) {
+    if !mode.is_empty() {
+        let t = format!("[mode]\nname = \"{mode}\"\n");
+        fake.content(".bosun/bosun.toml", "main", &t);
+    }
+}
+
 fn run_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
     let mut a = vec!["-C", dir.to_str().unwrap()];
     a.extend_from_slice(args);
@@ -77,7 +85,8 @@ fn run_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
 }
 
 fn import(mode: &str, field: &str) -> String {
-    let (dir, fake) = (cfg_dir(mode), FakeGithub::start());
+    let (dir, fake) = (cfg_dir(""), FakeGithub::start());
+    on_main(&fake, mode);
     let file = dir.path().join("plan.md");
     std::fs::write(&file, plan_text(field)).unwrap();
     let f = file.to_str().unwrap();
@@ -136,8 +145,9 @@ fn spend(usd: f64) -> String {
 }
 
 /// Epic #10 with budget 100, a ready task #11 and a merged task #12 that spent `usd`.
-fn feature(usd: f64) -> FakeGithub {
+fn feature(mode: &str, usd: f64) -> FakeGithub {
     let fake = FakeGithub::start();
+    on_main(&fake, mode);
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     let join = format!(
         r#"{{"bosun":"join","session":"session_test","origin":"spawned","depth":1,"expires":"{LATER}"}}"#
@@ -159,7 +169,7 @@ fn feature(usd: f64) -> FakeGithub {
 
 #[test]
 fn claim_warns_at_80_percent_in_steady() {
-    let (dir, fake) = (cfg_dir("steady"), feature(80.0));
+    let (dir, fake) = (cfg_dir(""), feature("steady", 80.0));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
     assert_eq!(code, 0, "{v}");
     let w = &v["data"]["budget_feature"];
@@ -173,22 +183,22 @@ fn claim_warns_at_80_percent_in_steady() {
 
 #[test]
 fn claim_asks_the_owner_at_100_percent_in_booster() {
-    let (dir, fake) = (cfg_dir("booster"), feature(100.0));
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
     let before = fake.comments_of(11).len();
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["check"], "budget_feature", "{v}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("raise 10 +"));
+    assert!(v["error"]["fix"].as_str().unwrap().contains("epic #10"));
     assert_eq!(fake.comments_of(11).len(), before, "nothing is written");
 }
 
 #[test]
 fn claim_below_the_warning_and_in_gatekeeper_is_unchanged() {
-    let (dir, fake) = (cfg_dir("steady"), feature(10.0));
+    let (dir, fake) = (cfg_dir(""), feature("steady", 10.0));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
     assert_eq!(code, 0, "{v}");
     assert!(v["data"].get("budget_feature").is_none());
-    let (dir, fake) = (cfg_dir(""), feature(200.0));
+    let (dir, fake) = (cfg_dir(""), feature("", 200.0));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
     assert_eq!(code, 0, "{v}");
     assert!(v["data"].get("budget_feature").is_none());
@@ -196,7 +206,7 @@ fn claim_below_the_warning_and_in_gatekeeper_is_unchanged() {
 
 #[test]
 fn spawn_asks_the_owner_at_100_percent_and_warns_at_80() {
-    let (dir, fake) = (cfg_dir("booster"), feature(100.0));
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
     let before = fake.comments_of(10).len();
     let (code, v) = run_in(&fake, dir.path(), &["spawn", "10"]);
     assert_eq!(code, 5, "{v}");
@@ -205,12 +215,70 @@ fn spawn_asks_the_owner_at_100_percent_and_warns_at_80() {
         before,
         "a refusal claims nothing"
     );
-    let (dir, fake) = (cfg_dir("steady"), feature(85.0));
+    let (dir, fake) = (cfg_dir(""), feature("steady", 85.0));
     let (code, v) = run_in(&fake, dir.path(), &["spawn", "10"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["budget_feature"]["level"], "warn");
-    let (dir, fake) = (cfg_dir(""), feature(200.0));
+    let (dir, fake) = (cfg_dir(""), feature("", 200.0));
     let (code, v) = run_in(&fake, dir.path(), &["spawn", "10"]);
     assert_eq!(code, 0, "{v}");
     assert!(v["data"].get("budget_feature").is_none());
+}
+
+#[test]
+fn the_default_branch_decides_not_the_working_tree() {
+    // The working tree says gatekeeper, the default branch says booster.
+    let (dir, fake) = (cfg_dir("gatekeeper"), feature("booster", 100.0));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 5, "{v}");
+    // And the other way round: a booster working tree does not matter in gatekeeper.
+    let (dir, fake) = (cfg_dir("booster"), feature("", 100.0));
+    assert_eq!(run_in(&fake, dir.path(), &["claim", "11"]).0, 0);
+}
+
+#[test]
+fn the_warn_knob_only_warns_at_100_percent() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    fake.content(
+        ".bosun/bosun.toml",
+        "main",
+        "[mode]\nname = \"booster\"\nbudget_feature = \"warn\"\n",
+    );
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["budget_feature"]["level"], "over");
+}
+
+#[test]
+fn a_mainfix_task_is_never_refused() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    let mf = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["src/a1/**"],"kind":"mainfix"} -->"#;
+    fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"].get("budget_feature").is_none());
+}
+
+#[test]
+fn spend_on_the_epic_issue_counts_and_the_fix_names_what_works() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 0.0));
+    fake.comment(10, &spend(100.0));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 5, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("`budget_usd`") && fix.contains("bosun:epic"),
+        "{fix}"
+    );
+}
+
+#[test]
+fn a_wave_tick_guards_the_epic_of_the_task() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    let (code, v) = run_in(&fake, dir.path(), &["wave", "tick", "10"]);
+    assert_eq!(code, 0, "{v}");
+    let stop = &v["data"]["stopped"];
+    assert_eq!(stop["check"], "budget_feature", "{v}");
+    assert_eq!(stop["issue"], 11);
+    assert!(v["next"].as_array().unwrap().is_empty());
 }

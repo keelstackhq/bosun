@@ -124,7 +124,10 @@ fn per_task_if_on(config: &crate::config::Config, limits: &crate::config::Limits
 fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
     let p = read_plan(dir, &a.file)?;
     let root = dir.unwrap_or_else(|| Path::new("."));
-    let per_task = per_task_if_on(&Config::load(root)?, &Limits::load(root)?);
+    // No GitHub here: the working tree's files; a missing or bad one means the knob is off.
+    let per_task = Config::load(root)
+        .and_then(|c| Limits::load(root).map(|l| per_task_if_on(&c, &l)))
+        .unwrap_or(None);
     let gated = gated_rules(dir.unwrap_or_else(|| Path::new(".")))?;
     let errs = shape::gated_size_errors(&p.items, &gated);
     if !errs.is_empty() {
@@ -645,7 +648,14 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         refused: vec![],
         dir: app.ctx.dir.clone(),
         repo: app.ctx.repo.to_string(),
-        per_task: per_task_if_on(&app.ctx.config, &app.ctx.limits),
+        per_task: match super::budget::knob_from_default(app.gh.as_ref())? {
+            BudgetFeature::Off => None,
+            _ => Some(
+                crate::app::limits_from_default(app.gh.as_ref(), &app.ctx)?
+                    .budget
+                    .per_task_usd,
+            ),
+        },
         promoted: vec![],
         open_items: vec![],
         held: vec![],

@@ -55,7 +55,9 @@ The state machine, stop rules and resume.
      and the graph has no cycles.
    - `budget_usd:` (optional) a positive number: the feature budget of the item in US dollars. It
      reaches the epic metadata. Without it, a mode whose `budget_feature` knob is not off sets
-     tasks times `per_task_usd` (a cost-per-changed-line estimate comes later). Once only.
+     tasks times `per_task_usd` (a cost-per-changed-line estimate comes later). Once only. The budget
+     lands in the epic marker when the epic is created; a later plan edit or mode change does not
+     rewrite an existing epic: edit its `budget_usd` in the `bosun:epic` marker instead.
    - `shape:` (optional) `single`, `split` or `auto` (default). `single` makes the whole item
      one PR; `split` makes one small PR per task. See "Choosing the PR shape".
 4. Text between the fields and `### Tasks` is the item's description; it goes into the epic body.
