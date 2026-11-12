@@ -193,8 +193,6 @@ struct Source {
     plan: Option<(String, crate::core::plan::Plan)>,
     /// The tasks the epic's trusted bind lists.
     tasks: Vec<u64>,
-    /// The epic has a trusted bind (its plan and item come from it).
-    bound: bool,
 }
 
 fn source(app: &App, epic: u64) -> Result<Source> {
@@ -204,10 +202,22 @@ fn source(app: &App, epic: u64) -> Result<Source> {
     let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
     let bind = epic_bind(gh, epic)?;
     let tasks = bind.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
-    let bound = bind.is_some();
+    let (mp, mi) = (epic_plan(&body), epic_item(&body));
+    if let (Some(b), Some(p), Some(i)) = (&bind, &mp, &mi)
+        && (&b.plan, &b.item) != (p, i)
+    {
+        return Err(BosunError::needs_human(
+            format!(
+                "the bind of epic #{epic} names {}/{}, its marker {p}/{i}",
+                b.plan, b.item
+            ),
+            format!("the owner deletes the bind comment {} on #{epic}", b.id),
+        )
+        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic})));
+    }
     let (file, item) = match bind {
         Some(b) => (Some(b.plan), Some(b.item)),
-        None => (epic_plan(&body), epic_item(&body)),
+        None => (mp, mi),
     };
     let Some(f) = file else {
         // No marker: one task's worth, which a dummy issue cannot inflate.
@@ -217,7 +227,6 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             item,
             plan: None,
             tasks,
-            bound,
         });
     };
     let branch = crate::app::default_branch(gh)?;
@@ -236,7 +245,6 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             item,
             plan: Some((f, p)),
             tasks,
-            bound,
         }),
         _ => Err(BosunError::needs_human(
             format!(
@@ -256,11 +264,11 @@ fn source(app: &App, epic: u64) -> Result<Source> {
 pub(crate) fn feature_guard(
     app: &App,
     epic: u64,
-    task: Option<(&TaskMeta, bool)>,
+    task: Option<(u64, &TaskMeta, bool)>,
 ) -> Result<Option<Value>> {
     let knob = match knob_from_default(app.gh.as_ref()) {
         Ok(k) => k,
-        Err(_) if task.is_some_and(|t| t.1) => return Ok(None),
+        Err(_) if task.is_some_and(|t| t.2) => return Ok(None),
         Err(e) => return Err(e),
     };
     if knob == BudgetFeature::Off {
@@ -278,11 +286,10 @@ pub(crate) fn feature_guard(
             "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
     let all = app.gh.list_issues(&[], IssueState::All)?;
-    if src.bound && src.plan.is_some() {
+    if src.plan.is_some() {
         let gh = app.gh.as_ref();
         let (plan, item) = (file, item);
-        let dup = |i: &Issue| i.state_reason.as_deref() == Some("duplicate");
-        for i in all.iter().filter(|i| i.number < epic && !dup(i)) {
+        for i in all.iter().filter(|i| i.number < epic) {
             let names = epic_plan(i.body_text()).is_some_and(|p| p == plan)
                 && epic_item(i.body_text()).is_some_and(|x| x == item);
             let first = if names {
@@ -303,19 +310,20 @@ pub(crate) fn feature_guard(
             }
         }
     }
-    if let Some((m, _)) = task {
+    if let Some((n, m, _)) = task {
         // Each issue once: body metas of the epic and the tasks its bind lists, by (item, task).
         let live =
             |i: &Issue| !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"));
-        let (mut every, mut alive) = (0, 0);
+        let (mut alive, mut binds) = (0, vec![]);
         for i in &all {
             let by_body = task_meta(i)
                 .is_some_and(|x| x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task));
             let by_bind = src.tasks.contains(&i.number)
                 && task_bind(app.gh.as_ref(), i.number)?
                     .is_some_and(|(_, e, it, t)| (e, &it, &t) == (epic, &m.item, &m.task));
-            if by_body || by_bind {
-                (every, alive) = (every + 1, alive + usize::from(live(i)));
+            alive += usize::from((by_body || by_bind) && live(i));
+            if by_bind {
+                binds.push(i.number);
             }
         }
         if alive > 1 {
@@ -339,8 +347,11 @@ pub(crate) fn feature_guard(
                 .map(|t| t.kind.clone())
         });
         // Only the plan exempts: a body or label kind is editable.
-        // The id must be unique over every state, closed duplicates included: no borrowing.
-        if every == 1 && kind.is_some_and(|k| k == "mainfix") {
+        // One live copy, and when any copy has a bind it is this one: no borrowing an id.
+        if alive == 1
+            && (binds.is_empty() || binds.contains(&n))
+            && kind.is_some_and(|k| k == "mainfix")
+        {
             return Ok(None);
         }
     }
@@ -411,21 +422,21 @@ pub(crate) fn task_guard(
             ));
         }
         // A body that disagrees with the bind was edited.
-        if (&m.item, &m.task) != (&item, &task) {
+        if (&m.item, &m.task) != (&item, &task) || m.epic.is_some_and(|e| e != epic) {
             return Err(refuse(
                 format!(
                     "#{n} is bound to {item}/{task} but its body says {}/{}",
                     m.item, m.task
                 ),
                 format!(
-                    "restore the task body (`bosun plan amend {plan}`); if the bind is wrong, the owner deletes comment {id} on #{n}"
+                    "the owner deletes the bind comment {id} on #{n} (or restores the body, then `bosun plan amend {plan}`)"
                 ),
             ));
         }
         (m.epic, m.item, m.task) = (Some(epic), item, task);
     }
     match m.epic {
-        Some(e) => feature_guard(app, e, Some((&m, mainfix))),
+        Some(e) => feature_guard(app, e, Some((n, &m, mainfix))),
         None => Ok(None),
     }
 }

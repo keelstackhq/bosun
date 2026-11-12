@@ -99,7 +99,8 @@ fn a_repointed_marker_and_a_later_forged_bind_change_nothing() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     let big = EPIC.replace("plans/x.md", "plans/y.md");
     set_body(&fake, 10, &big);
-    refused(&fake, dir.path(), "claim", "11");
+    // The bind and the marker disagree now: refused by that, not by the spend.
+    guarded(&fake, dir.path(), "11");
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     fake.comment(10, &bind("plans/y.md", "M1", r#","tasks":[]"#));
     refused(&fake, dir.path(), "claim", "11");
@@ -309,13 +310,47 @@ fn a_hand_made_task_cannot_borrow_the_id_of_a_closed_mainfix_task() {
 }
 
 #[test]
-fn a_lower_epic_closed_as_duplicate_does_not_block_the_new_one() {
+fn a_lower_epic_closed_as_duplicate_still_wins_over_the_new_one() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     fake.close_issue_as(10, NOW, "duplicate");
     fake.issue(20, "Epic", &["bosun:state/ready"], EPIC);
     task_issue(&fake, 13, "T2", "20");
     fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":20"#));
     fake.comment(20, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
+    guarded(&fake, dir.path(), "13");
+}
+
+#[test]
+fn an_unbound_rival_epic_copying_the_marker_is_refused() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    fake.issue(20, "Rival", &["bosun:state/ready"], EPIC);
+    task_issue(&fake, 21, "T1", "20");
+    guarded(&fake, dir.path(), "21");
+}
+
+#[test]
+fn binds_must_agree_with_the_epic_marker_and_the_task_body() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    set_body(&fake, 10, &EPIC.replace("M1", "M2"));
+    guarded(&fake, dir.path(), "11");
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    set_body(&fake, 11, &task_body("99"));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("deletes the bind comment")
+    );
+}
+
+#[test]
+fn a_reopened_real_mainfix_task_claims_and_an_unbound_copy_does_not() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    task_issue(&fake, 13, "T2", "");
+    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":10"#));
+    fake.comment(10, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
     assert_eq!(code, 0, "{v}");
 }

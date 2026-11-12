@@ -384,17 +384,14 @@ fn a_task_id_in_another_epic_or_closed_as_duplicate_or_not_planned_is_no_duplica
     fake.issue(14, "B", &["bosun:state/ready"], &t("src/q/**", 99));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
     assert_eq!(code, 0, "{v}");
-    // A stray copy closed as a duplicate or not planned is no duplicate refusal, but the id is
-    // no longer unique, so the mainfix exemption is gone: the budget decides.
+    // A stray copy closed as a duplicate or not planned does not block the real task.
     for reason in ["duplicate", "not_planned"] {
         let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
         fake.issue(13, "A", &["bosun:state/ready"], &t("src/p/**", 10));
         fake.issue(14, "B", &["bosun:state/ready"], &t("src/q/**", 10));
         fake.close_issue_as(14, "2026-11-01T00:00:00Z", reason);
         let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
-        assert_eq!(code, 5, "{reason}: {v}");
-        let msg = v["error"]["message"].as_str().unwrap();
-        assert!(msg.contains("feature budget"), "{reason}: {msg}");
+        assert_eq!(code, 0, "{reason}: {v}");
     }
 }
 
