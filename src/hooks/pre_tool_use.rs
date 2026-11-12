@@ -1,4 +1,5 @@
-//! `bosun hook pre-tool-use`: label-lock, merge-lock and edit-lock (spec §4, D13).
+//! `bosun hook pre-tool-use`: label-lock, merge-lock and edit-lock (spec §4, D13), and
+//! push-gates (spec §7).
 
 use std::path::Path;
 
@@ -6,12 +7,16 @@ use serde_json::{Value, json};
 
 use super::{cache, git_out};
 use crate::app::{App, trusted_notes};
+use crate::cli::stamps;
+use crate::config::Config;
 use crate::core::guard::{
     ChildTask, Script, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock,
-    prereqs_lock, prereqs_lock_for, script_rules, tool_rules,
+    prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
+use crate::core::mode::PushGates;
 use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
+use crate::core::stamps::gate_loop;
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -122,6 +127,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         if let Some(why) = script_rules(command, &read, &branch_at, &default) {
             return Some(deny(&why));
         }
+        if let Some(why) = push_gates(&dir, command, &read, &default) {
+            return Some(deny(&why));
+        }
         return repeat;
     }
     if let Some(file) = repeat_file(&dir, input) {
@@ -136,6 +144,75 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             None
         }
     }
+}
+
+/// `push_gates = "push"` (spec §7): each pushed ref's tree needs a passing stamp for every
+/// ready gate, read in the checkout where git runs. A repo whose config is unset or `ready`
+/// pushes as before; a push whose checkout the guard cannot tell (interpreter code, a `cd`
+/// it cannot read, `--git-dir`) is refused when the hook directory's repo is in push mode.
+fn push_gates(
+    dir: &Path,
+    command: &str,
+    read: &dyn Fn(&str) -> Option<Script>,
+    default: &str,
+) -> Option<String> {
+    for mut push in pushes(command, read, default) {
+        // `--git-dir` and `--work-tree` name a checkout `--show-toplevel` does not report.
+        push.dir = push.dir.filter(|d| d.iter().all(|o| !o.starts_with("--")));
+        let opts = push.dir.clone().unwrap_or_default();
+        let at = |args: &[&str]| {
+            let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+            all.extend(args);
+            git_out(dir, &all)
+        };
+        let Some(root) = at(&["rev-parse", "--show-toplevel"]) else {
+            continue;
+        };
+        let root = Path::new(&root);
+        let push_mode = Config::load(root)
+            .is_ok_and(|c| c.mode_effective().knobs.push_gates.value == PushGates::Push);
+        if !push_mode {
+            continue;
+        }
+        if push.dir.is_none() {
+            return Some(
+                "push-gates: the guard cannot tell which checkout this push runs in; push with \
+                 a literal `cd <dir> &&` or `git -C <dir>`"
+                    .into(),
+            );
+        }
+        let gates = match stamps::ready_gates(root) {
+            Ok(g) => g,
+            Err(e) => return Some(format!("push-gates: {}; {}", e.message, e.fix)),
+        };
+        let srcs = if push.srcs.is_empty() {
+            vec!["HEAD".to_string()]
+        } else {
+            push.srcs
+        };
+        for src in srcs {
+            let Some(tree) = at(&["rev-parse", "--verify", "-q", &format!("{src}^{{tree}}")])
+            else {
+                return Some(format!(
+                    "push-gates: cannot read the tree of `{src}`; name a local branch to push"
+                ));
+            };
+            let missing: Vec<String> = gates
+                .iter()
+                .filter(|g| !stamps::has(root, &tree, g))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                return Some(format!(
+                    "push-gates (push_gates = \"push\"): the tree of `{src}` has no passing stamp \
+                     for {}: commit your work, run `{}`, fix what fails, then push again",
+                    missing.join(", "),
+                    gate_loop(&missing)
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// A script the merge-lock scans, relative to `dir`: at most 1 MiB is read (procfs files report
