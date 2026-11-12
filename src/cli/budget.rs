@@ -145,7 +145,10 @@ pub(crate) fn write_binds(
             .map(|(n, id)| format!("comment {id} on #{n}"))
             .collect();
         return Err(BosunError::needs_human(
-            format!("bind records differ from {plan}: {}", list.join(", ")),
+            format!(
+                "bind records are forged or moved ({}): the import stopped here; items before it were written",
+                list.join(", ")
+            ),
             format!(
                 "the owner deletes the forged bind comment {id} on #{n}, then reruns `bosun plan amend {plan}`"
             ),
@@ -190,6 +193,8 @@ struct Source {
     plan: Option<(String, crate::core::plan::Plan)>,
     /// The tasks the epic's trusted bind lists.
     tasks: Vec<u64>,
+    /// The epic has a trusted bind (its plan and item come from it).
+    bound: bool,
 }
 
 fn source(app: &App, epic: u64) -> Result<Source> {
@@ -199,6 +204,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
     let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
     let bind = epic_bind(gh, epic)?;
     let tasks = bind.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
+    let bound = bind.is_some();
     let (file, item) = match bind {
         Some(b) => (Some(b.plan), Some(b.item)),
         None => (epic_plan(&body), epic_item(&body)),
@@ -211,6 +217,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             item,
             plan: None,
             tasks,
+            bound,
         });
     };
     let branch = crate::app::default_branch(gh)?;
@@ -229,6 +236,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             item,
             plan: Some((f, p)),
             tasks,
+            bound,
         }),
         _ => Err(BosunError::needs_human(
             format!(
@@ -270,15 +278,43 @@ pub(crate) fn feature_guard(
             "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
     let all = app.gh.list_issues(&[], IssueState::All)?;
+    if src.bound && src.plan.is_some() {
+        let gh = app.gh.as_ref();
+        let (plan, item) = (file, item);
+        for i in all.iter().filter(|i| i.number < epic) {
+            let names = epic_plan(i.body_text()).is_some_and(|p| p == plan)
+                && epic_item(i.body_text()).is_some_and(|x| x == item);
+            let first = if names {
+                epic_bind(gh, i.number)?
+            } else {
+                None
+            };
+            if first.is_some_and(|b| (b.plan.as_str(), b.item.as_str()) == (plan, item)) {
+                let msg = format!("epic #{epic} and #{} both claim {item} of {plan}", i.number);
+                let fix = format!(
+                    "the owner deletes the forged bind comment on #{epic} or on the task bound to it, then reruns `bosun plan amend {plan}`"
+                );
+                return Err(refuse(msg, fix, 0.0));
+            }
+        }
+    }
     if let Some((m, _)) = task {
-        let same = |i: &&crate::github::Issue| {
-            // Ids are unique per plan, so per epic; an issue closed as a duplicate or not planned is ignored.
-            !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"))
-                && task_meta(i).is_some_and(|x| {
-                    x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task)
-                })
-        };
-        if all.iter().filter(same).count() > 1 {
+        // Each issue once: body metas of the epic and the tasks its bind lists, by (item, task).
+        let live =
+            |i: &&Issue| !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"));
+        let mut same: Vec<u64> = vec![];
+        for i in all.iter().filter(live) {
+            let by_body = task_meta(i)
+                .is_some_and(|x| x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task));
+            let listed = src.tasks.contains(&i.number);
+            let by_bind = listed
+                && task_bind(app.gh.as_ref(), i.number)?
+                    .is_some_and(|(_, e, it, t)| (e, &it, &t) == (epic, &m.item, &m.task));
+            if by_body || by_bind {
+                same.push(i.number);
+            }
+        }
+        if same.len() > 1 {
             let msg = format!("{}/{} names more than one task issue", m.item, m.task);
             let fix = "the orchestrator closes the extra issues as duplicates".to_string();
             return Err(refuse(msg, fix, 0.0));
@@ -331,14 +367,36 @@ pub(crate) fn task_guard(app: &App, n: u64, m: &TaskMeta, mainfix: bool) -> Resu
         return Ok(None);
     }
     let mut m = m.clone();
-    if let Some((_, epic, item, task)) = task_bind(gh, n)? {
+    if let Some((id, epic, item, task)) = task_bind(gh, n)? {
+        let eb = epic_bind(gh, epic)?;
+        let plan = eb
+            .as_ref()
+            .map_or("<plan>", |b| b.plan.as_str())
+            .to_string();
+        let refuse = |msg: String, fix: String| {
+            BosunError::needs_human(msg, fix).with_data(json!({"check": "budget_feature",
+                "name": "budget_feature", "epic": epic}))
+        };
         // The epic must list the task too, or the bind is forged.
-        if !epic_bind(gh, epic)?.is_some_and(|b| b.tasks.contains(&n)) {
-            return Err(BosunError::needs_human(
+        if !eb.is_some_and(|b| b.tasks.contains(&n)) {
+            return Err(refuse(
                 format!("#{n} is bound to epic #{epic}, which does not list it"),
-                format!("the owner deletes the forged bind comment on #{n}, then the orchestrator reruns `bosun plan amend`"),
-            )
-            .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic})));
+                format!(
+                    "rerun `bosun plan amend {plan}`; if that does not list it, the bind is forged: the owner deletes comment {id} on #{n}"
+                ),
+            ));
+        }
+        // A body that disagrees with the bind was edited.
+        if (&m.item, &m.task) != (&item, &task) {
+            return Err(refuse(
+                format!(
+                    "#{n} is bound to {item}/{task} but its body says {}/{}",
+                    m.item, m.task
+                ),
+                format!(
+                    "restore the task body (`bosun plan amend {plan}`); if the bind is wrong, the owner deletes comment {id} on #{n}"
+                ),
+            ));
         }
         (m.epic, m.item, m.task) = (Some(epic), item, task);
     }

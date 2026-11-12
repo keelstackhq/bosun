@@ -235,3 +235,45 @@ fn import_refuses_a_forged_first_bind_and_amend_backfills() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(binds(&fake), 4);
 }
+
+fn guarded(fake: &FakeGithub, dir: &Path, n: &str) {
+    let (code, v) = run_in(fake, dir, &["claim", n]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+}
+
+fn task_issue(fake: &FakeGithub, n: u64, task: &str, epic: &str) {
+    let e = if epic.is_empty() {
+        String::new()
+    } else {
+        format!(r#""epic":{epic},"#)
+    };
+    let body = format!(
+        r#"<!-- bosun:task {{"item":"M1",{e}"task":"{task}","touch":["src/n{n}/**"]}} -->"#
+    );
+    fake.issue(n, task, &["bosun:state/ready"], &body);
+}
+
+#[test]
+fn a_forged_bind_to_a_mainfix_id_and_an_appended_epic_list_is_refused() {
+    // T2 is a mainfix task in the plan; #13 is its real issue. #11 is bound to T2 by a forger.
+    for body_task in ["T1", "T2"] {
+        let (dir, fake) = (cfg_dir(), feature(false, 100.0));
+        task_issue(&fake, 13, "T2", "10");
+        set_body(&fake, 11, &task_body("10").replace("T1", body_task));
+        fake.comment(11, &bind("plans/x.md", "M1", r#","task":"T2","epic":10"#));
+        fake.comment(10, &bind("plans/x.md", "M1", r#","tasks":[11,13]"#));
+        guarded(&fake, dir.path(), "11");
+    }
+}
+
+#[test]
+fn a_task_bound_to_a_later_epic_that_copies_the_real_item_is_refused() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    let dummy = EPIC.replace("Epic", "Dummy");
+    fake.issue(20, "Dummy", &["bosun:state/ready"], &dummy);
+    task_issue(&fake, 13, "T2", "");
+    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":20"#));
+    fake.comment(20, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
+    guarded(&fake, dir.path(), "13");
+}
