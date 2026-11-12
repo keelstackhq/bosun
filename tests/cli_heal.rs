@@ -22,6 +22,7 @@ fn red_pr(lease: &str) -> FakeGithub {
     );
     fake.issue(7, "Task seven", &["bosun:state/review"], "");
     fake.comment(7, &lease_note("session_w", lease, "src/x.rs"));
+    fake.comment(7, r#"{"bosun":"task-pr","session":"session_w","pr":30}"#);
     fake.pull(30, "PR 30", "feat/7", "Closes #7");
     fake.pull_as_issue(30, "PR 30");
     fake.pull_commit_shas(30, &["sha30"]);
@@ -86,7 +87,7 @@ fn notify_sends_the_holder_the_failing_gate_once_per_head() {
         "{msg}"
     );
     assert!(msg.chars().count() <= 500);
-    let marks = fake.comments_of(30);
+    let marks = fake.comments_of(7);
     assert!(
         marks
             .iter()
@@ -127,6 +128,14 @@ fn a_dead_holder_gets_a_fixer_only_with_spawn() {
             .count()
     };
     assert_eq!(mine(&fake), 1);
+    // The fixer's lease keeps the dead lease's touch, and the fixer joins its own area.
+    let c = fake.comments_of(7);
+    let lease = c
+        .iter()
+        .find(|c| c.body.contains("\"session\":\"session_test\""))
+        .unwrap();
+    assert!(lease.body.contains("src/x.rs"), "{}", lease.body);
+    assert!(prompt.contains("--area heal-7"), "{prompt}");
     let (_, v) = heal_in(&fake, Some(BOOSTER), &[]);
     assert_eq!(actions(&v), ["skip"], "{v}");
     for (head, want) in [("sha30b", "spawn"), ("sha30c", "needs-human")] {
@@ -208,8 +217,8 @@ fn the_brake_caps_spawn_at_notify() {
 #[test]
 fn after_two_rounds_the_task_goes_to_needs_human() {
     let fake = red_pr(LIVE);
-    fake.comment(30, "<!-- bosun:heal head=old1 round=1 action=notify -->");
-    fake.comment(30, "<!-- bosun:heal head=old2 round=2 action=notify -->");
+    fake.comment(7, "<!-- bosun:heal head=old1 round=1 action=notify -->");
+    fake.comment(7, "<!-- bosun:heal head=old2 round=2 action=notify -->");
     let (code, v) = heal_in(&fake, Some(STEADY), &[]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(actions(&v), ["needs-human"]);
@@ -228,7 +237,7 @@ fn a_forged_marker_does_not_count_and_a_stop_rule_blocks() {
     let fake = red_pr(LIVE);
     fake.permission("mallory", "read");
     fake.comment_by(
-        30,
+        7,
         "mallory",
         "<!-- bosun:heal head=sha30 round=1 action=notify -->",
     );
@@ -259,4 +268,35 @@ fn green_heads_and_other_prs_are_left_alone() {
     fake.check_run_by("sha31", "ci-ok", "success", ACTIONS);
     let (_, v) = heal_in(&fake, Some(STEADY), &["--pr", "31"]);
     assert_eq!(v["data"]["prs"], serde_json::json!([]), "{v}");
+}
+
+#[test]
+fn a_live_fixer_blocks_a_second_one() {
+    let fake = red_pr(DEAD);
+    fake.comment(
+        1,
+        &format!(
+            r#"{{"bosun":"join","session":"fixer","origin":"spawned","area":"heal-7","parent":"session_test","depth":2,"expires":"{LIVE}"}}"#
+        ),
+    );
+    let (_, v) = heal_in(&fake, Some(BOOSTER), &[]);
+    assert_eq!(actions(&v), ["skip"], "{v}");
+    assert!(
+        v["data"]["prs"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("fixer of #7 is live")
+    );
+}
+
+#[test]
+fn a_decoy_pr_cannot_take_another_tasks_lease() {
+    let fake = red_pr(DEAD);
+    fake.pull(33, "decoy", "feat/x", "Closes #7");
+    fake.pull_as_issue(33, "decoy");
+    fake.check_run_by("sha33", "ci", "failure", ACTIONS);
+    fake.check_run_by("sha33", "ci-ok", "failure", ACTIONS);
+    let (_, v) = heal_in(&fake, Some(BOOSTER), &["--pr", "33"]);
+    assert_eq!(v["data"]["prs"], serde_json::json!([]), "{v}");
+    assert_eq!(v["next"], serde_json::json!([]));
 }
