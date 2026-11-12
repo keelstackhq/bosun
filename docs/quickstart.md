@@ -174,7 +174,7 @@ a red week.
      finding, but the file is R-gov, so you still approve it.
 4. An agent opens a PR that sets `[mode] name = "steady"` (section 0). **[phone]** Owner approves
    the exact head (chat form: repo, PR, head SHA). Merge as usual (orchestrator). Right after the
-   merge an agent runs `bosun plan amend <plan>` again for every plan: only now (knob on) does it
+   merge an agent runs `bosun plan amend <plan>` again for every plan, after the orchestrator's `bosun join` (no registry issue, no index): only now (knob on) does it
    write the bind and epic-index records, and until it does `claim` and `spawn` refuse plan tasks.
 5. `bosun mode` → `mode_source: "explicit"`; `bosun metrics --days 7`. Watch red-CI rate (target
    < 30 %), owner touches (≤ 5 a day), `data.brake`.

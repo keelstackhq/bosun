@@ -41,6 +41,8 @@ budget record = {usd: num, provider?: str, session?: str, model?: str | null, is
     already_recorded?: [int], usd_per_pr?: num, lesson?: {created?: bool, hits?: int, issue?: int,
     error?: str, fix?: str} | null};
 budget check = {daily_usd: num, spent_today_usd: num, pct: num, level: str, stopped: [str]};
+budget raise = {recorded: [{epic: int, usd: int, digest: str}], refused: [{epic: int | null,
+    usd: int | null, why: str}]};
 budget report = {month: str, written: [str], skipped_no_pr: [int], rows: [{pr: int,
     issue: int | null, title: str, outcome: str, merged_at: str | null, usd: num | null,
     tokens: any, models: [str] | null, sessions: [str] | null}], totals: {usd: num, prs: int,

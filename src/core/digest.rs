@@ -211,6 +211,46 @@ pub fn raise_message(
     format!("bosun-raise v1 {o}/{r} digest {id} day {day} reply {sha} epic {epic} usd +{usd}")
 }
 
+/// A parsed raise message (see [`raise_message`]).
+#[derive(Debug, PartialEq, Eq)]
+pub struct RaiseMsg {
+    pub repo: String,
+    pub digest: String,
+    pub day: String,
+    pub epic: u64,
+    pub usd: u64,
+}
+
+/// The fields of a `bosun-raise v1` message; anything else is `None`.
+pub fn parse_raise_message(m: &str) -> Option<RaiseMsg> {
+    let w: Vec<&str> = m.split(' ').collect();
+    let [
+        "bosun-raise",
+        "v1",
+        repo,
+        "digest",
+        id,
+        "day",
+        day,
+        "reply",
+        _,
+        "epic",
+        e,
+        "usd",
+        u,
+    ] = w[..]
+    else {
+        return None;
+    };
+    Some(RaiseMsg {
+        repo: repo.into(),
+        digest: id.into(),
+        day: day.into(),
+        epic: e.parse().ok()?,
+        usd: u.strip_prefix('+')?.parse().ok()?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +346,17 @@ mod tests {
         );
         assert_eq!(pick(&shown, &now, 16), Err("not in this digest"));
         assert!(pick(&shown, &[], 12).unwrap_err().starts_with("no longer"));
+    }
+
+    #[test]
+    fn a_raise_message_parses_back() {
+        let m = raise_message("Acme", "Widget", ("1a", "2026-11-12", "ab"), 7, 20);
+        let p = parse_raise_message(&m).unwrap();
+        assert_eq!(
+            (p.repo.as_str(), p.digest.as_str(), p.epic, p.usd),
+            ("acme/widget", "1a", 7, 20)
+        );
+        assert_eq!(parse_raise_message("bosun-raise v1 a/b digest 1"), None);
     }
 
     #[test]

@@ -306,7 +306,7 @@ fn editing_the_epic_body_does_not_lift_the_ask() {
         let fix = v["error"]["fix"].as_str().unwrap();
         // A missing marker refuses as a mismatch: the task names an item the epic does not.
         let want = if body.contains("bosun:epic") {
-            "on the default branch"
+            "budget raise --from -"
         } else {
             "plan amend"
         };

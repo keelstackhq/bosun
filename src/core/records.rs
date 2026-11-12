@@ -135,6 +135,18 @@ pub enum Record {
         item: String,
         epic: u64,
     },
+    /// An owner-signed budget raise of an epic (modes 7c), written by `bosun budget raise`.
+    /// Readers re-verify the signature, so a forged comment adds nothing.
+    Raise {
+        session: String,
+        epic: u64,
+        usd: u64,
+        digest: String,
+        day: String,
+        key_id: String,
+        message: String,
+        sig: String,
+    },
     /// An open PR that became conflicting with its base (`mergeable_state` dirty), posted by
     /// `bosun main-health`. One per head and base sha pair.
     Conflict {
@@ -219,6 +231,7 @@ impl Record {
             | Record::Relay { session, .. }
             | Record::TaskPr { session, .. }
             | Record::EpicIndex { session, .. }
+            | Record::Raise { session, .. }
             | Record::Bind { session, .. } => session,
         }
     }
@@ -389,6 +402,26 @@ mod tests {
         assert_eq!(
             r.to_line(),
             r#"{"bosun":"epic-index","session":"s","plan":"plans/x.md","item":"M1","epic":10}"#
+        );
+        assert_eq!(parse_record(&r.to_line()), Some(r.clone()));
+        assert_eq!(r.session(), "s");
+    }
+
+    #[test]
+    fn raise_round_trips() {
+        let r = Record::Raise {
+            session: "s".into(),
+            epic: 10,
+            usd: 50,
+            digest: "ab".into(),
+            day: "2026-11-12".into(),
+            key_id: "k1".into(),
+            message: "m".into(),
+            sig: "g".into(),
+        };
+        assert_eq!(
+            r.to_line(),
+            r#"{"bosun":"raise","session":"s","epic":10,"usd":50,"digest":"ab","day":"2026-11-12","key_id":"k1","message":"m","sig":"g"}"#
         );
         assert_eq!(parse_record(&r.to_line()), Some(r.clone()));
         assert_eq!(r.session(), "s");

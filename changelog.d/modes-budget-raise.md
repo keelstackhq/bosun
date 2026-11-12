@@ -1,0 +1,1 @@
+- `bosun budget raise` records the owner-signed raises of `bosun digest --answer` on their epics; the feature-budget guard adds the verified ones to the base budget.
