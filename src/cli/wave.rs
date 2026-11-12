@@ -80,7 +80,11 @@ fn tick(app: &App, epic: u64) -> CmdResult {
                     out = out.with_next(&call.tool, call.args);
                 }
                 let record = format!("bosun spawn {issue} --record --from -");
-                spawned.push(json!({"issue": issue, "title": entry["title"], "record": record}));
+                let mut sp = json!({"issue": issue, "title": entry["title"], "record": record});
+                if let Some(w) = r.data.get("budget_feature") {
+                    sp["budget_feature"] = w.clone();
+                }
+                spawned.push(sp);
                 pending += 1;
             }
             // Only a refusal (it carries `name`) stops the tick quietly; any other error before
