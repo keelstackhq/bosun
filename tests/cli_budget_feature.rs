@@ -170,7 +170,7 @@ fn feature_body(mode: &str, usd: f64, epic: &str) -> FakeGithub {
     let plan = plan.replace("touch: src/b/**", "touch: src/b/**\n  kind: mainfix");
     fake.content("plans/x.md", "main", &plan);
     fake.issue(11, "T1", &["bosun:state/ready"], &t(1));
-    fake.issue(12, "T2", &["bosun:state/merged"], &t(2));
+    fake.issue(12, "T3", &["bosun:state/merged"], &t(3));
     fake.comment(12, &spend(usd));
     fake
 }
@@ -358,4 +358,53 @@ fn unknown_item_and_task_keys_are_pinned() {
             .message
             .contains("unknown task key")
     );
+}
+
+#[test]
+fn a_duplicate_task_id_is_refused() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    let t = |s: &str| {
+        format!(r#"<!-- bosun:task {{"item":"M1","task":"T2","epic":10,"touch":["{s}"]}} -->"#)
+    };
+    fake.issue(13, "A", &["bosun:state/ready"], &t("src/p/**"));
+    fake.issue(14, "B", &["bosun:state/ready"], &t("src/q/**"));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bosun plan amend")
+    );
+}
+
+#[test]
+fn a_mainfix_label_does_not_exempt_a_wave_tick() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    fake.label(11, "bosun:kind/mainfix");
+    let (code, v) = run_in(&fake, dir.path(), &["wave", "tick", "10"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["stopped"]["check"], "budget_feature", "{v}");
+}
+
+#[test]
+fn a_plan_that_cannot_be_read_refuses_and_no_marker_means_one_task() {
+    let missing = EPIC.replace("plans/x.md", "plans/nope.md");
+    let (dir, fake) = (cfg_dir(""), feature_body("booster", 0.0, &missing));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bosun plan amend plans/nope.md")
+    );
+    let unknown = EPIC.replace(r#""item":"M1""#, r#""item":"M7""#);
+    let (dir, fake) = (cfg_dir(""), feature_body("booster", 0.0, &unknown));
+    assert_eq!(run_in(&fake, dir.path(), &["spawn", "10"]).0, 5);
+    // No marker: per_task_usd (25) for one task, however many issues name the epic.
+    let (dir, fake) = (cfg_dir(""), feature_body("booster", 25.0, "Epic"));
+    let (code, v) = run_in(&fake, dir.path(), &["spawn", "10"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["budget_usd"], 25.0);
 }

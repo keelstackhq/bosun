@@ -33,11 +33,11 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
 }
 
 /// What the tasks of `epic` have spent, over every state (spec §9, feature budget).
-pub(crate) fn feature_spend(app: &App, epic: u64) -> Result<f64> {
+fn feature_spend(app: &App, epic: u64, all: &[crate::github::Issue]) -> Result<f64> {
     let gh = app.gh.as_ref();
     let mut total = spend_total(&spend_notes(gh, epic)?, None);
-    for i in gh.list_issues(&[], IssueState::All)? {
-        if task_meta(&i).is_some_and(|m| m.epic == Some(epic)) {
+    for i in all {
+        if task_meta(i).is_some_and(|m| m.epic == Some(epic)) {
             total += spend_total(&spend_notes(gh, i.number)?, None);
         }
     }
@@ -72,35 +72,39 @@ fn source(app: &App, epic: u64) -> Result<Source> {
     let body = body.unwrap_or_default();
     let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
     let (file, item) = (epic_plan(&body), epic_item(&body));
-    let branch = crate::app::default_branch(gh)?;
-    let parsed = match &file {
-        Some(f) => gh
-            .file_at(f, &branch)?
-            .and_then(|t| crate::core::plan::parse(&t).ok()),
-        None => None,
+    let Some(f) = file else {
+        // No marker: one task's worth, which a dummy issue cannot inflate.
+        let budget = feature_estimate(1, per_task);
+        return Ok(Source {
+            budget,
+            item,
+            plan: None,
+        });
     };
+    let branch = crate::app::default_branch(gh)?;
+    let parsed = gh
+        .file_at(&f, &branch)?
+        .and_then(|t| crate::core::plan::parse(&t).ok());
     let found = parsed.as_ref().zip(item.as_ref()).and_then(|(p, id)| {
         p.items.iter().find(|i| &i.id == id).map(|i| {
             i.budget_usd
                 .unwrap_or(feature_estimate(i.tasks.len(), per_task))
         })
     });
-    let budget = match found {
-        Some(b) => b,
-        None => {
-            let all = gh.list_issues(&[], IssueState::All)?;
-            let n = all
-                .iter()
-                .filter(|i| task_meta(i).is_some_and(|m| m.epic == Some(epic)))
-                .count();
-            feature_estimate(n.max(1), per_task)
-        }
-    };
-    Ok(Source {
-        budget,
-        item,
-        plan: file.zip(parsed),
-    })
+    match (found, parsed) {
+        (Some(budget), Some(p)) => Ok(Source {
+            budget,
+            item,
+            plan: Some((f, p)),
+        }),
+        _ => Err(BosunError::needs_human(
+            format!(
+                "epic #{epic} names {f}, which is missing, unreadable or lacks its item on {branch}"
+            ),
+            format!("ask the orchestrator to run `bosun plan amend {f}`"),
+        )
+        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic}))),
+    }
 }
 
 /// The feature-budget guard of `epic` for claim, spawn and heal. Knob off (default branch): no
@@ -132,7 +136,16 @@ pub(crate) fn feature_guard(
         BosunError::needs_human(msg, fix).with_data(json!({"check": "budget_feature",
             "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
+    let all = app.gh.list_issues(&[], IssueState::All)?;
     if let Some((m, _)) = task {
+        let same = |i: &&crate::github::Issue| {
+            task_meta(i).is_some_and(|x| (&x.item, &x.task) == (&m.item, &m.task))
+        };
+        if all.iter().filter(same).count() > 1 {
+            let msg = format!("{}/{} names more than one task issue", m.item, m.task);
+            let fix = format!("ask the orchestrator to run `bosun plan amend {file}`");
+            return Err(refuse(msg, fix, 0.0));
+        }
         if src.item.as_deref() != Some(m.item.as_str()) {
             let msg = format!("the epic #{epic} marker names item {item}, not {}", m.item);
             return Err(refuse(
@@ -153,7 +166,7 @@ pub(crate) fn feature_guard(
             return Ok(None);
         }
     }
-    let (spent, budget) = (feature_spend(app, epic)?, src.budget);
+    let (spent, budget) = (feature_spend(app, epic, &all)?, src.budget);
     let warn = |level: &str| {
         Ok(Some(
             json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),

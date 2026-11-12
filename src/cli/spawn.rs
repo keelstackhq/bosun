@@ -178,13 +178,13 @@ fn spawn_on(
         thread.is_some(),
         tick.map_or(0, |t| t.pending),
     )?;
-    // The feature budget (modes item 6): the epic's own spend; a mainfix epic is exempt.
-    let feature = if input.mainfix {
-        None
-    } else {
-        // A wave tick spawns a task: its epic carries the budget.
-        let guard_epic = task_meta(&epic).and_then(|m| m.epic).unwrap_or(n);
-        super::budget::feature_guard(app, guard_epic, None)?
+    // The feature budget (modes item 6). A spawned task (wave tick) is guarded like a claim, so
+    // only the plan's kind exempts mainfix; a direct epic spawn keeps the label exemption.
+    let meta = task_meta(&epic);
+    let feature = match meta.as_ref().and_then(|m| m.epic.map(|e| (e, m))) {
+        Some((e, m)) => super::budget::feature_guard(app, e, Some((m, input.mainfix)))?,
+        None if input.mainfix => None,
+        None => super::budget::feature_guard(app, n, None)?,
     };
     super::prereqs_gate::refuse_epic_if_held(app.gh.as_ref(), &epic)?;
     let depth = input.parent_depth + 1;
