@@ -14,27 +14,35 @@ use crate::app::{
     settle_race, trusted_notes,
 };
 use crate::cli::metrics::window;
+use crate::cli::pr::update_pull_call;
 use crate::cli::prereqs_gate::refuse_epic_if_held;
+use crate::cli::risk_check::{base_rules, revert_findings, review_models, verdict_inputs};
 use crate::cli::status::process_red;
 use crate::config::{CONFIG_FILE, Config};
-use crate::core::heal::{Action, MAX_ROUNDS, RedPr, capped, decide, healed_heads, marker};
+use crate::core::heal::{
+    Action, MAX_ROUNDS, RedPr, capped, capped_main, decide, healed_heads, marker, since_green,
+};
 use crate::core::lease::{TTL_SECS, leases_of, members};
 use crate::core::meta::closing_issues;
 use crate::core::metrics::{CiRun, ci_head};
-use crate::core::mode::{Brake, HealPr, brake};
+use crate::core::mode::{Brake, HealMain, HealPr, brake};
 use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::risk::{clean_verdicts, revert_targets};
 use crate::core::signature::signature;
 use crate::core::spawn::{SpawnInput, check};
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::stop::evaluate;
-use crate::github::{Github, Issue, IssueState, Pull};
+use crate::github::{
+    Github, Issue, IssueState, Pull, enable_auto_merge_any, is_already_clean, is_ccr_refusal,
+};
 use crate::output::{CmdResult, Outcome};
 use crate::registry;
 use crate::time::parse_rfc3339;
 
 pub fn run(dir: Option<&Path>, args: &HealArgs) -> CmdResult {
     let app = App::load(dir)?;
-    if app.ctx.config.mode_effective().knobs.heal_pr.value == HealPr::Off {
+    let local = app.ctx.config.mode_effective().knobs;
+    if local.heal_pr.value == HealPr::Off && local.heal_main.value == HealMain::Off {
         let data = json!({"knob": "off", "brake": null, "prs": []});
         return Ok(Outcome::data(data));
     }
@@ -52,6 +60,7 @@ pub fn run(dir: Option<&Path>, args: &HealArgs) -> CmdResult {
     let mut run = Run {
         app: &app,
         knob,
+        main: capped_main(eff.knobs.heal_main.value, brake_on),
         env: config.cloud.environment_id.clone(),
         spawned: 0,
         out: Outcome::default(),
@@ -77,21 +86,162 @@ pub fn run(dir: Option<&Path>, args: &HealArgs) -> CmdResult {
             );
         }
     }
+    let err = |e: crate::output::BosunError| json!({"action": "error", "why": e.message});
+    let main = (args.pr.is_none()).then(|| run.main_inner().unwrap_or_else(err));
     let mut out = run.out;
     let brake = json!({"on": brake_on, "reasons": st.reasons});
-    out.data = json!({"knob": knob.as_str(), "brake": brake, "prs": rows});
+    out.data = json!({"knob": knob.as_str(), "brake": brake, "prs": rows, "main": main});
     Ok(out)
 }
 
 struct Run<'a> {
     app: &'a App,
     knob: HealPr,
+    main: HealMain,
     env: Option<String>,
     spawned: u32, // fixers returned in this run, counted against the session limits
     out: Outcome,
 }
 
 impl Run<'_> {
+    /// The row of a red main; a failure is the row, never an error of the command.
+    fn main_inner(&mut self) -> Result<Value> {
+        let skip = |w: &str| Ok(json!({"action": "skip", "why": w}));
+        let (app, gh) = (self.app, self.app.gh.as_ref());
+        if self.main == HealMain::Off {
+            return skip("heal_main is off");
+        }
+        if main_red(gh)?.is_none() {
+            return skip("main is green");
+        }
+        let (branch, repo) = (default_branch(gh)?, app.ctx.repo.to_string());
+        let since = app.ctx.now.minus_secs(7 * 86_400).to_string();
+        let mut pulls: Vec<Pull> = (gh.list_pulls_updated_since(&since)?.into_iter())
+            .filter(|p| {
+                p.merged_at.is_some() && p.merge_commit_sha.is_some() && p.base_ref == branch
+            })
+            .collect();
+        pulls.sort_by(|a, b| b.merged_at.cmp(&a.merged_at));
+        let mut heads = Vec::new();
+        for p in pulls.iter().take(10) {
+            let sha = p.merge_commit_sha.as_deref().unwrap_or_default();
+            let ci = ci_head(&ci_runs(gh, sha)?, false);
+            if heads.is_empty() && !ci.as_ref().is_some_and(|h| h.failing) {
+                return skip("the newest merge is not red (yet)");
+            }
+            let green = ci.is_some_and(|h| !h.failing);
+            heads.push((p.number, green));
+            if green {
+                break;
+            }
+        }
+        let n = match since_green(&heads) {
+            Ok(n) => n,
+            Err(w) => return skip(&w),
+        };
+        // Never revert a revert (it re-applies the original): the marker, or a `bosun/revert-<N>`
+        // branch of this repo (exactly, so `bosun/revert-x` is no revert).
+        let branch = |p: &Pull| {
+            let n = p.head_ref.strip_prefix("bosun/revert-").unwrap_or_default();
+            p.head_repo.eq_ignore_ascii_case(&repo)
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+        };
+        if (pulls.iter().find(|p| p.number == n))
+            .is_some_and(|p| !revert_targets(&p.body).is_empty() || branch(p))
+        {
+            return skip("the first bad PR is a revert; fix by hand");
+        }
+        let head = format!("{}:bosun/revert-{n}", app.ctx.repo.owner);
+        let ours =
+            |p: &&Pull| p.head_repo.eq_ignore_ascii_case(&repo) && revert_targets(&p.body) == [n];
+        let reverts = gh.list_pulls(Some(&head), IssueState::All)?;
+        // A revert closed unmerged was declined: never opened again.
+        if let Some(p) = reverts
+            .iter()
+            .filter(ours)
+            .find(|p| p.state == "closed" && p.merged_at.is_none())
+        {
+            return skip(&format!(
+                "revert PR #{} of #{n} was closed unmerged",
+                p.number
+            ));
+        }
+        let open = reverts.iter().filter(ours).find(|p| p.state == "open");
+        let Some(m) = open.map(|p| p.number) else {
+            let data = crate::cli::revert::open_revert(app, n)?.data;
+            let m = data["revert_pr"].as_u64().unwrap_or_default();
+            let drafted = gh.get_pull(m).and_then(|p| match p {
+                Some(p) => gh.set_draft(&p.node_id, true),
+                None => Ok(()),
+            });
+            let why = match drafted {
+                Ok(()) => format!("opened revert PR #{m} as a draft"),
+                Err(e) if is_ccr_refusal(&e) => {
+                    self.out.next.push(update_pull_call(app, m, true));
+                    format!("opened revert PR #{m}; the call in `next` makes it a draft")
+                }
+                Err(e) => format!("opened revert PR #{m}, not drafted: {}", e.message),
+            };
+            return Ok(json!({"action": "revert", "pr": n, "revert_pr": m, "why": why}));
+        };
+        if self.main != HealMain::RevertAuto {
+            return skip(&format!("revert PR #{m} is open"));
+        }
+        self.auto(n, m)
+    }
+
+    /// `revert-auto`: ready revert `m` of `n` with auto-merge when every check holds (spec §9).
+    fn auto(&mut self, n: u64, m: u64) -> Result<Value> {
+        let skip = |w: String| Ok(json!({"action": "skip", "pr": n, "revert_pr": m, "why": w}));
+        let (app, gh) = (self.app, self.app.gh.as_ref());
+        let Some(pull) = gh.get_pull(m)? else {
+            return skip(format!("revert PR #{m} is gone"));
+        };
+        let files = gh.pull_files(m)?;
+        let rules = base_rules(gh, &pull.base_sha)?;
+        match revert_findings(gh, &rules, &pull, &files) {
+            Some((_, ev)) if ev.is_empty() => {}
+            Some((_, ev)) => return skip(ev.join("; ")),
+            None => return skip(format!("revert PR #{m} has no revert marker")),
+        }
+        if pull.commits != 1 {
+            return skip(format!("revert PR #{m} has commits beyond the revert"));
+        }
+        let (comments, mut excluded) = verdict_inputs(gh, m, &[])?;
+        excluded.push(app.ctx.session.clone());
+        let msg = gh
+            .commit(&pull.head_sha)?
+            .map_or(String::new(), |c| c.message);
+        let Some(a) = msg.lines().find_map(|l| l.strip_prefix("Bosun-Session: ")) else {
+            return skip("the revert commit has no Bosun-Session trailer".into());
+        };
+        excluded.push(a.trim().into());
+        let models = review_models(gh, &pull.base_sha)?;
+        let by = comments.iter().map(|c| (c.user.as_str(), c.body.as_str()));
+        if clean_verdicts(by, &pull.head_sha, &excluded, models.as_deref()).is_empty() {
+            return skip(format!("no clean independent verdict on the head of #{m}"));
+        }
+        if pull.draft {
+            match gh.set_draft(&pull.node_id, false) {
+                Err(e) if is_ccr_refusal(&e) => {
+                    self.out.next.push(update_pull_call(app, m, false));
+                    let why = "the call in `next` marks it ready; rerun after it";
+                    return Ok(json!({"action": "ready-pending", "revert_pr": m, "why": why}));
+                }
+                r => r?,
+            }
+        }
+        match enable_auto_merge_any(gh, &pull) {
+            Ok(_) => Ok(json!({"action": "ready", "pr": n, "revert_pr": m,
+                "why": "auto-merge is on; the revert merges when ci-ok is green"})),
+            Err(e) if is_already_clean(&e) => {
+                skip("already mergeable: the orchestrator merges".into())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// `None` for a PR that is not red or whose task is not a bosun task.
     fn one(&mut self, pull: &Pull, task: u64) -> Result<Option<(&'static str, String)>> {
         let gh = self.app.gh.as_ref();
@@ -271,10 +421,10 @@ impl Run<'_> {
     }
 }
 
-/// The head fails `ci-ok` (a draft's lone red `ci-ok` is excused, as in `bosun metrics`).
-fn red(gh: &dyn Github, pull: &Pull) -> Result<bool> {
-    let runs: Vec<CiRun> = gh
-        .check_runs_all(&pull.head_sha)?
+/// The check runs of a commit, as the brake reads them (also on main merge commits).
+fn ci_runs(gh: &dyn Github, sha: &str) -> Result<Vec<CiRun>> {
+    Ok(gh
+        .check_runs_all(sha)?
         .into_iter()
         .map(|r| CiRun {
             completed: r.status == "completed",
@@ -283,8 +433,12 @@ fn red(gh: &dyn Github, pull: &Pull) -> Result<bool> {
             app: r.app,
             conclusion: r.conclusion,
         })
-        .collect();
-    Ok(ci_head(&runs, pull.draft).is_some_and(|h| h.failing))
+        .collect())
+}
+
+/// The head fails `ci-ok` (a draft's lone red `ci-ok` is excused, as in `bosun metrics`).
+fn red(gh: &dyn Github, pull: &Pull) -> Result<bool> {
+    Ok(ci_head(&ci_runs(gh, &pull.head_sha)?, pull.draft).is_some_and(|h| h.failing))
 }
 
 /// The failing jobs and the log signature of the first one (`bosun ci-log`), at most 500 chars.
