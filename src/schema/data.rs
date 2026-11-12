@@ -176,7 +176,11 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
 mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
     brake_note: str};
 heal = {};
-digest = {};
+digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
+    rules: [str], title: str}], asks: [{issue: int, answer: str}], bypass: [{pr: int, why: str}],
+    budget_asks: [any]} | {message_id: str, approve: [{pr: int, head_sha: str}],
+    dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
+    sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
 metrics = {};
 wave tick = {};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},

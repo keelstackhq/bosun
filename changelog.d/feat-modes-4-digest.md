@@ -1,0 +1,1 @@
+- `bosun digest`: the owner's daily approval digest as one chat form; `--answer` turns the reply into `bosun approve` calls in `next` and signs raises with an enrolled owner key (modes PR 4).
