@@ -106,7 +106,7 @@ environment_id = "env_..."     # the id of the cloud environment the children ru
 | booster, autonomous | The orchestrator runs `bosun wave tick <epic>`; its `create_session` calls use `environment_id` from `[cloud]`. Run it again when children finish: it returns `archive_session` for done children. |
 
 The janitor Routine (hourly, **[computer]**, claude.ai/code → Routines; prompts: `bosun doctor`,
-`data.routines`) keeps leases and spend honest in every mode. For `steady` and up, add this
+`data.routines`) keeps leases and spend honest in every mode. For `steady` and lighter, add this
 sentence at the end of the janitor prompt (owner step):
 
 ```text
@@ -156,13 +156,13 @@ thing that needs the Routine. `bosun metrics --propose` itself is read-only.
 
 ## 5. Migration: a repo that already runs bosun
 
-One step at a time (gatekeeper → steady → booster → autonomous). Never skip a step, never go up on
+One step at a time (gatekeeper → steady → booster → autonomous). Never skip a step, never move lighter on
 a red week.
 
 1. Baseline. `bosun metrics --days 30` in the repo. Write the numbers on the PR.
 2. **[computer]** Owner publishes a release that reads `[mode]`. An agent runs `bosun pin --latest --pr`
    (or the splice bot's PR); **[phone]** you approve it. Check: `cat .bosun/version`; `bosun mode` exits 0.
-3. Upgrade notes before `steady` (an agent does them, in order):
+3. Prep notes before `steady` (an agent does them, in order):
    - Every open epic needs a plan marker (the `bosun:epic` marker in its body, naming plan and
      item) before `budget_feature` is not `off` (`steady` sets `warn`; `booster` sets `ask`). For each plan file
      run `bosun plan check <plan>` then `bosun plan amend <plan>` (`--dry-run` first). Without the
