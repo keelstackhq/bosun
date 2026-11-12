@@ -2988,9 +2988,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                     r.split_once(':')
                         .is_some_and(|(s, d)| !s.is_empty() && !d.is_empty())
                 });
-            if sub == "push" && !explicit && !target.alone {
-                return Some(PUSH_ALONE);
-            }
+            // `pushes` lists it either way; `tool_rules` refuses it first.
             if let Some(sink) = target.sink {
                 let srcs = refs.iter().map(|r| r.split(':').next().unwrap_or(r));
                 sink(Push {
@@ -2998,7 +2996,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                     srcs: srcs.map(str::to_string).collect(),
                 });
             }
-            None
+            (sub == "push" && !explicit && !target.alone).then_some(PUSH_ALONE)
         }
         "tag" => {
             let lists = rest.is_empty()
