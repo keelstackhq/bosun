@@ -75,6 +75,7 @@ fn on_main(fake: &FakeGithub, mode: &str) {
     if !mode.is_empty() {
         let t = format!("[mode]\nname = \"{mode}\"\n");
         fake.content(".bosun/bosun.toml", "main", &t);
+        fake.content(".bosun/registry", "refs/heads/main", "1");
     }
 }
 
@@ -205,6 +206,33 @@ fn claim_asks_the_owner_at_100_percent_in_booster() {
 }
 
 #[test]
+fn claim_and_spawn_refuse_without_the_registry_pin_when_the_knob_is_on() {
+    let (dir, fake) = (cfg_dir(""), feature("", 10.0));
+    fake.content(
+        ".bosun/bosun.toml",
+        "main",
+        "[mode]\nname = \"booster\"\nbudget_feature = \"warn\"\n",
+    );
+    for args in [["claim", "11"], ["spawn", "10"]] {
+        let (code, v) = run_in(&fake, dir.path(), &args);
+        assert_eq!(code, 5, "{v}");
+        assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+        assert!(
+            v["error"]["fix"]
+                .as_str()
+                .unwrap()
+                .contains("commit `.bosun/registry`")
+        );
+    }
+    // A mainfix task (plan kind T2, label and body too) needs the pin as well.
+    let mf = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/m/**"],"kind":"mainfix"} -->"#;
+    fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+}
+
+#[test]
 fn claim_below_the_warning_and_in_gatekeeper_is_unchanged() {
     let (dir, fake) = (cfg_dir(""), feature("steady", 10.0));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
@@ -251,6 +279,7 @@ fn the_default_branch_decides_not_the_working_tree() {
 #[test]
 fn the_warn_knob_only_warns_at_100_percent() {
     let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    fake.content(".bosun/registry", "refs/heads/main", "1");
     fake.content(
         ".bosun/bosun.toml",
         "main",

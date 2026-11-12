@@ -25,6 +25,7 @@ fn enroll(fake: &FakeGithub, role: &str) {
 /// Epic #10 (budget 100, index on the registry) with 100 spent, and a ready task #11.
 fn feature(mode: &str) -> FakeGithub {
     let fake = FakeGithub::start();
+    fake.content(".bosun/registry", "refs/heads/main", "1");
     fake.content(
         ".bosun/bosun.toml",
         "main",

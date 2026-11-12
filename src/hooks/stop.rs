@@ -11,7 +11,6 @@ use crate::app::{App, trusted_notes};
 use crate::core::gate_record::{GateRecord, fingerprint, is_stale, wait_marker_live};
 use crate::core::records::{Note, Record, parse_record};
 use crate::ctx::Origin;
-use crate::github::IssueState;
 use crate::registry;
 
 /// Run the hook: a panic allows (the session may stop).
@@ -86,9 +85,8 @@ fn unfinished(dir: &Path) -> Result<Option<String>, String> {
         }
         if origin != Origin::Spawned {
             if registry.is_none() {
-                let issue = gh.list_issues(&[registry::LABEL], IssueState::Open);
-                registry = Some(match issue.map_err(|e| e.message)?.first() {
-                    Some(i) => trusted_notes(gh, i.number).map_err(|e| e.message)?,
+                registry = Some(match registry::pick(gh).map_err(|e| e.message)? {
+                    Some(n) => trusted_notes(gh, n).map_err(|e| e.message)?,
                     None => Vec::new(),
                 });
             }
