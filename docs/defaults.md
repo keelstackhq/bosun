@@ -75,7 +75,7 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 
 | Value | Default | Evidence |
 | ----- | ------- | -------- |
-| Mode | `gatekeeper` | No `[mode]` = today, byte for byte. A lighter mode is R-weaken: the owner's call. |
+| Mode | `gatekeeper` | No `[mode]` = today, byte for byte. A lighter mode (toward `autonomous`) is R-weaken: the owner's call. |
 | Preset policy | booster, autonomous: `autonomous` | D-017 fast lane; an explicit `[approvals] policy` wins. |
 | Brake window | 7 days | Estimate; review after 30 days of metrics (design open point 4). |
 | Brake: main red | 2 times | Estimate; review after 30 days of metrics (design open point 4). |
@@ -87,7 +87,7 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | Curator proposal | at least 10 passed owner blocks, none caught, in 30 days; one draft PR a week | Estimate; never R-weaken, R-secrets, R-prod-write, R-gov, R-gate, R-revert, R-ci, R-ci-review, R-deps, R-unseen. |
 | Targets, p50 lead time / red-CI / owner touches a day | steady 3 days / 30 % / 5; booster 1.5 days / 20 % / 3; autonomous 1 day / 15 % / 1 | Estimate; `bosun metrics` measures the gatekeeper baseline first. |
 | Knobs per mode | table in `docs/quickstart.md` and spec §18 | A mode is a preset; an explicit knob wins. |
-| Move up | one mode at a time, two weeks on target | `docs/quickstart.md` (migration). Estimate. |
+| Step to the next lighter mode | one mode at a time, two weeks on target | `docs/quickstart.md` (migration). Estimate. |
 | `bosun metrics` window | 30 days | Estimate; review after 30 days of metrics (design open point 4). |
 
 ## Lessons

@@ -52,7 +52,7 @@ widen them on measured evidence, never on confidence or on agents agreeing with 
 `[mode]` (spec §18, [quickstart](quickstart.md)) is the dial between "every gate, every approval"
 and "agents run, the owner reads one digest". It never moves the boundary files or the owner
 floor: R-weaken, R-gov, R-secrets, R-prod-write, workflows, releases and tags stay with the
-owner in every mode, and a lighter mode is itself an owner-approved R-weaken change. Helpers act
+owner in every mode, and a lighter mode (toward `autonomous`) is itself an owner-approved R-weaken change. Helpers act
 through `next` calls and PRs with full checks; a brake (red main, reverts, red-CI rate over the
 mode's target) turns the spawn and heal helpers down by itself.
 

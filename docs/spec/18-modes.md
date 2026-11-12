@@ -20,11 +20,13 @@ push_gates = "push"
   `[mode]` key (parse error): only `[approvals] policy` or the mode name sets it.
 - The preset fills `[approvals] policy` when the table leaves it unset (booster and
   autonomous: `autonomous`, D-017); risk-check and `approve` print `data.policy_source`.
-- Weaken (§8, R-weaken): a move down the ladder, and an effective `push_gates` push → ready,
+- Direction: the ladder runs gatekeeper < steady < booster < autonomous. **Lighter** = toward
+  `autonomous` (fewer gates, more helpers); **tighter** = toward `gatekeeper`.
+- Weaken (§8, R-weaken): a lighter mode (every step up the list above, gatekeeper → steady included), and an effective `push_gates` push → ready,
   `brake` on → off or `budget_feature` lowered (ask > warn > off: it removes a spend stop).
   Helper knobs (`heal_*`, `spawn_auto`, `approvals_batch`, `curator_loosen`) change who
   acts, not what passes: changing them alone is
-  no finding; the file is R-gov, so the owner still approves. A move up is no finding.
+  no finding; the file is R-gov, so the owner still approves. A tighter mode is no finding.
 - Code that acts without the owner (`core/mode`, `digest`, `heal`, `metrics`, `spawn`, `wave`,
   core and cli) is R-gate; R-gov is in the D-017 deny set.
 - Release ordering as for every new key: set `[mode]` only once `.bosun/version` pins a release

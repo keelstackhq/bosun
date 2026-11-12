@@ -8,7 +8,7 @@ Spec: [spec §18](spec/18-modes.md). Every command below: `bosun <command> --hel
 | `gatekeeper` | Today. No helpers. The default without `[mode]`. | as needed |
 | `steady` | Gates before push, red-PR notices, revert PRs on red main, daily digest, feature budget warnings. | ≤ 5 a day |
 | `booster` | Steady plus fast-lane approval (`autonomous` policy), auto spawn, fixer sessions, budget asks (advisory until budget bindings land; a raise is a plan PR), curator proposals. | ≤ 3 a day |
-| `autonomous` | Booster plus auto-merge of exact-inverse reverts (also needs a clean verdict, and the reverted PR needed no owner); owner talks to bosun through the digest only. | ≤ 1 a day |
+| `autonomous` | Booster plus auto-merge of exact-inverse reverts (also needs a clean verdict, and the reverted PR needed no owner); helpers cut the owner's touches to about one a day (the digest); owner-class PRs still need an approval. | ≤ 1 a day |
 
 Owner steps are marked **[phone]** or **[computer]** (D-009). Everything else an agent does.
 
@@ -26,7 +26,7 @@ name = "steady"        # gatekeeper | steady | booster | autonomous
 # heal_main = "off"
 ```
 
-The PR is R-gov, and a lighter mode is R-weaken: it needs your approval ([phone] is enough: the
+The PR is R-gov. A lighter mode (toward `autonomous`) is R-weaken: it needs your approval ([phone] is enough: the
 chat form or `/bosun approve <head sha>` on GitHub). Check what is in force (offline):
 
 ```bash
@@ -72,11 +72,12 @@ refuse a `git push` without gate stamps (`push_gates = "push"`), and every merge
 
 ```bash
 for g in fmt lint test deps test-integrity ci-minutes; do bosun gate "$g" || break; done
+# TypeScript stack (ts-pnpm profile): add `types` to the list
 ```
 
 Notes:
 - bosun never calls Claude Code tools (D29). Read `next`, make each call, nothing else.
-- **[computer]** Digest reply, on the machine that holds your key (`~/.bosun/approver.pem`; `bosun keygen --enroll` once):
+- Digest: **[phone]** you answer the form in chat. **[computer]** the key holder (`~/.bosun/approver.pem`; `bosun keygen --enroll` once, and it counts only after its `.bosun/approvers.toml` PR merged: R-gov, owner approves) runs:
   paste the digest's `data.header` as line 1, your reply under it, to
   `bosun digest --answer --sign-key ~/.bosun/approver.pem --from -`. Each approval comes back as
   `bosun approve <pr>@<head> --sign-key <pem>` in `next`.
@@ -168,8 +169,9 @@ a red week.
      marker `claim` and `spawn` refuse a task of the epic; the refusal's `error.fix` names the step.
    - `steady` sets `heal_main = "revert-pr"`: on a red main, `bosun heal` opens a **draft** revert PR
      (it never merges). Tell the orchestrator to review it, or set `heal_main = "off"` as an override.
-   - A lighter mode is an owner-approved R-weaken change: going down the ladder is a finding
-     the owner must approve; going up is none, but the step-4 PR is R-gov and waits for your approval too.
+   - Lighter means toward `autonomous`; tighter, toward `gatekeeper`. Every step in this section is a
+     lighter mode: an owner-approved R-weaken change (gatekeeper → steady too). A tighter mode is no
+     finding, but the file is R-gov, so you still approve it.
 4. An agent opens a PR that sets `[mode] name = "steady"` (section 0). **[phone]** Owner approves
    the exact head (chat form: repo, PR, head SHA). Merge as usual (orchestrator).
 5. `bosun mode` → `mode_source: "explicit"`; `bosun metrics --days 7`. Watch red-CI rate (target
@@ -178,10 +180,10 @@ a red week.
    `bosun digest`; reply by section 1.
 7. After two weeks on target: repeat steps 4-6 for `booster` (target red-CI < 20 %, ≤ 3 touches).
    `booster` also sets `[approvals] policy = "autonomous"` when the table leaves it unset
-   (an explicit `policy` wins; the older pinned release needs to know `autonomous`). **[computer]**
+   (an explicit `policy` wins; the pinned release must know `autonomous`). **[computer]**
    Replace the curator Routine prompt (section 4).
-8. `autonomous` the same way (red-CI < 15 %, ≤ 1 touch). Back down is always one PR: a **tighter**
-   mode is no finding, the owner still approves the file.
+8. `autonomous` the same way (red-CI < 15 %, ≤ 1 touch). Going back (tighter) is one PR too: no
+   R-weaken finding, but R-gov, so the owner still approves.
 
 Gatekeeper without `[mode]` is byte-for-byte today's behaviour; deleting the table goes back.
 What mode never changes: R-weaken, R-gov, R-secrets, R-prod-write, workflows, releases and tags

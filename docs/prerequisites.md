@@ -63,7 +63,7 @@ item that blocks the held task lists them in `replaces:`; an X id is never used 
 
 ## Modes: owner steps
 
-A mode adds owner steps. List them as prerequisites when the plan moves a repo up
+A mode adds owner steps. List them as prerequisites when the plan moves a repo to a lighter mode
 ([quickstart](quickstart.md), migration): **computer** pin a release that reads `[mode]`; paste
 the Routine prompts (janitor with `bosun heal`; curator for `curator_loosen = "propose"`;
 Routines are human-only); **phone** approve the PR that sets `[mode] name` (R-gov, and R-weaken
