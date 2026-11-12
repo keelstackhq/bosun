@@ -1,0 +1,1 @@
+- `bosun heal` self-heals a red main with `[mode] heal_main` (revert the one PR merged since green; `revert-auto` readies a clean exact inverse), and risk-check adds the built-in `R-revert`

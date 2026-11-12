@@ -1128,6 +1128,112 @@ pub fn comment_approves(body: &str, head: &str) -> bool {
     head.len() == 40 && body.trim() == format!("/bosun approve {head}")
 }
 
+/// The distinct N of the `<!-- bosun:revert N -->` lines of a PR body (digits only), in order.
+pub fn revert_targets(body: &str) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::new();
+    for part in body.split("<!-- bosun:revert ").skip(1) {
+        let n = part.split_once(" -->").map(|(n, _)| n);
+        let n = n
+            .filter(|n| n.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|n| n.parse().ok());
+        out.extend(n.filter(|n| !out.contains(n)));
+    }
+    out
+}
+
+/// One file of a PR as GitHub lists it, for `inverse_problems`.
+pub struct PatchFile<'a> {
+    pub path: &'a str,
+    pub previous_path: Option<&'a str>,
+    pub status: &'a str,
+    pub patch: Option<&'a str>,
+    pub changes: u64,
+}
+
+/// A patch as tokens: `@@` with the hunk's start lines, a `\ No newline` line glued to the line
+/// before it, `+`/`-` swapped when `flip`, each run of changed lines sorted `-` before `+`.
+fn tokens(patch: &str, flip: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut run: Vec<String> = Vec::new();
+    for l in patch.lines() {
+        let t = match l.chars().next() {
+            Some('\\') => {
+                if let Some(t) = run.last_mut().or(out.last_mut()) {
+                    t.push('\u{0}');
+                }
+                continue;
+            }
+            Some(c @ ('+' | '-')) => {
+                let c = match (flip, c) {
+                    (true, '+') => '-',
+                    (true, _) => '+',
+                    _ => c,
+                };
+                run.push(format!("{c}{}", &l[1..]));
+                continue;
+            }
+            // The hunk's start lines: #N's new side is the revert's old side.
+            _ if l.starts_with("@@") => {
+                let at = |i: usize| l.split(' ').nth(i).and_then(|w| w[1..].split(',').next());
+                let (a, b) = (at(1).unwrap_or("?"), at(2).unwrap_or("?"));
+                if flip {
+                    format!("@@ {b} {a}")
+                } else {
+                    format!("@@ {a} {b}")
+                }
+            }
+            _ => l.to_string(),
+        };
+        run.sort_by_key(|t| t.starts_with('+'));
+        out.append(&mut run);
+        out.push(t);
+    }
+    run.sort_by_key(|t| t.starts_with('+'));
+    out.append(&mut run);
+    out
+}
+
+/// Why `revert` is not the exact inverse of `merged` (empty: it is), at most 5. Fails closed:
+/// unpaired files, other status pairs, a missing patch (bar a pure rename), a differing patch.
+pub fn inverse_problems(merged: &[PatchFile], revert: &[PatchFile]) -> Vec<String> {
+    let inverse = [
+        "added removed",
+        "removed added",
+        "modified modified",
+        "renamed renamed",
+    ];
+    let (mut out, mut used) = (Vec::new(), vec![false; merged.len()]);
+    for r in revert {
+        let pairs = |m: &PatchFile| {
+            m.path == r.path
+                || (r.status == "renamed"
+                    && Some(m.path) == r.previous_path
+                    && m.previous_path == Some(r.path))
+        };
+        let hits: Vec<usize> = (0..merged.len()).filter(|&i| pairs(&merged[i])).collect();
+        let why: String = match hits[..] {
+            [i] if !std::mem::replace(&mut used[i], true) => {
+                let (m, st) = (&merged[i], format!("{} {}", merged[i].status, r.status));
+                match (m.patch, r.patch) {
+                    _ if !inverse.contains(&st.as_str()) => format!("status {st} is not inverse"),
+                    (None, None) if m.status == "renamed" && m.changes + r.changes == 0 => continue,
+                    (Some(a), Some(b)) if tokens(a, true) == tokens(b, false) => continue,
+                    (Some(_), Some(_)) => "the patch is not the inverse".into(),
+                    _ => format!("no patch for {}", r.path),
+                }
+            }
+            _ => "no single counterpart in the reverted PR".into(),
+        };
+        out.push(format!("{}: {why}", r.path));
+    }
+    let left = merged.iter().zip(&used).filter(|(_, u)| !**u);
+    out.extend(
+        left.map(|(m, _)| format!("{}: changed by the reverted PR, not the revert", m.path)),
+    );
+    out.truncate(5);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
