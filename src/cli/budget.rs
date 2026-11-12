@@ -139,8 +139,8 @@ pub(crate) fn feature_guard(
     let all = app.gh.list_issues(&[], IssueState::All)?;
     if let Some((m, _)) = task {
         let same = |i: &&crate::github::Issue| {
-            // Ids are unique per plan, so per epic; an issue closed as a duplicate is ignored.
-            i.state_reason.as_deref() != Some("duplicate")
+            // Ids are unique per plan, so per epic; an issue closed as a duplicate or not planned is ignored.
+            !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"))
                 && task_meta(i).is_some_and(|x| {
                     x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task)
                 })
