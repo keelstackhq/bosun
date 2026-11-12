@@ -177,6 +177,10 @@ conflict to resolve. Cut the plan by file ownership:
 | plan task | one issue per item, `<item>/P: plan`; `ready` at once, `kind: plan`, `allow: []`, touches the plan file | `bosun:kind/plan`, area, `bosun:source/plan`, `bosun:state/ready` |
 | UC line | listed in the epic; the UC test lands passing with the task that implements it, no pending tests (spec §7); `bosun plan import` writes no test files; tasks become ready on the import run after the plan task merged | — |
 
+When the `budget_feature` knob is not off, import (and `plan amend`, which backfills existing
+epics) also comments one `{"bosun":"bind",...}` record on each task issue and on the epic, once:
+they bind the task to its epic, item and task id, and the epic to its plan and item (see spec 05).
+
 Each issue body starts with a hidden marker `<!-- bosun:plan <item>/<task> -->`. Import finds
 existing issues by that marker, so a second import of the same plan creates nothing new (UC-M2-1).
 Import also adopts hand-made issues: a task issue whose `bosun:task` metadata names the same

@@ -119,8 +119,8 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         }
     }
 
-    let feature = match meta.as_ref().and_then(|m| m.epic.map(|e| (e, m))) {
-        Some((e, m)) => super::budget::feature_guard(&app, e, Some((m, mainfix)))?,
+    let feature = match meta.as_ref() {
+        Some(m) => super::budget::task_guard(&app, n, m, mainfix)?,
         None => None,
     };
 

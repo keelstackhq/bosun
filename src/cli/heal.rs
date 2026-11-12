@@ -179,9 +179,9 @@ impl Run<'_> {
         let model = limits.models.build.clone();
         let meta = crate::app::task_meta(issue);
         let mainfix = issue.labels.iter().any(|l| l == "bosun:kind/mainfix");
-        if let Some((e, m)) = meta.as_ref().and_then(|m| m.epic.map(|e| (e, m))) {
+        if let Some(m) = meta.as_ref() {
             let mainfix = mainfix || m.kind == "mainfix";
-            if let Err(e) = super::budget::feature_guard(app, e, Some((m, mainfix))) {
+            if let Err(e) = super::budget::task_guard(app, task, m, mainfix) {
                 return Ok(Err(e.message));
             }
         }

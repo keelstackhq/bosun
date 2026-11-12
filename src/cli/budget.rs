@@ -13,10 +13,11 @@ use crate::app::{
 use crate::cli::plan::{epic_item, epic_plan};
 use crate::core::budget::{Feature, feature_estimate, feature_level, level, to_stop};
 use crate::core::lease::members;
+use crate::core::meta::TaskMeta;
 use crate::core::mode::BudgetFeature;
-use crate::core::records::{Record, spend_total};
+use crate::core::records::{Record, parse_record, spend_total};
 use crate::core::state::{State, state_of};
-use crate::github::IssueState;
+use crate::github::{Issue, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 use crate::sessions::usage;
@@ -32,16 +33,104 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     }
 }
 
-/// What the tasks of `epic` have spent, over every state (spec §9, feature budget).
-fn feature_spend(app: &App, epic: u64, all: &[crate::github::Issue]) -> Result<f64> {
+/// What the epic and its tasks have spent: the tasks its trusted bind lists and the issues whose
+/// body names it, each once.
+fn feature_spend(app: &App, epic: u64, all: &[Issue], bound: &[u64]) -> Result<f64> {
     let gh = app.gh.as_ref();
     let mut total = spend_total(&spend_notes(gh, epic)?, None);
     for i in all {
-        if task_meta(i).is_some_and(|m| m.epic == Some(epic)) {
+        let body = task_meta(i).is_some_and(|m| m.epic == Some(epic));
+        if body || bound.contains(&i.number) {
             total += spend_total(&spend_notes(gh, i.number)?, None);
         }
     }
     Ok(total)
+}
+
+/// The trusted `bind` records of issue `n`, oldest first.
+fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<Record>> {
+    let notes = crate::app::trusted_notes(gh, n)?;
+    let all = notes.iter().filter_map(|c| parse_record(&c.body));
+    Ok(all.filter(|r| matches!(r, Record::Bind { .. })).collect())
+}
+
+/// An epic's binding: the first trusted bind's plan and item, the union of all listed tasks.
+pub(crate) struct EpicBind {
+    pub plan: String,
+    pub item: String,
+    pub tasks: Vec<u64>,
+}
+
+pub(crate) fn epic_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<EpicBind>> {
+    let mut out: Option<EpicBind> = None;
+    for r in binds_of(gh, n)? {
+        if let Record::Bind {
+            plan,
+            item,
+            task: None,
+            epic: None,
+            tasks,
+            ..
+        } = r
+        {
+            let b = out.get_or_insert(EpicBind {
+                plan,
+                item,
+                tasks: vec![],
+            });
+            b.tasks.extend(tasks);
+        }
+    }
+    Ok(out)
+}
+
+/// A task's binding: the first trusted bind's epic, item and task.
+fn task_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<(u64, String, String)>> {
+    Ok(binds_of(gh, n)?.into_iter().find_map(|r| match r {
+        Record::Bind {
+            item,
+            task: Some(t),
+            epic: Some(e),
+            ..
+        } => Some((e, item, t)),
+        _ => None,
+    }))
+}
+
+/// Write the binds of one imported item (modes 7b): each task issue without a trusted bind, and
+/// the epic when it has none or its binds lack some of the tasks.
+pub(crate) fn write_binds(
+    gh: &dyn crate::github::Github,
+    session: &str,
+    plan: &str,
+    item: &crate::core::plan::Item,
+    epic: u64,
+    tasks: &[(String, u64)],
+) -> Result<()> {
+    let bind = |task: Option<&str>, e: Option<u64>, tasks: Vec<u64>| Record::Bind {
+        session: session.into(),
+        plan: plan.into(),
+        item: item.id.clone(),
+        task: task.map(String::from),
+        epic: e,
+        tasks,
+    };
+    for (t, n) in tasks {
+        if task_bind(gh, *n)?.is_none() {
+            gh.add_comment(*n, &bind(Some(t), Some(epic), vec![]).to_line())?;
+        }
+    }
+    let have = epic_bind(gh, epic)?;
+    let known = have.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
+    let missing: Vec<u64> = tasks
+        .iter()
+        .map(|t| t.1)
+        .filter(|n| !known.contains(n))
+        .collect();
+    if have.is_none() || !missing.is_empty() {
+        gh.add_comment(epic, &bind(None, None, missing).to_line())?;
+    }
+    Ok(())
 }
 
 /// The `budget_feature` knob of the default branch's `.bosun/bosun.toml`, as wave and heal read it.
@@ -64,6 +153,8 @@ struct Source {
     budget: f64,
     item: Option<String>,
     plan: Option<(String, crate::core::plan::Plan)>,
+    /// The tasks the epic's trusted bind lists.
+    tasks: Vec<u64>,
 }
 
 fn source(app: &App, epic: u64) -> Result<Source> {
@@ -71,7 +162,12 @@ fn source(app: &App, epic: u64) -> Result<Source> {
     let body = gh.get_issue(epic)?.map(|e| e.body_text().to_string());
     let body = body.unwrap_or_default();
     let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
-    let (file, item) = (epic_plan(&body), epic_item(&body));
+    let bind = epic_bind(gh, epic)?;
+    let tasks = bind.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
+    let (file, item) = match bind {
+        Some(b) => (Some(b.plan), Some(b.item)),
+        None => (epic_plan(&body), epic_item(&body)),
+    };
     let Some(f) = file else {
         // No marker: one task's worth, which a dummy issue cannot inflate.
         let budget = feature_estimate(1, per_task);
@@ -79,6 +175,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             budget,
             item,
             plan: None,
+            tasks,
         });
     };
     let branch = crate::app::default_branch(gh)?;
@@ -96,6 +193,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             budget,
             item,
             plan: Some((f, p)),
+            tasks,
         }),
         _ => Err(BosunError::needs_human(
             format!(
@@ -115,7 +213,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
 pub(crate) fn feature_guard(
     app: &App,
     epic: u64,
-    task: Option<(&crate::core::meta::TaskMeta, bool)>,
+    task: Option<(&TaskMeta, bool)>,
 ) -> Result<Option<Value>> {
     let knob = match knob_from_default(app.gh.as_ref()) {
         Ok(k) => k,
@@ -170,7 +268,7 @@ pub(crate) fn feature_guard(
             return Ok(None);
         }
     }
-    let (spent, budget) = (feature_spend(app, epic, &all)?, src.budget);
+    let (spent, budget) = (feature_spend(app, epic, &all, &src.tasks)?, src.budget);
     let warn = |level: &str| {
         Ok(Some(
             json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),
@@ -187,6 +285,23 @@ pub(crate) fn feature_guard(
             ),
             spent,
         )),
+    }
+}
+
+/// The guard of task issue `n`: its trusted bind (epic, item, task), when it has one, replaces
+/// the body's, so editing the body cannot move or drop the task.
+pub(crate) fn task_guard(app: &App, n: u64, m: &TaskMeta, mainfix: bool) -> Result<Option<Value>> {
+    let gh = app.gh.as_ref();
+    if knob_from_default(gh).is_ok_and(|k| k == BudgetFeature::Off) {
+        return Ok(None);
+    }
+    let mut m = m.clone();
+    if let Some((epic, item, task)) = task_bind(gh, n)? {
+        (m.epic, m.item, m.task) = (Some(epic), item, task);
+    }
+    match m.epic {
+        Some(e) => feature_guard(app, e, Some((&m, mainfix))),
+        None => Ok(None),
     }
 }
 
