@@ -18,21 +18,27 @@ pub struct HeadCi {
     pub at: Option<Timestamp>,
 }
 
-/// Only completed `ci-ok` runs of the Actions app; `None` when the commit has none.
+/// Completed runs of the Actions app only. A head is red when a `ci-ok` run failed and another
+/// job of the same commit failed too: a cancelled run (a newer push) or a draft fails `ci-ok`
+/// alone and is no pushed head. `None` when the commit has neither a green nor a red `ci-ok`.
 pub fn ci_head(runs: &[CiRun]) -> Option<HeadCi> {
-    let mine: Vec<&CiRun> = runs
-        .iter()
-        .filter(|r| r.name == "ci-ok" && r.app == TRUSTED_APP && r.completed)
+    let mine: Vec<&CiRun> = (runs.iter())
+        .filter(|r| r.app == TRUSTED_APP && r.completed)
         .collect();
-    let failing = |r: &&CiRun| {
+    let red = |r: &&&CiRun| {
         matches!(
             r.conclusion.as_deref(),
             Some("failure" | "timed_out" | "startup_failure")
         )
     };
-    (!mine.is_empty()).then(|| HeadCi {
-        failing: mine.iter().any(failing),
-        at: mine.iter().filter_map(|r| r.at).max(),
+    let (ok, jobs): (Vec<&CiRun>, Vec<&CiRun>) = mine.into_iter().partition(|r| r.name == "ci-ok");
+    let failing = ok.iter().any(|r| red(&r)) && jobs.iter().any(|r| red(&r));
+    let green = ok
+        .iter()
+        .any(|r| r.conclusion.as_deref() == Some("success"));
+    (failing || green).then(|| HeadCi {
+        failing,
+        at: ok.iter().filter_map(|r| r.at).max(),
     })
 }
 

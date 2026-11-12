@@ -11,7 +11,7 @@ use super::MetricsArgs;
 use super::risk_check::owner_logins;
 use crate::app::{App, Result, default_branch, is_writer, spend_notes, task_meta, trusted_notes};
 use crate::core::budget_report::{facts, merge_spend};
-use crate::core::cost::round_usd;
+use crate::core::cost::{revert_target, round_usd};
 use crate::core::meta::closing_issues;
 use crate::core::metrics::{CiRun, HeadCi, ci_head, owner_rules, p50, revert_of};
 use crate::core::mode::{BrakeWindow, brake};
@@ -54,12 +54,14 @@ fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
     let repo = app.ctx.repo.to_string();
     let mut out = Vec::new();
     for pull in gh.list_pulls_updated_since(&since.to_string())? {
-        if !pull.head_repo.eq_ignore_ascii_case(&repo) {
-            continue;
-        }
+        // A fork's heads are not ours to count; its merge into main is.
         let mut heads = Vec::new();
-        for sha in gh.pull_commits(pull.number)? {
-            heads.extend(ci(gh, &sha)?);
+        if pull.head_repo.eq_ignore_ascii_case(&repo) {
+            for sha in gh.pull_commits(pull.number)? {
+                heads.extend(ci(gh, &sha)?);
+            }
+        } else if pull.merged_at.is_none() {
+            continue;
         }
         let main_red = match (&pull.merged_at, &pull.merge_commit_sha) {
             (Some(_), Some(sha)) => ci(gh, sha)?.is_some_and(|h| h.failing),
@@ -92,7 +94,8 @@ fn brake_window(app: &App, facts: &[Facts], since: Timestamp) -> Result<BrakeWin
         let merged = ts(&f.pull.merged_at).filter(|t| *t >= since);
         w.main_red += u32::from(merged.is_some() && f.main_red);
         if merged.is_some()
-            && revert_of(&f.pull.body).is_some()
+            // The branch name cannot be edited after the merge; the body can.
+            && (revert_target(&f.pull.head_ref).is_some() || revert_of(&f.pull.body).is_some())
             && is_writer(app.gh.as_ref(), &f.pull.user)?
         {
             w.reverts += 1;
@@ -135,19 +138,18 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
             || in_days(&f.pull.closed_at)
     }) {
         threads.insert(f.pull.number);
-        let Some(task) = closing_issues(&f.pull.body).first().copied() else {
-            continue;
-        };
-        threads.insert(task);
+        let task = closing_issues(&f.pull.body).first().copied();
+        threads.extend(task);
         let Some(at) = ts(&f.pull.merged_at).filter(|t| *t >= start) else {
             continue;
         };
         merged += 1;
-        usd += facts(&merge_spend(
-            spend_notes(gh, task)?,
-            spend_notes(gh, f.pull.number)?,
-        ))
-        .2;
+        let task_spend = match task {
+            Some(t) => spend_notes(gh, t)?,
+            None => Vec::new(),
+        };
+        usd += facts(&merge_spend(task_spend, spend_notes(gh, f.pull.number)?)).2;
+        let Some(task) = task else { continue };
         let epic = gh
             .get_issue(task)?
             .and_then(|i| task_meta(&i))

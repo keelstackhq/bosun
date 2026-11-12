@@ -15,14 +15,32 @@ fn ok(c: &str, at: i64) -> CiRun {
     run("ci-ok", "github-actions", true, c, Some(at))
 }
 
+fn job(c: &str) -> CiRun {
+    run("ci", "github-actions", true, c, None)
+}
+
 #[test]
 fn a_later_green_rerun_does_not_erase_a_failure() {
-    let h = ci_head(&[ok("failure", 10), ok("success", 20)]).unwrap();
+    let h = ci_head(&[
+        job("failure"),
+        ok("failure", 10),
+        job("success"),
+        ok("success", 20),
+    ]);
+    let h = h.unwrap();
     assert!(h.failing);
     assert_eq!(h.at, Some(Timestamp(20)));
     for c in ["timed_out", "startup_failure"] {
-        assert!(ci_head(&[ok(c, 1)]).unwrap().failing, "{c}");
+        assert!(ci_head(&[job(c), ok(c, 1)]).unwrap().failing, "{c}");
     }
+}
+
+#[test]
+fn a_cancelled_or_draft_head_is_no_pushed_head() {
+    assert!(ci_head(&[job("cancelled"), ok("failure", 1)]).is_none());
+    assert!(ci_head(&[ok("failure", 1)]).is_none());
+    let other = run("ci", "other-app", true, "failure", None);
+    assert!(ci_head(&[other, ok("failure", 1)]).is_none());
 }
 
 #[test]
@@ -31,8 +49,13 @@ fn only_completed_ci_ok_runs_of_actions_count() {
     assert!(ci_head(&[run("ci-ok", "other-app", true, "failure", Some(1))]).is_none());
     assert!(ci_head(&[run("lint", "github-actions", true, "failure", Some(1))]).is_none());
     assert!(ci_head(&[run("ci-ok", "github-actions", false, "failure", Some(1))]).is_none());
-    for c in ["cancelled", "skipped", "neutral", "success"] {
-        assert!(!ci_head(&[ok(c, 1)]).unwrap().failing, "{c}");
+    assert!(
+        !ci_head(&[job("failure"), ok("success", 1)])
+            .unwrap()
+            .failing
+    );
+    for c in ["cancelled", "skipped", "neutral"] {
+        assert!(ci_head(&[job("failure"), ok(c, 1)]).is_none(), "{c}");
     }
 }
 

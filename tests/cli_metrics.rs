@@ -15,6 +15,12 @@ fn merged(fake: &FakeGithub, n: u64, at: &str) {
     }
 }
 
+/// A real red head: the `ci` job failed, so `ci-ok` failed.
+fn red(fake: &FakeGithub, sha: &str) {
+    fake.check_run_by(sha, "ci", "failure", ACTIONS);
+    fake.check_run_by(sha, "ci-ok", "failure", ACTIONS);
+}
+
 fn pr(fake: &FakeGithub, n: u64, body: &str, heads: &[&str]) {
     fake.pull(n, &format!("PR {n}"), &format!("feat/{n}"), body);
     fake.pull_commit_shas(n, heads);
@@ -33,7 +39,7 @@ fn two_red_mains(fake: &FakeGithub) {
     for n in [10, 11] {
         pr(fake, n, "", &[]);
         merged(fake, n, "2026-11-10T10:00:00Z");
-        fake.check_run_by(&format!("m{n}"), "ci-ok", "failure", ACTIONS);
+        red(fake, &format!("m{n}"));
     }
 }
 
@@ -59,12 +65,17 @@ fn two_red_main_merges_trip_the_brake_and_no_main_red_issue_is_read() {
 fn a_green_rerun_still_counts_and_other_sources_do_not() {
     let fake = FakeGithub::start();
     pr(&fake, 20, "", &["h20"]);
-    fake.check_run_by("h20", "ci-ok", "failure", ACTIONS);
+    red(&fake, "h20");
     fake.check_run_by("h20", "ci-ok", "success", ACTIONS);
     pr(&fake, 21, "", &["h21"]);
     fake.check_run_by("h21", "ci-ok", "failure", "some-other-app");
     pr(&fake, 22, "", &["h22"]);
     fake.status("h22", "ci-ok", "failure", "red");
+    // A newer push cancelled the run, or a draft: `ci-ok` fails alone, no pushed head.
+    pr(&fake, 23, "", &["h23a", "h23b"]);
+    fake.check_run_by("h23a", "ci", "cancelled", ACTIONS);
+    fake.check_run_by("h23a", "ci-ok", "failure", ACTIONS);
+    fake.check_run_by("h23b", "ci-ok", "failure", ACTIONS);
     let d = metrics(&fake, &[]);
     assert_eq!(
         d["red_ci"],
@@ -93,6 +104,22 @@ fn only_a_writers_revert_marker_counts() {
     assert_eq!(d["brake"]["on"], true);
 }
 
+#[test]
+fn a_revert_branch_counts_after_its_marker_is_edited_away() {
+    let fake = FakeGithub::start();
+    for n in [33, 34] {
+        fake.pull(
+            n,
+            "Revert",
+            &format!("bosun/revert-{n}"),
+            "body edited, marker gone",
+        );
+        merged(&fake, n, "2026-11-11T10:00:00Z");
+    }
+    let d = metrics(&fake, &[]);
+    assert_eq!(d["brake"]["window"]["reverts"], 2, "{d}");
+}
+
 fn run_in(fake: &FakeGithub, mode: Option<&str>) -> Value {
     let dir = tempfile::tempdir().unwrap();
     if let Some(m) = mode {
@@ -115,7 +142,7 @@ fn run_in(fake: &FakeGithub, mode: Option<&str>) -> Value {
 fn the_knob_follows_the_mode_and_a_red_rate_trips_steady_only() {
     let fake = FakeGithub::start();
     pr(&fake, 40, "", &["h40"]);
-    fake.check_run_by("h40", "ci-ok", "failure", ACTIONS);
+    red(&fake, "h40");
     pr(&fake, 41, "", &["h41"]);
     fake.check_run_by("h41", "ci-ok", "success", ACTIONS);
     let g = run_in(&fake, None);
@@ -189,7 +216,7 @@ fn cost_lead_time_touches_and_blocks() {
     merged(&fake, 21, "2026-11-05T00:00:00Z");
     merged(&fake, 22, "2026-11-04T12:00:00Z");
     pr(&fake, 23, &risk(0, &["R-gate"]), &["h23"]);
-    fake.check_run_by("h23", "ci-ok", "failure", ACTIONS);
+    red(&fake, "h23");
     fake.pull_set(23, "state", json!("closed"));
     fake.pull_set(23, "closed_at", json!("2026-11-06T00:00:00Z"));
     pr(&fake, 24, &risk(0, &["R-gate"]), &[]); // open: skipped
