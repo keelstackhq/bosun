@@ -180,7 +180,12 @@ digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha
     rules: [str], title: str}], asks: [{issue: int, answer: str}], bypass: [{pr: int, why: str}],
     budget_asks: [any], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
     dropped: [{pr: int, why: str}], unknown: [str]};
-metrics = {};
+metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str],
+    window: {days: int, main_red: int, reverts: int, failing_heads: int, pushed_heads: int}},
+    red_ci: {failing_heads: int, pushed_heads: int, rate_pct: num | null}, merged: int,
+    cost_per_merged_usd: num | null, lead_time_p50_hours: num | null, epics: int,
+    owner_touches: int, owner_touches_per_day: num,
+    blocks: [{rule: str, blocks: int, caught: int, passed: int}]};
 wave tick = {};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
     commands?: {[str]: any}, ts?: str};

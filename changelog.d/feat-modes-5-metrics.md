@@ -1,0 +1,1 @@
+- `bosun metrics [--days N]` prints red-CI rate, the brake (`data.brake`), cost per merged PR, lead time, owner touches and blocks per owner rule from GitHub; `--propose` is plan PR 8
