@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 7d · epic index on the registry issue closes the hidden-rival residual

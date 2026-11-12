@@ -176,6 +176,60 @@ pub(crate) fn write_binds(
     Ok(())
 }
 
+/// The registry issue's first trusted `epic-index` for (plan, item): the registry issue, its
+/// comment id and the epic. `None` without a registry issue or an index.
+fn epic_index(
+    gh: &dyn crate::github::Github,
+    plan: &str,
+    item: &str,
+) -> Result<Option<(u64, u64, u64)>> {
+    let Some((reg, notes)) = registry::load(gh)? else {
+        return Ok(None);
+    };
+    Ok(notes.iter().find_map(|c| match parse_record(&c.body)? {
+        Record::EpicIndex {
+            plan: p,
+            item: i,
+            epic,
+            ..
+        } if same_path(&p, plan) && i == item => Some((reg, c.id, epic)),
+        _ => None,
+    }))
+}
+
+/// Write the epic index of one imported item on the registry issue (modes 7d) unless it has
+/// one; a first index naming another epic is forged or moved. No registry issue: nothing is
+/// written, and the guard refuses until `bosun plan amend` runs after a session has joined.
+pub(crate) fn write_index(
+    gh: &dyn crate::github::Github,
+    session: &str,
+    plan: &str,
+    item: &str,
+    epic: u64,
+) -> Result<()> {
+    match epic_index(gh, plan, item)? {
+        Some((reg, id, e)) if e != epic => Err(BosunError::needs_human(
+            format!("the epic index of {plan}/{item} names #{e}, not #{epic} (forged or moved)"),
+            format!(
+                "the owner deletes the index comment {id} on the registry issue #{reg}, then reruns `bosun plan amend {plan}`"
+            ),
+        )),
+        Some(_) => Ok(()),
+        None => {
+            if let Some((reg, _)) = registry::load(gh)? {
+                let r = Record::EpicIndex {
+                    session: session.into(),
+                    plan: plan.into(),
+                    item: item.into(),
+                    epic,
+                };
+                gh.add_comment(reg, &r.to_line())?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// The `budget_feature` knob of the default branch's `.bosun/bosun.toml`, as wave and heal read it.
 pub(crate) fn knob_from_default(gh: &dyn crate::github::Github) -> Result<BudgetFeature> {
     let branch = crate::app::default_branch(gh)?;
@@ -292,42 +346,25 @@ pub(crate) fn feature_guard(
     };
     let all = app.gh.list_issues(&[], IssueState::All)?;
     if src.plan.is_some() {
-        let gh = app.gh.as_ref();
-        let (plan, item) = (file, item);
-        let area = src.plan.as_ref().and_then(|(_, p)| {
-            p.items
-                .iter()
-                .find(|i| i.id == item)
-                .map(|i| format!("bosun:area/{}", i.area))
-        });
-        // Candidates are found by marker or area label, not by what a body says now: the
-        // rival is whoever's first bind names this plan and item.
-        let candidate = |i: &&Issue| {
-            i.number < epic
-                && (i.body_text().contains("<!-- bosun:epic")
-                    || i.labels.iter().any(|l| Some(l) == area.as_ref()))
+        // The registry's first trusted index names the canonical epic of this plan item.
+        let (canon, id) = match epic_index(app.gh.as_ref(), file, item)? {
+            Some((_, id, c)) => (Some(c), id),
+            None => (None, 0),
         };
-        for i in all.iter().filter(candidate) {
-            let rival =
-                epic_bind(gh, i.number)?.filter(|b| same_path(&b.plan, plan) && b.item == item);
-            if let Some(b) = rival {
-                let n = i.number;
-                let (msg, fix) = if i.state == "closed" {
-                    (
-                        format!("a lower epic #{n} (closed) still holds the bind of {plan}/{item}"),
-                        format!(
-                            "the owner deletes its bind comment {}, or reopens #{n} if it is the real one",
-                            b.id
-                        ),
-                    )
-                } else {
-                    (
-                        format!("a lower issue #{n} is already the epic of {plan}/{item}"),
-                        format!(
-                            "the owner deletes the forged bind (on #{n} or #{epic}) and reruns `bosun plan amend {plan}`"
-                        ),
-                    )
-                };
+        match canon {
+            Some(c) if c == epic => {}
+            Some(c) => {
+                let msg = format!("#{c} is the epic of {file}/{item}, not #{epic}");
+                let fix = format!(
+                    "work under #{c}; if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}`"
+                );
+                return Err(refuse(msg, fix, 0.0));
+            }
+            None => {
+                let msg = format!("{file}/{item} has no epic index on the registry issue");
+                let fix = format!(
+                    "the orchestrator runs `bosun plan amend {file}` (writes the epic index)"
+                );
                 return Err(refuse(msg, fix, 0.0));
             }
         }

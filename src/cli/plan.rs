@@ -1473,6 +1473,7 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 .collect();
             let plan = imp.plan_path.clone();
             super::budget::write_binds(imp.gh, &session, &plan, item, e, &made)?;
+            super::budget::write_index(imp.gh, &session, &plan, &item.id, e)?;
         }
         imp.promote(&epic, &pslot, &slots)?;
     }
