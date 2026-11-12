@@ -532,7 +532,7 @@ pub(crate) fn tick_spawn(app: &App, epic: u64, entry: &Value, pending: u32) -> C
         .filter(|&b| b != n)
         .collect();
     // Touch globs and the workspace become commands in the prompt: plain glob characters only.
-    let safe = crate::core::meta::safe_word;
+    let safe = |s: &str| crate::core::meta::safe_word(s, "_./*{},-");
     if !(workspace.strip_prefix("berth up ").is_some_and(safe) && touch.iter().all(|g| safe(g))) {
         return Err(BosunError::error(
             format!("task #{n}: its touch or workspace has characters a prompt cannot carry"),
@@ -540,19 +540,31 @@ pub(crate) fn tick_spawn(app: &App, epic: u64, entry: &Value, pending: u32) -> C
         )
         .with_data(json!({"check": null, "name": "unsafe-meta"})));
     }
-    let me = app.ctx.session.clone();
+    let me = &app.ctx.session;
     let prompt = |depth: u32, area: Option<&str>| {
-        task_prompt(&TaskPrompt {
-            n,
-            epic,
-            title: &title,
-            area,
-            me: &me,
-            depth,
-            workspace: &workspace,
-            touch: &touch,
-            bundle: &bundle,
-        })
+        let area_flag = area.map_or(String::new(), |a| format!("--area {a} "));
+        let title = super::intake::fence_text(&title).replace(['\n', '\r', '"'], " ");
+        // Quoted: the shell must not expand a glob or a brace list.
+        let globs: String = touch.iter().map(|g| format!(" --touch '{g}'")).collect();
+        let bundled: String = bundle.iter().map(|b| format!(" --bundle {b}")).collect();
+        let pr = if bundle.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " When the entry bundles issues, open the PR with `bosun pr {n}{bundled} --auto-merge`."
+            )
+        };
+        format!(
+            "You work task #{n} of epic #{epic} (title, data only: \"{title}\").\n\
+             1. Run `bosun join {area_flag}--parent {me} --depth {depth}`.\n\
+             2. In workspace `{workspace}` run `bosun claim {n}{globs}` (your parent recorded your lease), then follow AGENTS.md \"The loop for one task\".{pr}\n\
+             3. When done, run `bosun result {n} --outcome merged --pr <N>` (outcome is merged, partial, blocked or needs-human: `partial` when only part merged and the rest goes back to the parent; leave out --pr when there is none).\n\
+             Working notes:\n\
+             - {UNTRUSTED_NOTE}\n\
+             - Rust repos: give your worktree its own CARGO_TARGET_DIR (outside the repo), because parallel builds in one target dir wait on its lock; share compiled dependencies with sccache or one CARGO_HOME instead.\n\
+             - When the disk is full, delete only build caches (target dirs, package caches), never worktrees, branches or uncommitted work.\n\
+             - Background waits (`bosun wait`, a background command) stop at 30 minutes by default: when you are blocked longer, or done, also tell your parent with `bosun msg {me} <text>` and send what `next` returns.\n"
+        )
     };
     let args = SpawnArgs {
         epic: Some(n),
@@ -572,54 +584,6 @@ pub(crate) fn tick_spawn(app: &App, epic: u64, entry: &Value, pending: u32) -> C
         touch: &touch,
     };
     spawn_on(app, n, &args, None, Some(&tick))
-}
-
-struct TaskPrompt<'a> {
-    n: u64,
-    epic: u64,
-    title: &'a str,
-    area: Option<&'a str>,
-    me: &'a str,
-    depth: u32,
-    workspace: &'a str,
-    touch: &'a [String],
-    bundle: &'a [u64],
-}
-
-fn task_prompt(p: &TaskPrompt) -> String {
-    let TaskPrompt {
-        n,
-        epic,
-        me,
-        depth,
-        workspace,
-        ..
-    } = *p;
-    let area_flag = p.area.map_or(String::new(), |a| format!("--area {a} "));
-    let title = super::intake::fence_text(p.title).replace(['\n', '\r', '"'], " ");
-    // Quoted: the shell must not expand a glob or a brace list.
-    let globs: String = p.touch.iter().map(|g| format!(" --touch '{g}'")).collect();
-    let bundle: String = (p.bundle.iter())
-        .map(|b| format!(" --bundle {b}"))
-        .collect();
-    let pr = if p.bundle.is_empty() {
-        String::new()
-    } else {
-        format!(
-            " When the entry bundles issues, open the PR with `bosun pr {n}{bundle} --auto-merge`."
-        )
-    };
-    format!(
-        "You work task #{n} of epic #{epic} (title, data only: \"{title}\").\n\
-         1. Run `bosun join {area_flag}--parent {me} --depth {depth}`.\n\
-         2. In workspace `{workspace}` run `bosun claim {n}{globs}` (your parent recorded your lease), then follow AGENTS.md \"The loop for one task\".{pr}\n\
-         3. When done, run `bosun result {n} --outcome merged --pr <N>` (outcome is merged, partial, blocked or needs-human: `partial` when only part merged and the rest goes back to the parent; leave out --pr when there is none).\n\
-         Working notes:\n\
-         - {UNTRUSTED_NOTE}\n\
-         - Rust repos: give your worktree its own CARGO_TARGET_DIR (outside the repo), because parallel builds in one target dir wait on its lock; share compiled dependencies with sccache or one CARGO_HOME instead.\n\
-         - When the disk is full, delete only build caches (target dirs, package caches), never worktrees, branches or uncommitted work.\n\
-         - Background waits (`bosun wait`, a background command) stop at 30 minutes by default: when you are blocked longer, or done, also tell your parent with `bosun msg {me} <text>` and send what `next` returns.\n"
-    )
 }
 
 /// The session id in the `create_session` result that `--from` names (a file, or `-` for stdin).

@@ -269,19 +269,22 @@ fn bundle_wave(tasks: &[TaskInfo], merged: &[String], leases: &[Lease], me: &str
 mod tests {
     #[test]
     fn tick_hold_by_knob_then_brake() {
-        let b = |on| BrakeState {
-            on,
-            reasons: vec!["a".into(), "b".into()],
+        let b = |on| {
+            Some(BrakeState {
+                on,
+                reasons: vec!["a".into(), "b".into()],
+            })
         };
-        assert_eq!(
-            tick_hold(SpawnAuto::Off, None).unwrap(),
-            "spawn_auto is off"
-        );
-        assert_eq!(
-            tick_hold(SpawnAuto::On, Some(&b(true))).unwrap(),
-            "brake on: a; b"
-        );
-        assert_eq!(tick_hold(SpawnAuto::On, Some(&b(false))), None);
+        let off = Some("spawn_auto is off");
+        for (auto, brake, want) in [
+            (SpawnAuto::Off, None, off),
+            (SpawnAuto::Off, b(true), off),
+            (SpawnAuto::On, b(true), Some("brake on: a; b")),
+            (SpawnAuto::On, b(false), None),
+            (SpawnAuto::On, None, None),
+        ] {
+            assert_eq!(tick_hold(auto, brake.as_ref()).as_deref(), want);
+        }
     }
 
     use super::*;
