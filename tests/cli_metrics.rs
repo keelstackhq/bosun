@@ -195,29 +195,50 @@ fn zero_days_is_usage() {
     assert_eq!(code, 2, "{v}");
 }
 
+const RULES: &str = "[[rule]]\nid = \"R-docs\"\nwhy = \"d\"\npaths = [\"docs/**\"]\n\n\
+    [[rule]]\nid = \"R-api\"\nwhy = \"a\"\npaths = [\"api/**\"]\n\n\
+    [[rule]]\nid = \"R-web\"\nwhy = \"w\"\npaths = [\"web/**\"]\n\n\
+    [[rule]]\nid = \"R-gov\"\nwhy = \"g\"\npaths = [\".bosun/**\"]\n";
+
+fn waiting(fake: &FakeGithub, sha: &str, ids: &str) {
+    let d = format!("high risk, owner approval needed: {ids}");
+    fake.status(sha, "risk-check", "failure", &d);
+    fake.status(sha, "risk-check", "success", "approved by the owner");
+}
+
 #[test]
-fn propose_lists_rules_with_ten_blocks_and_no_catch_but_never_the_floor() {
+fn propose_counts_trusted_risk_check_rules_of_prs_merged_on_their_first_head() {
     let fake = FakeGithub::start();
-    // PRs 31-40 merged on the first head: R-deps, R-gov and R-bundle (built in, not in the
-    // risk.toml) block 10 times each, R-gov twice in one note. PR 30 was re-pushed (caught)
-    // and blocked by R-ci only; PR 41 is open.
-    for n in 30..=41u64 {
-        let (rules, heads): (&[&str], Vec<String>) = match n {
-            30 => (&["R-ci"], vec!["h30".into(), "h30b".into()]),
-            _ => (
-                &["R-deps", "R-gov", "R-gov", "R-bundle"],
-                vec![format!("h{n}")],
-            ),
+    fake.content(".bosun/risk.toml", "main", RULES);
+    // PRs 31-40 merged on their first head. Trusted risk-check: R-docs on all 10 (twice on
+    // 40), R-api on 31-39, R-gov (floor) on all. Their bodies claim R-web: never trusted.
+    for n in 31..=40u64 {
+        let h = format!("h{n}");
+        pr(&fake, n, &risk(0, &["R-web"]), &[&h]);
+        fake.pull_head_sha(n, &h);
+        merged(&fake, n, "2026-11-05T00:00:00Z");
+        fake.check_run_by(&h, "ci-ok", "success", ACTIONS);
+        let ids = if n == 40 {
+            "R-docs, R-gov, R-docs"
+        } else {
+            "R-docs, R-api, R-gov"
         };
-        let heads: Vec<&str> = heads.iter().map(String::as_str).collect();
-        pr(&fake, n, &risk(0, rules), &heads);
-        if n < 41 {
-            merged(&fake, n, "2026-11-05T00:00:00Z");
-        }
-        for h in &heads {
-            fake.check_run_by(h, "ci-ok", "success", ACTIONS);
-        }
+        waiting(&fake, &h, ids);
+        let forged = "high risk, owner approval needed: R-web";
+        fake.status_by(&h, "risk-check", "failure", forged, "mallory");
     }
+    // A fork's merged PR has no ci-ok facts: its R-api block is not a pass.
+    fake.pull_from_fork(42, "fix", "other/fork");
+    merged(&fake, 42, "2026-11-05T00:00:00Z");
+    waiting(&fake, "sha42", "R-api");
+    // Re-pushed and open PRs: caught, and not counted.
+    pr(&fake, 43, "", &["h43", "h43b"]);
+    fake.pull_head_sha(43, "h43b");
+    merged(&fake, 43, "2026-11-05T00:00:00Z");
+    waiting(&fake, "h43b", "R-web");
+    pr(&fake, 44, "", &["h44"]);
+    fake.pull_head_sha(44, "h44");
+    waiting(&fake, "h44", "R-api");
     let d = metrics(&fake, &["--propose"]);
     assert_eq!(d["curator_loosen"], "off", "{d}");
     assert_eq!(
@@ -229,7 +250,7 @@ fn propose_lists_rules_with_ten_blocks_and_no_catch_but_never_the_floor() {
     assert_eq!(p.len(), 1, "{d}");
     assert_eq!(
         (p[0]["rule"].as_str(), p[0]["blocks"].as_u64()),
-        (Some("R-deps"), Some(10))
+        (Some("R-docs"), Some(10))
     );
     assert_eq!(p[0]["prs"], json!((31..=40).collect::<Vec<u64>>()));
     let body = p[0]["body"].as_str().unwrap();
@@ -237,19 +258,27 @@ fn propose_lists_rules_with_ten_blocks_and_no_catch_but_never_the_floor() {
         body.contains("- #31\n") && body.contains("- #40\n"),
         "{body}"
     );
-    assert!(p[0]["title"].as_str().unwrap().contains("R-deps"));
-    // A rule listed twice blocks a PR once; plain metrics never carry proposals.
-    let plain = metrics(&fake, &[]);
-    assert!(plain.get("proposals").is_none());
-    let gov = plain["blocks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|b| b["rule"] == "R-gov");
-    assert_eq!(gov.unwrap()["blocks"], 10);
+    assert!(p[0]["title"].as_str().unwrap().contains("R-docs"));
+    // Plain metrics never carry proposals.
+    assert!(metrics(&fake, &[]).get("proposals").is_none());
     // A window that ends before the merges finds nothing.
     let none = metrics(&fake, &["--propose", "--days", "5"]);
     assert_eq!(none["proposals"], json!([]), "{none}");
+}
+
+#[test]
+fn propose_with_built_in_rules_finds_nothing_every_built_in_is_on_the_floor() {
+    let fake = FakeGithub::start();
+    for n in 31..=40u64 {
+        let h = format!("h{n}");
+        pr(&fake, n, "", &[&h]);
+        fake.pull_head_sha(n, &h);
+        merged(&fake, n, "2026-11-05T00:00:00Z");
+        fake.check_run_by(&h, "ci-ok", "success", ACTIONS);
+        waiting(&fake, &h, "R-deps, R-ci-review, R-bundle");
+    }
+    let d = metrics(&fake, &["--propose"]);
+    assert_eq!(d["proposals"], json!([]), "{d}");
 }
 
 fn task(fake: &FakeGithub, n: u64, epic: u64, claimed: &str, usd: f64) {

@@ -10,6 +10,7 @@ use serde_json::json;
 use super::MetricsArgs;
 use super::risk_check::{enrolled_keys, owner_logins};
 use crate::app::{App, Result, default_branch, is_writer, spend_notes, task_meta, trusted_notes};
+use crate::core::approve::Stat;
 use crate::core::approve::{
     ApproverKey, Form, Role, signature_lines, signed_message, signed_message_v2, verify_ed25519,
 };
@@ -17,13 +18,14 @@ use crate::core::budget_report::{facts, merge_spend};
 use crate::core::cost::{revert_target, round_usd};
 use crate::core::meta::closing_issues;
 use crate::core::metrics::{
-    CiRun, HeadCi, RuleBlocks, ci_head, owner_rules, p50, proposals, revert_of,
+    CiRun, HeadCi, RuleBlocks, ci_head, owner_rules, p50, proposals, revert_of, waiting_rules,
 };
 use crate::core::mode::{BrakeWindow, brake};
 use crate::core::records::{Record, parse_record};
 use crate::core::risk::Rules;
 use crate::ctx::RepoId;
 use crate::github::b64;
+use crate::github::gate::gate_history;
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
@@ -160,37 +162,73 @@ fn owner_signed(body: &str, keys: &[ApproverKey], repo: &RepoId, pr: u64) -> boo
 
 type Blocks = BTreeMap<String, (Vec<u64>, u32, u32)>;
 
-/// Blocks per rule since `start`: the blocked PRs, then caught (closed unmerged or re-pushed)
-/// and passed (merged on the first head) counts. Open PRs are not counted yet.
-fn rule_blocks(all: &[Facts], start: Timestamp) -> Blocks {
+/// `(caught, passed)` of a PR closed or merged since `start`: caught = closed unmerged or
+/// re-pushed, passed = merged on the first head. `None` for the rest (open, older).
+fn outcome(f: &Facts, start: Timestamp) -> Option<(bool, bool)> {
     let in_days = |t: &Option<String>| ts(t).is_some_and(|t| t >= start);
+    let p = &f.pull;
+    match (p.merged_at.is_some(), p.state == "closed") {
+        (false, true) if in_days(&p.closed_at) => Some((true, false)),
+        (true, _) if in_days(&p.merged_at) => Some((f.heads.len() > 1, f.heads.len() == 1)),
+        _ => None,
+    }
+}
+
+/// Blocks per rule since `start` from the Risk notes: the blocked PRs, caught and passed.
+fn rule_blocks(all: &[Facts], start: Timestamp) -> Blocks {
     let mut blocks = Blocks::new();
     for f in all {
-        let p = &f.pull;
-        let merged = p.merged_at.is_some();
-        let (caught, passed) = match (merged, p.state == "closed") {
-            (false, true) if in_days(&p.closed_at) => (true, false),
-            (true, _) if in_days(&p.merged_at) => (f.heads.len() > 1, f.heads.len() == 1),
-            _ => continue,
+        let Some((caught, passed)) = outcome(f, start) else {
+            continue;
         };
         // A rule listed twice in one note blocks that PR once.
-        for rule in owner_rules(&p.body).into_iter().collect::<BTreeSet<_>>() {
+        for rule in owner_rules(&f.pull.body)
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+        {
             let e = blocks.entry(rule).or_default();
-            e.0.push(p.number);
+            e.0.push(f.pull.number);
             (e.1, e.2) = (e.1 + u32::from(caught), e.2 + u32::from(passed));
         }
     }
     blocks
 }
 
+/// As [`rule_blocks`], but the rule ids come from the trusted risk-check posts on the PR's
+/// last head (the body is agent-editable), and only passed PRs are listed.
+fn trusted_blocks(gh: &dyn Github, all: &[Facts], start: Timestamp) -> Result<Vec<RuleBlocks>> {
+    let mut by: BTreeMap<String, RuleBlocks> = BTreeMap::new();
+    for f in all {
+        let Some((caught, passed)) = outcome(f, start) else {
+            continue;
+        };
+        let history: Vec<Stat> = gate_history(gh, &f.pull.head_sha)?
+            .into_iter()
+            .map(|s| Stat {
+                context: s.context,
+                state: s.state,
+                description: s.description,
+                creator: s.creator,
+            })
+            .collect();
+        for rule in waiting_rules(&history) {
+            let e = by.entry(rule.clone()).or_insert(RuleBlocks {
+                rule,
+                passed: Vec::new(),
+                caught: 0,
+            });
+            e.passed.extend(passed.then_some(f.pull.number));
+            e.caught += u32::from(caught);
+        }
+    }
+    Ok(by.into_values().collect())
+}
+
 /// `--propose`: the rules a curator may propose to loosen, each with a draft PR title and body.
 /// Read-only; the curator Routine opens the PR (R-weaken, so the owner decides).
 fn propose(app: &App, days: u32) -> CmdResult {
     let start = app.ctx.now.minus_secs(i64::from(days) * DAY);
-    let all: Vec<RuleBlocks> = rule_blocks(&collect(app, start)?, start)
-        .into_iter()
-        .map(|(rule, (prs, caught, _))| RuleBlocks { rule, prs, caught })
-        .collect();
+    let all = trusted_blocks(app.gh.as_ref(), &collect(app, start)?, start)?;
     // Only rules the base `.bosun/risk.toml` defines can be loosened there (not built-ins
     // such as R-bundle, not ids of a stale or forged note).
     let gh = app.gh.as_ref();
