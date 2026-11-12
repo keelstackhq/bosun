@@ -1133,7 +1133,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         "registry issue",
         match &reg {
             Ok(Some(_)) => None,
-            Ok(None) => Some("no open issue labelled bosun:registry".into()),
+            Ok(None) => Some("no issue labelled bosun:registry".into()),
             Err(e) => Some(e.message.clone()),
         },
         format!(
