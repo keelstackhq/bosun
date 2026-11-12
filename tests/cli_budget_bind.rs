@@ -56,7 +56,9 @@ fn feature(bound: bool, usd: f64) -> FakeGithub {
         r#"{{"bosun":"join","session":"session_test","origin":"spawned","depth":1,"expires":"{LATER}"}}"#
     );
     fake.comment(1, &join);
-    fake.content("plans/x.md", "main", &plan_text("100"));
+    // T2 is a mainfix task in the plan.
+    let mf = |t: String| t.replace("touch: src/b/**", "touch: src/b/**\n  kind: mainfix");
+    fake.content("plans/x.md", "main", &mf(plan_text("100")));
     fake.content("plans/y.md", "main", &plan_text("9999"));
     fake.issue(10, "Epic", &["bosun:state/ready", "bosun:area/core"], EPIC);
     let body = |e: &str| if bound { task_body("") } else { task_body(e) };
@@ -276,4 +278,44 @@ fn a_task_bound_to_a_later_epic_that_copies_the_real_item_is_refused() {
     fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":20"#));
     fake.comment(20, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
     guarded(&fake, dir.path(), "13");
+}
+
+#[test]
+fn a_bound_task_with_its_meta_block_deleted_is_still_guarded() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    set_body(&fake, 11, "no meta any more");
+    guarded(&fake, dir.path(), "11");
+    let (code, v) = run_in(&fake, dir.path(), &["spawn", "11"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+}
+
+#[test]
+fn a_hand_made_task_cannot_borrow_the_id_of_a_closed_mainfix_task() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    task_issue(&fake, 13, "T2", "");
+    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":10"#));
+    fake.comment(10, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
+    fake.close_issue_as(13, NOW, "not_planned");
+    task_issue(&fake, 14, "T2", "10");
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "14"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("spent"),
+        "refused by the budget, not the exemption: {msg}"
+    );
+}
+
+#[test]
+fn a_lower_epic_closed_as_duplicate_does_not_block_the_new_one() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    fake.close_issue_as(10, NOW, "duplicate");
+    fake.issue(20, "Epic", &["bosun:state/ready"], EPIC);
+    task_issue(&fake, 13, "T2", "20");
+    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":20"#));
+    fake.comment(20, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 0, "{v}");
 }

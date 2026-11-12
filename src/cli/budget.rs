@@ -281,7 +281,8 @@ pub(crate) fn feature_guard(
     if src.bound && src.plan.is_some() {
         let gh = app.gh.as_ref();
         let (plan, item) = (file, item);
-        for i in all.iter().filter(|i| i.number < epic) {
+        let dup = |i: &Issue| i.state_reason.as_deref() == Some("duplicate");
+        for i in all.iter().filter(|i| i.number < epic && !dup(i)) {
             let names = epic_plan(i.body_text()).is_some_and(|p| p == plan)
                 && epic_item(i.body_text()).is_some_and(|x| x == item);
             let first = if names {
@@ -290,9 +291,13 @@ pub(crate) fn feature_guard(
                 None
             };
             if first.is_some_and(|b| (b.plan.as_str(), b.item.as_str()) == (plan, item)) {
-                let msg = format!("epic #{epic} and #{} both claim {item} of {plan}", i.number);
+                let msg = format!(
+                    "a lower issue #{} is already the epic of {plan}/{item}",
+                    i.number
+                );
                 let fix = format!(
-                    "the owner deletes the forged bind comment on #{epic} or on the task bound to it, then reruns `bosun plan amend {plan}`"
+                    "the owner deletes the forged bind (on #{} or #{epic}) and reruns `bosun plan amend {plan}`",
+                    i.number
                 );
                 return Err(refuse(msg, fix, 0.0));
             }
@@ -301,20 +306,19 @@ pub(crate) fn feature_guard(
     if let Some((m, _)) = task {
         // Each issue once: body metas of the epic and the tasks its bind lists, by (item, task).
         let live =
-            |i: &&Issue| !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"));
-        let mut same: Vec<u64> = vec![];
-        for i in all.iter().filter(live) {
+            |i: &Issue| !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"));
+        let (mut every, mut alive) = (0, 0);
+        for i in &all {
             let by_body = task_meta(i)
                 .is_some_and(|x| x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task));
-            let listed = src.tasks.contains(&i.number);
-            let by_bind = listed
+            let by_bind = src.tasks.contains(&i.number)
                 && task_bind(app.gh.as_ref(), i.number)?
                     .is_some_and(|(_, e, it, t)| (e, &it, &t) == (epic, &m.item, &m.task));
             if by_body || by_bind {
-                same.push(i.number);
+                (every, alive) = (every + 1, alive + usize::from(live(i)));
             }
         }
-        if same.len() > 1 {
+        if alive > 1 {
             let msg = format!("{}/{} names more than one task issue", m.item, m.task);
             let fix = "the orchestrator closes the extra issues as duplicates".to_string();
             return Err(refuse(msg, fix, 0.0));
@@ -335,7 +339,8 @@ pub(crate) fn feature_guard(
                 .map(|t| t.kind.clone())
         });
         // Only the plan exempts: a body or label kind is editable.
-        if kind.is_some_and(|k| k == "mainfix") {
+        // The id must be unique over every state, closed duplicates included: no borrowing.
+        if every == 1 && kind.is_some_and(|k| k == "mainfix") {
             return Ok(None);
         }
     }
@@ -361,13 +366,32 @@ pub(crate) fn feature_guard(
 
 /// The guard of task issue `n`: its trusted bind (epic, item, task), when it has one, replaces
 /// the body's, so editing the body cannot move or drop the task.
-pub(crate) fn task_guard(app: &App, n: u64, m: &TaskMeta, mainfix: bool) -> Result<Option<Value>> {
+pub(crate) fn task_guard(
+    app: &App,
+    n: u64,
+    m: Option<&TaskMeta>,
+    mainfix: bool,
+) -> Result<Option<Value>> {
     let gh = app.gh.as_ref();
     if knob_from_default(gh).is_ok_and(|k| k == BudgetFeature::Off) {
         return Ok(None);
     }
-    let mut m = m.clone();
-    if let Some((id, epic, item, task)) = task_bind(gh, n)? {
+    let bind = task_bind(gh, n)?;
+    // No task meta and no task bind: only a bound epic has a budget to guard.
+    if m.is_none() && bind.is_none() {
+        return match epic_bind(gh, n)? {
+            Some(_) => feature_guard(app, n, None),
+            None => Ok(None),
+        };
+    }
+    // A deleted meta block is rebuilt from the bind.
+    let built = bind.as_ref().and_then(|(_, _, i, t)| {
+        serde_json::from_value::<TaskMeta>(json!({"item": i, "task": t})).ok()
+    });
+    let Some(mut m) = m.cloned().or(built) else {
+        return Ok(None);
+    };
+    if let Some((id, epic, item, task)) = bind {
         let eb = epic_bind(gh, epic)?;
         let plan = eb
             .as_ref()
@@ -421,10 +445,12 @@ pub(crate) fn spawn_guard(
     if epic_bind(gh, n)?.is_some() {
         return feature_guard(app, n, None);
     }
-    match meta {
-        Some(m) => task_guard(app, n, m, mainfix),
-        None if mainfix => Ok(None),
-        None => feature_guard(app, n, None),
+    if meta.is_some() || task_bind(gh, n)?.is_some() {
+        return task_guard(app, n, meta, mainfix);
+    }
+    match mainfix {
+        true => Ok(None),
+        false => feature_guard(app, n, None),
     }
 }
 
