@@ -81,6 +81,7 @@ fn bosun_mode_prints_knobs_offline() {
 
 #[test]
 fn stubs_exit_1_with_a_fix() {
+    #[allow(clippy::single_element_loop)] // heal left in PR 3a; wave tick leaves in PR 6
     for (args, pr) in [(vec!["wave", "tick", "7"], "6")] {
         let out = bosun().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{args:?}");
