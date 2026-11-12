@@ -1,0 +1,1 @@
+- 2026-11-12 · channel agents.md: push as its own command or with src:dst
