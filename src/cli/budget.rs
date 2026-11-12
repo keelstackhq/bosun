@@ -350,6 +350,21 @@ pub(crate) fn feature_guard(
             "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
     let all = app.gh.list_issues(&[], IssueState::All)?;
+    // The registry's first trusted index names the canonical epic of this plan item; another
+    // epic is refused even for mainfix, a missing index only after the mainfix exemption.
+    let mut canon = None;
+    if src.plan.is_some()
+        && let Some((_, id, c)) = epic_index(app.gh.as_ref(), file, item)?
+    {
+        if c != epic {
+            let msg = format!("#{c} is the epic of {file}/{item}, not #{epic}");
+            let fix = format!(
+                "work under #{c} (reopen it if it is closed); if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}`"
+            );
+            return Err(refuse(msg, fix, 0.0));
+        }
+        canon = Some(c);
+    }
     if let Some((n, m, _)) = task {
         // Each issue once: body metas of the epic and the tasks its bind lists, by (item, task).
         let live =
@@ -395,29 +410,11 @@ pub(crate) fn feature_guard(
             return Ok(None);
         }
     }
-    if src.plan.is_some() {
-        // The registry's first trusted index names the canonical epic of this plan item.
-        let (canon, id) = match epic_index(app.gh.as_ref(), file, item)? {
-            Some((_, id, c)) => (Some(c), id),
-            None => (None, 0),
-        };
-        match canon {
-            Some(c) if c == epic => {}
-            Some(c) => {
-                let msg = format!("#{c} is the epic of {file}/{item}, not #{epic}");
-                let fix = format!(
-                    "work under #{c} (reopen it if it is closed); if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}`"
-                );
-                return Err(refuse(msg, fix, 0.0));
-            }
-            None => {
-                let msg = format!("{file}/{item} has no epic index on the registry issue");
-                let fix = format!(
-                    "the orchestrator runs `bosun plan amend {file}` (writes the epic index)"
-                );
-                return Err(refuse(msg, fix, 0.0));
-            }
-        }
+    if src.plan.is_some() && canon.is_none() {
+        let msg = format!("{file}/{item} has no epic index on the registry issue");
+        let fix =
+            format!("the orchestrator runs `bosun plan amend {file}` (writes the epic index)");
+        return Err(refuse(msg, fix, 0.0));
     }
     let (spent, budget) = (feature_spend(app, epic, &all, &src.tasks)?, src.budget);
     let warn = |level: &str| {

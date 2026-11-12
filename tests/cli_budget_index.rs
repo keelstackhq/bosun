@@ -198,6 +198,30 @@ fn amend_backfills_an_index_and_the_task_then_claims() {
 }
 
 #[test]
+fn a_mainfix_id_copy_under_a_rival_epic_is_refused() {
+    let (dir, fake) = rival();
+    let two = "- T1: a\n  touch: src/a/**\n- T2: b\n  touch: src/b/**\n  kind: mainfix";
+    let plan = plan_text().replace("- T1: a\n  touch: src/a/**", two);
+    fake.content("plans/x.md", "main", &plan);
+    let b = r#"<!-- bosun:task {"item":"M1","epic":20,"task":"T2","touch":["src/b/**"]} -->"#;
+    fake.issue(13, "T2", &["bosun:state/ready"], b);
+    let t =
+        r#"{"bosun":"bind","session":"s","plan":"plans/x.md","item":"M1","task":"T2","epic":20}"#;
+    fake.comment(13, t);
+    let e = r#"{"bosun":"bind","session":"s","plan":"plans/x.md","item":"M1","tasks":[13]}"#;
+    fake.comment(20, e);
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("work under #10"),
+        "{v}"
+    );
+}
+
+#[test]
 fn two_plans_with_the_same_item_id_do_not_refuse_each_other() {
     let (dir, fake) = rival();
     fake.content("plans/y.md", "main", &plan_text());
