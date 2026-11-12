@@ -313,11 +313,11 @@ pub(crate) fn feature_guard(
                 epic_bind(gh, i.number)?.filter(|b| same_path(&b.plan, plan) && b.item == item);
             if let Some(b) = rival {
                 let n = i.number;
-                let (msg, fix) = if i.state_reason.as_deref() == Some("duplicate") {
+                let (msg, fix) = if i.state == "closed" {
                     (
-                        format!("epic #{n} (closed as duplicate) is still bound to {plan}/{item}"),
+                        format!("a lower epic #{n} (closed) still holds the bind of {plan}/{item}"),
                         format!(
-                            "reopen it, or the owner deletes its bind comment {} to let #{epic} take over",
+                            "the owner deletes its bind comment {}, or reopens #{n} if it is the real one",
                             b.id
                         ),
                     )

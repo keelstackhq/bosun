@@ -382,7 +382,7 @@ fn a_duplicate_closed_epic_that_is_still_bound_is_named_as_the_cause() {
         v["error"]["fix"].as_str().unwrap(),
     );
     assert!(
-        msg.contains("closed as duplicate") && fix.contains("reopen it"),
+        msg.contains("(closed) still holds the bind") && fix.contains("reopens #"),
         "{v}"
     );
 }
