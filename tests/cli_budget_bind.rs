@@ -360,6 +360,8 @@ fn a_rival_is_found_by_the_real_epics_bind_whatever_its_body_says() {
     for body in [
         "Epic with no marker".to_string(),
         EPIC.replace("plans/x.md", "plans/y.md"),
+        // A fake task block appended to the real epic does not hide it.
+        format!(r#"{EPIC}<!-- bosun:task {{"item":"M9","task":"T1"}} -->"#),
     ] {
         let (dir, fake) = (cfg_dir(), feature(true, 100.0));
         set_body(&fake, 10, &body);

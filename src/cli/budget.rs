@@ -304,7 +304,6 @@ pub(crate) fn feature_guard(
         // rival is whoever's first bind names this plan and item.
         let candidate = |i: &&Issue| {
             i.number < epic
-                && task_meta(i).is_none()
                 && (i.body_text().contains("<!-- bosun:epic")
                     || i.labels.iter().any(|l| Some(l) == area.as_ref()))
         };
