@@ -66,6 +66,35 @@ pub fn to_stop(level: Level, members: &[Member], caller: &str, now: Timestamp) -
     ids
 }
 
+/// The feature budget estimate: `tasks` times `per_task_usd` (the cost-per-line estimate is later).
+pub fn feature_estimate(tasks: usize, per_task_usd: f64) -> f64 {
+    tasks as f64 * per_task_usd
+}
+
+/// How much of one feature's budget is used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Feature {
+    /// Below 80 %, or no usable budget.
+    Under,
+    /// 80 % or more.
+    Warn,
+    /// 100 % or more.
+    Over,
+}
+
+/// The level of `spent` against a feature `budget`. A budget that is not positive and finite is off.
+pub fn feature_level(spent: f64, budget: f64) -> Feature {
+    if !budget.is_finite() || budget <= 0.0 {
+        Feature::Under
+    } else if spent >= budget {
+        Feature::Over
+    } else if spent >= BUDGET_STOP * budget {
+        Feature::Warn
+    } else {
+        Feature::Under
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

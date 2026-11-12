@@ -53,6 +53,11 @@ The state machine, stop rules and resume.
    - `area:` (required) the area label, `^[a-z0-9-]+$`. One area has one orchestrator.
    - `depends:` (optional) comma-separated item IDs, or `seed`. Every ID must exist in the plan,
      and the graph has no cycles.
+   - `budget_usd:` (optional) a positive number: the feature budget of the item in US dollars. The
+     budget is read from this plan on the default branch (the `budget_usd` in the epic marker is
+     display only, written when the epic is created). Without it, a mode whose `budget_feature` knob
+     is not off uses tasks times `per_task_usd` (a cost-per-changed-line estimate comes later).
+     Once only. To raise it, change the item in a PR to the default branch.
    - `shape:` (optional) `single`, `split` or `auto` (default). `single` makes the whole item
      one PR; `split` makes one small PR per task. See "Choosing the PR shape".
 4. Text between the fields and `### Tasks` is the item's description; it goes into the epic body.

@@ -1,0 +1,1 @@
+- `budget_usd:` on a plan item sets a feature budget; `bosun claim` and `bosun spawn` warn at 80 % and exit 5 at 100 % under the `ask` knob (modes item 6).

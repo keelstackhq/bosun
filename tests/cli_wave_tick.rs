@@ -34,6 +34,13 @@ fn build(config: Option<&str>, epic_body: &str, touch11: &str) -> FakeGithub {
     let fake = FakeGithub::start();
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     fake.comment(1, &join("session_test", None, 1));
+    // The feature budget guard needs a marker that names the item.
+    let marker = r#"<!-- bosun:epic {"item":"M1"} -->"#;
+    let epic_body = if epic_body.is_empty() {
+        marker
+    } else {
+        epic_body
+    };
     fake.issue(10, "Epic", &["bosun:state/claimed"], epic_body);
     task(&fake, 11, "M1/T1", touch11);
     task(&fake, 12, "M1/T2", "src/b/**");
