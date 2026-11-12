@@ -6,6 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::core::approve::Policy;
+use crate::core::mode::{Effective, ModeConfig, ModeName};
 use crate::output::BosunError;
 
 pub const CONFIG_FILE: &str = ".bosun/bosun.toml";
@@ -37,6 +38,9 @@ pub struct Config {
     /// `[session]`: Claude Code session settings bosun hands out (spec §5). Release ordering as
     /// for `intake`: set it only once `.bosun/version` pins a release that reads it.
     pub session: Session,
+    /// `[mode]`: a preset and knob overrides. Release ordering as for `intake`.
+    #[serde(skip_serializing_if = "ModeConfig::is_unset")]
+    pub mode: ModeConfig,
 }
 
 /// `[session]`: the auto-compact point `bosun setup-snippet` prints. `autocompact_window`
@@ -126,6 +130,7 @@ impl Default for Config {
             trailers: Trailers::default(),
             checks: Checks::default(),
             session: Session::default(),
+            mode: ModeConfig::default(),
         }
     }
 }
@@ -394,6 +399,22 @@ impl Config {
             }
         }
         c.session.resolve(file)?;
+        if c.mode.policy.is_some() {
+            return Err(BosunError::error(
+                format!("{file}: policy is not a [mode] key"),
+                format!("edit {file}: set [approvals] policy, or remove mode.policy"),
+            ));
+        }
+        let name = c.mode.name.filter(|n| *n != ModeName::Gatekeeper);
+        let off = name.map(|n| format!("mode {:?}", n.as_str()));
+        if let Some(what) = off.or(c.mode.off_default().map(|k| format!("mode.{k} override"))) {
+            return Err(BosunError::error(
+                format!("{file}: {what} is not active yet"),
+                format!(
+                    "edit {file}: remove it or set the gatekeeper value; lighter modes and overrides arrive with their weaken check (plan PR 1b)"
+                ),
+            ));
+        }
         let k = &c.checks;
         if k.mode != CheckMode::Statuses {
             let id_ok = k.app_id.is_some_and(|i| i > 0);
@@ -423,6 +444,11 @@ impl Config {
             }
         }
         Ok(c)
+    }
+
+    /// The knobs `[mode]` resolves to (explicit > preset > default).
+    pub fn mode_effective(&self) -> Effective {
+        crate::core::mode::resolve(&self.mode)
     }
 
     /// Read `<root>/.bosun/bosun.toml`; a missing file gives the defaults.
