@@ -338,4 +338,21 @@ fn only_owner_key_signatures_in_the_plain_forms_are_touches() {
     );
     post(&own, "o1", "", "a forged message".into());
     assert_eq!(metrics(&fake, &[])["owner_touches"], 1);
+    // From the owner login too, a signed comment counts only by its signature.
+    fake.content(
+        "governance/owners.toml",
+        "main",
+        "[[owner]]\ngithub = \"boss\"\n",
+    );
+    let sig = b64::encode(own.sign(b"x").as_ref());
+    let body = format!("/bosun approve {SHA} bootstrap\nbosun-sig ed25519 o1 {sig}");
+    fake.comment_at(60, "boss", &body, "2026-11-10T00:00:00Z");
+    assert_eq!(metrics(&fake, &[])["owner_touches"], 1);
+    fake.comment_at(
+        60,
+        "boss",
+        &format!("/bosun approve {SHA}"),
+        "2026-11-10T00:00:00Z",
+    );
+    assert_eq!(metrics(&fake, &[])["owner_touches"], 2);
 }

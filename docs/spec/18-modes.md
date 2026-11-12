@@ -64,7 +64,8 @@ marker. Main-red issues are not read: closing one cannot lift the brake. Main re
 are the authoritative trips. The rate trip is advisory: PR heads are PR-controlled, and known
 gaps lower it (never main red or reverts): a rebase of a PR branch drops its old commits
 from the list, a hand-cancel followed by a new push is excused, and a workflow on a PR branch
-can post same-app `ci-ok` runs that dilute the rate.
+can post same-app `ci-ok` runs that dilute the rate, and PR code run by the `ci` job can make
+its own checks pass.
 
 ### Revert (plan PR 3b)
 

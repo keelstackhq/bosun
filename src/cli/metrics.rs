@@ -226,7 +226,10 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     let mut touches = 0;
     for n in &threads {
         for c in gh.list_comments(*n)? {
+            // A body with a signature line is judged by its signature alone.
+            let signed = c.body.lines().any(|l| l.trim().starts_with("bosun-sig "));
             let by_owner = owners.iter().any(|o| o.eq_ignore_ascii_case(&c.user))
+                && !signed
                 && (c.body.starts_with("/bosun approve")
                     || matches!(parse_record(&c.body), Some(Record::Answer { .. })));
             let counts = in_days(&Some(c.created_at.clone()))
