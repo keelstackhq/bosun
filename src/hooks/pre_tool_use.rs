@@ -148,14 +148,17 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
 
 /// `push_gates = "push"` (spec §7): each pushed ref's tree needs a passing stamp for every
 /// ready gate, read in the checkout where git runs. A repo whose config is unset or `ready`
-/// pushes as before; a push from a directory the guard cannot tell is judged by the hook's repo.
+/// pushes as before; a push whose checkout the guard cannot tell (interpreter code, a `cd`
+/// it cannot read, `--git-dir`) is refused when the hook directory's repo is in push mode.
 fn push_gates(
     dir: &Path,
     command: &str,
     read: &dyn Fn(&str) -> Option<Script>,
     default: &str,
 ) -> Option<String> {
-    for push in pushes(command, read, default) {
+    for mut push in pushes(command, read, default) {
+        // `--git-dir` and `--work-tree` name a checkout `--show-toplevel` does not report.
+        push.dir = push.dir.filter(|d| d.iter().all(|o| !o.starts_with("--")));
         let opts = push.dir.clone().unwrap_or_default();
         let at = |args: &[&str]| {
             let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();

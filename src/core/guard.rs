@@ -1,6 +1,7 @@
 //! What the PreToolUse hook refuses (spec §4 edit hook, label-lock; D13 merge-lock). Pure: the
 //! hook passes the tool call, the repo-relative path, the current branch and the live leases.
 
+use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -508,25 +509,43 @@ pub struct Push {
 /// Where the walk reports each push it lets through.
 pub(crate) type PushSink<'a> = &'a dyn Fn(Push);
 
+/// The sinks of shell pushes (their `cd`s are tracked) and of pushes found in interpreter code
+/// (whose directory the scan cannot tell).
+#[derive(Clone, Copy)]
+pub(crate) struct Sinks<'a> {
+    pub shell: PushSink<'a>,
+    pub code: PushSink<'a>,
+}
+
 /// Every `git push` of `command` that the merge-lock allows, in shell scripts it runs and code
-/// it runs too (the same walk as the merge-lock). A refused command may list fewer.
+/// it runs too (the same walk as the merge-lock). A refused command may list fewer. Interpreter
+/// code is scanned as words, so a push found only there is one push whose directory is unknown;
+/// when the shell walk found pushes, the code scan (which sees the same text) adds none.
 pub fn pushes(
     command: &str,
     read: &dyn Fn(&str) -> Option<Script>,
     default_branch: &str,
 ) -> Vec<Push> {
-    let found = std::cell::RefCell::new(Vec::new());
-    let sink = |p: Push| found.borrow_mut().push(p);
+    let (shell, code) = (RefCell::new(Vec::new()), Cell::new(false));
+    let sinks = Sinks {
+        shell: &|p: Push| shell.borrow_mut().push(p),
+        code: &|_: Push| code.set(true),
+    };
     // The branch only decides refusals, which `tool_rules` already made.
     let branch_at = |_: &[String]| Some(String::new());
-    let _ = check(command, &branch_at, default_branch, 0, Some(&sink));
-    let _ = interp::script_walk(command, read, &branch_at, default_branch, Some(&sink));
-    // A shell script is walked as shell and scanned as code: keep each push once.
+    let _ = check(command, &branch_at, default_branch, 0, Some(&sinks));
+    let _ = interp::script_walk(command, read, &branch_at, default_branch, Some(&sinks));
     let mut out: Vec<Push> = Vec::new();
-    for p in found.into_inner() {
+    for p in shell.into_inner() {
         if !out.contains(&p) {
             out.push(p);
         }
+    }
+    if out.is_empty() && code.get() {
+        out.push(Push {
+            dir: None,
+            srcs: Vec::new(),
+        });
     }
     out
 }
@@ -536,13 +555,13 @@ fn check(
     branch_at: BranchAt,
     default_branch: &str,
     depth: usize,
-    sink: Option<PushSink>,
+    sinks: Option<&Sinks>,
 ) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some(too_deep());
     }
     for inner in nested(command) {
-        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1, sink) {
+        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1, sinks) {
             return Some(why);
         }
     }
@@ -550,7 +569,7 @@ fn check(
         dir: Some(&[]),
         branch_at,
         default_branch,
-        sink,
+        sink: sinks.map(|s| s.code),
     };
     if let Some(why) = interp::inline_rule(&split_heredocs(command).0, &here) {
         return Some(why);
@@ -590,7 +609,7 @@ fn check(
                 dir: dir.as_deref(),
                 branch_at,
                 default_branch,
-                sink,
+                sink: sinks.map(|s| s.shell),
             };
             if let Some(why) = merge_rule(&words, segment, &target) {
                 return Some(format!(
@@ -2677,6 +2696,9 @@ fn version_like(r: &str) -> bool {
     })
 }
 
+/// `git push` flags whose value is the next word.
+const PUSH_VALUE_FLAGS: [&str; 5] = ["-o", "--push-option", "--receive-pack", "--exec", "--repo"];
+
 fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     let default_branch = target.default_branch;
     // git's global options: `-C dir`, `--git-dir`, `--work-tree` move the target; `-c k=v`,
@@ -2751,12 +2773,17 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             {
                 return Some("push of every branch or a glob refspec");
             }
-            let refs: Vec<&str> = rest
-                .iter()
-                .copied()
-                .filter(|a| !a.starts_with('-'))
-                .skip(1)
-                .collect();
+            // The remote, then refspecs; the value of a flag that takes one is neither.
+            let mut words = Vec::new();
+            let mut it = rest.iter().copied();
+            while let Some(a) = it.next() {
+                if PUSH_VALUE_FLAGS.contains(&a) {
+                    it.next();
+                } else if !a.starts_with('-') {
+                    words.push(a);
+                }
+            }
+            let refs: Vec<&str> = words.into_iter().skip(1).collect();
             if refs
                 .iter()
                 .any(|r| r.starts_with('+') || r.starts_with(':') || r.contains("refs/tags/"))
@@ -2859,6 +2886,15 @@ mod tests {
             ),
             ("git -C \"$D\" push origin x", vec![push(None, &["x"])]),
             ("git push --force origin x", vec![]),
+            ("git push -o ci.skip origin", vec![push(Some(&[]), &[])]),
+            (
+                "git push --repo origin -o x origin y",
+                vec![push(Some(&[]), &["y"])],
+            ),
+            (
+                "python3 -c \"run(['git','push','origin','x'], check=True)\"",
+                vec![push(None, &[])],
+            ),
         ];
         for (cmd, want) in cases {
             assert_eq!(pushes(cmd, &none, "main"), want, "{cmd}");
@@ -2868,6 +2904,22 @@ mod tests {
             pushes("bash ship.sh", &script, "main"),
             vec![push(Some(&[]), &["z"])]
         );
+        // Every push is checked, so an extra one (the outer walk does not parse quotes) only
+        // adds a check; the nested `sh -c` push is read where its `cd` moves it.
+        let nested = pushes("bash -c 'cd ../w && git push origin y'", &none, "main");
+        assert!(
+            nested.contains(&push(Some(&["-C", "../w"]), &["y"])),
+            "{nested:?}"
+        );
+        // The code scan of a shell script adds no push beside the shell walk's.
+        let moved =
+            |p: &str| (p == "ship.sh").then(|| Script::Text("cd ../w\ngit push origin\n".into()));
+        assert_eq!(
+            pushes("bash ship.sh", &moved, "main"),
+            vec![push(Some(&["-C", "../w"]), &[])]
+        );
+        // A flag value is not the remote: a bare push on the default branch stays refused.
+        assert!(bash("git push -o ci.skip origin", "main").is_some());
     }
 
     #[test]

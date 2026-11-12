@@ -137,3 +137,19 @@ fn the_pushed_tree_is_read_where_git_runs_and_from_the_pushed_ref() {
     fs::write(r.path().join("ship.sh"), "git push origin old\n").unwrap();
     assert!(hook(r.path(), "bash ship.sh").is_some());
 }
+
+#[test]
+fn a_push_whose_checkout_cannot_be_told_is_refused_in_push_mode() {
+    let r = repo(Some(STEADY));
+    stamps::stamp_all(r.path());
+    for cmd in [
+        "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat'])\"",
+        "git --git-dir=../w/.git push origin feat",
+    ] {
+        let why = hook(r.path(), cmd).expect(cmd);
+        assert!(why.contains("cannot tell which checkout"), "{why}");
+    }
+    let plain = repo(None);
+    let py = "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat'])\"";
+    assert_eq!(hook(plain.path(), py), None);
+}

@@ -3,7 +3,7 @@
 //! into statements and words, and each `gh`/`git` word is judged like a shell command.
 
 use super::{
-    BranchAt, MAX_DEPTH, MERGE_FIX, PushSink, RUNNERS, SEP, Target, WRAPPERS, base, check, gh_rule,
+    BranchAt, MAX_DEPTH, MERGE_FIX, RUNNERS, SEP, Sinks, Target, WRAPPERS, base, check, gh_rule,
     git_rule, heredoc_at, http_rule, literal_path, nested, shell_words, unwrap_runners,
 };
 
@@ -301,19 +301,19 @@ pub fn script_rules(
     script_walk(command, read, branch_at, default_branch, None)
 }
 
-/// [`script_rules`], reporting each allowed push to `sink`.
+/// [`script_rules`], reporting each allowed push to `sinks`.
 pub(super) fn script_walk(
     command: &str,
     read: &dyn Fn(&str) -> Option<Script>,
     branch_at: BranchAt,
     default_branch: &str,
-    sink: Option<PushSink>,
+    sinks: Option<&Sinks>,
 ) -> Option<String> {
     let target = Target {
         dir: Some(&[]),
         branch_at,
         default_branch,
-        sink,
+        sink: sinks.map(|s| s.code),
     };
     for ScriptPath { path, shell, first } in script_paths(command, 0) {
         // stdin by name, fed by a heredoc: the body is in the command text, which
@@ -335,7 +335,7 @@ pub(super) fn script_walk(
         let line = code.lines().next().unwrap_or("");
         let shell =
             shell || path.ends_with(".sh") || path.ends_with(".bash") || shell_shebang(line);
-        if shell && let Some(why) = check(&code, branch_at, default_branch, MAX_DEPTH / 2, sink) {
+        if shell && let Some(why) = check(&code, branch_at, default_branch, MAX_DEPTH / 2, sinks) {
             return Some(format!("in the script `{path}`: {why}"));
         }
         if let Some(why) = code_rule(&code, &target) {

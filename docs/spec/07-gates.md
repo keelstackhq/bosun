@@ -182,9 +182,15 @@ Gates before push (`[mode] push_gates`, default `ready`; `push` from `steady` up
 the PreToolUse hook refuses a Bash `git push` when the tree of a pushed ref lacks a stamp for
 a ready gate (the stamps `bosun pr --ready` reads, §4); the reason names the missing gates and
 the `for g in ..; do bosun gate $g || break; done` loop. Pushes are found by the merge-lock's
-walk (`core::guard::pushes`: nested commands, shell scripts it runs, interpreter code) and are
-read where git runs: the hook directory moved by `cd dir &&` and `git -C dir`. The pushed ref
-is each refspec source (`HEAD` when none is named); the mode is read from the
-`.bosun/bosun.toml` of that checkout, and a config that is missing or does not parse leaves
-the push to the other locks. A push whose directory the guard cannot tell is refused under
-`push`. `ready`: no change.
+walk (`core::guard::pushes`: nested commands, `sh -c`, the shell scripts it runs) and read
+where git runs: the hook directory moved by `cd dir &&` and `git -C dir`. Each pushed ref is a
+refspec source after the remote (the values of `-o`, `--push-option`, `--receive-pack`,
+`--exec` and `--repo` are skipped), `HEAD` when none is named; mode, gates and stamps come from
+that checkout's `.bosun/bosun.toml`, and a checkout with no config, or one that does not
+parse, pushes as today. A push whose checkout the guard cannot tell (a `cd` it cannot read,
+`--git-dir`, `--work-tree`, or a push found only in interpreter code such as
+`subprocess.run(["git", "push"])`) is refused when the hook directory's repo is in push mode.
+An extra push read from the unparsed outer text of a quoted command only adds a check. Known
+misses: refs pushed by config (`remote.<r>.push`, `push.default = matching`; only `HEAD` is
+checked), `git subtree push` and `git send-pack`, and an interpreter push in a command that
+also has a shell push. `ready`: no change.
