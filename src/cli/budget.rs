@@ -294,23 +294,41 @@ pub(crate) fn feature_guard(
     if src.plan.is_some() {
         let gh = app.gh.as_ref();
         let (plan, item) = (file, item);
-        for i in all.iter().filter(|i| i.number < epic) {
-            let names = epic_plan(i.body_text()).is_some_and(|p| same_path(&p, plan))
-                && epic_item(i.body_text()).is_some_and(|x| x == item);
-            let first = if names {
-                epic_bind(gh, i.number)?
-            } else {
-                None
-            };
-            if first.is_some_and(|b| same_path(&b.plan, plan) && b.item == item) {
-                let msg = format!(
-                    "a lower issue #{} is already the epic of {plan}/{item}",
-                    i.number
-                );
-                let fix = format!(
-                    "the owner deletes the forged bind (on #{} or #{epic}) and reruns `bosun plan amend {plan}`",
-                    i.number
-                );
+        let area = src.plan.as_ref().and_then(|(_, p)| {
+            p.items
+                .iter()
+                .find(|i| i.id == item)
+                .map(|i| format!("bosun:area/{}", i.area))
+        });
+        // Candidates are found by marker or area label, not by what a body says now: the
+        // rival is whoever's first bind names this plan and item.
+        let candidate = |i: &&Issue| {
+            i.number < epic
+                && task_meta(i).is_none()
+                && (i.body_text().contains("<!-- bosun:epic")
+                    || i.labels.iter().any(|l| Some(l) == area.as_ref()))
+        };
+        for i in all.iter().filter(candidate) {
+            let rival =
+                epic_bind(gh, i.number)?.filter(|b| same_path(&b.plan, plan) && b.item == item);
+            if let Some(b) = rival {
+                let n = i.number;
+                let (msg, fix) = if i.state_reason.as_deref() == Some("duplicate") {
+                    (
+                        format!("epic #{n} (closed as duplicate) is still bound to {plan}/{item}"),
+                        format!(
+                            "reopen it, or the owner deletes its bind comment {} to let #{epic} take over",
+                            b.id
+                        ),
+                    )
+                } else {
+                    (
+                        format!("a lower issue #{n} is already the epic of {plan}/{item}"),
+                        format!(
+                            "the owner deletes the forged bind (on #{n} or #{epic}) and reruns `bosun plan amend {plan}`"
+                        ),
+                    )
+                };
                 return Err(refuse(msg, fix, 0.0));
             }
         }

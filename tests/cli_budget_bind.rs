@@ -354,3 +354,35 @@ fn an_open_bound_mainfix_task_claims() {
     let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
     assert_eq!(code, 0, "{v}");
 }
+
+#[test]
+fn a_rival_is_found_by_the_real_epics_bind_whatever_its_body_says() {
+    for body in [
+        "Epic with no marker".to_string(),
+        EPIC.replace("plans/x.md", "plans/y.md"),
+    ] {
+        let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+        set_body(&fake, 10, &body);
+        fake.issue(20, "Rival", &["bosun:state/ready"], EPIC);
+        task_issue(&fake, 21, "T1", "20");
+        guarded(&fake, dir.path(), "21");
+    }
+}
+
+#[test]
+fn a_duplicate_closed_epic_that_is_still_bound_is_named_as_the_cause() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    fake.close_issue_as(10, NOW, "duplicate");
+    fake.issue(20, "Epic", &["bosun:state/ready"], EPIC);
+    task_issue(&fake, 21, "T1", "20");
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "21"]);
+    assert_eq!(code, 5, "{v}");
+    let (msg, fix) = (
+        v["error"]["message"].as_str().unwrap(),
+        v["error"]["fix"].as_str().unwrap(),
+    );
+    assert!(
+        msg.contains("closed as duplicate") && fix.contains("reopen it"),
+        "{v}"
+    );
+}
