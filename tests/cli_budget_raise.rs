@@ -65,15 +65,22 @@ fn run_env(fake: &FakeGithub, now: &str, repo: &str, args: &[&str], stdin: &str)
 
 /// The owner's signed answer of `raise <epic> +<usd>` to a digest made at `now` in `repo`.
 fn signed(fake: &FakeGithub, now: &str, repo: &str, reply: &str) -> String {
+    signed_v(fake, now, repo, reply, 0)
+}
+
+/// As `signed`, for the digest variant `variant`: another shown pair, so another digest id on
+/// the same day.
+fn signed_v(fake: &FakeGithub, now: &str, repo: &str, reply: &str, variant: u32) -> String {
     let dir = tempfile::tempdir().unwrap();
     let key = dir.path().join("k.pem");
     std::fs::write(&key, common::TEST_ED25519_PEM).unwrap();
-    let (_, d) = run_env(fake, now, repo, &["digest"], "");
-    let (head, id) = (
-        d["data"]["header"].as_str().unwrap(),
-        &d["data"]["message_id"],
-    );
-    let input = format!("{head}\n{} {reply}\n", id.as_str().unwrap());
+    let day = &now[..10];
+    let pairs: Vec<String> = (1..=variant).map(|n| format!("{n}@{:040x}", n)).collect();
+    let mut lines = pairs.clone();
+    lines.push(format!("day {day}"));
+    let id = bosun::core::approve::message_id(&lines);
+    let head = format!("/bosun digest {repo} {day} {id} {}", pairs.join(" "));
+    let input = format!("{head}\n{id} {reply}\n");
     let args = ["digest", "--answer", "--sign-key", key.to_str().unwrap()];
     let (code, v) = run_env(fake, now, repo, &args, &input);
     assert_eq!(code, 0, "{v}");
@@ -183,19 +190,29 @@ fn a_forged_raise_comment_adds_nothing_and_gatekeeper_is_untouched() {
 
 /// The record line of the first signed raise of `input`, as `bosun budget raise` would write it.
 fn record_of(input: &str) -> String {
+    record_on(input, "2026-11-12")
+}
+
+fn record_on(input: &str, day: &str) -> String {
     let e = serde_json::from_str::<Value>(input).unwrap()["data"]["raises"][0].clone();
     let m = e["message"].as_str().unwrap();
     let digest = m.split(' ').nth(4).unwrap();
-    json!({"bosun": "raise", "session": "s", "epic": 10, "usd": 50, "digest": digest,
-        "day": "2026-11-12", "key_id": "k1", "message": m, "sig": e["sig"]})
+    let usd = e["usd"].as_u64().unwrap();
+    json!({"bosun": "raise", "session": "s", "epic": 10, "usd": usd, "digest": digest,
+        "day": day, "key_id": "k1", "message": m, "sig": e["sig"]})
     .to_string()
 }
 
 /// A feature with 160 spent: +50 makes the budget 150 (over), a double count would make it 200.
 fn spent_160() -> FakeGithub {
+    spent_more(60)
+}
+
+fn spent_more(extra: u64) -> FakeGithub {
     let fake = feature("booster");
-    let spend = r#"{"bosun":"spend","session":"s","usd":60.0,"at":"2026-11-12T03:00:00Z"}"#;
-    fake.comment(12, spend);
+    let spend =
+        format!(r#"{{"bosun":"spend","session":"s","usd":{extra}.0,"at":"2026-11-12T03:00:00Z"}}"#);
+    fake.comment(12, &spend);
     fake
 }
 
@@ -230,4 +247,82 @@ fn a_recorded_raise_still_counts_after_its_day_has_passed() {
     let later = "2026-11-17T06:00:00Z";
     let (code, v) = run_env(&fake, later, "acme/widget", &["claim", "11"], "");
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn one_raise_a_day_at_record_and_read_time() {
+    let fake = spent_more(40);
+    let a = signed_v(&fake, NOW, "acme/widget", "raise 10 +10", 1);
+    let b = signed_v(&fake, NOW, "acme/widget", "raise 10 +10", 2);
+    assert_eq!(raise(&fake, NOW, &a).0, 0);
+    let (code, v) = raise(&fake, NOW, &b);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["data"]["refused"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("day"),
+        "{v}"
+    );
+    assert_eq!(raises_on(&fake), 1);
+    // Posted by hand, the second one is ignored: 140 spent of 110, not of 120.
+    let fake = spent_more(45);
+    let t = "2026-11-12T07:00:00Z";
+    fake.comment_at(10, "octocat", &record_of(&a), t);
+    fake.comment_at(10, "octocat", &record_of(&b), t);
+    assert_eq!(claim(&fake).0, 5);
+}
+
+#[test]
+fn raises_within_seven_days_are_capped_at_the_base_budget() {
+    // Days 1 and 3 each 0.6 of the base: the second is refused at record time.
+    let (d1, d3) = ("2026-11-10T06:00:00Z", "2026-11-12T06:00:00Z");
+    let fake = feature("booster");
+    let a = signed(&fake, d1, "acme/widget", "raise 10 +60");
+    let b = signed(&fake, d3, "acme/widget", "raise 10 +60");
+    assert_eq!(raise(&fake, d1, &a).0, 0);
+    let (_, v) = raise(&fake, d3, &b);
+    assert!(
+        v["data"]["refused"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("cap"),
+        "{v}"
+    );
+    // By hand the second adds nothing: 170 spent of 160, not of 220.
+    let fake = spent_more(70);
+    fake.comment_at(10, "octocat", &record_on(&a, "2026-11-10"), d1);
+    fake.comment_at(10, "octocat", &record_on(&b, "2026-11-12"), d3);
+    assert_eq!(claim(&fake).0, 5);
+    // Day 1 and day 8, each the whole base: both count (260 spent of 300).
+    let (d1, d8) = ("2026-11-05T06:00:00Z", "2026-11-12T06:00:00Z");
+    let fake = spent_more(160);
+    let a = signed(&fake, d1, "acme/widget", "raise 10 +100");
+    let b = signed(&fake, d8, "acme/widget", "raise 10 +100");
+    for (i, at) in [(&a, d1), (&b, d8)] {
+        let (_, v) = raise(&fake, at, i);
+        assert_eq!(v["data"]["refused"], json!([]), "{v}");
+    }
+    let (code, v) = claim(&fake);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_github_error_exits_1_and_a_rerun_is_safe_and_bad_input_is_refused() {
+    let fake = feature("booster");
+    let input = signed(&fake, NOW, "acme/widget", "raise 10 +50");
+    fake.fail_path("issues/1/comments", 500);
+    let (code, v) = raise(&fake, NOW, &input);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(raises_on(&fake), 0);
+    fake.state.lock().unwrap().fail_paths.clear();
+    assert_eq!(raise(&fake, NOW, &input).0, 0);
+    let (_, again) = raise(&fake, NOW, &input);
+    assert_eq!(raises_on(&fake), 1, "{again}");
+    let bad = r#"[{"key_id":"k1","message":"x","sig":"y"}]"#;
+    let (code, v) = raise(&fake, NOW, bad);
+    assert_eq!(code, 0, "{v}");
+    let r = &v["data"]["refused"][0];
+    assert_eq!((&r["epic"], &r["usd"]), (&Value::Null, &Value::Null));
+    assert_eq!(raise(&fake, NOW, r#"{"data":{}}"#).0, 2);
 }

@@ -419,7 +419,7 @@ pub(crate) fn feature_guard(
     }
     let raised: u64 = super::budget_raise::valid_raises(app, epic, src.budget)?
         .iter()
-        .map(|r| r.1)
+        .map(|r| r.usd)
         .sum();
     let (spent, budget) = (
         feature_spend(app, epic, &all, &src.tasks)?,

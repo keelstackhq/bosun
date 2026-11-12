@@ -60,11 +60,45 @@ fn repo_of(app: &App) -> String {
     format!("{}/{}", r.owner, r.name).to_ascii_lowercase()
 }
 
-/// The valid raises on `epic` as `(digest id, usd)`, each digest once, none over `base`.
-pub(super) fn valid_raises(app: &App, epic: u64, base: f64) -> Result<Vec<(String, u64)>> {
+/// An accepted raise: its digest id, amount and digest day (days since the epoch).
+pub(super) struct Raise {
+    pub digest: String,
+    pub usd: u64,
+    pub day: i64,
+}
+
+fn day_no(day: &str) -> Option<i64> {
+    Some(
+        parse_rfc3339(&format!("{day}T00:00:00Z"))?
+            .0
+            .div_euclid(86_400),
+    )
+}
+
+/// Why a raise of `usd` on `day` is not accepted beside `have`: one raise a day, and the raises
+/// of the days `day + span.0 ..= day + span.1` plus this one stay within the base budget.
+fn capped(have: &[Raise], day: i64, usd: u64, base: f64, span: (i64, i64)) -> Option<String> {
+    if have.iter().any(|h| h.day == day) {
+        return Some("a raise is already counted for that digest day (one a day)".into());
+    }
+    let near: u64 = have
+        .iter()
+        .filter(|h| (day + span.0..=day + span.1).contains(&h.day))
+        .map(|h| h.usd)
+        .sum();
+    ((near + usd) as f64 > base).then(|| {
+        format!(
+            "+{usd} is over the cap: raises within 7 days total ${near}+{usd} against the base budget ${base:.2} (more needs an R-gov plan PR)"
+        )
+    })
+}
+
+/// The valid raises on `epic` in (day, comment) order: verified, one per digest id and per day,
+/// and every 7 days at most the base budget in all.
+pub(super) fn valid_raises(app: &App, epic: u64, base: f64) -> Result<Vec<Raise>> {
     let keys = enrolled_keys(app.gh.as_ref()).unwrap_or_default();
     let repo = repo_of(app);
-    let mut out: Vec<(String, u64)> = Vec::new();
+    let mut found: Vec<(i64, u64, Raise)> = Vec::new();
     for c in trusted_notes(app.gh.as_ref(), epic)? {
         let Some(Record::Raise {
             epic: e,
@@ -78,13 +112,29 @@ pub(super) fn valid_raises(app: &App, epic: u64, base: f64) -> Result<Vec<(Strin
             continue;
         };
         // An unreadable creation time is 1970: the day check fails closed.
-        let at = c.created_at;
         let claim = (epic, usd, key_id.as_str());
-        let Ok(m) = verify(&keys, &repo, at, claim, (&message, &sig)) else {
+        let Ok(m) = verify(&keys, &repo, c.created_at, claim, (&message, &sig)) else {
             continue;
         };
-        if e == epic && usd as f64 <= base && !out.iter().any(|o| o.0 == m.digest) {
-            out.push((m.digest, usd));
+        if let (true, Some(day)) = (e == epic, day_no(&m.day)) {
+            found.push((
+                day,
+                c.id,
+                Raise {
+                    digest: m.digest,
+                    usd,
+                    day,
+                },
+            ));
+        }
+    }
+    found.sort_by_key(|f| (f.0, f.1));
+    let mut out: Vec<Raise> = Vec::new();
+    for (_, _, r) in found {
+        if !out.iter().any(|o| o.digest == r.digest)
+            && capped(&out, r.day, r.usd, base, (-6, 0)).is_none()
+        {
+            out.push(r);
         }
     }
     Ok(out)
@@ -145,19 +195,17 @@ fn one(app: &App, keys: &[ApproverKey], e: &Value) -> Result<Why<(u64, u64, Stri
         )));
     }
     let base = source(app, epic)?.budget;
-    if usd as f64 > base {
-        return Ok(Err(format!(
-            "+{usd} is over the cap: one raise is at most the base budget ${base:.2}"
-        )));
-    }
-    if valid_raises(app, epic, base)?
-        .iter()
-        .any(|h| h.0 == m.digest)
-    {
+    let have = valid_raises(app, epic, base)?;
+    if have.iter().any(|h| h.digest == m.digest) {
         return Ok(Err(format!(
             "digest {} is already counted on #{epic}",
             m.digest
         )));
+    }
+    // Wider than the read-time window, so a raise recorded now is never dropped later.
+    let day = day_no(&m.day).unwrap_or_default();
+    if let Some(why) = capped(&have, day, usd, base, (-6, 6)) {
+        return Ok(Err(why));
     }
     let r = Record::Raise {
         session: app.ctx.session.clone(),

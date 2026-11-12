@@ -89,7 +89,7 @@ again signs the same bytes (`bosun budget raise` records it and counts one messa
 `--sign-key`, or with a key enrolled but not as owner, the raise is in `data.refused`, exit 0,
 approvals unchanged; an unreadable key or approvers file is exit 1, and `--sign-key` without
 `--answer` is exit 2. One reply raises an epic at most once: two amounts for one epic are exit 2.
-A raise counts at most once per (digest id, epic). The orchestrator runs `bosun budget raise --from -` with this output: it checks the signature, repo, epic, day and cap and writes a `raise` record on the epic (spec 05). Other
+A raise counts at most once per (digest id, epic). The orchestrator runs `bosun budget raise --from -` with this output: it checks the signature, repo, epic, day and cap and writes a `raise` record on the epic (spec 05). A raise is only as strong as the key holder's relay: under bootstrap (D-012) the orchestrator's key is enrolled as owner and can sign raises, within the caps of spec 05 (one per digest day, 7 days at most the base budget); the owner removes that by enrolling their own key and dropping the orchestrator's owner role. Other
 reply lines are in `data.unknown`, never guessed. Not yet: needs-human PRs from `heal` (plan PR
 3a) and the "brake on" lead line (plan PR 5).
 
