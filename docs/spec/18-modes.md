@@ -1,6 +1,6 @@
 ## 18. Modes
 
-**Status: parse, policy and weaken check (plan PRs 1a, 1b, 5); the boosters land later.** Design:
+**Status: modes and their boosters are built (plan PRs 1a-8); budget bindings and raise records (PRs 7b, 7c) and bosun's own move to `steady` (PR 9) are open.** Design:
 `docs/superpowers/specs/2026-11-11-modes-booster-design.md`, plan `…/plans/2026-11-11-modes-booster.md`.
 
 ### `[mode]`
@@ -50,8 +50,8 @@ least two PRs were reverted, or the red-CI rate (failing `ci-ok` heads / pushed 
 at least 10 points over the mode's target (steady 30 %, booster 20 %, autonomous 15 %;
 gatekeeper has no target). Nothing is stored. `bosun metrics` computes it on every run
 (`data.brake`, in every mode; `knob` says whether the mode applies it); `bosun mode` stays
-offline and prints `brake: null`; heal, digest and wave tick read it through
-`cli::metrics::window`. Sources: check runs of the GitHub Actions app, on merge commits of
+offline and always prints `brake: null`; `bosun heal` and `bosun wave tick` compute it through
+`cli::metrics::window` (the digest does not read it yet). Sources: check runs of the GitHub Actions app, on merge commits of
 main (what main-health judges) and on the commits of own-branch PRs. A commit with a green or
 red `ci-ok` is a pushed head. A `ci-ok` that failed while no other job of that app failed is
 excused only on a PR commit a newer push superseded (its run was cancelled) and on the head of
@@ -79,7 +79,8 @@ exact-inverse check.
 - `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
   (a task's spend once), lead time p50 per epic, owner touches (an owner's own approve or
   answer, or a plain or after-review signature of an owner-role key) and owner-rule blocks;
-  `brake` over 7 days. `--propose` lands in PR 8.
-- `bosun heal [--pr N]` (PR 3a/3b), `bosun digest [--answer --from F --sign-key PEM]` (PR 4),
-  `bosun wave tick <epic>` (PR 6): registered with their final arguments; until their PR lands
-  each exits 1 with a `fix` naming it.
+  `brake` over 7 days. `--propose` (PR 8) lists the rules a curator may propose to loosen (§6).
+- `bosun heal [--pr N]` (§9), `bosun digest [--answer --from F --sign-key PEM]` (§14) and
+  `bosun wave tick <epic>` (§5): `heal` and `wave tick` do nothing while their knob is off
+  (gatekeeper); `digest` does not read `approvals_batch`, the orchestrator runs it. Quickstart per mode and
+  environment, and how a running repo moves up: `docs/quickstart.md`.

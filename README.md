@@ -136,6 +136,15 @@ variable itself and ignores an environment value. `data.autocompact.local_export
 do not apply it. No hook can start a compaction; the bosun hooks keep the state across it
 (spec §4).
 
+## Modes
+
+`[mode] name` in `.bosun/bosun.toml` sets how much bosun does for you: `gatekeeper` (the default,
+no table needed), `steady` (gates before push, red-PR and red-main help, daily digest), `booster`
+(fast-lane approval, auto spawn, curator proposals) and `autonomous` (auto-merged exact reverts,
+digest-only owner contact). A lighter mode is an owner-approved change. `bosun mode` shows the
+effective knobs, `bosun metrics` the numbers. Setup per mode and environment (CLI, cloud, Slack)
+and the steps for a repo that already runs bosun: [docs/quickstart.md](docs/quickstart.md).
+
 ## Use
 
 ```text
@@ -146,6 +155,8 @@ for g in fmt lint test deps test-integrity; do bosun gate $g || break; done   # 
 bosun pr 42 --ready                    # ready + auto-merge; GitHub merges on green (bosun never merges)
 bosun gate-missed --pr 41              # "Which gate missed this?" issue for an escaped defect (main-red and revert open it too)
 bosun budget report --month 2026-11 --out reports/budget   # every PR of one UTC month, with spend where recorded: stdout JSON, DIR/2026-11.md and .json (read-only)
+bosun mode                             # effective mode, knobs, source of each (offline)
+bosun metrics --days 30                # red-CI rate, lead time, cost, owner touches, brake
 bosun budget record --pr 41 --pr 42 --from -   # session cost (get_session on stdin), split over the PRs it made; --usd N overrides
 ```
 
@@ -227,6 +238,7 @@ else console.log(`exit ${r.exit_code}, next step: ${r.error.fix}`); // e.g. 3: p
   `BOSUN_HALT=1` also halts, where the token can read it.
 
 - Update bosun: [docs/update.md](docs/update.md)
+- Modes, quickstart and migration: [docs/quickstart.md](docs/quickstart.md)
 - Adopt bosun on an existing repo (also cloud sessions and Claude Tag): [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md)
 - CI minutes: [docs/ci-minutes.md](docs/ci-minutes.md)
 - Design: [docs/spec.md](docs/spec.md)
