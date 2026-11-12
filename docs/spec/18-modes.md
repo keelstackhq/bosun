@@ -1,6 +1,6 @@
 ## 18. Modes
 
-**Status: modes and their boosters are built (plan PRs 1a-8); budget bindings and raise records (PRs 7b, 7c) and bosun's own move to `steady` (PR 9) are open.** Design:
+**Status: modes and their boosters are built (plan PRs 1a-8); budget bindings and raise records (follow-up PRs in progress) and bosun's own move to `steady` (PR 9) are open.** Design:
 `docs/superpowers/specs/2026-11-11-modes-booster-design.md`, plan `…/plans/2026-11-11-modes-booster.md`.
 
 ### `[mode]`

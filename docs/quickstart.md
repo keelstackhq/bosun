@@ -7,15 +7,16 @@ Spec: [spec §18](spec/18-modes.md). Every command below: `bosun <command> --hel
 | ---- | ----------------------- | ------------- |
 | `gatekeeper` | Today. No helpers. The default without `[mode]`. | as needed |
 | `steady` | Gates before push, red-PR notices, revert PRs on red main, daily digest, feature budget warnings. | ≤ 5 a day |
-| `booster` | Steady plus fast-lane approval (`autonomous` policy), auto spawn, fixer sessions, budget asks, curator proposals. | ≤ 3 a day |
-| `autonomous` | Booster plus auto-merge of exact-inverse reverts; owner talks to bosun through the digest only. | ≤ 1 a day |
+| `booster` | Steady plus fast-lane approval (`autonomous` policy), auto spawn, fixer sessions, budget asks (advisory until budget bindings land; a raise is a plan PR), curator proposals. | ≤ 3 a day |
+| `autonomous` | Booster plus auto-merge of exact-inverse reverts (also needs a clean verdict, and the reverted PR needed no owner); owner talks to bosun through the digest only. | ≤ 1 a day |
 
 Owner steps are marked **[phone]** or **[computer]** (D-009). Everything else an agent does.
 
 ## 0. Set the mode (all modes, all environments)
 
-**[computer]** Pin a release that reads `[mode]` first (`bosun pin --latest --pr`, approve the PR;
-see [update.md](update.md)). The pinned release refuses unknown keys. Then open a PR:
+**[computer]** Needs a published bosun release that reads `[mode]` (owner release). An agent then pins it
+(`bosun pin --latest --pr`, see [update.md](update.md)) and you approve that PR **[phone]**: an older release
+refuses `[mode]` as an unknown key. Then open a PR:
 
 ```toml
 # .bosun/bosun.toml
@@ -65,13 +66,17 @@ refuse a `git push` without gate stamps (`push_gates = "push"`), and every merge
 | Mode | Run in the session |
 | ---- | ------------------ |
 | gatekeeper | `bosun claim <task>` → work → `bosun pr <task>` → local gates → `bosun pr <task> --ready` |
-| steady | Same, but run the gates **before the push**: `for g in fmt lint test deps test-integrity ci-minutes; do bosun gate "$g" \|\| break; done`, then push. Hourly: `bosun heal`. Daily: `bosun digest`. |
+| steady | Same, but run the gates **before the push** (loop below), then push. Hourly: `bosun heal`. Daily: `bosun digest`. |
 | booster | Orchestrator, per epic: `bosun wave tick <epic>` (it returns `create_session` / `archive_session` calls in `next`; you make them, then run `bosun spawn <n> --record --from -` with each result). Plus `bosun heal`, `bosun digest`. |
-| autonomous | Same as booster; `bosun heal` also readies exact-inverse reverts of red main. |
+| autonomous | Same as booster; `bosun heal` also readies exact-inverse reverts of red main (clean verdict in, reverted PR needed no owner). |
+
+```bash
+for g in fmt lint test deps test-integrity ci-minutes; do bosun gate "$g" || break; done
+```
 
 Notes:
 - bosun never calls Claude Code tools (D29). Read `next`, make each call, nothing else.
-- Digest reply, on the machine that holds your key (`~/.bosun/approver.pem`; `bosun keygen --enroll` once):
+- **[computer]** Digest reply, on the machine that holds your key (`~/.bosun/approver.pem`; `bosun keygen --enroll` once):
   paste the digest's `data.header` as line 1, your reply under it, to
   `bosun digest --answer --sign-key ~/.bosun/approver.pem --from -`. Each approval comes back as
   `bosun approve <pr>@<head> --sign-key <pem>` in `next`.
@@ -130,7 +135,7 @@ bosun notify --channel-info -     # posts due: halt, main-red, asks; the digest 
 | Mode | In a thread |
 | ---- | ----------- |
 | gatekeeper, steady | Ask `bosun status`; request work: `bosun spawn --slack-thread <ts> --slack-user <U...> --request -`. |
-| booster, autonomous | Same; spawned children use `[cloud]`'s environment. |
+| booster, autonomous | Same. A thread spawn inherits the caller's environment; `wave tick` uses `[cloud]`'s. |
 
 Approvals never come from Slack: bosun answers needs-human in the thread; you approve by chat
 form or on GitHub **[phone]**.
@@ -153,9 +158,9 @@ thing that needs the Routine. `bosun metrics --propose` itself is read-only.
 One step at a time (gatekeeper → steady → booster → autonomous). Never skip a step, never go up on
 a red week.
 
-1. **[computer]** Baseline. `bosun metrics --days 30` in the repo. Write the numbers on the PR.
-2. **[computer]** Pin a release that reads `[mode]`: `bosun pin --latest --pr` (or the splice bot's
-   PR), approve it **[phone]**. Check: `cat .bosun/version`; `bosun mode` exits 0.
+1. Baseline. `bosun metrics --days 30` in the repo. Write the numbers on the PR.
+2. **[computer]** Owner publishes a release that reads `[mode]`. An agent runs `bosun pin --latest --pr`
+   (or the splice bot's PR); **[phone]** you approve it. Check: `cat .bosun/version`; `bosun mode` exits 0.
 3. Upgrade notes before `steady` (an agent does them, in order):
    - Every open epic needs a plan marker (the `bosun:epic` marker in its body, naming plan and
      item) before `budget_feature` is not `off` (`steady` sets `warn`; `booster` sets `ask`). For each plan file
@@ -163,8 +168,8 @@ a red week.
      marker `claim` and `spawn` refuse a task of the epic; the refusal's `error.fix` names the step.
    - `steady` sets `heal_main = "revert-pr"`: on a red main, `bosun heal` opens a **draft** revert PR
      (it never merges). Tell the orchestrator to review it, or set `heal_main = "off"` as an override.
-   - A lighter mode is an owner-approved R-weaken change: the PR for step 4 is not auto-merged
-     for you. Moving up the ladder is no finding, but `.bosun/**` stays R-gov.
+   - A lighter mode is an owner-approved R-weaken change: going down the ladder is a finding
+     the owner must approve; going up is none, but the step-4 PR is R-gov and waits for your approval too.
 4. An agent opens a PR that sets `[mode] name = "steady"` (section 0). **[phone]** Owner approves
    the exact head (chat form: repo, PR, head SHA). Merge as usual (orchestrator).
 5. `bosun mode` → `mode_source: "explicit"`; `bosun metrics --days 7`. Watch red-CI rate (target

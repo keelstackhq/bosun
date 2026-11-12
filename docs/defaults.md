@@ -82,9 +82,9 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | Brake: reverts | 2 PRs | Estimate; review after 30 days of metrics (design open point 4). |
 | Brake: red-CI margin | 10 points over target | Estimate; review after 30 days of metrics (design open point 4). |
 | Red-CI target | steady 30 %, booster 20 %, autonomous 15 % | Estimate; review after 30 days of metrics (design open point 4). |
-| Heal rounds per PR | 2 (one per head SHA) | Estimate: a third round on the same PR repeats the failure signature (stop rule: 3 times). Then it is needs-human. |
+| Heal rounds per PR | 2 (one per head SHA) | Estimate: design open point 4. Then it is needs-human. |
 | Feature budget | item `budget_usd:`, else tasks times `per_task_usd`; warn at 80 %, `ask` stops at 100 % | Same 80/100 % as the daily guard (§9). Estimate. |
-| Curator proposal | at least 10 passed owner blocks, none caught, in 30 days; one draft PR a week | Estimate; never R-weaken, R-secrets, R-prod-write, R-gov, R-gate, R-revert or workflow paths. |
+| Curator proposal | at least 10 passed owner blocks, none caught, in 30 days; one draft PR a week | Estimate; never R-weaken, R-secrets, R-prod-write, R-gov, R-gate, R-revert, R-ci, R-ci-review, R-deps, R-unseen. |
 | Targets, p50 lead time / red-CI / owner touches a day | steady 3 days / 30 % / 5; booster 1.5 days / 20 % / 3; autonomous 1 day / 15 % / 1 | Estimate; `bosun metrics` measures the gatekeeper baseline first. |
 | Knobs per mode | table in `docs/quickstart.md` and spec §18 | A mode is a preset; an explicit knob wins. |
 | Move up | one mode at a time, two weeks on target | `docs/quickstart.md` (migration). Estimate. |

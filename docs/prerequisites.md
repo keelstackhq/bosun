@@ -67,7 +67,7 @@ A mode adds owner steps. List them as prerequisites when the plan moves a repo u
 ([quickstart](quickstart.md), migration): **computer** pin a release that reads `[mode]`; paste
 the Routine prompts (janitor with `bosun heal`; curator for `curator_loosen = "propose"`;
 Routines are human-only); **phone** approve the PR that sets `[mode] name` (R-gov, and R-weaken
-for a lighter mode). Use `verify: file .bosun/version` for the pin; Routine prompts are `verify: owner`.
+for a lighter mode). Use `verify: owner` for all of them (bosun cannot tell a pin to a release that reads `[mode]` from an older one).
 
 ## Automatic items
 
