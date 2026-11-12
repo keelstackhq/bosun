@@ -528,7 +528,9 @@ pub(crate) fn tick_spawn(app: &App, epic: u64, entry: &Value, pending: u32) -> C
         .collect();
     // Touch globs and the workspace become commands in the prompt: plain glob characters only.
     let safe = |s: &str| {
-        !s.is_empty() && (s.chars()).all(|c| c.is_ascii_alphanumeric() || "_./*{},-".contains(c))
+        !s.starts_with('-')
+            && !s.is_empty()
+            && (s.chars()).all(|c| c.is_ascii_alphanumeric() || "_./*{},-".contains(c))
     };
     if !(workspace.strip_prefix("berth up ").is_some_and(safe) && touch.iter().all(|g| safe(g))) {
         return Err(BosunError::error(
@@ -594,7 +596,8 @@ fn task_prompt(p: &TaskPrompt) -> String {
     } = *p;
     let area_flag = p.area.map_or(String::new(), |a| format!("--area {a} "));
     let title = super::intake::fence_text(p.title).replace(['\n', '\r', '"'], " ");
-    let globs: String = p.touch.iter().map(|g| format!(" --touch {g}")).collect();
+    // Quoted: the shell must not expand a glob or a brace list.
+    let globs: String = p.touch.iter().map(|g| format!(" --touch '{g}'")).collect();
     let bundle: String = (p.bundle.iter())
         .map(|b| format!(" --bundle {b}"))
         .collect();
@@ -738,11 +741,23 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         comment_id: prior.map_or(0, |m| m.comment_id),
     };
     registry::write(gh, reg, &reg_notes, prior, &member)?;
-    // The child keeps the touch of the spawner's lease (a `wave tick` entry's), from a writer.
-    let touch = (leases_of(n, &trusted_notes(gh, n)?).into_iter())
+    // The child keeps the touch of the spawner's newest lease (a `wave tick` entry's) when a
+    // writer wrote it; a failed lookup only drops the touch. An empty touch needs no lookup.
+    let touch = (leases_of(n, &plain).into_iter())
         .filter(|l| &l.session == me)
         .max_by_key(|l| l.comment_id)
-        .map_or_else(Vec::new, |l| l.touch);
+        .filter(|l| !l.touch.is_empty())
+        .and_then(|l| {
+            let author = comments
+                .iter()
+                .find(|c| c.id == l.comment_id)?
+                .user
+                .as_str();
+            let p = gh.permission(author).ok().flatten();
+            p.filter(|p| matches!(p.as_str(), "admin" | "write"))
+                .map(|_| l.touch)
+        })
+        .unwrap_or_default();
     if leases_of(n, &crate::app::notes(gh, n)?)
         .iter()
         .any(|l| &l.session == me)

@@ -96,7 +96,7 @@ fn booster_spawns_every_ready_entry_and_claims_the_tasks() {
         "{p}"
     );
     assert!(p.contains("berth up m1-t1"), "{p}");
-    assert!(p.contains("bosun claim 11 --touch src/a/**"), "{p}");
+    assert!(p.contains("bosun claim 11 --touch 'src/a/**'"), "{p}");
     assert!(creates[0].get("environment_id").is_none());
     assert!(!fake.comments_of(11).is_empty() && !fake.comments_of(12).is_empty());
 }
