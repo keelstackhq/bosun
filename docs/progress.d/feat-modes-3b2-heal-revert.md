@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 3b-2: heal_main reverts a red main
