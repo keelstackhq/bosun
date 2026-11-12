@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 6: bosun wave tick (spawn and archive calls)

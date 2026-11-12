@@ -188,7 +188,9 @@ metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reason
     cost_per_merged_usd: num | null, lead_time_p50_hours: num | null, epics: int,
     owner_touches: int, owner_touches_per_day: num,
     blocks: [{rule: str, blocks: int, caught: int, passed: int}]} | {days: int, since: str, curator_loosen: str, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
-wave tick = {};
+wave tick = {epic: int, mode: str, spawn_auto: str, brake: [str] | null, held_by: str | null,
+    spawned: [{issue: int, title: str, record: str}], stopped: {issue: int, exit: str, message: str,
+    fix: str, check: int | null, name: str | null} | null, archived: [str], environment_id: str | null};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
     commands?: {[str]: any}, ts?: str};
 "#;

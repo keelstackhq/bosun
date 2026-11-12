@@ -210,6 +210,7 @@ impl Run<'_> {
             max_live_sessions: limits.sessions.max_live_sessions,
             children: children + self.spawned,
             max_children: limits.sessions.max_children,
+            pending: 0,
             // Only a dead holder gets a fixer, so no live lease on the task conflicts.
             conflict: None,
         };

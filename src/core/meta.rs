@@ -166,17 +166,35 @@ fn linked_in(body: &str, repo: Option<&str>) -> Vec<u64> {
     out
 }
 
-/// The area named by a `bosun:area/<a>` label.
+/// The area named by a `bosun:area/<a>` label; labels are not locked and the area goes into
+/// spawn prompts unquoted, so only letters, digits, `_` and `-` count.
 pub fn area_of<S: AsRef<str>>(labels: &[S]) -> Option<String> {
     labels
         .iter()
         .find_map(|l| l.as_ref().strip_prefix("bosun:area/"))
+        .filter(|a| safe_word(a, "_-"))
         .map(str::to_string)
+}
+
+/// Letters, digits and `extra`, not empty and not starting with `-`.
+pub fn safe_word(s: &str, extra: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && (s.chars()).all(|c| c.is_ascii_alphanumeric() || extra.contains(c))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unsafe_area_is_none() {
+        assert_eq!(area_of(&["bosun:area/core-io"]), Some("core-io".into()));
+        assert_eq!(area_of(&["bosun:area/x; rm -rf ~"]), None);
+        for bad in ["--help", "{a,-b}", "x*", "a/b"] {
+            assert_eq!(area_of(&[format!("bosun:area/{bad}")]), None);
+        }
+    }
 
     #[test]
     fn full_marker_parses() {

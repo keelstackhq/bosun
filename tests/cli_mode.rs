@@ -80,15 +80,6 @@ fn bosun_mode_prints_knobs_offline() {
 }
 
 #[test]
-fn stubs_exit_1_with_a_fix() {
-    let out = bosun().args(["wave", "tick", "7"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    let v = one_object(&out.stdout);
-    let fix = v["error"]["fix"].as_str().unwrap();
-    assert!(fix.contains("plan PR 6"), "{fix}");
-}
-
-#[test]
 fn a_non_default_override_parses() {
     for k in [
         "heal_main = \"revert-auto\"",
@@ -103,4 +94,13 @@ fn a_non_default_override_parses() {
             assert_eq!(c.approvals.policy_source(), "default", "{k}");
         }
     }
+}
+
+#[test]
+fn wave_tick_is_no_longer_a_stub() {
+    let out = bosun().args(["wave", "tick", "7"]).output().unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(v["command"], "wave tick");
+    let fix = v["error"]["fix"].as_str().unwrap_or_default();
+    assert!(!fix.contains("plan PR"), "{v}");
 }

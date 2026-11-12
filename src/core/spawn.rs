@@ -23,6 +23,8 @@ pub struct SpawnInput {
     pub max_live_sessions: u32,
     pub children: u32,
     pub max_children: u32,
+    /// Sessions this command already asked for and did not record yet (`wave tick`).
+    pub pending: u32,
     /// A live lease or area owner that conflicts with the epic: (what, who).
     pub conflict: Option<String>,
 }
@@ -93,26 +95,28 @@ pub fn check(i: &SpawnInput) -> Result<(), Refusal> {
             "run the epic's tasks as wave agents in this session (`bosun wave plan`) instead of spawning",
         );
     }
-    if i.live_sessions >= i.max_live_sessions {
+    if i.live_sessions + i.pending >= i.max_live_sessions {
         return refuse(
             4,
             "live-sessions",
             Exit::Limit,
             format!(
                 "{} live sessions, max_live_sessions is {}",
-                i.live_sessions, i.max_live_sessions
+                i.live_sessions + i.pending,
+                i.max_live_sessions
             ),
             "wait for a session to finish (`bosun wait --child <id>`), or run `bosun reap` to drop dead ones",
         );
     }
-    if i.children >= i.max_children {
+    if i.children + i.pending >= i.max_children {
         return refuse(
             5,
             "children",
             Exit::Limit,
             format!(
                 "this session has {} children, max_children is {}",
-                i.children, i.max_children
+                i.children + i.pending,
+                i.max_children
             ),
             "wait for a child to post its result (`bosun wait --child <id>`)",
         );
@@ -147,6 +151,7 @@ mod tests {
             max_live_sessions: 4,
             children: 0,
             max_children: 3,
+            pending: 0,
             conflict: None,
         }
     }
@@ -185,6 +190,21 @@ mod tests {
         let mut i = ok_input();
         i.conflict = Some("a lease".into());
         assert_eq!(refused(i), (6, Exit::Conflict));
+    }
+
+    #[test]
+    fn pending_spawns_count_against_checks_4_and_5() {
+        let mut i = ok_input();
+        i.pending = 3; // 1 live + 3 pending = 4 of 4
+        assert_eq!(refused(i), (4, Exit::Limit));
+        let mut i = ok_input();
+        i.max_live_sessions = 9;
+        i.children = 1;
+        i.pending = 2; // 1 + 2 = 3 of 3
+        assert_eq!(refused(i), (5, Exit::Limit));
+        let mut i = ok_input();
+        i.pending = 2;
+        assert_eq!(check(&i), Ok(()));
     }
 
     #[test]

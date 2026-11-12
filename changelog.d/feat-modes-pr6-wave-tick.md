@@ -1,0 +1,1 @@
+- `bosun wave tick <epic>` returns `create_session` calls for ready wave entries (mode knob `spawn_auto`, brake, spawn checks) and `archive_session` for finished children whose PR closed
