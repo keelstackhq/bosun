@@ -166,17 +166,33 @@ fn linked_in(body: &str, repo: Option<&str>) -> Vec<u64> {
     out
 }
 
-/// The area named by a `bosun:area/<a>` label.
+/// The area named by a `bosun:area/<a>` label; an area that is not a `safe_word` is none
+/// (labels are not locked, and the area goes into spawn prompts).
 pub fn area_of<S: AsRef<str>>(labels: &[S]) -> Option<String> {
     labels
         .iter()
         .find_map(|l| l.as_ref().strip_prefix("bosun:area/"))
+        .filter(|a| safe_word(a))
         .map(str::to_string)
+}
+
+/// Plain glob characters, not starting with `-`: safe as a command word in a prompt.
+pub fn safe_word(s: &str) -> bool {
+    !s.is_empty()
+        && !s.starts_with('-')
+        && (s.chars()).all(|c| c.is_ascii_alphanumeric() || "_./*{},-".contains(c))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unsafe_area_is_none() {
+        assert_eq!(area_of(&["bosun:area/core-io"]), Some("core-io".into()));
+        assert_eq!(area_of(&["bosun:area/x; rm -rf ~"]), None);
+        assert_eq!(area_of(&["bosun:area/--help"]), None);
+    }
 
     #[test]
     fn full_marker_parses() {

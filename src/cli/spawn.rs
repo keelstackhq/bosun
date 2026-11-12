@@ -532,11 +532,7 @@ pub(crate) fn tick_spawn(app: &App, epic: u64, entry: &Value, pending: u32) -> C
         .filter(|&b| b != n)
         .collect();
     // Touch globs and the workspace become commands in the prompt: plain glob characters only.
-    let safe = |s: &str| {
-        !s.starts_with('-')
-            && !s.is_empty()
-            && (s.chars()).all(|c| c.is_ascii_alphanumeric() || "_./*{},-".contains(c))
-    };
+    let safe = crate::core::meta::safe_word;
     if !(workspace.strip_prefix("berth up ").is_some_and(safe) && touch.iter().all(|g| safe(g))) {
         return Err(BosunError::error(
             format!("task #{n}: its touch or workspace has characters a prompt cannot carry"),
