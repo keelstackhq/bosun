@@ -139,9 +139,17 @@ impl Run<'_> {
             Ok(n) => n,
             Err(w) => return skip(&w),
         };
-        if (pulls.iter().find(|p| p.number == n)).is_some_and(|p| {
-            !revert_targets(&p.body).is_empty() && p.head_ref.starts_with("bosun/revert-")
-        }) {
+        // Never revert a revert (it re-applies the original): the marker, or a `bosun/revert-<N>`
+        // branch of this repo (exactly, so `bosun/revert-x` is no revert).
+        let branch = |p: &Pull| {
+            let n = p.head_ref.strip_prefix("bosun/revert-").unwrap_or_default();
+            p.head_repo.eq_ignore_ascii_case(&repo)
+                && !n.is_empty()
+                && n.bytes().all(|b| b.is_ascii_digit())
+        };
+        if (pulls.iter().find(|p| p.number == n))
+            .is_some_and(|p| !revert_targets(&p.body).is_empty() || branch(p))
+        {
             return skip("the first bad PR is a revert; fix by hand");
         }
         let head = format!("{}:bosun/revert-{n}", app.ctx.repo.owner);

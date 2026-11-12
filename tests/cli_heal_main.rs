@@ -263,10 +263,34 @@ fn a_revert_closed_unmerged_was_declined() {
 }
 
 #[test]
-fn a_marker_alone_does_not_make_the_bad_pr_a_revert() {
+fn a_bad_pr_that_is_a_revert_is_never_reverted() {
+    // The marker alone (a hand-made revert) or an exact `bosun/revert-<N>` branch is a revert.
     let (_t, dir, sha) = repo();
     let fake = world(&sha, "broken");
     fake.pull_set(5, "body", json!("<!-- bosun:revert 1 -->"));
+    let v = heal(&fake, &dir, Some(PR_ONLY));
+    assert_eq!(why(&v), "the first bad PR is a revert; fix by hand", "{v}");
+    let fake = world(&sha, "broken");
+    fake.pull_set(
+        5,
+        "head",
+        json!({"sha": "sha5", "ref": "bosun/revert-1",
+        "label": "acme:bosun/revert-1", "repo": {"full_name": "acme/widget"}}),
+    );
+    let v = heal(&fake, &dir, Some(PR_ONLY));
+    assert_eq!(why(&v), "the first bad PR is a revert; fix by hand", "{v}");
+}
+
+#[test]
+fn a_branch_that_only_looks_like_a_revert_does_not_opt_out() {
+    let (_t, dir, sha) = repo();
+    let fake = world(&sha, "broken");
+    fake.pull_set(
+        5,
+        "head",
+        json!({"sha": "sha5", "ref": "bosun/revert-x",
+        "label": "acme:bosun/revert-x", "repo": {"full_name": "acme/widget"}}),
+    );
     let v = heal(&fake, &dir, Some(PR_ONLY));
     assert_eq!(v["data"]["main"]["action"], "revert", "{v}");
 }
