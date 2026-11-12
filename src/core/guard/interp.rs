@@ -311,6 +311,7 @@ pub(super) fn script_walk(
 ) -> Option<String> {
     let target = Target {
         dir: Some(&[]),
+        alone: false,
         branch_at,
         default_branch,
         sink: sinks.map(|s| s.code),
@@ -480,12 +481,12 @@ mod tests {
             "python3 -c 'import json; print(json.dumps({\"merge\": 1}))'",
             "node -e 'console.log(process.argv)'",
             "node script.mjs",
-            r#"python3 -c 'subprocess.run(["git", "push", "-u", "origin", "claude/x"])'"#,
+            r#"python3 -c 'subprocess.run(["git", "push", "-u", "origin", "claude/x:claude/x"])'"#,
             r#"node -e 'execSync("git status && git log --oneline -3")'"#,
             "ruby -e 'puts 1'",
             "deno eval 'console.log(1)'",
-            "git push -u origin HEAD && sh -c 'echo $HOME'",
-            "git push -u origin claude/x && python3 -c 'print(1.5)'",
+            "git push -u origin HEAD:claude/x && sh -c 'echo $HOME'",
+            "git push -u origin claude/x:claude/x && python3 -c 'print(1.5)'",
             "git commit -F - <<'EOF'\nfix: python -c and gh pr merge refusals\nEOF",
         ] {
             assert_eq!(bash(cmd), None, "{cmd}");
@@ -522,7 +523,10 @@ mod tests {
         assert_eq!(script("node x.mjs", "console.log('merge sort')\n"), None);
         assert_eq!(script("python x.py", "print(1)\n"), None);
         assert_eq!(
-            script("bash x.sh", "cargo test\ngit push -u origin claude/x\n"),
+            script(
+                "bash x.sh",
+                "cargo test\ngit push -u origin claude/x:claude/x\n"
+            ),
             None
         );
         assert_eq!(

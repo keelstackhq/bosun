@@ -127,6 +127,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         if let Some(why) = script_rules(command, &read, &branch_at, &default) {
             return Some(deny(&why));
         }
+        if let Some(why) = push_config(&dir, command, &read, &default) {
+            return Some(deny(&why));
+        }
         if let Some(why) = push_gates(&dir, command, &read, &default) {
             return Some(deny(&why));
         }
@@ -144,6 +147,149 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             None
         }
     }
+}
+
+/// Merge-lock (spec §4) for pushes whose target git config sets, read where git runs: any
+/// `remote.<r>.push` or `remote.<r>.mirror` refuses every push; without a refspec,
+/// `push.default` must push `HEAD` to its own name or to an upstream that is not the default
+/// branch. A checkout the guard cannot tell is read at the hook directory.
+fn push_config(
+    dir: &Path,
+    command: &str,
+    read: &dyn Fn(&str) -> Option<Script>,
+    default: &str,
+) -> Option<String> {
+    const FIX: &str = "name the refspec, as in `git push -u origin claude/fix-1`";
+    const UNREAD: &str =
+        "merge-lock: the guard cannot read git config here, so it cannot tell where this push goes";
+    if let Some(why) = alias_push(dir, command) {
+        return Some(why);
+    }
+    for push in pushes(command, read, default) {
+        let opts = push.dir.unwrap_or_default();
+        let at = |args: &[&str]| {
+            let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+            all.extend(args);
+            git_out(dir, &all)
+        };
+        // Exit 1 is "no such key"; any other failure (not a repo, dubious ownership) fails closed.
+        let get = |args: &[&str]| -> Result<Option<String>, ()> {
+            let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+            all.extend(args);
+            config_get(dir, &all)
+        };
+        let Ok(set) = get(&["config", "--get-regexp", r"^remote\..*\.(push|mirror)$"]) else {
+            return Some(UNREAD.into());
+        };
+        for line in set.iter().flat_map(|s| s.lines()) {
+            let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+            if key.ends_with(".push") || !value.eq_ignore_ascii_case("false") {
+                return Some(format!(
+                    "merge-lock: git config `{key} {value}` sets where pushes go; unset it \
+                     (`git config --unset-all {key}`) or ask the owner"
+                ));
+            }
+        }
+        if !push.srcs.is_empty() {
+            continue;
+        }
+        let Ok(mode) = get(&["config", "--get", "push.default"]) else {
+            return Some(UNREAD.into());
+        };
+        let mode = mode.map(|m| m.to_ascii_lowercase());
+        match mode.as_deref() {
+            None | Some("simple" | "current" | "nothing") => {}
+            Some("upstream" | "tracking") => {
+                let up = at(&["rev-parse", "--abbrev-ref", "@{upstream}"]);
+                let branch = up.as_deref().and_then(|u| u.split_once('/')).map(|p| p.1);
+                if branch.is_none_or(|b| b == default || b.ends_with(&format!("/{default}"))) {
+                    return Some(format!(
+                        "merge-lock: push.default = upstream pushes to `{}`, which the guard \
+                         cannot tell apart from `{default}`; {FIX}",
+                        up.as_deref().unwrap_or("no upstream")
+                    ));
+                }
+            }
+            Some(m) => {
+                return Some(format!(
+                    "merge-lock: push.default = {m} can push `{default}`; {FIX}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// `git config` read: `Ok(None)` when the key is unset (exit 1), `Err` when git fails.
+fn config_get(dir: &Path, args: &[&str]) -> Result<Option<String>, ()> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|_| ())?;
+    match out.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )),
+        Some(1) => Ok(None),
+        _ => Err(()),
+    }
+}
+
+/// A git alias that may push, run in git's subcommand position (after its global options) and
+/// read where that git runs (the hook directory moved by `-C`, `--git-dir`, `--work-tree`):
+/// a value with a `push`, `send-pack` or `subtree` word, or one that starts with `!` (a shell)
+/// or `-` (global options). The merge-lock cannot see behind it.
+fn alias_push(dir: &Path, command: &str) -> Option<String> {
+    let unq = |w: &str| w.replace(['\'', '"', '\\'], "");
+    let words: Vec<String> = command.split_whitespace().map(unq).collect();
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i].trim_start_matches(['(', '{']);
+        i += 1;
+        if w.rsplit('/').next() != Some("git") {
+            continue;
+        }
+        let mut opts: Vec<String> = Vec::new();
+        while let Some(o) = words.get(i).filter(|o| o.starts_with('-')) {
+            let next = words.get(i + 1).cloned().unwrap_or_default();
+            i += 1;
+            match o.as_str() {
+                "-C" => {
+                    opts.extend(["-C".into(), next]);
+                    i += 1;
+                }
+                "--git-dir" | "--work-tree" => {
+                    opts.push(format!("{o}={next}"));
+                    i += 1;
+                }
+                "-c" | "--config-env" | "--namespace" => i += 1,
+                _ if o.starts_with("--git-dir=") || o.starts_with("--work-tree=") => {
+                    opts.push(o.clone())
+                }
+                _ => {}
+            }
+        }
+        let Some(sub) = words.get(i) else { break };
+        let mut args: Vec<&str> = opts.iter().map(String::as_str).collect();
+        let key = format!("alias.{sub}");
+        args.extend(["config", "--get", &key]);
+        let Ok(Some(value)) = config_get(dir, &args) else {
+            continue;
+        };
+        let v = value.trim_start();
+        let risky = v.starts_with(['!', '-'])
+            || v.split_whitespace()
+                .map(unq)
+                .any(|w| matches!(w.as_str(), "push" | "send-pack" | "subtree"));
+        if risky {
+            return Some(format!(
+                "merge-lock: git alias `{sub}` runs `{value}`, which the guard cannot judge; run the git command itself"
+            ));
+        }
+    }
+    None
 }
 
 /// `push_gates = "push"` (spec §7): each pushed ref's tree needs a passing stamp for every
