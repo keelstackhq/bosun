@@ -1,5 +1,5 @@
 //! `bosun digest` logic (spec §14, §18): the daily owner digest as one D-012 chat form, and the
-//! parser of the owner's reply ("approve 12 15", "raise 7 +20"). No I/O.
+//! parser of the owner's reply ("approve 12 15"). No I/O.
 
 use crate::core::approve::message_id;
 use crate::core::text::inert;
@@ -64,12 +64,9 @@ pub fn digest(repo: &str, items: &[Item], asks: &[(u64, String)]) -> Digest {
     }
     text.push_str("\nBudget asks (0):");
     let nums: Vec<String> = items.iter().map(|i| i.pr.to_string()).collect();
-    let reply = if nums.is_empty() {
-        "raise <epic> +<usd>".to_string()
-    } else {
-        format!("approve {} / raise <epic> +<usd>", nums.join(" "))
-    };
-    text.push_str(&format!("\nReply: {id} {reply}"));
+    if !nums.is_empty() {
+        text.push_str(&format!("\nReply: {id} approve {}", nums.join(" ")));
+    }
     let header = format!("/bosun digest {repo} {id} {}", pairs.join(" "))
         .trim_end()
         .to_string();
@@ -105,18 +102,17 @@ pub fn parse_header(line: &str) -> Option<Header> {
     (message_id(&raw) == id).then_some((repo, id, pairs))
 }
 
-/// The owner's reply: PRs to approve, `(epic, usd)` raises, and the lines that are neither.
+/// The owner's reply: PRs to approve, and the lines that are not approvals.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Reply {
     /// The digest id the owner quoted, if any.
     pub id: Option<String>,
     pub approve: Vec<u64>,
-    pub raise: Vec<(u64, u64)>,
     pub unknown: Vec<String>,
 }
 
-/// Parse the reply: lines (or `;`/`/` parts) `approve 12 15` (`#12` and commas allowed) and
-/// `raise <epic> +<usd>`. Anything else is `unknown`, never guessed.
+/// Parse the reply: lines (or `;`/`/` parts) `approve 12 15` (`#12` and commas allowed).
+/// Anything else is `unknown`, never guessed.
 pub fn parse_reply(text: &str) -> Reply {
     let mut r = Reply::default();
     for part in text.split(['\n', ';', '/']) {
@@ -143,13 +139,6 @@ pub fn parse_reply(text: &str) -> Reply {
                 let n: Option<Vec<u64>> = prs.iter().map(|p| num(p)).collect();
                 n.map(|n| r.approve.extend(n)).is_some()
             }
-            ["raise", epic, usd] => match (num(epic), usd.strip_prefix('+').and_then(num)) {
-                (Some(e), Some(u)) if u > 0 => {
-                    r.raise.push((e, u));
-                    true
-                }
-                _ => false,
-            },
             _ => false,
         };
         if !ok {
@@ -175,20 +164,6 @@ pub fn pick(
         Some(_) => Err("head moved since the digest; listed again in the next digest"),
         None => Err("no longer waits for an owner at the digest's head"),
     }
-}
-
-/// The exact bytes an owner key signs for a raise: repo lowercased, `(digest id, day, SHA-256
-/// hex of the normalized reply)` so one reply is never replayed as a second raise, epic, amount.
-pub fn raise_message(
-    owner: &str,
-    repo: &str,
-    at: (&str, &str, &str),
-    epic: u64,
-    usd: u64,
-) -> String {
-    let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
-    let (id, day, sha) = at;
-    format!("bosun-raise v1 {o}/{r} digest {id} day {day} reply {sha} epic {epic} usd +{usd}")
 }
 
 #[cfg(test)]
@@ -220,7 +195,7 @@ mod tests {
         );
         let id = &d.id;
         let want = format!(
-            "Daily digest acme/widget {id}\nApprovals (2):\n- #12@aaaaaaa R-gate: `change 12`\n- #15@bbbbbbb R-gov: `change 15`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply: {id} approve 12 15 / raise <epic> +<usd>"
+            "Daily digest acme/widget {id}\nApprovals (2):\n- #12@aaaaaaa R-gate: `change 12`\n- #15@bbbbbbb R-gov: `change 15`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply: {id} approve 12 15"
         );
         assert_eq!(d.text, want);
         let pairs = vec![(12, sha('a')), (15, sha('b'))];
@@ -230,11 +205,7 @@ mod tests {
         );
         let empty = digest("acme/widget", &[], &[]);
         assert_eq!(parse_header(&empty.header).unwrap().2, vec![]);
-        assert!(
-            empty
-                .text
-                .ends_with(&format!("Reply: {} raise <epic> +<usd>", empty.id))
-        );
+        assert!(empty.text.ends_with("Budget asks (0):"));
     }
 
     #[test]
@@ -247,11 +218,10 @@ mod tests {
     }
 
     #[test]
-    fn the_reply_parses_approvals_and_raises_and_keeps_the_rest() {
-        let r = parse_reply("Approve #15, 12 12\nraise 7 +20; ok thanks\nraise 7 20\nraise 7 +0");
+    fn the_reply_parses_approvals_and_keeps_the_rest() {
+        let r = parse_reply("Approve #15, 12 12\nraise 7 +20; ok thanks");
         assert_eq!(r.approve, vec![12, 15]);
-        assert_eq!(r.raise, vec![(7, 20)]);
-        assert_eq!(r.unknown, vec!["ok thanks", "raise 7 20", "raise 7 +0"]);
+        assert_eq!(r.unknown, vec!["raise 7 +20", "ok thanks"]);
         assert_eq!(r.id, None);
         assert_eq!(parse_reply("approve 12 x").approve, Vec::<u64>::new());
         assert_eq!(parse_reply("approve").unknown, vec!["approve"]);
@@ -271,14 +241,5 @@ mod tests {
         );
         assert_eq!(pick(&shown, &now, 16), Err("not in this digest"));
         assert!(pick(&shown, &[], 12).unwrap_err().starts_with("no longer"));
-    }
-
-    #[test]
-    fn the_raise_message_binds_repo_digest_day_reply_epic_and_amount() {
-        let m = raise_message("Acme", "Widget", ("1a2b3c4d", "2026-11-12", "ab"), 7, 20);
-        assert_eq!(
-            m,
-            "bosun-raise v1 acme/widget digest 1a2b3c4d day 2026-11-12 reply ab epic 7 usd +20"
-        );
     }
 }
