@@ -128,9 +128,14 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
         ));
     }
     let reply = parse_reply(&lines.collect::<Vec<_>>().join("\n"));
-    if let Some(quoted) = &reply.id
-        && *quoted != id
-    {
+    // The owner quotes the id they saw, so a reply never pairs with another digest's heads.
+    if reply.ids.is_empty() {
+        return Err(BosunError::usage(
+            "the owner's reply quotes no digest id",
+            "relay the owner's reply as typed from the form (`<id> approve ...`); ask the owner to reply with the id",
+        ));
+    }
+    if let Some(quoted) = reply.ids.iter().find(|q| **q != id) {
         return Err(BosunError::conflict(
             format!("the owner answered digest {quoted}, the header is digest {id}"),
             "pass the header of the digest the owner answered (its id is in the message's first line)",

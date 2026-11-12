@@ -73,8 +73,10 @@ not read is in `data.skipped`. `data.header` is `/bosun digest <owner>/<repo> <i
 <pr>@<head>...` (`id`: as `message_id` above, an unkeyed checksum that catches copy errors, not
 forgery: the orchestrator relays the header of the message it showed). `bosun digest --answer`
 (after the kill switch) takes that header as the first line, then the owner's reply verbatim: a
-header that does not check or names another repo is exit 2, a reply that quotes another id is
-exit 3. A PR the owner names counts only when the digest showed it and it still waits at that
+header that does not check or names another repo is exit 2. The owner quotes the id they saw
+(the form's last line, pasted as is, is a valid reply): a reply that quotes no id is exit 2, one
+whose quoted ids are not all the header's id is exit 3, so a reply never pairs with another
+digest's heads. A PR the owner names counts only when the digest showed it and it still waits at that
 head, else it is in `data.dropped` (a moved head is listed in the next digest). Each approval is
 a `next` call `bosun approve <pr>@<head> --sign-key <pem>` for the key holder: the digest signs
 no approval. Other reply lines are in `data.unknown`, never guessed. Not yet: signed budget

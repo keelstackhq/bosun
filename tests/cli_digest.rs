@@ -74,7 +74,7 @@ fn the_digest_lists_owner_waiting_prs_and_open_asks_and_skips_mainfix() {
     let d = &v["data"];
     let id = d["message_id"].as_str().unwrap();
     let want = format!(
-        "Daily digest acme/widget {id}\nApprovals (2):\n- #12@abc1234 R-gov, R-ci: `first change`\n- #15@def5678 R-gov, R-ci: `second change`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply: {id} approve 12 15"
+        "Daily digest acme/widget {id}\nApprovals (2):\n- #12@abc1234 R-gov, R-ci: `first change`\n- #15@def5678 R-gov, R-ci: `second change`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply with (drop the PRs you hold):\n{id} approve 12 15"
     );
     assert_eq!(d["message"], json!(want));
     let pairs = format!("12@{} 15@{}", head("abc1234"), head("def5678"));
@@ -105,9 +105,21 @@ fn the_answer_returns_approve_calls_and_drops_a_moved_head() {
     let fake = setup();
     let (_, v) = digest(&fake, &[], "");
     let header = v["data"]["header"].as_str().unwrap().to_string();
+    let id = v["data"]["message_id"].as_str().unwrap().to_string();
+    // The form's reply line, pasted as is, parses.
+    let line = v["data"]["message"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .last()
+        .unwrap()
+        .to_string();
+    let (code, v) = digest(&fake, &["--answer"], &format!("{header}\n{line}\n"));
+    assert_eq!((code, v["data"]["unknown"].clone()), (0, json!([])), "{v}");
+    assert_eq!(v["data"]["approve"].as_array().unwrap().len(), 2);
     let moved = head("def9999");
     set_head(&fake, 15, &moved);
-    let input = format!("{header}\nApprove 12, 15, 20\nraise 7 +20\nthanks\n");
+    let input = format!("{header}\n{id} Approve 12, 15, 20\nraise 7 +20\nthanks\n");
     let (code, v) = digest(&fake, &["--answer"], &input);
     assert_eq!(code, 0, "{v}");
     let d = &v["data"];
@@ -133,6 +145,12 @@ fn the_answer_returns_approve_calls_and_drops_a_moved_head() {
     let other = format!("{header}\n0000beef approve 12\n");
     let (code, v) = digest(&fake, &["--answer"], &other);
     assert_eq!(code, 3, "{v}");
+    // Every quoted id must match, and a reply without one is refused.
+    let mixed = format!("{header}\n{id} approve 12\n0000beef approve 15\n");
+    let (code, v) = digest(&fake, &["--answer"], &mixed);
+    assert_eq!(code, 3, "{v}");
+    let (code, v) = digest(&fake, &["--answer"], &format!("{header}\napprove 12\n"));
+    assert_eq!(code, 2, "{v}");
 }
 
 #[test]

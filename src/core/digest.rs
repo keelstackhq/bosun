@@ -65,7 +65,10 @@ pub fn digest(repo: &str, items: &[Item], asks: &[(u64, String)]) -> Digest {
     text.push_str("\nBudget asks (0):");
     let nums: Vec<String> = items.iter().map(|i| i.pr.to_string()).collect();
     if !nums.is_empty() {
-        text.push_str(&format!("\nReply: {id} approve {}", nums.join(" ")));
+        text.push_str(&format!(
+            "\nReply with (drop the PRs you hold):\n{id} approve {}",
+            nums.join(" ")
+        ));
     }
     let header = format!("/bosun digest {repo} {id} {}", pairs.join(" "))
         .trim_end()
@@ -105,8 +108,8 @@ pub fn parse_header(line: &str) -> Option<Header> {
 /// The owner's reply: PRs to approve, and the lines that are not approvals.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Reply {
-    /// The digest id the owner quoted, if any.
-    pub id: Option<String>,
+    /// Every digest id the owner quoted (a part's leading 8 hex).
+    pub ids: Vec<String>,
     pub approve: Vec<u64>,
     pub unknown: Vec<String>,
 }
@@ -126,7 +129,7 @@ pub fn parse_reply(text: &str) -> Reply {
             .first()
             .is_some_and(|w| w.len() == 8 && w.bytes().all(|b| b.is_ascii_hexdigit()))
         {
-            r.id = Some(words.remove(0));
+            r.ids.push(words.remove(0));
         }
         let ok = match words
             .iter()
@@ -195,7 +198,7 @@ mod tests {
         );
         let id = &d.id;
         let want = format!(
-            "Daily digest acme/widget {id}\nApprovals (2):\n- #12@aaaaaaa R-gate: `change 12`\n- #15@bbbbbbb R-gov: `change 15`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply: {id} approve 12 15"
+            "Daily digest acme/widget {id}\nApprovals (2):\n- #12@aaaaaaa R-gate: `change 12`\n- #15@bbbbbbb R-gov: `change 15`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply with (drop the PRs you hold):\n{id} approve 12 15"
         );
         assert_eq!(d.text, want);
         let pairs = vec![(12, sha('a')), (15, sha('b'))];
@@ -222,11 +225,12 @@ mod tests {
         let r = parse_reply("Approve #15, 12 12\nraise 7 +20; ok thanks");
         assert_eq!(r.approve, vec![12, 15]);
         assert_eq!(r.unknown, vec!["raise 7 +20", "ok thanks"]);
-        assert_eq!(r.id, None);
+        assert!(r.ids.is_empty());
         assert_eq!(parse_reply("approve 12 x").approve, Vec::<u64>::new());
         assert_eq!(parse_reply("approve").unknown, vec!["approve"]);
-        let q = parse_reply("1A2B3C4D approve 12");
-        assert_eq!((q.id.as_deref(), q.approve), (Some("1a2b3c4d"), vec![12]));
+        let q = parse_reply("1A2B3C4D approve 12\n0000beef approve 15");
+        let ids: Vec<String> = vec!["1a2b3c4d".into(), "0000beef".into()];
+        assert_eq!((q.ids, q.approve), (ids, vec![12, 15]));
     }
 
     #[test]
