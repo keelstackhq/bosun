@@ -192,6 +192,7 @@ that checkout's `.bosun/bosun.toml`, and a checkout with no config, or one that 
 parse, pushes as today. A push whose checkout the guard cannot tell (a `cd` it cannot read,
 `--git-dir`, `--work-tree`, or a push found only in interpreter code such as
 `subprocess.run(["git", "push"])`) is refused when the hook directory's repo is in push mode.
-Known misses: refs pushed by config (`remote.<r>.push`, `push.default = matching`; only `HEAD` is
-checked; also `git -c remote.<r>.push=..`), `git subtree push` and `git send-pack` (spec §4), and an interpreter push in a command that
+Refs pushed by config (`remote.<r>.push`, `remote.<r>.mirror`, `push.default = matching`) are refused by
+the merge-lock (spec §4), so `HEAD` is the ref of a refspec-less push; `git send-pack` refs are
+checked like push refspecs. Known misses: `git subtree push` (its split commit has no stamp to read), and an interpreter push in a command that
 also has a shell push. `ready`: no change.

@@ -127,6 +127,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         if let Some(why) = script_rules(command, &read, &branch_at, &default) {
             return Some(deny(&why));
         }
+        if let Some(why) = push_config(&dir, command, &read, &default) {
+            return Some(deny(&why));
+        }
         if let Some(why) = push_gates(&dir, command, &read, &default) {
             return Some(deny(&why));
         }
@@ -144,6 +147,61 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
             None
         }
     }
+}
+
+/// Merge-lock (spec §4) for pushes whose target git config sets, read where git runs: any
+/// `remote.<r>.push` or `remote.<r>.mirror` refuses every push; without a refspec,
+/// `push.default` must push `HEAD` to its own name or to an upstream that is not the default
+/// branch. A checkout the guard cannot tell is read at the hook directory.
+fn push_config(
+    dir: &Path,
+    command: &str,
+    read: &dyn Fn(&str) -> Option<Script>,
+    default: &str,
+) -> Option<String> {
+    const FIX: &str = "name the refspec, as in `git push -u origin claude/fix-1`";
+    for push in pushes(command, read, default) {
+        let opts = push.dir.unwrap_or_default();
+        let at = |args: &[&str]| {
+            let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+            all.extend(args);
+            git_out(dir, &all)
+        };
+        let set = at(&["config", "--get-regexp", r"^remote\..*\.(push|mirror)$"]);
+        for line in set.iter().flat_map(|s| s.lines()) {
+            let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+            if key.ends_with(".push") || !value.eq_ignore_ascii_case("false") {
+                return Some(format!(
+                    "merge-lock: git config `{key} {value}` sets where pushes go; unset it \
+                     (`git config --unset-all {key}`) or ask the owner"
+                ));
+            }
+        }
+        if !push.srcs.is_empty() {
+            continue;
+        }
+        let mode = at(&["config", "--get", "push.default"]).map(|m| m.to_ascii_lowercase());
+        match mode.as_deref() {
+            None | Some("simple" | "current" | "nothing") => {}
+            Some("upstream" | "tracking") => {
+                let up = at(&["rev-parse", "--abbrev-ref", "@{upstream}"]);
+                let branch = up.as_deref().and_then(|u| u.split_once('/')).map(|p| p.1);
+                if branch.is_none_or(|b| b == default || b.ends_with(&format!("/{default}"))) {
+                    return Some(format!(
+                        "merge-lock: push.default = upstream pushes to `{}`, which the guard \
+                         cannot tell apart from `{default}`; {FIX}",
+                        up.as_deref().unwrap_or("no upstream")
+                    ));
+                }
+            }
+            Some(m) => {
+                return Some(format!(
+                    "merge-lock: push.default = {m} can push `{default}`; {FIX}"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// `push_gates = "push"` (spec §7): each pushed ref's tree needs a passing stamp for every

@@ -1535,6 +1535,7 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         {
             Some(GIT_ALIAS)
         }
+        Some("git") if segment.contains("GIT_CONFIG_") && push_env(segment) => Some(PUSH_CONFIG),
         Some("git") => git_rule(&words[1..], &target),
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
@@ -2696,6 +2697,64 @@ fn alias_key(a: &str) -> bool {
 
 const GIT_ALIAS: &str = "a git alias hides the command it runs";
 
+const PUSH_CONFIG: &str = "git config sets where this push goes (`remote.<r>.push`, `remote.<r>.mirror` or `push.default`); name the refspec, as in `git push -u origin claude/fix-1`";
+
+const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`";
+
+/// A git config key that sets where a push goes: `remote.<r>.push`, `remote.<r>.mirror`.
+fn push_key(k: &str) -> bool {
+    let k = k.trim_start_matches(['\'', '"']).to_ascii_lowercase();
+    k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
+}
+
+/// `push.default` values that push only the current branch to its own name (`HEAD` is judged).
+fn head_only(v: &str) -> bool {
+    matches!(
+        v.trim_matches(['\'', '"']).to_ascii_lowercase().as_str(),
+        "simple" | "current" | "nothing"
+    )
+}
+
+/// Config from the environment (`GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`) that may move a push.
+fn push_env(segment: &str) -> bool {
+    let s = segment.to_ascii_lowercase();
+    s.contains("push.default")
+        || (s.contains("remote.") && (s.contains(".push") || s.contains(".mirror")))
+}
+
+/// `git subtree push -P <prefix> <repository> [<commit>:]<ref>`: refused when the ref is
+/// missing or any word names the default branch or a tag (quoted messages split into words,
+/// so this fails closed).
+fn subtree_push(rest: &[&str], default_branch: &str) -> Option<&'static str> {
+    if rest.iter().any(|a| a.contains(['$', '`', '\\'])) {
+        return Some(UNREAD_PUSH);
+    }
+    let (mut words, mut it) = (Vec::new(), rest.iter().map(|a| a.trim_matches(['\'', '"'])));
+    while let Some(a) = it.next() {
+        if matches!(
+            a,
+            "-P" | "--prefix" | "-m" | "--message" | "-b" | "--branch" | "--onto" | "--annotate"
+        ) {
+            it.next();
+        } else if !a.starts_with('-') {
+            words.push(a);
+        }
+    }
+    if words.len() < 2 {
+        return Some(UNREAD_PUSH);
+    }
+    for w in words {
+        let dst = w.rsplit(':').next().unwrap_or(w);
+        if w.starts_with('+') || dst.contains("refs/tags/") || version_like(dst) {
+            return Some("force, tag or delete push");
+        }
+        if dst == default_branch || dst == format!("refs/heads/{default_branch}") {
+            return Some("push to the default branch");
+        }
+    }
+    None
+}
+
 /// `git merge --ff-only [origin/<default>|@{u}|@{upstream}]`: catches the local branch up
 /// with its remote, never brings in other work.
 fn ff_only(rest: &[&str], default_branch: &str) -> bool {
@@ -2770,6 +2829,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     // git's global options: `-C dir`, `--git-dir`, `--work-tree` move the target; `-c k=v`,
     // `--no-pager` and the like do not. A target that cannot be read literally is unknown.
     let (mut i, mut opts, mut known) = (0, Vec::new(), true);
+    // `-c remote.<r>.push=..` and the like; `push.default` when set.
+    let (mut push_cfg, mut push_default) = (false, None);
     while i < args.len() && args[i].starts_with('-') {
         let (a, next) = (args[i], args.get(i + 1).copied());
         let config = match a {
@@ -2778,6 +2839,16 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         };
         if config.is_some_and(alias_key) {
             return Some(GIT_ALIAS);
+        }
+        if let Some((k, v)) = config.map(|c| c.split_once('=').unwrap_or((c, ""))) {
+            push_cfg |= push_key(k);
+            if k.trim_start_matches(['\'', '"'])
+                .eq_ignore_ascii_case("push.default")
+            {
+                // `--config-env` names a variable, not the value.
+                let env = a.starts_with("--config-env");
+                push_default = Some(if env { "" } else { v });
+            }
         }
         let (flag, value, step) = match a.split_once('=') {
             Some((k @ ("--git-dir" | "--work-tree"), v)) => (Some(format!("{k}=")), Some(v), 1),
@@ -2814,12 +2885,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         }
     };
     match sub {
-        "push" => {
+        "push" | "send-pack" => {
+            if push_cfg {
+                return Some(PUSH_CONFIG);
+            }
             // Quotes do not hide a target; one the shell expands cannot be read: fail closed.
             if rest.iter().any(|a| a.contains(['$', '`', '\\'])) {
-                return Some(
-                    "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`",
-                );
+                return Some(UNREAD_PUSH);
             }
             let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
             let rest = push_words(&unquoted);
@@ -2850,6 +2922,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 }
             }
             let refs: Vec<&str> = words.into_iter().skip(1).collect();
+            // `send-pack` without refs pushes every matching branch; `--stdin` reads them.
+            if sub == "send-pack" && (refs.is_empty() || rest.contains(&"--stdin")) {
+                return Some(UNREAD_PUSH);
+            }
+            if refs.is_empty() && push_default.is_some_and(|d| !head_only(d)) {
+                return Some(PUSH_CONFIG);
+            }
             if refs
                 .iter()
                 .any(|r| r.starts_with('+') || r.starts_with(':') || r.contains("refs/tags/"))
@@ -2887,13 +2966,36 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 });
             (!lists).then_some("tag")
         }
+        "subtree" if rest.first() == Some(&"push") => subtree_push(&rest[1..], default_branch),
         "config" => {
             let reads = matches!(rest.first(), Some(&("get" | "list")))
                 || rest.iter().any(|a| {
                     matches!(*a, "--get" | "--get-all" | "--get-regexp" | "-l" | "--list")
                 });
-            (rest.iter().any(|a| alias_key(a)) && !reads).then_some(GIT_ALIAS)
+            if reads {
+                return None;
+            }
+            if rest.iter().any(|a| alias_key(a)) {
+                return Some(GIT_ALIAS);
+            }
+            // Writing push targets into config; unsetting them is fine.
+            let unsets = rest
+                .iter()
+                .any(|a| matches!(*a, "--unset" | "--unset-all" | "unset"));
+            let default_at = rest.iter().position(|a| {
+                a.trim_matches(['\'', '"'])
+                    .eq_ignore_ascii_case("push.default")
+            });
+            let sets_default = default_at
+                .and_then(|i| rest.get(i + 1))
+                .is_some_and(|v| !head_only(v));
+            (!unsets && (rest.iter().any(|a| push_key(a)) || sets_default)).then_some(PUSH_CONFIG)
         }
+        // `--mirror=push` (or a bare `--mirror`) makes every push a mirror push.
+        "remote" => rest
+            .iter()
+            .any(|a| a.starts_with("--mirror") && *a != "--mirror=fetch")
+            .then_some(PUSH_CONFIG),
         "merge" if ff_only(rest, default_branch) => None,
         "merge" | "rebase" | "cherry-pick" | "reset" | "commit" if on_default => {
             Some("changing the default branch")
@@ -3723,6 +3825,62 @@ mod tests {
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
+    }
+
+    #[test]
+    fn merge_lock_refuses_pushes_driven_by_config_send_pack_and_subtree() {
+        for cmd in [
+            "git send-pack origin main",
+            "git send-pack --thin git@github.com:o/r.git HEAD:refs/heads/main",
+            "git send-pack origin",
+            "git send-pack --stdin origin",
+            "git send-pack --all origin",
+            "git send-pack --force origin feature",
+            "git subtree push --prefix=lib origin main",
+            "git subtree push -P lib origin refs/heads/main",
+            "git subtree push -P lib origin HEAD:main",
+            "git subtree push -P lib origin",
+            "git subtree push -P lib origin v1.2.3",
+            "git subtree push -P lib origin $B",
+            "git -c remote.origin.push=HEAD:main push",
+            "git -c remote.origin.push=refs/heads/x:refs/heads/x push origin",
+            "git -c Remote.Origin.Push=x push origin x",
+            "git --config-env=remote.origin.push=P push",
+            "git -c remote.origin.mirror=true push origin",
+            "git -c push.default=matching push",
+            "git -c push.default=upstream push origin",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=HEAD:main git push",
+            "GIT_CONFIG_PARAMETERS=\"'push.default=matching'\" git push",
+            "git config remote.origin.push HEAD:main && git push",
+            "git config remote.origin.push refs/heads/x:refs/heads/x",
+            "git config --add remote.origin.push HEAD",
+            "git config set remote.origin.push HEAD:main",
+            "git config remote.origin.mirror true",
+            "git config push.default matching",
+            "git config --global push.default upstream",
+            "git remote add --mirror=push backup https://x/y.git",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+        for cmd in [
+            "git send-pack origin feature",
+            "git send-pack origin HEAD:refs/heads/feature",
+            "git subtree push --prefix=lib origin feature",
+            "git subtree push -P lib -m 'split lib' origin lib-split",
+            "git subtree split -P lib -b main-lib",
+            "git -c push.default=current push",
+            "git -c push.default=simple push origin",
+            "git -c user.name=x push -u origin feature",
+            "git config --get remote.origin.push",
+            "git config --get-regexp 'remote.*push'",
+            "git config --unset-all remote.origin.push",
+            "git config push.default current",
+            "git config user.name x",
+            "git remote add upstream https://x/y.git",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+        assert!(bash("git send-pack origin HEAD", "main").is_some());
     }
 
     /// The guard cannot parse these unquoted heredoc bodies exactly (a `)` inside a quote, a
