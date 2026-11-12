@@ -1151,6 +1151,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         if let Some(w) = pin_warn {
             it["status"] = json!("warn");
             it["detail"] = json!(w);
+            it["fix"] = json!("commit `.bosun/registry` with the registry issue number (an R-gov PR the owner approves)");
         }
         it
     });
