@@ -238,16 +238,42 @@ fn config_get(dir: &Path, args: &[&str]) -> Result<Option<String>, ()> {
 }
 
 /// A git alias that may push, run in git's subcommand position (after its global options) and
-/// read where that git runs (the hook directory moved by `-C`, `--git-dir`, `--work-tree`):
+/// read where that git may run (the hook directory, moved by each earlier literal `cd` or
+/// `pushd` and by `-C`, `--git-dir`, `--work-tree`):
 /// a value with a `push`, `send-pack` or `subtree` word, or one that starts with `!` (a shell)
 /// or `-` (global options). The merge-lock cannot see behind it.
 fn alias_push(dir: &Path, command: &str) -> Option<String> {
     let unq = |w: &str| w.replace(['\'', '"', '\\'], "");
-    let words: Vec<String> = command.split_whitespace().map(unq).collect();
+    let spaced: String = command
+        .chars()
+        .flat_map(|c| match c {
+            ';' | '&' | '|' | '\n' | '(' | ')' => vec![' ', c, ' '],
+            _ => vec![c],
+        })
+        .collect();
+    let words: Vec<String> = spaced.split_whitespace().map(unq).collect();
+    // Every directory an earlier `cd` or `pushd` may have moved to (as `-C` options); an alias
+    // is read in each. A target the guard cannot read leaves only git's builtins.
+    let (mut dirs, mut known) = (vec![Vec::<String>::new()], true);
     let mut i = 0;
     while i < words.len() {
-        let w = words[i].trim_start_matches(['(', '{']);
+        let w = words[i].clone();
         i += 1;
+        if matches!(w.as_str(), "cd" | "pushd") {
+            match words.get(i).filter(|t| {
+                !t.is_empty()
+                    && !t.starts_with(['-', '~'])
+                    && !t.contains(['$', '`', '*', '?', '{', ';', '&', '|', '(', ')'])
+            }) {
+                Some(t) => {
+                    let mut d = dirs.last().cloned().unwrap_or_default();
+                    d.extend(["-C".to_string(), t.clone()]);
+                    dirs.push(d);
+                }
+                None => known = false,
+            }
+            continue;
+        }
         if w.rsplit('/').next() != Some("git") {
             continue;
         }
@@ -272,21 +298,32 @@ fn alias_push(dir: &Path, command: &str) -> Option<String> {
             }
         }
         let Some(sub) = words.get(i) else { break };
-        let mut args: Vec<&str> = opts.iter().map(String::as_str).collect();
+        if !known {
+            let builtins = git_out(dir, &["--list-cmds=builtins"]).unwrap_or_default();
+            if !builtins.lines().any(|b| b == sub) {
+                return Some(format!(
+                    "merge-lock: `git {sub}` after a `cd` the guard cannot read may be an alias; \
+                     `cd` to a literal path, or run the git command itself"
+                ));
+            }
+        }
         let key = format!("alias.{sub}");
-        args.extend(["config", "--get", &key]);
-        let Ok(Some(value)) = config_get(dir, &args) else {
-            continue;
-        };
-        let v = value.trim_start();
-        let risky = v.starts_with(['!', '-'])
-            || v.split_whitespace()
-                .map(unq)
-                .any(|w| matches!(w.as_str(), "push" | "send-pack" | "subtree"));
-        if risky {
-            return Some(format!(
-                "merge-lock: git alias `{sub}` runs `{value}`, which the guard cannot judge; run the git command itself"
-            ));
+        for d in &dirs {
+            let mut args: Vec<&str> = d.iter().chain(&opts).map(String::as_str).collect();
+            args.extend(["config", "--get", &key]);
+            let Ok(Some(value)) = config_get(dir, &args) else {
+                continue;
+            };
+            let v = value.trim_start();
+            let risky = v.starts_with(['!', '-'])
+                || v.split_whitespace()
+                    .map(unq)
+                    .any(|w| matches!(w.as_str(), "push" | "send-pack" | "subtree"));
+            if risky {
+                return Some(format!(
+                    "merge-lock: git alias `{sub}` runs `{value}`, which the guard cannot judge; run the git command itself"
+                ));
+            }
         }
     }
     None

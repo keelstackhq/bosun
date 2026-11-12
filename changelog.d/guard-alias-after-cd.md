@@ -1,0 +1,1 @@
+- Guard: git aliases are read in every directory an earlier `cd` or `pushd` moves to; after a `cd` the guard cannot read, only git builtins pass

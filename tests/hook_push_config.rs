@@ -163,6 +163,20 @@ fn aliases_that_push_or_run_a_shell_are_refused() {
     let at = format!("git -C {} x origin feat:main", other.path().display());
     assert!(hook(r.path(), &at).expect("alias at -C").contains("alias"));
     assert_eq!(hook(r.path(), "git x origin feat:main"), None);
+    // A `cd` or `pushd` moves where the alias is read; one the guard cannot read leaves only
+    // builtins.
+    let o = other.path().display();
+    for cmd in [
+        format!("cd {o} && git x origin feat:main"),
+        format!("cd {o}; git x origin feat:main"),
+        format!("pushd {o} && git x origin feat:main"),
+        format!("cd \"{o}\" && git x origin feat:main"),
+        "cd $D && git x origin feat:main".to_string(),
+    ] {
+        assert!(hook(r.path(), &cmd).expect(&cmd).contains("alias"), "{cmd}");
+    }
+    assert_eq!(hook(r.path(), &format!("cd {o} && git status")), None);
+    assert_eq!(hook(r.path(), "cd $D && git status"), None);
 }
 
 #[test]
