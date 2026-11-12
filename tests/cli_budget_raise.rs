@@ -180,3 +180,54 @@ fn a_forged_raise_comment_adds_nothing_and_gatekeeper_is_untouched() {
     let (code, v) = claim(&fake);
     assert_eq!(code, 0, "{v}");
 }
+
+/// The record line of the first signed raise of `input`, as `bosun budget raise` would write it.
+fn record_of(input: &str) -> String {
+    let e = serde_json::from_str::<Value>(input).unwrap()["data"]["raises"][0].clone();
+    let m = e["message"].as_str().unwrap();
+    let digest = m.split(' ').nth(4).unwrap();
+    json!({"bosun": "raise", "session": "s", "epic": 10, "usd": 50, "digest": digest,
+        "day": "2026-11-12", "key_id": "k1", "message": m, "sig": e["sig"]})
+    .to_string()
+}
+
+/// A feature with 160 spent: +50 makes the budget 150 (over), a double count would make it 200.
+fn spent_160() -> FakeGithub {
+    let fake = feature("booster");
+    let spend = r#"{"bosun":"spend","session":"s","usd":60.0,"at":"2026-11-12T03:00:00Z"}"#;
+    fake.comment(12, spend);
+    fake
+}
+
+#[test]
+fn a_raise_posted_late_or_with_an_unreadable_time_adds_nothing() {
+    for at in ["2026-11-15T09:00:00Z", "not a time"] {
+        let fake = feature("booster");
+        let input = signed(&fake, NOW, "acme/widget", "raise 10 +50");
+        fake.comment_at(10, "octocat", &record_of(&input), at);
+        assert_eq!(claim(&fake).0, 5, "{at}");
+    }
+}
+
+#[test]
+fn the_same_raise_posted_twice_counts_once() {
+    let fake = spent_160();
+    let input = signed(&fake, NOW, "acme/widget", "raise 10 +50");
+    for _ in 0..2 {
+        fake.comment_at(10, "octocat", &record_of(&input), "2026-11-12T07:00:00Z");
+    }
+    assert_eq!(claim(&fake).0, 5, "counted once: 160 of 150");
+    let fake = spent_160();
+    fake.comment_at(10, "octocat", &record_of(&input), "2026-11-12T07:00:00Z");
+    assert_eq!(claim(&fake).0, 5);
+}
+
+#[test]
+fn a_recorded_raise_still_counts_after_its_day_has_passed() {
+    let fake = feature("booster");
+    let input = signed(&fake, NOW, "acme/widget", "raise 10 +50");
+    assert_eq!(raise(&fake, NOW, &input).0, 0);
+    let later = "2026-11-17T06:00:00Z";
+    let (code, v) = run_env(&fake, later, "acme/widget", &["claim", "11"], "");
+    assert_eq!(code, 0, "{v}");
+}

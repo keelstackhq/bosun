@@ -77,11 +77,8 @@ pub(super) fn valid_raises(app: &App, epic: u64, base: f64) -> Result<Vec<(Strin
         else {
             continue;
         };
-        let at = if c.created_at.0 == 0 {
-            app.ctx.now
-        } else {
-            c.created_at
-        };
+        // An unreadable creation time is 1970: the day check fails closed.
+        let at = c.created_at;
         let claim = (epic, usd, key_id.as_str());
         let Ok(m) = verify(&keys, &repo, at, claim, (&message, &sig)) else {
             continue;
@@ -129,37 +126,38 @@ fn entries(from: &str) -> Result<Vec<Value>> {
     })
 }
 
-/// Check one entry and write its raise; `(epic, usd, digest)` or why it was refused.
-fn one(app: &App, keys: &[ApproverKey], e: &Value) -> Why<(u64, u64, String)> {
+/// Check one entry and write its raise: `(epic, usd, digest)`, or why it was refused. GitHub
+/// errors are the command's own.
+fn one(app: &App, keys: &[ApproverKey], e: &Value) -> Result<Why<(u64, u64, String)>> {
     let s = |k: &str| e[k].as_str().unwrap_or_default();
-    let (epic, usd) =
-        (e["epic"].as_u64().zip(e["usd"].as_u64())).ok_or("the entry has no epic and usd")?;
+    let Some((epic, usd)) = e["epic"].as_u64().zip(e["usd"].as_u64()) else {
+        return Ok(Err("the entry has no epic and usd".into()));
+    };
     let claim = (epic, usd, s("key_id"));
-    let m = verify(
-        keys,
-        &repo_of(app),
-        app.ctx.now,
-        claim,
-        (s("message"), s("sig")),
-    )?;
-    let msg = |x: BosunError| x.message;
-    if !indexed(app, epic).map_err(msg)? {
-        return Err(format!(
+    let at = app.ctx.now;
+    let m = match verify(keys, &repo_of(app), at, claim, (s("message"), s("sig"))) {
+        Ok(m) => m,
+        Err(why) => return Ok(Err(why)),
+    };
+    if !indexed(app, epic)? {
+        return Ok(Err(format!(
             "epic #{epic} is not in the epic index (the orchestrator runs `bosun plan amend <plan>`)"
-        ));
+        )));
     }
-    let base = source(app, epic).map_err(msg)?.budget;
+    let base = source(app, epic)?.budget;
     if usd as f64 > base {
-        return Err(format!(
+        return Ok(Err(format!(
             "+{usd} is over the cap: one raise is at most the base budget ${base:.2}"
-        ));
+        )));
     }
-    if valid_raises(app, epic, base)
-        .map_err(msg)?
+    if valid_raises(app, epic, base)?
         .iter()
         .any(|h| h.0 == m.digest)
     {
-        return Err(format!("digest {} is already counted on #{epic}", m.digest));
+        return Ok(Err(format!(
+            "digest {} is already counted on #{epic}",
+            m.digest
+        )));
     }
     let r = Record::Raise {
         session: app.ctx.session.clone(),
@@ -171,8 +169,8 @@ fn one(app: &App, keys: &[ApproverKey], e: &Value) -> Why<(u64, u64, String)> {
         message: s("message").into(),
         sig: s("sig").into(),
     };
-    app.gh.add_comment(epic, &r.to_line()).map_err(msg)?;
-    Ok((epic, usd, m.digest))
+    app.gh.add_comment(epic, &r.to_line())?;
+    Ok(Ok((epic, usd, m.digest)))
 }
 
 pub fn run(dir: Option<&Path>, a: &BudgetRaiseArgs) -> CmdResult {
@@ -182,17 +180,18 @@ pub fn run(dir: Option<&Path>, a: &BudgetRaiseArgs) -> CmdResult {
     let keys = enrolled_keys(app.gh.as_ref()).map_err(|why| {
         BosunError::error(
             format!("raises cannot be checked: {why}"),
-            "enroll the orchestrator's key in .bosun/approvers.toml on the default branch with a PR the owner approves on GitHub",
+            "fix or add `.bosun/approvers.toml` on the default branch (an owner key)",
         )
     })?;
     let (mut recorded, mut refused) = (vec![], vec![]);
     for e in &list {
-        match one(&app, &keys, e) {
+        match one(&app, &keys, e)? {
             Ok((epic, usd, digest)) => {
                 recorded.push(json!({"epic": epic, "usd": usd, "digest": digest}));
             }
             Err(why) => {
-                refused.push(json!({"epic": e["epic"], "usd": e["usd"], "why": why}));
+                let (epic, usd) = (e["epic"].as_u64(), e["usd"].as_u64());
+                refused.push(json!({"epic": epic, "usd": usd, "why": why}));
             }
         }
     }
