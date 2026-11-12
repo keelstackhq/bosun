@@ -633,6 +633,16 @@ fn check(
                     }
                 }),
             };
+            let pushes = segment.contains("git")
+                && words
+                    .iter()
+                    .any(|w| matches!(w.trim_matches(['\'', '"', ')']), "push" | "send-pack"));
+            if pushes && env_config(command) {
+                return Some(format!(
+                    "`{}` is refused ({PUSH_CONFIG}; config from the environment or a file the guard does not read): {MERGE_FIX}",
+                    segment.trim()
+                ));
+            }
             if let Some(why) = merge_rule(&words, segment, &target) {
                 return Some(format!(
                     "`{}` is refused ({why}): {MERGE_FIX}",
@@ -1535,7 +1545,6 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         {
             Some(GIT_ALIAS)
         }
-        Some("git") if segment.contains("GIT_CONFIG_") && push_env(segment) => Some(PUSH_CONFIG),
         Some("git") => git_rule(&words[1..], &target),
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
@@ -2702,9 +2711,37 @@ const PUSH_CONFIG: &str = "git config sets where this push goes (`remote.<r>.pus
 const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`";
 
 /// A git config key that sets where a push goes: `remote.<r>.push`, `remote.<r>.mirror`.
+/// A key with a backslash is one the guard cannot read: fail closed.
 fn push_key(k: &str) -> bool {
-    let k = k.trim_start_matches(['\'', '"']).to_ascii_lowercase();
-    k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
+    let k = cfg_key(k);
+    k.contains('\\') || k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
+}
+
+/// A config key as git reads it: quotes removed, lowercase.
+fn cfg_key(k: &str) -> String {
+    k.replace(['\'', '"'], "").to_ascii_lowercase()
+}
+
+/// Whether a push's destination names the default branch (`main`, `refs/heads/main`, and
+/// `heads/main`, which git expands to `refs/heads/main`).
+fn names_default(dst: &str, default_branch: &str) -> bool {
+    let d = dst.strip_prefix("refs/").unwrap_or(dst);
+    d == default_branch || d.strip_prefix("heads/") == Some(default_branch)
+}
+
+/// Config or a config file from the environment or `include.path`, which the hook does not
+/// read where git runs: a push in such a command is refused.
+fn env_config(command: &str) -> bool {
+    let c = command.to_ascii_lowercase();
+    [
+        "git_config",
+        "home=",
+        "xdg_config_home=",
+        "include.path",
+        "includeif.",
+    ]
+    .iter()
+    .any(|v| c.contains(v))
 }
 
 /// `push.default` values that push only the current branch to its own name (`HEAD` is judged).
@@ -2713,13 +2750,6 @@ fn head_only(v: &str) -> bool {
         v.trim_matches(['\'', '"']).to_ascii_lowercase().as_str(),
         "simple" | "current" | "nothing"
     )
-}
-
-/// Config from the environment (`GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`) that may move a push.
-fn push_env(segment: &str) -> bool {
-    let s = segment.to_ascii_lowercase();
-    s.contains("push.default")
-        || (s.contains("remote.") && (s.contains(".push") || s.contains(".mirror")))
 }
 
 /// `git subtree push -P <prefix> <repository> [<commit>:]<ref>`: refused when the ref is
@@ -2748,7 +2778,7 @@ fn subtree_push(rest: &[&str], default_branch: &str) -> Option<&'static str> {
         if w.starts_with('+') || dst.contains("refs/tags/") || version_like(dst) {
             return Some("force, tag or delete push");
         }
-        if dst == default_branch || dst == format!("refs/heads/{default_branch}") {
+        if names_default(dst, default_branch) {
             return Some("push to the default branch");
         }
     }
@@ -2842,9 +2872,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         }
         if let Some((k, v)) = config.map(|c| c.split_once('=').unwrap_or((c, ""))) {
             push_cfg |= push_key(k);
-            if k.trim_start_matches(['\'', '"'])
-                .eq_ignore_ascii_case("push.default")
-            {
+            if cfg_key(k) == "push.default" {
                 // `--config-env` names a variable, not the value.
                 let env = a.starts_with("--config-env");
                 push_default = Some(if env { "" } else { v });
@@ -2895,6 +2923,22 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             }
             let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
             let rest = push_words(&unquoted);
+            // git takes a long option by any unique prefix (`--mir` is `--mirror`).
+            const BULK: [&str; 7] = [
+                "--force",
+                "--tags",
+                "--follow-tags",
+                "--mirror",
+                "--delete",
+                "--all",
+                "--stdin",
+            ];
+            if rest.iter().any(|a| {
+                let long = a.split('=').next().unwrap_or(a);
+                long.len() > 2 && long.starts_with("--") && BULK.iter().any(|b| b.starts_with(long))
+            }) {
+                return Some("force, tag, delete or bulk push");
+            }
             if rest.iter().any(|a| {
                 matches!(
                     *a,
@@ -2938,9 +2982,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             }
             let to_default = refs.iter().any(|r| {
                 let dst = r.rsplit(':').next().unwrap_or(r);
-                dst == default_branch
-                    || dst == format!("refs/heads/{default_branch}")
-                    || (dst == "HEAD" && on_default)
+                names_default(dst, default_branch) || (dst == "HEAD" && on_default)
             });
             if to_default || (refs.is_empty() && on_default) {
                 return Some("push to the default branch");
@@ -2982,14 +3024,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             let unsets = rest
                 .iter()
                 .any(|a| matches!(*a, "--unset" | "--unset-all" | "unset"));
-            let default_at = rest.iter().position(|a| {
-                a.trim_matches(['\'', '"'])
-                    .eq_ignore_ascii_case("push.default")
+            // A key with a value after it is a write; the key alone reads it.
+            let value = |i: usize| rest.get(i + 1).filter(|v| !v.starts_with('-'));
+            let writes = rest.iter().enumerate().any(|(i, a)| {
+                (push_key(a) && value(i).is_some())
+                    || (cfg_key(a) == "push.default" && value(i).is_some_and(|v| !head_only(v)))
             });
-            let sets_default = default_at
-                .and_then(|i| rest.get(i + 1))
-                .is_some_and(|v| !head_only(v));
-            (!unsets && (rest.iter().any(|a| push_key(a)) || sets_default)).then_some(PUSH_CONFIG)
+            (!unsets && writes).then_some(PUSH_CONFIG)
         }
         // `--mirror=push` (or a bare `--mirror`) makes every push a mirror push.
         "remote" => rest
@@ -3859,6 +3900,21 @@ mod tests {
             "git config push.default matching",
             "git config --global push.default upstream",
             "git remote add --mirror=push backup https://x/y.git",
+            "git -c 'push.default'=matching push",
+            "git -c 'remote.origin.push'=HEAD:main push",
+            "git config \"remote.origin.push\" HEAD:main && git push",
+            "git config remote.origin.pu''sh HEAD:main",
+            "git config push.\"default\" matching",
+            "export GIT_CONFIG_PARAMETERS=\"'remote.origin.push=HEAD:main'\"; git push",
+            "GIT_CONFIG_GLOBAL=/tmp/g git push",
+            "HOME=/tmp/h git push origin feature",
+            "git -c include.path=/tmp/g push origin feature",
+            "git push origin HEAD:heads/main",
+            "git send-pack origin feature:heads/main",
+            "git send-pack --std origin feature",
+            "git push --mir origin",
+            "git push --al origin",
+            "git push --del origin feature",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
@@ -3877,6 +3933,11 @@ mod tests {
             "git config push.default current",
             "git config user.name x",
             "git remote add upstream https://x/y.git",
+            "git config remote.origin.push",
+            "git config --type=bool remote.origin.mirror",
+            "GIT_CONFIG_NOSYSTEM=1 git commit -m 'remote. handling for .push'",
+            "git push origin feature:heads/feature",
+            "git push --set-upstream origin feature",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
