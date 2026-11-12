@@ -339,8 +339,9 @@ pub(crate) fn feature_guard(
     if knob == BudgetFeature::Off {
         return Ok(None);
     }
-    // Feature spend and indexes come from the registry: with the knob on it must be pinned.
-    if !task.is_some_and(|t| t.2) && !crate::registry::pinned(app.gh.as_ref())? {
+    // Feature spend and indexes come from the registry: with the knob on (any value but off) it
+    // must be pinned, for every task: a mainfix flag can come from an editable label or body.
+    if !crate::registry::pinned(app.gh.as_ref())? {
         return Err(BosunError::needs_human(
             format!(
                 "budget_feature is on but {} is not on the default branch, so the registry issue can be swapped",

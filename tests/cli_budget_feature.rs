@@ -224,6 +224,12 @@ fn claim_and_spawn_refuse_without_the_registry_pin_when_the_knob_is_on() {
                 .contains("commit `.bosun/registry`")
         );
     }
+    // A mainfix task (plan kind T2, label and body too) needs the pin as well.
+    let mf = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/m/**"],"kind":"mainfix"} -->"#;
+    fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
 }
 
 #[test]
