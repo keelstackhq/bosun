@@ -83,7 +83,6 @@ fn bosun_mode_prints_knobs_offline() {
 fn stubs_exit_1_with_a_fix() {
     for (args, pr) in [
         (vec!["heal"], "3a"),
-        (vec!["digest"], "4"),
         (vec!["metrics"], "5"),
         (vec!["wave", "tick", "7"], "6"),
     ] {
