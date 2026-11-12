@@ -1,6 +1,6 @@
 ## 18. Modes
 
-**Status: parse, policy and weaken check (plan PRs 1a, 1b); the boosters land later.** Design:
+**Status: parse, policy and weaken check (plan PRs 1a, 1b, 5); the boosters land later.** Design:
 `docs/superpowers/specs/2026-11-11-modes-booster-design.md`, plan `…/plans/2026-11-11-modes-booster.md`.
 
 ### `[mode]`
@@ -48,10 +48,14 @@ push_gates = "push"
 Pure (`core::mode::brake`): over a 7-day window it is on when main went red at least twice, at
 least two PRs were reverted, or the red-CI rate (failing `ci-ok` heads / pushed PR heads) is
 at least 10 points over the mode's target (steady 30 %, booster 20 %, autonomous 15 %;
-gatekeeper has no target). Nothing is stored. The counts come from GitHub in plan PR 5; until
-then `bosun mode` prints `brake: null`. Its sources are writer-only or immutable: main-health
-commit statuses, merged revert PRs by a writer with the `bosun:revert N` marker, and check
-conclusions. Never an issue an agent can close: closing a main-red issue cannot lift it.
+gatekeeper has no target). Nothing is stored. `bosun metrics` computes it on every run
+(`data.brake`, in every mode; `knob` says whether the mode applies it); `bosun mode` stays
+offline and prints `brake: null`; heal, digest and wave tick read it through
+`cli::metrics::window`. Sources, all immutable or writer-only: `ci-ok` check runs of the GitHub
+Actions app on merge commits of main (what main-health judges) and on PR heads, where any
+failing run counts (a rerun cannot erase it; other apps and commit statuses never count), and
+merged PRs with the `bosun:revert N` marker opened by a writer. Never an issue an agent can
+close: main-red issues are not read, so closing one cannot lift the brake.
 
 ### Revert (plan PR 3b)
 
@@ -62,6 +66,8 @@ exact-inverse check.
 ### Commands
 
 - `bosun mode`: the effective mode and knobs with their sources; no GitHub call.
+- `bosun metrics [--days N]` (PR 5, read-only): red-CI rate, brake, cost per merged PR, lead
+  time p50 per epic, owner touches and owner-rule blocks. `--propose` lands in PR 8.
 - `bosun heal [--pr N]` (PR 3a/3b), `bosun digest [--answer --from F --sign-key PEM]` (PR 4),
-  `bosun metrics [--days N] [--propose]` (PR 5/8), `bosun wave tick <epic>` (PR 6): registered
-  with their final arguments; until their PR lands each exits 1 with a `fix` naming it.
+  `bosun wave tick <epic>` (PR 6): registered with their final arguments; until their PR lands
+  each exits 1 with a `fix` naming it.
