@@ -1,4 +1,5 @@
-//! `bosun metrics` logic (plan PR 5): CI facts of a head, the revert marker, p50, risk rules.
+//! `bosun metrics` logic (plan PR 5, 8): CI facts of a head, the revert marker, p50, risk rules,
+//! curator proposals.
 
 use super::approve::TRUSTED_APP;
 use crate::time::Timestamp;
@@ -69,4 +70,59 @@ pub fn owner_rules(body: &str) -> Vec<String> {
     }
     let rule = |l: &str| Some(l.strip_prefix("- **")?.split_once("**:")?.0.to_string());
     note.lines().filter_map(rule).collect()
+}
+
+/// Rules the curator never proposes to loosen (spec §7): the floor and workflow paths (R-ci).
+pub const NEVER_PROPOSED: [&str; 8] = [
+    "R-weaken",
+    "R-secrets",
+    "R-prod-write",
+    "R-gov",
+    "R-gate",
+    "R-revert",
+    "R-ci",
+    "R-unseen",
+];
+
+/// Owner blocks of one rule in the window: the PRs it blocked, how many of them were caught.
+pub struct RuleBlocks {
+    pub rule: String,
+    pub prs: Vec<u64>,
+    pub caught: u32,
+}
+
+/// A rule the curator may propose to loosen, with a draft PR title and body.
+pub struct Proposal {
+    pub rule: String,
+    pub blocks: u32,
+    pub prs: Vec<u64>,
+    pub title: String,
+    pub body: String,
+}
+
+/// Rules with at least 10 blocks and no catch in `days`, never [`NEVER_PROPOSED`].
+pub fn proposals(all: &[RuleBlocks], days: u32) -> Vec<Proposal> {
+    let ok = |b: &&RuleBlocks| {
+        b.prs.len() >= 10 && b.caught == 0 && !NEVER_PROPOSED.contains(&b.rule.as_str())
+    };
+    all.iter()
+        .filter(ok)
+        .map(|b| {
+            let n = b.prs.len() as u32;
+            let prs: String = b.prs.iter().map(|p| format!("- #{p}\n")).collect();
+            Proposal {
+                rule: b.rule.clone(),
+                blocks: n,
+                prs: b.prs.clone(),
+                title: format!("risk: loosen {} (no catch in {days} days)", b.rule),
+                body: format!(
+                    "{rule} asked for an owner approval {n} times: {n} owner blocks in {days} \
+                     days, none caught (each PR merged on its first head, none closed).\n\n\
+                     Blocked PRs:\n{prs}\nThis PR loosens {rule} in `.bosun/risk.toml`. It \
+                     matches R-weaken and R-gov: the owner decides.\n",
+                    rule = b.rule
+                ),
+            }
+        })
+        .collect()
 }

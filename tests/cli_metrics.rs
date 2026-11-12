@@ -189,13 +189,53 @@ fn a_gatekeeper_still_trips_on_main_red() {
 }
 
 #[test]
-fn propose_is_not_built_and_zero_days_is_usage() {
+fn zero_days_is_usage() {
     let fake = FakeGithub::start();
-    let (code, v) = run(&fake, "s", NOW, &["metrics", "--propose"]);
-    assert_eq!(code, 1);
-    assert!(v["error"]["fix"].as_str().unwrap().contains("plan PR 8"));
     let (code, v) = run(&fake, "s", NOW, &["metrics", "--days", "0"]);
     assert_eq!(code, 2, "{v}");
+}
+
+#[test]
+fn propose_lists_rules_with_ten_blocks_and_no_catch_but_never_the_floor() {
+    let fake = FakeGithub::start();
+    // PRs 31-40 merged on the first head: R-ci-review, R-deps and R-gov block 10 times each.
+    // PR 30 was re-pushed (caught) and blocked by R-deps only.
+    for n in 30..=40u64 {
+        let (rules, heads): (&[&str], Vec<String>) = if n == 30 {
+            (&["R-deps"], vec!["h30".into(), "h30b".into()])
+        } else {
+            (&["R-ci-review", "R-deps", "R-gov"], vec![format!("h{n}")])
+        };
+        let heads: Vec<&str> = heads.iter().map(String::as_str).collect();
+        pr(&fake, n, &risk(0, rules), &heads);
+        merged(&fake, n, "2026-11-05T00:00:00Z");
+        for h in &heads {
+            fake.check_run_by(h, "ci-ok", "success", ACTIONS);
+        }
+    }
+    let d = metrics(&fake, &["--propose"]);
+    assert_eq!(d["curator_loosen"], "off", "{d}");
+    assert_eq!(
+        (d["days"].as_u64(), d.get("brake")),
+        (Some(30), None),
+        "{d}"
+    );
+    let p = d["proposals"].as_array().unwrap();
+    assert_eq!(p.len(), 1, "{d}");
+    assert_eq!(
+        (p[0]["rule"].as_str(), p[0]["blocks"].as_u64()),
+        (Some("R-ci-review"), Some(10))
+    );
+    assert_eq!(p[0]["prs"].as_array().unwrap().len(), 10);
+    let body = p[0]["body"].as_str().unwrap();
+    assert!(
+        body.contains("- #31\n") && body.contains("- #40\n"),
+        "{body}"
+    );
+    assert!(!body.contains("#30\n"), "{body}");
+    assert!(p[0]["title"].as_str().unwrap().contains("R-ci-review"));
+    // Plain metrics never carry proposals (gatekeeper output unchanged).
+    assert!(metrics(&fake, &[]).get("proposals").is_none());
 }
 
 fn task(fake: &FakeGithub, n: u64, epic: u64, claimed: &str, usd: f64) {

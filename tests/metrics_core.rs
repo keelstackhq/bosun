@@ -108,3 +108,51 @@ fn owner_rules_need_an_owner_ask() {
     assert!(owner_rules(&note("Needed: two independent review verdicts")).is_empty());
     assert!(owner_rules("- **R-gov**: loose bullet\nOwner: review").is_empty());
 }
+
+fn block(rule: &str, prs: &[u64], caught: u32) -> RuleBlocks {
+    RuleBlocks {
+        rule: rule.into(),
+        prs: prs.to_vec(),
+        caught,
+    }
+}
+
+#[test]
+fn proposals_need_ten_blocks_no_catch_and_never_a_floor_rule() {
+    let ten: Vec<u64> = (1..=10).collect();
+    let mut all = vec![
+        block("R-deps", &ten, 0),
+        block("R-ci-review", &ten[..9], 0),
+        block("R-docs", &ten, 1),
+    ];
+    for r in NEVER_PROPOSED {
+        all.push(block(r, &ten, 0));
+    }
+    let p = proposals(&all, 30);
+    assert_eq!(
+        p.iter().map(|p| p.rule.as_str()).collect::<Vec<_>>(),
+        ["R-deps"]
+    );
+    for r in [
+        "R-weaken",
+        "R-secrets",
+        "R-gov",
+        "R-gate",
+        "R-revert",
+        "R-prod-write",
+        "R-ci",
+    ] {
+        assert!(NEVER_PROPOSED.contains(&r), "{r}");
+    }
+    let body = &p[0].body;
+    assert!(p[0].title.contains("R-deps"), "{}", p[0].title);
+    assert!(
+        body.contains("10 owner blocks in 30 days, none caught"),
+        "{body}"
+    );
+    assert!(
+        body.contains("- #1\n") && body.contains("- #10\n"),
+        "{body}"
+    );
+    assert!(body.contains("R-weaken"), "{body}");
+}

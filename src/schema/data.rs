@@ -185,7 +185,7 @@ metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reason
     red_ci: {failing_heads: int, pushed_heads: int, rate_pct: num | null}, merged: int,
     cost_per_merged_usd: num | null, lead_time_p50_hours: num | null, epics: int,
     owner_touches: int, owner_touches_per_day: num,
-    blocks: [{rule: str, blocks: int, caught: int, passed: int}]};
+    blocks: [{rule: str, blocks: int, caught: int, passed: int}]} | {days: int, since: str, curator_loosen: str, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
 wave tick = {};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
     commands?: {[str]: any}, ts?: str};

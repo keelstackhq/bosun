@@ -16,7 +16,9 @@ use crate::core::approve::{
 use crate::core::budget_report::{facts, merge_spend};
 use crate::core::cost::{revert_target, round_usd};
 use crate::core::meta::closing_issues;
-use crate::core::metrics::{CiRun, HeadCi, ci_head, owner_rules, p50, revert_of};
+use crate::core::metrics::{
+    CiRun, HeadCi, RuleBlocks, ci_head, owner_rules, p50, proposals, revert_of,
+};
 use crate::core::mode::{BrakeWindow, brake};
 use crate::core::records::{Record, parse_record};
 use crate::ctx::RepoId;
@@ -155,10 +157,49 @@ fn owner_signed(body: &str, keys: &[ApproverKey], repo: &RepoId, pr: u64) -> boo
         })
 }
 
-pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
-    if args.propose {
-        return Err(super::not_built("metrics --propose", "8"));
+type Blocks = BTreeMap<String, (Vec<u64>, u32, u32)>;
+
+/// Blocks per rule since `start`: the blocked PRs, then caught (closed unmerged or re-pushed)
+/// and passed (merged on the first head) counts. Open PRs are not counted yet.
+fn rule_blocks(all: &[Facts], start: Timestamp) -> Blocks {
+    let in_days = |t: &Option<String>| ts(t).is_some_and(|t| t >= start);
+    let mut blocks = Blocks::new();
+    for f in all {
+        let p = &f.pull;
+        let merged = p.merged_at.is_some();
+        let (caught, passed) = match (merged, p.state == "closed") {
+            (false, true) if in_days(&p.closed_at) => (true, false),
+            (true, _) if in_days(&p.merged_at) => (f.heads.len() > 1, f.heads.len() == 1),
+            _ => continue,
+        };
+        for rule in owner_rules(&p.body) {
+            let e = blocks.entry(rule).or_default();
+            e.0.push(p.number);
+            (e.1, e.2) = (e.1 + u32::from(caught), e.2 + u32::from(passed));
+        }
     }
+    blocks
+}
+
+/// `--propose`: the rules a curator may propose to loosen, each with a draft PR title and body.
+/// Read-only; the curator Routine opens the PR (R-weaken, so the owner decides).
+fn propose(app: &App, days: u32) -> CmdResult {
+    let start = app.ctx.now.minus_secs(i64::from(days) * DAY);
+    let all: Vec<RuleBlocks> = rule_blocks(&collect(app, start)?, start)
+        .into_iter()
+        .map(|(rule, (prs, caught, _))| RuleBlocks { rule, prs, caught })
+        .collect();
+    let knob = app.ctx.config.mode_effective().knobs.curator_loosen.value;
+    let found = proposals(&all, days).into_iter().map(|p| {
+        json!({"rule": p.rule, "blocks": p.blocks, "prs": p.prs, "title": p.title, "body": p.body})
+    });
+    Ok(Outcome::data(json!({
+        "days": days, "since": start.to_string(), "curator_loosen": knob.as_str(),
+        "proposals": found.collect::<Vec<_>>(),
+    })))
+}
+
+pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     if args.days == 0 {
         return Err(BosunError::usage(
             "--days must be at least 1",
@@ -166,6 +207,9 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
         ));
     }
     let app = App::load(dir)?;
+    if args.propose {
+        return propose(&app, args.days);
+    }
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
     let start = now.minus_secs(i64::from(args.days) * DAY);
     let b7 = now.minus_secs(i64::from(BRAKE_DAYS) * DAY);
@@ -238,21 +282,7 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
         }
     }
 
-    // Blocks per rule: closed unmerged or re-pushed = caught, merged on the first head = passed.
-    let mut blocks: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
-    for f in &all {
-        let p = &f.pull;
-        let merged = p.merged_at.is_some();
-        let (caught, passed) = match (merged, p.state == "closed") {
-            (false, true) if in_days(&p.closed_at) => (true, false),
-            (true, _) if in_days(&p.merged_at) => (f.heads.len() > 1, f.heads.len() == 1),
-            _ => continue,
-        };
-        for rule in owner_rules(&p.body) {
-            let e = blocks.entry(rule).or_default();
-            *e = (e.0 + 1, e.1 + u32::from(caught), e.2 + u32::from(passed));
-        }
-    }
+    let blocks = rule_blocks(&all, start);
     let (pushed, failing) = all.iter().fold((0, 0), |a, f| rate_add(f, start, a));
     let rate =
         (pushed > 0).then(|| (f64::from(failing) * 1000.0 / f64::from(pushed)).round() / 10.0);
@@ -268,6 +298,6 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
         "epics": hours.len(),
         "owner_touches": touches,
         "owner_touches_per_day": round2(f64::from(touches) / f64::from(args.days)),
-        "blocks": blocks.iter().map(|(r, (b, c, p))| json!({"rule": r, "blocks": b, "caught": c, "passed": p})).collect::<Vec<_>>(),
+        "blocks": blocks.iter().map(|(r, (b, c, p))| json!({"rule": r, "blocks": b.len(), "caught": c, "passed": p})).collect::<Vec<_>>(),
     })))
 }
