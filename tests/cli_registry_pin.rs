@@ -51,19 +51,18 @@ fn the_file_on_the_default_branch_wins_over_a_lower_issue() {
     let fake = FakeGithub::start();
     fake.issue(1, "old", &[LABEL], "");
     fake.issue(5, "pinned", &[LABEL], "");
-    fake.content(".bosun/registry", "main", "5\n");
+    fake.content(".bosun/registry", "refs/heads/main", "5\n");
     let (code, v) = run(&fake, "session_a", T0, &["join"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["registry_issue"], 5);
 }
 
 #[test]
-fn the_file_naming_a_missing_or_unlabelled_issue_is_an_error() {
+fn the_file_naming_a_missing_issue_or_a_non_number_is_an_error() {
     let fake = FakeGithub::start();
     fake.issue(1, "bosun registry", &[LABEL], "");
-    fake.issue(3, "plain", &[], "");
-    for n in ["9", "3", "abc"] {
-        fake.content(".bosun/registry", "main", n);
+    for n in ["9", "abc"] {
+        fake.content(".bosun/registry", "refs/heads/main", n);
         let (code, v) = run(&fake, "session_a", T0, &["join"]);
         assert_eq!(code, 1, "{v}");
         let msg = v["error"]["message"].as_str().unwrap();
@@ -78,4 +77,31 @@ fn no_issue_and_no_file_creates_one() {
     let (code, v) = run(&fake, "session_a", T0, &["join"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(labelled(&fake), 1);
+}
+
+#[test]
+fn the_pin_is_the_trust_root_when_the_label_is_removed_from_it() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &[], "");
+    fake.issue(2, "rival", &[LABEL], "");
+    fake.content(".bosun/registry", "refs/heads/main", "1");
+    let (code, v) = run(&fake, "session_a", T0, &["join"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["registry_issue"], 1);
+}
+
+#[test]
+fn doctor_warns_about_a_missing_pin() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "bosun registry", &[LABEL], "");
+    let (_, v) = run(&fake, "session_a", T0, &["doctor"]);
+    let item = v["data"]["items"]
+        .as_array()
+        .or_else(|| v["data"]["steps"].as_array())
+        .unwrap()
+        .iter()
+        .find(|i| i["name"] == "registry issue")
+        .unwrap();
+    assert_eq!(item["status"], "warn", "{v}");
+    assert!(item["detail"].as_str().unwrap().contains(".bosun/registry"));
 }

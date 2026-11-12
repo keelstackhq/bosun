@@ -26,17 +26,30 @@ pub fn load_own(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
 /// Where the pin file lives, on the default branch.
 pub const PIN_FILE: &str = ".bosun/registry";
 
-/// The registry issue number, the one choice every reader and writer shares: the number in
-/// `.bosun/registry` on the default branch (any state), else the lowest-numbered issue with the
-/// label in any state. A newer labelled issue never counts.
+/// The registry issue number, the one choice every reader and writer shares (read once per
+/// process): the number in `.bosun/registry` on the default branch, which is the trust root and
+/// names an issue in any state, else the lowest-numbered issue with the label in any state. A
+/// newer labelled issue never counts. Fails closed when the default branch cannot be read.
 pub fn pick(gh: &dyn Github) -> Result<Option<u64>> {
-    let branch = crate::app::default_branch(gh).unwrap_or_else(|_| "main".to_string());
-    if let Some(text) = gh.file_at(PIN_FILE, &branch)? {
+    static CACHE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    if let Some(n) = CACHE.get() {
+        return Ok(Some(*n));
+    }
+    let picked = pick_uncached(gh)?;
+    if let Some(n) = picked {
+        let _ = CACHE.set(n);
+    }
+    Ok(picked)
+}
+
+fn pick_uncached(gh: &dyn Github) -> Result<Option<u64>> {
+    let git_ref = crate::app::default_ref(gh)?;
+    if let Some(text) = gh.file_at(PIN_FILE, &git_ref)? {
         let bad = |why: String| {
             BosunError::error(
-                format!("{PIN_FILE} on {branch} {why}"),
+                format!("{PIN_FILE} on {git_ref} {why}"),
                 format!(
-                    "make {PIN_FILE} on the default branch hold the number of the issue labelled {LABEL} (an owner-approved PR), or delete the file"
+                    "the owner fixes {PIN_FILE} on the default branch (an R-gov PR) to hold the number of the registry issue"
                 ),
             )
         };
@@ -45,16 +58,32 @@ pub fn pick(gh: &dyn Github) -> Result<Option<u64>> {
             .parse()
             .map_err(|_| bad(format!("is not an issue number: {:?}", text.trim())))?;
         return match gh.get_issue(n)? {
-            Some(i) if i.labels.iter().any(|l| l == LABEL) => Ok(Some(n)),
-            Some(_) => Err(bad(format!("names #{n}, which lacks the {LABEL} label"))),
+            Some(_) => Ok(Some(n)),
             None => Err(bad(format!("names #{n}, which does not exist"))),
         };
     }
+    Ok(labelled(gh)?.into_iter().min())
+}
+
+fn labelled(gh: &dyn Github) -> Result<Vec<u64>> {
     Ok(gh
         .list_issues(&[LABEL], IssueState::All)?
         .iter()
         .map(|i| i.number)
-        .min())
+        .collect())
+}
+
+/// What `bosun doctor` warns about: no committed pin (the fallback can be swapped by relabelling
+/// issues), or several labelled issues. `None` when the pin file exists.
+pub fn pin_advice(gh: &dyn Github) -> Result<Option<String>> {
+    let git_ref = crate::app::default_ref(gh)?;
+    if gh.file_at(PIN_FILE, &git_ref)?.is_some() {
+        return Ok(None);
+    }
+    let n = labelled(gh)?.len();
+    Ok(Some(format!(
+        "no {PIN_FILE} on the default branch ({n} issue(s) labelled {LABEL}): the registry is the lowest-numbered labelled issue, which relabelling can swap; commit {PIN_FILE} with the registry issue number (an R-gov PR the owner approves)"
+    )))
 }
 
 fn load_with(gh: &dyn Github, trusted: bool) -> Result<Option<(u64, Vec<Note>)>> {

@@ -1100,6 +1100,7 @@ fn route(
                         && want.iter().all(|w| i.labels.iter().any(|l| l == w))
                 })
                 .map(issue_json)
+                .rev()
                 .collect();
             page(items, &query, base, path, raw_query)
         }
