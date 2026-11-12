@@ -81,11 +81,7 @@ fn bosun_mode_prints_knobs_offline() {
 
 #[test]
 fn stubs_exit_1_with_a_fix() {
-    for (args, pr) in [
-        (vec!["heal"], "3a"),
-        (vec!["digest"], "4"),
-        (vec!["wave", "tick", "7"], "6"),
-    ] {
+    for (args, pr) in [(vec!["heal"], "3a"), (vec!["wave", "tick", "7"], "6")] {
         let out = bosun().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(1), "{args:?}");
         let v = one_object(&out.stdout);
