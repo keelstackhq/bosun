@@ -114,19 +114,29 @@ fn a_dead_holder_gets_a_fixer_only_with_spawn() {
         prompt.contains("#30") && prompt.contains("Do not claim"),
         "{prompt}"
     );
-    // This session took the dead lease for the fixer: the next run neither spawns nor notifies.
-    let lease = fake.comments_of(7);
     assert!(
-        lease
-            .iter()
-            .any(|c| c.body.contains("\"session\":\"session_test\""))
+        prompt.contains("bosun join --parent session_test --depth 2"),
+        "{prompt}"
     );
-    fake.pull_head_sha(30, "sha30b");
-    fake.check_run_by("sha30b", "ci", "failure", ACTIONS);
-    fake.check_run_by("sha30b", "ci-ok", "failure", ACTIONS);
+    // This session took the dead lease for the fixer, once. The same head is not healed again;
+    // a new red head is round 2 (a new fixer, no second lease), then needs-human.
+    let mine = |f: &FakeGithub| {
+        let c = f.comments_of(7);
+        c.iter()
+            .filter(|c| c.body.contains("\"session\":\"session_test\""))
+            .count()
+    };
+    assert_eq!(mine(&fake), 1);
     let (_, v) = heal_in(&fake, Some(BOOSTER), &[]);
     assert_eq!(actions(&v), ["skip"], "{v}");
-    assert_eq!(v["next"], serde_json::json!([]));
+    for (head, want) in [("sha30b", "spawn"), ("sha30c", "needs-human")] {
+        fake.pull_head_sha(30, head);
+        fake.check_run_by(head, "ci", "failure", ACTIONS);
+        fake.check_run_by(head, "ci-ok", "failure", ACTIONS);
+        let (_, v) = heal_in(&fake, Some(BOOSTER), &[]);
+        assert_eq!(actions(&v), [want], "{v}");
+    }
+    assert_eq!(mine(&fake), 1);
 }
 
 #[test]
