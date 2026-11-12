@@ -9,11 +9,12 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::{ApproveArgs, DigestArgs};
-use crate::app::App;
+use crate::app::{App, kill_switch, main_red};
 use crate::cli::approve::read_key;
 use crate::cli::risk_check::enrolled_keys;
+use crate::core::answer::text_sha256;
 use crate::core::approve::{APPROVERS_PATH, Role};
-use crate::core::digest::{Item, digest, drop_reason, parse_header, parse_reply, raise_message};
+use crate::core::digest::{Item, RaiseCtx, digest, parse_header, parse_reply, pick, raise_message};
 use crate::gates::main_open::is_mainfix;
 use crate::github::{IssueState, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -38,8 +39,16 @@ fn read_text(from: &str) -> Result<String, BosunError> {
     Ok(text)
 }
 
-/// The owner-waiting PRs (mainfix PRs apart) and the mainfix PRs, from `approve --list`.
-fn board(dir: Option<&Path>, app: &App) -> Result<(Vec<Item>, Vec<u64>), BosunError> {
+/// The board: owner-waiting PRs, mainfix PRs (only while main is red) and what a tokenless
+/// listing could not read.
+struct Board {
+    items: Vec<Item>,
+    bypass: Vec<u64>,
+    skipped: Value,
+}
+
+/// The board from `approve --list`.
+fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
     let list = ApproveArgs {
         prs: Vec::new(),
         list: true,
@@ -50,7 +59,13 @@ fn board(dir: Option<&Path>, app: &App) -> Result<(Vec<Item>, Vec<u64>), BosunEr
         bootstrap: false,
     };
     let data = super::approve::run(dir, &list)?.data;
-    let pulls = app.gh.list_pulls(None, IssueState::Open)?;
+    // Mainfix PRs skip the batch only while main is red, as main-open judges them.
+    let red = main_red(app.gh.as_ref())?.is_some();
+    let pulls = if red {
+        app.gh.list_pulls(None, IssueState::Open)?
+    } else {
+        Vec::new()
+    };
     let (mut items, mut bypass) = (Vec::new(), Vec::new());
     for r in data["ready"].as_array().into_iter().flatten() {
         let pr = r["pr"].as_u64().unwrap_or_default();
@@ -72,7 +87,17 @@ fn board(dir: Option<&Path>, app: &App) -> Result<(Vec<Item>, Vec<u64>), BosunEr
             title: r["title"].as_str().unwrap_or_default().to_string(),
         });
     }
-    Ok((items, bypass))
+    let skipped = data.get("skipped").cloned().unwrap_or(json!([]));
+    Ok(Board {
+        items,
+        bypass,
+        skipped,
+    })
+}
+
+fn repo(app: &App) -> String {
+    let r = &app.ctx.repo;
+    format!("{}/{}", r.owner, r.name).to_ascii_lowercase()
 }
 
 pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
@@ -86,14 +111,18 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
     if args.answer {
         return answer(dir, &app, args);
     }
-    let (items, bypass) = board(dir, &app)?;
+    let Board {
+        items,
+        bypass,
+        skipped,
+    } = board(dir, &app)?;
     let mut asks = Vec::new();
     for i in app.gh.list_issues(&[NEEDS_HUMAN], IssueState::Open)? {
         if !i.pull_request {
             asks.push((i.number, i.title));
         }
     }
-    let d = digest(&items, &asks);
+    let d = digest(&repo(&app), &items, &asks);
     Ok(Outcome::data(json!({
         "message_id": d.id,
         "message": d.text,
@@ -104,45 +133,69 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
             "answer": format!("bosun answer {n} --chat")})).collect::<Vec<_>>(),
         "bypass": bypass.iter().map(|n| json!({"pr": n, "why": BYPASS})).collect::<Vec<_>>(),
         "budget_asks": [],
+        "skipped": skipped,
     })))
 }
 
 fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
+    kill_switch(app.gh.as_ref())?;
     let text = read_text(&args.from)?;
     super::refuse_secret("the reply", &text)?;
     let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
     let header = lines.next().unwrap_or_default();
-    let (id, shown) = parse_header(header).ok_or_else(|| {
+    let (hrepo, id, shown) = parse_header(header).ok_or_else(|| {
         BosunError::usage("the answer does not start with a digest header", HEADER_FIX)
     })?;
-    let reply = parse_reply(&lines.collect::<Vec<_>>().join("\n"));
-    let (items, _) = board(dir, app)?;
-    let now: Vec<(u64, String)> = items.iter().map(|i| (i.pr, i.head.clone())).collect();
+    if hrepo != repo(app) {
+        return Err(BosunError::usage(
+            format!("the digest header is for {hrepo}, not {}", repo(app)),
+            HEADER_FIX,
+        ));
+    }
+    let body = lines.collect::<Vec<_>>().join("\n");
+    let reply = parse_reply(&body);
+    if let Some(quoted) = &reply.id
+        && *quoted != id
+    {
+        return Err(BosunError::conflict(
+            format!("the owner answered digest {quoted}, the header is digest {id}"),
+            "pass the header of the digest the owner answered (its id is in the message's first line)",
+        ));
+    }
+    let now: Vec<(u64, String)> = board(dir, app)?
+        .items
+        .iter()
+        .map(|i| (i.pr, i.head.clone()))
+        .collect();
     let (mut approve, mut dropped) = (Vec::new(), Vec::new());
     for pr in &reply.approve {
-        match drop_reason(&shown, &now, *pr) {
-            None => approve.push((*pr, shown.iter().find(|s| s.0 == *pr).unwrap().1.clone())),
-            Some(why) => dropped.push(json!({"pr": pr, "why": why})),
+        match pick(&shown, &now, *pr) {
+            Ok(h) => approve.push((*pr, h)),
+            Err(why) => dropped.push(json!({"pr": pr, "why": why})),
         }
     }
     let (mut raises, mut refused) = (Vec::new(), Vec::new());
-    if let Some(path) = &args.sign_key
-        && !reply.raise.is_empty()
-    {
-        let (key_id, pair) = owner_key(app, path)?;
-        let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
-        for (epic, usd) in &reply.raise {
-            let message = raise_message(owner, repo, &id, *epic, *usd);
-            let sig = b64::encode(pair.sign(message.as_bytes()).as_ref());
-            raises.push(
-                json!({"epic": epic, "usd": usd, "key_id": key_id, "message": message,
-                "sig": sig}),
-            );
-        }
-    } else {
-        for (epic, usd) in &reply.raise {
-            refused.push(json!({"raise": {"epic": epic, "usd": usd},
-                "why": "not signed: run again with --sign-key and an enrolled owner key"}));
+    let key = match &args.sign_key {
+        Some(path) if !reply.raise.is_empty() => owner_key(app, path).map_err(|e| e.message),
+        _ => Err("not signed: run again with --sign-key and an enrolled owner key".to_string()),
+    };
+    let (owner, name) = (&app.ctx.repo.owner, &app.ctx.repo.name);
+    let stamp = app.ctx.now.to_string();
+    let sha = text_sha256(&body);
+    let c = RaiseCtx {
+        id: &id,
+        day: &stamp[..10],
+        reply_sha256: &sha,
+    };
+    for (epic, usd) in &reply.raise {
+        match &key {
+            Ok((key_id, pair)) => {
+                let message = raise_message(owner, name, &c, *epic, *usd);
+                let sig = b64::encode(pair.sign(message.as_bytes()).as_ref());
+                raises.push(json!({"epic": epic, "usd": usd, "key_id": key_id,
+                    "message": message, "sig": sig}));
+            }
+            Err(why) => refused.push(json!({"raise": {"epic": epic, "usd": usd}, "why": why})),
         }
     }
     let mut out = Outcome::data(json!({

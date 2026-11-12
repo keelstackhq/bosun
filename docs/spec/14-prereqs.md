@@ -63,20 +63,25 @@ sorted `<pr>@<head>` lines) and `data.message_pairs`. Only the latest relayed me
 answerable; PR numbers come only from the owner's chat; each (id, pr) is signed at most once (§8).
 
 **Daily digest (§18, `approvals_batch = "daily"`).** `bosun digest` (the orchestrator, once a day)
-reads the `approve --list` board and needs-human issues and writes nothing. `data.message` is one
-D-012 chat form: every owner-waiting PR (`#<pr>@<short head>`, its risk rules, the inert title),
-the open asks (answered with `bosun answer <issue> --chat`), budget asks (none until plan PR 7)
-and the reply `approve 12 15 / raise <epic> +<usd>`. Mainfix PRs are in `data.bypass`, never in
-the digest; release-environment taps never wait for it. `data.header` is
-`/bosun digest <id> <pr>@<head>...` (`id`: as `message_id` above). `bosun digest --answer` takes
-that header as the first line, then the owner's reply verbatim: an edited header is a usage
-error; a PR the owner names counts only when the digest showed it and it still waits at that
+reads the `approve --list` board and the needs-human issues, and writes nothing. `data.message`
+is one D-012 chat form for the repo: its first line `Daily digest <owner>/<repo> <id>`, every
+owner-waiting PR (`#<pr>@<short head>`, its `R-` rule ids, the inert title), the open asks
+(answered with `bosun answer <issue> --chat`), budget asks (none until plan PR 7) and the reply
+`<id> approve 12 15 / raise <epic> +<usd>`. While main is red, mainfix PRs are in `data.bypass`,
+not in the digest; release-environment taps never wait for it. What a tokenless listing could
+not read is in `data.skipped`. `data.header` is `/bosun digest <owner>/<repo> <id>
+<pr>@<head>...` (`id`: as `message_id` above, an unkeyed checksum that catches copy errors, not
+forgery: the orchestrator relays the header of the message it showed). `bosun digest --answer`
+(after the kill switch) takes that header as the first line, then the owner's reply verbatim: a
+header that does not check or names another repo is exit 2, a reply that quotes another id is
+exit 3. A PR the owner names counts only when the digest showed it and it still waits at that
 head, else it is in `data.dropped` (a moved head is listed in the next digest). Each approval is
 a `next` call `bosun approve <pr>@<head> --sign-key <pem>` for the key holder: the digest signs
 no approval. A raise counts only with `--sign-key` and a key enrolled as owner on the default
-branch: `data.raises` carries the signature of `bosun-raise v1 <owner>/<repo> digest <id> epic
-<n> usd +<usd>`; unsigned raises are in `data.refused`. Other reply lines are in `data.unknown`,
-never guessed.
+branch: `data.raises` carries the signature of `bosun-raise v1 <owner>/<repo> digest <id> day
+<YYYY-MM-DD> reply <sha256 of the normalized reply> epic <n> usd +<usd>`; otherwise it is in
+`data.refused` with the reason. Other reply lines are in `data.unknown`, never guessed. Not yet:
+needs-human PRs from `heal` (plan PR 3a) and the "brake on" lead line (plan PR 5).
 
 **App check runs (B2, §15).** Once per org, mostly from a computer, as H1-H7 of
 `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, in this order: H1 create the App
