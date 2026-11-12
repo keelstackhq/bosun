@@ -237,26 +237,59 @@ fn config_get(dir: &Path, args: &[&str]) -> Result<Option<String>, ()> {
     }
 }
 
-/// A git alias (in the hook directory's config) that runs `push`, `send-pack`, `subtree` or a
-/// shell command (`!..`), named as a word of the command: the merge-lock cannot see behind it.
+/// A git alias that may push, run in git's subcommand position (after its global options) and
+/// read where that git runs (the hook directory moved by `-C`, `--git-dir`, `--work-tree`):
+/// a value with a `push`, `send-pack` or `subtree` word, or one that starts with `!` (a shell)
+/// or `-` (global options). The merge-lock cannot see behind it.
 fn alias_push(dir: &Path, command: &str) -> Option<String> {
-    if !command.contains("git") {
-        return None;
-    }
-    let aliases = config_get(dir, &["config", "--get-regexp", r"^alias\."]).ok()??;
-    let words: Vec<String> = command
-        .split_whitespace()
-        .map(|w| w.replace(['\'', '"', '\\'], ""))
-        .collect();
-    aliases.lines().find_map(|line| {
-        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
-        let name = key.strip_prefix("alias.")?;
+    let unq = |w: &str| w.replace(['\'', '"', '\\'], "");
+    let words: Vec<String> = command.split_whitespace().map(unq).collect();
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i].trim_start_matches(['(', '{']);
+        i += 1;
+        if w.rsplit('/').next() != Some("git") {
+            continue;
+        }
+        let mut opts: Vec<String> = Vec::new();
+        while let Some(o) = words.get(i).filter(|o| o.starts_with('-')) {
+            let next = words.get(i + 1).cloned().unwrap_or_default();
+            i += 1;
+            match o.as_str() {
+                "-C" => {
+                    opts.extend(["-C".into(), next]);
+                    i += 1;
+                }
+                "--git-dir" | "--work-tree" => {
+                    opts.push(format!("{o}={next}"));
+                    i += 1;
+                }
+                "-c" | "--config-env" | "--namespace" => i += 1,
+                _ if o.starts_with("--git-dir=") || o.starts_with("--work-tree=") => {
+                    opts.push(o.clone())
+                }
+                _ => {}
+            }
+        }
+        let Some(sub) = words.get(i) else { break };
+        let mut args: Vec<&str> = opts.iter().map(String::as_str).collect();
+        let key = format!("alias.{sub}");
+        args.extend(["config", "--get", &key]);
+        let Ok(Some(value)) = config_get(dir, &args) else {
+            continue;
+        };
         let v = value.trim_start();
-        let risky = v.starts_with('!') || ["push", "send-pack", "subtree"].iter().any(|c| v.starts_with(c));
-        (risky && words.iter().any(|w| w == name)).then(|| {
-            format!("merge-lock: git alias `{name}` runs `{value}`, which the guard cannot judge; run the git command itself")
-        })
-    })
+        let risky = v.starts_with(['!', '-'])
+            || v.split_whitespace()
+                .map(unq)
+                .any(|w| matches!(w.as_str(), "push" | "send-pack" | "subtree"));
+        if risky {
+            return Some(format!(
+                "merge-lock: git alias `{sub}` runs `{value}`, which the guard cannot judge; run the git command itself"
+            ));
+        }
+    }
+    None
 }
 
 /// `push_gates = "push"` (spec §7): each pushed ref's tree needs a passing stamp for every

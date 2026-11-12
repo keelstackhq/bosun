@@ -135,11 +135,34 @@ fn aliases_that_push_or_run_a_shell_are_refused() {
     git(r.path(), &["config", "alias.p", "push"]);
     git(r.path(), &["config", "alias.q", "!git push"]);
     git(r.path(), &["config", "alias.st", "status"]);
-    for cmd in ["git p origin feat:main", "git q", "git \"p\" origin"] {
+    git(r.path(), &["config", "alias.pp", "-c x=y push"]);
+    git(r.path(), &["config", "alias.sp", "remote -v && git push"]);
+    for cmd in [
+        "git p origin feat:main",
+        "git q",
+        "git \"p\" origin",
+        "git pp origin feat:main",
+        "git sp",
+        "git -c user.name=x p origin",
+        "cargo test && git -C . p origin",
+    ] {
         let why = hook(r.path(), cmd).expect(cmd);
         assert!(why.contains("alias"), "{why}");
     }
-    assert_eq!(hook(r.path(), "git st"), None);
+    for cmd in [
+        "git st",
+        "git commit -m 'fix p'",
+        "ls st p q",
+        "echo git status p",
+    ] {
+        assert_eq!(hook(r.path(), cmd), None, "{cmd}");
+    }
+    // Read where git runs: `-C` moves to a checkout with its own aliases.
+    let other = repo(None);
+    git(other.path(), &["config", "alias.x", "push"]);
+    let at = format!("git -C {} x origin feat:main", other.path().display());
+    assert!(hook(r.path(), &at).expect("alias at -C").contains("alias"));
+    assert_eq!(hook(r.path(), "git x origin feat:main"), None);
 }
 
 #[test]
