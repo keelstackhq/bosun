@@ -72,8 +72,9 @@ pub fn owner_rules(body: &str) -> Vec<String> {
     note.lines().filter_map(rule).collect()
 }
 
-/// Rules the curator never proposes to loosen (spec §7): the floor and workflow paths (R-ci).
-pub const NEVER_PROPOSED: [&str; 8] = [
+/// Rules the curator never proposes to loosen (modes spec, metrics and curator): the floor,
+/// workflow paths (R-ci) and the CI bosun ships to other repos (R-ci-review).
+pub const NEVER_PROPOSED: [&str; 9] = [
     "R-weaken",
     "R-secrets",
     "R-prod-write",
@@ -81,6 +82,7 @@ pub const NEVER_PROPOSED: [&str; 8] = [
     "R-gate",
     "R-revert",
     "R-ci",
+    "R-ci-review",
     "R-unseen",
 ];
 
@@ -100,10 +102,15 @@ pub struct Proposal {
     pub body: String,
 }
 
-/// Rules with at least 10 blocks and no catch in `days`, never [`NEVER_PROPOSED`].
-pub fn proposals(all: &[RuleBlocks], days: u32) -> Vec<Proposal> {
+/// Rules of `defined` (the ids of the base `.bosun/risk.toml`) with at least 10 blocks and no
+/// catch in `days`, never [`NEVER_PROPOSED`] (ids compared ignoring case).
+pub fn proposals(all: &[RuleBlocks], defined: &[String], days: u32) -> Vec<Proposal> {
+    let is = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
     let ok = |b: &&RuleBlocks| {
-        b.prs.len() >= 10 && b.caught == 0 && !NEVER_PROPOSED.contains(&b.rule.as_str())
+        b.prs.len() >= 10
+            && b.caught == 0
+            && defined.iter().any(|d| d == &b.rule)
+            && !NEVER_PROPOSED.iter().any(|f| is(f, &b.rule))
     };
     all.iter()
         .filter(ok)

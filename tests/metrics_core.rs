@@ -128,7 +128,13 @@ fn proposals_need_ten_blocks_no_catch_and_never_a_floor_rule() {
     for r in NEVER_PROPOSED {
         all.push(block(r, &ten, 0));
     }
-    let p = proposals(&all, 30);
+    all.push(block("r-gov", &ten, 0));
+    all.push(block("R-bundle", &ten, 0));
+    let mut defined: Vec<String> = ["R-deps", "R-ci-review", "R-docs", "r-gov"]
+        .map(String::from)
+        .into();
+    defined.extend(NEVER_PROPOSED.map(String::from));
+    let p = proposals(&all, &defined, 30);
     assert_eq!(
         p.iter().map(|p| p.rule.as_str()).collect::<Vec<_>>(),
         ["R-deps"]

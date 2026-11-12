@@ -105,8 +105,10 @@ Prune:
   oldest first), counted from `lesson-seen` and `lesson-hit` records.
 - Curator proposals: `bosun metrics --propose [--days N]` (read-only, default 30 days) lists the
   rules with at least 10 owner blocks and none caught in the window (blocks per rule as in
-  `bosun metrics`: caught = closed unmerged or re-pushed; open PRs do not count). Never listed:
-  R-weaken, R-secrets, R-prod-write, R-gov, R-gate, R-revert, R-ci (workflow paths), R-unseen.
+  `bosun metrics`: caught = closed unmerged or re-pushed; open PRs do not count; a rule counts
+  once per PR). Only rules that `.bosun/risk.toml` on the default branch defines (built-in rules
+  when it is absent) are listed. Never listed: R-weaken, R-secrets, R-prod-write, R-gov, R-gate,
+  R-revert, R-ci (workflow paths), R-ci-review (shipped CI), R-unseen.
   data `{days, since, curator_loosen, proposals: [{rule, blocks, prs, title, body}]}`: `body` is
   a draft PR body with the blocked PRs as evidence. With `curator_loosen = "propose"` the curator
   Routine opens at most one such draft PR a week; it changes `.bosun/risk.toml`, so it matches

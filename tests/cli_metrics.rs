@@ -198,17 +198,22 @@ fn zero_days_is_usage() {
 #[test]
 fn propose_lists_rules_with_ten_blocks_and_no_catch_but_never_the_floor() {
     let fake = FakeGithub::start();
-    // PRs 31-40 merged on the first head: R-ci-review, R-deps and R-gov block 10 times each.
-    // PR 30 was re-pushed (caught) and blocked by R-deps only.
-    for n in 30..=40u64 {
-        let (rules, heads): (&[&str], Vec<String>) = if n == 30 {
-            (&["R-deps"], vec!["h30".into(), "h30b".into()])
-        } else {
-            (&["R-ci-review", "R-deps", "R-gov"], vec![format!("h{n}")])
+    // PRs 31-40 merged on the first head: R-deps, R-gov and R-bundle (built in, not in the
+    // risk.toml) block 10 times each, R-gov twice in one note. PR 30 was re-pushed (caught)
+    // and blocked by R-ci only; PR 41 is open.
+    for n in 30..=41u64 {
+        let (rules, heads): (&[&str], Vec<String>) = match n {
+            30 => (&["R-ci"], vec!["h30".into(), "h30b".into()]),
+            _ => (
+                &["R-deps", "R-gov", "R-gov", "R-bundle"],
+                vec![format!("h{n}")],
+            ),
         };
         let heads: Vec<&str> = heads.iter().map(String::as_str).collect();
         pr(&fake, n, &risk(0, rules), &heads);
-        merged(&fake, n, "2026-11-05T00:00:00Z");
+        if n < 41 {
+            merged(&fake, n, "2026-11-05T00:00:00Z");
+        }
         for h in &heads {
             fake.check_run_by(h, "ci-ok", "success", ACTIONS);
         }
@@ -224,18 +229,27 @@ fn propose_lists_rules_with_ten_blocks_and_no_catch_but_never_the_floor() {
     assert_eq!(p.len(), 1, "{d}");
     assert_eq!(
         (p[0]["rule"].as_str(), p[0]["blocks"].as_u64()),
-        (Some("R-ci-review"), Some(10))
+        (Some("R-deps"), Some(10))
     );
-    assert_eq!(p[0]["prs"].as_array().unwrap().len(), 10);
+    assert_eq!(p[0]["prs"], json!((31..=40).collect::<Vec<u64>>()));
     let body = p[0]["body"].as_str().unwrap();
     assert!(
         body.contains("- #31\n") && body.contains("- #40\n"),
         "{body}"
     );
-    assert!(!body.contains("#30\n"), "{body}");
-    assert!(p[0]["title"].as_str().unwrap().contains("R-ci-review"));
-    // Plain metrics never carry proposals (gatekeeper output unchanged).
-    assert!(metrics(&fake, &[]).get("proposals").is_none());
+    assert!(p[0]["title"].as_str().unwrap().contains("R-deps"));
+    // A rule listed twice blocks a PR once; plain metrics never carry proposals.
+    let plain = metrics(&fake, &[]);
+    assert!(plain.get("proposals").is_none());
+    let gov = plain["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["rule"] == "R-gov");
+    assert_eq!(gov.unwrap()["blocks"], 10);
+    // A window that ends before the merges finds nothing.
+    let none = metrics(&fake, &["--propose", "--days", "5"]);
+    assert_eq!(none["proposals"], json!([]), "{none}");
 }
 
 fn task(fake: &FakeGithub, n: u64, epic: u64, claimed: &str, usd: f64) {

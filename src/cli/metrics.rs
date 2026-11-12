@@ -21,6 +21,7 @@ use crate::core::metrics::{
 };
 use crate::core::mode::{BrakeWindow, brake};
 use crate::core::records::{Record, parse_record};
+use crate::core::risk::Rules;
 use crate::ctx::RepoId;
 use crate::github::b64;
 use crate::github::{Github, Pull};
@@ -172,7 +173,8 @@ fn rule_blocks(all: &[Facts], start: Timestamp) -> Blocks {
             (true, _) if in_days(&p.merged_at) => (f.heads.len() > 1, f.heads.len() == 1),
             _ => continue,
         };
-        for rule in owner_rules(&p.body) {
+        // A rule listed twice in one note blocks that PR once.
+        for rule in owner_rules(&p.body).into_iter().collect::<BTreeSet<_>>() {
             let e = blocks.entry(rule).or_default();
             e.0.push(p.number);
             (e.1, e.2) = (e.1 + u32::from(caught), e.2 + u32::from(passed));
@@ -189,8 +191,21 @@ fn propose(app: &App, days: u32) -> CmdResult {
         .into_iter()
         .map(|(rule, (prs, caught, _))| RuleBlocks { rule, prs, caught })
         .collect();
+    // Only rules the base `.bosun/risk.toml` defines can be loosened there (not built-ins
+    // such as R-bundle, not ids of a stale or forged note).
+    let gh = app.gh.as_ref();
+    let rules = match gh.file_at(".bosun/risk.toml", &default_branch(gh)?)? {
+        Some(t) => Rules::parse(&t).map_err(|e| {
+            BosunError::error(
+                format!(".bosun/risk.toml on the default branch: {e}"),
+                "fix .bosun/risk.toml on the default branch",
+            )
+        })?,
+        None => Rules::defaults(),
+    };
+    let defined: Vec<String> = rules.rules.into_iter().map(|r| r.id).collect();
     let knob = app.ctx.config.mode_effective().knobs.curator_loosen.value;
-    let found = proposals(&all, days).into_iter().map(|p| {
+    let found = proposals(&all, &defined, days).into_iter().map(|p| {
         json!({"rule": p.rule, "blocks": p.blocks, "prs": p.prs, "title": p.title, "body": p.body})
     });
     Ok(Outcome::data(json!({
