@@ -139,7 +139,8 @@ fn the_answer_returns_approve_calls_and_drops_a_moved_head() {
         .map(|x| x["pr"].as_u64().unwrap())
         .collect();
     assert_eq!(dropped, vec![15, 20]);
-    assert_eq!(d["unknown"], json!(["raise 7 +20", "thanks"]));
+    assert_eq!(d["unknown"], json!(["thanks"]));
+    assert_eq!(d["refused"][0]["raise"], json!({"epic": 7, "usd": 20}));
     assert_eq!(writes(&fake), 0, "the answer writes nothing");
     // A quoted id of another digest is a conflict.
     let other = format!("{header}\n0000beef approve 12\n");
@@ -173,8 +174,7 @@ fn an_answer_without_a_valid_header_is_a_usage_error() {
     fake.issue(50, "halt", &["bosun:halt"], "");
     let (code, _) = digest(&fake, &["--answer"], &fine);
     assert_eq!(code, 4);
-    // Signed raises land in plan PR 4b.
+    // A halted repo signs nothing either.
     let (code, v) = digest(&fake, &["--answer", "--sign-key", "k.pem"], &fine);
-    assert_eq!(code, 1, "{v}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("plan PR 4b"));
+    assert_eq!(code, 4, "{v}");
 }

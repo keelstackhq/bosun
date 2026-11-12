@@ -79,9 +79,13 @@ whose quoted ids are not all the header's id is exit 3, so a reply never pairs w
 digest's heads. A PR the owner names counts only when the digest showed it and it still waits at that
 head, else it is in `data.dropped` (a moved head is listed in the next digest). Each approval is
 a `next` call `bosun approve <pr>@<head> --sign-key <pem>` for the key holder: the digest signs
-no approval. Other reply lines are in `data.unknown`, never guessed. Not yet: signed budget
-raises `raise <epic> +<usd>` with `--sign-key` (plan PR 4b; until then `--sign-key` exits 1),
-needs-human PRs from `heal` (plan PR 3a) and the "brake on" lead line (plan PR 5).
+no approval. A raise `<id> raise <epic> +<usd>` counts only with `--sign-key` and a key enrolled
+as owner on the default branch: `data.raises` carries the signature of `bosun-raise v1
+<owner>/<repo> digest <id> day <YYYY-MM-DD> reply <sha256 of the normalized reply> epic <n> usd
++<usd>` (one reply is never a second raise); otherwise it is in `data.refused` with the reason,
+exit 0, approvals unchanged. bosun records nothing: plan PR 7 records and counts raises. Other
+reply lines are in `data.unknown`, never guessed. Not yet: needs-human PRs from `heal` (plan PR
+3a) and the "brake on" lead line (plan PR 5).
 
 **App check runs (B2, §15).** Once per org, mostly from a computer, as H1-H7 of
 `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, in this order: H1 create the App

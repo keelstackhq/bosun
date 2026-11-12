@@ -179,7 +179,8 @@ heal = {};
 digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
     rules: [str], title: str}], asks: [{issue: int, answer: str}], bypass: [{pr: int, why: str}],
     budget_asks: [any], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
-    dropped: [{pr: int, why: str}], unknown: [str]};
+    dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
+    sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
 metrics = {};
 wave tick = {};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
