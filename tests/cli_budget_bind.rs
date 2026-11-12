@@ -346,7 +346,7 @@ fn binds_must_agree_with_the_epic_marker_and_the_task_body() {
 }
 
 #[test]
-fn a_reopened_real_mainfix_task_claims_and_an_unbound_copy_does_not() {
+fn an_open_bound_mainfix_task_claims() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     task_issue(&fake, 13, "T2", "");
     fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":10"#));

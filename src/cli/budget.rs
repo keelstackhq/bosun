@@ -33,6 +33,11 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     }
 }
 
+/// Plan paths as markers and binds spell them: `./plans/x.md` is `plans/x.md`.
+fn same_path(a: &str, b: &str) -> bool {
+    a.trim_start_matches("./") == b.trim_start_matches("./")
+}
+
 /// What the epic and its tasks have spent: the tasks its trusted bind lists and the issues whose
 /// body names it, each once.
 fn feature_spend(app: &App, epic: u64, all: &[Issue], bound: &[u64]) -> Result<f64> {
@@ -204,7 +209,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
     let tasks = bind.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
     let (mp, mi) = (epic_plan(&body), epic_item(&body));
     if let (Some(b), Some(p), Some(i)) = (&bind, &mp, &mi)
-        && (&b.plan, &b.item) != (p, i)
+        && (same_path(&b.plan, p), &b.item) != (true, i)
     {
         return Err(BosunError::needs_human(
             format!(
@@ -290,14 +295,14 @@ pub(crate) fn feature_guard(
         let gh = app.gh.as_ref();
         let (plan, item) = (file, item);
         for i in all.iter().filter(|i| i.number < epic) {
-            let names = epic_plan(i.body_text()).is_some_and(|p| p == plan)
+            let names = epic_plan(i.body_text()).is_some_and(|p| same_path(&p, plan))
                 && epic_item(i.body_text()).is_some_and(|x| x == item);
             let first = if names {
                 epic_bind(gh, i.number)?
             } else {
                 None
             };
-            if first.is_some_and(|b| (b.plan.as_str(), b.item.as_str()) == (plan, item)) {
+            if first.is_some_and(|b| same_path(&b.plan, plan) && b.item == item) {
                 let msg = format!(
                     "a lower issue #{} is already the epic of {plan}/{item}",
                     i.number
