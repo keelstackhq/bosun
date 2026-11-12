@@ -2708,9 +2708,26 @@ const PUSH_ALONE: &str = "a push without `src:dst` goes where git config says, w
 const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`";
 
 /// A command that is one plain `git` call: no other command, `$`, backtick, group, redirect
-/// (but `2>&1`), assignment, `source` or `eval`.
+/// (but `2>&1`), assignment, `source` or `eval`; a last `| tail -N` or `| head -N` only reads.
 fn alone(command: &str) -> bool {
     let c = command.trim().replace("2>&1", "");
+    let c = match c.rsplit_once('|') {
+        Some((git, tail)) => {
+            let w: Vec<&str> = tail.split_whitespace().collect();
+            let n = |x: &str| {
+                x.trim_start_matches('-')
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+            };
+            let reads = matches!(w.as_slice(), [t, x] if matches!(*t, "tail" | "head") && n(x))
+                || matches!(w.as_slice(), [t, "-n", x] if matches!(*t, "tail" | "head") && n(x));
+            if !reads {
+                return false;
+            }
+            git.trim_end().to_string()
+        }
+        None => c,
+    };
     c.starts_with("git ") && !c.contains(['\n', ';', '&', '|', '$', '`', '(', ')', '<', '>'])
 }
 
@@ -3936,6 +3953,8 @@ mod tests {
             "eval \"$(cat envfile)\"; git push origin feature",
             "cargo test && git push -u origin feature",
             "git push -u origin feature 2>/dev/null",
+            "git push -u origin feature | sh",
+            "git push -u origin feature | tail -3 | sh",
             "bash -c 'git push origin feature'",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
@@ -3969,6 +3988,8 @@ mod tests {
             "cat .git/config && git push origin feature:feature",
             "timeout 60 git push origin feature:feature",
             "git push origin @",
+            "git push -u origin feature 2>&1 | tail -3",
+            "git push origin feature | head -n 5",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }

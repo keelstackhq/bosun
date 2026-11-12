@@ -104,7 +104,7 @@ fn steady_allows_a_push_once_every_ready_gate_is_stamped() {
     assert_eq!(hook(r.path(), PUSH), None);
     // Redirections are not pushed refs.
     assert_eq!(hook(r.path(), &format!("{PUSH} 2>&1 | tail -3")), None);
-    assert_eq!(hook(r.path(), &format!("{PUSH} > log")), None);
+    assert_eq!(hook(r.path(), "git push -u origin feat:feat > log"), None);
 }
 
 #[test]
@@ -146,13 +146,14 @@ fn a_push_whose_checkout_cannot_be_told_is_refused_in_push_mode() {
     let r = repo(Some(STEADY));
     stamps::stamp_all(r.path());
     for cmd in [
-        "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat'])\"",
+        "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat:feat'])\"",
         "git --git-dir=../w/.git push origin feat",
     ] {
         let why = hook(r.path(), cmd).expect(cmd);
         assert!(why.contains("cannot tell which checkout"), "{why}");
     }
     let plain = repo(None);
-    let py = "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat'])\"";
+    let py =
+        "python3 -c \"import subprocess; subprocess.run(['git', 'push', 'origin', 'feat:feat'])\"";
     assert_eq!(hook(plain.path(), py), None);
 }

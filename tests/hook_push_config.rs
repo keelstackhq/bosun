@@ -105,10 +105,12 @@ fn push_default_that_can_reach_the_default_branch_refuses_a_bare_push() {
     assert_eq!(hook(r.path(), "git push -u origin feat"), None);
     git(r.path(), &["config", "push.default", "upstream"]);
     git(r.path(), &["branch", "--set-upstream-to=origin/main"]);
-    for cmd in ["git push", "git push origin", "cd . && git push"] {
+    for cmd in ["git push", "git push origin", "git -C . push"] {
         let why = hook(r.path(), cmd).expect(cmd);
         assert!(why.contains("upstream"), "{why}");
     }
+    let why = hook(r.path(), "cd . && git push").expect("chained");
+    assert!(why.contains("as its own command"), "{why}");
     git(
         r.path(),
         &["update-ref", "refs/remotes/origin/feat", "HEAD"],
