@@ -1,6 +1,8 @@
 //! `bosun approve`: which open PRs wait for an owner and are ready for one (spec section 8).
 //! Pure: the command reads the statuses and check runs and passes them in.
 
+use crate::core::lease::Member;
+
 /// The start of the `risk-check` description while a high-risk PR waits for an owner.
 pub const WAITING_PREFIX: &str = "high risk, owner approval needed";
 /// The only creator whose `risk-check` and `review-verdict` statuses count: the Actions token.
@@ -555,8 +557,181 @@ pub fn signed_comment(
     format!("/bosun approve {head}{tail}\n{note}bosun-sig ed25519 {key_id} {sig_b64}")
 }
 
+/// The marker that tags a chat approval record (spec section 8).
+pub const CHAT_MARKER: &str = "bosun:chat-approval";
+
+/// A chat approval record: the orchestrator wrote down the owner's chat yes for `head`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatRecord {
+    pub head: String,
+    pub session: String,
+    pub question: Option<String>,
+}
+
+/// The PR comment that records the owner's chat approval of `head`.
+pub fn chat_comment(head: &str, session: &str, at: &str, question: Option<&str>) -> String {
+    let q = question
+        .map(|q| format!(" question={q}"))
+        .unwrap_or_default();
+    format!(
+        "/bosun approve {head} chat\nApproved by the owner in chat (session {session}, {at}).\n<!-- {CHAT_MARKER} v1 session={session} head={head}{q} -->"
+    )
+}
+
+/// The chat record in `body` for `head`: the first line is exactly `/bosun approve <head> chat`
+/// and a marker line names the same head and a session.
+pub fn parse_chat_record(body: &str, head: &str) -> Option<ChatRecord> {
+    let first = body.lines().map(str::trim).find(|l| !l.is_empty())?;
+    if first != format!("/bosun approve {head} chat") {
+        return None;
+    }
+    let prefix = format!("<!-- {CHAT_MARKER} v1 ");
+    let marker = body.lines().map(str::trim).find_map(|l| {
+        l.strip_prefix(prefix.as_str())
+            .and_then(|r| r.strip_suffix("-->"))
+    })?;
+    let (mut session, mut mhead, mut question) = (None, None, None);
+    for kv in marker.split_whitespace() {
+        match kv.split_once('=') {
+            Some(("session", v)) => session = Some(v),
+            Some(("head", v)) => mhead = Some(v),
+            Some(("question", v)) => question = Some(v),
+            _ => {}
+        }
+    }
+    let session = session.filter(|s| !s.is_empty())?;
+    (mhead? == head).then(|| ChatRecord {
+        head: head.into(),
+        session: session.into(),
+        question: question.filter(|q| !q.is_empty()).map(Into::into),
+    })
+}
+
+/// Whether `session`'s newest registry record is an orchestrator: a root (depth 1, no parent)
+/// or origin `local` or `slack`. Wave agent ids (`S/task`, any `/`) never are.
+pub fn is_orchestrator(members: &[Member], session: &str) -> bool {
+    if session.is_empty() || session.contains('/') {
+        return false;
+    }
+    members
+        .iter()
+        .filter(|m| m.session == session)
+        .max_by_key(|m| m.comment_id)
+        .is_some_and(|m| {
+            (m.depth == 1 && m.parent.is_none()) || matches!(m.origin.as_str(), "local" | "slack")
+        })
+}
+
+/// The id bosun puts in an approval question: `<pr>-<short head>-<unix secs>`.
+pub fn question_id(pr: u64, head: &str, unix: i64) -> String {
+    let short: String = head.chars().take(7).collect();
+    format!("{pr}-{short}-{unix}")
+}
+
 #[cfg(test)]
 mod tests {
+
+    const H: &str = "abcdef1234567890abcdef1234567890abcdef12";
+    const H2: &str = "1111111111111111111111111111111111111111";
+
+    fn member(session: &str, origin: &str, parent: Option<&str>, depth: u32, id: u64) -> Member {
+        Member {
+            session: session.into(),
+            origin: origin.into(),
+            area: None,
+            parent: parent.map(Into::into),
+            depth,
+            expires: crate::time::Timestamp(0),
+            slack: None,
+            comment_id: id,
+        }
+    }
+
+    #[test]
+    fn chat_comment_round_trips() {
+        let body = chat_comment(H, "session_o", "2026-11-10T00:00:00Z", Some("12-abcdef1-1"));
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], format!("/bosun approve {H} chat"));
+        assert_eq!(
+            lines[1],
+            "Approved by the owner in chat (session session_o, 2026-11-10T00:00:00Z)."
+        );
+        assert_eq!(
+            lines[2],
+            format!(
+                "<!-- bosun:chat-approval v1 session=session_o head={H} question=12-abcdef1-1 -->"
+            )
+        );
+        assert_eq!(
+            parse_chat_record(&body, H),
+            Some(ChatRecord {
+                head: H.into(),
+                session: "session_o".into(),
+                question: Some("12-abcdef1-1".into()),
+            })
+        );
+        let none = chat_comment(H, "session_o", "t", None);
+        assert_eq!(parse_chat_record(&none, H).unwrap().question, None);
+    }
+
+    #[test]
+    fn parse_rejects_other_head() {
+        let body = chat_comment(H, "s", "t", None);
+        assert_eq!(parse_chat_record(&body, H2), None);
+        // Marker names another head than the first line.
+        let mixed = body.replacen(&format!("head={H}"), &format!("head={H2}"), 1);
+        assert_eq!(parse_chat_record(&mixed, H), None);
+    }
+
+    #[test]
+    fn parse_rejects_missing_marker() {
+        let body = format!("/bosun approve {H} chat\nApproved by the owner in chat.");
+        assert_eq!(parse_chat_record(&body, H), None);
+        let empty = chat_comment(H, "", "t", None);
+        assert_eq!(parse_chat_record(&empty, H), None);
+    }
+
+    #[test]
+    fn parse_rejects_plain_approve() {
+        assert_eq!(parse_chat_record(&format!("/bosun approve {H}"), H), None);
+        let quoted = format!("> {}", chat_comment(H, "s", "t", None));
+        assert_eq!(parse_chat_record(&quoted, H), None);
+    }
+
+    #[test]
+    fn orchestrator_root_local_slack() {
+        let m = vec![
+            member("root", "spawned", None, 1, 1),
+            member("loc", "local", Some("root"), 2, 2),
+            member("slk", "slack", Some("root"), 2, 3),
+            member("kid", "spawned", Some("root"), 2, 4),
+            member("S/1", "local", None, 1, 5),
+        ];
+        assert!(is_orchestrator(&m, "root"));
+        assert!(is_orchestrator(&m, "loc"));
+        assert!(is_orchestrator(&m, "slk"));
+        assert!(!is_orchestrator(&m, "kid"));
+        assert!(!is_orchestrator(&m, "S/1"));
+        assert!(!is_orchestrator(&m, "nobody"));
+        assert!(!is_orchestrator(&m, ""));
+        // The newest record for a session wins.
+        let later = vec![
+            member("x", "local", None, 1, 1),
+            member("x", "spawned", Some("p"), 2, 9),
+        ];
+        assert!(!is_orchestrator(&later, "x"));
+        let rev = vec![
+            member("x", "spawned", Some("p"), 2, 9),
+            member("x", "local", None, 1, 1),
+        ];
+        assert!(!is_orchestrator(&rev, "x"));
+    }
+
+    #[test]
+    fn question_id_format() {
+        assert_eq!(question_id(12, H, 1_700_000_000), "12-abcdef1-1700000000");
+    }
 
     fn case<'a>(policy: Policy, until: Option<&'a str>, today: &'a str) -> OrchestratorCase<'a> {
         OrchestratorCase {

@@ -1,0 +1,1 @@
+- Core chat approval record: `chat_comment`/`parse_chat_record`, orchestrator rule, question id, `[approvals] chat` (default on; not counted yet).

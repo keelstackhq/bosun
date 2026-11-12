@@ -283,6 +283,10 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
     ("0.9.0", &["bootstrap_until", "policy"]),
     ("0.10.0", &["bootstrap_until", "policy"]),
     ("0.11.0", &["bootstrap_until", "policy", "review_models"]),
+    (
+        "0.12.0",
+        &["bootstrap_until", "policy", "review_models", "chat"],
+    ),
 ];
 
 /// The `[approvals] policy` values each pinned release accepts (`autonomous` from 0.8.0).
@@ -488,4 +492,11 @@ fn review_models_is_known_from_0_11_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"review_models"));
     assert!(!has("0.10.0"));
     assert!(has("0.11.0"));
+}
+
+#[test]
+fn chat_is_known_from_0_12_0() {
+    let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"chat"));
+    assert!(!has("0.11.0"));
+    assert!(has("0.12.0"));
 }
