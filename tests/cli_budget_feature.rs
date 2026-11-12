@@ -226,7 +226,12 @@ fn claim_and_spawn_refuse_without_the_registry_pin_when_the_knob_is_on() {
     }
     // A body or label that says mainfix does not waive the pin (both are editable).
     let flag = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["src/z/**"],"kind":"mainfix"} -->"#;
-    fake.issue(14, "Not a fix", &["bosun:state/ready", "bosun:kind/mainfix"], flag);
+    fake.issue(
+        14,
+        "Not a fix",
+        &["bosun:state/ready", "bosun:kind/mainfix"],
+        flag,
+    );
     let (code, v) = run_in(&fake, dir.path(), &["claim", "14"]);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["check"], "budget_feature", "{v}");
