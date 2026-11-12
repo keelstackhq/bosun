@@ -108,21 +108,19 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
     }
     let day = app.ctx.now.to_string();
     // Budget asks (knob `ask`): the indexed epics at 100 % of their feature budget.
-    let mut over = Vec::new();
+    let (mut over, mut budget_skipped) = (Vec::new(), Vec::new());
     if knob_from_default(app.gh.as_ref())? == BudgetFeature::Ask {
-        for l in feature_levels(&app)? {
-            if l["level"] == "over" {
-                let f = |k: &str| l[k].as_f64().unwrap_or_default();
-                over.push((
-                    l["epic"].as_u64().unwrap_or_default(),
-                    f("spent_usd"),
-                    f("budget_usd"),
-                ));
-            }
+        let (levels, skipped) = feature_levels(&app)?;
+        budget_skipped = skipped;
+        for l in levels.iter().filter(|l| l["level"] == "over") {
+            let f = |k: &str| l[k].as_f64().unwrap_or_default();
+            let epic = l["epic"].as_u64().unwrap_or_default();
+            let room = l["raise_room_usd"].as_u64().unwrap_or_default();
+            over.push((epic, f("spent_usd"), f("budget_usd"), room));
         }
     }
     let d = digest_with(&repo(&app), &day[..10], &items, &asks, &over);
-    Ok(Outcome::data(json!({
+    let mut data = json!({
         "message_id": d.id,
         "message": d.text,
         "header": d.header,
@@ -131,10 +129,19 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
         "asks": asks.iter().map(|(n, _)| json!({"issue": n,
             "answer": format!("bosun answer {n} --chat")})).collect::<Vec<_>>(),
         "bypass": bypass.iter().map(|n| json!({"pr": n, "why": BYPASS})).collect::<Vec<_>>(),
-        "budget_asks": over.iter().map(|(e, s, b)| json!({"epic": e, "spent_usd": s,
-            "budget_usd": b})).collect::<Vec<_>>(),
+        "budget_asks": over.iter().map(|(e, s, b, room)| {
+            let mut a = json!({"epic": e, "spent_usd": s, "budget_usd": b});
+            if *room == 0 {
+                a["needs"] = json!("R-gov plan PR");
+            }
+            a
+        }).collect::<Vec<_>>(),
         "skipped": skipped,
-    })))
+    });
+    if !budget_skipped.is_empty() {
+        data["budget_skipped"] = json!(budget_skipped);
+    }
+    Ok(Outcome::data(data))
 }
 
 fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {

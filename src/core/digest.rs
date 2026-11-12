@@ -39,15 +39,16 @@ pub fn digest(repo: &str, day: &str, items: &[Item], asks: &[(u64, String)]) -> 
     digest_with(repo, day, items, asks, &[])
 }
 
-/// As [`digest`], with `raises`: `(epic, spent, budget)` of the epics over their feature budget.
-/// They are not in the id (the id binds PR heads and the day) and each adds the reply line
-/// `<id> raise <epic> +<usd>`, the overspend rounded up to whole dollars, at least 1.
+/// As [`digest`], with `raises`: `(epic, spent, budget, room)` of the epics over their feature
+/// budget, `room` the dollars a raise may still add. They are not in the id (the id binds PR heads
+/// and the day). Each adds the reply line `<id> raise <epic> +<usd>`, the overspend rounded up to
+/// whole dollars, at least 1 and at most `room`; with no room it says an R-gov plan PR is needed.
 pub fn digest_with(
     repo: &str,
     day: &str,
     items: &[Item],
     asks: &[(u64, String)],
-    raises: &[(u64, f64, f64)],
+    raises: &[(u64, f64, f64, u64)],
 ) -> Digest {
     let pairs: Vec<String> = items
         .iter()
@@ -77,8 +78,11 @@ pub fn digest_with(
         text.push_str(&format!("\n- #{n} {}", inert(title, TITLE)));
     }
     text.push_str(&format!("\nBudget asks ({}):", raises.len()));
-    for (epic, spent, budget) in raises {
+    for (epic, spent, budget, room) in raises {
         text.push_str(&format!("\n- epic #{epic} ${spent:.2} of ${budget:.2}"));
+        if *room == 0 {
+            text.push_str(" (needs an R-gov plan PR)");
+        }
     }
     let nums: Vec<String> = items.iter().map(|i| i.pr.to_string()).collect();
     if !nums.is_empty() {
@@ -87,8 +91,8 @@ pub fn digest_with(
     } else if !raises.is_empty() {
         text.push_str("\nReply with:");
     }
-    for (epic, spent, budget) in raises {
-        let usd = (spent - budget).ceil().max(1.0) as u64;
+    for (epic, spent, budget, room) in raises.iter().filter(|r| r.3 > 0) {
+        let usd = ((spent - budget).ceil().max(1.0) as u64).min(*room);
         text.push_str(&format!("\n{id} raise {epic} +{usd}"));
     }
     let header = format!("/bosun digest {repo} {day} {id} {}", pairs.join(" "))

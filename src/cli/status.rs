@@ -97,7 +97,11 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
         data["integrity_reason"] = json!(why);
     }
     if knob_from_default(gh)? != BudgetFeature::Off {
-        data["budget_feature"] = json!(feature_levels(&app)?);
+        let (levels, skipped) = feature_levels(&app)?;
+        data["budget_feature"] = json!(levels);
+        if !skipped.is_empty() {
+            data["budget_skipped"] = json!(skipped);
+        }
     }
     with_archive_children(gh, &ctx.session, &[], now, Outcome::data(data))
 }

@@ -107,3 +107,103 @@ fn a_wave_tick_copies_the_warning_into_the_spawned_entry() {
         "{v}"
     );
 }
+
+const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
+
+fn enroll(fake: &FakeGithub) {
+    let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{PUB}\"\nrole = \"owner\"\n");
+    fake.content(".bosun/approvers.toml", "refs/heads/main", &keys);
+}
+
+/// The record line of an owner-signed `raise 10 +<usd>` for the digest of `day`, posted on #10.
+fn post_raise(fake: &FakeGithub, day: &str, usd: u64) {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("k.pem");
+    std::fs::write(&key, common::TEST_ED25519_PEM).unwrap();
+    let id = bosun::core::approve::message_id(&[format!("day {day}")]);
+    let head = format!("/bosun digest acme/widget {day} {id} ");
+    let input = format!("{head}\n{id} raise 10 +{usd}\n");
+    let at = format!("{day}T06:00:00Z");
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_test")
+        .env("BOSUN_NOW", &at)
+        .env("BOSUN_REPO", "acme/widget")
+        .args(["digest", "--answer", "--sign-key", key.to_str().unwrap()])
+        .write_stdin(input)
+        .output()
+        .unwrap();
+    let v = common::one_object(&out.stdout);
+    let e = v["data"]["raises"][0].clone();
+    assert!(e.is_object(), "{v}");
+    let m = e["message"].as_str().unwrap();
+    let digest = m.split(' ').nth(4).unwrap();
+    let rec = json!({"bosun": "raise", "session": "s", "epic": 10, "usd": usd, "digest": digest,
+        "day": day, "key_id": "k1", "message": m, "sig": e["sig"]});
+    fake.comment_at(10, "octocat", &rec.to_string(), &format!("{day}T07:00:00Z"));
+}
+
+#[test]
+fn the_reply_hint_is_capped_by_what_a_raise_may_still_add() {
+    let fake = feature("booster", 250.0);
+    enroll(&fake);
+    let (_, v) = run_in(&fake, &["digest"]);
+    let id = v["data"]["message_id"].as_str().unwrap();
+    let msg = v["data"]["message"].as_str().unwrap();
+    assert!(msg.contains(&format!("{id} raise 10 +100")), "{msg}");
+    assert!(v["data"]["budget_asks"][0].get("needs").is_none(), "{v}");
+    // +100 raised this week: base 100 leaves nothing, so no reply line and the plan PR is named.
+    let fake = feature("booster", 230.0);
+    enroll(&fake);
+    post_raise(&fake, "2026-11-10", 100);
+    let (_, v) = run_in(&fake, &["digest"]);
+    let msg = v["data"]["message"].as_str().unwrap();
+    assert!(!msg.contains(" raise 10 +"), "{msg}");
+    let ask = &v["data"]["budget_asks"][0];
+    assert_eq!(ask["epic"], 10, "{v}");
+    assert_eq!(ask["budget_usd"].as_f64(), Some(200.0), "{v}");
+    assert_eq!(ask["needs"], "R-gov plan PR", "{v}");
+}
+
+#[test]
+fn closed_epics_are_not_listed_and_a_bad_epic_is_skipped() {
+    let fake = feature("steady", 85.0);
+    // #20 is indexed and closed; #30 is indexed and open, but its comments fail.
+    let idx = |item: &str, epic: u64| {
+        format!(
+            r#"{{"bosun":"epic-index","session":"s","plan":"plans/x.md","item":"{item}","epic":{epic}}}"#
+        )
+    };
+    fake.comment(1, &idx("M2", 20));
+    fake.comment(1, &idx("M3", 30));
+    let body = |i: &str| format!(r#"E<!-- bosun:epic {{"item":"{i}","plan":"plans/x.md"}} -->"#);
+    fake.issue(20, "Closed", &["bosun:area/core"], &body("M2"));
+    fake.close_issue(20, "2026-11-11T00:00:00Z");
+    fake.issue(30, "Bad", &["bosun:area/core"], &body("M3"));
+    fake.fail_path("/issues/30/comments", 500);
+    let (code, v) = run_in(&fake, &["status"]);
+    assert_eq!(code, 0, "{v}");
+    let l = v["data"]["budget_feature"].as_array().unwrap();
+    assert_eq!(l.len(), 1, "{v}");
+    assert_eq!(l[0]["epic"], 10);
+    let s = v["data"]["budget_skipped"].as_array().unwrap();
+    assert_eq!(s.len(), 1, "{v}");
+    assert_eq!(s[0]["epic"], 30);
+    assert!(!s[0]["error"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn an_epic_with_a_raise_is_measured_against_base_plus_raise() {
+    let fake = feature("steady", 150.0);
+    enroll(&fake);
+    post_raise(&fake, "2026-11-12", 50);
+    let (_, v) = run_in(&fake, &["status"]);
+    let l = &v["data"]["budget_feature"][0];
+    assert_eq!(l["budget_usd"].as_f64(), Some(150.0), "{v}");
+    assert_eq!(l["level"], "over", "{v}");
+    let fake = feature("steady", 140.0);
+    enroll(&fake);
+    post_raise(&fake, "2026-11-12", 50);
+    let (_, v) = run_in(&fake, &["status"]);
+    assert_eq!(v["data"]["budget_feature"][0]["level"], "warn", "{v}");
+}
