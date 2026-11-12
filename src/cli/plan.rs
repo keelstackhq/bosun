@@ -1464,8 +1464,12 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
             slots.push(slot);
         }
         if let (Some(session), false, Some(e)) = (imp.bind.clone(), imp.dry, epic.issue) {
-            let made: Vec<(String, u64)> = (item.tasks.iter().zip(&slots))
-                .filter_map(|(t, s)| s.issue.map(|n| (t.id.clone(), n)))
+            let plan_task = pslot.issue.map(|n| ("P".to_string(), n));
+            let made: Vec<(String, u64)> = (plan_task.into_iter())
+                .chain(
+                    (item.tasks.iter().zip(&slots))
+                        .filter_map(|(t, s)| s.issue.map(|n| (t.id.clone(), n))),
+                )
                 .collect();
             let plan = imp.plan_path.clone();
             super::budget::write_binds(imp.gh, &session, &plan, item, e, &made)?;

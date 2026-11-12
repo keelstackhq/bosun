@@ -47,15 +47,19 @@ fn feature_spend(app: &App, epic: u64, all: &[Issue], bound: &[u64]) -> Result<f
     Ok(total)
 }
 
-/// The trusted `bind` records of issue `n`, oldest first.
-fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<Record>> {
+/// The trusted `bind` records of issue `n` with their comment ids, oldest first.
+fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<(u64, Record)>> {
     let notes = crate::app::trusted_notes(gh, n)?;
-    let all = notes.iter().filter_map(|c| parse_record(&c.body));
-    Ok(all.filter(|r| matches!(r, Record::Bind { .. })).collect())
+    let all = notes
+        .iter()
+        .filter_map(|c| Some((c.id, parse_record(&c.body)?)));
+    Ok(all.filter(|r| matches!(r.1, Record::Bind { .. })).collect())
 }
 
 /// An epic's binding: the first trusted bind's plan and item, the union of all listed tasks.
 pub(crate) struct EpicBind {
+    /// The comment id of the first bind.
+    pub id: u64,
     pub plan: String,
     pub item: String,
     pub tasks: Vec<u64>,
@@ -63,7 +67,7 @@ pub(crate) struct EpicBind {
 
 pub(crate) fn epic_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<EpicBind>> {
     let mut out: Option<EpicBind> = None;
-    for r in binds_of(gh, n)? {
+    for (id, r) in binds_of(gh, n)? {
         if let Record::Bind {
             plan,
             item,
@@ -74,6 +78,7 @@ pub(crate) fn epic_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option
         } = r
         {
             let b = out.get_or_insert(EpicBind {
+                id,
                 plan,
                 item,
                 tasks: vec![],
@@ -84,15 +89,17 @@ pub(crate) fn epic_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option
     Ok(out)
 }
 
-/// A task's binding: the first trusted bind's epic, item and task.
-fn task_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<(u64, String, String)>> {
-    Ok(binds_of(gh, n)?.into_iter().find_map(|r| match r {
+type Tb = (u64, u64, String, String);
+
+/// A task's binding: the first trusted bind's comment id, epic, item and task.
+fn task_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<Tb>> {
+    Ok(binds_of(gh, n)?.into_iter().find_map(|(id, r)| match r {
         Record::Bind {
             item,
             task: Some(t),
             epic: Some(e),
             ..
-        } => Some((e, item, t)),
+        } => Some((id, e, item, t)),
         _ => None,
     }))
 }
@@ -115,12 +122,40 @@ pub(crate) fn write_binds(
         epic: e,
         tasks,
     };
+    // A first bind that differs from the plan is forged (it would stay the binding for good):
+    // write nothing and ask the owner to delete it.
+    let have = epic_bind(gh, epic)?;
+    let mut bad: Vec<(u64, u64)> = vec![];
+    for (t, n) in tasks {
+        if let Some((id, e, i, tt)) = task_bind(gh, *n)?
+            && (e, &i, &tt) != (epic, &item.id, t)
+        {
+            bad.push((*n, id));
+        }
+    }
+    if let Some(b) = have
+        .as_ref()
+        .filter(|b| (&b.plan, &b.item) != (&plan.to_string(), &item.id))
+    {
+        bad.push((epic, b.id));
+    }
+    if let Some(&(n, id)) = bad.first() {
+        let list: Vec<String> = bad
+            .iter()
+            .map(|(n, id)| format!("comment {id} on #{n}"))
+            .collect();
+        return Err(BosunError::needs_human(
+            format!("bind records differ from {plan}: {}", list.join(", ")),
+            format!(
+                "the owner deletes the forged bind comment {id} on #{n}, then reruns `bosun plan amend {plan}`"
+            ),
+        ));
+    }
     for (t, n) in tasks {
         if task_bind(gh, *n)?.is_none() {
             gh.add_comment(*n, &bind(Some(t), Some(epic), vec![]).to_line())?;
         }
     }
-    let have = epic_bind(gh, epic)?;
     let known = have.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
     let missing: Vec<u64> = tasks
         .iter()
@@ -296,12 +331,42 @@ pub(crate) fn task_guard(app: &App, n: u64, m: &TaskMeta, mainfix: bool) -> Resu
         return Ok(None);
     }
     let mut m = m.clone();
-    if let Some((epic, item, task)) = task_bind(gh, n)? {
+    if let Some((_, epic, item, task)) = task_bind(gh, n)? {
+        // The epic must list the task too, or the bind is forged.
+        if !epic_bind(gh, epic)?.is_some_and(|b| b.tasks.contains(&n)) {
+            return Err(BosunError::needs_human(
+                format!("#{n} is bound to epic #{epic}, which does not list it"),
+                format!("the owner deletes the forged bind comment on #{n}, then the orchestrator reruns `bosun plan amend`"),
+            )
+            .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic})));
+        }
         (m.epic, m.item, m.task) = (Some(epic), item, task);
     }
     match m.epic {
         Some(e) => feature_guard(app, e, Some((&m, mainfix))),
         None => Ok(None),
+    }
+}
+
+/// The guard of `bosun spawn <n>`. An epic with a trusted bind goes the epic path whatever its
+/// body says and has no mainfix-label exemption; a task is guarded like a claim.
+pub(crate) fn spawn_guard(
+    app: &App,
+    n: u64,
+    meta: Option<&TaskMeta>,
+    mainfix: bool,
+) -> Result<Option<Value>> {
+    let gh = app.gh.as_ref();
+    if knob_from_default(gh).is_ok_and(|k| k == BudgetFeature::Off) {
+        return Ok(None);
+    }
+    if epic_bind(gh, n)?.is_some() {
+        return feature_guard(app, n, None);
+    }
+    match meta {
+        Some(m) => task_guard(app, n, m, mainfix),
+        None if mainfix => Ok(None),
+        None => feature_guard(app, n, None),
     }
 }
 

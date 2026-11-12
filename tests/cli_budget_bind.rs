@@ -86,37 +86,45 @@ fn feature(bound: bool, usd: f64) -> FakeGithub {
 #[test]
 fn a_bound_task_without_its_body_epic_is_still_guarded_and_its_spend_counts() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
-    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
-    assert_eq!(code, 5, "{v}");
-    assert_eq!(v["data"]["check"], "budget_feature");
-    assert_eq!(v["data"]["spent_usd"], 100.0);
+    refused(&fake, dir.path(), "claim", "11");
     // Unbound, the body epic still guards.
     let (dir, fake) = (cfg_dir(), feature(false, 100.0));
-    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
-    assert_eq!(code, 5, "{v}");
+    refused(&fake, dir.path(), "claim", "11");
 }
 
 #[test]
 fn a_repointed_marker_and_a_later_forged_bind_change_nothing() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     let big = EPIC.replace("plans/x.md", "plans/y.md");
-    fake.issue(10, "Epic", &["bosun:state/ready", "bosun:area/core"], &big);
-    assert_eq!(run_in(&fake, dir.path(), &["claim", "11"]).0, 5);
+    set_body(&fake, 10, &big);
+    refused(&fake, dir.path(), "claim", "11");
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     fake.comment(10, &bind("plans/y.md", "M1", r#","tasks":[]"#));
-    assert_eq!(run_in(&fake, dir.path(), &["claim", "11"]).0, 5);
+    refused(&fake, dir.path(), "claim", "11");
 }
 
 #[test]
 fn a_bound_epic_has_no_mainfix_label_exemption_and_an_unbound_one_keeps_it() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     fake.label(10, "bosun:kind/mainfix");
-    let (code, v) = run_in(&fake, dir.path(), &["spawn", "10"]);
-    assert_eq!(code, 5, "{v}");
+    refused(&fake, dir.path(), "spawn", "10");
     let (dir, fake) = (cfg_dir(), feature(false, 100.0));
     fake.label(10, "bosun:kind/mainfix");
     let (code, v) = run_in(&fake, dir.path(), &["spawn", "10"]);
     assert_eq!(code, 0, "{v}");
+}
+
+/// Exit 5 from the budget guard with the spend of the feature.
+fn refused(fake: &FakeGithub, dir: &Path, cmd: &str, n: &str) {
+    let (code, v) = run_in(fake, dir, &[cmd, n]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+    assert_eq!(v["data"]["spent_usd"], 100.0, "{v}");
+}
+
+fn set_body(fake: &FakeGithub, n: u64, body: &str) {
+    let mut s = fake.state.lock().unwrap();
+    s.issues.iter_mut().find(|i| i.number == n).unwrap().body = body.into();
 }
 
 fn binds(fake: &FakeGithub) -> usize {
@@ -141,8 +149,89 @@ fn import_writes_binds_only_when_the_knob_is_on_and_never_twice() {
     let (dir, fake) = (cfg_dir(), FakeGithub::start());
     mode(&fake, "steady");
     import(&fake, dir.path());
-    // Two tasks and the epic.
-    assert_eq!(binds(&fake), 3);
+    // The plan task, two tasks and the epic.
+    assert_eq!(binds(&fake), 4);
     import(&fake, dir.path());
-    assert_eq!(binds(&fake), 3, "a second import adds nothing");
+    assert_eq!(binds(&fake), 4, "a second import adds nothing");
+}
+
+fn amend(fake: &FakeGithub, dir: &Path) -> (i32, Value) {
+    let file = dir.join("plan.md");
+    run_in(fake, dir, &["plan", "amend", file.to_str().unwrap()])
+}
+
+fn number(fake: &FakeGithub, marker: &str) -> u64 {
+    let s = fake.state.lock().unwrap();
+    s.issues
+        .iter()
+        .find(|i| i.body.starts_with(marker))
+        .unwrap()
+        .number
+}
+
+#[test]
+fn a_bound_epic_whose_body_has_task_meta_is_still_an_epic() {
+    let (dir, fake) = (cfg_dir(), feature(true, 100.0));
+    let body = format!("{EPIC}\n{}", task_body(""));
+    set_body(&fake, 10, &body);
+    refused(&fake, dir.path(), "spawn", "10");
+}
+
+#[test]
+fn a_task_named_in_the_body_and_the_bind_counts_once() {
+    let (dir, fake) = (cfg_dir(), feature(false, 100.0));
+    let t = r#","task":"T3","epic":10"#;
+    fake.comment(12, &bind("plans/x.md", "M1", t));
+    fake.comment(11, &bind("plans/x.md", "M1", r#","task":"T1","epic":10"#));
+    fake.comment(10, &bind("plans/x.md", "M1", r#","tasks":[11,12]"#));
+    refused(&fake, dir.path(), "claim", "11");
+}
+
+#[test]
+fn a_task_bound_to_an_epic_that_does_not_list_it_is_refused() {
+    let (dir, fake) = (cfg_dir(), feature(false, 100.0));
+    fake.issue(99, "Dummy", &[], "Epic");
+    fake.comment(11, &bind("plans/x.md", "M1", r#","task":"T1","epic":99"#));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature");
+}
+
+#[test]
+fn import_refuses_a_forged_first_bind_and_amend_backfills() {
+    let (dir, fake) = (cfg_dir(), FakeGithub::start());
+    import(&fake, dir.path());
+    assert_eq!(binds(&fake), 0);
+    let t1 = number(&fake, "<!-- bosun:plan M1/T1 -->");
+    fake.comment(t1, &bind("plan.md", "M1", r#","task":"T1","epic":99"#));
+    mode(&fake, "steady");
+    let (code, v) = amend(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("on #{t1}")),
+        "{v}"
+    );
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("deletes the forged bind comment")
+    );
+    // A forged epic bind naming another plan.
+    let (dir, fake) = (cfg_dir(), FakeGithub::start());
+    import(&fake, dir.path());
+    let e = number(&fake, "<!-- bosun:plan M1 -->");
+    fake.comment(e, &bind("other.md", "M1", r#","tasks":[]"#));
+    mode(&fake, "steady");
+    assert_eq!(amend(&fake, dir.path()).0, 5);
+    // Without a forgery, amend backfills an epic imported before the knob was on.
+    let (dir, fake) = (cfg_dir(), FakeGithub::start());
+    import(&fake, dir.path());
+    mode(&fake, "steady");
+    let (code, v) = amend(&fake, dir.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(binds(&fake), 4);
 }

@@ -180,12 +180,7 @@ fn spawn_on(
     )?;
     // The feature budget (modes item 6). A spawned task (wave tick) is guarded like a claim, so
     // only the plan's kind exempts mainfix; a direct epic spawn keeps the label exemption.
-    let feature = match task_meta(&epic) {
-        Some(m) => super::budget::task_guard(app, n, &m, input.mainfix)?,
-        // A plan epic (it has a trusted bind) is never mainfix-exempt; an unbound one keeps the label.
-        None if input.mainfix && super::budget::epic_bind(app.gh.as_ref(), n)?.is_none() => None,
-        None => super::budget::feature_guard(app, n, None)?,
-    };
+    let feature = super::budget::spawn_guard(app, n, task_meta(&epic).as_ref(), input.mainfix)?;
     super::prereqs_gate::refuse_epic_if_held(app.gh.as_ref(), &epic)?;
     let depth = input.parent_depth + 1;
     // A plan task from Slack has the request's first line in its title: not in the prompt.
