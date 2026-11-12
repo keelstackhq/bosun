@@ -9,6 +9,7 @@ pub mod approve;
 pub mod ask;
 pub mod budget;
 mod budget_pr;
+pub mod budget_raise;
 pub mod budget_report;
 pub mod carry_over;
 pub mod ci_log;
@@ -316,6 +317,7 @@ impl Command {
             Command::Progress(_) => "progress",
             Command::Budget(BudgetCmd::Check) => "budget check",
             Command::Budget(BudgetCmd::Report(_)) => "budget report",
+            Command::Budget(BudgetCmd::Raise(_)) => "budget raise",
             Command::Result(_) => "result",
             Command::MainTriage(_) => "main-triage",
             Command::Init(_) => "init",
@@ -798,6 +800,15 @@ pub enum BudgetCmd {
     Check,
     /// One month of spend per PR, with totals; `--out DIR` also writes DIR/YYYY-MM.md and .json.
     Report(BudgetReportArgs),
+    /// Record the owner-signed raises of `bosun digest --answer` on their epics (spec §5).
+    Raise(BudgetRaiseArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct BudgetRaiseArgs {
+    /// The `digest --answer` output (or its `data.raises` array): `-` for stdin, or a file.
+    #[arg(long, default_value = "-")]
+    pub from: String,
 }
 
 #[derive(Debug, Args)]

@@ -29,12 +29,13 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     match cmd {
         BudgetCmd::Record(a) => record(dir, a),
         BudgetCmd::Check => check(dir),
+        BudgetCmd::Raise(a) => super::budget_raise::run(dir, a),
         BudgetCmd::Report(a) => super::budget_report::run(dir, a),
     }
 }
 
 /// Plan paths as markers and binds spell them: `./plans/x.md` is `plans/x.md`.
-fn same_path(a: &str, b: &str) -> bool {
+pub(super) fn same_path(a: &str, b: &str) -> bool {
     a.trim_start_matches("./") == b.trim_start_matches("./")
 }
 
@@ -251,15 +252,15 @@ pub(crate) fn knob_from_default(gh: &dyn crate::github::Github) -> Result<Budget
 
 /// Where the budget of an epic comes from. The epic body is editable by anyone with write
 /// access, so its `budget_usd` is display only: the plan on the default branch decides.
-struct Source {
-    budget: f64,
+pub(super) struct Source {
+    pub(super) budget: f64,
     item: Option<String>,
     plan: Option<(String, crate::core::plan::Plan)>,
     /// The tasks the epic's trusted bind lists.
     tasks: Vec<u64>,
 }
 
-fn source(app: &App, epic: u64) -> Result<Source> {
+pub(super) fn source(app: &App, epic: u64) -> Result<Source> {
     let gh = app.gh.as_ref();
     let body = gh.get_issue(epic)?.map(|e| e.body_text().to_string());
     let body = body.unwrap_or_default();
@@ -416,7 +417,13 @@ pub(crate) fn feature_guard(
             format!("the orchestrator runs `bosun plan amend {file}` (writes the epic index)");
         return Err(refuse(msg, fix, 0.0));
     }
-    let (spent, budget) = (feature_spend(app, epic, &all, &src.tasks)?, src.budget);
+    let raised: u64 = super::budget_raise::valid_raises(app, epic, src.budget)?
+        .iter()
+        .fold(0u64, |a, r| a.saturating_add(r.usd));
+    let (spent, budget) = (
+        feature_spend(app, epic, &all, &src.tasks)?,
+        src.budget + raised as f64,
+    );
     let warn = |level: &str| {
         Ok(Some(
             json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),
@@ -429,7 +436,7 @@ pub(crate) fn feature_guard(
         Feature::Over => Err(refuse(
             format!("epic #{epic} spent ${spent:.2} of its ${budget:.2} feature budget"),
             format!(
-                "the owner raises `budget_usd:` of item {item} in {file} on the default branch (an R-gov PR); digest raises come in a later release"
+                "the owner answers `raise {epic} +<usd>` in `bosun digest`, then the orchestrator runs `bosun budget raise --from -` with the `bosun digest --answer --sign-key` output (or the owner raises `budget_usd:` of item {item} in {file} in an R-gov PR)"
             ),
             spent,
         )),

@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 7c · signed budget raises (`bosun budget raise`), part B (80 % warnings in status, digest, wave tick) moves to 7e · PR #565
