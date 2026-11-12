@@ -1,1 +1,1 @@
-- 2026-11-12 · modes PR 3b: heal_main (revert a red main) and R-revert
+- 2026-11-12 · modes PR 3b-1: built-in R-revert in risk-check

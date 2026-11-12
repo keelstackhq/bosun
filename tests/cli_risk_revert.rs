@@ -17,6 +17,7 @@ fn setup(body: &str, path: &str, back: &str) -> FakeGithub {
     fake.content("governance/owners.toml", "base0000", OWNERS);
     fake.pull(2, "forward", "feature", "");
     fake.pull_merged(2, "merge2");
+    fake.status(&fake.pull_head(2), "risk-check", "success", "normal risk");
     fake.pull_file(2, path, "modified", 1, 1, Some(FWD));
     fake.pull(1, "Revert #2", "bosun/revert-2", body);
     fake.pull_file(1, path, "modified", 1, 1, Some(back));
@@ -89,18 +90,27 @@ fn a_wrong_target_needs_the_owner() {
 }
 
 #[test]
-fn a_linked_tasks_owner_capability_on_the_reverted_pr_needs_the_owner() {
+fn the_reverted_prs_recorded_risk_check_decides_its_class() {
+    // Labels and links of #2 are editable after the merge; its trusted outcome counts.
     let fake = setup("<!-- bosun:revert 2 -->", "src/a.rs", BACK);
-    fake.pull_set(2, "body", "Closes #7".into());
-    let meta = "<!-- bosun:task {\"capabilities\":[\"prod-write\"]} -->";
-    fake.issue(7, "task", &[], meta);
+    let head = fake.pull_head(2);
+    fake.status(
+        &head,
+        "risk-check",
+        "success",
+        "high risk (R-prod-write), approved by ada",
+    );
     let (code, ids, v) = rules(&fake);
     assert_eq!(code, 5, "{v}");
     assert!(ids.contains(&"R-revert".into()), "{ids:?}");
     assert!(
-        v.to_string().contains("#2 needed the owner (R-prod-write)"),
+        v.to_string().contains("its risk-check was not normal risk"),
         "{v}"
     );
+    // A forged newer status by anyone else never counts.
+    fake.status_by(&head, "risk-check", "success", "normal risk", "mallory");
+    let (_, ids, _) = rules(&fake);
+    assert!(ids.contains(&"R-revert".into()), "{ids:?}");
 }
 
 #[test]

@@ -1194,7 +1194,7 @@ fn tokens(patch: &str, flip: bool) -> Vec<String> {
 }
 
 /// Why `revert` is not the exact inverse of `merged` (empty: it is), at most 5. Fails closed:
-/// unpaired files, other status pairs, a missing patch (bar a pure rename), a differing patch.
+/// unpaired files, other status pairs, a missing patch (also a rename), a differing patch.
 pub fn inverse_problems(merged: &[PatchFile], revert: &[PatchFile]) -> Vec<String> {
     let inverse = [
         "added removed",
@@ -1216,7 +1216,6 @@ pub fn inverse_problems(merged: &[PatchFile], revert: &[PatchFile]) -> Vec<Strin
                 let (m, st) = (&merged[i], format!("{} {}", merged[i].status, r.status));
                 match (m.patch, r.patch) {
                     _ if !inverse.contains(&st.as_str()) => format!("status {st} is not inverse"),
-                    (None, None) if m.status == "renamed" && m.changes + r.changes == 0 => continue,
                     (Some(a), Some(b)) if tokens(a, true) == tokens(b, false) => continue,
                     (Some(_), Some(_)) => "the patch is not the inverse".into(),
                     _ => format!("no patch for {}", r.path),

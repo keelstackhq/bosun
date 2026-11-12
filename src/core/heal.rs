@@ -1,7 +1,7 @@
 //! `bosun heal` logic (plan PR 3a): what to do about one open PR whose head fails `ci-ok`.
 //! Pure: the command reads the PR, its task and the brake.
 
-use super::mode::{HealMain, HealPr};
+use super::mode::HealPr;
 use super::stop::Stop;
 
 /// Heal rounds per PR; one more red head after that goes to the digest as needs-human.
@@ -35,28 +35,6 @@ pub fn capped(knob: HealPr, brake_on: bool) -> HealPr {
         knob.min(HealPr::Notify)
     } else {
         knob
-    }
-}
-
-/// `heal_main` after the brake: while it is on, a revert PR is opened but never auto-merged.
-pub fn capped_main(k: HealMain, brake_on: bool) -> HealMain {
-    k.min(if brake_on {
-        HealMain::RevertPr
-    } else {
-        HealMain::RevertAuto
-    })
-}
-
-/// The PR a red main points at: `heads` are the merged PRs, newest first, with whether the merge
-/// commit is green on `ci-ok`. Only the one PR right before the first green is a safe revert.
-pub fn since_green(heads: &[(u64, bool)]) -> Result<u64, String> {
-    match heads.iter().position(|h| h.1) {
-        Some(0) => Err("the newest merge is green".into()),
-        Some(1) => Ok(heads[0].0),
-        Some(n) => Err(format!(
-            "{n} PRs merged since green: run `bosun main-triage --good <sha>`, then `bosun revert <pr>`"
-        )),
-        None => Err("no green merge in the window".into()),
     }
 }
 

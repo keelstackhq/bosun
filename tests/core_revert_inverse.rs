@@ -1,6 +1,4 @@
 //! `core::risk` revert helpers: the markers and the exact-inverse check (spec §8, R-revert).
-use bosun::core::heal::{capped_main, since_green};
-use bosun::core::mode::HealMain;
 use bosun::core::risk::{PatchFile, inverse_problems, revert_targets};
 
 fn f<'a>(path: &'a str, status: &'a str, patch: Option<&'a str>) -> PatchFile<'a> {
@@ -79,11 +77,17 @@ fn added_pairs_with_removed_only() {
 
 #[test]
 fn a_rename_pairs_through_the_previous_path() {
+    let mut m = f("new", "renamed", Some("@@ -1 +1 @@\n-a\n+b"));
+    m.previous_path = Some("old");
+    let mut r = f("old", "renamed", Some("@@ -1 +1 @@\n-b\n+a"));
+    r.previous_path = Some("new");
+    assert!(inverse_problems(&[m], &[r]).is_empty());
+    // No patch (a pure rename, or a binary whose bytes changed): bosun cannot see it, so it fails.
     let mut m = f("new", "renamed", None);
     m.previous_path = Some("old");
     let mut r = f("old", "renamed", None);
     r.previous_path = Some("new");
-    assert!(inverse_problems(&[m], &[r]).is_empty());
+    assert!(!inverse_problems(&[m], &[r]).is_empty());
     let mut m = f("new", "renamed", None);
     m.previous_path = Some("old");
     let mut r = f("elsewhere", "renamed", None);
@@ -154,27 +158,4 @@ fn problems_are_capped() {
         .map(|n| f(n, "modified", Some("@@ -1 +1 @@\n-a\n+b")))
         .collect();
     assert!(inverse_problems(&[], &r).len() <= 6);
-}
-
-#[test]
-fn brake_caps_revert_auto_at_revert_pr() {
-    assert_eq!(capped_main(HealMain::RevertAuto, true), HealMain::RevertPr);
-    assert_eq!(
-        capped_main(HealMain::RevertAuto, false),
-        HealMain::RevertAuto
-    );
-    assert_eq!(capped_main(HealMain::Off, true), HealMain::Off);
-}
-
-#[test]
-fn since_green_names_the_one_bad_pr() {
-    assert_eq!(since_green(&[(9, false), (8, true), (7, true)]), Ok(9));
-    let e = since_green(&[(9, true)]).unwrap_err();
-    assert!(e.contains("newest merge is green"), "{e}");
-    let e = since_green(&[(9, false), (8, false), (7, true)]).unwrap_err();
-    assert!(e.starts_with("2 PRs merged since green"), "{e}");
-    assert!(e.contains("bosun main-triage --good <sha>"), "{e}");
-    let e = since_green(&[(9, false), (8, false)]).unwrap_err();
-    assert!(e.contains("no green merge in the window"), "{e}");
-    assert!(since_green(&[]).is_err());
 }

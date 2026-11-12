@@ -360,8 +360,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         &files,
         &rules,
     ));
-    if let Some((_, evidence)) =
-        revert_findings(gh, &app.ctx.repo.to_string(), &rules, &pull, &pr_files)
+    if let Some((_, evidence)) = revert_findings(gh, &rules, &pull, &pr_files)
         && !evidence.is_empty()
     {
         matches.push(risk::Match {
@@ -661,7 +660,6 @@ fn patch_files(files: &[PrFile]) -> Vec<risk::PatchFile<'_>> {
 /// #N needed no owner and this is its exact inverse. A failed read is evidence, never an error.
 pub(crate) fn revert_findings(
     gh: &dyn Github,
-    repo: &str,
     rules: &Rules,
     pull: &Pull,
     pr_files: &[PrFile],
@@ -671,7 +669,7 @@ pub(crate) fn revert_findings(
     let ev = if t.len() > 1 || n == pull.number {
         vec!["the marker names several PRs or this PR".into()]
     } else {
-        revert_evidence(gh, repo, rules, pull, pr_files, n)
+        revert_evidence(gh, rules, pull, pr_files, n)
             .unwrap_or_else(|e| vec![format!("cannot judge #{n}: {}", e.message)])
     };
     Some((n, ev))
@@ -679,7 +677,6 @@ pub(crate) fn revert_findings(
 
 fn revert_evidence(
     gh: &dyn Github,
-    repo: &str,
     rules: &Rules,
     pull: &Pull,
     pr_files: &[PrFile],
@@ -710,18 +707,28 @@ fn revert_evidence(
             added_lines: f.patch.as_deref().map(added_lines).unwrap_or_default(),
         })
         .collect();
-    // As `judge` saw #N; a changed manifest counts as a new dependency (fail closed).
-    let mut caps = capability_labels(&old.labels);
-    for i in linked_issues_in(&old.body, repo) {
-        if let Some(m) = gh.get_issue(i)?.as_ref().and_then(task_meta) {
-            caps.extend(m.capabilities);
-        }
+    // #N's labels and links are editable after the merge: its own trusted risk-check outcome
+    // counts instead, and only `normal risk` is no owner class (fail closed).
+    let trusted = |s: &&crate::github::Status| {
+        s.context == CONTEXT && s.creator == crate::core::approve::TRUSTED_CREATOR
+    };
+    let statuses = crate::github::gate::gate_statuses(gh, &old.head_sha)?; // newest first
+    if statuses
+        .iter()
+        .find(trusted)
+        .map(|s| s.description.as_str())
+        != Some("normal risk")
+    {
+        ev.push(format!(
+            "#{n} needed the owner (its risk-check was not normal risk)"
+        ));
     }
+    // The files under today's rules too; a changed manifest counts as a new dependency.
     let deps: Vec<String> = (old_files.iter())
         .filter(|f| is_manifest(&f.filename))
         .map(|f| f.filename.clone())
         .collect();
-    let mut ms = evaluate(rules, &changed, &deps, &caps);
+    let mut ms = evaluate(rules, &changed, &deps, &[]);
     if !weaken_findings(gh, &old_files, &old.base_sha, &old.head_sha)?.is_empty() {
         ms.push(risk::Match {
             rule: weaken::RULE.into(),
@@ -737,6 +744,7 @@ fn revert_evidence(
         m.approval == Approval::Owner || ["R-weaken", "R-gate", "R-gov"].contains(&m.rule.as_str())
     };
     let mut ids: Vec<&str> = ms.iter().filter(owner).map(|m| m.rule.as_str()).collect();
+    ids.sort_unstable();
     ids.dedup();
     ev.extend(ids.iter().map(|id| format!("#{n} needed the owner ({id})")));
     Ok(ev)
