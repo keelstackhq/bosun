@@ -119,10 +119,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         }
     }
 
-    let feature = match meta.as_ref().and_then(|m| m.epic.map(|e| (e, m))) {
-        Some((e, m)) => super::budget::feature_guard(&app, e, Some((m, mainfix)))?,
-        None => None,
-    };
+    let feature = super::budget::task_guard(&app, n, meta.as_ref(), mainfix)?;
 
     super::prereqs_gate::refuse_if_held(gh, n, &meta)?;
     refuse_if_bundled(gh, n, &meta)?;

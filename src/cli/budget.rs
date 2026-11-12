@@ -13,10 +13,11 @@ use crate::app::{
 use crate::cli::plan::{epic_item, epic_plan};
 use crate::core::budget::{Feature, feature_estimate, feature_level, level, to_stop};
 use crate::core::lease::members;
+use crate::core::meta::TaskMeta;
 use crate::core::mode::BudgetFeature;
-use crate::core::records::{Record, spend_total};
+use crate::core::records::{Record, parse_record, spend_total};
 use crate::core::state::{State, state_of};
-use crate::github::IssueState;
+use crate::github::{Issue, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 use crate::sessions::usage;
@@ -32,16 +33,147 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
     }
 }
 
-/// What the tasks of `epic` have spent, over every state (spec §9, feature budget).
-fn feature_spend(app: &App, epic: u64, all: &[crate::github::Issue]) -> Result<f64> {
+/// Plan paths as markers and binds spell them: `./plans/x.md` is `plans/x.md`.
+fn same_path(a: &str, b: &str) -> bool {
+    a.trim_start_matches("./") == b.trim_start_matches("./")
+}
+
+/// What the epic and its tasks have spent: the tasks its trusted bind lists and the issues whose
+/// body names it, each once.
+fn feature_spend(app: &App, epic: u64, all: &[Issue], bound: &[u64]) -> Result<f64> {
     let gh = app.gh.as_ref();
     let mut total = spend_total(&spend_notes(gh, epic)?, None);
     for i in all {
-        if task_meta(i).is_some_and(|m| m.epic == Some(epic)) {
+        let body = task_meta(i).is_some_and(|m| m.epic == Some(epic));
+        if body || bound.contains(&i.number) {
             total += spend_total(&spend_notes(gh, i.number)?, None);
         }
     }
     Ok(total)
+}
+
+/// The trusted `bind` records of issue `n` with their comment ids, oldest first.
+fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<(u64, Record)>> {
+    let notes = crate::app::trusted_notes(gh, n)?;
+    let all = notes
+        .iter()
+        .filter_map(|c| Some((c.id, parse_record(&c.body)?)));
+    Ok(all.filter(|r| matches!(r.1, Record::Bind { .. })).collect())
+}
+
+/// An epic's binding: the first trusted bind's plan and item, the union of all listed tasks.
+pub(crate) struct EpicBind {
+    /// The comment id of the first bind.
+    pub id: u64,
+    pub plan: String,
+    pub item: String,
+    pub tasks: Vec<u64>,
+}
+
+pub(crate) fn epic_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<EpicBind>> {
+    let mut out: Option<EpicBind> = None;
+    for (id, r) in binds_of(gh, n)? {
+        if let Record::Bind {
+            plan,
+            item,
+            task: None,
+            epic: None,
+            tasks,
+            ..
+        } = r
+        {
+            let b = out.get_or_insert(EpicBind {
+                id,
+                plan,
+                item,
+                tasks: vec![],
+            });
+            b.tasks.extend(tasks);
+        }
+    }
+    Ok(out)
+}
+
+type Tb = (u64, u64, String, String);
+
+/// A task's binding: the first trusted bind's comment id, epic, item and task.
+fn task_bind(gh: &dyn crate::github::Github, n: u64) -> Result<Option<Tb>> {
+    Ok(binds_of(gh, n)?.into_iter().find_map(|(id, r)| match r {
+        Record::Bind {
+            item,
+            task: Some(t),
+            epic: Some(e),
+            ..
+        } => Some((id, e, item, t)),
+        _ => None,
+    }))
+}
+
+/// Write the binds of one imported item (modes 7b): each task issue without a trusted bind, and
+/// the epic when it has none or its binds lack some of the tasks.
+pub(crate) fn write_binds(
+    gh: &dyn crate::github::Github,
+    session: &str,
+    plan: &str,
+    item: &crate::core::plan::Item,
+    epic: u64,
+    tasks: &[(String, u64)],
+) -> Result<()> {
+    let bind = |task: Option<&str>, e: Option<u64>, tasks: Vec<u64>| Record::Bind {
+        session: session.into(),
+        plan: plan.into(),
+        item: item.id.clone(),
+        task: task.map(String::from),
+        epic: e,
+        tasks,
+    };
+    // A first bind that differs from the plan is forged (it would stay the binding for good):
+    // write nothing and ask the owner to delete it.
+    let have = epic_bind(gh, epic)?;
+    let mut bad: Vec<(u64, u64)> = vec![];
+    for (t, n) in tasks {
+        if let Some((id, e, i, tt)) = task_bind(gh, *n)?
+            && (e, &i, &tt) != (epic, &item.id, t)
+        {
+            bad.push((*n, id));
+        }
+    }
+    if let Some(b) = have
+        .as_ref()
+        .filter(|b| (&b.plan, &b.item) != (&plan.to_string(), &item.id))
+    {
+        bad.push((epic, b.id));
+    }
+    if let Some(&(n, id)) = bad.first() {
+        let list: Vec<String> = bad
+            .iter()
+            .map(|(n, id)| format!("comment {id} on #{n}"))
+            .collect();
+        return Err(BosunError::needs_human(
+            format!(
+                "bind records are forged or moved ({}): the import stopped here; items before it were written",
+                list.join(", ")
+            ),
+            format!(
+                "the owner deletes the forged bind comment {id} on #{n}, then reruns `bosun plan amend {plan}`"
+            ),
+        ));
+    }
+    for (t, n) in tasks {
+        if task_bind(gh, *n)?.is_none() {
+            gh.add_comment(*n, &bind(Some(t), Some(epic), vec![]).to_line())?;
+        }
+    }
+    let known = have.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
+    let missing: Vec<u64> = tasks
+        .iter()
+        .map(|t| t.1)
+        .filter(|n| !known.contains(n))
+        .collect();
+    if have.is_none() || !missing.is_empty() {
+        gh.add_comment(epic, &bind(None, None, missing).to_line())?;
+    }
+    Ok(())
 }
 
 /// The `budget_feature` knob of the default branch's `.bosun/bosun.toml`, as wave and heal read it.
@@ -64,6 +196,8 @@ struct Source {
     budget: f64,
     item: Option<String>,
     plan: Option<(String, crate::core::plan::Plan)>,
+    /// The tasks the epic's trusted bind lists.
+    tasks: Vec<u64>,
 }
 
 fn source(app: &App, epic: u64) -> Result<Source> {
@@ -71,7 +205,25 @@ fn source(app: &App, epic: u64) -> Result<Source> {
     let body = gh.get_issue(epic)?.map(|e| e.body_text().to_string());
     let body = body.unwrap_or_default();
     let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
-    let (file, item) = (epic_plan(&body), epic_item(&body));
+    let bind = epic_bind(gh, epic)?;
+    let tasks = bind.as_ref().map(|b| b.tasks.clone()).unwrap_or_default();
+    let (mp, mi) = (epic_plan(&body), epic_item(&body));
+    if let (Some(b), Some(p), Some(i)) = (&bind, &mp, &mi)
+        && (same_path(&b.plan, p), &b.item) != (true, i)
+    {
+        return Err(BosunError::needs_human(
+            format!(
+                "the bind of epic #{epic} names {}/{}, its marker {p}/{i}",
+                b.plan, b.item
+            ),
+            format!("the owner deletes the bind comment {} on #{epic}", b.id),
+        )
+        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic})));
+    }
+    let (file, item) = match bind {
+        Some(b) => (Some(b.plan), Some(b.item)),
+        None => (mp, mi),
+    };
     let Some(f) = file else {
         // No marker: one task's worth, which a dummy issue cannot inflate.
         let budget = feature_estimate(1, per_task);
@@ -79,6 +231,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             budget,
             item,
             plan: None,
+            tasks,
         });
     };
     let branch = crate::app::default_branch(gh)?;
@@ -96,6 +249,7 @@ fn source(app: &App, epic: u64) -> Result<Source> {
             budget,
             item,
             plan: Some((f, p)),
+            tasks,
         }),
         _ => Err(BosunError::needs_human(
             format!(
@@ -115,11 +269,11 @@ fn source(app: &App, epic: u64) -> Result<Source> {
 pub(crate) fn feature_guard(
     app: &App,
     epic: u64,
-    task: Option<(&crate::core::meta::TaskMeta, bool)>,
+    task: Option<(u64, &TaskMeta, bool)>,
 ) -> Result<Option<Value>> {
     let knob = match knob_from_default(app.gh.as_ref()) {
         Ok(k) => k,
-        Err(_) if task.is_some_and(|t| t.1) => return Ok(None),
+        Err(_) if task.is_some_and(|t| t.2) => return Ok(None),
         Err(e) => return Err(e),
     };
     if knob == BudgetFeature::Off {
@@ -137,15 +291,64 @@ pub(crate) fn feature_guard(
             "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
     let all = app.gh.list_issues(&[], IssueState::All)?;
-    if let Some((m, _)) = task {
-        let same = |i: &&crate::github::Issue| {
-            // Ids are unique per plan, so per epic; an issue closed as a duplicate or not planned is ignored.
-            !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"))
-                && task_meta(i).is_some_and(|x| {
-                    x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task)
-                })
+    if src.plan.is_some() {
+        let gh = app.gh.as_ref();
+        let (plan, item) = (file, item);
+        let area = src.plan.as_ref().and_then(|(_, p)| {
+            p.items
+                .iter()
+                .find(|i| i.id == item)
+                .map(|i| format!("bosun:area/{}", i.area))
+        });
+        // Candidates are found by marker or area label, not by what a body says now: the
+        // rival is whoever's first bind names this plan and item.
+        let candidate = |i: &&Issue| {
+            i.number < epic
+                && (i.body_text().contains("<!-- bosun:epic")
+                    || i.labels.iter().any(|l| Some(l) == area.as_ref()))
         };
-        if all.iter().filter(same).count() > 1 {
+        for i in all.iter().filter(candidate) {
+            let rival =
+                epic_bind(gh, i.number)?.filter(|b| same_path(&b.plan, plan) && b.item == item);
+            if let Some(b) = rival {
+                let n = i.number;
+                let (msg, fix) = if i.state == "closed" {
+                    (
+                        format!("a lower epic #{n} (closed) still holds the bind of {plan}/{item}"),
+                        format!(
+                            "the owner deletes its bind comment {}, or reopens #{n} if it is the real one",
+                            b.id
+                        ),
+                    )
+                } else {
+                    (
+                        format!("a lower issue #{n} is already the epic of {plan}/{item}"),
+                        format!(
+                            "the owner deletes the forged bind (on #{n} or #{epic}) and reruns `bosun plan amend {plan}`"
+                        ),
+                    )
+                };
+                return Err(refuse(msg, fix, 0.0));
+            }
+        }
+    }
+    if let Some((n, m, _)) = task {
+        // Each issue once: body metas of the epic and the tasks its bind lists, by (item, task).
+        let live =
+            |i: &Issue| !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"));
+        let (mut alive, mut binds) = (0, vec![]);
+        for i in &all {
+            let by_body = task_meta(i)
+                .is_some_and(|x| x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task));
+            let by_bind = src.tasks.contains(&i.number)
+                && task_bind(app.gh.as_ref(), i.number)?
+                    .is_some_and(|(_, e, it, t)| (e, &it, &t) == (epic, &m.item, &m.task));
+            alive += usize::from((by_body || by_bind) && live(i));
+            if by_bind {
+                binds.push(i.number);
+            }
+        }
+        if alive > 1 {
             let msg = format!("{}/{} names more than one task issue", m.item, m.task);
             let fix = "the orchestrator closes the extra issues as duplicates".to_string();
             return Err(refuse(msg, fix, 0.0));
@@ -166,11 +369,15 @@ pub(crate) fn feature_guard(
                 .map(|t| t.kind.clone())
         });
         // Only the plan exempts: a body or label kind is editable.
-        if kind.is_some_and(|k| k == "mainfix") {
+        // One live copy, and when any copy has a bind it is this one: no borrowing an id.
+        if alive == 1
+            && (binds.is_empty() || binds.contains(&n))
+            && kind.is_some_and(|k| k == "mainfix")
+        {
             return Ok(None);
         }
     }
-    let (spent, budget) = (feature_spend(app, epic, &all)?, src.budget);
+    let (spent, budget) = (feature_spend(app, epic, &all, &src.tasks)?, src.budget);
     let warn = |level: &str| {
         Ok(Some(
             json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),
@@ -187,6 +394,96 @@ pub(crate) fn feature_guard(
             ),
             spent,
         )),
+    }
+}
+
+/// The guard of task issue `n`: its trusted bind (epic, item, task), when it has one, replaces
+/// the body's, so editing the body cannot move or drop the task.
+pub(crate) fn task_guard(
+    app: &App,
+    n: u64,
+    m: Option<&TaskMeta>,
+    mainfix: bool,
+) -> Result<Option<Value>> {
+    let gh = app.gh.as_ref();
+    if knob_from_default(gh).is_ok_and(|k| k == BudgetFeature::Off) {
+        return Ok(None);
+    }
+    let bind = task_bind(gh, n)?;
+    // No task meta and no task bind: only a bound epic has a budget to guard.
+    if m.is_none() && bind.is_none() {
+        return match epic_bind(gh, n)? {
+            Some(_) => feature_guard(app, n, None),
+            None => Ok(None),
+        };
+    }
+    // A deleted meta block is rebuilt from the bind.
+    let built = bind.as_ref().and_then(|(_, _, i, t)| {
+        serde_json::from_value::<TaskMeta>(json!({"item": i, "task": t})).ok()
+    });
+    let Some(mut m) = m.cloned().or(built) else {
+        return Ok(None);
+    };
+    if let Some((id, epic, item, task)) = bind {
+        let eb = epic_bind(gh, epic)?;
+        let plan = eb
+            .as_ref()
+            .map_or("<plan>", |b| b.plan.as_str())
+            .to_string();
+        let refuse = |msg: String, fix: String| {
+            BosunError::needs_human(msg, fix).with_data(json!({"check": "budget_feature",
+                "name": "budget_feature", "epic": epic}))
+        };
+        // The epic must list the task too, or the bind is forged.
+        if !eb.is_some_and(|b| b.tasks.contains(&n)) {
+            return Err(refuse(
+                format!("#{n} is bound to epic #{epic}, which does not list it"),
+                format!(
+                    "rerun `bosun plan amend {plan}`; if that does not list it, the bind is forged: the owner deletes comment {id} on #{n}"
+                ),
+            ));
+        }
+        // A body that disagrees with the bind was edited.
+        if (&m.item, &m.task) != (&item, &task) || m.epic.is_some_and(|e| e != epic) {
+            return Err(refuse(
+                format!(
+                    "#{n} is bound to {item}/{task} but its body says {}/{}",
+                    m.item, m.task
+                ),
+                format!(
+                    "the owner deletes the bind comment {id} on #{n} (or restores the body, then `bosun plan amend {plan}`)"
+                ),
+            ));
+        }
+        (m.epic, m.item, m.task) = (Some(epic), item, task);
+    }
+    match m.epic {
+        Some(e) => feature_guard(app, e, Some((n, &m, mainfix))),
+        None => Ok(None),
+    }
+}
+
+/// The guard of `bosun spawn <n>`. An epic with a trusted bind goes the epic path whatever its
+/// body says and has no mainfix-label exemption; a task is guarded like a claim.
+pub(crate) fn spawn_guard(
+    app: &App,
+    n: u64,
+    meta: Option<&TaskMeta>,
+    mainfix: bool,
+) -> Result<Option<Value>> {
+    let gh = app.gh.as_ref();
+    if knob_from_default(gh).is_ok_and(|k| k == BudgetFeature::Off) {
+        return Ok(None);
+    }
+    if epic_bind(gh, n)?.is_some() {
+        return feature_guard(app, n, None);
+    }
+    if meta.is_some() || task_bind(gh, n)?.is_some() {
+        return task_guard(app, n, meta, mainfix);
+    }
+    match mainfix {
+        true => Ok(None),
+        false => feature_guard(app, n, None),
     }
 }
 

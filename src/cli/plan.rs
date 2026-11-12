@@ -244,6 +244,8 @@ struct Importer<'a> {
     repo: String,
     /// `per_task_usd` when the `budget_feature` knob is on: the epic then carries an estimate.
     per_task: Option<f64>,
+    /// The session that writes the bind records (modes 7b): `Some` when the knob is not off.
+    bind: Option<String>,
     promoted: Vec<String>,
     /// Open owner-checklist items of the plan being imported, and what they hold back.
     open_items: Vec<Held>,
@@ -637,6 +639,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
     }
     let mut roots = vec![app.ctx.dir.clone()];
     roots.extend(std::fs::canonicalize(&app.ctx.dir).ok());
+    let knob = super::budget::knob_from_default(app.gh.as_ref())?;
     let mut imp = Importer {
         gh: app.gh.as_ref(),
         issues: all_issues(app.gh.as_ref())?,
@@ -648,7 +651,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         refused: vec![],
         dir: app.ctx.dir.clone(),
         repo: app.ctx.repo.to_string(),
-        per_task: match super::budget::knob_from_default(app.gh.as_ref())? {
+        per_task: match knob {
             BudgetFeature::Off => None,
             _ => Some(
                 crate::app::limits_from_default(app.gh.as_ref(), &app.ctx)?
@@ -656,6 +659,7 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
                     .per_task_usd,
             ),
         },
+        bind: (knob != BudgetFeature::Off).then(|| app.ctx.session.clone()),
         promoted: vec![],
         open_items: vec![],
         held: vec![],
@@ -1458,6 +1462,17 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
                 finish_done_by(imp, &mut slot, pr)?;
             }
             slots.push(slot);
+        }
+        if let (Some(session), false, Some(e)) = (imp.bind.clone(), imp.dry, epic.issue) {
+            let plan_task = pslot.issue.map(|n| ("P".to_string(), n));
+            let made: Vec<(String, u64)> = (plan_task.into_iter())
+                .chain(
+                    (item.tasks.iter().zip(&slots))
+                        .filter_map(|(t, s)| s.issue.map(|n| (t.id.clone(), n))),
+                )
+                .collect();
+            let plan = imp.plan_path.clone();
+            super::budget::write_binds(imp.gh, &session, &plan, item, e, &made)?;
         }
         imp.promote(&epic, &pslot, &slots)?;
     }

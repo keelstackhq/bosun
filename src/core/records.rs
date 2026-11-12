@@ -113,6 +113,20 @@ pub enum Record {
     },
     /// The PR that `bosun pr --auto-merge` queued for this task; `reap` reads it directly.
     TaskPr { session: String, pr: u64 },
+    /// The binding `bosun plan import` writes (modes 7b): a task issue names its epic, item and
+    /// task (`task` and `epic` set); an epic names its plan and item and lists its task issues.
+    /// The first trusted one wins, so a later forged record changes nothing.
+    Bind {
+        session: String,
+        plan: String,
+        item: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        epic: Option<u64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tasks: Vec<u64>,
+    },
     /// An open PR that became conflicting with its base (`mergeable_state` dirty), posted by
     /// `bosun main-health`. One per head and base sha pair.
     Conflict {
@@ -195,7 +209,8 @@ impl Record {
             | Record::Hold { session, .. }
             | Record::Handoff { session, .. }
             | Record::Relay { session, .. }
-            | Record::TaskPr { session, .. } => session,
+            | Record::TaskPr { session, .. }
+            | Record::Bind { session, .. } => session,
         }
     }
 }

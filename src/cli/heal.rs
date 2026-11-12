@@ -329,11 +329,9 @@ impl Run<'_> {
         let model = limits.models.build.clone();
         let meta = crate::app::task_meta(issue);
         let mainfix = issue.labels.iter().any(|l| l == "bosun:kind/mainfix");
-        if let Some((e, m)) = meta.as_ref().and_then(|m| m.epic.map(|e| (e, m))) {
-            let mainfix = mainfix || m.kind == "mainfix";
-            if let Err(e) = super::budget::feature_guard(app, e, Some((m, mainfix))) {
-                return Ok(Err(e.message));
-            }
+        let mainfix = mainfix || meta.as_ref().is_some_and(|m| m.kind == "mainfix");
+        if let Err(e) = super::budget::task_guard(app, task, meta.as_ref(), mainfix) {
+            return Ok(Err(e.message));
         }
         if model.contains("[1m]") {
             return Ok(Err(format!("the build model {model:?} is a [1m] model")));

@@ -1,0 +1,1 @@
+- `bosun plan import` and `plan amend` write trusted `bind` records when `budget_feature` is on; the feature budget guard reads them first, so editing issue bodies no longer lifts `ask` (modes item 6b).
