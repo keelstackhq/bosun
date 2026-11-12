@@ -57,10 +57,12 @@ red `ci-ok` is a pushed head. A `ci-ok` that failed while no other job of that a
 excused only on a PR commit a newer push superseded (its run was cancelled) and on the head of
 a draft: elsewhere it is red, also when a hand-cancelled run made it fail, and always on main.
 Every run of the commit counts, so a green rerun cannot erase a failure; commit statuses and
-other apps never count. A revert is a merged PR by a
+other apps never count. A PR that changes `.github/**` never counts for the rate: its own
+`on: pull_request` workflows post its `ci-ok`. A revert is a merged PR by a
 writer from a `bosun/revert-N` branch (the name cannot change) or with the `bosun:revert N`
-marker. Main-red issues are not read: closing one cannot lift the brake. Known gaps (they lower
-only the red-CI rate, never main red or reverts): a rebase of a PR branch drops its old commits
+marker. Main-red issues are not read: closing one cannot lift the brake. Main red and reverts
+are the authoritative trips. The rate trip is advisory: PR heads are PR-controlled, and known
+gaps lower it (never main red or reverts): a rebase of a PR branch drops its old commits
 from the list, a hand-cancel followed by a new push is excused, and a workflow on a PR branch
 can post same-app `ci-ok` runs that dilute the rate.
 
@@ -73,8 +75,10 @@ exact-inverse check.
 ### Commands
 
 - `bosun mode`: the effective mode and knobs with their sources; no GitHub call.
-- `bosun metrics [--days N]` (PR 5, read-only): red-CI rate, brake, cost per merged PR, lead
-  time p50 per epic, owner touches and owner-rule blocks. `--propose` lands in PR 8.
+- `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
+  (a task's spend once), lead time p50 per epic, owner touches (an owner's own approve or
+  answer, or a plain or after-review signature of an owner-role key) and owner-rule blocks;
+  `brake` over 7 days. `--propose` lands in PR 8.
 - `bosun heal [--pr N]` (PR 3a/3b), `bosun digest [--answer --from F --sign-key PEM]` (PR 4),
   `bosun wave tick <epic>` (PR 6): registered with their final arguments; until their PR lands
   each exits 1 with a `fix` naming it.

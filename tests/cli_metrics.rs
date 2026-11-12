@@ -240,6 +240,9 @@ fn cost_lead_time_touches_and_blocks() {
     fake.pull_set(23, "state", json!("closed"));
     fake.pull_set(23, "closed_at", json!("2026-11-06T00:00:00Z"));
     pr(&fake, 24, &risk(0, &["R-gate"]), &[]); // open: skipped
+    // A second PR of task 100: its spend counts once.
+    pr(&fake, 25, "Closes #100", &[]);
+    merged(&fake, 25, "2026-11-04T00:00:00Z");
     for n in [20, 21] {
         fake.pull_as_issue(n, "pr");
     }
@@ -250,8 +253,8 @@ fn cost_lead_time_touches_and_blocks() {
     fake.comment_at(21, "octocat", "/bosun approve 21 x", "2026-11-04T01:00:00Z");
     fake.comment_at(21, "boss", "/bosun approve 21 x", "2026-09-01T00:00:00Z");
     let d = metrics(&fake, &[]);
-    assert_eq!(d["merged"], 3);
-    assert_eq!(d["cost_per_merged_usd"], 2.0);
+    assert_eq!(d["merged"], 4);
+    assert_eq!(d["cost_per_merged_usd"], 1.5);
     assert_eq!(d["epics"], 2);
     assert_eq!(d["lead_time_p50_hours"], 54.0);
     assert_eq!(d["owner_touches"], 2);
@@ -267,4 +270,72 @@ fn cost_lead_time_touches_and_blocks() {
         metrics(&fake, &["--days", "10"])["owner_touches_per_day"],
         0.2
     );
+}
+
+#[test]
+fn a_pr_that_changes_github_files_never_counts_for_the_rate() {
+    let fake = FakeGithub::start();
+    pr(&fake, 40, "", &["h40"]);
+    red(&fake, "h40");
+    // Its own `on: pull_request` workflow could post a green `ci-ok`: not counted.
+    for (n, file) in [
+        (41, ".github/workflows/ci.yml"),
+        (42, ".github/actions/x.yml"),
+    ] {
+        let h = format!("h{n}");
+        pr(&fake, n, "", &[h.as_str()]);
+        fake.pull_file(n, file, "modified", 1, 0, None);
+        fake.check_run_by(&h, "ci-ok", "success", ACTIONS);
+    }
+    let s = run_in(&fake, Some("steady"));
+    assert_eq!(s["brake"]["window"]["pushed_heads"], 1, "{s}");
+    assert_eq!(s["red_ci"]["pushed_heads"], 1);
+    assert_eq!(s["brake"]["on"], true);
+}
+
+const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+#[test]
+fn only_owner_key_signatures_in_the_plain_forms_are_touches() {
+    use bosun::core::approve::{Role, signed_message, signed_message_bootstrap};
+    use bosun::github::b64;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    let fake = FakeGithub::start();
+    let rng = ring::rand::SystemRandom::new();
+    let pair = |_| {
+        let doc = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        Ed25519KeyPair::from_pkcs8(doc.as_ref()).unwrap()
+    };
+    let (own, del) = (pair(0), pair(1));
+    let enc = |k: &Ed25519KeyPair| b64::encode(k.public_key().as_ref());
+    let keys = format!(
+        "[[key]]\nid = \"o1\"\ned25519 = \"{}\"\n\n[[key]]\nid = \"d1\"\ned25519 = \"{}\"\nrole = \"delegate\"\n",
+        enc(&own),
+        enc(&del)
+    );
+    fake.content(".bosun/approvers.toml", "refs/heads/main", &keys);
+    pr(&fake, 60, "", &[]);
+    fake.pull_set(60, "created_at", json!("2026-11-09T00:00:00Z"));
+    fake.pull_as_issue(60, "pr");
+    let post = |k: &Ed25519KeyPair, id: &str, tail: &str, msg: String| {
+        let sig = b64::encode(k.sign(msg.as_bytes()).as_ref());
+        let body = format!("/bosun approve {SHA}{tail}\nbosun-sig ed25519 {id} {sig}");
+        fake.comment_at(60, "claude", &body, "2026-11-10T00:00:00Z");
+    };
+    post(
+        &own,
+        "o1",
+        "",
+        signed_message(Role::Owner, "acme", "widget", 60, SHA),
+    );
+    let boot = signed_message_bootstrap("acme", "widget", 60, SHA);
+    post(&own, "o1", " bootstrap", boot);
+    post(
+        &del,
+        "d1",
+        "",
+        signed_message(Role::Delegate, "acme", "widget", 60, SHA),
+    );
+    post(&own, "o1", "", "a forged message".into());
+    assert_eq!(metrics(&fake, &[])["owner_touches"], 1);
 }

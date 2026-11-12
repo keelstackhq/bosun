@@ -8,14 +8,19 @@ use std::path::Path;
 use serde_json::json;
 
 use super::MetricsArgs;
-use super::risk_check::owner_logins;
+use super::risk_check::{enrolled_keys, owner_logins};
 use crate::app::{App, Result, default_branch, is_writer, spend_notes, task_meta, trusted_notes};
+use crate::core::approve::{
+    ApproverKey, Form, Role, signature_lines, signed_message, signed_message_v2, verify_ed25519,
+};
 use crate::core::budget_report::{facts, merge_spend};
 use crate::core::cost::{revert_target, round_usd};
 use crate::core::meta::closing_issues;
 use crate::core::metrics::{CiRun, HeadCi, ci_head, owner_rules, p50, revert_of};
 use crate::core::mode::{BrakeWindow, brake};
 use crate::core::records::{Record, parse_record};
+use crate::ctx::RepoId;
+use crate::github::b64;
 use crate::github::{Github, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::time::{Timestamp, parse_rfc3339};
@@ -28,6 +33,9 @@ struct Facts {
     pull: Pull,
     heads: Vec<HeadCi>,
     main_red: bool,
+    /// False when the PR changes `.github/**`: its own `on: pull_request` workflows post its
+    /// `ci-ok`, so its heads never count for the (advisory) red-CI rate.
+    rate: bool,
 }
 
 fn ts(t: &Option<String>) -> Option<Timestamp> {
@@ -55,8 +63,13 @@ fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
     let mut out = Vec::new();
     for pull in gh.list_pulls_updated_since(&since.to_string())? {
         // A fork's heads are not ours to count; its merge into main is.
-        let mut heads = Vec::new();
+        let (mut heads, mut rate) = (Vec::new(), false);
         if pull.head_repo.eq_ignore_ascii_case(&repo) {
+            rate = !gh.pull_files(pull.number)?.iter().any(|f| {
+                std::iter::once(&f.filename)
+                    .chain(&f.previous_filename)
+                    .any(|n| n.starts_with(".github/"))
+            });
             let shas = gh.pull_commits(pull.number)?;
             for (i, sha) in shas.iter().enumerate() {
                 // Superseded heads (run cancelled by the push) and a draft's head (`ci` not run).
@@ -74,6 +87,7 @@ fn collect(app: &App, since: Timestamp) -> Result<Vec<Facts>> {
             pull,
             heads,
             main_red,
+            rate,
         });
     }
     Ok(out)
@@ -103,12 +117,42 @@ fn brake_window(app: &App, facts: &[Facts], since: Timestamp) -> Result<BrakeWin
         {
             w.reverts += 1;
         }
-        for h in f.heads.iter().filter(|h| h.at.is_none_or(|t| t >= since)) {
-            w.pushed_heads += 1;
-            w.failing_heads += u32::from(h.failing);
-        }
+        (w.pushed_heads, w.failing_heads) = rate_add(f, since, (w.pushed_heads, w.failing_heads));
     }
     Ok(w)
+}
+
+/// Adds `f`'s heads in the window to `(pushed, failing)`.
+fn rate_add(f: &Facts, since: Timestamp, (p, r): (u32, u32)) -> (u32, u32) {
+    let heads = f
+        .heads
+        .iter()
+        .filter(|h| f.rate && h.at.is_none_or(|t| t >= since));
+    heads.fold((p, r), |(p, r), h| (p + 1, r + u32::from(h.failing)))
+}
+
+/// A comment signed with an enrolled owner-role key in the plain or after-review form; the
+/// orchestrator's bootstrap and autonomous forms and delegate keys never count.
+fn owner_signed(body: &str, keys: &[ApproverKey], repo: &RepoId, pr: u64) -> bool {
+    let first = body.lines().next().unwrap_or_default().trim();
+    let head = (first.strip_prefix("/bosun approve ")).and_then(|r| r.get(..40));
+    let head = head.unwrap_or_default();
+    let (o, r) = (&repo.owner, &repo.name);
+    signature_lines(body, head)
+        .into_iter()
+        .any(|(form, id, sig)| {
+            let msg = match form {
+                Form::V1 => signed_message(Role::Owner, o, r, pr, head),
+                Form::V2(v) => signed_message_v2(o, r, pr, head, v),
+                _ => return false,
+            };
+            keys.iter().any(|k| {
+                k.id == id
+                    && k.role == Role::Owner
+                    && (b64::decode(&k.ed25519).zip(b64::decode(sig)))
+                        .is_some_and(|(k, s)| verify_ed25519(&k, msg.as_bytes(), &s))
+            })
+        })
 }
 
 pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
@@ -133,6 +177,7 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
 
     // Cost per merged PR, lead time per epic (first claim to last merge).
     let (mut merged, mut usd) = (0, 0.0);
+    let mut paid: BTreeSet<u64> = BTreeSet::new();
     let mut epics: BTreeMap<u64, (Option<Timestamp>, Timestamp)> = BTreeMap::new();
     let mut threads: BTreeSet<u64> = BTreeSet::new();
     for f in all.iter().filter(|f| {
@@ -147,9 +192,10 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
             continue;
         };
         merged += 1;
+        // A task's spend counts once, however many of its PRs merged.
         let task_spend = match task {
-            Some(t) => spend_notes(gh, t)?,
-            None => Vec::new(),
+            Some(t) if paid.insert(t) => spend_notes(gh, t)?,
+            _ => Vec::new(),
         };
         usd += facts(&merge_spend(task_spend, spend_notes(gh, f.pull.number)?)).2;
         let Some(task) = task else { continue };
@@ -174,15 +220,17 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
         .collect();
     let round2 = |x: f64| (x * 100.0).round() / 100.0;
 
-    // Owner touches: an owner's approve command or answer on a PR or its task.
+    // Owner touches: an owner's own approve command or answer, or an owner-key signature.
     let owners = owner_logins(gh, &default_branch(gh)?)?;
+    let keys = enrolled_keys(gh).unwrap_or_default();
     let mut touches = 0;
-    for n in threads.iter().filter(|_| !owners.is_empty()) {
+    for n in &threads {
         for c in gh.list_comments(*n)? {
-            let counts = owners.iter().any(|o| o.eq_ignore_ascii_case(&c.user))
-                && in_days(&Some(c.created_at.clone()))
+            let by_owner = owners.iter().any(|o| o.eq_ignore_ascii_case(&c.user))
                 && (c.body.starts_with("/bosun approve")
                     || matches!(parse_record(&c.body), Some(Record::Answer { .. })));
+            let counts = in_days(&Some(c.created_at.clone()))
+                && (by_owner || owner_signed(&c.body, &keys, &app.ctx.repo, *n));
             touches += u32::from(counts);
         }
     }
@@ -202,14 +250,15 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
             *e = (e.0 + 1, e.1 + u32::from(caught), e.2 + u32::from(passed));
         }
     }
-    let rate = (w.pushed_heads > 0)
-        .then(|| (f64::from(w.failing_heads) * 1000.0 / f64::from(w.pushed_heads)).round() / 10.0);
+    let (pushed, failing) = all.iter().fold((0, 0), |a, f| rate_add(f, start, a));
+    let rate =
+        (pushed > 0).then(|| (f64::from(failing) * 1000.0 / f64::from(pushed)).round() / 10.0);
     Ok(Outcome::data(json!({
         "days": args.days, "since": start.to_string(), "mode": eff.mode.as_str(),
         "brake": {"knob": eff.knobs.brake.value.as_str(), "on": state.on, "reasons": state.reasons,
             "window": {"days": w.days, "main_red": w.main_red, "reverts": w.reverts,
                 "failing_heads": w.failing_heads, "pushed_heads": w.pushed_heads}},
-        "red_ci": {"failing_heads": w.failing_heads, "pushed_heads": w.pushed_heads, "rate_pct": rate},
+        "red_ci": {"failing_heads": failing, "pushed_heads": pushed, "rate_pct": rate},
         "merged": merged,
         "cost_per_merged_usd": (merged > 0).then(|| round_usd(usd / f64::from(merged))),
         "lead_time_p50_hours": p50(&mut hours).map(round2),
