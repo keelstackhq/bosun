@@ -339,18 +339,6 @@ pub(crate) fn feature_guard(
     if knob == BudgetFeature::Off {
         return Ok(None);
     }
-    // Feature spend and indexes come from the registry: with the knob on (any value but off) it
-    // must be pinned, for every task: a mainfix flag can come from an editable label or body.
-    if !crate::registry::pinned(app.gh.as_ref())? {
-        return Err(BosunError::needs_human(
-            format!(
-                "budget_feature is on but {} is not on the default branch, so the registry issue can be swapped",
-                crate::registry::PIN_FILE
-            ),
-            "commit `.bosun/registry` with the registry issue number (an R-gov PR the owner approves)",
-        )
-        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic})));
-    }
     let src = source(app, epic)?;
     let file = src
         .plan
@@ -422,6 +410,20 @@ pub(crate) fn feature_guard(
         {
             return Ok(None);
         }
+    }
+    // Feature spend and indexes come from the registry: with the knob on (any value but off) it
+    // must be pinned, for every task but one whose kind in the plan on the default branch is
+    // mainfix (exempted above; a body or label flag is editable and does not waive it), so a
+    // red-main fix stays claimable in an unpinned repo.
+    if !crate::registry::pinned(app.gh.as_ref())? {
+        return Err(BosunError::needs_human(
+            format!(
+                "budget_feature is on but {} is not on the default branch, so the registry issue can be swapped",
+                crate::registry::PIN_FILE
+            ),
+            "commit `.bosun/registry` with the registry issue number (an R-gov PR the owner approves)",
+        )
+        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic})));
     }
     if src.plan.is_some() && canon.is_none() {
         let msg = format!("{file}/{item} has no epic index on the registry issue");
