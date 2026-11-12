@@ -117,10 +117,15 @@ fn code_that_acts_without_the_owner_is_r_gate_in_both_rule_files() {
         "src/core/wave.rs",
         "src/cli/wave.rs",
     ];
-    for text in [
-        include_str!("../src/core/risk_default.toml"),
-        include_str!("../.bosun/risk.toml"),
-    ] {
+    // CI puts the base's `.bosun/` over the checkout: read the committed copy (HEAD).
+    let out = std::process::Command::new("git")
+        .args(["show", "HEAD:.bosun/risk.toml"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let repo = String::from_utf8(out.stdout).unwrap();
+    for text in [include_str!("../src/core/risk_default.toml"), repo.as_str()] {
         let t: toml::Table = text.parse().unwrap();
         let rules = t["rule"].as_array().unwrap();
         let gate = rules
@@ -136,4 +141,12 @@ fn code_that_acts_without_the_owner_is_r_gate_in_both_rule_files() {
             assert!(paths.contains(&dir.as_str()), "{dir}");
         }
     }
+}
+
+#[test]
+fn knob_order_is_looser_first() {
+    use bosun::core::mode::{Brake, BudgetFeature, PushGates};
+    assert!(BudgetFeature::Off < BudgetFeature::Warn && BudgetFeature::Warn < BudgetFeature::Ask);
+    assert!(PushGates::Ready < PushGates::Push);
+    assert!(Brake::Off < Brake::On);
 }
