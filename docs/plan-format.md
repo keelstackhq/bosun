@@ -179,7 +179,7 @@ conflict to resolve. Cut the plan by file ownership:
 
 When the `budget_feature` knob is not off, import (and `plan amend`, which backfills existing
 epics) also comments one `{"bosun":"bind",...}` record on each task issue and on the epic, once:
-they bind the task to its epic, item and task id, and the epic to its plan and item (see spec 05).
+they bind the task to its epic, item and task id, and the epic to its plan and item (see spec 05), and one `{"bosun":"epic-index",...}` on the registry issue naming the epic of the item.
 
 Each issue body starts with a hidden marker `<!-- bosun:plan <item>/<task> -->`. Import finds
 existing issues by that marker, so a second import of the same plan creates nothing new (UC-M2-1).

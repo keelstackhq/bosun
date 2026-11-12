@@ -127,6 +127,14 @@ pub enum Record {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tasks: Vec<u64>,
     },
+    /// The registry's index of which epic is canonical for a plan item (modes 7d), written by
+    /// plan import and amend. The first trusted one per (plan, item) wins.
+    EpicIndex {
+        session: String,
+        plan: String,
+        item: String,
+        epic: u64,
+    },
     /// An open PR that became conflicting with its base (`mergeable_state` dirty), posted by
     /// `bosun main-health`. One per head and base sha pair.
     Conflict {
@@ -210,6 +218,7 @@ impl Record {
             | Record::Handoff { session, .. }
             | Record::Relay { session, .. }
             | Record::TaskPr { session, .. }
+            | Record::EpicIndex { session, .. }
             | Record::Bind { session, .. } => session,
         }
     }
@@ -367,6 +376,22 @@ mod tests {
             r#"{"bosun":"lesson-seen","session":"s","signature":"00ff00ff00ff00ff","issue":7}"#
         );
         assert_eq!(parse_record(&r.to_line()), Some(r));
+    }
+
+    #[test]
+    fn epic_index_round_trips() {
+        let r = Record::EpicIndex {
+            session: "s".into(),
+            plan: "plans/x.md".into(),
+            item: "M1".into(),
+            epic: 10,
+        };
+        assert_eq!(
+            r.to_line(),
+            r#"{"bosun":"epic-index","session":"s","plan":"plans/x.md","item":"M1","epic":10}"#
+        );
+        assert_eq!(parse_record(&r.to_line()), Some(r.clone()));
+        assert_eq!(r.session(), "s");
     }
 
     #[test]

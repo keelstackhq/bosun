@@ -159,6 +159,10 @@ fn feature_body(mode: &str, usd: f64, epic: &str) -> FakeGithub {
         r#"{{"bosun":"join","session":"session_test","origin":"spawned","depth":1,"expires":"{LATER}"}}"#
     );
     fake.comment(1, &join);
+    fake.comment(
+        1,
+        r#"{"bosun":"epic-index","session":"s","plan":"plans/x.md","item":"M1","epic":10}"#,
+    );
     fake.issue(10, "Epic", &["bosun:state/ready", "bosun:area/core"], epic);
     let t = |n: u64| {
         format!(
