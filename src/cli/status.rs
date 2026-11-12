@@ -96,12 +96,20 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     if let Some(why) = reduced {
         data["integrity_reason"] = json!(why);
     }
-    if knob_from_default(gh)? != BudgetFeature::Off {
-        let (levels, skipped) = feature_levels(&app)?;
-        data["budget_feature"] = json!(levels);
-        if !skipped.is_empty() {
-            data["budget_skipped"] = json!(skipped);
+    // Status is the recovery path: the budget part is best effort.
+    let budget = knob_from_default(gh).and_then(|k| match k {
+        BudgetFeature::Off => Ok(None),
+        _ => feature_levels(&app).map(Some),
+    });
+    match budget {
+        Ok(Some((levels, skipped))) => {
+            data["budget_feature"] = json!(levels);
+            if !skipped.is_empty() {
+                data["budget_skipped"] = json!(skipped);
+            }
         }
+        Ok(None) => {}
+        Err(e) => data["budget_skipped"] = json!([{"epic": null, "error": e.message}]),
     }
     with_archive_children(gh, &ctx.session, &[], now, Outcome::data(data))
 }

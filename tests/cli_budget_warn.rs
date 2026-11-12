@@ -80,7 +80,7 @@ fn digest_asks_for_a_120_percent_epic_under_booster_only() {
     let id = v["data"]["message_id"].as_str().unwrap();
     let msg = v["data"]["message"].as_str().unwrap();
     assert!(msg.contains("Budget asks (1):"), "{msg}");
-    assert!(msg.contains(&format!("{id} raise 10 +20")), "{msg}");
+    assert!(msg.contains(&format!("{id} raise 10 +45")), "{msg}");
     // Under 100 % and under steady nothing is asked, and the id is the same either way.
     let (_, w) = run_in(&feature("booster", 85.0), &["digest"]);
     assert_eq!(w["data"]["budget_asks"], json!([]), "{w}");
@@ -273,4 +273,72 @@ fn a_gatekeeper_wave_tick_has_no_budget_feature_and_the_old_shape() {
     ];
     let want: Vec<&str> = want.iter().copied().chain(["spawned", "stopped"]).collect();
     assert_eq!(keys, want, "{v}");
+}
+
+#[test]
+fn status_survives_a_failing_budget_read() {
+    let fake = feature("steady", 85.0);
+    fake.fail_path("contents/.bosun/bosun.toml", 500);
+    let (code, v) = run_in(&fake, &["status"]);
+    assert_eq!(code, 0, "{v}");
+    let s = &v["data"]["budget_skipped"][0];
+    assert!(s["epic"].is_null(), "{v}");
+    assert!(!s["error"].as_str().unwrap().is_empty(), "{v}");
+}
+
+#[test]
+fn the_hint_adds_one_task_estimate_and_the_raise_lifts_the_claim() {
+    let fake = feature("booster", 130.0);
+    enroll(&fake);
+    let (_, v) = run_in(&fake, &["digest"]);
+    let id = v["data"]["message_id"].as_str().unwrap();
+    // Overspend 30 plus the 25 a task is estimated at.
+    let hint = format!("{id} raise 10 +55");
+    assert!(v["data"]["message"].as_str().unwrap().contains(&hint));
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("k.pem");
+    std::fs::write(&key, common::TEST_ED25519_PEM).unwrap();
+    let head = format!("/bosun digest acme/widget 2026-11-12 {id}");
+    let args = ["digest", "--answer", "--sign-key", key.to_str().unwrap()];
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_test")
+        .env("BOSUN_NOW", NOW)
+        .env("BOSUN_REPO", "acme/widget")
+        .args(args)
+        .write_stdin(format!("{head}\n{hint}\n"))
+        .output()
+        .unwrap();
+    let signed = common::one_object(&out.stdout)["data"]["raises"].clone();
+    assert_eq!(signed.as_array().map(Vec::len), Some(1));
+    let out = common::bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_test")
+        .env("BOSUN_NOW", NOW)
+        .env("BOSUN_REPO", "acme/widget")
+        .args(["budget", "raise", "--from", "-"])
+        .write_stdin(signed.to_string())
+        .output()
+        .unwrap();
+    let r = common::one_object(&out.stdout);
+    assert_eq!(r["data"]["recorded"][0]["usd"], 55, "{r}");
+    // The fake stamps every comment with a fixed time; GitHub would stamp `now`.
+    for c in fake.state.lock().unwrap().comments.iter_mut() {
+        if c.body.contains(r#""bosun":"raise""#) {
+            c.created_at = NOW.into();
+        }
+    }
+    let (code, v) = run_in(&fake, &["claim", "11"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn no_bare_reply_line_when_no_ask_has_room() {
+    let fake = feature("booster", 230.0);
+    enroll(&fake);
+    post_raise(&fake, "2026-11-10", 100);
+    let (_, v) = run_in(&fake, &["digest"]);
+    let msg = v["data"]["message"].as_str().unwrap();
+    assert!(msg.contains("needs an R-gov plan PR"), "{msg}");
+    assert!(!msg.contains("Reply with"), "{msg}");
 }

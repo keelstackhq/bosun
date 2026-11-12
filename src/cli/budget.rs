@@ -454,15 +454,15 @@ pub(crate) fn feature_levels(app: &App) -> Result<(Vec<Value>, Vec<Value>)> {
     let Some((_, notes)) = registry::load(gh)? else {
         return Ok((vec![], vec![]));
     };
-    let (mut seen, mut epics) = (Vec::new(), Vec::new());
+    let (mut seen, mut epics): (Vec<(String, String)>, Vec<u64>) = (Vec::new(), Vec::new());
     for n in &notes {
         if let Some(Record::EpicIndex {
             plan, item, epic, ..
         }) = parse_record(&n.body)
+            && !seen.iter().any(|(p, i)| same_path(p, &plan) && i == &item)
         {
-            let key = (plan.to_ascii_lowercase(), item);
-            if !seen.contains(&key) && !epics.contains(&epic) {
-                seen.push(key);
+            seen.push((plan, item));
+            if !epics.contains(&epic) {
                 epics.push(epic);
             }
         }

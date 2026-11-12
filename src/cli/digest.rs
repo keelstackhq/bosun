@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::budget::{feature_levels, knob_from_default};
 use super::{ApproveArgs, DigestArgs};
-use crate::app::{App, kill_switch, main_red};
+use crate::app::{App, kill_switch, limits_from_default, main_red};
 use crate::cli::approve::read_key;
 use crate::cli::risk_check::enrolled_keys;
 use crate::core::answer::text_sha256;
@@ -109,6 +109,9 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
     let day = app.ctx.now.to_string();
     // Budget asks (knob `ask`): the indexed epics at 100 % of their feature budget.
     let knob = knob_from_default(app.gh.as_ref())?;
+    let per_task = limits_from_default(app.gh.as_ref(), &app.ctx)?
+        .budget
+        .per_task_usd;
     let (mut over, mut warns, mut budget_skipped) = (Vec::new(), Vec::new(), Vec::new());
     if knob != BudgetFeature::Off {
         let (levels, skipped) = feature_levels(&app)?;
@@ -124,7 +127,15 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
             }
         }
     }
-    let d = digest_with(&repo(&app), &day[..10], &items, &asks, &over, &warns);
+    let d = digest_with(
+        &repo(&app),
+        &day[..10],
+        &items,
+        &asks,
+        &over,
+        &warns,
+        per_task,
+    );
     let mut data = json!({
         "message_id": d.id,
         "message": d.text,

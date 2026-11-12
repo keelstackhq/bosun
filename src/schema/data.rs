@@ -175,7 +175,7 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     touch: [str]}], live_sessions: [{session: str, origin: str, area: str | null, depth: int,
     expires: str}], budget_pct: num, daily_usd: num, spend_today_usd: num,
     budget_feature?: [{epic: int, spent_usd: num, budget_usd: num, level: str,
-    raise_room_usd?: int}], budget_skipped?: [{epic: int, error: str}],
+    raise_room_usd?: int}], budget_skipped?: [{epic: int | null, error: str}],
     archive_error?: str};
 mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
     brake_note: str};
