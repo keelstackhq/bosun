@@ -300,3 +300,20 @@ fn a_decoy_pr_cannot_take_another_tasks_lease() {
     assert_eq!(v["data"]["prs"], serde_json::json!([]), "{v}");
     assert_eq!(v["next"], serde_json::json!([]));
 }
+
+#[test]
+fn a_dead_lease_without_touch_gets_no_fixer() {
+    let fake = red_pr(DEAD);
+    // Newer than the touched dead lease, still dead, and with no touch.
+    let empty = lease_note("session_v", "2026-11-12T11:30:00Z", "x").replace(r#"["x"]"#, "[]");
+    fake.comment(7, &empty);
+    let (_, v) = heal_in(&fake, Some(BOOSTER), &[]);
+    assert_eq!(actions(&v), ["skip"], "{v}");
+    assert!(
+        v["data"]["prs"][0]["why"]
+            .as_str()
+            .unwrap()
+            .contains("no lease touch")
+    );
+    assert_eq!(v["next"], serde_json::json!([]));
+}

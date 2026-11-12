@@ -120,8 +120,7 @@ impl Run<'_> {
         let holder = (leases.into_iter().rev())
             .find(|l| l.is_live(self.app.ctx.now))
             .map(|l| l.session);
-        // The caller's own lease (taken for an earlier fixer, kept alive by its heartbeat)
-        // is no holder to notify: a new red head gets the next round.
+        // The caller's own lease (for an earlier fixer) is no holder: a red head gets a round.
         let mine = holder.as_ref() == Some(me);
         let holder = holder.filter(|s| s != me);
         let red_pr = RedPr {
@@ -141,6 +140,7 @@ impl Run<'_> {
                 self.out = std::mem::take(&mut self.out).with_next("send_message", call);
                 ("notify", format!("sent to {s}"))
             }
+            Action::Spawn if touch.is_empty() => ("skip", "no lease touch to hand a fixer".into()),
             Action::Spawn => match self.fixer(pull, &issue)? {
                 Err(w) => ("skip", w),
                 Ok(call) => {
