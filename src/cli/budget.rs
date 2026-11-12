@@ -186,15 +186,19 @@ fn epic_index(
     let Some((reg, notes)) = registry::load(gh)? else {
         return Ok(None);
     };
-    Ok(notes.iter().find_map(|c| match parse_record(&c.body)? {
+    Ok(first_index(&notes, plan, item).map(|(id, e)| (reg, id, e)))
+}
+
+fn first_index(notes: &[crate::core::records::Note], plan: &str, item: &str) -> Option<(u64, u64)> {
+    notes.iter().find_map(|c| match parse_record(&c.body)? {
         Record::EpicIndex {
             plan: p,
             item: i,
             epic,
             ..
-        } if same_path(&p, plan) && i == item => Some((reg, c.id, epic)),
+        } if same_path(&p, plan) && i == item => Some((c.id, epic)),
         _ => None,
-    }))
+    })
 }
 
 /// Write the epic index of one imported item on the registry issue (modes 7d) unless it has
@@ -207,8 +211,11 @@ pub(crate) fn write_index(
     item: &str,
     epic: u64,
 ) -> Result<()> {
-    match epic_index(gh, plan, item)? {
-        Some((reg, id, e)) if e != epic => Err(BosunError::needs_human(
+    let Some((reg, notes)) = registry::load(gh)? else {
+        return Ok(());
+    };
+    match first_index(&notes, plan, item) {
+        Some((id, e)) if e != epic => Err(BosunError::needs_human(
             format!("the epic index of {plan}/{item} names #{e}, not #{epic} (forged or moved)"),
             format!(
                 "the owner deletes the index comment {id} on the registry issue #{reg}, then reruns `bosun plan amend {plan}`"
@@ -216,15 +223,13 @@ pub(crate) fn write_index(
         )),
         Some(_) => Ok(()),
         None => {
-            if let Some((reg, _)) = registry::load(gh)? {
-                let r = Record::EpicIndex {
-                    session: session.into(),
-                    plan: plan.into(),
-                    item: item.into(),
-                    epic,
-                };
-                gh.add_comment(reg, &r.to_line())?;
-            }
+            let r = Record::EpicIndex {
+                session: session.into(),
+                plan: plan.into(),
+                item: item.into(),
+                epic,
+            };
+            gh.add_comment(reg, &r.to_line())?;
             Ok(())
         }
     }
@@ -345,30 +350,6 @@ pub(crate) fn feature_guard(
             "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
     let all = app.gh.list_issues(&[], IssueState::All)?;
-    if src.plan.is_some() {
-        // The registry's first trusted index names the canonical epic of this plan item.
-        let (canon, id) = match epic_index(app.gh.as_ref(), file, item)? {
-            Some((_, id, c)) => (Some(c), id),
-            None => (None, 0),
-        };
-        match canon {
-            Some(c) if c == epic => {}
-            Some(c) => {
-                let msg = format!("#{c} is the epic of {file}/{item}, not #{epic}");
-                let fix = format!(
-                    "work under #{c}; if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}`"
-                );
-                return Err(refuse(msg, fix, 0.0));
-            }
-            None => {
-                let msg = format!("{file}/{item} has no epic index on the registry issue");
-                let fix = format!(
-                    "the orchestrator runs `bosun plan amend {file}` (writes the epic index)"
-                );
-                return Err(refuse(msg, fix, 0.0));
-            }
-        }
-    }
     if let Some((n, m, _)) = task {
         // Each issue once: body metas of the epic and the tasks its bind lists, by (item, task).
         let live =
@@ -412,6 +393,30 @@ pub(crate) fn feature_guard(
             && kind.is_some_and(|k| k == "mainfix")
         {
             return Ok(None);
+        }
+    }
+    if src.plan.is_some() {
+        // The registry's first trusted index names the canonical epic of this plan item.
+        let (canon, id) = match epic_index(app.gh.as_ref(), file, item)? {
+            Some((_, id, c)) => (Some(c), id),
+            None => (None, 0),
+        };
+        match canon {
+            Some(c) if c == epic => {}
+            Some(c) => {
+                let msg = format!("#{c} is the epic of {file}/{item}, not #{epic}");
+                let fix = format!(
+                    "work under #{c} (reopen it if it is closed); if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}`"
+                );
+                return Err(refuse(msg, fix, 0.0));
+            }
+            None => {
+                let msg = format!("{file}/{item} has no epic index on the registry issue");
+                let fix = format!(
+                    "the orchestrator runs `bosun plan amend {file}` (writes the epic index)"
+                );
+                return Err(refuse(msg, fix, 0.0));
+            }
         }
     }
     let (spent, budget) = (feature_spend(app, epic, &all, &src.tasks)?, src.budget);

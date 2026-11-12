@@ -279,8 +279,8 @@ fn a_task_bound_to_a_later_epic_that_copies_the_real_item_is_refused() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     let dummy = EPIC.replace("Epic", "Dummy");
     fake.issue(20, "Dummy", &["bosun:state/ready"], &dummy);
-    task_issue(&fake, 13, "T2", "");
-    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":20"#));
+    task_issue(&fake, 13, "T1", "");
+    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T1","epic":20"#));
     fake.comment(20, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
     guarded(&fake, dir.path(), "13");
 }
@@ -318,8 +318,8 @@ fn a_lower_epic_closed_as_duplicate_still_wins_over_the_new_one() {
     let (dir, fake) = (cfg_dir(), feature(true, 100.0));
     fake.close_issue_as(10, NOW, "duplicate");
     fake.issue(20, "Epic", &["bosun:state/ready"], EPIC);
-    task_issue(&fake, 13, "T2", "20");
-    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T2","epic":20"#));
+    task_issue(&fake, 13, "T1", "20");
+    fake.comment(13, &bind("plans/x.md", "M1", r#","task":"T1","epic":20"#));
     fake.comment(20, &bind("plans/x.md", "M1", r#","tasks":[13]"#));
     guarded(&fake, dir.path(), "13");
 }
@@ -388,7 +388,9 @@ fn a_closed_canonical_epic_is_named_as_the_cause() {
         v["error"]["fix"].as_str().unwrap(),
     );
     assert!(
-        msg.contains("#10 is the epic of") && fix.contains("work under #10"),
+        msg.contains("#10 is the epic of")
+            && fix.contains("work under #10")
+            && fix.contains("reopen"),
         "{v}"
     );
 }

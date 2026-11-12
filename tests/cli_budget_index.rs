@@ -146,3 +146,71 @@ fn no_index_refuses_with_the_amend_fix_and_the_canonical_epic_claims() {
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
     assert_eq!(code, 0, "{v}");
 }
+
+fn bind_count(fake: &FakeGithub) -> usize {
+    (1..=9)
+        .flat_map(|n| fake.comments_of(n))
+        .filter(|c| c.body.contains(r#""bosun":"bind""#))
+        .count()
+}
+
+#[test]
+fn a_forged_first_index_stops_the_import_before_any_bind_of_that_item() {
+    let (dir, fake) = (cfg_dir(), repo("steady"));
+    fake.comment(1, FORGED);
+    assert_eq!(plan_cmd(&fake, dir.path(), "import").0, 5);
+    assert_eq!(bind_count(&fake), 0);
+}
+
+#[test]
+fn a_plan_mainfix_task_claims_before_any_index_exists() {
+    let (dir, fake) = rival();
+    let plan = plan_text().replace("touch: src/a/**", "touch: src/a/**\n  kind: mainfix");
+    fake.content("plans/x.md", "main", &plan);
+    {
+        let mut s = fake.state.lock().unwrap();
+        s.comments.retain(|c| !c.body.contains("epic-index"));
+    }
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn amend_backfills_an_index_and_the_task_then_claims() {
+    let (dir, fake) = (cfg_dir(), repo("gatekeeper"));
+    assert_eq!(plan_cmd(&fake, dir.path(), "import").0, 0);
+    fake.content(".bosun/bosun.toml", "main", "[mode]\nname = \"steady\"\n");
+    fake.content("plan.md", "main", &plan_text());
+    assert_eq!(indexes(&fake), 0);
+    assert_eq!(plan_cmd(&fake, dir.path(), "amend").0, 0);
+    assert_eq!(indexes(&fake), 1);
+    let n = {
+        let s = fake.state.lock().unwrap();
+        let marker = "<!-- bosun:plan M1/P -->";
+        s.issues
+            .iter()
+            .find(|i| i.body.starts_with(marker))
+            .unwrap()
+            .number
+    };
+    let (code, v) = run_in(&fake, dir.path(), &["claim", &n.to_string()]);
+    assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn two_plans_with_the_same_item_id_do_not_refuse_each_other() {
+    let (dir, fake) = rival();
+    fake.content("plans/y.md", "main", &plan_text());
+    let y = INDEX
+        .replace("plans/x.md", "plans/y.md")
+        .replace("10", "30");
+    fake.comment(1, &y);
+    let marker = EPIC.replace("plans/x.md", "plans/y.md");
+    fake.issue(30, "Epic y", &["bosun:state/ready"], &marker);
+    let body = r#"<!-- bosun:task {"item":"M1","epic":30,"task":"T1","touch":["src/y/**"]} -->"#;
+    fake.issue(31, "T1", &["bosun:state/ready"], body);
+    for n in ["11", "31"] {
+        let (code, v) = run_in(&fake, dir.path(), &["claim", n]);
+        assert_eq!(code, 0, "{v}");
+    }
+}
