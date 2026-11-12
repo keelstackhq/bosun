@@ -36,6 +36,7 @@ fn heal_in(fake: &FakeGithub, toml: Option<&str>, args: &[&str]) -> (i32, Value)
     if let Some(t) = toml {
         std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
         std::fs::write(dir.path().join(".bosun/bosun.toml"), t).unwrap();
+        fake.content(".bosun/bosun.toml", "main", t);
     }
     let out = bosun()
         .current_dir(dir.path())
@@ -110,9 +111,73 @@ fn a_dead_holder_gets_a_fixer_only_with_spawn() {
     assert_eq!(next["tool"], "create_session");
     let prompt = next["args"]["prompt"].as_str().unwrap();
     assert!(
-        prompt.contains("#30") && prompt.contains("bosun claim 7"),
+        prompt.contains("#30") && prompt.contains("Do not claim"),
         "{prompt}"
     );
+    // This session took the dead lease for the fixer: the next run neither spawns nor notifies.
+    let lease = fake.comments_of(7);
+    assert!(
+        lease
+            .iter()
+            .any(|c| c.body.contains("\"session\":\"session_test\""))
+    );
+    fake.pull_head_sha(30, "sha30b");
+    fake.check_run_by("sha30b", "ci", "failure", ACTIONS);
+    fake.check_run_by("sha30b", "ci-ok", "failure", ACTIONS);
+    let (_, v) = heal_in(&fake, Some(BOOSTER), &[]);
+    assert_eq!(actions(&v), ["skip"], "{v}");
+    assert_eq!(v["next"], serde_json::json!([]));
+}
+
+#[test]
+fn a_local_edit_cannot_lift_the_brake() {
+    let fake = red_pr(DEAD);
+    fake.content(".bosun/bosun.toml", "main", BOOSTER_BRAKE);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
+    std::fs::write(dir.path().join(".bosun/bosun.toml"), BOOSTER).unwrap();
+    let out = bosun()
+        .current_dir(dir.path())
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_NOW", NOW)
+        .arg("heal")
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(v["data"]["knob"], "notify", "{v}");
+    assert_eq!(v["next"], serde_json::json!([]));
+}
+
+#[test]
+fn the_kill_switch_halts_heal() {
+    let fake = red_pr(LIVE);
+    fake.variable("BOSUN_HALT", "1");
+    let (code, v) = heal_in(&fake, Some(STEADY), &[]);
+    assert_eq!(code, 4, "{v}");
+}
+
+#[test]
+fn one_failing_pr_keeps_the_calls_of_the_others() {
+    let fake = red_pr(LIVE);
+    fake.issue(8, "Task eight", &["bosun:state/review"], "");
+    fake.pull(31, "PR 31", "feat/8", "Closes #8");
+    fake.pull_as_issue(31, "PR 31");
+    fake.fail_path("commits/sha31/check-runs", 500);
+    let (code, v) = heal_in(&fake, Some(STEADY), &[]);
+    assert_eq!(code, 0, "{v}");
+    let mut a = actions(&v);
+    a.sort();
+    assert_eq!(a, ["error", "notify"]);
+    assert_eq!(v["next"][0]["tool"], "send_message");
+}
+
+#[test]
+fn a_pr_closing_a_non_task_is_left_alone() {
+    let fake = red_pr(LIVE);
+    fake.issue(9, "not a task", &[], "");
+    fake.pull(32, "PR 32", "feat/9", "Closes #9");
+    let (_, v) = heal_in(&fake, Some(STEADY), &["--pr", "32"]);
+    assert_eq!(v["data"]["prs"], serde_json::json!([]), "{v}");
 }
 
 #[test]
@@ -124,6 +189,10 @@ fn the_brake_caps_spawn_at_notify() {
     assert_eq!(v["data"]["brake"]["on"], true);
     assert_eq!(actions(&v), ["skip"]);
     assert_eq!(v["next"], serde_json::json!([]));
+    // A live holder is still notified under the brake.
+    let fake = red_pr(LIVE);
+    let (_, v) = heal_in(&fake, Some(BOOSTER_BRAKE), &[]);
+    assert_eq!(actions(&v), ["notify"], "{v}");
 }
 
 #[test]
@@ -140,6 +209,8 @@ fn after_two_rounds_the_task_goes_to_needs_human() {
             .iter()
             .any(|l| l == "bosun:state/needs-human")
     );
+    let (_, v) = heal_in(&fake, Some(STEADY), &[]);
+    assert_eq!(actions(&v), ["skip"], "{v}");
 }
 
 #[test]
