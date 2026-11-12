@@ -193,6 +193,6 @@ parse, pushes as today. A push whose checkout the guard cannot tell (a `cd` it c
 `--git-dir`, `--work-tree`, or a push found only in interpreter code such as
 `subprocess.run(["git", "push"])`) is refused when the hook directory's repo is in push mode.
 Refs pushed by config (`remote.<r>.push`, `remote.<r>.mirror`, `push.default = matching`) are refused by
-the merge-lock where it reads them (spec §4, with its known misses), so `HEAD` is the ref of a refspec-less push; `git send-pack` refs are
+the merge-lock, which reads them for a push without `src:dst` run as the whole input (spec §4), so `HEAD` is the ref of a refspec-less push; `git send-pack` refs are
 checked like push refspecs. Known misses: `git subtree push` (its split commit has no stamp to read), and an interpreter push in a command that
 also has a shell push. `ready`: no change.

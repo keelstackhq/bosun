@@ -578,6 +578,7 @@ fn check(
     }
     let here = Target {
         dir: Some(&[]),
+        alone: false,
         branch_at,
         default_branch,
         sink: sinks.map(|s| s.code),
@@ -620,6 +621,7 @@ fn check(
         } else {
             let target = Target {
                 dir: dir.as_deref(),
+                alone: depth == 0 && alone(command),
                 branch_at,
                 default_branch,
                 // Inside quotes (`bash -c '..'`) or a `( )` group, the nested walk may report
@@ -633,16 +635,6 @@ fn check(
                     }
                 }),
             };
-            let pushes = segment.contains("git")
-                && words
-                    .iter()
-                    .any(|w| matches!(w.trim_matches(['\'', '"', ')']), "push" | "send-pack"));
-            if pushes && env_config(command) {
-                return Some(format!(
-                    "`{}` is refused ({PUSH_CONFIG}; config from the environment or a file the guard does not read): {MERGE_FIX}",
-                    segment.trim()
-                ));
-            }
             if let Some(why) = merge_rule(&words, segment, &target) {
                 return Some(format!(
                     "`{}` is refused ({why}): {MERGE_FIX}",
@@ -1431,6 +1423,9 @@ const HTTP_WRITES: &[&str] = &[
 #[derive(Clone, Copy)]
 struct Target<'a> {
     dir: Option<&'a [String]>,
+    /// The git command is the whole input (no other command, nesting, expansion or
+    /// assignment), so the config the hook reads is the config git runs with.
+    alone: bool,
     branch_at: BranchAt<'a>,
     default_branch: &'a str,
     sink: Option<PushSink<'a>>,
@@ -2708,7 +2703,16 @@ const GIT_ALIAS: &str = "a git alias hides the command it runs";
 
 const PUSH_CONFIG: &str = "git config sets where this push goes (`remote.<r>.push`, `remote.<r>.mirror` or `push.default`); name the refspec, as in `git push -u origin claude/fix-1`";
 
+const PUSH_ALONE: &str = "a push without `src:dst` goes where git config says, which another command here may change; run the push as its own command, or name both sides, as in `git push -u origin claude/fix-1:claude/fix-1`";
+
 const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`";
+
+/// A command that is one plain `git` call: no other command, `$`, backtick, group, redirect
+/// (but `2>&1`), assignment, `source` or `eval`.
+fn alone(command: &str) -> bool {
+    let c = command.trim().replace("2>&1", "");
+    c.starts_with("git ") && !c.contains(['\n', ';', '&', '|', '$', '`', '(', ')', '<', '>'])
+}
 
 /// A git config key that sets where a push goes: `remote.<r>.push`, `remote.<r>.mirror`.
 /// A key with a backslash is one the guard cannot read: fail closed.
@@ -2730,35 +2734,6 @@ fn cfg_key(k: &str) -> String {
 fn names_default(dst: &str, default_branch: &str) -> bool {
     let d = dst.strip_prefix("refs/").unwrap_or(dst);
     d == default_branch || d.strip_prefix("heads/") == Some(default_branch)
-}
-
-/// Config the hook does not read where git runs, so a push in the same command is refused: a
-/// config file or config from the environment (`HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG*` assigned
-/// or exported), or a write into `.git/` or a file named `config` (a `cd .git` first included).
-fn env_config(command: &str) -> bool {
-    let words: Vec<&str> = command
-        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '`'))
-        .collect();
-    let assigns = words.iter().any(|w| {
-        w.split_once('=').is_some_and(|(n, _)| {
-            matches!(n.trim_start_matches('$'), "HOME" | "XDG_CONFIG_HOME")
-                || n.starts_with("GIT_CONFIG")
-        })
-    });
-    let into_git = |p: &str| {
-        let name = p.rsplit('/').next().unwrap_or(p);
-        p.split('/').any(|c| c == ".git")
-            || matches!(name, "config" | "config.worktree")
-            || name.ends_with("gitconfig")
-    };
-    let lower = command.to_ascii_lowercase();
-    assigns
-        || writes::bash_writes(command).iter().any(|p| into_git(p))
-        || lower.contains(".git/config")
-        || lower.contains("config.worktree")
-        || words
-            .windows(2)
-            .any(|w| matches!(w[0], "cd" | "pushd") && into_git(w[1].trim_matches(['\'', '"'])))
 }
 
 /// `push.default` values that push only the current branch to its own name (`HEAD` is judged).
@@ -3005,6 +2980,16 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             });
             if to_default || (refs.is_empty() && on_default) {
                 return Some("push to the default branch");
+            }
+            // A refspec without `:dst` (or none) follows `remote.<r>.push` and `push.default`,
+            // which an earlier command may change: only alone does the hook read that config.
+            let explicit = !refs.is_empty()
+                && refs.iter().all(|r| {
+                    r.split_once(':')
+                        .is_some_and(|(s, d)| !s.is_empty() && !d.is_empty())
+                });
+            if sub == "push" && !explicit && !target.alone {
+                return Some(PUSH_ALONE);
             }
             if let Some(sink) = target.sink {
                 let srcs = refs.iter().map(|r| r.split(':').next().unwrap_or(r));
@@ -3431,7 +3416,7 @@ mod tests {
             "git -C /wt commit -m x",
             "git --git-dir=/wt/.git --work-tree=/wt commit -m x",
             "git --git-dir /wt/.git commit -m x",
-            "cd /wt && git push -u origin feature",
+            "cd /wt && git push -u origin feature:feature",
         ] {
             let (asked, why) = in_worktree(cmd);
             assert_eq!(why, None, "{cmd}: asked {asked:?}");
@@ -3809,7 +3794,7 @@ mod tests {
             ],
             &[
                 "env -S 'cargo test'",
-                "env -S 'git push origin feature'",
+                "env -S 'git push origin feature:feature'",
                 "command -v git",
                 "builtin echo merge",
             ],
@@ -3946,6 +3931,14 @@ mod tests {
             "git config include.path /tmp/g && git push",
             "git push --force-w origin feature",
             "git push --force-i origin feature",
+            "f=.gi; echo x >> ${f}t/config && git push origin feature",
+            "echo x >> .g?t/c?nfig && git push origin feature",
+            ". envfile && git push origin feature",
+            "source envfile; git push",
+            "eval \"$(cat envfile)\"; git push origin feature",
+            "cargo test && git push -u origin feature",
+            "git push -u origin feature 2>/dev/null",
+            "bash -c 'git push origin feature'",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
@@ -3969,11 +3962,14 @@ mod tests {
             "GIT_CONFIG_NOSYSTEM=1 git commit -m 'remote. handling for .push'",
             "git push origin feature:heads/feature",
             "git push --set-upstream origin feature",
-            "CARGO_HOME=/tmp/ch cargo build && git push -u origin feature",
-            "export RUSTUP_HOME=/x; git push -u origin feature",
-            "git commit -m 'fix home= parsing' && git push -u origin feature",
-            "git commit -m 'document include.path' && git push origin feature",
-            "git log --grep=HOME= && git push -u origin feature",
+            "CARGO_HOME=/tmp/ch cargo build && git push -u origin feature:feature",
+            "export RUSTUP_HOME=/x; git push -u origin feature:feature",
+            "git commit -m 'fix home= parsing' && git push -u origin feature:feature",
+            "git commit -m 'document include.path' && git push origin feature:feature",
+            "git log --grep=HOME= && git push -u origin feature:feature",
+            "git commit -m 'see .git/config' && git push -u origin feature:feature",
+            "cat .git/config && git push origin feature:feature",
+            "timeout 60 git push origin feature:feature",
             "git push origin @",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");

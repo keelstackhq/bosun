@@ -26,7 +26,8 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
    (a passing gate leaves a stamp for the tree it ran on; step 8 needs them).
    CI minutes are scarce: push once per PR, when it is done and green locally; do review
    rounds locally (step 6) and push their fixes together. Do not edit the PR body or title
-   just to retry CI.
+   just to retry CI. Run the push as its own command (`git push -u origin <branch>`), or name both
+   sides (`<branch>:<branch>`): a chained push without `src:dst` is refused (spec §4).
 5. `bosun pr <issue>` — right after the push it opens or reuses the PR as a draft (no CI runs
    on a draft) and moves the task to review.
 6. Review locally: a fresh subagent reads `bosun review-pack <pr>` and returns the verdict JSON, listing
