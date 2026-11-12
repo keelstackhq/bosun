@@ -184,7 +184,7 @@ heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, hea
 digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
     rules: [str], title: str}], asks: [{issue: int, answer: str}], bypass: [{pr: int, why: str}],
     budget_asks: [{epic: int, spent_usd: num, budget_usd: num, needs?: str}],
-    budget_skipped?: [{epic: int, error: str}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
+    budget_warnings?: [{epic: int, spent_usd: num, budget_usd: num}], budget_skipped?: [{epic: int, error: str}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
     dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
     sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
 metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str],

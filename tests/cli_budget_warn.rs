@@ -207,3 +207,70 @@ fn an_epic_with_a_raise_is_measured_against_base_plus_raise() {
     let (_, v) = run_in(&fake, &["status"]);
     assert_eq!(v["data"]["budget_feature"][0]["level"], "warn", "{v}");
 }
+
+#[test]
+fn digest_lists_85_percent_epics_as_warnings_without_a_reply_hint() {
+    let (_, base) = run_in(&feature("steady", 10.0), &["digest"]);
+    assert_eq!(base["data"]["budget_warnings"], json!([]), "{base}");
+    assert!(
+        !base["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("warnings")
+    );
+    let (code, v) = run_in(&feature("steady", 85.0), &["digest"]);
+    assert_eq!(code, 0, "{v}");
+    let w = &v["data"]["budget_warnings"];
+    assert_eq!(w.as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(w[0]["epic"], 10);
+    assert_eq!(w[0]["spent_usd"].as_f64(), Some(85.0));
+    assert_eq!(w[0]["budget_usd"].as_f64(), Some(100.0));
+    let msg = v["data"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("Budget warnings (1):\n- epic #10 $85.00 of $100.00 (85 %)"),
+        "{msg}"
+    );
+    assert!(!msg.contains(" raise "), "{msg}");
+    assert_eq!(v["data"]["message_id"], base["data"]["message_id"]);
+    assert_eq!(v["data"]["budget_asks"], json!([]));
+    // Over 100 % under warn is a warning too; under ask the 85 % epic is a warning, not an ask.
+    let (_, o) = run_in(&feature("steady", 120.0), &["digest"]);
+    assert_eq!(
+        o["data"]["budget_warnings"][0]["spent_usd"].as_f64(),
+        Some(120.0),
+        "{o}"
+    );
+    let (_, a) = run_in(&feature("booster", 85.0), &["digest"]);
+    assert_eq!(a["data"]["budget_warnings"][0]["epic"], 10, "{a}");
+    assert_eq!(a["data"]["budget_asks"], json!([]));
+    // Gatekeeper: no key, no section.
+    let (_, g) = run_in(&feature("", 85.0), &["digest"]);
+    assert!(g["data"].get("budget_warnings").is_none(), "{g}");
+    assert!(
+        g["data"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("Budget asks (0):")
+    );
+}
+
+#[test]
+fn a_gatekeeper_wave_tick_has_no_budget_feature_and_the_old_shape() {
+    let fake = feature("", 85.0);
+    let (code, v) = run_in(&fake, &["wave", "tick", "10"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(!v.to_string().contains("budget_feature"), "{v}");
+    let mut keys: Vec<&String> = v["data"].as_object().unwrap().keys().collect();
+    keys.sort();
+    let want = [
+        "archived",
+        "brake",
+        "environment_id",
+        "epic",
+        "held_by",
+        "mode",
+        "spawn_auto",
+    ];
+    let want: Vec<&str> = want.iter().copied().chain(["spawned", "stopped"]).collect();
+    assert_eq!(keys, want, "{v}");
+}

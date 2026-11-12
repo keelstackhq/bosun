@@ -108,18 +108,23 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
     }
     let day = app.ctx.now.to_string();
     // Budget asks (knob `ask`): the indexed epics at 100 % of their feature budget.
-    let (mut over, mut budget_skipped) = (Vec::new(), Vec::new());
-    if knob_from_default(app.gh.as_ref())? == BudgetFeature::Ask {
+    let knob = knob_from_default(app.gh.as_ref())?;
+    let (mut over, mut warns, mut budget_skipped) = (Vec::new(), Vec::new(), Vec::new());
+    if knob != BudgetFeature::Off {
         let (levels, skipped) = feature_levels(&app)?;
         budget_skipped = skipped;
-        for l in levels.iter().filter(|l| l["level"] == "over") {
+        for l in &levels {
             let f = |k: &str| l[k].as_f64().unwrap_or_default();
             let epic = l["epic"].as_u64().unwrap_or_default();
-            let room = l["raise_room_usd"].as_u64().unwrap_or_default();
-            over.push((epic, f("spent_usd"), f("budget_usd"), room));
+            if l["level"] == "over" && knob == BudgetFeature::Ask {
+                let room = l["raise_room_usd"].as_u64().unwrap_or_default();
+                over.push((epic, f("spent_usd"), f("budget_usd"), room));
+            } else {
+                warns.push((epic, f("spent_usd"), f("budget_usd")));
+            }
         }
     }
-    let d = digest_with(&repo(&app), &day[..10], &items, &asks, &over);
+    let d = digest_with(&repo(&app), &day[..10], &items, &asks, &over, &warns);
     let mut data = json!({
         "message_id": d.id,
         "message": d.text,
@@ -138,6 +143,12 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
         }).collect::<Vec<_>>(),
         "skipped": skipped,
     });
+    if knob != BudgetFeature::Off {
+        data["budget_warnings"] = warns
+            .iter()
+            .map(|(e, s, b)| json!({"epic": e, "spent_usd": s, "budget_usd": b}))
+            .collect();
+    }
     if !budget_skipped.is_empty() {
         data["budget_skipped"] = json!(budget_skipped);
     }

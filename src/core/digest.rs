@@ -36,19 +36,21 @@ fn rule_ok(r: &str) -> bool {
 /// title)` of open asks), made on `day` (YYYY-MM-DD): the day is in the id, so an unchanged
 /// board gives a new digest, and a reply binds to one day's digest.
 pub fn digest(repo: &str, day: &str, items: &[Item], asks: &[(u64, String)]) -> Digest {
-    digest_with(repo, day, items, asks, &[])
+    digest_with(repo, day, items, asks, &[], &[])
 }
 
 /// As [`digest`], with `raises`: `(epic, spent, budget, room)` of the epics over their feature
 /// budget, `room` the dollars a raise may still add. They are not in the id (the id binds PR heads
 /// and the day). Each adds the reply line `<id> raise <epic> +<usd>`, the overspend rounded up to
 /// whole dollars, at least 1 and at most `room`; with no room it says an R-gov plan PR is needed.
+/// `warns` (`(epic, spent, budget)` at 80 % or more) are info lines with no reply hint.
 pub fn digest_with(
     repo: &str,
     day: &str,
     items: &[Item],
     asks: &[(u64, String)],
     raises: &[(u64, f64, f64, u64)],
+    warns: &[(u64, f64, f64)],
 ) -> Digest {
     let pairs: Vec<String> = items
         .iter()
@@ -83,6 +85,15 @@ pub fn digest_with(
         if *room == 0 {
             text.push_str(" (needs an R-gov plan PR)");
         }
+    }
+    if !warns.is_empty() {
+        text.push_str(&format!("\nBudget warnings ({}):", warns.len()));
+    }
+    for (epic, spent, budget) in warns {
+        let pct = (spent / budget * 100.0).floor();
+        text.push_str(&format!(
+            "\n- epic #{epic} ${spent:.2} of ${budget:.2} ({pct} %)"
+        ));
     }
     let nums: Vec<String> = items.iter().map(|i| i.pr.to_string()).collect();
     if !nums.is_empty() {
