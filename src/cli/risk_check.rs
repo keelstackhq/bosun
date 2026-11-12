@@ -428,27 +428,24 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     }
     let signed_ok = trust.is_empty() && !unseen;
     let requirement = requirement(&matches);
-    let (mut bootstrap, autonomous) = if high && signed_ok {
+    let (mut bootstrap, policy_source) = if high && signed_ok {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
         let excluded = bootstrap_excluded(&pr_files, &matches, bosun_code);
         let today = app.ctx.now.to_string();
         let pr = (&pr_files[..], &matches[..], requirement);
         orchestrator_window(gh, base, &today[..10], pr, (&excluded, &capabilities))?
     } else {
-        (
-            Err("signed approvals do not count on this PR".into()),
-            false,
-        )
+        (Err("signed approvals do not count on this PR".into()), None)
     };
     let repo = app.ctx.repo.to_string();
     let linked = linked_issues_in(&pull.body, &repo);
     // D-017: the signature counts only with a clean verdict and a task the author leased.
-    let auto = if autonomous && bootstrap.is_ok() {
+    let auto = if policy_source.is_some() && bootstrap.is_ok() {
         autonomous_inputs(gh, &pull, &repo)?
     } else {
         None
     };
-    if autonomous && bootstrap.is_ok() && auto.is_none() {
+    if policy_source.is_some() && bootstrap.is_ok() && auto.is_none() {
         bootstrap =
             Err("autonomous mode (D-017) needs an open linked task leased by the author".into());
     }
@@ -569,6 +566,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         }
         if autonomous {
             data["policy"] = json!("autonomous");
+            data["policy_source"] = json!(policy_source);
             data["autonomous_verdicts"] = json!(autonomous_verdicts);
         }
     }
@@ -1193,12 +1191,12 @@ fn orchestrator_window(
     today: &str,
     pr: (&[PrFile], &[risk::Match], Approval),
     (excluded, capabilities): (&[String], &[String]),
-) -> Result<(std::result::Result<String, String>, bool)> {
+) -> Result<(std::result::Result<String, String>, Option<&'static str>)> {
     let (files, matches, requirement) = pr;
     let approvals = match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => match Config::parse(&t, CONFIG_FILE) {
             Ok(c) => c.approvals,
-            Err(e) => return Ok((Err(format!("bootstrap mode is off: {}", e.message)), false)),
+            Err(e) => return Ok((Err(format!("bootstrap mode is off: {}", e.message)), None)),
         },
         None => Default::default(),
     };
@@ -1223,7 +1221,8 @@ fn orchestrator_window(
         autonomous_excluded: &autonomous_excluded,
         capabilities,
     });
-    Ok((counts, approvals.policy() == Policy::Autonomous))
+    let autonomous = approvals.policy() == Policy::Autonomous;
+    Ok((counts, autonomous.then(|| approvals.policy_source())))
 }
 
 /// The paths and rules of the PR that a bootstrap-mode approval never covers.

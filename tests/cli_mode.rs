@@ -1,6 +1,7 @@
 mod common;
 
 use bosun::config::Config;
+use bosun::core::approve::Policy;
 use bosun::core::mode::*;
 use common::{bosun, one_object};
 
@@ -41,10 +42,15 @@ fn gatekeeper_with_a_default_override_parses() {
 }
 
 #[test]
-fn lighter_modes_are_refused_until_1b() {
-    for m in ["steady", "booster", "autonomous"] {
-        let msg = err(&format!("[mode]\nname = \"{m}\"\n"));
-        assert!(msg.contains("is not active yet"), "{msg}");
+fn lighter_modes_parse_and_fill_the_policy() {
+    for (m, policy, source) in [
+        ("steady", Policy::Owner, "default"),
+        ("booster", Policy::Autonomous, "preset"),
+        ("autonomous", Policy::Autonomous, "preset"),
+    ] {
+        let c = Config::parse(&format!("[mode]\nname = \"{m}\"\n"), "f.toml").unwrap();
+        assert_eq!(c.approvals.policy(), policy, "{m}");
+        assert_eq!(c.approvals.policy_source(), source, "{m}");
     }
 }
 
@@ -90,20 +96,18 @@ fn stubs_exit_1_with_a_fix() {
 }
 
 #[test]
-fn a_non_default_override_is_refused_until_1b() {
+fn a_non_default_override_parses() {
     for k in [
         "heal_main = \"revert-auto\"",
         "spawn_auto = \"on\"",
         "push_gates = \"push\"",
     ] {
         for name in ["", "name = \"gatekeeper\"\n"] {
-            let e = Config::parse(&format!("[mode]\n{name}{k}\n"), "f.toml").unwrap_err();
-            assert!(
-                e.message.contains("override is not active yet"),
-                "{}",
-                e.message
-            );
-            assert!(e.fix.contains("plan PR 1b"), "{}", e.fix);
+            let c = Config::parse(&format!("[mode]\n{name}{k}\n"), "f.toml").unwrap();
+            let v = serde_json::to_value(c.mode_effective()).unwrap();
+            let knob = k.split(' ').next().unwrap();
+            assert_eq!(v["knobs"][knob]["source"], "explicit", "{k}");
+            assert_eq!(c.approvals.policy_source(), "default", "{k}");
         }
     }
 }

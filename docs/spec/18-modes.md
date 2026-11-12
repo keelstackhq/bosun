@@ -1,6 +1,6 @@
 ## 18. Modes
 
-**Status: parse and registrations only (plan PR 1a); the boosters land later.** Design:
+**Status: parse, policy and weaken check (plan PRs 1a, 1b); the boosters land later.** Design:
 `docs/superpowers/specs/2026-11-11-modes-booster-design.md`, plan `…/plans/2026-11-11-modes-booster.md`.
 
 ### `[mode]`
@@ -18,9 +18,15 @@ push_gates = "push"
   source of each knob (`explicit`, `preset`, `default`).
 - Unknown mode names, unknown knobs and unknown values are parse errors. `policy` is never a
   `[mode]` key (parse error): only `[approvals] policy` or the mode name sets it.
-- **Not active yet:** until the weaken check lands (plan PR 1b), any `name` but `gatekeeper` is a
-  parse error, and so is any knob override away from its gatekeeper value, so no release
-  carries a lighter mode without it. PR 1b lifts both; its weaken check covers overrides alone.
+- The preset fills `[approvals] policy` when the table leaves it unset (booster and
+  autonomous: `autonomous`, D-017); risk-check and `approve` print `data.policy_source`.
+- Weaken (§8, R-weaken): a move down the ladder, and an effective `push_gates` push → ready,
+  `brake` on → off or `budget_feature` lowered (ask > warn > off: it removes a spend stop).
+  Helper knobs (`heal_*`, `spawn_auto`, `approvals_batch`, `curator_loosen`) change who
+  acts, not what passes: changing them alone is
+  no finding; the file is R-gov, so the owner still approves. A move up is no finding.
+- Code that acts without the owner (`core/mode`, `digest`, `heal`, `metrics`, `spawn`, `wave`,
+  core and cli) is R-gate; R-gov is in the D-017 deny set.
 - Release ordering as for every new key: set `[mode]` only once `.bosun/version` pins a release
   that reads it.
 
@@ -43,7 +49,15 @@ Pure (`core::mode::brake`): over a 7-day window it is on when main went red at l
 least two PRs were reverted, or the red-CI rate (failing `ci-ok` heads / pushed PR heads) is
 at least 10 points over the mode's target (steady 30 %, booster 20 %, autonomous 15 %;
 gatekeeper has no target). Nothing is stored. The counts come from GitHub in plan PR 5; until
-then `bosun mode` prints `brake: null`.
+then `bosun mode` prints `brake: null`. Its sources are writer-only or immutable: main-health
+commit statuses, merged revert PRs by a writer with the `bosun:revert N` marker, and check
+conclusions. Never an issue an agent can close: closing a main-red issue cannot lift it.
+
+### Revert (plan PR 3b)
+
+`revert-auto` and the `R-revert` rule act only on a PR with the `bosun:revert N` marker. A
+revert without it gets the normal rules and is never `revert-auto`; a wrong N fails the
+exact-inverse check.
 
 ### Commands
 

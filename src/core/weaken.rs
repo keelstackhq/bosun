@@ -100,11 +100,48 @@ fn parse(text: Option<&str>) -> Option<Value> {
     toml::from_str(text.unwrap_or_default()).ok()
 }
 
+/// `[mode]` (spec §18): a move down the ladder, and an effective `push_gates` push → ready or
+/// `brake` on → off. Helper knobs change who acts, not what passes: no finding.
+fn mode_findings(b: &Value, h: &Value, add: &mut impl FnMut(&str, &str, &str)) {
+    use super::mode::{ModeConfig, Source, preset, resolve};
+    let eff = |v: &Value| match v.get("mode") {
+        None => Some(resolve(&ModeConfig::default())),
+        Some(m) => m.clone().try_into::<ModeConfig>().ok().map(|m| resolve(&m)),
+    };
+    // A base that does not parse counts as gatekeeper (fail closed).
+    let o = eff(b).unwrap_or_else(|| resolve(&ModeConfig::default()));
+    let Some(n) = eff(h) else {
+        return add("mode", "parses", "(unparseable)");
+    };
+    if n.mode > o.mode {
+        add("mode", o.mode.as_str(), n.mode.as_str());
+    }
+    // Looser = lower in the knob's order. A move up the ladder may loosen these by its preset
+    // (gatekeeper has no brake); an override looser than the new mode's preset still counts.
+    let (up, p) = (n.mode < o.mode, preset(n.mode));
+    macro_rules! looser {
+        ($($f:ident),+) => {$(
+            let (ov, nv) = (o.knobs.$f, n.knobs.$f);
+            if nv.value < ov.value && (!up || nv.source == Source::Explicit && nv.value < p.$f) {
+                add(concat!("mode.", stringify!($f)), ov.value.as_str(), nv.value.as_str());
+            }
+        )+};
+    }
+    looser!(push_gates, brake, budget_feature);
+}
+
 /// Findings from a gate file's text at base and head. A missing side (an added or deleted file)
-/// counts as empty; an unparseable head is a finding, an unparseable base gives none.
+/// counts as empty; an unparseable head is a finding, an unparseable base gives none (but
+/// `.bosun/bosun.toml`, where it counts as empty).
 pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<String> {
-    let (Some(kind), Some(b)) = (kind(path), parse(base)) else {
+    let Some(kind) = kind(path) else {
         return Vec::new();
+    };
+    // An unparseable `.bosun/bosun.toml` base counts as empty, so `[mode]` is still judged.
+    let b = match parse(base) {
+        Some(b) => b,
+        None if kind == Kind::Config => Value::Table(Default::default()),
+        None => return Vec::new(),
     };
     let Some(h) = parse(head) else {
         return vec![format!("{path}: toml parses → (unparseable)")];
@@ -155,6 +192,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             for (k, new) in fh.iter().filter(|(k, _)| gated(k) && !fb.contains_key(*k)) {
                 add(k, "(none)", &show(new));
             }
+            mode_findings(&b, &h, &mut add);
         }
         Kind::Deny => {
             let adds = |l: &str| {

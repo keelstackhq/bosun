@@ -1,0 +1,1 @@
+- `[mode]` lighter modes and overrides parse; the preset fills `[approvals] policy` (`data.policy_source`), loosening `[mode]` is R-weaken, R-gov joins the D-017 deny set, and the mode, digest, heal, metrics, spawn and wave code joins R-gate

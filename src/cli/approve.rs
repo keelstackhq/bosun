@@ -597,13 +597,14 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     let key_id = key.id;
     let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
     let policy = boot.as_ref().map(|b| b.2.name());
+    let policy_source = boot.as_ref().map(|b| b.3);
     let mut signed = Vec::new();
     let note = boot.as_ref().map(|b| b.1.as_str());
     let until = boot.as_ref().and_then(|b| b.0.clone());
     for after in reviews {
         let (form, msg) = match (after, &boot) {
             (Some(r), _) => (Form::V2(r), signed_message_v2(owner, repo, pr, &head, r)),
-            (None, Some((.., Policy::Autonomous))) => (
+            (None, Some((_, _, Policy::Autonomous, _))) => (
                 Form::Autonomous,
                 signed_message_autonomous(owner, repo, pr, &head),
             ),
@@ -623,7 +624,7 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             .collect();
         return Ok(Outcome::data(
             json!({"pr": pr, "head_sha": head, "key_id": key_id, "role": role.name(),
-                "bootstrap_until": until, "policy": policy, "body": signed[0].1, "bodies": all}),
+                "bootstrap_until": until, "policy": policy, "policy_source": policy_source, "body": signed[0].1, "bodies": all}),
         ));
     }
     let mut approved = Vec::new();
@@ -634,7 +635,8 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
             Err(e) => return Err(e.with_data(json!({"approved": approved}))),
         };
         let mut entry = json!({"pr": pr, "head_sha": head, "key_id": key_id,
-            "role": role.name(), "comment_id": id, "policy": policy});
+            "role": role.name(), "comment_id": id, "policy": policy,
+            "policy_source": policy_source});
         if let Some(r) = after {
             entry["after_review"] = json!(r);
         }
@@ -643,10 +645,13 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     Ok(Outcome::data(json!({"approved": approved})))
 }
 
+/// Bootstrap until, the signed line, the policy and who set it (`Approvals::policy_source`).
+type Boot = (Option<String>, String, Policy, &'static str);
+
 /// How `--bootstrap` may sign for the PR at `head` today: the last day of the window (D-012)
 /// and its note line, or (after it) the note line of the approval policy (D-014) and no date. The
 /// setting is read on the default branch, which risk-check reads at the PR's base.
-fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<(Option<String>, String, Policy)> {
+fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<Boot> {
     let gh = app.gh.as_ref();
     let (pr, head) = (pull.number, pull.head_sha.as_str());
     let text = gh.file_at(CONFIG_FILE, &default_ref(gh)?)?;
@@ -654,16 +659,16 @@ fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<(Option<String>
         Some(t) => Config::parse(&t, CONFIG_FILE)?.approvals,
         None => Default::default(),
     };
-    let policy = approvals.policy();
+    let (policy, src) = (approvals.policy(), approvals.policy_source());
     if policy == Policy::Autonomous {
         autonomous_ok(app, pull)?;
-        return Ok((None, AUTONOMOUS_LINE.into(), policy));
+        return Ok((None, AUTONOMOUS_LINE.into(), policy, src));
     }
     let end = approvals
         .bootstrap_until
         .map(|u| u.min(BOOTSTRAP_END.to_string()));
     if let Some(d) = end.as_ref().filter(|d| today <= d.as_str()) {
-        return Ok((Some(d.clone()), bootstrap_line(d), policy));
+        return Ok((Some(d.clone()), bootstrap_line(d), policy, src));
     }
     let window = match &end {
         Some(d) => format!("bootstrap mode ended on {d} (D-012)"),
@@ -695,7 +700,7 @@ fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<(Option<String>
     if !ok {
         return refuse("approval policy owner-gated: only R-ci changes outside workflows are signed; the owner approves this PR".into());
     }
-    Ok((None, policy_line(policy), policy))
+    Ok((None, policy_line(policy), policy, src))
 }
 
 /// D-017: signs only when no excluded path changed and a reviewer other than the task's leaseholders
@@ -708,7 +713,25 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     let paths: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.previous_filename.as_deref()))
         .collect();
-    let mut hit = risk::autonomous_excluded(&paths, &[]);
+    // The base rules, as risk-check reads them: a rule match in the deny set (R-gov) refuses too.
+    let rules = match gh.file_at(".bosun/risk.toml", &pull.base_sha)? {
+        Some(t) => risk::Rules::parse(&t)
+            .map_err(|e| BosunError::error(format!(".bosun/risk.toml at base: {e}"), fix))?,
+        None => risk::Rules::defaults(),
+    };
+    let changed: Vec<_> = (files.iter())
+        .map(|f| risk::ChangedFile {
+            path: f.filename.clone(),
+            previous_path: f.previous_filename.clone(),
+            added_lines: f
+                .patch
+                .as_deref()
+                .map(risk::added_lines)
+                .unwrap_or_default(),
+        })
+        .collect();
+    let matches = risk::evaluate(&rules, &changed, &[], &[]);
+    let mut hit = risk::autonomous_excluded(&paths, &matches);
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();

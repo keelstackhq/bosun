@@ -521,8 +521,9 @@ pub const AUTONOMOUS_DENIED: [&str; 9] = [
 
 /// The rules whose match autonomous mode never covers: secrets, production writes, the gate code
 /// (R-gate at base: what decides approvals, so the deny set follows the rule) and a weakened gate
-/// (agents may propose relaxing criteria, never apply them).
-pub const AUTONOMOUS_DENIED_RULES: [&str; 4] = ["R-secrets", "R-prod-write", "R-gate", "R-weaken"];
+/// (agents may propose relaxing criteria, never apply them), and governance (who approves what).
+pub const AUTONOMOUS_DENIED_RULES: [&str; 5] =
+    ["R-secrets", "R-prod-write", "R-gate", "R-weaken", "R-gov"];
 
 /// The Rust files among `(path, patch)` whose diff is not shown or changes a line that may set a
 /// `#[path]` (also inside `cfg_attr`, over several lines): `path` then `=` and a quote, spaces
@@ -1225,7 +1226,7 @@ mod tests {
             ["R-prod-write"]
         );
         assert_eq!(autonomous_excluded(&f, &[m("R-weaken")]), ["R-weaken"]);
-        assert!(autonomous_excluded(&f, &[m("R-gov")]).is_empty());
+        assert_eq!(autonomous_excluded(&f, &[m("R-gov")]), ["R-gov"]);
         // A `#[path]` attribute in a changed Rust line, or an unseen Rust diff, goes to the owner.
         let some = Some("@@\n+fn a() {}");
         let attr = Some("@@\n+#[cfg_attr(x,\n+   path = \"other.rs\")]\n+mod risk;");
