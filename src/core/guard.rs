@@ -2714,7 +2714,10 @@ const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch 
 /// A key with a backslash is one the guard cannot read: fail closed.
 fn push_key(k: &str) -> bool {
     let k = cfg_key(k);
-    k.contains('\\') || k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
+    k.contains('\\')
+        || k == "include.path"
+        || k.starts_with("includeif.")
+        || k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
 }
 
 /// A config key as git reads it: quotes removed, lowercase.
@@ -2729,19 +2732,33 @@ fn names_default(dst: &str, default_branch: &str) -> bool {
     d == default_branch || d.strip_prefix("heads/") == Some(default_branch)
 }
 
-/// Config or a config file from the environment or `include.path`, which the hook does not
-/// read where git runs: a push in such a command is refused.
+/// Config the hook does not read where git runs, so a push in the same command is refused: a
+/// config file or config from the environment (`HOME`, `XDG_CONFIG_HOME`, `GIT_CONFIG*` assigned
+/// or exported), or a write into `.git/` or a file named `config` (a `cd .git` first included).
 fn env_config(command: &str) -> bool {
-    let c = command.to_ascii_lowercase();
-    [
-        "git_config",
-        "home=",
-        "xdg_config_home=",
-        "include.path",
-        "includeif.",
-    ]
-    .iter()
-    .any(|v| c.contains(v))
+    let words: Vec<&str> = command
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '`'))
+        .collect();
+    let assigns = words.iter().any(|w| {
+        w.split_once('=').is_some_and(|(n, _)| {
+            matches!(n.trim_start_matches('$'), "HOME" | "XDG_CONFIG_HOME")
+                || n.starts_with("GIT_CONFIG")
+        })
+    });
+    let into_git = |p: &str| {
+        let name = p.rsplit('/').next().unwrap_or(p);
+        p.split('/').any(|c| c == ".git")
+            || matches!(name, "config" | "config.worktree")
+            || name.ends_with("gitconfig")
+    };
+    let lower = command.to_ascii_lowercase();
+    assigns
+        || writes::bash_writes(command).iter().any(|p| into_git(p))
+        || lower.contains(".git/config")
+        || lower.contains("config.worktree")
+        || words
+            .windows(2)
+            .any(|w| matches!(w[0], "cd" | "pushd") && into_git(w[1].trim_matches(['\'', '"'])))
 }
 
 /// `push.default` values that push only the current branch to its own name (`HEAD` is judged).
@@ -2924,8 +2941,10 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
             let rest = push_words(&unquoted);
             // git takes a long option by any unique prefix (`--mir` is `--mirror`).
-            const BULK: [&str; 7] = [
+            const BULK: [&str; 9] = [
                 "--force",
+                "--force-with-lease",
+                "--force-if-includes",
                 "--tags",
                 "--follow-tags",
                 "--mirror",
@@ -2982,7 +3001,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             }
             let to_default = refs.iter().any(|r| {
                 let dst = r.rsplit(':').next().unwrap_or(r);
-                names_default(dst, default_branch) || (dst == "HEAD" && on_default)
+                names_default(dst, default_branch) || (matches!(dst, "HEAD" | "@") && on_default)
             });
             if to_default || (refs.is_empty() && on_default) {
                 return Some("push to the default branch");
@@ -3915,6 +3934,18 @@ mod tests {
             "git push --mir origin",
             "git push --al origin",
             "git push --del origin feature",
+            "printf '[remote \"origin\"]\\n\\tpush = HEAD:refs/heads/main\\n' >> .git/config && git push origin",
+            "echo x | tee -a .git/config && git push origin",
+            "sed -i 's/a/b/' .git/config && git push",
+            "cp /tmp/c .git/config && git push origin feature",
+            "cd .git && echo x >> config && cd .. && git push",
+            "python3 -c 'open(\".git/config\",\"a\")' && git push",
+            "export GIT_CONFIG_GLOBAL=/tmp/g; git push origin feature",
+            "env XDG_CONFIG_HOME=/tmp/x git push origin feature",
+            "git -c includeIf.onbranch:feature.path=/tmp/g push origin feature",
+            "git config include.path /tmp/g && git push",
+            "git push --force-w origin feature",
+            "git push --force-i origin feature",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
@@ -3938,10 +3969,17 @@ mod tests {
             "GIT_CONFIG_NOSYSTEM=1 git commit -m 'remote. handling for .push'",
             "git push origin feature:heads/feature",
             "git push --set-upstream origin feature",
+            "CARGO_HOME=/tmp/ch cargo build && git push -u origin feature",
+            "export RUSTUP_HOME=/x; git push -u origin feature",
+            "git commit -m 'fix home= parsing' && git push -u origin feature",
+            "git commit -m 'document include.path' && git push origin feature",
+            "git log --grep=HOME= && git push -u origin feature",
+            "git push origin @",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
         assert!(bash("git send-pack origin HEAD", "main").is_some());
+        assert!(bash("git push origin @", "main").is_some());
     }
 
     /// The guard cannot parse these unquoted heredoc bodies exactly (a `)` inside a quote, a
