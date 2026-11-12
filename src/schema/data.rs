@@ -48,8 +48,8 @@ budget report = {month: str, written: [str], skipped_no_pr: [int], rows: [{pr: i
     reverted: int, cost_per_merged_usd: num | null, cost_per_held_usd: num | null,
     top_prs: [{pr: int, title: str, usd: num}]}};
 plan check = {file: str, title: str, project: str | null, items: [{id: str, title: str, area: str,
-    shape: str, shape_reasons: [str], size: int, tasks: int, ucs: int, gated: [str]}],
-    warnings: [{line: int, message: str, fix: str}]};
+    shape: str, shape_reasons: [str], size: int, tasks: int, ucs: int, gated: [str],
+    budget_usd?: num}], warnings: [{line: int, message: str, fix: str}]};
 plan import = {file: str, dry_run: bool, warnings: [str], skipped?: [str], epics: [{id: str,
     action: str, issue: int | null, state?: str, closed?: bool}], tasks: [{id: str, action: str,
     issue: int | null, state: str | null, closed?: bool}], held: [{task: str, needs: [str]}],
@@ -126,12 +126,12 @@ prereqs = {message: str, open: int, warnings: [str], plans: [{file: str, plan_pa
     state: str, done: bool, blocks: [str]}], approvals: [{batch: int, task: str, needs: str,
     why: [str]}]}]};
 claim = {comment_id: int, issue: int, lease: {expires: str, session: str, touch: [str]},
-    lessons: [str], added?: [str]};
+    lessons: [str], added?: [str], budget_feature?: {..}};
 heartbeat = {leases: [int], registry: bool};
 release = {comment_id: int, issue: int, state: str};
 spawn = {checks_passed?: int, epic?: int, model?: str, child?: str, from?: str, root?: str,
     environment_id?: str | null, handoff?: int, relay_waves?: int, then?: str, thread_ts?: str,
-    intake?: int, warning?: str};
+    intake?: int, warning?: str, budget_feature?: {..}};
 wait = {changed: bool, polls: int, before: {..}, after: {..}, heartbeat: {beats: int,
     error: str | null, leases: [int], left: [str], reaped: [{issue: int, session: str}],
     registry: bool}};

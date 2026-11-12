@@ -119,6 +119,11 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         }
     }
 
+    let feature = match meta.as_ref().and_then(|m| m.epic).filter(|_| !mainfix) {
+        Some(e) => super::budget::feature_guard(&app, e)?,
+        None => None,
+    };
+
     super::prereqs_gate::refuse_if_held(gh, n, &meta)?;
     refuse_if_bundled(gh, n, &meta)?;
     refuse_gated_touch(gh, &meta, &args.touch)?;
@@ -204,6 +209,9 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     }
     let mut data = lease_data(n, session, &expires, &touch_raw, comment.id);
     add_lessons(&mut data, &app.ctx.dir, &touch_raw);
+    if let Some(w) = feature {
+        data["budget_feature"] = w;
+    }
     Ok(Outcome::data(data))
 }
 

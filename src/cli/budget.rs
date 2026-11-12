@@ -7,11 +7,16 @@ use serde_json::{Value, json};
 
 use super::lesson::capture_lesson;
 use super::{BudgetCmd, BudgetRecordArgs};
-use crate::app::{App, Result, kill_switch, limits_from_default, set_state};
-use crate::core::budget::{level, to_stop};
+use crate::app::{
+    App, Result, kill_switch, limits_from_default, set_state, spend_notes, task_meta,
+};
+use crate::core::budget::{Feature, feature_level, level, to_stop};
 use crate::core::lease::members;
+use crate::core::meta::epic_budget;
+use crate::core::mode::BudgetFeature;
 use crate::core::records::{Record, spend_total};
 use crate::core::state::{State, state_of};
+use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 use crate::sessions::usage;
@@ -24,6 +29,51 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
         BudgetCmd::Record(a) => record(dir, a),
         BudgetCmd::Check => check(dir),
         BudgetCmd::Report(a) => super::budget_report::run(dir, a),
+    }
+}
+
+/// What the tasks of `epic` have spent, over every state (spec §9, feature budget).
+pub(crate) fn feature_spend(app: &App, epic: u64) -> Result<f64> {
+    let gh = app.gh.as_ref();
+    let mut total = 0.0;
+    for i in gh.list_issues(&[], IssueState::All)? {
+        if task_meta(&i).is_some_and(|m| m.epic == Some(epic)) {
+            total += spend_total(&spend_notes(gh, i.number)?, None);
+        }
+    }
+    Ok(total)
+}
+
+/// The feature-budget guard of `epic` for claim and spawn. Knob off: no GitHub call. No budget on
+/// the epic, or under 80 %: `None`. At 80 % a warning; at 100 % a warning under `warn`, exit 5
+/// under `ask` (raises come later, so ask stays at exit 5).
+pub(crate) fn feature_guard(app: &App, epic: u64) -> Result<Option<Value>> {
+    let knob = app.ctx.config.mode_effective().knobs.budget_feature.value;
+    if knob == BudgetFeature::Off {
+        return Ok(None);
+    }
+    let Some(e) = app.gh.get_issue(epic)? else {
+        return Ok(None);
+    };
+    let Some(budget) = epic_budget(e.body_text()) else {
+        return Ok(None);
+    };
+    let spent = feature_spend(app, epic)?;
+    let warn = |level: &str| {
+        Ok(Some(
+            json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),
+        ))
+    };
+    match feature_level(spent, budget) {
+        Feature::Under => Ok(None),
+        Feature::Warn => warn("warn"),
+        Feature::Over if knob == BudgetFeature::Warn => warn("over"),
+        Feature::Over => Err(BosunError::needs_human(
+            format!("epic #{epic} spent ${spent:.2} of its ${budget:.2} feature budget"),
+            format!("the owner answers `raise {epic} +<usd>` in the daily digest (`bosun digest`), or the epic stays paused"),
+        )
+        .with_data(json!({"check": "budget_feature", "epic": epic,
+            "spent_usd": spent, "budget_usd": budget}))),
     }
 }
 

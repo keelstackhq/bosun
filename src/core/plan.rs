@@ -26,6 +26,9 @@ pub struct Item {
     /// `shape:`; `None` is auto (`core::shape::decide`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape: Option<Shape>,
+    /// `budget_usd:`, the feature budget (modes item 6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_usd: Option<f64>,
     pub description: String,
     pub tasks: Vec<Task>,
     pub ucs: Vec<Uc>,
@@ -87,7 +90,7 @@ static AREA: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^[a-z0-9-]+$"));
 static HEADING: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^## ([A-Z][A-Z0-9]*):\s*(\S.*)$"));
 static BULLET: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^- ([^:\s]+):\s*(\S.*)$"));
 static UC: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^UC-([A-Z0-9]+)-([0-9]+)$"));
-static KEY: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([a-z-]+):\s*(.*)$"));
+static KEY: LazyLock<regex::Regex> = LazyLock::new(|| re(r"^([a-z_-]+):\s*(.*)$"));
 
 const KINDS: [&str; 5] = ["feature", "bookkeeping", "mainfix", "process-fix", "flake"];
 
@@ -312,7 +315,9 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
             Sec::Fields | Sec::Desc => {
                 let key = KEY.captures(line).filter(|_| sec == Sec::Fields);
                 let known = key.as_ref().map(|c| c[1].to_string());
-                if let Some(k) = known.filter(|k| k == "area" || k == "depends" || k == "shape") {
+                if let Some(k) = known
+                    .filter(|k| k == "area" || k == "depends" || k == "shape" || k == "budget_usd")
+                {
                     if ifields.contains(&k) {
                         bad!(errs, n; "keep one line per field" => "`{k}:` is given twice");
                         continue;
@@ -325,6 +330,12 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
                         bad!(errs, n; "use lowercase letters, digits and `-`" => "area `{v}` does not match ^[a-z0-9-]+$")
                     }
                     Some(("depends", v)) => it.depends = csv(v),
+                    Some(("budget_usd", v)) => match v.parse::<f64>() {
+                        Ok(b) if b.is_finite() && b > 0.0 => it.budget_usd = Some(b),
+                        _ => {
+                            bad!(errs, n; "use a positive number of US dollars, such as budget_usd: 120" => "budget_usd `{v}` is not valid")
+                        }
+                    },
                     Some(("shape", "auto")) => it.shape = None,
                     Some(("shape", v)) => match Shape::parse(v) {
                         Some(s) => it.shape = Some(s),

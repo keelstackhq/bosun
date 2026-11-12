@@ -178,6 +178,12 @@ fn spawn_on(
         thread.is_some(),
         tick.map_or(0, |t| t.pending),
     )?;
+    // The feature budget (modes item 6): the epic's own spend; a mainfix epic is exempt.
+    let feature = if input.mainfix {
+        None
+    } else {
+        super::budget::feature_guard(app, n)?
+    };
     super::prereqs_gate::refuse_epic_if_held(app.gh.as_ref(), &epic)?;
     let depth = input.parent_depth + 1;
     // A plan task from Slack has the request's first line in its title: not in the prompt.
@@ -229,6 +235,9 @@ fn spawn_on(
         format!("{project}: #{n} {}", epic.title)
     };
     let mut data = json!({"epic": n, "checks_passed": 6, "model": model});
+    if let Some(w) = feature {
+        data["budget_feature"] = w;
+    }
     if let Some(ts) = thread {
         data["thread_ts"] = json!(ts);
     }

@@ -56,6 +56,14 @@ pub fn parse_task_meta(body: &str) -> Option<TaskMeta> {
     serde_json::from_str(json.trim()).ok()
 }
 
+/// The `budget_usd` of the last `<!-- bosun:epic {json} -->` marker of an epic body.
+pub fn epic_budget(body: &str) -> Option<f64> {
+    const OPEN: &str = "<!-- bosun:epic ";
+    let rest = &body[body.rfind(OPEN)? + OPEN.len()..];
+    let v: serde_json::Value = serde_json::from_str(rest[..rest.find("-->")?].trim()).ok()?;
+    v["budget_usd"].as_f64()
+}
+
 const REF: &str = r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(?:https?://(?:www\.)?github\.com/([\w.-]+/[\w.-]+)/(issues|pull)/(\d+)|([\w.-]+/[\w.-]+)#(\d+)|#(\d+))";
 
 /// One closing reference of a PR body: `repo` is the lower-cased `owner/repo` of a qualified
