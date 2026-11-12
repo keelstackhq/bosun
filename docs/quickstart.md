@@ -55,7 +55,7 @@ Setup, once ([adopt-existing-repo.md](adopt-existing-repo.md) steps 1-5):
 
 ```bash
 npm i -g @keelstackhq/bosun
-export GITHUB_TOKEN=$(gh auth token)
+# set GITHUB_TOKEN to the output of `gh auth token`
 bosun doctor                      # each missing step with its fix
 bosun trailers install            # the SessionStart hook does it too
 ```
