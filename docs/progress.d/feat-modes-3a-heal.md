@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 3a: bosun heal for red PRs (notify, spawn fixer, 2 rounds, brake cap)

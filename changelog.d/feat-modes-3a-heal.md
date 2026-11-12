@@ -1,0 +1,1 @@
+- `bosun heal`: a red `ci-ok` head on an open PR gets a `send_message` to the live lease holder (`heal_pr = notify`) or a `create_session` fixer when the holder is dead (`spawn`, within the spawn checks); at most 2 rounds, then needs-human; the brake caps it at notify; a no-op in gatekeeper (modes PR 3a).
