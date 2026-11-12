@@ -1,0 +1,1 @@
+- Docs: `docs/quickstart.md` (each mode in CLI, cloud and Slack, migration steps) and the README, spec §18, defaults, operating-model, adopt and prerequisites docs updated for modes.

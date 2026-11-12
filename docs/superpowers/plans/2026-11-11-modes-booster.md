@@ -78,7 +78,7 @@ Touch: `src/core/digest.rs`, `src/cli/digest.rs`, `docs/spec/14-prereqs.md`. Siz
 
 - [ ] One D-012 form: owner-waiting PRs (repo, PR, head SHA, rule, why), open asks, budget asks.
 - [ ] Parse the answer ("approve 12 15", "raise 7 +20"); a moved head drops out. Mainfix and
-  release taps bypass. Approvals come back as `next` calls `bosun approve <pr> --head <sha>`
+  release taps bypass. Approvals come back as `next` calls `bosun approve <pr>@<head>`
   for the orchestrator (the key holder signs; digest signs nothing, so no `approve.rs` touch).
   A "raise" counts only with a verified enrolled-owner signature (as `answer --chat`).
 
@@ -140,15 +140,6 @@ Size ~350. After PR 6 (`src/cli/spawn.rs`, spec 05).
 - [ ] `budget_usd:` per item; `plan import` estimates when missing from the budget report;
   `plan check` (no GitHub) uses the `per_task_usd` fallback. `warn` at 80 %; `ask` also
   exits 5 at 100 % until an owner "raise" answer.
-
-### PR 8 — curator loosening proposals
-
-Touch: `src/core/metrics.rs`, `src/cli/metrics.rs`, `docs/spec/06-learning.md`. Size ~250.
-After PR 5.
-
-- [ ] `bosun metrics --propose`: rules with ≥ 10 blocks and no catch in 30 days, never the floor
-  rules; draft PR body text with evidence. The PR it leads to is R-weaken (owner).
-- [ ] Blocked (owner): curator Routine prompt runs it weekly when `curator_loosen = "propose"`.
 
 ### PR 9 — bosun moves to `steady` (owner)
 
