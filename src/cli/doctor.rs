@@ -1125,15 +1125,18 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     items.push(slack_item);
 
     let reg = gh.map_or(Ok(None), registry::load);
+    let pin_warn = gh
+        .filter(|_| matches!(reg, Ok(Some(_))))
+        .and_then(|g| registry::pin_advice(g).ok().flatten());
     items.push(if gh.is_none() {
         no_token(8, "registry issue")
     } else {
-        item(
+        let mut it = item(
         8,
         "registry issue",
         match &reg {
             Ok(Some(_)) => None,
-            Ok(None) => Some("no open issue labelled bosun:registry".into()),
+            Ok(None) => Some("no issue labelled bosun:registry".into()),
             Err(e) => Some(e.message.clone()),
         },
         format!(
@@ -1144,7 +1147,13 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
                 .map_or(0, |r| r.0)
         ),
         "run `bosun adopt` (with GITHUB_TOKEN set) or `bosun join`; either creates the registry issue",
-    )
+    );
+        if let Some(w) = pin_warn {
+            it["status"] = json!("warn");
+            it["detail"] = json!(w);
+            it["fix"] = json!("commit `.bosun/registry` with the registry issue number (an R-gov PR the owner approves)");
+        }
+        it
     });
 
     items.push(if gh.is_none() {

@@ -46,6 +46,7 @@ fn build(config: Option<&str>, epic_body: &str, touch11: &str) -> FakeGithub {
     task(&fake, 12, "M1/T2", "src/b/**");
     if let Some(c) = config {
         fake.content(".bosun/bosun.toml", "main", c);
+        fake.content(".bosun/registry", "refs/heads/main", "1");
     }
     fake
 }

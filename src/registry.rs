@@ -1,5 +1,6 @@
-//! The registry: the one open issue labelled `bosun:registry`; each session has one `join`
-//! comment there that heartbeats edit in place (spec §4).
+//! The registry: one issue labelled `bosun:registry`, pinned by `.bosun/registry` on the
+//! default branch or else the lowest-numbered labelled issue in any state; each session has one
+//! `join` comment there that heartbeats edit in place (spec §4).
 
 use crate::app::{App, Result, trusted_notes};
 use crate::core::lease::{Member, members};
@@ -22,10 +23,87 @@ pub fn load_own(gh: &dyn Github) -> Result<Option<(u64, Vec<Note>)>> {
     load_with(gh, false)
 }
 
+/// Where the pin file lives, on the default branch.
+pub const PIN_FILE: &str = ".bosun/registry";
+
+/// The registry issue number, the one choice every reader and writer shares (read once per
+/// process): the number in `.bosun/registry` on the default branch, which is the trust root and
+/// names an issue in any state, else the lowest-numbered open issue with the label, else the lowest in any state. A
+/// newer labelled issue never counts. Fails closed when the default branch cannot be read.
+pub fn pick(gh: &dyn Github) -> Result<Option<u64>> {
+    static CACHE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    if let Some(n) = CACHE.get() {
+        return Ok(Some(*n));
+    }
+    let picked = pick_uncached(gh)?;
+    if let Some(n) = picked {
+        let _ = CACHE.set(n);
+    }
+    Ok(picked)
+}
+
+fn pick_uncached(gh: &dyn Github) -> Result<Option<u64>> {
+    let git_ref = crate::app::default_ref(gh)?;
+    if let Some(text) = gh.file_at(PIN_FILE, &git_ref)? {
+        let bad = |why: String| {
+            BosunError::error(
+                format!("{PIN_FILE} on {git_ref} {why}"),
+                format!(
+                    "the owner fixes {PIN_FILE} on the default branch (an R-gov PR) to hold the number of the registry issue"
+                ),
+            )
+        };
+        let n: u64 = text
+            .trim()
+            .parse()
+            .map_err(|_| bad(format!("is not an issue number: {:?}", text.trim())))?;
+        return match gh.get_issue(n)? {
+            Some(_) => Ok(Some(n)),
+            None => Err(bad(format!("names #{n}, which does not exist"))),
+        };
+    }
+    let all = gh.list_issues(&[LABEL], IssueState::All)?;
+    let lowest = |open: bool| {
+        all.iter()
+            .filter(|i| !open || i.state == "open")
+            .map(|i| i.number)
+            .min()
+    };
+    Ok(lowest(true).or_else(|| lowest(false)))
+}
+
+fn labelled(gh: &dyn Github) -> Result<Vec<u64>> {
+    Ok(gh
+        .list_issues(&[LABEL], IssueState::All)?
+        .iter()
+        .map(|i| i.number)
+        .collect())
+}
+
+/// Whether `.bosun/registry` exists on the default branch.
+pub fn pinned(gh: &dyn Github) -> Result<bool> {
+    Ok(gh
+        .file_at(PIN_FILE, &crate::app::default_ref(gh)?)?
+        .is_some())
+}
+
+/// What `bosun doctor` warns about: no committed pin (the fallback can be swapped by relabelling
+/// issues), or several labelled issues. `None` when the pin file exists.
+pub fn pin_advice(gh: &dyn Github) -> Result<Option<String>> {
+    let git_ref = crate::app::default_ref(gh)?;
+    if gh.file_at(PIN_FILE, &git_ref)?.is_some() {
+        return Ok(None);
+    }
+    let n = labelled(gh)?.len();
+    Ok(Some(format!(
+        "no {PIN_FILE} on the default branch ({n} issue(s) labelled {LABEL}): the registry is the lowest-numbered labelled issue, which relabelling can swap; commit {PIN_FILE} with the registry issue number (an R-gov PR the owner approves)"
+    )))
+}
+
 fn load_with(gh: &dyn Github, trusted: bool) -> Result<Option<(u64, Vec<Note>)>> {
-    match gh.list_issues(&[LABEL], IssueState::Open)?.first() {
-        Some(i) if trusted => Ok(Some((i.number, trusted_notes(gh, i.number)?))),
-        Some(i) => Ok(Some((i.number, crate::app::notes(gh, i.number)?))),
+    match pick(gh)? {
+        Some(n) if trusted => Ok(Some((n, trusted_notes(gh, n)?))),
+        Some(n) => Ok(Some((n, crate::app::notes(gh, n)?))),
         None => Ok(None),
     }
 }
@@ -33,8 +111,8 @@ fn load_with(gh: &dyn Github, trusted: bool) -> Result<Option<(u64, Vec<Note>)>>
 /// The registry comments written by admin or write users; empty before the first join. Spend
 /// is summed only from these: a forged `spend` record by anyone else must not stop the agents.
 pub fn trusted_spend_notes(gh: &dyn Github) -> Result<Vec<Note>> {
-    match gh.list_issues(&[LABEL], IssueState::Open)?.first() {
-        Some(i) => crate::app::spend_notes(gh, i.number),
+    match pick(gh)? {
+        Some(n) => crate::app::spend_notes(gh, n),
         None => Ok(Vec::new()),
     }
 }
@@ -196,11 +274,7 @@ pub fn seat_of(
     session: &str,
     now: crate::time::Timestamp,
 ) -> Result<Option<SlackSeat>> {
-    let Some(issue) = gh
-        .list_issues(&[LABEL], IssueState::Open)?
-        .first()
-        .map(|i| i.number)
-    else {
+    let Some(issue) = pick(gh)? else {
         return Ok(None);
     };
     Ok(members(&trusted_notes(gh, issue)?)

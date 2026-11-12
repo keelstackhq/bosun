@@ -34,6 +34,7 @@ fn run_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
 /// A registry issue with this session joined, and the mode on main.
 fn repo(mode: &str) -> FakeGithub {
     let fake = FakeGithub::start();
+    fake.content(".bosun/registry", "refs/heads/main", "1");
     fake.content(
         ".bosun/bosun.toml",
         "main",
@@ -179,6 +180,7 @@ fn a_plan_mainfix_task_claims_before_any_index_exists() {
 fn amend_backfills_an_index_and_the_task_then_claims() {
     let (dir, fake) = (cfg_dir(), repo("gatekeeper"));
     assert_eq!(plan_cmd(&fake, dir.path(), "import").0, 0);
+    fake.content(".bosun/registry", "refs/heads/main", "1");
     fake.content(".bosun/bosun.toml", "main", "[mode]\nname = \"steady\"\n");
     fake.content("plan.md", "main", &plan_text());
     assert_eq!(indexes(&fake), 0);

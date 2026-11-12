@@ -22,6 +22,7 @@ fn feature(mode: &str, usd: f64) -> FakeGithub {
     if !mode.is_empty() {
         let t = format!("[mode]\nname = \"{mode}\"\n");
         fake.content(".bosun/bosun.toml", "main", &t);
+        fake.content(".bosun/registry", "refs/heads/main", "1");
     }
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     let join = r#"{"bosun":"join","session":"session_test","origin":"spawned","depth":1,"expires":"2026-11-12T06:20:00Z"}"#;

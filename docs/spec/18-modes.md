@@ -45,6 +45,8 @@ push_gates = "push"
 | `brake` | `off` | `on` | `on` | `on` |
 | `curator_loosen` | `off` | `off` | `propose` | `propose` |
 
+`budget_feature` other than `off` (`warn` included) needs the registry pin `.bosun/registry` on the default branch (§5).
+
 ### Brake
 
 Pure (`core::mode::brake`): over a 7-day window it is on when main went red at least twice, at

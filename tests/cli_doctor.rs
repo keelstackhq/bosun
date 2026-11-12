@@ -162,6 +162,7 @@ fn full_repo(owners: &str) -> (tempfile::TempDir, FakeGithub) {
         .labels
         .push(("bosun:halt".into(), "B60205".into()));
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    fake.content(".bosun/registry", "refs/heads/main", "1\n");
     fake.issue(2, "task", &[], "");
     fake.comment_by(2, "claude[bot]", "On it.");
     fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
