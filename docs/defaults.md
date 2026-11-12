@@ -71,6 +71,13 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | One job budget | 8 min | A job over 8 min should split; the PR budget then still holds with jobs in parallel. |
 | Snapshot change marker | `snapshot-change: <reason>` | Makes an intended snapshot change visible to the reviewer and to test-integrity. |
 
+## Modes (`[mode]`, spec §18)
+
+| Value | Default | Evidence |
+| ----- | ------- | -------- |
+| Mode | `gatekeeper` | No `[mode]` = today, byte for byte. A lighter mode is R-weaken: the owner's call. |
+| Preset policy | booster, autonomous: `autonomous` | D-017 fast lane; an explicit `[approvals] policy` wins. |
+
 ## Lessons
 
 | Value | Default | Evidence |

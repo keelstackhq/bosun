@@ -100,6 +100,41 @@ fn parse(text: Option<&str>) -> Option<Value> {
     toml::from_str(text.unwrap_or_default()).ok()
 }
 
+/// `[mode]` (spec §18): a move down the ladder, and an effective `push_gates` push → ready or
+/// `brake` on → off. Helper knobs change who acts, not what passes: no finding.
+fn mode_findings(b: &Value, h: &Value, add: &mut impl FnMut(&str, &str, &str)) {
+    use super::mode::{Brake, ModeConfig, PushGates, Source, preset, resolve};
+    let eff = |v: &Value| match v.get("mode") {
+        None => Some(resolve(&ModeConfig::default())),
+        Some(m) => m.clone().try_into::<ModeConfig>().ok().map(|m| resolve(&m)),
+    };
+    // A base that does not parse counts as gatekeeper (fail closed).
+    let o = eff(b).unwrap_or_else(|| resolve(&ModeConfig::default()));
+    let Some(n) = eff(h) else {
+        return add("mode", "parses", "(unparseable)");
+    };
+    if n.mode > o.mode {
+        add("mode", o.mode.as_str(), n.mode.as_str());
+    }
+    // A move up the ladder may turn these off by its preset (gatekeeper has no brake); an
+    // override looser than the new mode's preset is still a finding.
+    let up = n.mode < o.mode;
+    let p = preset(n.mode);
+    let (op, np) = (o.knobs.push_gates, n.knobs.push_gates);
+    let explicit = |s: Source| s == Source::Explicit;
+    if (op.value, np.value) == (PushGates::Push, PushGates::Ready)
+        && (!up || explicit(np.source) && p.push_gates == PushGates::Push)
+    {
+        add("mode.push_gates", "push", "ready");
+    }
+    let (ob, nb) = (o.knobs.brake, n.knobs.brake);
+    if (ob.value, nb.value) == (Brake::On, Brake::Off)
+        && (!up || explicit(nb.source) && p.brake == Brake::On)
+    {
+        add("mode.brake", "on", "off");
+    }
+}
+
 /// Findings from a gate file's text at base and head. A missing side (an added or deleted file)
 /// counts as empty; an unparseable head is a finding, an unparseable base gives none.
 pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<String> {
@@ -155,6 +190,7 @@ pub fn text_findings(path: &str, base: Option<&str>, head: Option<&str>) -> Vec<
             for (k, new) in fh.iter().filter(|(k, _)| gated(k) && !fb.contains_key(*k)) {
                 add(k, "(none)", &show(new));
             }
+            mode_findings(&b, &h, &mut add);
         }
         Kind::Deny => {
             let adds = |l: &str| {

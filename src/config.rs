@@ -6,7 +6,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::core::approve::Policy;
-use crate::core::mode::{Effective, ModeConfig, ModeName};
+use crate::core::mode::{Effective, ModeConfig};
 use crate::output::BosunError;
 
 pub const CONFIG_FILE: &str = ".bosun/bosun.toml";
@@ -223,11 +223,23 @@ pub struct Approvals {
     /// approval. Unset: any model counts. A new model id stops counting until enrolled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_models: Option<Vec<String>>,
+    /// `policy` came from the `[mode]` preset, not from this table.
+    #[serde(skip)]
+    pub policy_preset: bool,
 }
 
 impl Approvals {
     pub fn policy(&self) -> Policy {
         self.policy.unwrap_or_default()
+    }
+
+    /// Who set the effective policy: `explicit` (`[approvals]`), `preset` (`[mode]`), `default`.
+    pub fn policy_source(&self) -> &'static str {
+        match (self.policy_preset, self.policy.is_some()) {
+            (true, _) => "preset",
+            (_, true) => "explicit",
+            _ => "default",
+        }
     }
 }
 
@@ -375,7 +387,7 @@ fn read_optional(path: &Path, label: &str) -> Result<Option<String>, BosunError>
 impl Config {
     /// Parse the text of `.bosun/bosun.toml`; `file` is the name used in errors.
     pub fn parse(text: &str, file: &str) -> Result<Config, BosunError> {
-        let c: Config = parse_toml(text, file)?;
+        let mut c: Config = parse_toml(text, file)?;
         for (key, zero) in [
             ("max_tokens", c.review.max_tokens == 0),
             ("max_diff_bytes", c.review.max_diff_bytes == 0),
@@ -405,15 +417,10 @@ impl Config {
                 format!("edit {file}: set [approvals] policy, or remove mode.policy"),
             ));
         }
-        let name = c.mode.name.filter(|n| *n != ModeName::Gatekeeper);
-        let off = name.map(|n| format!("mode {:?}", n.as_str()));
-        if let Some(what) = off.or(c.mode.off_default().map(|k| format!("mode.{k} override"))) {
-            return Err(BosunError::error(
-                format!("{file}: {what} is not active yet"),
-                format!(
-                    "edit {file}: remove it or set the gatekeeper value; lighter modes and overrides arrive with their weaken check (plan PR 1b)"
-                ),
-            ));
+        // The preset fills the policy only when `[approvals]` leaves it unset.
+        if c.approvals.policy.is_none() {
+            c.approvals.policy = c.mode.name.and_then(crate::core::mode::preset_policy);
+            c.approvals.policy_preset = c.approvals.policy.is_some();
         }
         let k = &c.checks;
         if k.mode != CheckMode::Statuses {

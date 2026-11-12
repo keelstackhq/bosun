@@ -82,12 +82,6 @@ macro_rules! knobs {
             pub fn is_unset(&self) -> bool {
                 *self == ModeConfig::default()
             }
-            /// The first knob overridden away from its gatekeeper value.
-            pub fn off_default(&self) -> Option<&'static str> {
-                let g = preset(ModeName::Gatekeeper);
-                [$(self.$f.is_some_and(|v| v != g.$f).then_some(stringify!($f))),+]
-                    .into_iter().flatten().next()
-            }
         }
 
         /// Explicit override > preset of the named mode > default (the gatekeeper value).
@@ -119,7 +113,7 @@ knobs!(
     curator_loosen: CuratorLoosen = [Off, Off, Propose, Propose],
 );
 
-/// The approval policy a mode implies (used from plan PR 1b; not wired yet).
+/// The approval policy a mode implies; `Config::parse` fills it when `[approvals]` has none.
 pub fn preset_policy(m: ModeName) -> Option<Policy> {
     (m >= ModeName::Booster).then_some(Policy::Autonomous)
 }

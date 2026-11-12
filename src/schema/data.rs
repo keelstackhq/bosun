@@ -144,19 +144,19 @@ gate = {gate?: str, stack?: str | null, command?: [str], packages?: [str], exit_
     command: [str], packages: [str], exit_status: int, secs: num, over_budget: bool,
     skipped: bool}]};
 approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
-    after_review?: int, key_id?: str, policy?: str | null, role?: str}],
+    after_review?: int, key_id?: str, policy?: str | null, policy_source?: str | null, role?: str}],
     approve_command?: str | null, auth?: str, cloud?: bool, hint?: str, message?: str | null,
     message_id?: str | null, message_pairs?: [str] | null, ready?: [{pr: int, title: str,
     head_sha: str, files: [str], files_truncated: bool, risk_from_status: [str]}],
     skipped?: [{pr: int | null, why: str}], waiting?: [{pr: int, why: str}], skipped_fix?: str,
     main_open?: {head_sha: str, pr: int}, bodies?: [{after_review: int | null, body: str}],
     body?: str, bootstrap_until?: str | null, head_sha?: str, key_id?: str, policy?: str | null,
-    pr?: int, role?: str};
+    policy_source?: str | null, pr?: int, role?: str};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
-    policy?: str, verdicts?: [str], autonomous_verdicts?: [str], delegate_verdicts?: [str],
-    delegate_blocked?: str | null, checks_skipped?: bool};
+    policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
+    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
