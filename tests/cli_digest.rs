@@ -74,13 +74,13 @@ fn the_digest_lists_owner_waiting_prs_and_open_asks_and_skips_mainfix() {
     let d = &v["data"];
     let id = d["message_id"].as_str().unwrap();
     let want = format!(
-        "Daily digest acme/widget {id}\nApprovals (2):\n- #12@abc1234 R-gov, R-ci: `first change`\n- #15@def5678 R-gov, R-ci: `second change`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply with (drop the PRs you hold):\n{id} approve 12 15"
+        "Daily digest acme/widget 2026-11-12 {id}\nApprovals (2):\n- #12@abc1234 R-gov, R-ci: `first change`\n- #15@def5678 R-gov, R-ci: `second change`\nOpen asks (1):\n- #30 `which db?`\nBudget asks (0):\nReply with (drop the PRs you hold):\n{id} approve 12 15"
     );
     assert_eq!(d["message"], json!(want));
     let pairs = format!("12@{} 15@{}", head("abc1234"), head("def5678"));
     assert_eq!(
         d["header"],
-        json!(format!("/bosun digest acme/widget {id} {pairs}"))
+        json!(format!("/bosun digest acme/widget 2026-11-12 {id} {pairs}"))
     );
     assert_eq!(
         d["bypass"],
@@ -164,7 +164,7 @@ fn an_answer_without_a_valid_header_is_a_usage_error() {
     let fine = format!("{header}\napprove 12\n");
     for input in [
         "approve 12\n",
-        "/bosun digest acme/widget 00000000 12@abc\napprove 12\n",
+        "/bosun digest acme/widget 2026-11-12 00000000 12@abc\napprove 12\n",
         other_repo.as_str(),
     ] {
         let (code, v) = digest(&fake, &["--answer"], input);

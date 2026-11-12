@@ -9,12 +9,16 @@ use serde_json::{Value, json};
 const PUB: &str = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=";
 
 fn digest(fake: &FakeGithub, extra: &[&str], input: &str) -> (i32, Value) {
+    digest_at(fake, "2026-11-12T06:00:00Z", extra, input)
+}
+
+fn digest_at(fake: &FakeGithub, now: &str, extra: &[&str], input: &str) -> (i32, Value) {
     let out = bosun()
         .env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_OWNER_TOKEN", "canary-owner-token-7f3a")
         .env("BOSUN_HTTP_MAX_SLEEP_MS", "0")
         .env("BOSUN_SESSION", "session_orch")
-        .env("BOSUN_NOW", "2026-11-12T06:00:00Z")
+        .env("BOSUN_NOW", now)
         .arg("digest")
         .args(extra)
         .write_stdin(input.to_string())
@@ -67,10 +71,32 @@ fn a_raise_is_signed_only_with_an_enrolled_owner_key() {
         v["data"]["refused"][0]["raise"],
         json!({"epic": 7, "usd": 20})
     );
+    // No approvers file, or a key file that cannot be read: exit 1, nothing signed.
     let (code, v) = digest(&fake, &["--answer", "--sign-key", key], &input);
-    assert_eq!(code, 0, "{v}");
-    let why = v["data"]["refused"][0]["why"].as_str().unwrap();
-    assert!(why.contains("approvers.toml"), "{why}");
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("approvers.toml"),
+        "{v}"
+    );
+    enroll(&fake, "owner");
+    let gone = dir.path().join("gone.pem");
+    let (code, v) = digest(
+        &fake,
+        &["--answer", "--sign-key", gone.to_str().unwrap()],
+        &input,
+    );
+    assert_eq!(code, 1, "{v}");
+    // The key is checked even when the reply has no raise.
+    let only_approve = format!("{head}\n{id} approve 12\n");
+    let (code, _) = digest(
+        &fake,
+        &["--answer", "--sign-key", gone.to_str().unwrap()],
+        &only_approve,
+    );
+    assert_eq!(code, 1);
     enroll(&fake, "delegate");
     let (_, v) = digest(&fake, &["--answer", "--sign-key", key], &input);
     assert_eq!(v["data"]["raises"], json!([]));
@@ -100,6 +126,14 @@ fn a_raise_is_signed_only_with_an_enrolled_owner_key() {
         &sig
     ));
     assert_eq!(v["next"], json!([]), "a raise is no approve call");
+    // Relayed again, even on a later day, the same reply signs the same bytes.
+    let (_, again) = digest_at(
+        &fake,
+        "2026-11-14T09:00:00Z",
+        &["--answer", "--sign-key", key],
+        &input,
+    );
+    assert_eq!(again["data"]["raises"][0]["message"], json!(msg));
     // Another reply text signs another message.
     let (_, w) = digest(
         &fake,
@@ -120,4 +154,33 @@ fn bad_raises_are_unknown_and_sign_key_needs_answer() {
     assert_eq!(v["data"]["unknown"].as_array().unwrap().len(), 3);
     let (code, _) = digest(&fake, &["--sign-key", "k.pem"], "");
     assert_eq!(code, 2, "--sign-key needs --answer");
+}
+
+#[test]
+fn approvals_and_raises_mix_and_a_repeated_raise_counts_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("k.pem");
+    std::fs::write(&key, common::TEST_ED25519_PEM).unwrap();
+    let fake = FakeGithub::start();
+    enroll(&fake, "owner");
+    let (head, id) = header(&fake);
+    let reply = format!("{id} approve 12\n{id} raise 7 +20\n{id} raise 7 +20");
+    let input = format!("{head}\n{reply}\n");
+    let (code, v) = digest(
+        &fake,
+        &["--answer", "--sign-key", key.to_str().unwrap()],
+        &input,
+    );
+    assert_eq!(code, 0, "{v}");
+    let d = &v["data"];
+    assert_eq!(d["raises"].as_array().unwrap().len(), 1);
+    // #12 was not in this (empty) digest: dropped, no approve call.
+    assert_eq!(d["dropped"][0]["pr"], json!(12));
+    assert_eq!(v["next"], json!([]));
+    let sha = bosun::core::answer::text_sha256(&reply);
+    assert!(d["raises"][0]["message"].as_str().unwrap().contains(&sha));
+    // A digest made on another day has another id.
+    let (code, w) = digest_at(&fake, "2026-11-13T06:00:00Z", &[], "");
+    assert_eq!(code, 0, "{w}");
+    assert_ne!(w["data"]["message_id"], json!(id));
 }

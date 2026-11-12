@@ -69,8 +69,9 @@ owner-waiting PR (`#<pr>@<short head>`, its `R-` rule ids, the inert title), the
 (answered with `bosun answer <issue> --chat`), budget asks (none until plan PR 7) and the reply
 `<id> approve 12 15`. While main is red, mainfix PRs are in `data.bypass`,
 not in the digest; release-environment taps never wait for it. What a tokenless listing could
-not read is in `data.skipped`. `data.header` is `/bosun digest <owner>/<repo> <id>
-<pr>@<head>...` (`id`: as `message_id` above, an unkeyed checksum that catches copy errors, not
+not read is in `data.skipped`. `data.header` is `/bosun digest <owner>/<repo> <day> <id>
+<pr>@<head>...` (`day`: the digest's UTC date; `id`: as `message_id` above over the pairs and a
+`day <day>` line, so each day's digest has its own id; an unkeyed checksum that catches copy errors, not
 forgery: the orchestrator relays the header of the message it showed). `bosun digest --answer`
 (after the kill switch) takes that header as the first line, then the owner's reply verbatim: a
 header that does not check or names another repo is exit 2. The owner quotes the id they saw
@@ -82,8 +83,12 @@ a `next` call `bosun approve <pr>@<head> --sign-key <pem>` for the key holder: t
 no approval. A raise `<id> raise <epic> +<usd>` counts only with `--sign-key` and a key enrolled
 as owner on the default branch: `data.raises` carries the signature of `bosun-raise v1
 <owner>/<repo> digest <id> day <YYYY-MM-DD> reply <sha256 of the normalized reply> epic <n> usd
-+<usd>` (one reply is never a second raise); otherwise it is in `data.refused` with the reason,
-exit 0, approvals unchanged. bosun records nothing: plan PR 7 records and counts raises. Other
++<usd>`: `day` is the header's, the hash covers the reply lines after the header (normalized as
+`answer --chat` text), and the same raise twice in one reply counts once, so a reply relayed
+again signs the same bytes (plan PR 7 records raises and counts one message once). Without
+`--sign-key`, or with a key enrolled but not as owner, the raise is in `data.refused`, exit 0,
+approvals unchanged; an unreadable key or approvers file is exit 1, and `--sign-key` without
+`--answer` is exit 2. bosun records nothing; PR 7 also checks the epic and caps the amount. Other
 reply lines are in `data.unknown`, never guessed. Not yet: needs-human PRs from `heal` (plan PR
 3a) and the "brake on" lead line (plan PR 5).
 

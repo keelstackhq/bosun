@@ -104,7 +104,8 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
             asks.push((i.number, i.title));
         }
     }
-    let d = digest(&repo(&app), &items, &asks);
+    let day = app.ctx.now.to_string();
+    let d = digest(&repo(&app), &day[..10], &items, &asks);
     Ok(Outcome::data(json!({
         "message_id": d.id,
         "message": d.text,
@@ -125,7 +126,7 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
     super::refuse_secret("the reply", &text)?;
     let mut lines = text.lines().skip_while(|l| l.trim().is_empty());
     let header = lines.next().unwrap_or_default();
-    let (hrepo, id, shown) = parse_header(header).ok_or_else(|| {
+    let (hrepo, day, id, shown) = parse_header(header).ok_or_else(|| {
         BosunError::usage("the answer does not start with a digest header", HEADER_FIX)
     })?;
     if hrepo != repo(app) {
@@ -162,16 +163,18 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
         }
     }
     let (mut raises, mut refused) = (Vec::new(), Vec::new());
+    // A given key is always checked: an unreadable key or approvers file is an error, a key that
+    // is not an owner's refuses the raises.
     let key = match &args.sign_key {
-        Some(path) if !reply.raise.is_empty() => owner_key(app, path),
-        _ => Err("not signed: run again with --sign-key and an enrolled owner key".to_string()),
+        Some(path) => owner_key(app, path)?,
+        None => Err("not signed: run again with --sign-key and an enrolled owner key".to_string()),
     };
     let (owner, name) = (&app.ctx.repo.owner, &app.ctx.repo.name);
-    let (stamp, sha) = (app.ctx.now.to_string(), text_sha256(&body));
+    let sha = text_sha256(&body);
     for (epic, usd) in &reply.raise {
         match &key {
             Ok((key_id, pair)) => {
-                let message = raise_message(owner, name, (&id, &stamp[..10], &sha), *epic, *usd);
+                let message = raise_message(owner, name, (&id, &day, &sha), *epic, *usd);
                 let sig = b64::encode(pair.sign(message.as_bytes()).as_ref());
                 raises.push(json!({"epic": epic, "usd": usd, "key_id": key_id,
                     "message": message, "sig": sig}));
@@ -195,19 +198,25 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
     Ok(out)
 }
 
-/// The enrolled owner key id of the key at `path`, and the key; else why nothing is signed.
-fn owner_key(app: &App, path: &Path) -> Result<(String, ring::signature::Ed25519KeyPair), String> {
-    let keys =
-        enrolled_keys(app.gh.as_ref()).map_err(|why| format!("signed raises are off: {why}"))?;
-    let pair = read_key(path).map_err(|e| e.message)?;
+type Key = Result<(String, ring::signature::Ed25519KeyPair), String>;
+
+/// The enrolled owner key id of the key at `path` and the key, or why it signs nothing.
+fn owner_key(app: &App, path: &Path) -> Result<Key, BosunError> {
+    let keys = enrolled_keys(app.gh.as_ref()).map_err(|why| {
+        BosunError::error(
+            format!("signed raises are off: {why}"),
+            format!("enroll the orchestrator's key in {APPROVERS_PATH} on the default branch with a PR the owner approves on GitHub"),
+        )
+    })?;
+    let pair = read_key(path)?;
     let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
     let key = keys.iter().filter(|k| k.role == Role::Owner).find(|k| {
         b64::decode(&k.ed25519).map(|b| b64::encode(&b)).as_deref() == Some(public.as_str())
     });
-    match key {
+    Ok(match key {
         Some(k) => Ok((k.id.clone(), pair)),
         None => Err(format!(
             "the key {public} is not an owner key in {APPROVERS_PATH} on the default branch"
         )),
-    }
+    })
 }
