@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 8: bosun metrics --propose (curator loosening proposals)

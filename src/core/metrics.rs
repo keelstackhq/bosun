@@ -1,6 +1,7 @@
-//! `bosun metrics` logic (plan PR 5): CI facts of a head, the revert marker, p50, risk rules.
+//! `bosun metrics` logic (plan PR 5, 8): CI facts of a head, the revert marker, p50, risk rules,
+//! curator proposals.
 
-use super::approve::TRUSTED_APP;
+use super::approve::{Stat, TRUSTED_APP, TRUSTED_CREATOR, WAITING_PREFIX, risk_ids};
 use crate::time::Timestamp;
 
 /// One check run, as far as the brake reads it.
@@ -69,4 +70,83 @@ pub fn owner_rules(body: &str) -> Vec<String> {
     }
     let rule = |l: &str| Some(l.strip_prefix("- **")?.split_once("**:")?.0.to_string());
     note.lines().filter_map(rule).collect()
+}
+
+/// Rules the curator never proposes to loosen (modes spec, metrics and curator): the floor,
+/// workflow paths (R-ci), the CI bosun ships to other repos (R-ci-review) and the supply chain
+/// (R-deps).
+pub const NEVER_PROPOSED: [&str; 10] = [
+    "R-weaken",
+    "R-secrets",
+    "R-prod-write",
+    "R-gov",
+    "R-gate",
+    "R-revert",
+    "R-ci",
+    "R-ci-review",
+    "R-deps",
+    "R-unseen",
+];
+
+/// Owner blocks of one rule in the window: the PRs merged on their first head (passed), and
+/// how many PRs were caught (closed unmerged or re-pushed).
+pub struct RuleBlocks {
+    pub rule: String,
+    pub passed: Vec<u64>,
+    pub caught: u32,
+}
+
+/// The rule ids of every trusted risk-check post on a head that asked for an owner, deduped.
+pub fn waiting_rules(history: &[Stat]) -> Vec<String> {
+    let mut ids: Vec<String> = history
+        .iter()
+        .filter(|s| s.context == "risk-check" && s.creator == TRUSTED_CREATOR)
+        .filter(|s| s.state == "failure" && s.description.starts_with(WAITING_PREFIX))
+        .flat_map(|s| risk_ids(&s.description))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// A rule the curator may propose to loosen, with a draft PR title and body.
+pub struct Proposal {
+    pub rule: String,
+    pub blocks: u32,
+    pub prs: Vec<u64>,
+    pub title: String,
+    pub body: String,
+}
+
+/// Rules of `defined` (the ids of the base `.bosun/risk.toml`) with at least 10 passed blocks
+/// and no catch in `days`, never [`NEVER_PROPOSED`] (ids compared ignoring case).
+pub fn proposals(all: &[RuleBlocks], defined: &[String], days: u32) -> Vec<Proposal> {
+    let is = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let ok = |b: &&RuleBlocks| {
+        b.passed.len() >= 10
+            && b.caught == 0
+            && defined.iter().any(|d| d == &b.rule)
+            && !NEVER_PROPOSED.iter().any(|f| is(f, &b.rule))
+    };
+    all.iter()
+        .filter(ok)
+        .map(|b| {
+            let n = b.passed.len() as u32;
+            let prs: String = b.passed.iter().map(|p| format!("- #{p}\n")).collect();
+            Proposal {
+                rule: b.rule.clone(),
+                blocks: n,
+                prs: b.passed.clone(),
+                title: format!("risk: loosen {} (no catch in {days} days)", b.rule),
+                body: format!(
+                    "{rule} asked for an owner approval {n} times: {n} owner blocks in {days} \
+                     days, each merged on its first head, none caught (no PR re-pushed or \
+                     closed). Rule ids come from the trusted risk-check posts.\n\n\
+                     Blocked PRs:\n{prs}\nThis PR loosens {rule} in `.bosun/risk.toml`. It \
+                     matches R-weaken and R-gov: the owner decides.\n",
+                    rule = b.rule
+                ),
+            }
+        })
+        .collect()
 }
