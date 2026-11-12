@@ -274,15 +274,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let n = pull.number;
     let (base, head) = (pull.base_sha.as_str(), pull.head_sha.as_str());
 
-    let rules = match gh.file_at(RULES_PATH, base)? {
-        Some(text) => Rules::parse(&text).map_err(|e| {
-            BosunError::error(
-                format!("{RULES_PATH} at base {base}: {e}"),
-                "fix the file on the base branch in a PR; a PR cannot change the rules that judge it",
-            )
-        })?,
-        None => Rules::defaults(),
-    };
+    let rules = base_rules(gh, base)?;
 
     let pr_files = gh.pull_files(n)?;
     let files: Vec<ChangedFile> = pr_files
@@ -368,6 +360,16 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         &files,
         &rules,
     ));
+    if let Some((_, evidence)) = revert_findings(gh, &rules, &pull, &pr_files)
+        && !evidence.is_empty()
+    {
+        matches.push(risk::Match {
+            rule: "R-revert".into(),
+            why: "a revert of an owner-class PR, or not its exact inverse, needs the owner".into(),
+            approval: Approval::Owner,
+            evidence,
+        });
+    }
     // The critical floor: a delegate never approves the approval system, secrets or prod.
     let critical = if matches.iter().any(|m| m.approval == Approval::Delegate) {
         let bosun_code = gh.file_at(BOSUN_CODE_MARKER, base)?.is_some();
@@ -627,6 +629,125 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         format!("{boot}{fix}{model_note}"),
     )
     .with_data(data))
+}
+
+/// The risk rules at `base` (the built-in defaults when it has none).
+pub(crate) fn base_rules(gh: &dyn Github, base: &str) -> Result<Rules> {
+    Ok(match gh.file_at(RULES_PATH, base)? {
+        Some(text) => Rules::parse(&text).map_err(|e| {
+            BosunError::error(
+                format!("{RULES_PATH} at base {base}: {e}"),
+                "fix the file on the base branch in a PR; a PR cannot change the rules that judge it",
+            )
+        })?,
+        None => Rules::defaults(),
+    })
+}
+
+fn patch_files(files: &[PrFile]) -> Vec<risk::PatchFile<'_>> {
+    (files.iter())
+        .map(|f| risk::PatchFile {
+            path: &f.filename,
+            previous_path: f.previous_filename.as_deref(),
+            status: &f.status,
+            patch: f.patch.as_deref(),
+            changes: f.additions + f.deletions,
+        })
+        .collect()
+}
+
+/// Built-in R-revert (§8): `None` without a revert marker, else `(N, evidence)`; no evidence =
+/// #N needed no owner and this is its exact inverse. A failed read is evidence, never an error.
+pub(crate) fn revert_findings(
+    gh: &dyn Github,
+    rules: &Rules,
+    pull: &Pull,
+    pr_files: &[PrFile],
+) -> Option<(u64, Vec<String>)> {
+    let t = risk::revert_targets(&pull.body);
+    let n = *t.first()?;
+    let ev = if t.len() > 1 || n == pull.number {
+        vec!["the marker names several PRs or this PR".into()]
+    } else {
+        revert_evidence(gh, rules, pull, pr_files, n)
+            .unwrap_or_else(|e| vec![format!("cannot judge #{n}: {}", e.message)])
+    };
+    Some((n, ev))
+}
+
+fn revert_evidence(
+    gh: &dyn Github,
+    rules: &Rules,
+    pull: &Pull,
+    pr_files: &[PrFile],
+    n: u64,
+) -> Result<Vec<String>> {
+    let Some(old) = gh.get_pull(n)?.filter(|p| p.merged) else {
+        return Ok(vec![format!("#{n} does not exist or is not merged")]);
+    };
+    let old_files = gh.pull_files(n)?;
+    let whole =
+        pull.changed_files == pr_files.len() as u64 && old.changed_files == old_files.len() as u64;
+    if !whole || old.base_ref != pull.base_ref {
+        let why = "the file lists are not whole, or the bases differ";
+        return Ok(vec![format!("#{n}: {why}")]);
+    }
+    let mut ev = Vec::new();
+    let problems = risk::inverse_problems(&patch_files(&old_files), &patch_files(pr_files));
+    if !problems.is_empty() {
+        ev.push(format!(
+            "not the exact inverse of #{n}: {}",
+            problems.join("; ")
+        ));
+    }
+    let changed: Vec<ChangedFile> = (old_files.iter())
+        .map(|f| ChangedFile {
+            path: f.filename.clone(),
+            previous_path: f.previous_filename.clone(),
+            added_lines: f.patch.as_deref().map(added_lines).unwrap_or_default(),
+        })
+        .collect();
+    // #N's labels and links are editable after the merge: its own trusted risk-check outcome
+    // counts instead, and only `normal risk` is no owner class (fail closed).
+    let trusted = |s: &&crate::github::Status| {
+        s.context == CONTEXT && s.creator == crate::core::approve::TRUSTED_CREATOR
+    };
+    let statuses = crate::github::gate::gate_statuses(gh, &old.head_sha)?; // newest first
+    if statuses
+        .iter()
+        .find(trusted)
+        .map(|s| s.description.as_str())
+        != Some("normal risk")
+    {
+        ev.push(format!(
+            "#{n} needed the owner (its risk-check was not normal risk)"
+        ));
+    }
+    // The files under today's rules too; a changed manifest counts as a new dependency.
+    let deps: Vec<String> = (old_files.iter())
+        .filter(|f| is_manifest(&f.filename))
+        .map(|f| f.filename.clone())
+        .collect();
+    let mut ms = evaluate(rules, &changed, &deps, &[]);
+    if !weaken_findings(gh, &old_files, &old.base_sha, &old.head_sha)?.is_empty() {
+        ms.push(risk::Match {
+            rule: weaken::RULE.into(),
+            why: weaken::WHY.into(),
+            approval: Approval::Owner,
+            evidence: Vec::new(),
+        });
+    }
+    let bosun_code = gh.file_at(BOSUN_CODE_MARKER, &pull.base_sha)?.is_some();
+    let critical = risk::critical(&ms, &changed, bosun_code);
+    apply_floor(&mut ms, &critical);
+    let owner = |m: &&risk::Match| {
+        m.approval == Approval::Owner || ["R-weaken", "R-gate", "R-gov"].contains(&m.rule.as_str())
+    };
+    let mut ids: Vec<&str> = ms.iter().filter(owner).map(|m| m.rule.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ev.extend(ids.iter().map(|id| format!("#{n} needed the owner ({id})")));
+    Ok(ev)
 }
 
 /// What an approval is judged by: the checked head's own diff, the rules and owners at base.

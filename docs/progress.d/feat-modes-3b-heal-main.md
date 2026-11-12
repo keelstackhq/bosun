@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 3b-1: built-in R-revert in risk-check
