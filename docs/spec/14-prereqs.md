@@ -88,7 +88,10 @@ as owner on the default branch: `data.raises` carries the signature of `bosun-ra
 again signs the same bytes (plan PR 7 records raises and counts one message once). Without
 `--sign-key`, or with a key enrolled but not as owner, the raise is in `data.refused`, exit 0,
 approvals unchanged; an unreadable key or approvers file is exit 1, and `--sign-key` without
-`--answer` is exit 2. bosun records nothing; PR 7 also checks the epic and caps the amount. Other
+`--answer` is exit 2. One reply raises an epic at most once: two amounts for one epic are exit 2.
+A raise counts at most once per (digest id, epic). bosun records nothing here: plan PR 7 records
+raises, counts each (digest id, epic) once, refuses a raise whose digest day is stale (a bounded
+age), checks the epic and caps the amount. Other
 reply lines are in `data.unknown`, never guessed. Not yet: needs-human PRs from `heal` (plan PR
 3a) and the "brake on" lead line (plan PR 5).
 

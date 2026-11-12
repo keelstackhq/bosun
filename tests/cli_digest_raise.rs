@@ -184,3 +184,24 @@ fn approvals_and_raises_mix_and_a_repeated_raise_counts_once() {
     assert_eq!(code, 0, "{w}");
     assert_ne!(w["data"]["message_id"], json!(id));
 }
+
+#[test]
+fn two_amounts_for_one_epic_are_a_usage_error() {
+    let fake = FakeGithub::start();
+    let (head, id) = header(&fake);
+    let input = format!("{head}\n{id} raise 7 +20\n{id} raise 7 +30\n{id} raise 8 +5\n");
+    let (code, v) = digest(&fake, &["--answer"], &input);
+    assert_eq!(code, 2, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("epic 7 twice"),
+        "{v}"
+    );
+    // Two epics, one raise each, is fine.
+    let ok = format!("{head}\n{id} raise 7 +20\n{id} raise 8 +5\n");
+    let (code, v) = digest(&fake, &["--answer"], &ok);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["refused"].as_array().unwrap().len(), 2);
+}

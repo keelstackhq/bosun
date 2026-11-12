@@ -150,6 +150,16 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
             "pass the header of the digest the owner answered (its id is in the message's first line)",
         ));
     }
+    // One raise per epic in a reply: two amounts for one epic are the owner's to settle.
+    if let Some(w) = reply.raise.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(BosunError::usage(
+            format!(
+                "the reply raises epic {} twice (+{} and +{})",
+                w[0].0, w[0].1, w[1].1
+            ),
+            "ask the owner for one `raise <epic> +<usd>` per epic and relay that reply",
+        ));
+    }
     let now: Vec<(u64, String)> = board(dir, app)?
         .0
         .iter()
