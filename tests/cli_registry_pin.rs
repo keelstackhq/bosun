@@ -25,9 +25,9 @@ fn labelled(fake: &FakeGithub) -> usize {
 #[test]
 fn a_newer_open_labelled_issue_does_not_replace_the_registry() {
     let fake = FakeGithub::start();
+    fake.issue(2, "rival", &[LABEL], "");
     fake.issue(1, "bosun registry", &[LABEL], "");
     fake.comment(1, &join_note("session_b"));
-    fake.issue(2, "rival", &[LABEL], "");
     let (code, v) = run(&fake, "session_a", T0, &["join"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["registry_issue"], 1);
@@ -49,8 +49,8 @@ fn a_closed_lowest_registry_still_counts() {
 #[test]
 fn the_file_on_the_default_branch_wins_over_a_lower_issue() {
     let fake = FakeGithub::start();
-    fake.issue(1, "old", &[LABEL], "");
     fake.issue(5, "pinned", &[LABEL], "");
+    fake.issue(1, "old", &[LABEL], "");
     fake.content(".bosun/registry", "refs/heads/main", "5\n");
     let (code, v) = run(&fake, "session_a", T0, &["join"]);
     assert_eq!(code, 0, "{v}");
@@ -82,8 +82,8 @@ fn no_issue_and_no_file_creates_one() {
 #[test]
 fn the_pin_is_the_trust_root_when_the_label_is_removed_from_it() {
     let fake = FakeGithub::start();
-    fake.issue(1, "bosun registry", &[], "");
     fake.issue(2, "rival", &[LABEL], "");
+    fake.issue(1, "bosun registry", &[], "");
     fake.content(".bosun/registry", "refs/heads/main", "1");
     let (code, v) = run(&fake, "session_a", T0, &["join"]);
     assert_eq!(code, 0, "{v}");
@@ -104,4 +104,16 @@ fn doctor_warns_about_a_missing_pin() {
         .unwrap();
     assert_eq!(item["status"], "warn", "{v}");
     assert!(item["detail"].as_str().unwrap().contains(".bosun/registry"));
+}
+
+#[test]
+fn unpinned_the_lowest_open_wins_over_a_lower_closed_one() {
+    let fake = FakeGithub::start();
+    fake.issue(1, "rotated", &[LABEL], "");
+    fake.close_issue(1, "2026-10-21T10:00:00Z");
+    fake.issue(2, "live", &[LABEL], "");
+    fake.issue(3, "rival", &[LABEL], "");
+    let (code, v) = run(&fake, "session_a", T0, &["join"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["registry_issue"], 2);
 }

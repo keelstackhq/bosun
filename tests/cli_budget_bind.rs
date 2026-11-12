@@ -31,6 +31,7 @@ fn run_in(fake: &FakeGithub, dir: &Path, args: &[&str]) -> (i32, Value) {
 fn mode(fake: &FakeGithub, name: &str) {
     let t = format!("[mode]\nname = \"{name}\"\n");
     fake.content(".bosun/bosun.toml", "main", &t);
+    fake.content(".bosun/registry", "refs/heads/main", "1");
 }
 
 fn bind(plan: &str, item: &str, rest: &str) -> String {

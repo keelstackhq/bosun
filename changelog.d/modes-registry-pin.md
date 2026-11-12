@@ -1,1 +1,1 @@
-- The registry is pinned: `.bosun/registry` on the default branch, else the lowest-numbered `bosun:registry` issue in any state; a newer labelled issue no longer replaces it.
+- The registry is pinned by `.bosun/registry` on the default branch (else the lowest open, then lowest any-state, `bosun:registry` issue); a repo that rotated its registry should commit `.bosun/registry` naming the live one, and the feature budget refuses without the pin.

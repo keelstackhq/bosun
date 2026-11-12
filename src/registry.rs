@@ -28,7 +28,7 @@ pub const PIN_FILE: &str = ".bosun/registry";
 
 /// The registry issue number, the one choice every reader and writer shares (read once per
 /// process): the number in `.bosun/registry` on the default branch, which is the trust root and
-/// names an issue in any state, else the lowest-numbered issue with the label in any state. A
+/// names an issue in any state, else the lowest-numbered open issue with the label, else the lowest in any state. A
 /// newer labelled issue never counts. Fails closed when the default branch cannot be read.
 pub fn pick(gh: &dyn Github) -> Result<Option<u64>> {
     static CACHE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
@@ -62,7 +62,14 @@ fn pick_uncached(gh: &dyn Github) -> Result<Option<u64>> {
             None => Err(bad(format!("names #{n}, which does not exist"))),
         };
     }
-    Ok(labelled(gh)?.into_iter().min())
+    let all = gh.list_issues(&[LABEL], IssueState::All)?;
+    let lowest = |open: bool| {
+        all.iter()
+            .filter(|i| !open || i.state == "open")
+            .map(|i| i.number)
+            .min()
+    };
+    Ok(lowest(true).or_else(|| lowest(false)))
 }
 
 fn labelled(gh: &dyn Github) -> Result<Vec<u64>> {
@@ -71,6 +78,13 @@ fn labelled(gh: &dyn Github) -> Result<Vec<u64>> {
         .iter()
         .map(|i| i.number)
         .collect())
+}
+
+/// Whether `.bosun/registry` exists on the default branch.
+pub fn pinned(gh: &dyn Github) -> Result<bool> {
+    Ok(gh
+        .file_at(PIN_FILE, &crate::app::default_ref(gh)?)?
+        .is_some())
 }
 
 /// What `bosun doctor` warns about: no committed pin (the fallback can be swapped by relabelling
