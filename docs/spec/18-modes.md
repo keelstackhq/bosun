@@ -45,7 +45,7 @@ push_gates = "push"
 | `brake` | `off` | `on` | `on` | `on` |
 | `curator_loosen` | `off` | `off` | `propose` | `propose` |
 
-`budget_feature` other than `off` (`warn` included) needs the registry pin `.bosun/registry` on the default branch (§5); a task the plan marks `mainfix` is exempt.
+`budget_feature` other than `off` (`warn` included) needs the registry pin `.bosun/registry` on the default branch (§5); a task the plan marks `mainfix` and the epic's bind lists is exempt.
 
 ### Brake
 

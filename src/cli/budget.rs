@@ -404,8 +404,12 @@ pub(crate) fn feature_guard(
         });
         // Only the plan exempts: a body or label kind is editable.
         // One live copy, and when any copy has a bind it is this one: no borrowing an id.
+        // Unpinned, the registry (and its index) can be swapped, so the epic's trusted bind must
+        // list this issue: a copied epic with a task naming a mainfix id is not waived.
+        let pinned = crate::registry::pinned(app.gh.as_ref())?;
         if alive == 1
             && (binds.is_empty() || binds.contains(&n))
+            && (pinned || binds.contains(&n))
             && kind.is_some_and(|k| k == "mainfix")
         {
             return Ok(None);
