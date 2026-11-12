@@ -184,7 +184,7 @@ fn spawn_on(
     } else {
         // A wave tick spawns a task: its epic carries the budget.
         let guard_epic = task_meta(&epic).and_then(|m| m.epic).unwrap_or(n);
-        super::budget::feature_guard(app, guard_epic)?
+        super::budget::feature_guard(app, guard_epic, None)?
     };
     super::prereqs_gate::refuse_epic_if_held(app.gh.as_ref(), &epic)?;
     let depth = input.parent_depth + 1;

@@ -146,6 +146,12 @@ fn spend(usd: f64) -> String {
 
 /// Epic #10 with budget 100, a ready task #11 and a merged task #12 that spent `usd`.
 fn feature(mode: &str, usd: f64) -> FakeGithub {
+    feature_body(mode, usd, EPIC)
+}
+
+const EPIC: &str = r#"Epic<!-- bosun:epic {"item":"M1","plan":"plans/x.md","budget_usd":100.0,"budget_source":"plan"} -->"#;
+
+fn feature_body(mode: &str, usd: f64, epic: &str) -> FakeGithub {
     let fake = FakeGithub::start();
     on_main(&fake, mode);
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
@@ -153,14 +159,16 @@ fn feature(mode: &str, usd: f64) -> FakeGithub {
         r#"{{"bosun":"join","session":"session_test","origin":"spawned","depth":1,"expires":"{LATER}"}}"#
     );
     fake.comment(1, &join);
-    let epic = r#"Epic<!-- bosun:epic {"item":"M1","plan":"plans/x.md","budget_usd":100.0,"budget_source":"plan"} -->"#;
     fake.issue(10, "Epic", &["bosun:state/ready", "bosun:area/core"], epic);
     let t = |n: u64| {
         format!(
             r#"<!-- bosun:task {{"item":"M1","task":"T{n}","epic":10,"touch":["src/a{n}/**"]}} -->"#
         )
     };
-    fake.content("plans/x.md", "main", &plan_text(""));
+    let plan = plan_text("budget_usd: 100");
+    // T2 is a mainfix task in the plan.
+    let plan = plan.replace("touch: src/b/**", "touch: src/b/**\n  kind: mainfix");
+    fake.content("plans/x.md", "main", &plan);
     fake.issue(11, "T1", &["bosun:state/ready"], &t(1));
     fake.issue(12, "T2", &["bosun:state/merged"], &t(2));
     fake.comment(12, &spend(usd));
@@ -188,7 +196,7 @@ fn claim_asks_the_owner_at_100_percent_in_booster() {
     let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["check"], "budget_feature", "{v}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("epic #10"));
+    assert!(v["error"]["fix"].as_str().unwrap().contains("item M1"));
     assert_eq!(fake.comments_of(11).len(), before, "nothing is written");
 }
 
@@ -252,7 +260,7 @@ fn the_warn_knob_only_warns_at_100_percent() {
 #[test]
 fn a_mainfix_task_is_never_refused() {
     let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
-    let mf = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["src/a1/**"],"kind":"mainfix"} -->"#;
+    let mf = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/a1/**"],"kind":"mainfix"} -->"#;
     fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
     let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
     assert_eq!(code, 0, "{v}");
@@ -267,7 +275,7 @@ fn spend_on_the_epic_issue_counts_and_the_fix_names_what_works() {
     assert_eq!(code, 5, "{v}");
     let fix = v["error"]["fix"].as_str().unwrap();
     assert!(
-        fix.contains("`budget_usd`") && fix.contains("bosun:epic"),
+        fix.contains("`budget_usd:`") && fix.contains("plans/x.md"),
         "{fix}"
     );
 }
@@ -281,4 +289,73 @@ fn a_wave_tick_guards_the_epic_of_the_task() {
     assert_eq!(stop["check"], "budget_feature", "{v}");
     assert_eq!(stop["issue"], 11);
     assert!(v["next"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn editing_the_epic_body_does_not_lift_the_ask() {
+    let raised = EPIC.replace("100.0", "9999.0");
+    let appended = format!(r#"{EPIC}<!-- bosun:epic {{"item":"M1","budget_usd":9999.0}} -->"#);
+    for body in [raised.as_str(), appended.as_str(), "Epic with no marker"] {
+        let (dir, fake) = (cfg_dir(""), feature_body("booster", 100.0, body));
+        let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+        assert_eq!(code, 5, "{body}: {v}");
+        let fix = v["error"]["fix"].as_str().unwrap();
+        // A missing marker refuses as a mismatch: the task names an item the epic does not.
+        let want = if body.contains("bosun:epic") {
+            "on the default branch"
+        } else {
+            "plan amend"
+        };
+        assert!(fix.contains(want), "{fix}");
+    }
+}
+
+#[test]
+fn the_body_cannot_make_a_task_mainfix_or_move_it_to_another_epic() {
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    let mf = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":10,"touch":["src/z/**"],"kind":"mainfix"} -->"#;
+    fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
+    assert_eq!(run_in(&fake, dir.path(), &["claim", "13"]).0, 5);
+    let other = r#"Epic<!-- bosun:epic {"item":"M9","plan":"plans/x.md"} -->"#;
+    fake.issue(14, "Other", &["bosun:state/ready"], other);
+    let t = r#"<!-- bosun:task {"item":"M1","task":"T1","epic":14,"touch":["src/y/**"]} -->"#;
+    fake.issue(15, "T", &["bosun:state/ready"], t);
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "15"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("bosun plan amend")
+    );
+}
+
+#[test]
+fn a_bad_default_branch_config_stops_feature_tasks_but_not_mainfix() {
+    let (dir, fake) = (cfg_dir(""), feature("", 0.0));
+    fake.content(".bosun/bosun.toml", "main", "[mode\n");
+    let mf = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/m/**"],"kind":"mainfix"} -->"#;
+    fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
+    assert_eq!(run_in(&fake, dir.path(), &["claim", "13"]).0, 0);
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "11"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(".bosun/bosun.toml"),
+        "{v}"
+    );
+}
+
+#[test]
+fn unknown_item_and_task_keys_are_pinned() {
+    // An unknown lowercase key on an item line is description text; on a task it is an error.
+    assert!(parse(&plan_text("foo_bar: 1")).is_ok());
+    let bad = plan_text("").replace("  touch: src/a/**", "  touch: src/a/**\n  foo_bar: 1");
+    assert!(
+        parse(&bad).unwrap_err()[0]
+            .message
+            .contains("unknown task key")
+    );
 }

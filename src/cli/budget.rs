@@ -10,9 +10,9 @@ use super::{BudgetCmd, BudgetRecordArgs};
 use crate::app::{
     App, Result, kill_switch, limits_from_default, set_state, spend_notes, task_meta,
 };
-use crate::core::budget::{Feature, feature_level, level, to_stop};
+use crate::cli::plan::{epic_item, epic_plan};
+use crate::core::budget::{Feature, feature_estimate, feature_level, level, to_stop};
 use crate::core::lease::members;
-use crate::core::meta::epic_budget;
 use crate::core::mode::BudgetFeature;
 use crate::core::records::{Record, spend_total};
 use crate::core::state::{State, state_of};
@@ -58,21 +58,102 @@ pub(crate) fn knob_from_default(gh: &dyn crate::github::Github) -> Result<Budget
     .value)
 }
 
-/// The feature-budget guard of `epic` for claim and spawn. Knob off (default branch): no more calls. No budget on
-/// the epic, or under 80 %: `None`. At 80 % a warning; at 100 % a warning under `warn`, exit 5
-/// under `ask` (raises come later, so ask stays at exit 5).
-pub(crate) fn feature_guard(app: &App, epic: u64) -> Result<Option<Value>> {
-    let knob = knob_from_default(app.gh.as_ref())?;
+/// Where the budget of an epic comes from. The epic body is editable by anyone with write
+/// access, so its `budget_usd` is display only: the plan on the default branch decides.
+struct Source {
+    budget: f64,
+    item: Option<String>,
+    plan: Option<(String, crate::core::plan::Plan)>,
+}
+
+fn source(app: &App, epic: u64) -> Result<Source> {
+    let gh = app.gh.as_ref();
+    let body = gh.get_issue(epic)?.map(|e| e.body_text().to_string());
+    let body = body.unwrap_or_default();
+    let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
+    let (file, item) = (epic_plan(&body), epic_item(&body));
+    let branch = crate::app::default_branch(gh)?;
+    let parsed = match &file {
+        Some(f) => gh
+            .file_at(f, &branch)?
+            .and_then(|t| crate::core::plan::parse(&t).ok()),
+        None => None,
+    };
+    let found = parsed.as_ref().zip(item.as_ref()).and_then(|(p, id)| {
+        p.items.iter().find(|i| &i.id == id).map(|i| {
+            i.budget_usd
+                .unwrap_or(feature_estimate(i.tasks.len(), per_task))
+        })
+    });
+    let budget = match found {
+        Some(b) => b,
+        None => {
+            let all = gh.list_issues(&[], IssueState::All)?;
+            let n = all
+                .iter()
+                .filter(|i| task_meta(i).is_some_and(|m| m.epic == Some(epic)))
+                .count();
+            feature_estimate(n.max(1), per_task)
+        }
+    };
+    Ok(Source {
+        budget,
+        item,
+        plan: file.zip(parsed),
+    })
+}
+
+/// The feature-budget guard of `epic` for claim, spawn and heal. Knob off (default branch): no
+/// more calls. Under 80 %: `None`. At 80 % a warning; at 100 % a warning under `warn`, exit 5
+/// under `ask`. `task` is the claimed task and whether its body or label says mainfix: the plan's
+// `kind:` alone exempts mainfix (the flag only lets a mainfix pass a bad config), and the epic
+/// marker must name the task's item (a missing marker refuses).
+pub(crate) fn feature_guard(
+    app: &App,
+    epic: u64,
+    task: Option<(&crate::core::meta::TaskMeta, bool)>,
+) -> Result<Option<Value>> {
+    let knob = match knob_from_default(app.gh.as_ref()) {
+        Ok(k) => k,
+        Err(_) if task.is_some_and(|t| t.1) => return Ok(None),
+        Err(e) => return Err(e),
+    };
     if knob == BudgetFeature::Off {
         return Ok(None);
     }
-    let Some(e) = app.gh.get_issue(epic)? else {
-        return Ok(None);
+    let src = source(app, epic)?;
+    let file = src
+        .plan
+        .as_ref()
+        .map(|p| p.0.as_str())
+        .unwrap_or("its plan");
+    let item = src.item.as_deref().unwrap_or("?");
+    let refuse = |msg: String, fix: String, spent: f64| {
+        BosunError::needs_human(msg, fix).with_data(json!({"check": "budget_feature",
+            "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
     };
-    let Some(budget) = epic_budget(e.body_text()) else {
-        return Ok(None);
-    };
-    let spent = feature_spend(app, epic)?;
+    if let Some((m, _)) = task {
+        if src.item.as_deref() != Some(m.item.as_str()) {
+            let msg = format!("the epic #{epic} marker names item {item}, not {}", m.item);
+            return Err(refuse(
+                msg,
+                format!("ask the orchestrator to run `bosun plan amend {file}`"),
+                0.0,
+            ));
+        }
+        let kind = src.plan.as_ref().and_then(|(_, p)| {
+            let it = p.items.iter().find(|i| i.id == m.item)?;
+            it.tasks
+                .iter()
+                .find(|t| t.id == m.task)
+                .map(|t| t.kind.clone())
+        });
+        // Only the plan exempts: a body or label kind is editable.
+        if kind.is_some_and(|k| k == "mainfix") {
+            return Ok(None);
+        }
+    }
+    let (spent, budget) = (feature_spend(app, epic)?, src.budget);
     let warn = |level: &str| {
         Ok(Some(
             json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),
@@ -82,12 +163,13 @@ pub(crate) fn feature_guard(app: &App, epic: u64) -> Result<Option<Value>> {
         Feature::Under => Ok(None),
         Feature::Warn => warn("warn"),
         Feature::Over if knob == BudgetFeature::Warn => warn("over"),
-        Feature::Over => Err(BosunError::needs_human(
+        Feature::Over => Err(refuse(
             format!("epic #{epic} spent ${spent:.2} of its ${budget:.2} feature budget"),
-            format!("the owner raises `budget_usd` in the `bosun:epic` marker of epic #{epic} (digest raises come in a later release)"),
-        )
-        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic,
-            "spent_usd": spent, "budget_usd": budget}))),
+            format!(
+                "the owner raises `budget_usd:` of item {item} in {file} on the default branch (an R-gov PR); digest raises come in a later release"
+            ),
+            spent,
+        )),
     }
 }
 
