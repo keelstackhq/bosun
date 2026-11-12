@@ -5,11 +5,13 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::budget::{feature_levels, knob_from_default};
 use crate::app::{
     App, Result, active_issues, halt_reason, limits_from_default, main_red, trusted_notes,
 };
 use crate::core::handoff::{children_of, finished_children};
 use crate::core::lease::{live_leases, members, orchestrator_of};
+use crate::core::mode::BudgetFeature;
 use crate::core::records::{Note, spend_total};
 use crate::core::state::State;
 use crate::gates::integrity::reduced_reason;
@@ -93,6 +95,9 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
     });
     if let Some(why) = reduced {
         data["integrity_reason"] = json!(why);
+    }
+    if knob_from_default(gh)? != BudgetFeature::Off {
+        data["budget_feature"] = json!(feature_levels(&app)?);
     }
     with_archive_children(gh, &ctx.session, &[], now, Outcome::data(data))
 }

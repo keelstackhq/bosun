@@ -36,6 +36,19 @@ fn rule_ok(r: &str) -> bool {
 /// title)` of open asks), made on `day` (YYYY-MM-DD): the day is in the id, so an unchanged
 /// board gives a new digest, and a reply binds to one day's digest.
 pub fn digest(repo: &str, day: &str, items: &[Item], asks: &[(u64, String)]) -> Digest {
+    digest_with(repo, day, items, asks, &[])
+}
+
+/// As [`digest`], with `raises`: `(epic, spent, budget)` of the epics over their feature budget.
+/// They are not in the id (the id binds PR heads and the day) and each adds the reply line
+/// `<id> raise <epic> +<usd>`, the overspend rounded up to whole dollars, at least 1.
+pub fn digest_with(
+    repo: &str,
+    day: &str,
+    items: &[Item],
+    asks: &[(u64, String)],
+    raises: &[(u64, f64, f64)],
+) -> Digest {
     let pairs: Vec<String> = items
         .iter()
         .map(|i| format!("{}@{}", i.pr, i.head))
@@ -63,13 +76,20 @@ pub fn digest(repo: &str, day: &str, items: &[Item], asks: &[(u64, String)]) -> 
     for (n, title) in asks {
         text.push_str(&format!("\n- #{n} {}", inert(title, TITLE)));
     }
-    text.push_str("\nBudget asks (0):");
+    text.push_str(&format!("\nBudget asks ({}):", raises.len()));
+    for (epic, spent, budget) in raises {
+        text.push_str(&format!("\n- epic #{epic} ${spent:.2} of ${budget:.2}"));
+    }
     let nums: Vec<String> = items.iter().map(|i| i.pr.to_string()).collect();
     if !nums.is_empty() {
-        text.push_str(&format!(
-            "\nReply with (drop the PRs you hold):\n{id} approve {}",
-            nums.join(" ")
-        ));
+        text.push_str("\nReply with (drop the PRs you hold):");
+        text.push_str(&format!("\n{id} approve {}", nums.join(" ")));
+    } else if !raises.is_empty() {
+        text.push_str("\nReply with:");
+    }
+    for (epic, spent, budget) in raises {
+        let usd = (spent - budget).ceil().max(1.0) as u64;
+        text.push_str(&format!("\n{id} raise {epic} +{usd}"));
     }
     let header = format!("/bosun digest {repo} {day} {id} {}", pairs.join(" "))
         .trim_end()

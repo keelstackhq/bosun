@@ -443,6 +443,60 @@ pub(crate) fn feature_guard(
     }
 }
 
+/// Every epic of the registry's epic index (the first trusted index of each plan item; closed
+/// epics skipped) whose feature spend is at 80 % of its budget or more, as `{epic, spent_usd,
+/// budget_usd, level}` with level `warn` or `over`. Read-only and never refuses: an epic whose
+/// plan is missing or unreadable is left out (the guard refuses it at claim). Callers read the knob.
+pub(crate) fn feature_levels(app: &App) -> Result<Vec<Value>> {
+    let gh = app.gh.as_ref();
+    let Some((_, notes)) = registry::load(gh)? else {
+        return Ok(vec![]);
+    };
+    let (mut seen, mut epics) = (Vec::new(), Vec::new());
+    for n in &notes {
+        if let Some(Record::EpicIndex {
+            plan, item, epic, ..
+        }) = parse_record(&n.body)
+        {
+            let key = (plan.to_ascii_lowercase(), item);
+            if !seen.contains(&key) {
+                seen.push(key);
+                epics.push(epic);
+            }
+        }
+    }
+    let mut all = None;
+    let mut out = Vec::new();
+    for epic in epics {
+        if out.iter().any(|v: &Value| v["epic"] == epic) {
+            continue;
+        }
+        if gh.get_issue(epic)?.is_none_or(|i| i.state == "closed") {
+            continue;
+        }
+        let src = match source(app, epic) {
+            Ok(s) => s,
+            Err(e) if e.exit == crate::output::Exit::NeedsHuman => continue,
+            Err(e) => return Err(e),
+        };
+        if all.is_none() {
+            all = Some(gh.list_issues(&[], IssueState::All)?);
+        }
+        let raised: u64 = super::budget_raise::valid_raises(app, epic, src.budget)?
+            .iter()
+            .fold(0u64, |a, r| a.saturating_add(r.usd));
+        let spent = feature_spend(app, epic, all.as_deref().unwrap_or(&[]), &src.tasks)?;
+        let budget = src.budget + raised as f64;
+        let level = match feature_level(spent, budget) {
+            Feature::Under => continue,
+            Feature::Warn => "warn",
+            Feature::Over => "over",
+        };
+        out.push(json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}));
+    }
+    Ok(out)
+}
+
 /// The guard of task issue `n`: its trusted bind (epic, item, task), when it has one, replaces
 /// the body's, so editing the body cannot move or drop the task.
 pub(crate) fn task_guard(

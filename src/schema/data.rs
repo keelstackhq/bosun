@@ -174,6 +174,7 @@ status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     issues_by_state: {[str]: int}, leases: [{issue: int, expires: str, session: str,
     touch: [str]}], live_sessions: [{session: str, origin: str, area: str | null, depth: int,
     expires: str}], budget_pct: num, daily_usd: num, spend_today_usd: num,
+    budget_feature?: [{epic: int, spent_usd: num, budget_usd: num, level: str}],
     archive_error?: str};
 mode = {mode: str, mode_source: str, knobs: {[str]: {value: str, source: str}}, brake: any,
     brake_note: str};
@@ -181,7 +182,7 @@ heal = {knob: str, brake: {on: bool, reasons: [str]} | null, prs: [{pr: int, hea
     task: int, action: str, why: str}], main?: any};
 digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha: str,
     rules: [str], title: str}], asks: [{issue: int, answer: str}], bypass: [{pr: int, why: str}],
-    budget_asks: [any], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
+    budget_asks: [{epic: int, spent_usd: num, budget_usd: num}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
     dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
     sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
 metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str],
@@ -191,7 +192,8 @@ metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reason
     owner_touches: int, owner_touches_per_day: num,
     blocks: [{rule: str, blocks: int, caught: int, passed: int}]} | {days: int, since: str, curator_loosen: str, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
 wave tick = {epic: int, mode: str, spawn_auto: str, brake: [str] | null, held_by: str | null,
-    spawned: [{issue: int, title: str, record: str}], stopped: {issue: int, exit: str, message: str,
+    spawned: [{issue: int, title: str, record: str, budget_feature?: {epic: int,
+    spent_usd: num, budget_usd: num, level: str}}], stopped: {issue: int, exit: str, message: str,
     fix: str, check: int | str | null, name: str | null} | null, archived: [str], environment_id: str | null};
 schema = {format: "json" | "ts", command?: str, schema?: {..}, envelope?: {..},
     commands?: {[str]: any}, ts?: str};
