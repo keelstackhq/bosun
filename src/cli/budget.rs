@@ -359,7 +359,7 @@ pub(crate) fn feature_guard(
         if c != epic {
             let msg = format!("#{c} is the epic of {file}/{item}, not #{epic}");
             let fix = format!(
-                "work under #{c} (reopen it if it is closed); if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}`"
+                "work under #{c} (reopen it if it is closed); if the index is forged the owner deletes the index comment {id} on the registry issue and reruns `bosun plan amend {file}` (until then a forged index also blocks the mainfix tasks of the real epic)"
             );
             return Err(refuse(msg, fix, 0.0));
         }
