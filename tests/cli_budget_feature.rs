@@ -224,12 +224,43 @@ fn claim_and_spawn_refuse_without_the_registry_pin_when_the_knob_is_on() {
                 .contains("commit `.bosun/registry`")
         );
     }
-    // A mainfix task (plan kind T2, label and body too) needs the pin as well.
+    let pin_refused = |v: &serde_json::Value| {
+        v["error"]["fix"]
+            .as_str()
+            .is_some_and(|f| f.contains("commit `.bosun/registry`"))
+    };
+    // A body or label that says mainfix does not waive the pin (both are editable); T9 is not
+    // in the plan, so no other check refuses it first.
+    let flag = r#"<!-- bosun:task {"item":"M1","task":"T9","epic":10,"touch":["src/z/**"],"kind":"mainfix"} -->"#;
+    fake.issue(
+        14,
+        "Not a fix",
+        &["bosun:state/ready", "bosun:kind/mainfix"],
+        flag,
+    );
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "14"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+    assert!(pin_refused(&v), "{v}");
+    // A task whose kind in the plan on the default branch is mainfix (T2) is never refused
+    // (spec 05), so a red-main fix stays claimable in an unpinned repo, once the epic's trusted
+    // bind lists it: unpinned, an unbound copy naming a mainfix id is not waived.
     let mf = r#"<!-- bosun:task {"item":"M1","task":"T2","epic":10,"touch":["src/m/**"],"kind":"mainfix"} -->"#;
     fake.issue(13, "Fix", &["bosun:state/ready", "bosun:kind/mainfix"], mf);
     let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
     assert_eq!(code, 5, "{v}");
-    assert_eq!(v["data"]["check"], "budget_feature", "{v}");
+    assert!(pin_refused(&v), "{v}");
+    fake.comment(
+        10,
+        r#"{"bosun":"bind","session":"s","plan":"plans/x.md","item":"M1","tasks":[13]}"#,
+    );
+    fake.comment(
+        13,
+        r#"{"bosun":"bind","session":"s","plan":"plans/x.md","item":"M1","task":"T2","epic":10}"#,
+    );
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"].get("budget_feature").is_none(), "{v}");
 }
 
 #[test]
