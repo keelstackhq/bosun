@@ -11,9 +11,12 @@ use super::prereqs::Env;
 use super::prereqs_gate::{Held, blockers};
 use super::{PlanAmendArgs, PlanCheckArgs, PlanCmd, PlanImportArgs};
 use crate::app::{App, Result, default_branch, kill_switch, set_state, task_meta, trusted_notes};
+use crate::config::{Config, Limits};
+use crate::core::budget::feature_estimate;
 use crate::core::glob::Glob;
 use crate::core::lease::leases_of;
 use crate::core::meta::{TaskMeta, closing_issues_in, linked_issues, parse_task_meta};
+use crate::core::mode::BudgetFeature;
 use crate::core::plan::{self, Item, Plan, PlanError, Task};
 use crate::core::prereqs as pq;
 use crate::core::risk::Rules;
@@ -112,8 +115,19 @@ pub(super) fn plan_errors(file: &str, errs: &[PlanError]) -> BosunError {
     .with_data(json!({ "errors": errs }))
 }
 
+/// `per_task_usd` when the `budget_feature` knob is not off.
+fn per_task_if_on(config: &crate::config::Config, limits: &crate::config::Limits) -> Option<f64> {
+    let on = config.mode_effective().knobs.budget_feature.value != BudgetFeature::Off;
+    on.then_some(limits.budget.per_task_usd)
+}
+
 fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
     let p = read_plan(dir, &a.file)?;
+    let root = dir.unwrap_or_else(|| Path::new("."));
+    // No GitHub here: the working tree's files; a missing or bad one means the knob is off.
+    let per_task = Config::load(root)
+        .and_then(|c| Limits::load(root).map(|l| per_task_if_on(&c, &l)))
+        .unwrap_or(None);
     let gated = gated_rules(dir.unwrap_or_else(|| Path::new(".")))?;
     let errs = shape::gated_size_errors(&p.items, &gated);
     if !errs.is_empty() {
@@ -124,9 +138,13 @@ fn check(dir: Option<&Path>, a: &PlanCheckArgs) -> CmdResult {
         .iter()
         .map(|i| {
             let d = shape::effective(i, &gated);
-            json!({"id": i.id, "title": i.title, "area": i.area,
+            let mut row = json!({"id": i.id, "title": i.title, "area": i.area,
                 "tasks": i.tasks.len(), "ucs": i.ucs.len(), "shape": d.shape,
-                "shape_reasons": d.reasons, "gated": d.gated, "size": d.total})
+                "shape_reasons": d.reasons, "gated": d.gated, "size": d.total});
+            if let Some((usd, _)) = item_budget(i, per_task) {
+                row["budget_usd"] = json!(usd);
+            }
+            row
         })
         .collect();
     Ok(Outcome::data(json!({"file": a.file, "title": p.title,
@@ -224,6 +242,8 @@ struct Importer<'a> {
     refused: Vec<String>,
     dir: PathBuf,
     repo: String,
+    /// `per_task_usd` when the `budget_feature` knob is on: the epic then carries an estimate.
+    per_task: Option<f64>,
     promoted: Vec<String>,
     /// Open owner-checklist items of the plan being imported, and what they hold back.
     open_items: Vec<Held>,
@@ -480,7 +500,17 @@ fn labels(kind: &str, area: &str, state: &str) -> Vec<String> {
     ]
 }
 
-fn epic_body(item: &Item, file: &str, gated: &shape::Gated) -> String {
+/// The feature budget of an item and where it comes from: its `budget_usd:`, else (knob not off)
+/// tasks times `per_task_usd`. `None` is no budget: the output stays as before the knob.
+fn item_budget(item: &Item, per_task: Option<f64>) -> Option<(f64, &'static str)> {
+    match (item.budget_usd, per_task) {
+        (Some(b), _) => Some((b, "plan")),
+        (None, Some(p)) => Some((feature_estimate(item.tasks.len(), p), "per_task")),
+        _ => None,
+    }
+}
+
+fn epic_body(item: &Item, file: &str, gated: &shape::Gated, per_task: Option<f64>) -> String {
     let tasks: String = item
         .tasks
         .iter()
@@ -492,9 +522,13 @@ fn epic_body(item: &Item, file: &str, gated: &shape::Gated) -> String {
         .map(|u| format!("- {}: {}\n", u.id, u.text))
         .collect();
     let ids: Vec<&str> = item.ucs.iter().map(|u| u.id.as_str()).collect();
-    let meta = json!({"item": item.id, "area": item.area, "plan": file,
+    let mut meta = json!({"item": item.id, "area": item.area, "plan": file,
         "depends": item.depends, "ucs": ids,
         "shape": shape::effective_by(item, &|i, t| gated.is(i, t)).shape});
+    if let Some((usd, source)) = item_budget(item, per_task) {
+        meta["budget_usd"] = json!(usd);
+        meta["budget_source"] = json!(source);
+    }
     format!(
         "{}\n{}\n\n{tasks}\n{ucs}\n<!-- bosun:epic {meta} -->",
         marker(&item.id),
@@ -614,6 +648,14 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         refused: vec![],
         dir: app.ctx.dir.clone(),
         repo: app.ctx.repo.to_string(),
+        per_task: match super::budget::knob_from_default(app.gh.as_ref())? {
+            BudgetFeature::Off => None,
+            _ => Some(
+                crate::app::limits_from_default(app.gh.as_ref(), &app.ctx)?
+                    .budget
+                    .per_task_usd,
+            ),
+        },
         promoted: vec![],
         open_items: vec![],
         held: vec![],
@@ -1234,10 +1276,11 @@ fn import_items(imp: &mut Importer, p: &Plan, a: &PlanImportArgs) -> Result<()> 
         .filter(|i| a.item.is_empty() || a.item.contains(&i.id))
     {
         let gated = imp.gated.clone();
+        let per_task = imp.per_task;
         let epic = imp.slot(&item.id, (&item.id, None), || {
             (
                 format!("{}: {}", item.id, item.title),
-                epic_body(item, &plan_path, &gated),
+                epic_body(item, &plan_path, &gated, per_task),
                 labels("feature", &item.area, "planned"),
             )
         })?;

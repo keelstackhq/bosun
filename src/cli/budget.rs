@@ -7,11 +7,16 @@ use serde_json::{Value, json};
 
 use super::lesson::capture_lesson;
 use super::{BudgetCmd, BudgetRecordArgs};
-use crate::app::{App, Result, kill_switch, limits_from_default, set_state};
-use crate::core::budget::{level, to_stop};
+use crate::app::{
+    App, Result, kill_switch, limits_from_default, set_state, spend_notes, task_meta,
+};
+use crate::cli::plan::{epic_item, epic_plan};
+use crate::core::budget::{Feature, feature_estimate, feature_level, level, to_stop};
 use crate::core::lease::members;
+use crate::core::mode::BudgetFeature;
 use crate::core::records::{Record, spend_total};
 use crate::core::state::{State, state_of};
+use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
 use crate::registry;
 use crate::sessions::usage;
@@ -24,6 +29,164 @@ pub fn run(dir: Option<&Path>, cmd: &BudgetCmd) -> CmdResult {
         BudgetCmd::Record(a) => record(dir, a),
         BudgetCmd::Check => check(dir),
         BudgetCmd::Report(a) => super::budget_report::run(dir, a),
+    }
+}
+
+/// What the tasks of `epic` have spent, over every state (spec §9, feature budget).
+fn feature_spend(app: &App, epic: u64, all: &[crate::github::Issue]) -> Result<f64> {
+    let gh = app.gh.as_ref();
+    let mut total = spend_total(&spend_notes(gh, epic)?, None);
+    for i in all {
+        if task_meta(i).is_some_and(|m| m.epic == Some(epic)) {
+            total += spend_total(&spend_notes(gh, i.number)?, None);
+        }
+    }
+    Ok(total)
+}
+
+/// The `budget_feature` knob of the default branch's `.bosun/bosun.toml`, as wave and heal read it.
+pub(crate) fn knob_from_default(gh: &dyn crate::github::Github) -> Result<BudgetFeature> {
+    let branch = crate::app::default_branch(gh)?;
+    let file = crate::config::CONFIG_FILE;
+    Ok(match gh.file_at(file, &branch)? {
+        Some(t) => crate::config::Config::parse(&t, &format!("{file} on {branch}"))?,
+        None => crate::config::Config::default(),
+    }
+    .mode_effective()
+    .knobs
+    .budget_feature
+    .value)
+}
+
+/// Where the budget of an epic comes from. The epic body is editable by anyone with write
+/// access, so its `budget_usd` is display only: the plan on the default branch decides.
+struct Source {
+    budget: f64,
+    item: Option<String>,
+    plan: Option<(String, crate::core::plan::Plan)>,
+}
+
+fn source(app: &App, epic: u64) -> Result<Source> {
+    let gh = app.gh.as_ref();
+    let body = gh.get_issue(epic)?.map(|e| e.body_text().to_string());
+    let body = body.unwrap_or_default();
+    let per_task = limits_from_default(gh, &app.ctx)?.budget.per_task_usd;
+    let (file, item) = (epic_plan(&body), epic_item(&body));
+    let Some(f) = file else {
+        // No marker: one task's worth, which a dummy issue cannot inflate.
+        let budget = feature_estimate(1, per_task);
+        return Ok(Source {
+            budget,
+            item,
+            plan: None,
+        });
+    };
+    let branch = crate::app::default_branch(gh)?;
+    let parsed = gh
+        .file_at(&f, &branch)?
+        .and_then(|t| crate::core::plan::parse(&t).ok());
+    let found = parsed.as_ref().zip(item.as_ref()).and_then(|(p, id)| {
+        p.items.iter().find(|i| &i.id == id).map(|i| {
+            i.budget_usd
+                .unwrap_or(feature_estimate(i.tasks.len(), per_task))
+        })
+    });
+    match (found, parsed) {
+        (Some(budget), Some(p)) => Ok(Source {
+            budget,
+            item,
+            plan: Some((f, p)),
+        }),
+        _ => Err(BosunError::needs_human(
+            format!(
+                "epic #{epic} names {f}, which is missing, unreadable or lacks its item on {branch}"
+            ),
+            format!("ask the orchestrator to run `bosun plan amend {f}`"),
+        )
+        .with_data(json!({"check": "budget_feature", "name": "budget_feature", "epic": epic}))),
+    }
+}
+
+/// The feature-budget guard of `epic` for claim, spawn and heal. Knob off (default branch): no
+/// more calls. Under 80 %: `None`. At 80 % a warning; at 100 % a warning under `warn`, exit 5
+/// under `ask`. `task` is the claimed task and whether its body or label says mainfix: the plan's
+// `kind:` alone exempts mainfix (the flag only lets a mainfix pass a bad config), and the epic
+/// marker must name the task's item (a missing marker refuses).
+pub(crate) fn feature_guard(
+    app: &App,
+    epic: u64,
+    task: Option<(&crate::core::meta::TaskMeta, bool)>,
+) -> Result<Option<Value>> {
+    let knob = match knob_from_default(app.gh.as_ref()) {
+        Ok(k) => k,
+        Err(_) if task.is_some_and(|t| t.1) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if knob == BudgetFeature::Off {
+        return Ok(None);
+    }
+    let src = source(app, epic)?;
+    let file = src
+        .plan
+        .as_ref()
+        .map(|p| p.0.as_str())
+        .unwrap_or("its plan");
+    let item = src.item.as_deref().unwrap_or("?");
+    let refuse = |msg: String, fix: String, spent: f64| {
+        BosunError::needs_human(msg, fix).with_data(json!({"check": "budget_feature",
+            "name": "budget_feature", "epic": epic, "spent_usd": spent, "budget_usd": src.budget}))
+    };
+    let all = app.gh.list_issues(&[], IssueState::All)?;
+    if let Some((m, _)) = task {
+        let same = |i: &&crate::github::Issue| {
+            // Ids are unique per plan, so per epic; an issue closed as a duplicate or not planned is ignored.
+            !matches!(i.state_reason.as_deref(), Some("duplicate" | "not_planned"))
+                && task_meta(i).is_some_and(|x| {
+                    x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task)
+                })
+        };
+        if all.iter().filter(same).count() > 1 {
+            let msg = format!("{}/{} names more than one task issue", m.item, m.task);
+            let fix = "the orchestrator closes the extra issues as duplicates".to_string();
+            return Err(refuse(msg, fix, 0.0));
+        }
+        if src.item.as_deref() != Some(m.item.as_str()) {
+            let msg = format!("the epic #{epic} marker names item {item}, not {}", m.item);
+            return Err(refuse(
+                msg,
+                format!("ask the orchestrator to run `bosun plan amend {file}`"),
+                0.0,
+            ));
+        }
+        let kind = src.plan.as_ref().and_then(|(_, p)| {
+            let it = p.items.iter().find(|i| i.id == m.item)?;
+            it.tasks
+                .iter()
+                .find(|t| t.id == m.task)
+                .map(|t| t.kind.clone())
+        });
+        // Only the plan exempts: a body or label kind is editable.
+        if kind.is_some_and(|k| k == "mainfix") {
+            return Ok(None);
+        }
+    }
+    let (spent, budget) = (feature_spend(app, epic, &all)?, src.budget);
+    let warn = |level: &str| {
+        Ok(Some(
+            json!({"epic": epic, "spent_usd": spent, "budget_usd": budget, "level": level}),
+        ))
+    };
+    match feature_level(spent, budget) {
+        Feature::Under => Ok(None),
+        Feature::Warn => warn("warn"),
+        Feature::Over if knob == BudgetFeature::Warn => warn("over"),
+        Feature::Over => Err(refuse(
+            format!("epic #{epic} spent ${spent:.2} of its ${budget:.2} feature budget"),
+            format!(
+                "the owner raises `budget_usd:` of item {item} in {file} on the default branch (an R-gov PR); digest raises come in a later release"
+            ),
+            spent,
+        )),
     }
 }
 
