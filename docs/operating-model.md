@@ -47,6 +47,15 @@ widen them on measured evidence, never on confidence or on agents agreeing with 
    a `--prompt-file` prompt is the caller's own text, and the Routine prompts (`bosun doctor`)
    carry no data note yet.
 
+### Modes: how much bosun does for you
+
+`[mode]` (spec §18, [quickstart](quickstart.md)) is the dial between "every gate, every approval"
+and "agents run, the owner reads one digest". It never moves the boundary files or the owner
+floor: R-weaken, R-gov, R-secrets, R-prod-write, workflows, releases and tags stay with the
+owner in every mode, and a lighter mode (toward `autonomous`) is itself an owner-approved R-weaken change. Helpers act
+through `next` calls and PRs with full checks; a brake (red main, reverts, red-CI rate over the
+mode's target) turns the spawn and heal helpers down by itself.
+
 ### The open tension: bootstrap mode
 
 Until 2026-11-30 (`[approvals] bootstrap_until` in `.bosun/bosun.toml`, hard cap `BOOTSTRAP_END`
@@ -92,6 +101,7 @@ table).
 | Human channels are untrusted | intake fence; `trusted_notes` takes records only from write users; registry and lease records count only from writers; spend records only from writers and `github-actions[bot]`; Slack thread role `may_build = false`; `--slack-user` not verified; review pack names its untrusted fields; built-in spawn prompts call issue and Slack text data; Routine prompts do not yet | partial |
 | Close the loop with the reporter | `bosun notify` returns thread posts in `next` for the caller; it posts nothing itself, and the notify routine is a Blocked human step | partial |
 | Protect controls from the agents they control | risk rules and approver keys not read from the PR; R-gov on limits and session rules; the hooks that enforce merge-lock and label-lock are R-gate; label-lock is not a sandbox | partial |
+| Dial of help vs. gates | `[mode]` ladder; weaken check; brake from main-red, reverts and red-CI rate; `bosun metrics` baseline and targets | partial |
 | Autonomy earned per change class | static delegate class; not earned from escape or revert rates; no automatic narrowing after an incident | partial |
 | Challenge in proportion | two levels only (`normal`, `high`) | partial |
 | Cost per outcome | `bosun progress`: cost per merged task; budget refuses new work at 80 % (exit 6) and returns stop actions for the caller; `held` and `cost_per_held_task_usd` leave out tasks whose PR was reverted; `bosun budget report` lists every PR of a month with its recorded spend (null when unrecorded), models and outcome, and the `budget-report` workflow (weekly and by manual dispatch) keeps `reports/budget/YYYY-MM.{md,json}` on the branch `bosun/budget-reports` (one draft PR, never merged); no human minutes | partial |

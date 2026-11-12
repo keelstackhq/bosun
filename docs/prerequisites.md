@@ -61,6 +61,14 @@ task waits for it: `bosun claim` refuses it until the box is ticked (`bosun wave
 read holds yet). The agent takes other work. Rewrites of the checklist keep X items until a plan
 item that blocks the held task lists them in `replaces:`; an X id is never used twice in a plan.
 
+## Modes: owner steps
+
+A mode adds owner steps. List them as prerequisites when the plan moves a repo to a lighter mode
+([quickstart](quickstart.md), migration): **computer** pin a release that reads `[mode]`; paste
+the Routine prompts (janitor with `bosun heal`; curator for `curator_loosen = "propose"`;
+Routines are human-only); **phone** approve the PR that sets `[mode] name` (R-gov, and R-weaken
+for a lighter mode). Use `verify: owner` for all of them (bosun cannot tell a pin to a release that reads `[mode]` from an older one).
+
 ## Automatic items
 
 bosun adds these without being asked:

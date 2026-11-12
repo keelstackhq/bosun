@@ -139,7 +139,7 @@ which source set each (explicit, preset, default) and the brake state.
    for the exact heads; a head that moved since the digest drops out and is listed the next
    day. Mainfix PRs and release-environment taps never wait for the digest. This is D-009's
    "batched chat approvals" made mechanical. The digest signs nothing: approvals come back as
-   `next` calls `bosun approve <pr> --head <sha>` for the orchestrator (the key holder).
+   `next` calls `bosun approve <pr>@<head>` for the orchestrator (the key holder).
 5. **Spawn and archive — kept, via `next`.** `spawn_auto = "on"`: `bosun wave tick <epic>`
    returns `create_session` calls for ready wave entries while every spawn check passes
    (limits, budget < 80 %, no lease conflict, brake off) and `archive_session` for children whose

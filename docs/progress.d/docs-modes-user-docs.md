@@ -1,0 +1,1 @@
+- 2026-11-12 · modes PR 10 · user docs, quickstart and migration for modes; plan and spec fixes (`approve <pr>@<head>`, duplicate PR 8) · PR #563

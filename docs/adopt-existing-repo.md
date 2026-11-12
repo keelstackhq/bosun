@@ -150,11 +150,18 @@ All but `splice.yml` run the release pinned in `.bosun/version`, never code from
    existing rules).
 4. Optional, so splice update PRs run CI: an environment `splice-bot` (deployment branches: main
    only) with the secret `SPLICE_BOT_TOKEN`.
-5. Optional: the Routines (janitor hourly, curator daily). `bosun doctor` prints their prompts.
+5. Optional: the Routines (janitor hourly, curator daily). `bosun doctor` prints their prompts; for modes above `gatekeeper` the changed prompts are in [quickstart.md](quickstart.md) (section 4).
 
 Check the result with `bosun doctor` (add `--remote` to also run `hoist check`). It lists each
 step as ok, warn, skipped or missing. Without `GITHUB_TOKEN` it still runs the local checks and marks the GitHub ones skipped;
 `data.next_step` names the first missing step.
+
+## Modes (optional, after setup)
+
+A freshly adopted repo is in `gatekeeper`: no `[mode]` table. To move on, pin a release that
+reads `[mode]` and follow the steps in [quickstart.md](quickstart.md) (section 5, migration);
+`bosun mode` shows what is in force. Move one mode at a time; the PR that sets `[mode] name` is
+R-gov and needs the owner.
 
 ## 6. The first plan and the task loop
 
