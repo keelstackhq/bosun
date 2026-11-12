@@ -95,3 +95,12 @@ fn a_non_default_override_parses() {
         }
     }
 }
+
+#[test]
+fn wave_tick_is_no_longer_a_stub() {
+    let out = bosun().args(["wave", "tick", "7"]).output().unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(v["command"], "wave tick");
+    let fix = v["error"]["fix"].as_str().unwrap_or_default();
+    assert!(!fix.contains("plan PR"), "{v}");
+}
