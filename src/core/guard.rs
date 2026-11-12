@@ -1531,7 +1531,18 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
             return Some("`xargs` adds arguments the guard cannot see");
         }
     }
-    match words.first().copied() {
+    // `\git`, `"git"`, `g''it` and `/usr/bin/git` all run git.
+    // A word with an open quote is part of a longer string (`python -c 'gh ..'`): left as is.
+    let first = words.first().map(|w| {
+        let even = |q: char| w.matches(q).count() % 2 == 0;
+        if even('\'') && even('"') {
+            w.replace(['\'', '"', '\\'], "")
+        } else {
+            w.to_string()
+        }
+    });
+    let first = first.as_deref().map(|w| w.rsplit('/').next().unwrap_or(w));
+    match first {
         Some("gh") => gh_rule(&words[1..], segment),
         // `GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`: config from the environment.
         Some("git")
@@ -2905,7 +2916,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         }
         i += step;
     }
-    let (sub, rest) = (args.get(i).copied()?, &args[(i + 1).min(args.len())..]);
+    let sub = args.get(i)?.replace(['\'', '"', '\\'], "");
+    let (sub, rest) = (sub.as_str(), &args[(i + 1).min(args.len())..]);
     let at: Option<Vec<String>> = target
         .dir
         .filter(|_| known)
@@ -3956,6 +3968,12 @@ mod tests {
             "git push -u origin feature | sh",
             "git push -u origin feature | tail -3 | sh",
             "bash -c 'git push origin feature'",
+            "\\git push origin feature:main",
+            "\"git\" push origin feature:main",
+            "g''it push origin feature:main",
+            "git \"push\" origin feature:main",
+            "git 'pu''sh' origin feature:main",
+            "/usr/bin/git push origin feature:main",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
@@ -3990,6 +4008,7 @@ mod tests {
             "git push origin @",
             "git push -u origin feature 2>&1 | tail -3",
             "git push origin feature | head -n 5",
+            "/usr/bin/git push origin feature:feature",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }

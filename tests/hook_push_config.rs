@@ -126,6 +126,27 @@ fn push_default_that_can_reach_the_default_branch_refuses_a_bare_push() {
 }
 
 #[test]
+fn aliases_that_push_or_run_a_shell_are_refused() {
+    let r = repo(None);
+    git(r.path(), &["config", "alias.p", "push"]);
+    git(r.path(), &["config", "alias.q", "!git push"]);
+    git(r.path(), &["config", "alias.st", "status"]);
+    for cmd in ["git p origin feat:main", "git q", "git \"p\" origin"] {
+        let why = hook(r.path(), cmd).expect(cmd);
+        assert!(why.contains("alias"), "{why}");
+    }
+    assert_eq!(hook(r.path(), "git st"), None);
+}
+
+#[test]
+fn unreadable_config_fails_closed() {
+    let r = repo(None);
+    fs::write(r.path().join(".git/config"), "[broken\n").unwrap();
+    let why = hook(r.path(), "git push").expect("broken config");
+    assert!(why.contains("cannot read git config"), "{why}");
+}
+
+#[test]
 fn plain_config_pushes_as_today() {
     let r = repo(None);
     for cmd in ["git push", "git push origin", "git push -u origin feat"] {

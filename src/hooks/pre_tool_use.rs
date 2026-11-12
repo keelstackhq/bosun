@@ -160,6 +160,11 @@ fn push_config(
     default: &str,
 ) -> Option<String> {
     const FIX: &str = "name the refspec, as in `git push -u origin claude/fix-1`";
+    const UNREAD: &str =
+        "merge-lock: the guard cannot read git config here, so it cannot tell where this push goes";
+    if let Some(why) = alias_push(dir, command) {
+        return Some(why);
+    }
     for push in pushes(command, read, default) {
         let opts = push.dir.unwrap_or_default();
         let at = |args: &[&str]| {
@@ -167,7 +172,15 @@ fn push_config(
             all.extend(args);
             git_out(dir, &all)
         };
-        let set = at(&["config", "--get-regexp", r"^remote\..*\.(push|mirror)$"]);
+        // Exit 1 is "no such key"; any other failure (not a repo, dubious ownership) fails closed.
+        let get = |args: &[&str]| -> Result<Option<String>, ()> {
+            let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+            all.extend(args);
+            config_get(dir, &all)
+        };
+        let Ok(set) = get(&["config", "--get-regexp", r"^remote\..*\.(push|mirror)$"]) else {
+            return Some(UNREAD.into());
+        };
         for line in set.iter().flat_map(|s| s.lines()) {
             let (key, value) = line.split_once(' ').unwrap_or((line, ""));
             if key.ends_with(".push") || !value.eq_ignore_ascii_case("false") {
@@ -180,7 +193,10 @@ fn push_config(
         if !push.srcs.is_empty() {
             continue;
         }
-        let mode = at(&["config", "--get", "push.default"]).map(|m| m.to_ascii_lowercase());
+        let Ok(mode) = get(&["config", "--get", "push.default"]) else {
+            return Some(UNREAD.into());
+        };
+        let mode = mode.map(|m| m.to_ascii_lowercase());
         match mode.as_deref() {
             None | Some("simple" | "current" | "nothing") => {}
             Some("upstream" | "tracking") => {
@@ -202,6 +218,45 @@ fn push_config(
         }
     }
     None
+}
+
+/// `git config` read: `Ok(None)` when the key is unset (exit 1), `Err` when git fails.
+fn config_get(dir: &Path, args: &[&str]) -> Result<Option<String>, ()> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|_| ())?;
+    match out.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )),
+        Some(1) => Ok(None),
+        _ => Err(()),
+    }
+}
+
+/// A git alias (in the hook directory's config) that runs `push`, `send-pack`, `subtree` or a
+/// shell command (`!..`), named as a word of the command: the merge-lock cannot see behind it.
+fn alias_push(dir: &Path, command: &str) -> Option<String> {
+    if !command.contains("git") {
+        return None;
+    }
+    let aliases = config_get(dir, &["config", "--get-regexp", r"^alias\."]).ok()??;
+    let words: Vec<String> = command
+        .split_whitespace()
+        .map(|w| w.replace(['\'', '"', '\\'], ""))
+        .collect();
+    aliases.lines().find_map(|line| {
+        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
+        let name = key.strip_prefix("alias.")?;
+        let v = value.trim_start();
+        let risky = v.starts_with('!') || ["push", "send-pack", "subtree"].iter().any(|c| v.starts_with(c));
+        (risky && words.iter().any(|w| w == name)).then(|| {
+            format!("merge-lock: git alias `{name}` runs `{value}`, which the guard cannot judge; run the git command itself")
+        })
+    })
 }
 
 /// `push_gates = "push"` (spec §7): each pushed ref's tree needs a passing stamp for every
