@@ -578,32 +578,41 @@ pub fn chat_comment(head: &str, session: &str, at: &str, question: Option<&str>)
     )
 }
 
-/// The chat record in `body` for `head`: the first line is exactly `/bosun approve <head> chat`
-/// and a marker line names the same head and a session.
+/// The chat record in `body` for `head`: the first line is exactly `/bosun approve <head> chat`,
+/// `head` is 40 lowercase hex, and exactly one line mentions the marker, which reads exactly
+/// `<!-- bosun:chat-approval v1 session=<id> head=<head>[ question=<id>] -->` (keys in this
+/// order, none unknown or repeated). The risk-check counter and the hook guard share this rule.
 pub fn parse_chat_record(body: &str, head: &str) -> Option<ChatRecord> {
+    let hex = |c: u8| c.is_ascii_digit() || (b'a'..=b'f').contains(&c);
+    if head.len() != 40 || !head.bytes().all(hex) {
+        return None;
+    }
     let first = body.lines().map(str::trim).find(|l| !l.is_empty())?;
     if first != format!("/bosun approve {head} chat") {
         return None;
     }
-    let prefix = format!("<!-- {CHAT_MARKER} v1 ");
-    let marker = body.lines().map(str::trim).find_map(|l| {
-        l.strip_prefix(prefix.as_str())
-            .and_then(|r| r.strip_suffix("-->"))
-    })?;
-    let (mut session, mut mhead, mut question) = (None, None, None);
-    for kv in marker.split_whitespace() {
-        match kv.split_once('=') {
-            Some(("session", v)) => session = Some(v),
-            Some(("head", v)) => mhead = Some(v),
-            Some(("question", v)) => question = Some(v),
-            _ => {}
-        }
-    }
-    let session = session.filter(|s| !s.is_empty())?;
-    (mhead? == head).then(|| ChatRecord {
+    let mut marked = body.lines().filter(|l| l.contains(CHAT_MARKER));
+    let (Some(line), None) = (marked.next(), marked.next()) else {
+        return None;
+    };
+    let rest = line
+        .trim()
+        .strip_prefix(&format!("<!-- {CHAT_MARKER} v1 "))?
+        .strip_suffix(" -->")?;
+    let mut kv = rest.split(' ');
+    let session = kv
+        .next()?
+        .strip_prefix("session=")
+        .filter(|s| !s.is_empty())?;
+    (kv.next()?.strip_prefix("head=")? == head).then_some(())?;
+    let question = match kv.next() {
+        None => None,
+        Some(q) => Some(q.strip_prefix("question=").filter(|q| !q.is_empty())?),
+    };
+    kv.next().is_none().then(|| ChatRecord {
         head: head.into(),
         session: session.into(),
-        question: question.filter(|q| !q.is_empty()).map(Into::into),
+        question: question.map(Into::into),
     })
 }
 
@@ -726,6 +735,38 @@ mod tests {
             member("x", "local", None, 1, 1),
         ];
         assert!(!is_orchestrator(&rev, "x"));
+    }
+
+    #[test]
+    fn parse_is_strict() {
+        let ok = chat_comment(H, "s", "t", Some("q"));
+        let m = |marker: &str| ok.replacen("session=s head=", marker, 1);
+        // Keys out of order, unknown, duplicated.
+        assert_eq!(parse_chat_record(&m("head=x session=s head="), H), None);
+        assert_eq!(parse_chat_record(&m("session=s x=1 head="), H), None);
+        assert_eq!(parse_chat_record(&m("session=s session=s head="), H), None);
+        let swapped = ok.replacen(
+            &format!("head={H} question=q"),
+            &format!("question=q head={H}"),
+            1,
+        );
+        assert_eq!(parse_chat_record(&swapped, H), None);
+        let dup_q = ok.replacen("question=q", "question=q question=r", 1);
+        assert_eq!(parse_chat_record(&dup_q, H), None);
+        // Head must be 40 lowercase hex.
+        let short = chat_comment("abc", "s", "t", None);
+        assert_eq!(parse_chat_record(&short, "abc"), None);
+        let upper = H.to_uppercase();
+        assert_eq!(
+            parse_chat_record(&chat_comment(&upper, "s", "t", None), &upper),
+            None
+        );
+        // Exactly one marker line, and nothing after the marker but `-->`.
+        let twice = format!("{ok}\n<!-- bosun:chat-approval v1 session=s head={H} -->");
+        assert_eq!(parse_chat_record(&twice, H), None);
+        let mention = format!("{ok}\nsee bosun:chat-approval");
+        assert_eq!(parse_chat_record(&mention, H), None);
+        assert!(parse_chat_record(&ok, H).is_some());
     }
 
     #[test]

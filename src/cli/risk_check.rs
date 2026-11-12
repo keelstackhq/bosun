@@ -10,12 +10,13 @@ use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, 
 use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
+use crate::core::approve;
 use crate::core::approve::{
     APPROVERS_PATH, ApproverKey, Form, OrchestratorCase, Policy, Role, orchestrator_counts,
     parse_approvers, signature_lines, signed_message, signed_message_autonomous,
     signed_message_bootstrap, signed_message_v2, trust_files_changed, verify_ed25519,
 };
-use crate::core::lease::leases_of;
+use crate::core::lease::{Member, leases_of};
 use crate::core::meta::{closing_issues_in, linked_issues_in};
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
@@ -456,6 +457,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let unlinked =
         linked.is_empty() && matches!(requirement, Approval::TwoVerdicts | Approval::Delegate);
     let models = review_models(gh, base)?;
+    let chat_on = high && chat_enabled(gh, base)?;
     let need = Need {
         repo: &app.ctx.repo,
         pr: n,
@@ -468,6 +470,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         unlinked,
         autonomous: auto.as_ref(),
         models: models.as_deref(),
+        chat_author: chat_on.then_some(pull.user.as_str()),
     };
     let found = if high {
         approval_on(gh, &need, head)?
@@ -482,10 +485,19 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let carried = if passed_on_head {
         None
     } else {
-        default_branch(gh).ok().and_then(|branch| {
-            let approve = |h: &str| approval_on(gh, &need, h).ok();
-            carry_approval(gh, &pull, &branch, &owners, &approve)
-        })
+        // With no owners file a carried chat record stands for the fallback owners: their
+        // withdrawal on a later head must stop it too (a failed read is no carry).
+        let carry_owners = match need.chat_author {
+            Some(author) if owners.is_empty() => fallback_owners(gh, author).ok(),
+            _ => Some(owners.clone()),
+        };
+        default_branch(gh)
+            .ok()
+            .zip(carry_owners)
+            .and_then(|(branch, o)| {
+                let approve = |h: &str| approval_on(gh, &need, h).ok();
+                carry_approval(gh, &pull, &branch, &o, &approve)
+            })
     };
     let Found {
         mut approved_by,
@@ -649,6 +661,9 @@ struct Need<'a> {
     autonomous: Option<&'a (Vec<Comment>, Vec<String>)>,
     /// `[approvals] review_models` at base: when set, only verdicts by these models count.
     models: Option<&'a [String]>,
+    /// The PR author when chat records count (`[approvals] chat` at base): the no-owners
+    /// fallback needs it.
+    chat_author: Option<&'a str>,
 }
 
 /// How a head is approved: by an owner or delegate (`approved_by`), or by two verdicts.
@@ -698,6 +713,9 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     };
     let bootstrap = bootstrap.map(|l| (l, form));
     found.approved_by = approver(gh, repo, pr, sha, owners, need.signed_ok, bootstrap)?;
+    if let (None, Some(author)) = (&found.approved_by, need.chat_author) {
+        found.approved_by = chat_approver(gh, pr, sha, owners, author)?;
+    }
     let open = found.approved_by.is_none() && !need.unlinked;
     // Two verdicts only matter when the owner has not approved and the class allows them.
     if open && need.requirement == Approval::TwoVerdicts {
@@ -960,6 +978,89 @@ fn approver(
         by.get_or_insert(key);
     }
     Ok(by.map(|id| format!("key {id}")))
+}
+
+/// The owner whose chat record (spec §8) approves `head`: written by an orchestrator session
+/// for the owner who authored the comment, unedited; an owner's withdrawal (changes requested,
+/// or a dismissal not followed by a newer record) stops it. With no owners file the repo owner
+/// (user repo) or the PR author with admin permission (org repo) stands in. The registry is read
+/// only when a record for `head` exists.
+fn chat_approver(
+    gh: &dyn Github,
+    pr: u64,
+    head: &str,
+    owners: &[String],
+    author: &str,
+) -> Result<Option<String>> {
+    let comments = gh.list_comments(pr)?;
+    if !(comments.iter()).any(|c| approve::parse_chat_record(&c.body, head).is_some()) {
+        return Ok(None);
+    }
+    let owners = if owners.is_empty() {
+        fallback_owners(gh, author)?
+    } else {
+        owners.to_vec()
+    };
+    let Some((_, notes)) = crate::registry::load(gh)? else {
+        return Ok(None);
+    };
+    let members = crate::core::lease::members(&notes);
+    let reviews = gh.list_reviews(pr)?;
+    let by = owners.iter().find(|o| {
+        let one = std::slice::from_ref(*o);
+        match decisive_review(&reviews, o, head).as_deref() {
+            Some("DISMISSED") => {
+                let newer = newer_than(&comments, dismissed_at(gh, pr, &reviews, o, head));
+                chat_comment_by(&newer, one, &members, head).is_some()
+            }
+            s if withdrawn(s) => false,
+            _ => chat_comment_by(&comments, one, &members, head).is_some(),
+        }
+    });
+    Ok(by.cloned())
+}
+
+/// The owners a chat record counts for when the base has no owners file: the repo's owner for
+/// a user repo; for an org repo the PR author when an admin of the repo; else none.
+pub fn fallback_owners(gh: &dyn Github, author: &str) -> Result<Vec<String>> {
+    let Some(owner) = gh.repo_info()?.and_then(|r| r.owner) else {
+        return Ok(Vec::new());
+    };
+    if owner.kind == "User" {
+        return Ok(vec![owner.login]);
+    }
+    let admin = !author.is_empty() && gh.permission(author)?.as_deref() == Some("admin");
+    Ok(if admin {
+        vec![author.into()]
+    } else {
+        Vec::new()
+    })
+}
+
+/// `[approvals] chat` at base (unset: on). A config that does not parse turns chat off.
+fn chat_enabled(gh: &dyn Github, base: &str) -> Result<bool> {
+    Ok(match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => Config::parse(&t, CONFIG_FILE)
+            .map_err(|e| eprintln!("bosun: risk-check: chat records are off: {}", e.message))
+            .is_ok_and(|c| c.approvals.chat_enabled()),
+        None => true,
+    })
+}
+
+/// The chat record approving `head`: unedited, by one of `owners`, through any app (the cloud
+/// posts as the owner via the Claude app), whose marker names an orchestrator session.
+pub fn chat_comment_by<'a>(
+    comments: &'a [Comment],
+    owners: &[String],
+    members: &[Member],
+    head: &str,
+) -> Option<&'a Comment> {
+    comments.iter().find(|c| {
+        c.unedited()
+            && owners.iter().any(|o| c.user.eq_ignore_ascii_case(o))
+            && approve::parse_chat_record(&c.body, head)
+                .is_some_and(|r| approve::is_orchestrator(members, &r.session))
+    })
 }
 
 /// A decisive review in this state withdraws the owner's approvals (anyone with write access can

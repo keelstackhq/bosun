@@ -1,0 +1,1 @@
+- 2026-11-10 · chat-approval T2 · risk-check counts chat records (orchestrator, owner, unedited, head), no-owners fallback, strict marker parse

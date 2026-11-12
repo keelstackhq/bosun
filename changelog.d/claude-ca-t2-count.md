@@ -1,0 +1,1 @@
+- risk-check counts a chat approval record as the owner's approval; with no owners file the repo owner (or an admin PR author) stands in; the chat marker parse is strict.

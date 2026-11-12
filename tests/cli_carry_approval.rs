@@ -214,3 +214,16 @@ fn carries_or_passes(fake: &FakeGithub) -> bool { let (code, _, _) = go(fake); c
     fake.content(".bosun/risk.toml", D, "[[rule]]\nid = \"R-ci-review\"\nwhy = \"r\"\napproval = \"two-verdicts\"\npaths = [\"channel/**\"]\n[[rule]]\nid = \"R-o\"\nwhy = \"o\"\npaths = [\"src/gates/**\"]\n");
     assert!(!carries(&fake)); // two verdicts do not meet an owner rule beside the class
 }
+fn chat_on(fake: &FakeGithub, sha: &str) {
+    fake.issue(50, "bosun registry", &["bosun:registry"], "");
+    fake.comment(50, r#"{"bosun":"join","session":"session_orch","origin":"local","depth":1,"expires":"2026-10-22T11:00:00Z"}"#);
+    let body = format!("/bosun approve {sha} chat\nApproved by the owner in chat (session session_orch, t).\n<!-- bosun:chat-approval v1 session=session_orch head={sha} -->");
+    fake.comment_at(1, "ada", &body, "2026-10-22T09:00:00Z"); fake.last_comment(|c| c.via_app = Some("claude".into()));
+}
+#[test] fn a_chat_record_on_h_carries_and_a_fallback_owners_withdrawal_stops_it() {
+    let fake = world(); chat_on(&fake, H); assert!(carries(&fake));
+    // No owners file: the repo owner stands in, on the carry's withdrawal check too.
+    let none = || { let f = world(); f.state.lock().unwrap().contents.retain(|k, _| !k.ends_with(":governance/owners.toml")); f.repo_set("owner", json!({"login": "ada", "type": "User"})); chat_on(&f, H); f };
+    assert!(carries(&none()));
+    let fake = none(); fake.review(1, "ada", "CHANGES_REQUESTED", H2); assert!(!carries(&fake));
+}
