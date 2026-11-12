@@ -66,7 +66,7 @@ answerable; PR numbers come only from the owner's chat; each (id, pr) is signed 
 reads the `approve --list` board and the needs-human issues, and writes nothing. `data.message`
 is one D-012 chat form for the repo: its first line `Daily digest <owner>/<repo> <id>`, every
 owner-waiting PR (`#<pr>@<short head>`, its `R-` rule ids, the inert title), the open asks
-(answered with `bosun answer <issue> --chat`), budget asks (none until plan PR 7) and the reply
+(answered with `bosun answer <issue> --chat`), budget asks (under `budget_feature = ask`, each indexed epic at 100 % of its feature budget, with the reply line `<id> raise <epic> +<usd>`; they are not in the id; epics at 80 % or more that are not asks are listed as `Budget warnings`, also with no hint) and the reply
 `<id> approve 12 15`. While main is red, mainfix PRs are in `data.bypass`,
 not in the digest; release-environment taps never wait for it. What a tokenless listing could
 not read is in `data.skipped`. `data.header` is `/bosun digest <owner>/<repo> <day> <id>

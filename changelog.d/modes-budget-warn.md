@@ -1,0 +1,1 @@
+- The 80 % feature-budget warning also shows in `bosun status` (`budget_feature`) and in each `bosun wave tick` spawn; `bosun digest` lists epics at 100 % as budget asks with a `raise <epic> +<usd>` reply line.

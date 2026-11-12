@@ -7,13 +7,15 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
+use super::budget::{feature_levels, knob_from_default};
 use super::{ApproveArgs, DigestArgs};
-use crate::app::{App, kill_switch, main_red};
+use crate::app::{App, kill_switch, limits_from_default, main_red};
 use crate::cli::approve::read_key;
 use crate::cli::risk_check::enrolled_keys;
 use crate::core::answer::text_sha256;
 use crate::core::approve::{APPROVERS_PATH, Role};
-use crate::core::digest::{Item, digest, parse_header, parse_reply, pick, raise_message};
+use crate::core::digest::{Item, digest_with, parse_header, parse_reply, pick, raise_message};
+use crate::core::mode::BudgetFeature;
 use crate::gates::main_open::is_mainfix;
 use crate::github::{IssueState, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -105,8 +107,36 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
         }
     }
     let day = app.ctx.now.to_string();
-    let d = digest(&repo(&app), &day[..10], &items, &asks);
-    Ok(Outcome::data(json!({
+    // Budget asks (knob `ask`): the indexed epics at 100 % of their feature budget.
+    let knob = knob_from_default(app.gh.as_ref())?;
+    let per_task = limits_from_default(app.gh.as_ref(), &app.ctx)?
+        .budget
+        .per_task_usd;
+    let (mut over, mut warns, mut budget_skipped) = (Vec::new(), Vec::new(), Vec::new());
+    if knob != BudgetFeature::Off {
+        let (levels, skipped) = feature_levels(&app)?;
+        budget_skipped = skipped;
+        for l in &levels {
+            let f = |k: &str| l[k].as_f64().unwrap_or_default();
+            let epic = l["epic"].as_u64().unwrap_or_default();
+            if l["level"] == "over" && knob == BudgetFeature::Ask {
+                let room = l["raise_room_usd"].as_u64().unwrap_or_default();
+                over.push((epic, f("spent_usd"), f("budget_usd"), room));
+            } else {
+                warns.push((epic, f("spent_usd"), f("budget_usd")));
+            }
+        }
+    }
+    let d = digest_with(
+        &repo(&app),
+        &day[..10],
+        &items,
+        &asks,
+        &over,
+        &warns,
+        per_task,
+    );
+    let mut data = json!({
         "message_id": d.id,
         "message": d.text,
         "header": d.header,
@@ -115,9 +145,25 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
         "asks": asks.iter().map(|(n, _)| json!({"issue": n,
             "answer": format!("bosun answer {n} --chat")})).collect::<Vec<_>>(),
         "bypass": bypass.iter().map(|n| json!({"pr": n, "why": BYPASS})).collect::<Vec<_>>(),
-        "budget_asks": [],
+        "budget_asks": over.iter().map(|(e, s, b, room)| {
+            let mut a = json!({"epic": e, "spent_usd": s, "budget_usd": b});
+            if *room == 0 {
+                a["needs"] = json!("R-gov plan PR");
+            }
+            a
+        }).collect::<Vec<_>>(),
         "skipped": skipped,
-    })))
+    });
+    if knob != BudgetFeature::Off {
+        data["budget_warnings"] = warns
+            .iter()
+            .map(|(e, s, b)| json!({"epic": e, "spent_usd": s, "budget_usd": b}))
+            .collect();
+    }
+    if !budget_skipped.is_empty() {
+        data["budget_skipped"] = json!(budget_skipped);
+    }
+    Ok(Outcome::data(data))
 }
 
 fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {

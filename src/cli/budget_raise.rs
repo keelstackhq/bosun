@@ -100,6 +100,22 @@ fn capped(have: &[Raise], day: i64, usd: u64, base: f64, span: (i64, i64)) -> Op
     })
 }
 
+/// How many dollars a raise signed on digest day `today` may still add to `base` without
+/// `bosun budget raise` refusing it: nothing when one is already counted that day, else the
+/// room left in the 7-day cap (raises within 6 days either side) and the lifetime cap.
+pub(super) fn room(have: &[Raise], base: f64, today: &str) -> u64 {
+    let Some(day) = day_no(today) else { return 0 };
+    if have.iter().any(|h| h.day == day) {
+        return 0;
+    }
+    let sum = |near: bool| {
+        have.iter()
+            .filter(|h| !near || (day - 6..=day + 6).contains(&h.day))
+            .fold(0u64, |a, h| a.saturating_add(h.usd)) as f64
+    };
+    (base - sum(true)).min(2.0 * base - sum(false)).max(0.0) as u64
+}
+
 /// The valid raises on `epic` in (day, comment) order: verified, one per digest id and per day,
 /// and every 7 days at most the base budget in all.
 pub(super) fn valid_raises(app: &App, epic: u64, base: f64) -> Result<Vec<Raise>> {
