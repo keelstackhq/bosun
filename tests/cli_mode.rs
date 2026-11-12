@@ -16,9 +16,9 @@ fn no_mode_table_is_gatekeeper_and_serializes_unchanged() {
 }
 
 #[test]
-fn gatekeeper_with_an_override_parses() {
+fn gatekeeper_with_a_default_override_parses() {
     let c = Config::parse(
-        "[mode]\nname = \"gatekeeper\"\nheal_main = \"revert-pr\"\n",
+        "[mode]\nname = \"gatekeeper\"\nheal_main = \"off\"\n",
         "f.toml",
     )
     .unwrap();
@@ -27,7 +27,7 @@ fn gatekeeper_with_an_override_parses() {
     assert_eq!(
         e.knobs.heal_main,
         Set {
-            value: HealMain::RevertPr,
+            value: HealMain::Off,
             source: Source::Explicit
         }
     );
@@ -86,5 +86,24 @@ fn stubs_exit_1_with_a_fix() {
         let v = one_object(&out.stdout);
         let fix = v["error"]["fix"].as_str().unwrap();
         assert!(fix.contains(&format!("plan PR {pr}")), "{fix}");
+    }
+}
+
+#[test]
+fn a_non_default_override_is_refused_until_1b() {
+    for k in [
+        "heal_main = \"revert-auto\"",
+        "spawn_auto = \"on\"",
+        "push_gates = \"push\"",
+    ] {
+        for name in ["", "name = \"gatekeeper\"\n"] {
+            let e = Config::parse(&format!("[mode]\n{name}{k}\n"), "f.toml").unwrap_err();
+            assert!(
+                e.message.contains("override is not active yet"),
+                "{}",
+                e.message
+            );
+            assert!(e.fix.contains("plan PR 1b"), "{}", e.fix);
+        }
     }
 }

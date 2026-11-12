@@ -19,7 +19,8 @@ push_gates = "push"
 - Unknown mode names, unknown knobs and unknown values are parse errors. `policy` is never a
   `[mode]` key (parse error): only `[approvals] policy` or the mode name sets it.
 - **Not active yet:** until the weaken check lands (plan PR 1b), any `name` but `gatekeeper` is a
-  parse error, so no release carries a lighter mode without it.
+  parse error, and so is any knob override away from its gatekeeper value, so no release
+  carries a lighter mode without it. PR 1b lifts both; its weaken check covers overrides alone.
 - Release ordering as for every new key: set `[mode]` only once `.bosun/version` pins a release
   that reads it.
 

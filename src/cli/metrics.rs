@@ -1,10 +1,7 @@
 //! `bosun metrics`: not built yet (plan PR 5).
 
-use std::path::Path;
-
-use super::MetricsArgs;
 use crate::output::CmdResult;
 
-pub fn run(_dir: Option<&Path>, _args: &MetricsArgs) -> CmdResult {
+pub fn run(_: Option<&std::path::Path>, _: &super::MetricsArgs) -> CmdResult {
     Err(super::not_built("metrics", "5"))
 }

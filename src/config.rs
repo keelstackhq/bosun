@@ -405,11 +405,13 @@ impl Config {
                 format!("edit {file}: set [approvals] policy, or remove mode.policy"),
             ));
         }
-        if let Some(n) = c.mode.name.filter(|n| *n != ModeName::Gatekeeper) {
+        let name = c.mode.name.filter(|n| *n != ModeName::Gatekeeper);
+        let off = name.map(|n| format!("mode {:?}", n.as_str()));
+        if let Some(what) = off.or(c.mode.off_default().map(|k| format!("mode.{k} override"))) {
             return Err(BosunError::error(
-                format!("{file}: mode {:?} is not active yet", n.as_str()),
+                format!("{file}: {what} is not active yet"),
                 format!(
-                    "edit {file}: remove mode.name or set it to \"gatekeeper\"; lighter modes arrive with their weaken check (plan PR 1b)"
+                    "edit {file}: remove it or set the gatekeeper value; lighter modes and overrides arrive with their weaken check (plan PR 1b)"
                 ),
             ));
         }

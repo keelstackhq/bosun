@@ -78,6 +78,18 @@ macro_rules! knobs {
             Knobs { $($f: [$t::$g, $t::$s, $t::$b, $t::$a][m as usize]),+ }
         }
 
+        impl ModeConfig {
+            pub fn is_unset(&self) -> bool {
+                *self == ModeConfig::default()
+            }
+            /// The first knob overridden away from its gatekeeper value.
+            pub fn off_default(&self) -> Option<&'static str> {
+                let g = preset(ModeName::Gatekeeper);
+                [$(self.$f.is_some_and(|v| v != g.$f).then_some(stringify!($f))),+]
+                    .into_iter().flatten().next()
+            }
+        }
+
         /// Explicit override > preset of the named mode > default (the gatekeeper value).
         pub fn resolve(c: &ModeConfig) -> Effective {
             let base = preset(c.name.unwrap_or(ModeName::Gatekeeper));
@@ -106,12 +118,6 @@ knobs!(
     brake: Brake = [Off, On, On, On],
     curator_loosen: CuratorLoosen = [Off, Off, Propose, Propose],
 );
-
-impl ModeConfig {
-    pub fn is_unset(&self) -> bool {
-        *self == ModeConfig::default()
-    }
-}
 
 /// The approval policy a mode implies (used from plan PR 1b; not wired yet).
 pub fn preset_policy(m: ModeName) -> Option<Policy> {
