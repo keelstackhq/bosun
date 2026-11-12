@@ -254,7 +254,9 @@ fn alias_push(dir: &Path, command: &str) -> Option<String> {
     let words: Vec<String> = spaced.split_whitespace().map(unq).collect();
     // Every directory an earlier `cd` or `pushd` may have moved to (as `-C` options); an alias
     // is read in each. A target the guard cannot read leaves only git's builtins.
-    let (mut dirs, mut known) = (vec![Vec::<String>::new()], true);
+    // `CDPATH` makes `cd x` land somewhere other than `./x`.
+    let cdpath = words.iter().any(|w| w.starts_with("CDPATH="));
+    let (mut dirs, mut known) = (vec![Vec::<String>::new()], !cdpath);
     let mut i = 0;
     while i < words.len() {
         let w = words[i].clone();
@@ -298,21 +300,20 @@ fn alias_push(dir: &Path, command: &str) -> Option<String> {
             }
         }
         let Some(sub) = words.get(i) else { break };
-        if !known {
-            let builtins = git_out(dir, &["--list-cmds=builtins"]).unwrap_or_default();
-            if !builtins.lines().any(|b| b == sub) {
-                return Some(format!(
-                    "merge-lock: `git {sub}` after a `cd` the guard cannot read may be an alias; \
-                     `cd` to a literal path, or run the git command itself"
-                ));
-            }
-        }
         let key = format!("alias.{sub}");
+        // A directory git cannot open from here (a `cd` it reads differently: CDPATH, a quoted
+        // path with spaces) is unknown as well.
+        let mut unknown = !known;
         for d in &dirs {
             let mut args: Vec<&str> = d.iter().chain(&opts).map(String::as_str).collect();
             args.extend(["config", "--get", &key]);
-            let Ok(Some(value)) = config_get(dir, &args) else {
-                continue;
+            let value = match config_get(dir, &args) {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(()) => {
+                    unknown = true;
+                    continue;
+                }
             };
             let v = value.trim_start();
             let risky = v.starts_with(['!', '-'])
@@ -322,6 +323,19 @@ fn alias_push(dir: &Path, command: &str) -> Option<String> {
             if risky {
                 return Some(format!(
                     "merge-lock: git alias `{sub}` runs `{value}`, which the guard cannot judge; run the git command itself"
+                ));
+            }
+        }
+        if unknown {
+            let Some(builtins) = git_out(dir, &["--list-cmds=builtins,main"]) else {
+                return Some(
+                    "merge-lock: the guard cannot read git config or git's commands here".into(),
+                );
+            };
+            if !builtins.lines().any(|b| b == sub) {
+                return Some(format!(
+                    "merge-lock: `git {sub}` after a `cd` the guard cannot read may be an alias; \
+                     `cd` to a literal path, or run the git command itself"
                 ));
             }
         }

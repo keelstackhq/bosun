@@ -175,6 +175,22 @@ fn aliases_that_push_or_run_a_shell_are_refused() {
     ] {
         assert!(hook(r.path(), &cmd).expect(&cmd).contains("alias"), "{cmd}");
     }
+    // CDPATH or a path git cannot open as read: only builtins pass.
+    let spaced = tempfile::tempdir().unwrap();
+    let my = spaced.path().join("my dir");
+    fs::create_dir(&my).unwrap();
+    git(&my, &["init", "-q"]);
+    git(&my, &["config", "alias.p", "push"]);
+    let (base, s) = (spaced.path().display(), my.display());
+    for cmd in [
+        format!("CDPATH={base} cd 'my dir' && git p origin feat:main"),
+        format!("export CDPATH={base}; cd x && git p origin"),
+        format!("cd \"{s}\" && git p origin"),
+        format!("cd '{s}' && git p origin"),
+    ] {
+        assert!(hook(r.path(), &cmd).expect(&cmd).contains("alias"), "{cmd}");
+    }
+    assert_eq!(hook(r.path(), &format!("cd \"{s}\" && git status")), None);
     assert_eq!(hook(r.path(), &format!("cd {o} && git status")), None);
     assert_eq!(hook(r.path(), "cd $D && git status"), None);
 }
