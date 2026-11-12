@@ -81,13 +81,11 @@ fn bosun_mode_prints_knobs_offline() {
 
 #[test]
 fn stubs_exit_1_with_a_fix() {
-    for (args, pr) in [(vec!["heal"], "3a")] {
-        let out = bosun().args(&args).output().unwrap();
-        assert_eq!(out.status.code(), Some(1), "{args:?}");
-        let v = one_object(&out.stdout);
-        let fix = v["error"]["fix"].as_str().unwrap();
-        assert!(fix.contains(&format!("plan PR {pr}")), "{fix}");
-    }
+    let out = bosun().arg("heal").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v = one_object(&out.stdout);
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("plan PR 3a"), "{fix}");
 }
 
 #[test]

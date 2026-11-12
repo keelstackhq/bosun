@@ -139,6 +139,9 @@ fn gather(
 /// Slack thread ts of a thread spawn: it only restricts (no exemption) and is stored in the lease.
 /// A `wave tick` spawn: `pending` sessions of the tick are not recorded yet, `prompt` builds the
 /// prompt from the depth and area, and the lease carries the entry's `touch`.
+/// The lease text of a `wave tick` claim; `spawn --record` hands only such a lease's touch over.
+const TICK_CLAIM: &str = "a task child (wave tick)";
+
 struct Tick<'a> {
     pending: u32,
     prompt: &'a dyn Fn(u32, Option<&str>) -> String,
@@ -202,10 +205,12 @@ fn spawn_on(
             touch: tick.map_or_else(Vec::new, |t| t.touch.to_vec()),
             thread_ts: thread.map(String::from),
         };
-        let body = format!(
-            "Claimed by {me} to spawn an orchestrator.\n\n{}",
-            record.to_line()
-        );
+        let what = if tick.is_some() {
+            TICK_CLAIM
+        } else {
+            "an orchestrator"
+        };
+        let body = format!("Claimed by {me} to spawn {what}.\n\n{}", record.to_line());
         let comment = app.gh.add_comment(n, &body)?;
         settle_race(app.gh.as_ref(), me, n, comment.id, &[], &[], now)?;
     }
@@ -748,11 +753,11 @@ fn record(app: &App, epic: &Issue, args: &SpawnArgs) -> CmdResult {
         .max_by_key(|l| l.comment_id)
         .filter(|l| !l.touch.is_empty())
         .and_then(|l| {
-            let author = comments
-                .iter()
-                .find(|c| c.id == l.comment_id)?
-                .user
-                .as_str();
+            let c = comments.iter().find(|c| c.id == l.comment_id)?;
+            let author = (c
+                .body
+                .starts_with(&format!("Claimed by {me} to spawn {TICK_CLAIM}.")))
+            .then_some(c.user.as_str())?;
             let p = gh.permission(author).ok().flatten();
             p.filter(|p| matches!(p.as_str(), "admin" | "write"))
                 .map(|_| l.touch)
