@@ -22,7 +22,7 @@ push_gates = "push"
   autonomous: `autonomous`, D-017); risk-check and `approve` print `data.policy_source`.
 - Direction: the ladder runs gatekeeper < steady < booster < autonomous. **Lighter** = toward
   `autonomous` (fewer gates, more helpers); **tighter** = toward `gatekeeper`.
-- Weaken (§8, R-weaken): a lighter mode (every step up the list above, gatekeeper → steady included), and an effective `push_gates` push → ready,
+- Weaken (§8, R-weaken): a lighter mode (every step toward `autonomous` in the ladder above, gatekeeper → steady included), and an effective `push_gates` push → ready,
   `brake` on → off or `budget_feature` lowered (ask > warn > off: it removes a spend stop).
   Helper knobs (`heal_*`, `spawn_auto`, `approvals_batch`, `curator_loosen`) change who
   acts, not what passes: changing them alone is
@@ -85,4 +85,4 @@ exact-inverse check.
 - `bosun heal [--pr N]` (§9), `bosun digest [--answer --from F --sign-key PEM]` (§14) and
   `bosun wave tick <epic>` (§5): `heal` and `wave tick` do nothing while their knob is off
   (gatekeeper); `digest` does not read `approvals_batch`, the orchestrator runs it. Quickstart per mode and
-  environment, and how a running repo moves up: `docs/quickstart.md`.
+  environment, and how a running repo moves to a lighter mode: `docs/quickstart.md`.

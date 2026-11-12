@@ -1,0 +1,1 @@
+- 2026-11-12 · docs: "lighter" ladder wording in quickstart and spec 18
