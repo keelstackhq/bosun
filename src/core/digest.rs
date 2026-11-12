@@ -17,12 +17,10 @@ pub struct Item {
 }
 
 /// The digest: its id, the owner's text and the header line the reply must carry.
-#[derive(Debug, PartialEq, Eq)]
 pub struct Digest {
     pub id: String,
     pub text: String,
     pub header: String,
-    pub pairs: Vec<String>,
 }
 
 /// A rule id as risk-check names it (`R-gov`); anything else never reaches the owner's form.
@@ -75,12 +73,7 @@ pub fn digest(repo: &str, items: &[Item], asks: &[(u64, String)]) -> Digest {
     let header = format!("/bosun digest {repo} {id} {}", pairs.join(" "))
         .trim_end()
         .to_string();
-    Digest {
-        id,
-        text,
-        header,
-        pairs,
-    }
+    Digest { id, text, header }
 }
 
 /// A plain decimal number: no sign, no leading zero.
@@ -101,14 +94,11 @@ pub fn parse_header(line: &str) -> Option<Header> {
     }
     let repo = w.next()?.to_string();
     let id = w.next()?.to_string();
-    let mut pairs = Vec::new();
-    let mut raw = Vec::new();
+    let (mut pairs, mut raw) = (Vec::new(), Vec::new());
     for p in w {
         let (pr, sha) = p.split_once('@')?;
-        let ok = sha.len() == 40 && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        if !ok {
-            return None;
-        }
+        let hex = |b: u8| matches!(b, b'0'..=b'9' | b'a'..=b'f');
+        (sha.len() == 40 && sha.bytes().all(hex)).then_some(())?;
         pairs.push((num(pr)?, sha.to_string()));
         raw.push(p.to_string());
     }
@@ -130,13 +120,12 @@ pub struct Reply {
 pub fn parse_reply(text: &str) -> Reply {
     let mut r = Reply::default();
     for part in text.split(['\n', ';', '/']) {
-        let words: Vec<String> = part
+        let mut words: Vec<String> = part
             .replace(',', " ")
             .split_whitespace()
             .map(|w| w.trim_start_matches('#').to_ascii_lowercase())
             .collect();
         // A leading digest id (8 hex) is the owner quoting the message they answer.
-        let mut words = words;
         if words
             .first()
             .is_some_and(|w| w.len() == 8 && w.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -188,18 +177,17 @@ pub fn pick(
     }
 }
 
-/// What a raise signature binds: the digest id, the day it was signed and the SHA-256 (hex) of
-/// the owner's normalized reply, so one reply is never replayed as a second raise.
-pub struct RaiseCtx<'a> {
-    pub id: &'a str,
-    pub day: &'a str,
-    pub reply_sha256: &'a str,
-}
-
-/// The exact bytes an owner key signs for a raise: repo lowercased, the binding, epic, amount.
-pub fn raise_message(owner: &str, repo: &str, c: &RaiseCtx, epic: u64, usd: u64) -> String {
+/// The exact bytes an owner key signs for a raise: repo lowercased, `(digest id, day, SHA-256
+/// hex of the normalized reply)` so one reply is never replayed as a second raise, epic, amount.
+pub fn raise_message(
+    owner: &str,
+    repo: &str,
+    at: (&str, &str, &str),
+    epic: u64,
+    usd: u64,
+) -> String {
     let (o, r) = (owner.to_ascii_lowercase(), repo.to_ascii_lowercase());
-    let (id, day, sha) = (c.id, c.day, c.reply_sha256);
+    let (id, day, sha) = at;
     format!("bosun-raise v1 {o}/{r} digest {id} day {day} reply {sha} epic {epic} usd +{usd}")
 }
 
@@ -287,12 +275,7 @@ mod tests {
 
     #[test]
     fn the_raise_message_binds_repo_digest_day_reply_epic_and_amount() {
-        let c = RaiseCtx {
-            id: "1a2b3c4d",
-            day: "2026-11-12",
-            reply_sha256: "ab",
-        };
-        let m = raise_message("Acme", "Widget", &c, 7, 20);
+        let m = raise_message("Acme", "Widget", ("1a2b3c4d", "2026-11-12", "ab"), 7, 20);
         assert_eq!(
             m,
             "bosun-raise v1 acme/widget digest 1a2b3c4d day 2026-11-12 reply ab epic 7 usd +20"

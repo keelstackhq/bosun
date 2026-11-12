@@ -3,7 +3,6 @@
 //! and signs no approval: the orchestrator, the key holder, runs those calls. A raise counts only
 //! signed with an enrolled owner key (`--sign-key`), as `answer --chat`.
 
-use std::io::Read;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -14,7 +13,7 @@ use crate::cli::approve::read_key;
 use crate::cli::risk_check::enrolled_keys;
 use crate::core::answer::text_sha256;
 use crate::core::approve::{APPROVERS_PATH, Role};
-use crate::core::digest::{Item, RaiseCtx, digest, parse_header, parse_reply, pick, raise_message};
+use crate::core::digest::{Item, digest, parse_header, parse_reply, pick, raise_message};
 use crate::gates::main_open::is_mainfix;
 use crate::github::{IssueState, b64};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -24,30 +23,23 @@ const BYPASS: &str = "mainfix: approve it now, not in the digest";
 const HEADER_FIX: &str = "put data.header of the digest the owner answered as the first line, then the owner's reply verbatim";
 
 fn read_text(from: &str) -> Result<String, BosunError> {
-    let mut text = String::new();
-    let res = if from == "-" {
-        std::io::stdin().read_to_string(&mut text).map(|_| ())
+    let text = if from == "-" {
+        std::io::read_to_string(std::io::stdin())
     } else {
-        std::fs::read_to_string(from).map(|t| text = t)
+        std::fs::read_to_string(from)
     };
-    res.map_err(|e| {
+    text.map_err(|e| {
         BosunError::usage(
-            format!("cannot read the answer from {from}: {e}"),
+            format!("cannot read {from}: {e}"),
             "pass the reply on stdin or with --from FILE",
         )
-    })?;
-    Ok(text)
+    })
 }
 
-/// The board: owner-waiting PRs, mainfix PRs (only while main is red) and what a tokenless
-/// listing could not read.
-struct Board {
-    items: Vec<Item>,
-    bypass: Vec<u64>,
-    skipped: Value,
-}
+/// From `approve --list`: owner-waiting PRs, mainfix PRs (only while main is red) and what a
+/// tokenless listing could not read.
+type Board = (Vec<Item>, Vec<u64>, Value);
 
-/// The board from `approve --list`.
 fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
     let list = ApproveArgs {
         prs: Vec::new(),
@@ -73,8 +65,7 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
             let a = v.as_array().into_iter().flatten();
             a.filter_map(|s| s.as_str().map(String::from)).collect()
         };
-        let pull = pulls.iter().find(|p| p.number == pr);
-        if let Some(p) = pull
+        if let Some(p) = pulls.iter().find(|p| p.number == pr)
             && is_mainfix(app.gh.as_ref(), p)?
         {
             bypass.push(pr);
@@ -87,12 +78,7 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
             title: r["title"].as_str().unwrap_or_default().to_string(),
         });
     }
-    let skipped = data.get("skipped").cloned().unwrap_or(json!([]));
-    Ok(Board {
-        items,
-        bypass,
-        skipped,
-    })
+    Ok((items, bypass, data["skipped"].clone()))
 }
 
 fn repo(app: &App) -> String {
@@ -111,11 +97,7 @@ pub fn run(dir: Option<&Path>, args: &DigestArgs) -> CmdResult {
     if args.answer {
         return answer(dir, &app, args);
     }
-    let Board {
-        items,
-        bypass,
-        skipped,
-    } = board(dir, &app)?;
+    let (items, bypass, skipped) = board(dir, &app)?;
     let mut asks = Vec::new();
     for i in app.gh.list_issues(&[NEEDS_HUMAN], IssueState::Open)? {
         if !i.pull_request {
@@ -163,7 +145,7 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
         ));
     }
     let now: Vec<(u64, String)> = board(dir, app)?
-        .items
+        .0
         .iter()
         .map(|i| (i.pr, i.head.clone()))
         .collect();
@@ -176,21 +158,16 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
     }
     let (mut raises, mut refused) = (Vec::new(), Vec::new());
     let key = match &args.sign_key {
-        Some(path) if !reply.raise.is_empty() => owner_key(app, path).map_err(|e| e.message),
+        Some(path) if !reply.raise.is_empty() => owner_key(app, path),
         _ => Err("not signed: run again with --sign-key and an enrolled owner key".to_string()),
     };
     let (owner, name) = (&app.ctx.repo.owner, &app.ctx.repo.name);
     let stamp = app.ctx.now.to_string();
     let sha = text_sha256(&body);
-    let c = RaiseCtx {
-        id: &id,
-        day: &stamp[..10],
-        reply_sha256: &sha,
-    };
     for (epic, usd) in &reply.raise {
         match &key {
             Ok((key_id, pair)) => {
-                let message = raise_message(owner, name, &c, *epic, *usd);
+                let message = raise_message(owner, name, (&id, &stamp[..10], &sha), *epic, *usd);
                 let sig = b64::encode(pair.sign(message.as_bytes()).as_ref());
                 raises.push(json!({"epic": epic, "usd": usd, "key_id": key_id,
                     "message": message, "sig": sig}));
@@ -214,28 +191,19 @@ fn answer(dir: Option<&Path>, app: &App, args: &DigestArgs) -> CmdResult {
     Ok(out)
 }
 
-/// The enrolled owner key id of the key at `path`, and the key; nothing is signed otherwise.
-fn owner_key(
-    app: &App,
-    path: &Path,
-) -> Result<(String, ring::signature::Ed25519KeyPair), BosunError> {
-    let keys = enrolled_keys(app.gh.as_ref()).map_err(|why| {
-        BosunError::error(
-            format!("signed raises are off: {why}"),
-            format!("enroll the orchestrator's key in {APPROVERS_PATH} on the default branch with a PR the owner approves on GitHub"),
-        )
-    })?;
-    let pair = read_key(path)?;
+/// The enrolled owner key id of the key at `path`, and the key; else why nothing is signed.
+fn owner_key(app: &App, path: &Path) -> Result<(String, ring::signature::Ed25519KeyPair), String> {
+    let keys =
+        enrolled_keys(app.gh.as_ref()).map_err(|why| format!("signed raises are off: {why}"))?;
+    let pair = read_key(path).map_err(|e| e.message)?;
     let public = b64::encode(ring::signature::KeyPair::public_key(&pair).as_ref());
-    let key = keys
-        .iter()
-        .filter(|k| k.role == Role::Owner)
-        .find(|k| b64::decode(&k.ed25519).map(|b| b64::encode(&b)) == Some(public.clone()))
-        .ok_or_else(|| {
-            BosunError::error(
-                format!("the key is not an owner key in {APPROVERS_PATH} on the default branch; nothing was signed"),
-                format!("enroll the public key {public} as an owner key in {APPROVERS_PATH} with a PR the owner approves on GitHub"),
-            )
-        })?;
-    Ok((key.id.clone(), pair))
+    let key = keys.iter().filter(|k| k.role == Role::Owner).find(|k| {
+        b64::decode(&k.ed25519).map(|b| b64::encode(&b)).as_deref() == Some(public.as_str())
+    });
+    match key {
+        Some(k) => Ok((k.id.clone(), pair)),
+        None => Err(format!(
+            "the key {public} is not an owner key in {APPROVERS_PATH} on the default branch"
+        )),
+    }
 }
