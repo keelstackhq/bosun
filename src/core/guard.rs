@@ -1,6 +1,7 @@
 //! What the PreToolUse hook refuses (spec §4 edit hook, label-lock; D13 merge-lock). Pure: the
 //! hook passes the tool call, the repo-relative path, the current branch and the live leases.
 
+use std::cell::{Cell, RefCell};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -489,19 +490,89 @@ fn too_deep() -> String {
 fn bash_rules(command: &str, branch_at: BranchAt, default_branch: &str) -> Option<String> {
     decrypt_rule(command, 0)
         .or_else(|| destructive_rule(command, 0))
-        .or_else(|| check(command, branch_at, default_branch, 0))
+        .or_else(|| check(command, branch_at, default_branch, 0, None))
         .or_else(|| {
             let prose = prose::strip_prose(command);
             (prose.contains(STATE) && !read_only(&prose, 0)).then(label_reason)
         })
 }
 
-fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize) -> Option<String> {
+/// A `git push` the merge-lock lets through (push-gates, spec §7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Push {
+    /// `-C` options of the shell's `cd`s and git's own `-C`; `None`: the guard cannot tell.
+    pub dir: Option<Vec<String>>,
+    /// The local refs pushed (refspec sources); empty: the current branch.
+    pub srcs: Vec<String>,
+}
+
+/// Where the walk reports each push it lets through.
+pub(crate) type PushSink<'a> = &'a dyn Fn(Push);
+
+/// The sinks of shell pushes (their `cd`s are tracked) and of pushes found in interpreter code
+/// (whose directory the scan cannot tell).
+#[derive(Clone, Copy)]
+pub(crate) struct Sinks<'a> {
+    pub shell: PushSink<'a>,
+    pub code: PushSink<'a>,
+    /// A push read in quotes or a `( )` group, which the nested walk may report with its `cd`.
+    pub outer: PushSink<'a>,
+}
+
+/// Every `git push` of `command` that the merge-lock allows, in shell scripts it runs and code
+/// it runs too (the same walk as the merge-lock). A refused command may list fewer. Interpreter
+/// code is scanned as words, so a push found only there is one push whose directory is unknown;
+/// when the shell walk found pushes, the code scan (which sees the same text) adds none.
+pub fn pushes(
+    command: &str,
+    read: &dyn Fn(&str) -> Option<Script>,
+    default_branch: &str,
+) -> Vec<Push> {
+    let (shell, code, outer) = (
+        RefCell::new(Vec::new()),
+        Cell::new(false),
+        RefCell::new(vec![]),
+    );
+    let sinks = Sinks {
+        shell: &|p: Push| shell.borrow_mut().push(p),
+        code: &|_: Push| code.set(true),
+        outer: &|p: Push| outer.borrow_mut().push(p),
+    };
+    // The branch only decides refusals, which `tool_rules` already made.
+    let branch_at = |_: &[String]| Some(String::new());
+    let _ = check(command, &branch_at, default_branch, 0, Some(&sinks));
+    let _ = interp::script_walk(command, read, &branch_at, default_branch, Some(&sinks));
+    let shell = shell.into_inner();
+    // An outer push is dropped only when the nested walk reported the same refs.
+    let outer = outer.into_inner().into_iter();
+    let kept = outer.filter(|p| !shell.iter().any(|s| s.srcs == p.srcs));
+    let mut out: Vec<Push> = Vec::new();
+    for p in shell.iter().cloned().chain(kept.collect::<Vec<_>>()) {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    if out.is_empty() && code.get() {
+        out.push(Push {
+            dir: None,
+            srcs: Vec::new(),
+        });
+    }
+    out
+}
+
+fn check(
+    command: &str,
+    branch_at: BranchAt,
+    default_branch: &str,
+    depth: usize,
+    sinks: Option<&Sinks>,
+) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some(too_deep());
     }
     for inner in nested(command) {
-        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1) {
+        if let Some(why) = check(&inner, branch_at, default_branch, depth + 1, sinks) {
             return Some(why);
         }
     }
@@ -509,6 +580,7 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         dir: Some(&[]),
         branch_at,
         default_branch,
+        sink: sinks.map(|s| s.code),
     };
     if let Some(why) = interp::inline_rule(&split_heredocs(command).0, &here) {
         return Some(why);
@@ -528,9 +600,11 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
         {
             dir = None;
         }
-        if words.first() == Some(&"cd") {
-            let start = segment.as_ptr() as usize - command.as_ptr() as usize;
-            let before = &command[..start];
+        let start = segment.as_ptr() as usize - command.as_ptr() as usize;
+        let before = &command[..start];
+        if words.first() == Some(&"popd") {
+            dir = None;
+        } else if matches!(words.first(), Some(&("cd" | "pushd"))) {
             let grouped = before.matches('(').count() > before.matches(')').count()
                 || segment.contains(['(', ')']);
             let runs = matches!(prev, "" | ";" | "\n" | "&&");
@@ -548,6 +622,16 @@ fn check(command: &str, branch_at: BranchAt, default_branch: &str, depth: usize)
                 dir: dir.as_deref(),
                 branch_at,
                 default_branch,
+                // Inside quotes (`bash -c '..'`) or a `( )` group, the nested walk may report
+                // the push with its own `cd`s; `pushes` keeps this one only if it does not.
+                sink: sinks.map(|s| {
+                    let opens = before.matches('(').count() > before.matches(')').count();
+                    if opens || in_quotes(before) {
+                        s.outer
+                    } else {
+                        s.shell
+                    }
+                }),
             };
             if let Some(why) = merge_rule(&words, segment, &target) {
                 return Some(format!(
@@ -1339,6 +1423,7 @@ struct Target<'a> {
     dir: Option<&'a [String]>,
     branch_at: BranchAt<'a>,
     default_branch: &'a str,
+    sink: Option<PushSink<'a>>,
 }
 
 /// The segments of a command with the separator that ends each one (`&&`, `||`, `;`, `|`,
@@ -2633,6 +2718,53 @@ fn version_like(r: &str) -> bool {
     })
 }
 
+/// Whether `text` ends inside a single- or double-quoted string (`\` escapes outside `'`).
+fn in_quotes(text: &str) -> bool {
+    let (mut q, mut esc) = (None, false);
+    for c in text.chars() {
+        match (q, c) {
+            _ if std::mem::take(&mut esc) => {}
+            (Some('\''), '\'') => q = None,
+            (Some('\''), _) => {}
+            (_, '\\') => esc = true,
+            (Some('"'), '"') => q = None,
+            (None, '\'' | '"') => q = Some(c),
+            _ => {}
+        }
+    }
+    q.is_some()
+}
+
+/// The words of a `git push` without redirections (`> f`, `2>/dev/null`, the `2>` that
+/// `2>&1` leaves once `&` splits it, `< f`) and the `)` that ends a group.
+fn push_words(args: &[String]) -> Vec<&str> {
+    let (mut out, mut skip) = (Vec::new(), false);
+    for a in args {
+        let a = a.trim_end_matches(')');
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        let op = a.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        // A redirection glued to a word (`main>/dev/null`, `main<x`) ends it.
+        if let Some(i) = op.find(['>', '<']).filter(|&i| i > 0) {
+            let at = a.len() - op.len() + i;
+            out.push(&a[..at]);
+            skip = a[at..].trim_start_matches(['>', '<', '&']).is_empty();
+        } else if let Some(target) = [">>", ">&", ">", "<"]
+            .iter()
+            .find_map(|o| op.strip_prefix(o))
+        {
+            skip = target.is_empty();
+        } else if !a.is_empty() {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// `git push` flags whose value is the next word.
+const PUSH_VALUE_FLAGS: [&str; 5] = ["-o", "--push-option", "--receive-pack", "--exec", "--repo"];
+
 fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     let default_branch = target.default_branch;
     // git's global options: `-C dir`, `--git-dir`, `--work-tree` move the target; `-c k=v`,
@@ -2666,11 +2798,14 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         i += step;
     }
     let (sub, rest) = (args.get(i).copied()?, &args[(i + 1).min(args.len())..]);
-    let on_default = match target.dir.filter(|_| known) {
+    let at: Option<Vec<String>> = target
+        .dir
+        .filter(|_| known)
+        .map(|d| d.iter().cloned().chain(opts).collect());
+    let on_default = match &at {
         None => true,
-        Some(dir) => {
-            let all: Vec<String> = dir.iter().cloned().chain(opts).collect();
-            match (target.branch_at)(&all) {
+        Some(all) => {
+            match (target.branch_at)(all) {
                 Some(b) => b == default_branch,
                 // A moved target git cannot read (a failed `cd`, a missing `-C` dir) may
                 // leave git where the shell started: fail closed.
@@ -2687,7 +2822,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 );
             }
             let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
-            let rest: Vec<&str> = unquoted.iter().map(String::as_str).collect();
+            let rest = push_words(&unquoted);
             if rest.iter().any(|a| {
                 matches!(
                     *a,
@@ -2704,12 +2839,17 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             {
                 return Some("push of every branch or a glob refspec");
             }
-            let refs: Vec<&str> = rest
-                .iter()
-                .copied()
-                .filter(|a| !a.starts_with('-'))
-                .skip(1)
-                .collect();
+            // The remote, then refspecs; the value of a flag that takes one is neither.
+            let mut words = Vec::new();
+            let mut it = rest.iter().copied();
+            while let Some(a) = it.next() {
+                if PUSH_VALUE_FLAGS.contains(&a) {
+                    it.next();
+                } else if !a.starts_with('-') {
+                    words.push(a);
+                }
+            }
+            let refs: Vec<&str> = words.into_iter().skip(1).collect();
             if refs
                 .iter()
                 .any(|r| r.starts_with('+') || r.starts_with(':') || r.contains("refs/tags/"))
@@ -2725,6 +2865,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             });
             if to_default || (refs.is_empty() && on_default) {
                 return Some("push to the default branch");
+            }
+            if let Some(sink) = target.sink {
+                let srcs = refs.iter().map(|r| r.split(':').next().unwrap_or(r));
+                sink(Push {
+                    dir: at,
+                    srcs: srcs.map(str::to_string).collect(),
+                });
             }
             None
         }

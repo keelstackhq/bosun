@@ -77,6 +77,12 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | ----- | ------- | -------- |
 | Mode | `gatekeeper` | No `[mode]` = today, byte for byte. A lighter mode is R-weaken: the owner's call. |
 | Preset policy | booster, autonomous: `autonomous` | D-017 fast lane; an explicit `[approvals] policy` wins. |
+| Brake window | 7 days | Estimate; review after 30 days of metrics (design open point 4). |
+| Brake: main red | 2 times | Estimate; review after 30 days of metrics (design open point 4). |
+| Brake: reverts | 2 PRs | Estimate; review after 30 days of metrics (design open point 4). |
+| Brake: red-CI margin | 10 points over target | Estimate; review after 30 days of metrics (design open point 4). |
+| Red-CI target | steady 30 %, booster 20 %, autonomous 15 % | Estimate; review after 30 days of metrics (design open point 4). |
+| `bosun metrics` window | 30 days | Estimate; review after 30 days of metrics (design open point 4). |
 
 ## Lessons
 
