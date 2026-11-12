@@ -589,9 +589,11 @@ fn check(
         {
             dir = None;
         }
-        if words.first() == Some(&"cd") {
-            let start = segment.as_ptr() as usize - command.as_ptr() as usize;
-            let before = &command[..start];
+        let start = segment.as_ptr() as usize - command.as_ptr() as usize;
+        let before = &command[..start];
+        if words.first() == Some(&"popd") {
+            dir = None;
+        } else if matches!(words.first(), Some(&("cd" | "pushd"))) {
             let grouped = before.matches('(').count() > before.matches(')').count()
                 || segment.contains(['(', ')']);
             let runs = matches!(prev, "" | ";" | "\n" | "&&");
@@ -609,7 +611,12 @@ fn check(
                 dir: dir.as_deref(),
                 branch_at,
                 default_branch,
-                sink: sinks.map(|s| s.shell),
+                // Inside quotes (`bash -c '..'`) or a `( )` group, the push is reported by
+                // the nested walk, which reads its own `cd`s.
+                sink: sinks
+                    .filter(|_| before.matches('(').count() <= before.matches(')').count())
+                    .filter(|_| !in_quotes(before))
+                    .map(|s| s.shell),
             };
             if let Some(why) = merge_rule(&words, segment, &target) {
                 return Some(format!(
@@ -2696,6 +2703,45 @@ fn version_like(r: &str) -> bool {
     })
 }
 
+/// Whether `text` ends inside a single- or double-quoted string (`\` escapes outside `'`).
+fn in_quotes(text: &str) -> bool {
+    let (mut q, mut esc) = (None, false);
+    for c in text.chars() {
+        match (q, c) {
+            _ if std::mem::take(&mut esc) => {}
+            (Some('\''), '\'') => q = None,
+            (Some('\''), _) => {}
+            (_, '\\') => esc = true,
+            (Some('"'), '"') => q = None,
+            (None, '\'' | '"') => q = Some(c),
+            _ => {}
+        }
+    }
+    q.is_some()
+}
+
+/// The words of a `git push` without redirections (`> f`, `2>/dev/null`, the `2>` that
+/// `2>&1` leaves once `&` splits it, `< f`) and the `)` that ends a group.
+fn push_words(args: &[String]) -> Vec<&str> {
+    let (mut out, mut skip) = (Vec::new(), false);
+    for a in args {
+        let a = a.trim_end_matches(')');
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        let op = a.trim_start_matches(|c: char| c.is_ascii_digit() || c == '&');
+        if let Some(target) = [">>", ">&", ">", "<"]
+            .iter()
+            .find_map(|o| op.strip_prefix(o))
+        {
+            skip = target.is_empty();
+        } else if !a.is_empty() {
+            out.push(a);
+        }
+    }
+    out
+}
+
 /// `git push` flags whose value is the next word.
 const PUSH_VALUE_FLAGS: [&str; 5] = ["-o", "--push-option", "--receive-pack", "--exec", "--repo"];
 
@@ -2756,7 +2802,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 );
             }
             let unquoted: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
-            let rest: Vec<&str> = unquoted.iter().map(String::as_str).collect();
+            let rest = push_words(&unquoted);
             if rest.iter().any(|a| {
                 matches!(
                     *a,
@@ -2911,6 +2957,46 @@ mod tests {
             nested.contains(&push(Some(&["-C", "../w"]), &["y"])),
             "{nested:?}"
         );
+        for (cmd, want) in [
+            (
+                "git push -u origin feat 2>&1 | tail -3",
+                push(Some(&[]), &["feat"]),
+            ),
+            ("git push origin feat > log", push(Some(&[]), &["feat"])),
+            (
+                "git push origin feat 2>/dev/null",
+                push(Some(&[]), &["feat"]),
+            ),
+            (
+                "(cd ../w && git push origin feat)",
+                push(Some(&["-C", "../w"]), &["feat"]),
+            ),
+            (
+                "pushd ../w && git push origin",
+                push(Some(&["-C", "../w"]), &[]),
+            ),
+        ] {
+            assert_eq!(pushes(cmd, &none, "main"), vec![want], "{cmd}");
+        }
+        assert_eq!(
+            pushes("bash -c 'cd ../w && git push origin y'", &none, "main"),
+            vec![push(Some(&["-C", "../w"]), &["y"])]
+        );
+        assert_eq!(
+            pushes("git commit -m \"it's\" && git push origin x", &none, "main"),
+            vec![push(Some(&[]), &["x"])]
+        );
+        for cmd in [
+            "git push origin 2>&1",
+            "git push origin > f",
+            "popd; git push origin",
+        ] {
+            assert!(
+                bash(cmd, "main").is_some() || cmd.starts_with("popd"),
+                "{cmd}"
+            );
+        }
+        assert!(bash("popd; git push origin", "feature").is_some());
         // The code scan of a shell script adds no push beside the shell walk's.
         let moved =
             |p: &str| (p == "ship.sh").then(|| Script::Text("cd ../w\ngit push origin\n".into()));

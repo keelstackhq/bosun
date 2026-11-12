@@ -185,12 +185,13 @@ the `for g in ..; do bosun gate $g || break; done` loop. Pushes are found by the
 walk (`core::guard::pushes`: nested commands, `sh -c`, the shell scripts it runs) and read
 where git runs: the hook directory moved by `cd dir &&` and `git -C dir`. Each pushed ref is a
 refspec source after the remote (the values of `-o`, `--push-option`, `--receive-pack`,
-`--exec` and `--repo` are skipped), `HEAD` when none is named; mode, gates and stamps come from
+`--exec` and `--repo`, redirections such as `2>&1` or `> f`, and a closing `)` are skipped),
+`HEAD` when none is named; `pushd` moves the directory like `cd`, `popd` makes it unknown;
+a push inside quotes or a `( )` group is read by the nested walk, where its own `cd` counts; mode, gates and stamps come from
 that checkout's `.bosun/bosun.toml`, and a checkout with no config, or one that does not
 parse, pushes as today. A push whose checkout the guard cannot tell (a `cd` it cannot read,
 `--git-dir`, `--work-tree`, or a push found only in interpreter code such as
 `subprocess.run(["git", "push"])`) is refused when the hook directory's repo is in push mode.
-An extra push read from the unparsed outer text of a quoted command only adds a check. Known
-misses: refs pushed by config (`remote.<r>.push`, `push.default = matching`; only `HEAD` is
-checked), `git subtree push` and `git send-pack`, and an interpreter push in a command that
+Known misses: refs pushed by config (`remote.<r>.push`, `push.default = matching`; only `HEAD` is
+checked; also `git -c remote.<r>.push=..`), `git subtree push` and `git send-pack` (spec §4), and an interpreter push in a command that
 also has a shell push. `ready`: no change.

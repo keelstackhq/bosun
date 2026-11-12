@@ -102,6 +102,9 @@ fn steady_allows_a_push_once_every_ready_gate_is_stamped() {
     );
     stamps::stamp_all(r.path());
     assert_eq!(hook(r.path(), PUSH), None);
+    // Redirections are not pushed refs.
+    assert_eq!(hook(r.path(), &format!("{PUSH} 2>&1 | tail -3")), None);
+    assert_eq!(hook(r.path(), &format!("{PUSH} > log")), None);
 }
 
 #[test]
