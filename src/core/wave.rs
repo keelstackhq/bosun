@@ -2,6 +2,7 @@
 
 use crate::core::glob::{self, Glob};
 use crate::core::lease::{self, Lease};
+use crate::core::mode::{BrakeState, SpawnAuto};
 use crate::core::state::State;
 
 /// A task issue as wave planning sees it.
@@ -27,6 +28,16 @@ pub struct Wave {
     pub bundle: Vec<u64>,
     /// Issues not started, with the reason.
     pub waiting: Vec<(u64, String)>,
+}
+
+/// Why `wave tick` spawns nothing: `spawn_auto` is off, or the brake is on.
+pub fn tick_hold(spawn_auto: SpawnAuto, brake: Option<&BrakeState>) -> Option<String> {
+    if spawn_auto == SpawnAuto::Off {
+        return Some("spawn_auto is off".into());
+    }
+    brake
+        .filter(|b| b.on)
+        .map(|b| format!("brake on: {}", b.reasons.join("; ")))
 }
 
 /// Pick ready tasks whose dependencies are merged, whose touch paths overlap no live lease
@@ -256,6 +267,26 @@ fn bundle_wave(tasks: &[TaskInfo], merged: &[String], leases: &[Lease], me: &str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tick_hold_by_knob_then_brake() {
+        let on = BrakeState {
+            on: true,
+            reasons: vec!["a".into(), "b".into()],
+        };
+        let off = BrakeState {
+            on: false,
+            reasons: vec![],
+        };
+        let hold = tick_hold;
+        assert_eq!(
+            hold(SpawnAuto::Off, Some(&on)).unwrap(),
+            "spawn_auto is off"
+        );
+        assert_eq!(hold(SpawnAuto::On, Some(&on)).unwrap(), "brake on: a; b");
+        assert_eq!(hold(SpawnAuto::On, Some(&off)), None);
+        assert_eq!(hold(SpawnAuto::On, None), None);
+    }
+
     use super::*;
     use crate::time::Timestamp;
 

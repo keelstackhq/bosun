@@ -4,32 +4,152 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::metrics::window;
+use super::spawn::tick_spawn;
+
 use super::plan::{epic_plan, epic_shape};
 use super::prereqs_gate::{blockers, open_items, plan_ids};
 use super::{EpicArg, WaveCmd};
 use crate::app::{
-    App, active_issues, gated_from_default, limits_from_default, main_red, task_meta,
+    App, active_issues, default_branch, gated_from_default, kill_switch, limits_from_default,
+    main_red, task_meta, trusted_notes,
 };
 use crate::cli::status::process_red;
+use crate::config::{CONFIG_FILE, Config};
+use crate::core::handoff::finished_children;
 use crate::core::lease::live_leases;
+use crate::core::lease::orchestrator_of;
+use crate::core::mode::{self, Brake, SpawnAuto};
+use crate::core::records::{Note, Record, parse_record};
 use crate::core::shape::touch_gated_in;
 use crate::core::state::{State, state_of};
+use crate::core::wave::tick_hold;
 use crate::core::wave::{TaskInfo, plan, plan_single};
 use crate::github::IssueState;
 use crate::output::{BosunError, CmdResult, Outcome};
-
-/// `bosun wave tick <epic>`: not built yet (plan PR 6).
-pub fn tick(_dir: Option<&Path>, _cmd: &WaveCmd) -> CmdResult {
-    Err(super::not_built("wave tick", "6"))
-}
+use crate::registry;
 
 pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
-    let WaveCmd::Plan(EpicArg { epic }) = cmd else {
-        return tick(dir, cmd);
-    };
     let app = App::load(dir)?;
+    match cmd {
+        WaveCmd::Plan(EpicArg { epic }) => plan_on(&app, *epic),
+        WaveCmd::Tick(EpicArg { epic }) => tick(&app, *epic),
+    }
+}
+
+/// `bosun wave tick <epic>` (modes design §5): with `spawn_auto` on and the brake off, the
+/// `create_session` call of each ready entry while the spawn checks pass, and `archive_session`
+/// for each child whose result is in and whose PR is closed. bosun only returns the calls (D29).
+fn tick(app: &App, epic: u64) -> CmdResult {
+    let gh = app.gh.as_ref();
+    kill_switch(gh)?;
+    let branch = default_branch(gh)?;
+    let cfg = match gh.file_at(CONFIG_FILE, &branch)? {
+        Some(t) => Config::parse(&t, &format!("{CONFIG_FILE} on {branch}"))?,
+        None => Config::default(),
+    };
+    let eff = cfg.mode_effective();
+    let (auto, brake_knob) = (eff.knobs.spawn_auto.value, eff.knobs.brake.value);
+    let brake = (auto == SpawnAuto::On && brake_knob == Brake::On)
+        .then(|| window(app).map(|w| mode::brake(eff.mode, &w)))
+        .transpose()?;
+    let hold = tick_hold(auto, brake.as_ref());
+    let env = cfg.cloud.environment_id;
+    let mut data = json!({"epic": epic, "mode": eff.mode.as_str(), "spawn_auto": auto.as_str(),
+        "brake": brake.as_ref().filter(|b| b.on).map(|b| &b.reasons), "held_by": hold,
+        "spawned": [], "stopped": null, "archived": [], "environment_id": env});
+    if hold.is_some() {
+        return Ok(Outcome::data(data));
+    }
+    // Archive first: it only reads, so a failure here leaves no claimed task without its call.
+    let archived = archive(app, epic)?;
+    let mut out = Outcome::data(json!(null));
+    let (mut spawned, mut pending) = (Vec::new(), 0u32);
+    for entry in plan_on(app, epic)?.data["run"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let issue = entry["issue"].as_u64().unwrap_or_default();
+        match tick_spawn(app, epic, entry, pending) {
+            Ok(r) => {
+                for mut call in r.next {
+                    if let Some(id) = &env {
+                        call.args["environment_id"] = json!(id);
+                    }
+                    out = out.with_next(&call.tool, call.args);
+                }
+                let record = format!("bosun spawn {issue} --record --from -");
+                spawned.push(json!({"issue": issue, "title": entry["title"], "record": record}));
+                pending += 1;
+            }
+            // Only a refusal (it carries `name`) stops the tick quietly; any other error before
+            // the first call is the command's error.
+            Err(e) if spawned.is_empty() && e.data.as_ref().is_none_or(|d| d["name"].is_null()) => {
+                return Err(e);
+            }
+            Err(e) => {
+                let mut stop = json!({"issue": issue, "exit": e.exit.name(),
+                    "message": e.message, "fix": e.fix});
+                for k in ["check", "name"] {
+                    stop[k] = e.data.as_ref().map_or(json!(null), |d| d[k].clone());
+                }
+                data["stopped"] = stop;
+                break;
+            }
+        }
+    }
+    data["spawned"] = json!(spawned);
+    for c in &archived {
+        out = out.with_next("archive_session", json!({"session_id": c}));
+    }
+    data["archived"] = json!(archived);
+    out.data = data;
+    Ok(out)
+}
+
+/// Children of the caller's orchestrator that finished (spec §5) and whose newest result names a
+/// PR that is merged or closed.
+fn archive(app: &App, epic: u64) -> Result<Vec<String>, BosunError> {
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
-    let Some(epic_issue) = gh.get_issue(*epic)? else {
+    let Some((_, reg)) = registry::load(gh)? else {
+        return Ok(Vec::new());
+    };
+    let mut results: Vec<Note> = Vec::new();
+    for issue in gh.list_issues(&[], IssueState::All)? {
+        if issue.number == epic || task_meta(&issue).is_some_and(|m| m.epic == Some(epic)) {
+            results.extend(trusted_notes(gh, issue.number)?);
+        }
+    }
+    let held: Vec<_> = (active_issues(gh)?.into_iter())
+        .map(|(i, notes)| (i.number, notes))
+        .collect();
+    let finished = finished_children(
+        &reg,
+        orchestrator_of(&app.ctx.session),
+        &results,
+        &live_leases(&held, now),
+    );
+    let mut done = Vec::new();
+    for child in finished {
+        // The newest result decides: one without a PR is not archived here.
+        let newest = results.iter().filter_map(|n| match parse_record(&n.body) {
+            Some(Record::Result { session, pr, .. }) if session == child => Some((n.id, pr)),
+            _ => None,
+        });
+        if let Some((_, Some(pr))) = newest.max_by_key(|r| r.0)
+            && gh.get_pull(pr)?.is_some_and(|p| p.state == "closed")
+        {
+            done.push(child);
+        }
+    }
+    Ok(done)
+}
+
+/// The plan body of `bosun wave plan <epic>` (also the ready list of `wave tick`).
+fn plan_on(app: &App, epic: u64) -> CmdResult {
+    let (gh, now) = (app.gh.as_ref(), app.ctx.now);
+    let Some(epic_issue) = gh.get_issue(epic)? else {
         return Err(BosunError::error(
             format!("issue #{epic} does not exist"),
             "check the epic number; `bosun status` lists the epics",
@@ -70,7 +190,7 @@ pub fn run(dir: Option<&Path>, cmd: &WaveCmd) -> CmdResult {
         }
         if issue.state == "closed" || state == Some(State::Merged) {
             merged.push(plan_id);
-        } else if meta.epic == Some(*epic) {
+        } else if meta.epic == Some(epic) {
             if meta.kind == "process-fix" && state == Some(State::Ready) {
                 fix_tasks.push(issue.number);
             }
