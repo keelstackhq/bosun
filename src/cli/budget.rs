@@ -139,11 +139,15 @@ pub(crate) fn feature_guard(
     let all = app.gh.list_issues(&[], IssueState::All)?;
     if let Some((m, _)) = task {
         let same = |i: &&crate::github::Issue| {
-            task_meta(i).is_some_and(|x| (&x.item, &x.task) == (&m.item, &m.task))
+            // Ids are unique per plan, so per epic; an issue closed as a duplicate is ignored.
+            i.state_reason.as_deref() != Some("duplicate")
+                && task_meta(i).is_some_and(|x| {
+                    x.epic == Some(epic) && (&x.item, &x.task) == (&m.item, &m.task)
+                })
         };
         if all.iter().filter(same).count() > 1 {
             let msg = format!("{}/{} names more than one task issue", m.item, m.task);
-            let fix = format!("ask the orchestrator to run `bosun plan amend {file}`");
+            let fix = "the orchestrator closes the extra issues as duplicates".to_string();
             return Err(refuse(msg, fix, 0.0));
         }
         if src.item.as_deref() != Some(m.item.as_str()) {

@@ -370,12 +370,27 @@ fn a_duplicate_task_id_is_refused() {
     fake.issue(14, "B", &["bosun:state/ready"], &t("src/q/**"));
     let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
     assert_eq!(code, 5, "{v}");
-    assert!(
-        v["error"]["fix"]
-            .as_str()
-            .unwrap()
-            .contains("bosun plan amend")
-    );
+    assert!(v["error"]["fix"].as_str().unwrap().contains("duplicates"));
+}
+
+#[test]
+fn a_task_id_in_another_epic_or_closed_as_duplicate_is_no_duplicate() {
+    let t = |s: &str, e: u64| {
+        format!(r#"<!-- bosun:task {{"item":"M1","task":"T2","epic":{e},"touch":["{s}"]}} -->"#)
+    };
+    // Same ids under another epic (another plan): T2 is the plan's mainfix task, so it claims.
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    fake.issue(13, "A", &["bosun:state/ready"], &t("src/p/**", 10));
+    fake.issue(14, "B", &["bosun:state/ready"], &t("src/q/**", 99));
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 0, "{v}");
+    // A stray copy closed as a duplicate does not block the real task.
+    let (dir, fake) = (cfg_dir(""), feature("booster", 100.0));
+    fake.issue(13, "A", &["bosun:state/ready"], &t("src/p/**", 10));
+    fake.issue(14, "B", &["bosun:state/ready"], &t("src/q/**", 10));
+    fake.close_issue_as(14, "2026-11-01T00:00:00Z", "duplicate");
+    let (code, v) = run_in(&fake, dir.path(), &["claim", "13"]);
+    assert_eq!(code, 0, "{v}");
 }
 
 #[test]
