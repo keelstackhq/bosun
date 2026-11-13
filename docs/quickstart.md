@@ -156,6 +156,9 @@ thing that needs the Routine. `bosun metrics --propose` itself is read-only.
 
 ## 5. Migration: a repo that already runs bosun
 
+For a move to `booster`, with exact commands per environment and a prompt for Claude, see
+[migrate-booster.md](migrate-booster.md).
+
 One step at a time (gatekeeper → steady → booster → autonomous). Never skip a step, never move lighter on
 a red week.
 
