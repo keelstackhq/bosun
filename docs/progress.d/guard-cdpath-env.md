@@ -1,0 +1,1 @@
+- 2026-11-13 · guard: CDPATH from the hook environment; spec 05 unpinned mainfix residual
