@@ -1,0 +1,1 @@
+- Guard: a `CDPATH` in the hook's own environment makes a `cd` unknown (only git builtins and git-* commands pass)

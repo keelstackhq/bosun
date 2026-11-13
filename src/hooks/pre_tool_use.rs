@@ -254,8 +254,10 @@ fn alias_push(dir: &Path, command: &str) -> Option<String> {
     let words: Vec<String> = spaced.split_whitespace().map(unq).collect();
     // Every directory an earlier `cd` or `pushd` may have moved to (as `-C` options); an alias
     // is read in each. A target the guard cannot read leaves only git's builtins.
-    // `CDPATH` makes `cd x` land somewhere other than `./x`.
-    let cdpath = words.iter().any(|w| w.starts_with("CDPATH="));
+    // `CDPATH` (set in the command or in the environment the shell inherits, as the hook's
+    // own) makes `cd x` land somewhere other than `./x`.
+    let cdpath = words.iter().any(|w| w.starts_with("CDPATH="))
+        || std::env::var_os("CDPATH").is_some_and(|v| !v.is_empty());
     let (mut dirs, mut known) = (vec![Vec::<String>::new()], !cdpath);
     let mut i = 0;
     while i < words.len() {

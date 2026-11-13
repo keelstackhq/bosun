@@ -56,6 +56,11 @@ fn repo(config: Option<&str>) -> tempfile::TempDir {
 
 /// The hook's deny reason for a Bash `command` run in `cwd`, `None` when it allows it.
 fn hook(cwd: &Path, command: &str) -> Option<String> {
+    hook_env(cwd, command, &[])
+}
+
+/// `hook` with extra environment for the hook process.
+fn hook_env(cwd: &Path, command: &str, env: &[(&str, &str)]) -> Option<String> {
     let fake = FakeGithub::start();
     let input = json!({"session_id": "s", "tool_name": "Bash", "cwd": cwd.to_str().unwrap(),
         "tool_input": {"command": command}});
@@ -66,6 +71,8 @@ fn hook(cwd: &Path, command: &str) -> Option<String> {
         .env("BOSUN_GITHUB_API", fake.url())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("CDPATH")
+        .envs(env.iter().copied())
         .args(["hook", "pre-tool-use"])
         .write_stdin(input.to_string())
         .output()
@@ -193,6 +200,31 @@ fn aliases_that_push_or_run_a_shell_are_refused() {
     assert_eq!(hook(r.path(), &format!("cd \"{s}\" && git status")), None);
     assert_eq!(hook(r.path(), &format!("cd {o} && git status")), None);
     assert_eq!(hook(r.path(), "cd $D && git status"), None);
+}
+
+#[test]
+fn cdpath_in_the_hook_environment_makes_a_cd_unknown() {
+    // `cd sub` lands in CDPATH's `sub` (alias p=push), not the checkout's own `sub`.
+    let r = repo(None);
+    fs::create_dir(r.path().join("sub")).unwrap();
+    let base = tempfile::tempdir().unwrap();
+    let sub = base.path().join("sub");
+    fs::create_dir(&sub).unwrap();
+    git(&sub, &["init", "-q"]);
+    git(&sub, &["config", "alias.p", "push"]);
+    let cmd = "cd sub && git p origin feat:main";
+    assert_eq!(
+        hook(r.path(), cmd),
+        None,
+        "without CDPATH the checkout's sub has no alias"
+    );
+    let cdpath = base.path().to_str().unwrap();
+    let why = hook_env(r.path(), cmd, &[("CDPATH", cdpath)]).expect("CDPATH");
+    assert!(why.contains("alias"), "{why}");
+    assert_eq!(
+        hook_env(r.path(), "cd sub && git status", &[("CDPATH", cdpath)]),
+        None
+    );
 }
 
 #[test]
