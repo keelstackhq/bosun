@@ -1,0 +1,1 @@
+- Spec 05 residual (c) and the migrate-booster registry step now match `registry::pick` (lowest open labelled issue, else lowest in any state).

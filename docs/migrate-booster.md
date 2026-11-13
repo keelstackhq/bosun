@@ -122,7 +122,8 @@ Do this first, before any budget knob turns on.
 
 1. Find the live registry issue number. The registry is one issue with the label `bosun:registry`
    (`src/registry.rs`). Locally: `gh issue list --label bosun:registry --state all --json number,state,createdAt`;
-   pick the open one. In a cloud session `gh` is absent: read `bosun doctor` instead (it names the issue). `bosun doctor` warns until a pin exists; read its `detail` and `fix`.
+   pick the open one. In a cloud session `gh` is absent. Run `bosun doctor`: step 8 `registry issue` has the detail `registry issue #N`.
+   `bosun join` prints the same number as `data.registry_issue`. Check that it is the real registry before you pin it. `bosun doctor` warns until a pin exists; read its `detail` and `fix`.
 2. Commit `.bosun/registry` with only that number. Open a PR. It is R-gov. **[phone]** The owner approves.
 
 Without a pin, bosun takes the lowest open issue with the label. After a rotation (old closed, new opened) that is
