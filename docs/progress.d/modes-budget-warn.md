@@ -1,1 +1,0 @@
-- 2026-11-12 · modes PR 7e · feature-budget warnings in status, digest asks with raise hint, wave tick

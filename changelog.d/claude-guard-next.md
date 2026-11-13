@@ -1,1 +1,0 @@
-- Guard: prose stripping only for plain git commit|tag and gh pr|issue commands with allowlisted flags (no -c, VAR=, editor or file flags)

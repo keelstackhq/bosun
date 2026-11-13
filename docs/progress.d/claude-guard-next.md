@@ -1,1 +1,0 @@
-- 2026-11-11 · next-round PR1: guard false positives (prose label values, data args to scripts) and misses (quoted-substitution writes, heredoc + file operand)

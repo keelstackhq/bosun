@@ -1,1 +1,0 @@
-- 2026-11-12 · modes registry pin · registry pinned by `.bosun/registry`, else the lowest-numbered labelled issue in any state

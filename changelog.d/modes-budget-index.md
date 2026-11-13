@@ -1,1 +1,0 @@
-- Feature-budget rival check reads a registry epic index (`{"bosun":"epic-index"}`, written by plan import and amend) instead of scanning lower issues; a missing index refuses with a `bosun plan amend` fix.

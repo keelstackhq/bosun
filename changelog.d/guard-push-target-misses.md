@@ -1,1 +1,0 @@
-- Guard: merge-lock refuses `git send-pack` and `git subtree push` to the default branch and pushes whose target comes from git config (`remote.<r>.push`, `remote.<r>.mirror`, `push.default`), failing closed when the target is unknown

@@ -1,1 +1,0 @@
-- 2026-11-12 · modes PR 4: daily approval digest (`bosun digest`, `--answer`)

@@ -1,1 +1,0 @@
-- Docs: mode ladder wording says "lighter" instead of "up" in the quickstart and spec §18.

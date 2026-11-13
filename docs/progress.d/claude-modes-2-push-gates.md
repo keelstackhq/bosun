@@ -1,1 +1,0 @@
-- 2026-11-12 · modes PR 2: gates before push (push_gates = "push" in the PreToolUse hook)

@@ -1,1 +1,0 @@
-- Splice channel: an explicit bosun_version no longer renders `[approvals] policy` unless `policy_pin_checked` is set (`bosun adopt` sets it); a comment asks for it by hand. Migration: repos that set `policy` with an explicit `bosun_version` must set `policy_pin_checked=1` in the channel vars before this update, or the rendered policy key goes away.

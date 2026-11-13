@@ -1,1 +1,0 @@
-- risk-check adds the built-in `R-revert` (owner) on a `bosun:revert N` PR that is not the exact inverse of #N or whose #N was not normal risk

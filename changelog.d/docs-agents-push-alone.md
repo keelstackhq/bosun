@@ -1,1 +1,0 @@
-- Channel AGENTS.md: a push runs as its own command or names `src:dst` (the merge-lock refuses a chained push without it)

@@ -1,1 +1,0 @@
-- The registry is pinned by `.bosun/registry` on the default branch (else the lowest open, then lowest any-state, `bosun:registry` issue); a repo that rotated its registry should commit `.bosun/registry` naming the live one, and the feature budget refuses without the pin.

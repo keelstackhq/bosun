@@ -1,1 +1,0 @@
-- 2026-11-12 · budget guard: plan-mainfix tasks waive the registry pin check

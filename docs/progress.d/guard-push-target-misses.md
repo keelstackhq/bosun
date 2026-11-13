@@ -1,1 +1,0 @@
-- 2026-11-12 · guard: close merge-lock misses for send-pack, subtree push and config-driven push targets

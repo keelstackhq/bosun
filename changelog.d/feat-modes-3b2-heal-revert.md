@@ -1,1 +1,0 @@
-- `bosun heal` with `[mode] heal_main` opens a draft revert of the one PR merged since main was green; `revert-auto` readies a clean exact inverse with auto-merge
