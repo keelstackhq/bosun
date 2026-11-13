@@ -1,1 +1,0 @@
-- `[mode] push_gates = "push"`: the PreToolUse hook refuses a `git push` whose tree lacks a passing gate stamp.

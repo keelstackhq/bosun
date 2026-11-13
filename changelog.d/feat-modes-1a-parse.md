@@ -1,1 +1,0 @@
-- `[mode]` in `.bosun/bosun.toml` parses (gatekeeper only until the weaken check), `bosun mode` prints the effective knobs; `heal`, `digest`, `metrics` and `wave tick` are registered stubs

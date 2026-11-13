@@ -1,1 +1,0 @@
-- 2026-11-11 · next-round PR3: cli nits (pr --ready on plain issues, budget --pr task guard, pin dated branch, worker rule, compact warning, D23 nextest); channel/splice.toml bosun_version item left for a gated PR

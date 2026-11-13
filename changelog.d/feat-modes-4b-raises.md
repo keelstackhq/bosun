@@ -1,1 +1,0 @@
-- `bosun digest --answer --sign-key`: signs the owner's budget raises (`raise <epic> +<usd>`) with an enrolled owner key (modes PR 4b).

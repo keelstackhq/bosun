@@ -1,1 +1,0 @@
-- Budget guard: a task whose plan kind is mainfix is claimable without the registry pin (spec §5: a mainfix task is never refused)

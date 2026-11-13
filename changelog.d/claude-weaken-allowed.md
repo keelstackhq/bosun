@@ -1,1 +1,0 @@
-- risk-check: growth of a Rust `*_ALLOWED` list is an R-weaken finding, and no orchestrator signature counts on a PR with the `weaken` capability.

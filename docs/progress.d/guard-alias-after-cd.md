@@ -1,1 +1,0 @@
-- 2026-11-12 · guard: aliases resolved after cd/pushd; AGENTS.md step 4 synced with the channel

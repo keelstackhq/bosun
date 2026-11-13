@@ -1,1 +1,0 @@
-- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.13.0 with npm sha512 values via `bosun pin --latest`; CLAUDE.md runs tests with `cargo test --locked` (fresh cloud containers no longer build nextest).

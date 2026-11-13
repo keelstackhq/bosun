@@ -1,1 +1,0 @@
-- 2026-11-11 · next-round PR2: R-weaken flags `*_ALLOWED` list growth; the weaken capability blocks orchestrator approvals

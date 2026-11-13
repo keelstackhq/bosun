@@ -4,6 +4,44 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- `.bosun/version` and `docs/setup-script.sh` pin bosun 0.13.0 with npm sha512 values via `bosun pin --latest`; CLAUDE.md runs tests with `cargo test --locked` (fresh cloud containers no longer build nextest).
+- Budget guard: a task whose plan kind is mainfix is claimable without the registry pin (spec §5: a mainfix task is never refused)
+- Gate workflows and channel templates mint the App token with `client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}` instead of the deprecated `app-id`; consumers with the App: set `BOSUN_APP_CLIENT_ID` (the App's client id) in the `bosun-app` environment before taking this channel update, as `BOSUN_APP_ID` is no longer read.
+- The risk, verdict, main-open and main-health gate jobs run in the `bosun-app` environment and pass a downscoped App token (actions/create-github-app-token, pinned by sha) to bosun as `BOSUN_APP_TOKEN`; `tests/workflows.rs` checks that only those jobs hold the key and never run PR code (spec §15 Transition step 3).
+- New splice var `bosun_app` (1 or empty): the channel's risk, verdict, main-open and main-health gate jobs run in the `bosun-app` environment with the App token step (`risk.yml`, `verdict.yml` and `main-open.yml` become templates); bootstrap mode also excludes the `.jinja` copies of risk and verdict.
+- `.bosun/bosun.toml` sets `[checks] mode = "dual"` with the gate App (`keelstackhq-bosun-gate`, id 5696830): the gates post statuses and App check runs (spec §15 Transition step 3); `tests/pinned_config.rs` knows the 0.13.0 keys.
+- CI type-checks the declarations `bosun schema --format ts` prints with a pinned tsc; tests for the checks-mode verdict carry and golden snapshots of the four channel gate workflows
+- `bosun pr --ready` works for plain issues (no state label, no task metadata), `budget record --pr` refuses task PRs, plain `pin --latest` picks the dated branch before writing, worker rule and compaction warnings fixed
+- Guard: prose stripping only for plain git commit|tag and gh pr|issue commands with allowlisted flags (no -c, VAR=, editor or file flags)
+- `[mode] push_gates = "push"`: the PreToolUse hook refuses a `git push` whose tree lacks a passing gate stamp.
+- Design and plan for the mode ladder (gatekeeper, steady, booster, autonomous) and its boosters: gates before push, self-heal, daily approval digest, auto spawn, feature budget, metrics with brake.
+- Splice channel: an explicit bosun_version no longer renders `[approvals] policy` unless `policy_pin_checked` is set (`bosun adopt` sets it); a comment asks for it by hand. Migration: repos that set `policy` with an explicit `bosun_version` must set `policy_pin_checked=1` in the channel vars before this update, or the rendered policy key goes away.
+- risk-check: growth of a Rust `*_ALLOWED` list is an R-weaken finding, and no orchestrator signature counts on a PR with the `weaken` capability.
+- Channel AGENTS.md: a push runs as its own command or names `src:dst` (the merge-lock refuses a chained push without it)
+- Docs: mode ladder wording says "lighter" instead of "up" in the quickstart and spec §18.
+- Docs: `docs/quickstart.md` (each mode in CLI, cloud and Slack, migration steps) and the README, spec §18, defaults, operating-model, adopt and prerequisites docs updated for modes.
+- `[session] autocompact_window` (cloud) and `autocompact_pct` (local only) in `.bosun/bosun.toml` make `bosun setup-snippet` print the auto-compact variables and where each takes effect (spec §5).
+- The compaction state block reads leases from the cache only and waits at most 5 s for the PR lookup; the PreCompact hook entry has a 15 s timeout (spec §4).
+- `[mode]` in `.bosun/bosun.toml` parses (gatekeeper only until the weaken check), `bosun mode` prints the effective knobs; `heal`, `digest`, `metrics` and `wave tick` are registered stubs
+- `[mode]` lighter modes and overrides parse; the preset fills `[approvals] policy` (`data.policy_source`), loosening `[mode]` is R-weaken, R-gov joins the D-017 deny set, and the mode, digest, heal, metrics, spawn and wave code joins R-gate
+- `bosun heal`: a red `ci-ok` head on an open PR gets a `send_message` to the live lease holder (`heal_pr = notify`) or a `create_session` fixer when the holder is dead (`spawn`, within the spawn checks); at most 2 rounds, then needs-human; the brake caps it at notify; a no-op in gatekeeper (modes PR 3a).
+- risk-check adds the built-in `R-revert` (owner) on a `bosun:revert N` PR that is not the exact inverse of #N or whose #N was not normal risk
+- `bosun heal` with `[mode] heal_main` opens a draft revert of the one PR merged since main was green; `revert-auto` readies a clean exact inverse with auto-merge
+- `bosun digest`: the owner's daily approval digest as one chat form; `--answer` turns the reply into `bosun approve` calls in `next` (modes PR 4).
+- `bosun digest --answer --sign-key`: signs the owner's budget raises (`raise <epic> +<usd>`) with an enrolled owner key (modes PR 4b).
+- `bosun metrics [--days N]` prints red-CI rate, the brake (`data.brake`), cost per merged PR, lead time, owner touches and blocks per owner rule from GitHub; `--propose` is plan PR 8
+- `bosun metrics --propose`: rules with at least 10 owner blocks and no catch in the window (never the floor rules), each with a draft loosening PR body as evidence (modes PR 8).
+- `bosun wave tick <epic>` returns `create_session` calls for ready wave entries (mode knob `spawn_auto`, brake, spawn checks) and `archive_session` for finished children whose PR closed
+- Guard: git aliases are read in every directory an earlier `cd` or `pushd` moves to; after a `cd` the guard cannot read, only git builtins pass
+- Guard: merge-lock refuses `git send-pack` and `git subtree push` to the default branch and pushes whose target comes from git config (`remote.<r>.push`, `remote.<r>.mirror`, `push.default`), failing closed when the target is unknown
+- `bosun plan import` and `plan amend` write trusted `bind` records when `budget_feature` is on; the feature budget guard reads them first, so editing issue bodies no longer lifts `ask` (modes item 6b).
+- `budget_usd:` on a plan item sets a feature budget; `bosun claim` and `bosun spawn` warn at 80 % and exit 5 at 100 % under the `ask` knob (modes item 6).
+- Feature-budget rival check reads a registry epic index (`{"bosun":"epic-index"}`, written by plan import and amend) instead of scanning lower issues; a missing index refuses with a `bosun plan amend` fix.
+- `bosun budget raise` records the owner-signed raises of `bosun digest --answer` on their epics; the feature-budget guard adds the verified ones to the base budget.
+- The 80 % feature-budget warning also shows in `bosun status` (`budget_feature`) and in each `bosun wave tick` spawn; `bosun digest` lists epics at 100 % as budget asks with a `raise <epic> +<usd>` reply line.
+- The registry is pinned by `.bosun/registry` on the default branch (else the lowest open, then lowest any-state, `bosun:registry` issue); a repo that rotated its registry should commit `.bosun/registry` naming the live one, and the feature budget refuses without the pin.
+- Guard: a `CDPATH` in the hook's own environment makes a `cd` unknown (only git builtins and git-* commands pass)
+
 ## 0.13.0 (2026-11-10)
 
 - Plan `2026-10-28-app-checks-team-owners.md`: the B4 UCs are numbered without gaps, so `bosun plan import` and `bosun prereqs` read it again.

@@ -1,1 +1,0 @@
-- 2026-11-12 · modes item 6: per-feature budget (`budget_usd:`, `budget_feature` warn/ask in claim and spawn)

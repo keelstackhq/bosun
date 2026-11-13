@@ -1,1 +1,0 @@
-- `bosun metrics --propose`: rules with at least 10 owner blocks and no catch in the window (never the floor rules), each with a draft loosening PR body as evidence (modes PR 8).

@@ -1,1 +1,0 @@
-- 2026-11-12 · modes PR 5: bosun metrics and the brake (cli::metrics::window)

@@ -1,1 +1,0 @@
-- 2026-11-12 · modes PR 1b: preset policy, [mode] weaken findings, R-gov deny set, R-gate paths

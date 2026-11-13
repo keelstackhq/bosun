@@ -1,1 +1,0 @@
-- 2026-11-10 · compaction · bounded GitHub calls in the compaction state block; PreCompact timeout 15 s

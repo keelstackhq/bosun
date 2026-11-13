@@ -1,1 +1,0 @@
-- 2026-11-12 · modes item 6b: writer bind records close the body-edit misses of the feature budget

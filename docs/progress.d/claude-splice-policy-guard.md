@@ -1,1 +1,0 @@
-- 2026-11-11 · next-round: splice policy guard, an explicit pin renders no policy without policy_pin_checked (adopt sets it)

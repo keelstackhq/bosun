@@ -1,1 +1,0 @@
-- The risk, verdict, main-open and main-health gate jobs run in the `bosun-app` environment and pass a downscoped App token (actions/create-github-app-token, pinned by sha) to bosun as `BOSUN_APP_TOKEN`; `tests/workflows.rs` checks that only those jobs hold the key and never run PR code (spec §15 Transition step 3).

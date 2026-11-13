@@ -1,1 +1,0 @@
-- 2026-11-10 · B2W/T2: channel gate workflows on the App token behind `bosun_app`

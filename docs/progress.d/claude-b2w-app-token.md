@@ -1,1 +1,0 @@
-- 2026-11-10 · B2W/T1: gate workflows on the App token (bosun-app environment)

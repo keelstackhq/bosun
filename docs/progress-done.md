@@ -404,3 +404,40 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-10 · #502 PR 1 · sticky refusal markers shown by the PreToolUse hook; a kill-switch halt refuses writes · PR #506
 - 2026-11-10 · compaction · PreCompact state block and SessionStart re-injection after compaction · PR #533
 - 2026-11-10 · guard · stdin-device scripts skip the scan only when a heredoc feeds them · PR #531
+- 2026-11-10 · pin bosun 0.13.0 (bosun pin --latest)
+- 2026-11-12 · budget guard: plan-mainfix tasks waive the registry pin check
+- 2026-11-11 · next-round: create-github-app-token uses client-id (BOSUN_APP_CLIENT_ID) in the 4 gate workflows and templates
+- 2026-11-10 · B2W/T1: gate workflows on the App token (bosun-app environment)
+- 2026-11-10 · B2W/T2: channel gate workflows on the App token behind `bosun_app`
+- 2026-11-11 · B2W/T1: [checks] dual mode with the gate App
+- 2026-11-11 · next-round PR4: CI tsc step on the shipped .d.ts, checks-mode carry-over tests, golden gate-workflow snapshots
+- 2026-11-11 · next-round PR3: cli nits (pr --ready on plain issues, budget --pr task guard, pin dated branch, worker rule, compact warning, D23 nextest); channel/splice.toml bosun_version item left for a gated PR
+- 2026-11-11 · next-round PR1: guard false positives (prose label values, data args to scripts) and misses (quoted-substitution writes, heredoc + file operand)
+- 2026-11-12 · modes PR 2: gates before push (push_gates = "push" in the PreToolUse hook)
+- 2026-11-11 · modes booster design · spec and 12-PR plan for the mode ladder
+- 2026-11-11 · next-round: splice policy guard, an explicit pin renders no policy without policy_pin_checked (adopt sets it)
+- 2026-11-11 · next-round PR2: R-weaken flags `*_ALLOWED` list growth; the weaken capability blocks orchestrator approvals
+- 2026-11-12 · channel agents.md: push as its own command or with src:dst
+- 2026-11-12 · docs: "lighter" ladder wording in quickstart and spec 18
+- 2026-11-12 · modes PR 10 · user docs, quickstart and migration for modes; plan and spec fixes (`approve <pr>@<head>`, duplicate PR 8) · PR #563
+- 2026-11-10 · compaction · `[session] autocompact_window`/`autocompact_pct` and the setup-snippet auto-compact lines
+- 2026-11-10 · compaction · bounded GitHub calls in the compaction state block; PreCompact timeout 15 s
+- 2026-11-11 · modes PR 1a: [mode] parse, bosun mode, booster commands registered
+- 2026-11-12 · modes PR 1b: preset policy, [mode] weaken findings, R-gov deny set, R-gate paths
+- 2026-11-12 · modes PR 3a: bosun heal for red PRs (notify, spawn fixer, 2 rounds, brake cap)
+- 2026-11-12 · modes PR 3b-1: built-in R-revert in risk-check
+- 2026-11-12 · modes PR 3b-2: heal_main reverts a red main
+- 2026-11-12 · modes PR 4: daily approval digest (`bosun digest`, `--answer`)
+- 2026-11-12 · modes PR 4b: signed budget raises in `bosun digest --answer`
+- 2026-11-12 · modes PR 5: bosun metrics and the brake (cli::metrics::window)
+- 2026-11-12 · modes PR 8: bosun metrics --propose (curator loosening proposals)
+- 2026-11-12 · modes PR 6: bosun wave tick (spawn and archive calls)
+- 2026-11-12 · guard: aliases resolved after cd/pushd; AGENTS.md step 4 synced with the channel
+- 2026-11-12 · guard: close merge-lock misses for send-pack, subtree push and config-driven push targets
+- 2026-11-12 · modes item 6b: writer bind records close the body-edit misses of the feature budget
+- 2026-11-12 · modes item 6: per-feature budget (`budget_usd:`, `budget_feature` warn/ask in claim and spawn)
+- 2026-11-12 · modes PR 7d · epic index on the registry issue closes the hidden-rival residual
+- 2026-11-12 · modes PR 7c · signed budget raises (`bosun budget raise`), part B (80 % warnings in status, digest, wave tick) moves to 7e · PR #565
+- 2026-11-12 · modes PR 7e · feature-budget warnings in status, digest asks with raise hint, wave tick
+- 2026-11-12 · modes registry pin · registry pinned by `.bosun/registry`, else the lowest-numbered labelled issue in any state
+- 2026-11-13 · guard: CDPATH from the hook environment; spec 05 unpinned mainfix residual

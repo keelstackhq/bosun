@@ -1,1 +1,0 @@
-- Design and plan for the mode ladder (gatekeeper, steady, booster, autonomous) and its boosters: gates before push, self-heal, daily approval digest, auto spawn, feature budget, metrics with brake.
