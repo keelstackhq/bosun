@@ -163,6 +163,36 @@ fn aliases_that_push_or_run_a_shell_are_refused() {
     let at = format!("git -C {} x origin feat:main", other.path().display());
     assert!(hook(r.path(), &at).expect("alias at -C").contains("alias"));
     assert_eq!(hook(r.path(), "git x origin feat:main"), None);
+    // A `cd` or `pushd` moves where the alias is read; one the guard cannot read leaves only
+    // builtins.
+    let o = other.path().display();
+    for cmd in [
+        format!("cd {o} && git x origin feat:main"),
+        format!("cd {o}; git x origin feat:main"),
+        format!("pushd {o} && git x origin feat:main"),
+        format!("cd \"{o}\" && git x origin feat:main"),
+        "cd $D && git x origin feat:main".to_string(),
+    ] {
+        assert!(hook(r.path(), &cmd).expect(&cmd).contains("alias"), "{cmd}");
+    }
+    // CDPATH or a path git cannot open as read: only builtins pass.
+    let spaced = tempfile::tempdir().unwrap();
+    let my = spaced.path().join("my dir");
+    fs::create_dir(&my).unwrap();
+    git(&my, &["init", "-q"]);
+    git(&my, &["config", "alias.p", "push"]);
+    let (base, s) = (spaced.path().display(), my.display());
+    for cmd in [
+        format!("CDPATH={base} cd 'my dir' && git p origin feat:main"),
+        format!("export CDPATH={base}; cd x && git p origin"),
+        format!("cd \"{s}\" && git p origin"),
+        format!("cd '{s}' && git p origin"),
+    ] {
+        assert!(hook(r.path(), &cmd).expect(&cmd).contains("alias"), "{cmd}");
+    }
+    assert_eq!(hook(r.path(), &format!("cd \"{s}\" && git status")), None);
+    assert_eq!(hook(r.path(), &format!("cd {o} && git status")), None);
+    assert_eq!(hook(r.path(), "cd $D && git status"), None);
 }
 
 #[test]
