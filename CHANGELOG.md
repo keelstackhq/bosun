@@ -40,6 +40,7 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 - `bosun budget raise` records the owner-signed raises of `bosun digest --answer` on their epics; the feature-budget guard adds the verified ones to the base budget.
 - The 80 % feature-budget warning also shows in `bosun status` (`budget_feature`) and in each `bosun wave tick` spawn; `bosun digest` lists epics at 100 % as budget asks with a `raise <epic> +<usd>` reply line.
 - The registry is pinned by `.bosun/registry` on the default branch (else the lowest open, then lowest any-state, `bosun:registry` issue); a repo that rotated its registry should commit `.bosun/registry` naming the live one, and the feature budget refuses without the pin.
+- Guard: a `CDPATH` in the hook's own environment makes a `cd` unknown (only git builtins and git-* commands pass)
 
 ## 0.13.0 (2026-11-10)
 

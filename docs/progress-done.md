@@ -440,3 +440,4 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-12 · modes PR 7c · signed budget raises (`bosun budget raise`), part B (80 % warnings in status, digest, wave tick) moves to 7e · PR #565
 - 2026-11-12 · modes PR 7e · feature-budget warnings in status, digest asks with raise hint, wave tick
 - 2026-11-12 · modes registry pin · registry pinned by `.bosun/registry`, else the lowest-numbered labelled issue in any state
+- 2026-11-13 · guard: CDPATH from the hook environment; spec 05 unpinned mainfix residual
