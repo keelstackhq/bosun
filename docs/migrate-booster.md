@@ -221,10 +221,20 @@ Watch two weeks. Targets: red-CI under 20 %, at most 3 owner touches a day, `dat
 
 ### Step 9. Hull: `splice update` to v0.9.0
 
-**TODO:** the hull v0.9.0 step. This repo's docs do not describe the hull release, its lock file or the exact
-`splice update` command. Do not guess. Ask the owner for the hull docs (README, update guide, v0.9.0 changelog).
-Rule from [update.md](update.md): a repo with a splice channel gets its pins from `splice update` or the update bot.
-It does not run `bosun pin`. Any hull update PR touches `.splice/**` and is R-gov: the owner approves.
+Source: [hull docs/updating.md](https://github.com/keelstackhq/hull/blob/main/docs/updating.md). Normally the
+weekly splice bot opens this PR. Do it by hand only when the owner asks. Needs splice 0.3.0 or newer
+(`pnpm dlx @keelstackhq/splice …` if it is not installed). From the repo root, on a clean branch:
+
+1. `splice check --json`. Exit 1 means an update, drift or markers.
+2. `splice diff --json`. Read `changes`. A `conflict` or `delete` needs a decision. Add `--to 0.9.0` to pin.
+3. `splice update --all --json`. It updates the template, the decisions channel and the rigging.
+4. Resolve any markers. Then `splice check` must exit 0.
+5. `pnpm install && pnpm run ci`.
+6. Commit `chore: splice update to hull v0.9.0`. One update per PR.
+
+Never edit owned files to fix an update. hull v0.9.0 moves vite-plus to 1.5.1 (with a `vite-plus-core` override).
+The PR touches `.splice/**`: it is R-gov, and the owner approves. A repo with the bosun channel
+(`.splice/channels/bosun.toml`) gets bosun pins from `splice update --channel bosun`, not `bosun pin`.
 
 ### Step 10. Owner Routine prompts
 
@@ -312,8 +322,8 @@ Settings live in the cloud environment menu (session title bar → Edit). Source
    - `deb.nodesource.com`: Node 24, only when the container has no Node 24 yet.
    - `github.com`: the plugin marketplace clone (`claude plugin marketplace add`). It only warns on failure.
    - `tuf-repo-cdn.sigstore.dev`: only when the checkout has no repo script (the bootstrap checks npm signatures).
-   - **TODO:** the hosts that `rustup` and `apt-get` use. The script names none. Run the script once, read the setup log,
-     and add exactly the hosts it names.
+   If your own setup script installs other tools, add exactly the hosts it downloads from. A denied host shows as a
+   proxy refusal that names the host.
    A repo script that only uses npm needs no extra host. Read the repo's own script before you add one.
 3. **Environment variables.** Non-secret only. The docs name one for bosun: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
    (`data.autocompact.cloud_env` of `bosun spawn`). Nothing else is required.
