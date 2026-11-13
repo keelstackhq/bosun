@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.14.0 (2026-11-13)
+
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.13.0 with npm sha512 values via `bosun pin --latest`; CLAUDE.md runs tests with `cargo test --locked` (fresh cloud containers no longer build nextest).
 - Budget guard: a task whose plan kind is mainfix is claimable without the registry pin (spec §5: a mainfix task is never refused)
 - Gate workflows and channel templates mint the App token with `client-id: ${{ vars.BOSUN_APP_CLIENT_ID }}` instead of the deprecated `app-id`; consumers with the App: set `BOSUN_APP_CLIENT_ID` (the App's client id) in the `bosun-app` environment before taking this channel update, as `BOSUN_APP_ID` is no longer read.
