@@ -96,7 +96,7 @@ If `bosun mode` exits non-zero or `bosun doctor` shows a `missing` step: do its 
 ### Step 2. Pin the new release
 
 ```bash
-export GITHUB_TOKEN=$(gh auth token)   # not in a cloud session
+# Local only: give bosun your GitHub login from `gh auth token` (a cloud session needs none).
 bosun pin --latest --pr
 ```
 
@@ -120,8 +120,10 @@ Never edit a sha512 by hand.
 
 Do this first, before any budget knob turns on.
 
-1. Find the live registry issue number. **TODO:** the exact command that prints it is not in the sources. `bosun doctor` warns until a pin exists. Read its `detail` and `fix`.
-2. Commit `.bosun/registry` with that number. Open a PR. It is R-gov. **[phone]** The owner approves.
+1. Find the live registry issue number. The registry is one issue with the label `bosun:registry`
+   (`src/registry.rs`). List them: `gh issue list --label bosun:registry --state all --json number,state,createdAt`.
+   Pick the open one. `bosun doctor` warns until a pin exists; read its `detail` and `fix`.
+2. Commit `.bosun/registry` with only that number. Open a PR. It is R-gov. **[phone]** The owner approves.
 
 A repo that rotated its registry (old closed, new opened) must name the live one. Without the pin, the
 oldest labelled issue wins.
@@ -162,9 +164,9 @@ name = "booster"
 # heal_main = "off"
 ```
 
-**Direct.** When the repo is on `gatekeeper` and the owner asks to skip the two-week watch: ask the owner.
-The quickstart says never skip a step. Direct needs the owner's written word in the PR. **TODO:** the sources do
-not describe a direct move. Do not do it without that word.
+**Direct (gatekeeper to booster in one PR).** The quickstart says never skip a step. Do it only when the owner
+says so in the chat form. Write that answer in the PR body. The PR is R-gov and R-weaken, so the owner still approves
+the exact head. Without that answer, use the two steps.
 
 For each PR:
 
@@ -219,9 +221,10 @@ Watch two weeks. Targets: red-CI under 20 %, at most 3 owner touches a day, `dat
 
 ### Step 9. Hull: `splice update` to v0.9.0
 
-The user's task names hull `v0.9.0`. **TODO:** no hull version, command or channel is described in the sources
-for this repo. Do not guess. Ask the owner which channel and which version. The general rule is in
-[update.md](update.md): a repo with a splice channel gets its pins from `splice update`. It does not run `bosun pin`.
+**TODO:** the hull v0.9.0 step. This repo's docs do not describe the hull release, its lock file or the exact
+`splice update` command. Do not guess. Ask the owner for the hull docs (README, update guide, v0.9.0 changelog).
+Rule from [update.md](update.md): a repo with a splice channel gets its pins from `splice update` or the update bot.
+It does not run `bosun pin`. Any hull update PR touches `.splice/**` and is R-gov: the owner approves.
 
 ### Step 10. Owner Routine prompts
 
@@ -239,7 +242,7 @@ Then run `bosun heal` and make only the calls in its `next`; report data.prs.
    `bosun digest --answer --sign-key ~/.bosun/approver.pem --from -`. Each approval comes back as
    `bosun approve <pr>@<head> --sign-key <pem>` in `next`.
 
-Verify: **TODO:** the sources have no command that reads Routines back. The owner confirms in chat.
+Verify: no bosun command reads Routines back. The owner confirms in chat that each Routine is saved.
 
 ### Step 11. Run
 
@@ -262,11 +265,12 @@ Setup, once ([adopt-existing-repo.md](adopt-existing-repo.md) §1):
 ```bash
 npm i -g @keelstackhq/bosun
 gh auth login                           # once, if gh is not signed in
-export GITHUB_TOKEN=$(gh auth token)    # repo and workflow scopes
-export BOSUN_REPO=<owner>/<repo>        # only if the origin remote cannot be read
 bosun doctor                            # each missing step with its fix
 bosun trailers install                  # the SessionStart hook does it too
 ```
+
+Login. Set the environment variable `GITHUB_TOKEN` to the output of `gh auth token` (scopes: repo and workflow).
+Only if bosun cannot read the origin remote, also set `BOSUN_REPO` to `owner/name`. Never write either in a file in the repo.
 
 Hooks. `.claude/settings.json` holds `bosun hook session-start|stop|pre-tool-use`. They refuse a
 `git push` without gate stamps (`push_gates = "push"`) and every merge, tag or force-push. Do not edit that file.
@@ -290,23 +294,32 @@ Run the push as its own command: `git push -u origin <branch>`.
 
 Do these once per repo. The environment is shared. **[computer]** The owner does steps 1 and 3 to 5.
 
-1. **Setup script.** Run `bosun setup-snippet`. Paste `data.script` at claude.ai/code → Environments →
-   Setup script. Never paste it again. It does not change between releases. Each checkout's
-   `docs/setup-script.sh` pins the tools: Node, pnpm, splice, hoist, berth, bosun, cargo-deny and the Rust
-   toolchain when the repo has one. A pin PR (step 2 above) moves the bosun version. Do not put anything else
-   in the script. Do not put a secret in it.
-2. **Network hosts.** The sources name these:
-   - `registry.npmjs.org`: the pinned tools, and the pin check. (`BOSUN_NPM_REGISTRY` can name another https registry.)
-   - `tuf-repo-cdn.sigstore.dev`: only when no repo script exists, so the bootstrap must check npm signatures.
-   - GitHub: sessions reach it through the Claude GitHub App and the agent proxy. Install the app on the repo
-     (<https://github.com/apps/claude>). **TODO:** whether `api.github.com` must be on the environment's host list is not stated.
-   - **TODO:** hosts for Node 24, rustup, pnpm and `cargo install` fallbacks are not listed in the sources.
-     Read `docs/setup-script.sh` of the repo and the setup log. Ask the owner to add the hosts it names.
-   Add no other host.
-3. **Environment variables.** Non-secret only. The sources name one: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
-   (`data.autocompact.cloud_env` of `bosun spawn`). **TODO:** no other variable is required by the docs.
-   No PAT, no `BOSUN_OWNER_TOKEN` and no age key in the environment. A secret goes through the environment's
-   credential settings. Never the script, never a file in the repo.
+Settings live in the cloud environment menu (session title bar → Edit). Source:
+<https://code.claude.com/docs/en/cloud-environments>.
+
+1. **Setup script.** Run `bosun setup-snippet`. Paste `data.script` into the environment's Setup script field.
+   Paste it once. It does not change between releases. How it runs (Claude Code cloud docs): as root, on each fresh
+   container, after the repos are cloned and before Claude starts; it starts in the directory that holds the
+   checkouts; it cannot read the environment's variables or secrets; a failing script stops the session. The
+   snippet is idempotent and always exits 0. It runs each checkout's own `docs/setup-script.sh`, which pins the
+   tools (Node 24, pnpm, splice, hoist, berth, bosun, cargo-deny, the Rust toolchain of `rust-toolchain.toml`).
+   The pin PR (step 2) sets `BOSUN_VERSION` and its sha512 lines there to the new release. Add nothing else to the snippet.
+2. **Network hosts.** Choose Network access: Limited, with "Allow package managers" ticked (npm, PyPI, crates and
+   similar are then reachable). GitHub goes through the session's GitHub proxy and the Claude GitHub App
+   (<https://github.com/apps/claude>), not the host list. Add only hosts the repo's `docs/setup-script.sh` downloads
+   from and that package managers do not cover. In this repo's script they are:
+   - `registry.npmjs.org`: the pinned tools (`npm pack`, `npm install`). Covered by package managers.
+   - `deb.nodesource.com`: Node 24, only when the container has no Node 24 yet.
+   - `github.com`: the plugin marketplace clone (`claude plugin marketplace add`). It only warns on failure.
+   - `tuf-repo-cdn.sigstore.dev`: only when the checkout has no repo script (the bootstrap checks npm signatures).
+   - **TODO:** the hosts that `rustup` and `apt-get` use. The script names none. Run the script once, read the setup log,
+     and add exactly the hosts it names.
+   A repo script that only uses npm needs no extra host. Read the repo's own script before you add one.
+3. **Environment variables.** Non-secret only. The docs name one for bosun: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+   (`data.autocompact.cloud_env` of `bosun spawn`). Nothing else is required.
+   No GitHub PAT, no owner credential and no age key in the environment. An API key is added as a network credential
+   in the environment settings (the session can ask for it). GitHub comes from the connected GitHub app.
+   Never put a secret in the script, a variable or a file.
 4. **Tell bosun the environment.** Open a PR (R-gov, the owner approves; needs the pinned release from step 2):
 
    ```toml

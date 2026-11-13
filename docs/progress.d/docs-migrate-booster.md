@@ -1,1 +1,1 @@
-- 2026-11-13 · docs: migrate-booster.md (booster migration runbook, three environments, prompts)
+- 2026-11-13 · docs: migrate-booster.md (booster migration runbook, three environments, prompts) · PR #576
