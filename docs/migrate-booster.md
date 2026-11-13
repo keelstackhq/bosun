@@ -48,10 +48,10 @@ Booster is steady plus a fast lane. Values from the mode table:
 | `brake` | `on` | `on` | Same. |
 | `curator_loosen` | `off` | `propose` | The curator Routine may open one draft PR a week. |
 
-Fast lane: the orchestrator approves a PR that changes only `src/`, `tests/`, `docs/` or `changelog.d/`.
-All of these must hold: every verdict on the exact head is clean, one verdict is from an independent
-reviewer session, and the PR closes an open task that its author leases. Booster never uses the
-`orchestrator` policy.
+Fast lane: the orchestrator approves a PR whose paths are on the D-017 allowlist and not on its deny list
+(see [spec §8](spec/08-risk.md)). All of these must hold: every verdict on the exact head is clean, one verdict is
+from an independent reviewer session, and the PR closes an open task that its author leases. A mode never sets
+the `orchestrator` policy (it needs no verdict). An explicit `[approvals] policy` in the file wins.
 
 An explicit key wins over the preset. `[approvals] policy` set in the file stays. `[mode]` overrides
 take knobs only, never `policy`.
@@ -86,7 +86,7 @@ Expect:
 
 - `bosun mode`: `data.mode` and `data.mode_source` (`"default"` when `[mode]` is absent), and `data.knobs.<knob>.{value,source}`.
 - `bosun metrics`: red-CI rate, lead time, cost, owner touches, and `data.brake`.
-- `bosun doctor`: each step `ok` or `missing`, each with its `fix`. Step 17 `update` shows what is behind.
+- `bosun doctor`: each step `ok`, `warn`, `skipped` or `missing`, each with its `fix`. Step 17 `update` shows what is behind.
 
 Write the `metrics` numbers on the first PR. It is the baseline. If the repo is on `gatekeeper`, do the whole
 sequence for `steady` first (quickstart §5). Return here when `bosun mode` shows `steady`.
@@ -121,12 +121,13 @@ Never edit a sha512 by hand.
 Do this first, before any budget knob turns on.
 
 1. Find the live registry issue number. The registry is one issue with the label `bosun:registry`
-   (`src/registry.rs`). List them: `gh issue list --label bosun:registry --state all --json number,state,createdAt`.
-   Pick the open one. `bosun doctor` warns until a pin exists; read its `detail` and `fix`.
+   (`src/registry.rs`). Locally: `gh issue list --label bosun:registry --state all --json number,state,createdAt`;
+   pick the open one. In a cloud session `gh` is absent: read `bosun doctor` instead (it names the issue). `bosun doctor` warns until a pin exists; read its `detail` and `fix`.
 2. Commit `.bosun/registry` with only that number. Open a PR. It is R-gov. **[phone]** The owner approves.
 
-A repo that rotated its registry (old closed, new opened) must name the live one. Without the pin, the
-oldest labelled issue wins.
+Without a pin, bosun takes the lowest open issue with the label. After a rotation (old closed, new opened) that is
+the new one. The real risk is a swap: another labelled issue or a changed registry drops the indexes until
+`bosun plan amend` runs. The pin removes that risk. It is the trust root.
 
 Expect after merge: `bosun doctor` no longer warns about the registry.
 
@@ -145,7 +146,7 @@ bosun plan amend <plan> --dry-run
 Expect from `plan check`: `ok: true`. On an error it names the line and the fix. Fix the plan. A plan PR is R-gov: the owner approves it.
 
 Do not run `bosun plan amend <plan>` (without `--dry-run`) yet. It writes the bind and epic-index records only
-when the knob is on. Do it in step 7.
+when `budget_feature` is not `off` (`steady` already sets `warn`). Do it in step 7.
 
 If `claim` or `spawn` exits non-zero with a missing marker, read `error.fix`. It names the step.
 
@@ -183,7 +184,7 @@ If the config fails to parse (`unknown field`): the pin is older than the key. G
 
 ### Step 6. After the merge: join
 
-The orchestrator runs `bosun join` (no registry issue, no index yet). It registers the session in the registry.
+The orchestrator runs `bosun join` first. It registers this session in the registry; the plan amend in step 7 needs that.
 
 ```bash
 bosun join          # origin from BOSUN_ORIGIN, or --origin local|slack|routine|spawned
@@ -194,7 +195,7 @@ Expect `ok: true`. If it says GitHub is unreachable or the config is unknown: se
 
 ### Step 7. Amend the plans
 
-Now the knob is on. For every plan:
+Now `budget_feature` is not `off`. For every plan:
 
 ```bash
 bosun plan amend <plan> --dry-run
@@ -326,7 +327,7 @@ Settings live in the cloud environment menu (session title bar → Edit). Source
    proxy refusal that names the host.
    A repo script that only uses npm needs no extra host. Read the repo's own script before you add one.
 3. **Environment variables.** Non-secret only. The docs name one for bosun: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
-   (`data.autocompact.cloud_env` of `bosun spawn`). Nothing else is required.
+   (`data.autocompact.cloud_env` of `bosun setup-snippet`). Nothing else is required.
    No GitHub PAT, no owner credential and no age key in the environment. An API key is added as a network credential
    in the environment settings (the session can ask for it). GitHub comes from the connected GitHub app.
    Never put a secret in the script, a variable or a file.
@@ -468,7 +469,7 @@ Always read `error.fix` first. Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4
 | exit 4 on `wave plan` or `wave tick` | Main is red | Wait for the revert PR or the fix. Do not claim work. |
 | exit 3 on `claim` | Another session holds an overlapping lease | Pick another task: `bosun wave plan <epic>`. |
 | exit 3 on `pin` | Dirty tree, wrong branch, `bosun/pin` and `bosun/pin-<date>` both left, or npm latest is older than the pin | [update.md](update.md), "If verification fails". |
-| exit 5 on `claim` or `spawn` | A task needs the owner, or a budget ask is open (`budget_feature = "ask"`) | `bosun ask <issue> "<question>"`. The owner answers "raise <epic> +N" in the digest reply. |
+| exit 5 on `claim` or `spawn` | A task needs the owner, or a budget ask is open (`budget_feature = "ask"`) | Budget ask: the owner answers `raise <epic> +N` in the digest reply; then the orchestrator runs `bosun budget raise --from -` with the `bosun digest --answer` output. Caps: one raise per digest day, 7 days at most the base budget, all raises at most 2x the base (more is an R-gov plan PR). Other needs-human: `bosun ask <issue> "<question>"`. |
 | `claim` or `spawn` refuse a plan task, no marker | The epic has no `bosun:epic` marker, or the bind records are missing | Step 4, then step 7. |
 | exit 6 | A limit or a cap | Read `error.fix`. At the lesson cap: mechanize, combine or retire a lesson first. |
 | `bosun pr --ready`: `missing_gates` (exit 1) | No gate stamps for this tree | Run the loop in `error.fix`. |
@@ -479,7 +480,7 @@ Always read `error.fix` first. Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4
 | `bosun doctor` warns about the registry | No `.bosun/registry` pin | Step 3. |
 | `bosun wave tick`: `held_by` `spawn_auto is off` | The mode is below booster, or an override sets it off | `bosun mode`. |
 | `bosun wave tick`: `brake on: …` | Over 7 days: main red twice, two PRs reverted, or red-CI 10 points over target | Wait. It ends by itself. |
-| `bosun heal` returns an empty `next` | `heal_pr` is `off`, or nothing is red | `bosun mode` to check the knobs. |
+| `bosun heal` returns an empty `next` | Both `heal_pr` and `heal_main` are `off`, or nothing is red | `bosun mode` to check the knobs. |
 | `bosun join` reaches no GitHub | No token or no `BOSUN_REPO` | Set `GITHUB_TOKEN` (or `GH_TOKEN`) and `BOSUN_REPO=owner/name`. |
 
 If a step is not covered here, stop. Run `bosun doctor`. Read its `fix`. Ask the owner.
