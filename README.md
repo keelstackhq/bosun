@@ -143,7 +143,8 @@ no table needed), `steady` (gates before push, red-PR and red-main help, daily d
 (fast-lane approval, auto spawn, curator proposals) and `autonomous` (auto-merged exact reverts,
 digest-only owner contact). A lighter mode (toward `autonomous`) is an owner-approved change. `bosun mode` shows the
 effective knobs, `bosun metrics` the numbers. Setup per mode and environment (CLI, cloud, Slack)
-and the steps for a repo that already runs bosun: [docs/quickstart.md](docs/quickstart.md).
+and the steps for a repo that already runs bosun: [docs/quickstart.md](docs/quickstart.md). The exact steps to move a
+repo to booster, per environment, with a prompt for Claude: [docs/migrate-booster.md](docs/migrate-booster.md).
 
 ## Use
 
@@ -239,6 +240,7 @@ else console.log(`exit ${r.exit_code}, next step: ${r.error.fix}`); // e.g. 3: p
 
 - Update bosun: [docs/update.md](docs/update.md)
 - Modes, quickstart and migration: [docs/quickstart.md](docs/quickstart.md)
+- Migrate a repo to booster mode (agent runbook): [docs/migrate-booster.md](docs/migrate-booster.md)
 - Adopt bosun on an existing repo (also cloud sessions and Claude Tag): [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md)
 - CI minutes: [docs/ci-minutes.md](docs/ci-minutes.md)
 - Design: [docs/spec.md](docs/spec.md)

@@ -156,6 +156,9 @@ thing that needs the Routine. `bosun metrics --propose` itself is read-only.
 
 ## 5. Migration: a repo that already runs bosun
 
+For a move to `booster`, with exact commands per environment and a prompt for Claude, see
+[migrate-booster.md](migrate-booster.md).
+
 One step at a time (gatekeeper → steady → booster → autonomous). Never skip a step, never move lighter on
 a red week.
 
@@ -172,7 +175,7 @@ a red week.
    - Lighter means toward `autonomous`; tighter, toward `gatekeeper`. Every step in this section is a
      lighter mode: an owner-approved R-weaken change (gatekeeper → steady too). A tighter mode is no
      finding, but the file is R-gov, so you still approve it.
-   - Pin the registry first, right away and before turning any budget knob on: an agent commits `.bosun/registry` holding the live registry issue number (an R-gov PR the owner approves). A repo that rotated its registry (old closed, new opened) must name the live one, or the oldest labelled issue wins; `bosun doctor` warns until the pin exists.
+   - Pin the registry first, right away and before turning any budget knob on: an agent commits `.bosun/registry` holding the live registry issue number (an R-gov PR the owner approves). A repo that rotated its registry (old closed, new opened) must name the live one (without a pin the lowest open labelled issue wins, and a swap of the registry drops the indexes until `bosun plan amend` runs); `bosun doctor` warns until the pin exists.
 4. An agent opens a PR that sets `[mode] name = "steady"` (section 0). **[phone]** Owner approves
    the exact head (chat form: repo, PR, head SHA). Merge as usual (orchestrator). Right after the
    merge an agent runs `bosun plan amend <plan>` again for every plan, after the orchestrator's `bosun join` (no registry issue, no index): only now (knob on) does it

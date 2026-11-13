@@ -1,0 +1,1 @@
+- `docs/migrate-booster.md`: runbook for an agent (and the owner) that moves a repo on bosun to booster mode, for the CLI, cloud and Slack, with prompts, rollback and troubleshooting; linked from the README and quickstart §5.
