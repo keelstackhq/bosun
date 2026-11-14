@@ -574,12 +574,12 @@ impl Github for LiveGithub {
         match asked {
             Ok(v) => Ok(v.and_then(|v| v["permission"].as_str().map(str::to_string))),
             // A proxy (Claude Code cloud) answers 403 for /collaborators. Degrade, never fail:
-            // the token's own login (or an unknown one: the proxy's identity wrote the
-            // comments) gets the rights the repo document shows; any other login is unknown
-            // and counts as no write access.
+            // only the token's own login gets the rights the repo document shows; any other
+            // login (or an unknown own login) is unknown and counts as no write access.
             Err(()) => match self.own_login() {
-                Some(l) if l != user => Ok(None),
-                _ => Ok(self.own_permission().ok().flatten()),
+                Some(l) if l == user => Ok(self.own_permission().ok().flatten()),
+                // Another login, or none known: fail closed, never trust a record on a guess.
+                _ => Ok(None),
             },
         }
     }

@@ -48,8 +48,9 @@ pub struct Http {
     agent: ureq::Agent,
     max_sleep_ms: u64,
     verbose: bool,
-    started: Instant,
-    /// Budget in ms for all calls since `started`; 0 means none.
+    /// Milliseconds spent in GitHub calls and retry sleeps so far (local work does not count).
+    used_ms: AtomicU64,
+    /// Budget in ms for `used_ms`; 0 means none.
     budget_ms: AtomicU64,
 }
 
@@ -116,7 +117,7 @@ impl Http {
             agent,
             max_sleep_ms,
             verbose: std::env::var("BOSUN_VERBOSE").is_ok_and(|v| v == "1"),
-            started: Instant::now(),
+            used_ms: AtomicU64::new(0),
             budget_ms: AtomicU64::new(
                 std::env::var("BOSUN_HTTP_BUDGET_SECS")
                     .ok()
@@ -138,7 +139,7 @@ impl Http {
     /// Fail instead of hanging: `extra_ms` is a sleep the caller is about to take.
     fn check_budget(&self, method: &str, path: &str, extra_ms: u64) -> Result<()> {
         let budget = self.budget_ms.load(Ordering::Relaxed);
-        let used = self.started.elapsed().as_millis() as u64;
+        let used = self.used_ms.load(Ordering::Relaxed);
         if budget > 0 && used.saturating_add(extra_ms) > budget {
             return Err(BosunError::error(
                 format!(
@@ -366,7 +367,11 @@ impl Http {
         let mut attempt = 1;
         loop {
             self.check_budget(method, path, 0)?;
-            let r = self.once(method, path, body)?;
+            let t0 = Instant::now();
+            let r = self.once(method, path, body);
+            self.used_ms
+                .fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+            let r = r?;
             let limited = r.status == 429
                 || (r.status == 403 && (r.retry_after.is_some() || r.rate_remaining_zero));
             if method != "POST" && attempt < MAX_ATTEMPTS && (r.status >= 500 || limited) {
@@ -374,6 +379,7 @@ impl Http {
                 self.check_budget(method, path, ms)?;
                 if ms > 0 {
                     std::thread::sleep(Duration::from_millis(ms));
+                    self.used_ms.fetch_add(ms, Ordering::Relaxed);
                 }
                 attempt += 1;
                 continue;

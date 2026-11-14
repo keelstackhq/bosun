@@ -516,7 +516,7 @@ pub struct WaitArgs {
     #[arg(long, default_value_t = WAIT_TIMEOUT_SECS)]
     pub timeout: u64,
     /// Read the current state once and return at once (a status check; same as `--timeout 0`).
-    #[arg(long)]
+    #[arg(long, conflicts_with = "timeout")]
     pub once: bool,
 }
 

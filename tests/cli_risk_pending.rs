@@ -121,3 +121,34 @@ fn dry_run_prints_the_judgment_and_writes_nothing() {
     assert!(fake.statuses_of(HEAD).is_empty());
     assert!(fake.requests().iter().all(|r| r.method == "GET"));
 }
+
+#[test]
+fn dry_run_leaves_the_pr_body_alone() {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "Closes #7");
+    fake.pull_file(
+        1,
+        "src/a.rs",
+        "modified",
+        1,
+        0,
+        Some("@@ -0,0 +1,1 @@\n+let x = 1;"),
+    );
+    fake.pull_file(
+        1,
+        ".github/workflows/ci.yml",
+        "modified",
+        1,
+        0,
+        Some("@@ -0,0 +1,1 @@\n+x"),
+    );
+    let (code, v) = run(
+        &fake,
+        "session_test",
+        NOW,
+        &["risk-check", "1", "--dry-run"],
+    );
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["dry_run"], true, "{v}");
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
+}

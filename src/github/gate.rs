@@ -37,6 +37,11 @@ impl<'a> GateWriter<'a> {
         }
     }
 
+    /// Whether this writer writes nothing.
+    pub fn is_dry(&self) -> bool {
+        self.dry
+    }
+
     /// Write nothing: `post` and `post_full` only say they worked (`risk-check --dry-run`).
     pub fn dry(mut self, on: bool) -> Self {
         self.dry = on;

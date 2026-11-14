@@ -94,13 +94,23 @@ pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
     let out = judge(&app, &w, pull.clone());
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
+        // The cleanup write must not fail on the time budget that stopped the run.
+        gh.set_budget(None);
         _ = w.post(&pull.head_sha, CONTEXT, "error", UNFINISHED);
     }
     if args.dry_run {
-        return out.map(|mut o| {
-            o.data["dry_run"] = json!(true);
-            o
-        });
+        return match out {
+            Ok(mut o) => {
+                o.data["dry_run"] = json!(true);
+                Ok(o)
+            }
+            Err(mut e) => {
+                if let Some(d) = e.data.as_mut().filter(|d| d.is_object()) {
+                    d["dry_run"] = json!(true);
+                }
+                Err(e)
+            }
+        };
     }
     out
 }
@@ -406,7 +416,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         }
     });
     let body = replace_note(&pull.body, note.as_deref());
-    if body != pull.body {
+    if body != pull.body && !w.is_dry() {
         gh.update_pull_body(n, &body)?;
     }
 
@@ -859,6 +869,9 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
 /// its statuses before and after posting (verdict.yml is not serialized with us). Never an error.
 fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) -> Option<String> {
     let head = pull.head_sha.as_str();
+    if w.is_dry() {
+        return None;
+    }
     // A carried status on top of a real verdict (a run was cancelled mid-post) is repaired first.
     let top = crate::github::gate::gate_statuses(gh, head)
         .ok()
