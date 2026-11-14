@@ -12,8 +12,8 @@ merges, tags or force-pushes.
 
 Do these on a computer first; the phone steps come after.
 
-1. **Tools.** `bosun init` runs `splice` (it renders bosun's files), and the repo settings come
-   from `hoist`. Install both, plus bosun:
+1. **Tools.** `bosun adopt` needs only bosun: `npm i -g @keelstackhq/bosun`. `bosun init` also
+   runs `splice` (it renders bosun's files), and the repo settings come from `hoist`:
    `npm i -g @keelstackhq/bosun @keelstackhq/splice @keelstackhq/hoist`. A cloud session gets
    them from the setup script (section 9).
 2. **Claude GitHub App.** Install it on the repo (GitHub → Settings → GitHub Apps). Cloud
@@ -156,10 +156,10 @@ Check the result with `bosun doctor` (add `--remote` to also run `hoist check`).
 step as ok, warn, skipped or missing. Without `GITHUB_TOKEN` it still runs the local checks and marks the GitHub ones skipped;
 `data.next_step` names the first missing step.
 
-## Modes (optional, after setup)
+### Modes (optional, after setup)
 
-A freshly adopted repo is in `gatekeeper`: no `[mode]` table. To move on, pin a release that
-reads `[mode]` and follow the steps in [quickstart.md](quickstart.md) (section 5, migration);
+A freshly adopted repo is in `gatekeeper`: no `[mode]` table. To move on, run
+`bosun migrate --to <mode>` ([quickstart.md](quickstart.md) section 5, migration);
 `bosun mode` shows what is in force. Move one mode at a time; the PR that sets `[mode] name` is
 R-gov and needs the owner.
 
@@ -244,7 +244,11 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
 2. **No PAT in the environment.** The session reaches GitHub through the Claude GitHub App and
    the agent proxy. The proxy rewrites every GitHub write (app attribution, a Claude footer), so a
    PAT there would not count as you anyway: `bosun approve` with `BOSUN_OWNER_TOKEN` refuses in a
-   cloud session (exit 5). Keep `BOSUN_OWNER_TOKEN` on your own computer only.
+   cloud session (exit 5). Keep `BOSUN_OWNER_TOKEN` on your own computer only. (Local sessions are
+   the only ones that use a token: `GITHUB_TOKEN` from `gh auth token`.)
+   Network: a `ts-pnpm` repo needs no extra host, because pnpm installs from `registry.npmjs.org`,
+   which "Allow package managers" covers; a Rust repo adds `github.com` and
+   `release-assets.githubusercontent.com` for the prebuilt cargo tools.
 3. **Review verdicts.** Cloud sessions cannot write commit statuses (the proxy answers 403). A
    reviewer runs `bosun verdict comment --from -` with the verdict JSON; the `verdict` workflow
    checks the comment and posts `review-verdict`. `bosun verdict post` works only outside the
@@ -297,7 +301,8 @@ Support is thin. What works today:
   budget-halt, owner-question, thread-result) as `slack_post` calls in `next`; the caller posts
   them and runs `bosun notify --ack KEY`. bosun never calls Slack and holds no Slack token.
 - **Setup.** A `[slack]` table in `.bosun/bosun.toml` (`channel`, `spawners = "owners"`,
-  `may_spawn`, `may_build = false`, `notify`), a private channel with no guests and not shared, and your Slack ID in
+  `may_spawn`, `may_build = false`; `notify` is opt-in: empty posts halt, main-red and asks, add
+  `"digest"` to post digest links, and a non-empty list posts only the kinds it names), a private channel with no guests and not shared, and your Slack ID in
   `governance/owners.toml`.
 
 Gaps:

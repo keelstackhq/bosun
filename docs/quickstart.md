@@ -14,9 +14,9 @@ Owner steps are marked **[phone]** or **[computer]** (D-009). Everything else an
 
 ## 0. Set the mode (all modes, all environments)
 
-**[computer]** Needs a published bosun release that reads `[mode]` (owner release). An agent then pins it
-(`bosun pin --latest --pr`, see [update.md](update.md)) and you approve that PR **[phone]**: an older release
-refuses `[mode]` as an unknown key. Then open a PR:
+Run `bosun migrate --to <mode>` (section 5): it pins a release that reads `[mode]` and opens the PR; you
+approve it **[phone]**. By hand, pin first ([update.md](update.md); an older release refuses `[mode]` as an
+unknown key), then open a PR:
 
 ```toml
 # .bosun/bosun.toml
@@ -55,7 +55,7 @@ Setup, once ([adopt-existing-repo.md](adopt-existing-repo.md) steps 1-5):
 
 ```bash
 npm i -g @keelstackhq/bosun
-# set GITHUB_TOKEN to the output of `gh auth token`
+# set GITHUB_TOKEN to the output of `gh auth token` (local only; a cloud session needs no token)
 bosun doctor                      # each missing step with its fix
 bosun trailers install            # the SessionStart hook does it too
 ```
@@ -124,13 +124,14 @@ Then run `bosun heal` and make only the calls in its `next`; report data.prs.
 channel = "C0123456789"
 spawners = "owners"
 may_spawn = true
+# notify = ["digest"]   # opt-in: empty posts halt, main-red, asks; a non-empty list posts only what it names
 ```
 
 (`may_build` stays false: code comes from spawned sessions.) The Claude Tag session labels itself:
 
 ```bash
 bosun join --origin slack --slack-channel C0123456789 [--slack-thread <ts>]
-bosun notify --channel-info -     # posts due: halt, main-red, asks; the digest comes from bosun digest
+bosun notify --channel-info -     # posts due: halt, main-red, asks (digest links only if [slack] notify names "digest")
 ```
 
 | Mode | In a thread |
@@ -157,7 +158,7 @@ thing that needs the Routine. `bosun metrics --propose` itself is read-only.
 ## 5. Migration: a repo that already runs bosun
 
 One command, one owner approval ([migrate-booster.md](migrate-booster.md): steps and a prompt for the CLI,
-web/cloud and Claude Tag in Slack; the manual path is its appendix).
+web/cloud and Claude Tag in Slack; it holds no manual path: `bosun migrate` does the steps).
 
 ```bash
 bosun migrate --to booster --dry-run   # survey: version, mode, registry, unmarked epics, hull lock, baseline
