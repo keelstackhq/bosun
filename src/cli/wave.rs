@@ -11,8 +11,8 @@ use super::plan::{epic_plan, epic_shape};
 use super::prereqs_gate::{blockers, open_items, plan_ids};
 use super::{EpicArg, WaveCmd};
 use crate::app::{
-    App, active_issues, default_branch, gated_from_default, kill_switch, limits_from_default,
-    main_red, task_meta, trusted_notes,
+    App, active_issues, active_issues_blocking, default_branch, gated_from_default, kill_switch,
+    limits_from_default, main_red, task_meta, trusted_notes,
 };
 use crate::cli::status::process_red;
 use crate::config::{CONFIG_FILE, Config};
@@ -285,7 +285,7 @@ fn plan_on(app: &App, epic: u64) -> CmdResult {
         .map(|t| t.0.clone())
         .collect();
     let mut leased = Vec::new();
-    for (i, n) in active_issues(gh)? {
+    for (i, n) in active_issues_blocking(gh)? {
         leased.push((i.number, n));
     }
     let leases = live_leases(&leased, now);

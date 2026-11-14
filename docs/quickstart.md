@@ -105,7 +105,7 @@ environment_id = "env_..."     # the id of the cloud environment the children ru
 | gatekeeper, steady | Start an orchestrator session on the repo. `bosun spawn <epic>` → make the `create_session` call in `next` → `bosun spawn <epic> --record --from -`. |
 | booster, autonomous | The orchestrator runs `bosun wave tick <epic>`; its `create_session` calls use `environment_id` from `[cloud]`. Run it again when children finish: it returns `archive_session` for done children. |
 
-The janitor Routine (hourly, **[computer]**, claude.ai/code → Routines; prompts: `bosun doctor`,
+The janitor Routine (hourly, **[computer]**, claude.ai/code → Routines; prompts: `bosun doctor --full`,
 `data.routines`) keeps leases and spend honest in every mode. For `steady` and lighter, add this
 sentence at the end of the janitor prompt (owner step):
 
@@ -143,7 +143,7 @@ form or on GitHub **[phone]**.
 
 ## 4. Owner Routine prompts (owner-held)
 
-Routines are human-only. **[computer]** claude.ai/code → Routines. Janitor and notify: `bosun doctor`
+Routines are human-only. **[computer]** claude.ai/code → Routines. Janitor and notify: `bosun doctor --full`
 prints them. For `booster` and `autonomous` (`curator_loosen = "propose"`) replace the curator
 Routine prompt (daily, Sonnet) with exactly this text:
 

@@ -134,7 +134,11 @@ fn import_records_gated_and_size_in_the_task_meta() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     std::fs::write(tmp.path().join("plan.md"), GATED).unwrap();
     let file = tmp.path().join("plan.md");
-    let (code, v) = plan(&fake, tmp.path(), &["import", file.to_str().unwrap()]);
+    let (code, v) = plan(
+        &fake,
+        tmp.path(),
+        &["import", file.to_str().unwrap(), "--full"],
+    );
     assert_eq!(code, 0, "{v}");
     let bodies: Vec<String> = fake
         .state
@@ -160,7 +164,11 @@ fn import_writes_the_shape_into_the_epic() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     std::fs::write(tmp.path().join("plan.md"), PLAN).unwrap();
     let file = tmp.path().join("plan.md");
-    let (code, v) = plan(&fake, tmp.path(), &["import", file.to_str().unwrap()]);
+    let (code, v) = plan(
+        &fake,
+        tmp.path(),
+        &["import", file.to_str().unwrap(), "--full"],
+    );
     assert_eq!(code, 0, "{v}");
     let epics = v["data"]["epics"].as_array().unwrap();
     let shape = |k: usize| {

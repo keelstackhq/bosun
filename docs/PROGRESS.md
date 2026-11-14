@@ -35,7 +35,7 @@ Human-only items, in order. Each has the exact action.
    settings → setup script: paste the bootstrap (`bosun setup-snippet`, or the README) once in
    every environment, the owner's included; it runs each checkout's `docs/setup-script.sh`, so
    a pin bump needs no new paste.
-3. **Routines (checklist step 11).** `bosun doctor` prints the three prompts in
+3. **Routines (checklist step 11).** `bosun doctor --full` prints the three prompts in
    `data.routines`: janitor (every hour, Haiku), curator (daily, Sonnet), notify (every
    hour, Haiku; only with `[slack]`). Create them in claude.ai → Routines.
 4. **Workflow secrets into main-only environments (PR fix/secrets-environments).** A same-repo
@@ -105,7 +105,7 @@ Human-only items, in order. Each has the exact action.
      spawn, and `notify = [...]` to post only some kinds (empty means all).
    - Add `slack = "U…"` to your `[[owner]]` table in `governance/owners.toml` (R-gov). Without it
      no answer counts and no thread may spawn; `bosun doctor` warns.
-   - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor`
+   - Create the notify Routine (item 3), or replace its prompt, with the prompt in `bosun doctor --full`
      data.routines from the new release, and attach the Slack connector to it: the Routine reads
      the channel facts and posts with its Slack tool.
 9. **Owner approvals.** The default (D-012): the session asks the owner with a form in the
