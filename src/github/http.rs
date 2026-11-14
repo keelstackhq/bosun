@@ -13,6 +13,16 @@ const DEFAULT_MAX_SLEEP_MS: u64 = 60_000;
 /// All GitHub calls of one command may take this long (`BOSUN_HTTP_BUDGET_SECS`, 0 = no limit).
 const DEFAULT_BUDGET_SECS: u64 = 120;
 
+/// The budget in seconds: an explicit `BOSUN_HTTP_BUDGET_SECS` wins; else none in CI (gate jobs
+/// run long on purpose), else the default.
+fn budget_secs(explicit: Option<&str>, ci: bool) -> u64 {
+    match explicit.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(s) => s,
+        None if ci => 0,
+        None => DEFAULT_BUDGET_SECS,
+    }
+}
+
 /// Percent-encode a path segment or query value.
 pub fn enc(s: &str) -> String {
     let mut out = String::new();
@@ -119,11 +129,13 @@ impl Http {
             verbose: std::env::var("BOSUN_VERBOSE").is_ok_and(|v| v == "1"),
             used_ms: AtomicU64::new(0),
             budget_ms: AtomicU64::new(
-                std::env::var("BOSUN_HTTP_BUDGET_SECS")
-                    .ok()
-                    .and_then(|v| v.trim().parse::<u64>().ok())
-                    .unwrap_or(DEFAULT_BUDGET_SECS)
-                    .saturating_mul(1000),
+                budget_secs(
+                    std::env::var("BOSUN_HTTP_BUDGET_SECS").ok().as_deref(),
+                    ["CI", "GITHUB_ACTIONS"]
+                        .iter()
+                        .any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "false")),
+                )
+                .saturating_mul(1000),
             ),
         }
     }
@@ -545,6 +557,16 @@ fn parse_link_next(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ci_has_no_budget_unless_set_explicitly() {
+        use super::{DEFAULT_BUDGET_SECS, budget_secs};
+        assert_eq!(budget_secs(None, false), DEFAULT_BUDGET_SECS);
+        assert_eq!(budget_secs(None, true), 0, "a long CI run is not cut");
+        assert_eq!(budget_secs(Some("30"), true), 30);
+        assert_eq!(budget_secs(Some("0"), false), 0);
+        assert_eq!(budget_secs(Some("junk"), true), 0);
+    }
+
     use super::*;
 
     #[test]
