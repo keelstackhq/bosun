@@ -1201,9 +1201,9 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
                         [
                             "actions/checkout@v4",
                             "actions/setup-node@v4",
-                            "taiki-e/install-action@v2"
+                            "taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21"
                         ]
-                        .contains(&u),
+                        .contains(&u.split(" #").next().unwrap_or(u)),
                         "{u} in {TRUSTED}"
                     );
                     assert!(s["with"].get("cache").is_none(), "{s}");
@@ -1273,8 +1273,9 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
             let rust = stack.contains(&"rust");
             assert_eq!(b.iter().any(|s| s["name"] == "rust toolchain"), rust);
             assert_eq!(
-                b.iter()
-                    .any(|s| s["uses"].as_str() == Some("Swatinem/rust-cache@v2")),
+                b.iter().any(|s| s["uses"]
+                    .as_str()
+                    .is_some_and(|u| u.starts_with("Swatinem/rust-cache@"))),
                 rust
             );
         }

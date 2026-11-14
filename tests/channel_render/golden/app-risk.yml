@@ -23,12 +23,16 @@ on:
     types: [opened, synchronize, reopened, edited, ready_for_review]
   issue_comment:
     types: [created]
+  # The base moved: re-judge every open PR against main, since a verdict is stale once main
+  # changes (risk rules, plan, owner approvals read from the base). One job, one run per push.
+  push:
+    branches: [main]
 
 # A comment that is neither an approval nor a recheck by the repo's people gets a group of its
 # own: its run is skipped and must never cancel the run that judges a new head.
 concurrency:
   group: >-
-    risk-${{ github.event.pull_request.number || github.event.issue.number }}-${{
+    risk-${{ github.event.pull_request.number || github.event.issue.number || 'main' }}-${{
     (github.event_name == 'issue_comment' && !contains(github.event.comment.body, '/bosun approve')
     && !(contains(github.event.comment.body, '/bosun recheck') &&
     contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
@@ -50,7 +54,8 @@ jobs:
     # re-judges; the filter limits CI minutes only). On the PR events: not for a draft (no runner
     # starts; `ready_for_review` judges it). A comment on a draft still judges, as before.
     if: >-
-      (github.event_name != 'issue_comment' && github.event.pull_request.draft == false) ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && (contains(github.event.comment.body, '/bosun approve') ||
       (contains(github.event.comment.body, '/bosun recheck') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))))
@@ -86,5 +91,15 @@ jobs:
           BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
           BOSUN_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          EVENT: ${{ github.event_name }}
         # Exit 5 (needs-human) is the verdict, carried by the status; only errors fail the job.
-        run: bosun risk-check "$PR" || test $? -eq 5
+        # On a push to main: every open PR against main is judged again (the base moved).
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            prs="$(gh api --paginate "repos/$BOSUN_REPO/pulls?state=open&base=main&per_page=100" --jq '.[] | select(.draft | not) | .number')"
+            for n in $prs; do
+              bosun risk-check "$n" || test $? -eq 5
+            done
+          else
+            bosun risk-check "$PR" || test $? -eq 5
+          fi
