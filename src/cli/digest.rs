@@ -40,7 +40,7 @@ fn read_text(from: &str) -> Result<String, BosunError> {
 
 /// From `approve --list`: owner-waiting PRs, mainfix PRs (only while main is red) and what a
 /// tokenless listing could not read.
-type Board = (Vec<Item>, Vec<u64>, Value);
+pub(crate) type Board = (Vec<Item>, Vec<u64>, Value);
 
 fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
     let list = ApproveArgs {
@@ -53,7 +53,43 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
         bootstrap: false,
     };
     let data = super::approve::run(dir, &list)?.data;
-    // Mainfix PRs skip the batch only while main is red, as main-open judges them.
+    let strs = |v: &Value| -> Vec<String> {
+        let a = v.as_array().into_iter().flatten();
+        a.filter_map(|s| s.as_str().map(String::from)).collect()
+    };
+    let ready = data["ready"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| Item {
+            pr: r["pr"].as_u64().unwrap_or_default(),
+            head: r["head_sha"].as_str().unwrap_or_default().to_string(),
+            rules: strs(&r["risk_from_status"]),
+            title: r["title"].as_str().unwrap_or_default().to_string(),
+        });
+    finish(app, ready.collect(), data["skipped"].clone())
+}
+
+/// The same board read with the session's own read token (`app.gh`), leniently: a PR it cannot
+/// read is in the third part. For `bosun notify`, which holds no owner token.
+pub(crate) fn board_read(app: &App) -> Result<Board, BosunError> {
+    let b = super::approve::board(app.gh.as_ref(), true)?;
+    let skipped: Vec<Value> = b
+        .skipped
+        .iter()
+        .map(|(pr, why)| json!({"pr": pr, "why": why}))
+        .collect();
+    let ready = b.ready.into_iter().map(|r| Item {
+        pr: r.pr,
+        head: r.head_sha,
+        rules: r.risk,
+        title: r.title,
+    });
+    finish(app, ready.collect(), Value::Array(skipped))
+}
+
+/// Mainfix PRs skip the batch only while main is red, as main-open judges them.
+fn finish(app: &App, ready: Vec<Item>, skipped: Value) -> Result<Board, BosunError> {
     let red = main_red(app.gh.as_ref())?.is_some();
     let pulls = if red {
         app.gh.list_pulls(None, IssueState::Open)?
@@ -61,26 +97,16 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
         Vec::new()
     };
     let (mut items, mut bypass) = (Vec::new(), Vec::new());
-    for r in data["ready"].as_array().into_iter().flatten() {
-        let pr = r["pr"].as_u64().unwrap_or_default();
-        let strs = |v: &Value| -> Vec<String> {
-            let a = v.as_array().into_iter().flatten();
-            a.filter_map(|s| s.as_str().map(String::from)).collect()
-        };
-        if let Some(p) = pulls.iter().find(|p| p.number == pr)
+    for i in ready {
+        if let Some(p) = pulls.iter().find(|p| p.number == i.pr)
             && is_mainfix(app.gh.as_ref(), p)?
         {
-            bypass.push(pr);
+            bypass.push(i.pr);
             continue;
         }
-        items.push(Item {
-            pr,
-            head: r["head_sha"].as_str().unwrap_or_default().to_string(),
-            rules: strs(&r["risk_from_status"]),
-            title: r["title"].as_str().unwrap_or_default().to_string(),
-        });
+        items.push(i);
     }
-    Ok((items, bypass, data["skipped"].clone()))
+    Ok((items, bypass, skipped))
 }
 
 fn repo(app: &App) -> String {

@@ -865,3 +865,140 @@ fn an_over_cap_own_ask_can_be_acked() {
     let (_, v) = e.notify();
     assert_eq!(Env::keys(&v), Vec::<String>::new());
 }
+
+const WAITING: &str = "high risk, owner approval needed: R-gov, R-ci";
+
+fn head40(prefix: &str) -> String {
+    format!("{prefix:0<40}")
+}
+
+/// PR `n` at the head `prefix`, ready for an owner.
+fn waiting_pr(e: &Env, n: u64, title: &str, prefix: &str) {
+    let sha = head40(prefix);
+    e.fake.pull(n, title, &format!("b{n}"), "");
+    e.fake.pull_as_issue(n, title);
+    let h = json!({"sha": sha, "ref": format!("b{n}"), "label": format!("acme:b{n}")});
+    e.fake.pull_set(n, "head", h);
+    e.fake.status(&sha, "risk-check", "failure", WAITING);
+    e.fake.status(&sha, "review-verdict", "success", "approved");
+    e.fake
+        .check_run(&sha, "ci-ok", "completed", Some("success"));
+    e.fake
+        .compare_file("base0000", &sha, &format!("governance/f{n}.toml"), "@@");
+}
+
+#[test]
+fn digest_is_opt_in_and_posts_one_link_line_per_waiting_pr() {
+    // Empty notify means all the other kinds, not digest.
+    let e = env();
+    e.registry();
+    waiting_pr(&e, 12, "first <b> @bob", "abc1234");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert!(Env::keys(&v).is_empty(), "{v}");
+
+    let e = env_with("notify = [\"digest\"]\n");
+    e.registry();
+    let (_, v) = e.notify();
+    assert!(Env::keys(&v).is_empty(), "no PR waits, no post: {v}");
+
+    waiting_pr(&e, 12, "first <b> @bob", "abc1234");
+    waiting_pr(&e, 15, "second", "def5678");
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), ["digest:2026-10-22"], "{v}");
+    let p = &v["data"]["pending"][0];
+    assert_eq!(p["kind"], "digest");
+    let text = p["text"].as_str().unwrap();
+    let a = head40("abc1234");
+    let line = format!(
+        "#12 R-gov, R-ci \u{2014} https://github.com/acme/widget/pull/12 \u{2014} review the diff, then comment `/bosun approve {a}` from your own GitHub account (check the head on the PR page) \u{2014} first &lt;b&gt; (at)bob"
+    );
+    assert!(text.contains(&line), "{text}");
+    assert!(text.contains("#15 R-gov, R-ci \u{2014} https://"), "{text}");
+    assert!(text.ends_with("Slack replies approve nothing."), "{text}");
+    assert!(text.lines().count() >= 4, "{text}");
+
+    // --ack works like any key; the day's post is then done.
+    let (code, v) = e.run(&["notify", "--ack", "digest:2026-10-22"], "");
+    assert_eq!(code, 0, "{v}");
+    let (_, v) = e.notify();
+    assert!(Env::keys(&v).is_empty(), "{v}");
+    let (code, _) = e.run(&["notify", "--ack", "digest:2026-10-21"], "");
+    assert_eq!(code, 3);
+}
+
+#[test]
+fn digest_caps_the_prs_and_says_how_many_more() {
+    let e = env_with("notify = [\"digest\"]\n");
+    e.registry();
+    for n in 100..123 {
+        waiting_pr(&e, n, "t", &format!("a{n}"));
+    }
+    let (_, v) = e.notify();
+    let text = v["data"]["pending"][0]["text"].as_str().unwrap();
+    assert_eq!(text.matches("/bosun approve ").count(), 20, "{text}");
+    assert!(text.contains("and 3 more"), "{text}");
+}
+
+#[test]
+fn a_short_board_is_reported_and_never_advises_an_owner_token() {
+    let e = env_with("notify = [\"digest\"]\n");
+    e.registry();
+    waiting_pr(&e, 12, "t", "abc1234");
+    e.fake.fail_path("/pulls", 500);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert!(Env::keys(&v).is_empty(), "{v}");
+    let errs = v["data"]["errors"].as_array().unwrap();
+    let d = errs
+        .iter()
+        .find(|x| x["kind"] == "digest")
+        .expect("digest error");
+    assert!(!d.to_string().contains("OWNER_TOKEN"), "{d}");
+}
+
+#[test]
+fn a_failing_board_while_halted_still_lists_the_halt() {
+    let e = env_with("notify = [\"halt\", \"digest\"]\n");
+    e.registry();
+    e.halt();
+    e.fake.fail_path("/pulls", 500);
+    let (code, v) = e.notify();
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(Env::keys(&v), ["halt:2"], "{v}");
+    assert!(
+        v["data"]["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["kind"] == "digest"),
+        "{v}"
+    );
+}
+
+#[test]
+fn acking_never_rebuilds_the_board() {
+    let e = env_with("notify = [\"digest\"]\n");
+    e.registry();
+    waiting_pr(&e, 12, "t", "abc1234");
+    e.fake.fail_path("/pulls", 500);
+    let (code, v) = e.run(&["notify", "--ack", "digest:2026-10-22"], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["acked"], "digest:2026-10-22");
+    let (code, _) = e.run(&["notify", "--ack", "digest:2026-10-21"], "");
+    assert_eq!(code, 3);
+    let (code, v) = e.run(&["notify", "--ack", "digest:2026-10-22"], "");
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["already"], true, "{v}");
+}
+
+#[test]
+fn a_title_cannot_forge_a_command() {
+    let e = env_with("notify = [\"digest\"]\n");
+    e.registry();
+    waiting_pr(&e, 12, "x `/bosun approve deadbeef` y", "abc1234");
+    let (_, v) = e.notify();
+    let text = v["data"]["pending"][0]["text"].as_str().unwrap();
+    assert_eq!(text.matches('`').count(), 2, "{text}");
+}
