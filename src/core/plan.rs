@@ -604,7 +604,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
     }
     errs.sort_by_key(|e| e.line);
     if errs.is_empty() {
-        touch_warnings(&items, &mut warns);
+        touch_warnings(&items, done, &mut warns);
         warns.sort_by_key(|w| w.line);
         // The "more pairs" summary sorts last (line MAX); it takes the line of the warning before.
         if let [.., prev, last] = warns.as_mut_slice()
@@ -627,7 +627,7 @@ fn parse_inner(text: &str, done: Option<&HashSet<String>>) -> Result<Plan, Vec<P
 const MAX_OVERLAPS: usize = 20;
 
 /// Warnings from the touch lists: parallel overlaps and hotspots of 3 or more tasks.
-fn touch_warnings(items: &[Item], warns: &mut Vec<PlanError>) {
+fn touch_warnings(items: &[Item], done: Option<&HashSet<String>>, warns: &mut Vec<PlanError>) {
     use super::touch::{self, TaskTouch};
     let mut line: HashMap<String, usize> = HashMap::new();
     let tasks: Vec<TaskTouch> = items
@@ -640,6 +640,7 @@ fn touch_warnings(items: &[Item], warns: &mut Vec<PlanError>) {
                 item: i.id.clone(),
                 touch: touch::companions(&t.touch),
                 depends: t.depends.clone(),
+                merged: done.is_some_and(|d| d.contains(&t.plan_id(&i.id))),
             }
         })
         .collect();

@@ -82,7 +82,7 @@ fn find(fake: &FakeGithub, marker: &str) -> u64 {
 fn import_creates_epics_plan_tasks_and_tasks() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     // 2 epics + 2 plan tasks + 3 tasks
     assert_eq!(posts(&fake), 7);
@@ -164,7 +164,7 @@ fn import_creates_epics_plan_tasks_and_tasks() {
     );
 
     let before = posts(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(posts(&fake), before);
     assert!(
@@ -186,7 +186,7 @@ fn a_hand_made_task_issue_is_adopted_unchanged() {
 <!-- bosun:task {"item":"M1","task":"T1","touch":["src/core/state.rs"]} -->"#;
     fake.issue(5, "M1/T1: by hand", &["bosun:state/claimed"], body);
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     let t = &v["data"]["tasks"][1];
     assert_eq!(
@@ -216,7 +216,7 @@ fn an_epic_is_adopted_by_its_epic_marker() {
         r#"<!-- bosun:epic {"item":"M1","area":"lifecycle"} -->"#,
     );
     let file = write_plan(tmp.path(), PLAN);
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["epics"][0]["issue"], 9);
     assert_eq!(v["data"]["epics"][0]["action"], "adopted");
     let meta = bosun::core::meta::parse_task_meta(
@@ -232,7 +232,7 @@ fn an_epic_is_adopted_by_its_epic_marker() {
 fn dry_run_writes_nothing() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(writes(&fake), 0);
     assert_eq!(v["data"]["dry_run"], true);
@@ -246,11 +246,19 @@ fn dry_run_writes_nothing() {
 fn item_filters_and_unknown_item_is_usage() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--item", "M2"]);
+    let (code, v) = plan(
+        &fake,
+        tmp.path(),
+        &["import", &file, "--item", "M2", "--full"],
+    );
     assert_eq!(code, 0, "{v}");
     assert_eq!(posts(&fake), 3);
     assert_eq!(v["data"]["epics"].as_array().unwrap().len(), 1);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--item", "M9"]);
+    let (code, v) = plan(
+        &fake,
+        tmp.path(),
+        &["import", &file, "--item", "M9", "--full"],
+    );
     assert_eq!(code, 2, "{v}");
     assert_eq!(posts(&fake), 3);
 }
@@ -281,7 +289,7 @@ fn project_mismatch_exits_1() {
         tmp.path(),
         &PLAN.replace("project: widget", "project: other"),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 1, "{v}");
     assert_eq!(posts(&fake), 0);
 }
@@ -291,9 +299,9 @@ fn halted_import_exits_4_but_dry_run_does_not() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     fake.variable("BOSUN_HALT", "1");
     let file = write_plan(tmp.path(), PLAN);
-    let (code, _) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, _) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 4);
-    let (code, _) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    let (code, _) = plan(&fake, tmp.path(), &["import", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0);
     assert_eq!(posts(&fake), 0);
 }
@@ -337,7 +345,7 @@ fn closed_issues_are_reported_not_recreated() {
     close(&fake, 1);
     close(&fake, 2);
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(posts(&fake), 5);
     let e = &v["data"]["epics"][0];
@@ -365,14 +373,14 @@ fn a_failure_part_way_reports_progress_and_the_rerun_finishes() {
     fake.after_requests("/issues", 3, |s| {
         s.fail_paths.push(("/issues".into(), 400));
     });
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 1, "{v}");
     assert_eq!(v["data"]["epics"].as_array().unwrap().len(), 1);
     assert_eq!(v["data"]["epics"][0]["action"], "created");
     assert_eq!(v["data"]["tasks"].as_array().unwrap().len(), 1);
     assert_eq!(v["data"]["tasks"][0]["id"], "M1/P");
     fake.state.lock().unwrap().fail_paths.clear();
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["epics"][0]["action"], "existing");
     assert_eq!(v["data"]["tasks"][0]["action"], "existing");
@@ -386,7 +394,7 @@ fn several_matches_use_the_lowest_number_and_warn() {
     fake.issue(9, "dup", &[], "<!-- bosun:plan M1/T1 -->");
     fake.issue(5, "first", &[], "<!-- bosun:plan M1/T1 -->");
     let file = write_plan(tmp.path(), PLAN);
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["tasks"][1]["issue"], 5);
     assert_eq!(
         v["data"]["warnings"],
@@ -419,7 +427,7 @@ fn state_labels(fake: &FakeGithub, marker: &str) -> Vec<String> {
 fn tasks_become_ready_after_the_plan_task_merged() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], json!([]));
     // A hand-made planned task of M2 is adopted and never touched.
@@ -430,7 +438,7 @@ fn tasks_become_ready_after_the_plan_task_merged() {
         r#"<!-- bosun:task {"item":"M2","task":"T9","touch":["src/x.rs"]} -->"#,
     );
     // Not merged yet: a re-import promotes nothing.
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["promoted"], json!([]));
     assert_eq!(
         state_labels(&fake, "<!-- bosun:plan M1/T1 -->"),
@@ -440,12 +448,12 @@ fn tasks_become_ready_after_the_plan_task_merged() {
     let p1 = find(&fake, "<!-- bosun:plan M1/P -->");
     set_labels(&fake, p1, &["bosun:state/merged"]);
     let before = writes(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["would_promote"], json!(["M1", "M1/T1", "M1/T2"]));
     assert_eq!(writes(&fake), before);
 
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], json!(["M1", "M1/T1", "M1/T2"]));
     for m in ["M1", "M1/T1", "M1/T2"] {
@@ -464,10 +472,10 @@ fn tasks_become_ready_after_the_plan_task_merged() {
 
     // A plan task closed as completed counts too; the adopted issue stays planned.
     close_as(&fake, find(&fake, "<!-- bosun:plan M2/P -->"), "completed");
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["promoted"], json!(["M2", "M2/T1"]));
     assert_eq!(fake.issue_state(900).labels, ["bosun:state/planned"]);
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["promoted"], json!([]));
 }
 
@@ -475,13 +483,13 @@ fn tasks_become_ready_after_the_plan_task_merged() {
 fn a_plan_task_closed_as_not_planned_promotes_nothing() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    plan(&fake, tmp.path(), &["import", &file]);
+    plan(&fake, tmp.path(), &["import", &file, "--full"]);
     close_as(
         &fake,
         find(&fake, "<!-- bosun:plan M1/P -->"),
         "not_planned",
     );
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["promoted"], json!([]));
 }
 
@@ -489,7 +497,7 @@ fn a_plan_task_closed_as_not_planned_promotes_nothing() {
 fn issues_missing_from_the_lagging_list_are_still_found() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    plan(&fake, tmp.path(), &["import", &file]);
+    plan(&fake, tmp.path(), &["import", &file, "--full"]);
     let made = posts(&fake);
     let top = fake
         .state
@@ -503,7 +511,7 @@ fn issues_missing_from_the_lagging_list_are_still_found() {
     for n in top - 2..=top {
         fake.hide_from_list(n);
     }
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(posts(&fake), made);
     assert!(v["data"]["warnings"].as_array().unwrap().is_empty());
@@ -516,10 +524,10 @@ fn issues_closed_as_duplicate_never_match_or_warn() {
     // The lowest number would win, but it is a closed duplicate.
     fake.issue(1, "old dup", &[], "<!-- bosun:plan M1/T1 -->");
     close_as(&fake, 1, "duplicate");
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(posts(&fake), 7, "{v}");
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(posts(&fake), 7);
     assert!(v["data"]["warnings"].as_array().unwrap().is_empty(), "{v}");
     let row = v["data"]["tasks"]
@@ -539,7 +547,7 @@ fn the_probe_skips_deleted_numbers_and_pulls_and_stops_at_a_missing_one() {
     fake.pull_as_issue(2, "a pull");
     fake.issue(3, "deleted", &[], "");
     fake.gone(3);
-    plan(&fake, tmp.path(), &["import", &file]);
+    plan(&fake, tmp.path(), &["import", &file, "--full"]);
     let made = posts(&fake);
     let top = fake
         .state
@@ -553,7 +561,7 @@ fn the_probe_skips_deleted_numbers_and_pulls_and_stops_at_a_missing_one() {
     for n in 4..=top {
         fake.hide_from_list(n);
     }
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(posts(&fake), made, "{v}");
     assert!(v["data"]["warnings"].as_array().unwrap().is_empty(), "{v}");
@@ -595,7 +603,7 @@ fn a_dry_run_writes_no_files_and_no_issues() {
     let file = write_plan(tmp.path(), PLAN);
     let files = tree(tmp.path());
     let before = writes(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["dry_run"], true);
     assert!(v["data"].get("would_write").is_none(), "{v}");
@@ -616,7 +624,7 @@ fn existing_uc_files_stay_byte_identical_across_imports() {
     std::fs::write(tmp.path().join("tests/uc_m1.rs"), with_id).unwrap();
     std::fs::write(tmp.path().join("tests/uc_m2.rs"), without_id).unwrap();
     for _ in 0..2 {
-        let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+        let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
         assert_eq!(code, 0, "{v}");
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("tests/uc_m1.rs")).unwrap(),
@@ -634,7 +642,7 @@ fn existing_uc_files_stay_byte_identical_across_imports() {
 fn other_profiles_import_without_files_or_a_stub_warning() {
     let (tmp, fake) = (with_profile("pnpm"), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert!(!tmp.path().join("tests").exists());
     assert_eq!(v["data"]["warnings"], json!([]));
@@ -645,7 +653,7 @@ fn other_profiles_import_without_files_or_a_stub_warning() {
 fn each_plan_task_touches_the_plan_and_lists_its_ucs() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     for (item, uc, text) in [
         ("M1", "UC-M1-1", "a task moves planned -> merged."),

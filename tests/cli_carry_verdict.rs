@@ -134,6 +134,11 @@ fn a_changed_merge_a_foreign_base_or_a_read_error_means_no_carry() {
         owner_ada(&fake);
         fake.fail_path_message(&r, 500, "SECRET-GITHUB-TEXT");
         let (code, v, st) = go(&fake);
+        // The task's comments are also read for R-plan: that read error fails the check closed.
+        if r == "/issues/7/comments" {
+            assert!(st.is_empty() && code == 1, "{r}: {code} {v}");
+            continue;
+        }
         assert!(st.is_empty() && code == 0 && !v.to_string().contains("SECRET"), "{r}: {code} {v}");
     }
 }

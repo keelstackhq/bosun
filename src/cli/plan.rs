@@ -71,6 +71,12 @@ fn read_plan_text(dir: Option<&Path>, file: &str) -> Result<(String, Plan)> {
         )
     })?;
     let plan = match plan::parse(&text) {
+        // Overlap warnings skip pairs of merged tasks: look them up only when there are warnings.
+        Ok(p) if !p.warnings.is_empty() => App::load(dir)
+            .and_then(|app| merged_plan_ids(app.gh.as_ref()))
+            .ok()
+            .and_then(|done| plan::parse_with_done(&text, &done).ok())
+            .unwrap_or(p),
         Ok(p) => p,
         // Rule 6 counts only open tasks: look up the merged ones only when it is all that failed,
         // so a good plan is still checked without GitHub.
@@ -588,6 +594,7 @@ fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
         dry_run: a.dry_run,
         item: vec![],
         keep_plan_tasks_open: false,
+        full: a.full,
     };
     run_import(dir, &args, true)
 }
@@ -731,7 +738,27 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         )
         .with_data(data));
     }
+    if !a.full {
+        summarize_import(&mut data);
+    }
     Ok(Outcome::data(data))
+}
+
+/// The default view: epics and tasks the import left as they were are counted, not listed.
+fn summarize_import(data: &mut Value) {
+    let mut unchanged = serde_json::Map::new();
+    for key in ["epics", "tasks"] {
+        if let Some(rows) = data[key].as_array() {
+            let (same, changed): (Vec<_>, Vec<_>) = rows
+                .iter()
+                .cloned()
+                .partition(|r| r["action"] == "existing");
+            unchanged.insert(key.into(), json!(same.len()));
+            data[key] = Value::Array(changed);
+        }
+    }
+    data["unchanged"] = Value::Object(unchanged);
+    data["summary"] = json!(true);
 }
 
 /// A plan with prerequisites gets its checklist issue refreshed (as `bosun

@@ -54,7 +54,7 @@ fn feature_spend(app: &App, epic: u64, all: &[Issue], bound: &[u64]) -> Result<f
 }
 
 /// The trusted `bind` records of issue `n` with their comment ids, oldest first.
-fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<(u64, Record)>> {
+pub(crate) fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<(u64, Record)>> {
     let notes = crate::app::trusted_notes(gh, n)?;
     let all = notes
         .iter()

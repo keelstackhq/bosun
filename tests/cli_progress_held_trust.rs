@@ -35,7 +35,7 @@ fn a_task_pr_record_from_a_reader_does_not_count() {
     fake.close_issue(10, "2026-10-22T09:00:00Z");
     merged_pull(&fake, 30, "feat/a");
     merged_pull(&fake, 40, "bosun/revert-30");
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["reverted"], 0, "{v}");
     assert_eq!(v["data"]["held"], 1, "{v}");
@@ -54,7 +54,7 @@ fn a_fork_branch_named_like_a_revert_does_not_count() {
         "head",
         json!({"sha": "f", "ref": "bosun/revert-30", "label": "fork:bosun/revert-30"}),
     );
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["reverted"], 0, "{v}");
 }

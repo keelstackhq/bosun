@@ -83,7 +83,7 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
             json!({"issue": issue, "title": title, "closed_at": closed_at, "usd": usd})
         })
         .collect();
-    Ok(Outcome::data(json!({
+    let mut data = json!({
         "days": args.days,
         "since": since.to_string(),
         "merged": tasks.len(),
@@ -94,7 +94,12 @@ pub fn run(dir: Option<&Path>, args: &ProgressArgs) -> CmdResult {
         "cost_per_held_task_usd": per_task(spend_usd, held),
         "task_cost_avg_usd": mean(&costs),
         "tasks": list,
-    })))
+    });
+    if !args.full {
+        data.as_object_mut().map(|o| o.remove("tasks"));
+        data["summary"] = json!(true);
+    }
+    Ok(Outcome::data(data))
 }
 
 /// `progress --lessons`: the state of the learning loop (spec §6). Hits are the `lesson-seen`
