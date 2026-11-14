@@ -411,14 +411,14 @@ fn digest_post(app: &App, errors: &mut Vec<Value>) -> Result<Option<Pending>, Bo
     let mut text = format!("{} PR(s) wait for the owner:", items.len());
     for i in items.iter().take(MAX_DIGEST) {
         text.push_str(&format!(
-            "\n#{} https://github.com/{}/{}/pull/{} \u{2014} approve: comment `/bosun approve {}` from your own GitHub account (check the head on the PR page) \u{2014} {} {}",
+            "\n#{} {} \u{2014} https://github.com/{}/{}/pull/{} \u{2014} review the diff, then comment `/bosun approve {}` from your own GitHub account (check the head on the PR page) \u{2014} {}",
             i.pr,
+            tick_free(&i.rules.join(", ")),
             r.owner,
             r.name,
             i.pr,
             neutralise(&i.head),
             tick_free(&i.title),
-            tick_free(&i.rules.join(", ")),
         ));
     }
     if items.len() > MAX_DIGEST {

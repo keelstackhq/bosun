@@ -917,10 +917,10 @@ fn digest_is_opt_in_and_posts_one_link_line_per_waiting_pr() {
     let text = p["text"].as_str().unwrap();
     let a = head40("abc1234");
     let line = format!(
-        "#12 https://github.com/acme/widget/pull/12 \u{2014} approve: comment `/bosun approve {a}` from your own GitHub account (check the head on the PR page) \u{2014} first &lt;b&gt; (at)bob R-gov, R-ci"
+        "#12 R-gov, R-ci \u{2014} https://github.com/acme/widget/pull/12 \u{2014} review the diff, then comment `/bosun approve {a}` from your own GitHub account (check the head on the PR page) \u{2014} first &lt;b&gt; (at)bob"
     );
     assert!(text.contains(&line), "{text}");
-    assert!(text.contains("#15 https://"), "{text}");
+    assert!(text.contains("#15 R-gov, R-ci \u{2014} https://"), "{text}");
     assert!(text.ends_with("Slack replies approve nothing."), "{text}");
     assert!(text.lines().count() >= 4, "{text}");
 
