@@ -217,17 +217,32 @@ pub fn notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
 /// The comments of an issue written by users with admin or write access, oldest first. A
 /// record from anyone else (a read-only user, an outsider) is forged until proven otherwise.
 pub fn trusted_notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
-    notes_from(gh, number, false)
+    notes_from(gh, number, Count::Writers)
+}
+
+/// As [`trusted_notes`], plus the `lease` records of logins whose permission a proxy hides
+/// (`unknown`). For refusals only (an overlapping claim, a lost race): such a lease can block,
+/// never be evidence for anything (an edit lock, a D-017 author lease, an approval).
+pub fn blocking_notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
+    notes_from(gh, number, Count::Blocking)
 }
 
 /// As [`trusted_notes`], plus comments by the workflow bot (`github-actions[bot]`, whose
 /// permission lookup is not `write`): review-ci posts its spend as the bot, and only a workflow
 /// with a write token can post as it. Spend dropped here would make the daily stop fail open.
 pub fn spend_notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
-    notes_from(gh, number, true)
+    notes_from(gh, number, Count::Spend)
 }
 
-fn notes_from(gh: &dyn Github, number: u64, bot: bool) -> Result<Vec<Note>> {
+#[derive(Clone, Copy, PartialEq)]
+enum Count {
+    Writers,
+    Blocking,
+    Spend,
+}
+
+fn notes_from(gh: &dyn Github, number: u64, mode: Count) -> Result<Vec<Note>> {
+    let bot = mode == Count::Spend;
     #[derive(Clone, Copy, PartialEq)]
     enum Who {
         Writer,
@@ -255,15 +270,16 @@ fn notes_from(gh: &dyn Github, number: u64, bot: bool) -> Result<Vec<Note>> {
                 w
             }
         };
-        // A proxy that hides permissions makes a login `unknown`: its lease and spend records
-        // still count (dropping them would loosen the lease and the spend caps); nothing that
-        // approves or answers does.
+        // A proxy that hides permissions makes a login `unknown`: its `spend` records still
+        // count toward the caps and (for refusals only) its `lease` records block; nothing that
+        // approves or answers does, and no lease is evidence for anything.
         let counts = match who {
             Who::Writer => true,
-            Who::Unknown => matches!(
-                parse_record(&c.body),
-                Some(Record::Lease { .. } | Record::Spend { .. })
-            ),
+            Who::Unknown => match (mode, parse_record(&c.body)) {
+                (Count::Spend, Some(Record::Spend { .. })) => true,
+                (Count::Blocking, Some(Record::Lease { .. })) => true,
+                _ => false,
+            },
             Who::Other => false,
         };
         if counts {
@@ -284,6 +300,18 @@ pub fn task_meta(issue: &Issue) -> Option<TaskMeta> {
 
 /// Open issues in a state that holds a lease, with their comments, by issue number.
 pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
+    active_issues_with(gh, trusted_notes)
+}
+
+/// As [`active_issues`], with [`blocking_notes`]: for overlap refusals only.
+pub fn active_issues_blocking(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
+    active_issues_with(gh, blocking_notes)
+}
+
+fn active_issues_with(
+    gh: &dyn Github,
+    read: fn(&dyn Github, u64) -> Result<Vec<Note>>,
+) -> Result<Vec<(Issue, Vec<Note>)>> {
     let mut found: Vec<Issue> = Vec::new();
     for st in State::ALL.into_iter().filter(|s| s.is_active()) {
         for issue in gh.list_issues(&[&st.label()], IssueState::Open)? {
@@ -296,7 +324,7 @@ pub fn active_issues(gh: &dyn Github) -> Result<Vec<(Issue, Vec<Note>)>> {
     found
         .into_iter()
         .map(|i| {
-            let n = trusted_notes(gh, i.number)?;
+            let n = read(gh, i.number)?;
             Ok((i, n))
         })
         .collect()
@@ -315,9 +343,9 @@ pub fn settle_race(
     others: &[u64],
     now: Timestamp,
 ) -> Result<()> {
-    let mut fresh = vec![(issue, trusted_notes(gh, issue)?)];
+    let mut fresh = vec![(issue, blocking_notes(gh, issue)?)];
     for &n in others.iter().filter(|&&n| n != issue) {
-        fresh.push((n, trusted_notes(gh, n)?));
+        fresh.push((n, blocking_notes(gh, n)?));
     }
     let Some(w) = race_winner(issue, comment_id, touch, &fresh, now) else {
         return Ok(());

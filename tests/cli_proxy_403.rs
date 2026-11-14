@@ -43,11 +43,21 @@ fn unknown_logins_still_hold_leases_and_spend() {
     let fake = FakeGithub::start();
     fake.fail_path_message("/permission", 403, PROXY_403);
     fake.viewer("me");
-    fake.issue(10, "task", &["bosun:state/queued"], "Do it.");
+    let task = |n: u64, state: &str| {
+        let body = format!(
+            "Do it.\n\n<!-- bosun:task {{\"item\":\"M1\",\"task\":\"T{n}\",\"touch\":[\"src/a/**\"],\"kind\":\"feature\"}} -->"
+        );
+        fake.issue(n, "task", &[state], &body);
+    };
+    task(11, "bosun:state/claimed");
+    task(10, "bosun:state/ready");
     let live = lease_note("session_a", "2026-10-22T12:00:00Z", "src/a/**");
-    fake.comment_by(10, "bob", &live);
+    fake.comment_by(11, "bob", &live);
     let (code, v) = run(&fake, "session_b", T0, &["claim", "10"]);
     assert_eq!(code, 3, "another login's live lease blocks the claim: {v}");
+    // ... but it is no evidence: the strict readers (status) do not see it.
+    let (_, v) = run(&fake, "session_b", T0, &["status"]);
+    assert_eq!(v["data"]["leases"].as_array().map_or(0, Vec::len), 0, "{v}");
 
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     let spend = r#"{"bosun":"spend","session":"s","usd":150.0,"at":"2026-10-22T03:00:00Z"}"#;

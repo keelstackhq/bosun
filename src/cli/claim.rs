@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::ClaimArgs;
 use crate::app::{
-    App, active_issues, kill_switch, limits_from_default, main_red, renew_lease, set_state,
-    settle_race, task_meta, trusted_notes,
+    App, active_issues, active_issues_blocking, kill_switch, limits_from_default, main_red,
+    renew_lease, set_state, settle_race, task_meta, trusted_notes,
 };
 use crate::cli::lesson;
 use crate::cli::status::process_red;
@@ -142,7 +142,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
         )
     })?;
 
-    let active = active_issues(gh)?;
+    let active = active_issues_blocking(gh)?;
     check_overlap(&active, &touch, session, n, now)?;
 
     if let (Some(area), Some((_, reg))) = (area_of(&issue.labels), registry::load(gh)?) {
@@ -234,7 +234,7 @@ fn renew_lapsed(
     }
     let globs = glob::parse_all(&l.touch)
         .map_err(|m| BosunError::usage(m, "release the task and claim it again"))?;
-    check_overlap(&active_issues(gh)?, &globs, session, n, now)?;
+    check_overlap(&active_issues_blocking(gh)?, &globs, session, n, now)?;
     let expires = now.plus_secs(TTL_SECS);
     renew_lease(gh, l, cur, expires)?;
     // The write is in place, so a reap that ended the lease meanwhile is not undone by it: read
@@ -262,7 +262,7 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
     let Some(fresh) = fresh.filter(|i| state_of(&i.labels) == Some(State::Claimed)) else {
         return Ok(());
     };
-    let theirs = trusted_notes(gh, n).map_err(|e| e.to_string())?;
+    let theirs = crate::app::blocking_notes(gh, n).map_err(|e| e.to_string())?;
     if leases_of(n, &theirs)
         .iter()
         .any(|l| l.session != session && l.is_live(now))
@@ -272,7 +272,7 @@ fn revert_to_ready(gh: &dyn Github, n: u64, session: &str, now: Timestamp) -> Re
     set_state(gh, n, &fresh, State::Ready).map_err(|e| e.to_string())?;
     // A third claimer may have won while the state was `claimed` and posted its lease before our
     // `ready` write: its task must not be left `ready`. Look again and restore `claimed`.
-    let theirs = trusted_notes(gh, n).map_err(|e| e.to_string())?;
+    let theirs = crate::app::blocking_notes(gh, n).map_err(|e| e.to_string())?;
     if leases_of(n, &theirs)
         .iter()
         .any(|l| l.session != session && l.is_live(now))
@@ -353,7 +353,7 @@ fn grow(app: &App, n: u64, old: &Lease, added: &[String], mine: &[Note]) -> CmdR
             "use repo-relative globs with * ? ** only, such as src/core/**",
         )
     })?;
-    let active = active_issues(gh)?;
+    let active = active_issues_blocking(gh)?;
     check_overlap(&active, &new_globs, session, n, now)?;
     let touch: Vec<String> = old.touch.iter().chain(added).cloned().collect();
     let thread_ts = match mine
