@@ -15,7 +15,7 @@ bosun migrate --finish                 # after the merge: join, plan amend (idem
   and a 30-day metrics baseline (best effort, 20 s timeout: a missing baseline never blocks).
 - **One PR** with every file step: the `.bosun/version` pin (when the release is on npm; else exit 3 that names
   the pin step), the `.bosun/registry` pin, and `[mode] name`. The PR body lists the one owner approval and the
-  owner-only steps left (Routines). An open `bosun/migrate-*` PR is reused.
+  owner-only steps left (Routines). An open PR for the same step is reused.
 - **One step at a time:** without `--direct` it moves one rung (gatekeeper → steady). With `--direct` it goes
   straight to the target; the PR body records that the owner chose it.
 - **Auto-merge without a task:** `bosun pr --pr <n> --ready` marks the PR ready and turns on auto-merge after the

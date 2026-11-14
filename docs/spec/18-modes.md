@@ -87,9 +87,10 @@ exact-inverse check.
   --tool bosun` when the pin is older than 0.14.0; a bosun splice channel or an unpublished release
   exits 3 naming the pin step), the `.bosun/registry` pin (the live registry; two open and no pin
   exits 3) and `[mode] name`. One rung per run, lighter; `--direct` goes to the target and the
-  body records it as the owner's choice. A tighter target is one PR. An open `bosun/migrate-*` PR is
-  reused. The body names the one owner approval (R-gov; R-weaken when lighter) and the owner-only
-  Routine steps. `--finish [--plan F]` after the merge: `bosun join`, then `bosun plan amend` for
+  body records it as the owner's choice. A tighter target is one PR. It needs a clean tree on the default branch equal to
+  origin's; any failure restores the tree. An open `bosun/migrate-<step>` PR for the same step is
+  reused; one for another step exits 3. The body names the one owner approval (R-gov; R-weaken when lighter) and the owner-only
+  Routine steps. `--finish [--plan F]` after the merge (an open migrate PR exits 3): `bosun join`, then `bosun plan amend` for
   each plan an open epic marker names (and each `--plan`) when `budget_feature` is not `off`;
   both idempotent.
 - `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
