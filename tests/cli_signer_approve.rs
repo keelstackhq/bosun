@@ -32,6 +32,35 @@ fn key() -> Key {
     Key(Ed25519KeyPair::from_pkcs8(doc.as_ref()).unwrap(), pem)
 }
 
+/// The default branch's `.bosun/bosun.toml`: the signer opt-in and the gate App's checks mode.
+fn config(policy: &str, signer: bool, checks: bool) -> String {
+    let mut c = format!("project = \"widget\"\n\n[approvals]\npolicy = \"{policy}\"\n");
+    if signer {
+        c.push_str("signer = true\n");
+    }
+    if checks {
+        c.push_str("\n[checks]\nmode = \"checks\"\napp_id = 4242\napp_slug = \"gate-app\"\n");
+    }
+    c
+}
+
+/// A checkout directory whose config is the default branch's, as the signer workflow has it.
+fn checkout(checks: bool) -> std::path::PathBuf {
+    let dir = tempfile::tempdir().unwrap().keep();
+    std::fs::create_dir_all(dir.join(".bosun")).unwrap();
+    std::fs::write(
+        dir.join(".bosun/bosun.toml"),
+        config("autonomous", true, checks),
+    )
+    .unwrap();
+    dir
+}
+
+/// The gate App's green `ci-ok` run on HEAD.
+fn ci_ok(fake: &FakeGithub) {
+    fake.app_run(HEAD, "ci-ok", "success", "ok", "gate-app", 4242);
+}
+
 /// PR 1 by `author` (Closes #7, leased by `session_w`) at HEAD changing src/a.rs; owner `ada`;
 /// key `k1` enrolled as `role`.
 fn pr(k: &Key, role: &str, policy: &str, author: &str) -> FakeGithub {
@@ -66,18 +95,17 @@ fn pr_v(
     let keys = format!("[[key]]\nid = \"k1\"\ned25519 = \"{public}\"\nrole = \"{role}\"\n");
     fake.content(".bosun/approvers.toml", MAIN, &keys);
     fake.content(".bosun/risk.toml", BASE, RULES);
-    let cfg = format!("project = \"widget\"\n\n[approvals]\npolicy = \"{policy}\"\n");
+    let cfg = config(policy, true, true);
     fake.content(".bosun/bosun.toml", BASE, &cfg);
     fake.content(".bosun/bosun.toml", MAIN, &cfg);
     fake.pull_file(1, "src/feature/a.rs", "modified", 1, 0, Some(PLAIN));
     if let Some((session, major)) = verdict {
         let r = json!({"bosun": "verdict", "session": session, "head_sha": HEAD,
             "approved": true, "confidence": 0.95, "major": major});
-        fake.comment_by(
-            1,
-            "github-actions[bot]",
-            &format!("Review verdict: approve 0.95.\n\n{r}"),
-        );
+        // The gate App's comment counts in checks mode, GitHub Actions' otherwise.
+        for bot in ["github-actions[bot]", "gate-app[bot]"] {
+            fake.comment_by(1, bot, &format!("Review verdict: approve 0.95.\n\n{r}"));
+        }
     }
     fake
 }
@@ -113,6 +141,8 @@ fn sign_at(
     let target = format!("1@{HEAD}");
     let mut args = vec!["approve", &target, "--sign-key", path.to_str().unwrap()];
     args.extend_from_slice(extra);
+    let default = (at.is_none()).then(|| checkout(true));
+    let at = at.or(default.as_deref());
     let at = at.map(|d| d.to_str().unwrap().to_string());
     let mut full = Vec::new();
     if let Some(d) = &at {
@@ -128,7 +158,7 @@ const AS_SIGNER: [&str; 5] = ["--bootstrap", "--as", "signer", "--requester", "s
 fn the_signer_signs_the_autonomous_form_once_ci_ok_is_green() {
     let k = key();
     let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     let (code, v) = sign(&fake, &k, &AS_SIGNER);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["approved"][0]["policy"], "autonomous");
@@ -144,7 +174,7 @@ fn the_signer_signs_the_autonomous_form_once_ci_ok_is_green() {
 }
 
 #[test]
-fn only_the_newest_github_actions_ci_ok_run_counts() {
+fn only_the_gate_apps_newest_ci_ok_run_counts() {
     let k = key();
     // A ci-ok status never counts, however green.
     let fake = pr(&k, "signer", "autonomous", "octocat");
@@ -154,23 +184,23 @@ fn only_the_newest_github_actions_ci_ok_run_counts() {
         ("missing", vec![], 1),
         (
             "failure",
-            vec![("github-actions", "completed", Some("failure"))],
+            vec![("gate-app", "completed", Some("failure"))],
             1,
         ),
-        ("running", vec![("github-actions", "in_progress", None)], 1),
+        ("running", vec![("gate-app", "in_progress", None)], 1),
         (
             "older failing, newer passing",
             vec![
-                ("github-actions", "completed", Some("failure")),
-                ("github-actions", "completed", Some("success")),
+                ("gate-app", "completed", Some("failure")),
+                ("gate-app", "completed", Some("success")),
             ],
             0,
         ),
         (
             "newer failing",
             vec![
-                ("github-actions", "completed", Some("success")),
-                ("github-actions", "completed", Some("failure")),
+                ("gate-app", "completed", Some("success")),
+                ("gate-app", "completed", Some("failure")),
             ],
             1,
         ),
@@ -179,14 +209,20 @@ fn only_the_newest_github_actions_ci_ok_run_counts() {
             vec![("evil-app", "completed", Some("success"))],
             1,
         ),
+        (
+            "github-actions (a push workflow can post it)",
+            vec![("github-actions", "completed", Some("success"))],
+            1,
+        ),
     ] {
         let fake = pr(&k, "signer", "autonomous", "octocat");
         for (app, st, c) in &runs {
-            if *app == "github-actions" {
-                fake.check_run(HEAD, "ci-ok", st, *c);
-            } else {
-                fake.check_run_by(HEAD, "ci-ok", c.unwrap(), app);
-            }
+            let id = match *app {
+                "gate-app" => 4242,
+                "github-actions" => 15368,
+                _ => 7,
+            };
+            fake.check_run_app(HEAD, "ci-ok", st, *c, app, id);
         }
         let before = fake.comments_of(1).len();
         let (code, v) = sign(&fake, &k, &AS_SIGNER);
@@ -208,14 +244,14 @@ fn the_requester_is_never_the_independent_reviewer() {
         "octocat",
         Some(("session_q", 0)),
     );
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     let before = fake.comments_of(1).len();
     let (code, v) = sign(&fake, &k, &AS_SIGNER);
     assert_eq!(code, 1, "{v}");
     assert_eq!(fake.comments_of(1).len(), before, "nothing signed");
     // Another reviewer's clean verdict signs; --requester is required with --as signer only.
     let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     assert_eq!(sign(&fake, &k, &["--bootstrap", "--as", "signer"]).0, 2);
     assert_eq!(sign(&fake, &k, &["--bootstrap", "--requester", "x y"]).0, 2);
     assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 0);
@@ -225,14 +261,14 @@ fn the_requester_is_never_the_independent_reviewer() {
 fn the_signer_role_needs_bootstrap_and_the_autonomous_policy() {
     let k = key();
     let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     let no_boot = ["--as", "signer", "--requester", "session_q"];
     assert_eq!(sign(&fake, &k, &no_boot).0, 2, "no --bootstrap");
     // Without `--as signer` the enrolled role does not match.
     assert_eq!(sign(&fake, &k, &["--bootstrap"]).0, 1);
     for policy in ["owner-gated", "orchestrator", "owner"] {
         let fake = pr(&k, "signer", policy, "octocat");
-        fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+        ci_ok(&fake);
         let (code, v) = sign(&fake, &k, &AS_SIGNER);
         assert_eq!(code, 1, "{policy}: {v}");
         assert!(v["error"]["fix"].as_str().unwrap().contains("autonomous"));
@@ -240,7 +276,7 @@ fn the_signer_role_needs_bootstrap_and_the_autonomous_policy() {
     // An owner key never signs as signer.
     let o = key();
     let fake = pr(&o, "owner", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     assert_eq!(sign(&fake, &o, &AS_SIGNER).0, 1);
     // The usual autonomous checks still hold: a verdict with a major finding signs nothing.
     let fake = pr_v(
@@ -250,12 +286,12 @@ fn the_signer_role_needs_bootstrap_and_the_autonomous_policy() {
         "octocat",
         Some(("session_r", 2)),
     );
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     let before = fake.comments_of(1).len();
     assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 1, "major finding");
     assert_eq!(fake.comments_of(1).len(), before);
     let bad = pr(&k, "signer", "autonomous", "octocat");
-    bad.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&bad);
     bad.pull_file(1, ".github/workflows/ci.yml", "modified", 1, 0, Some(PLAIN));
     assert_eq!(sign(&bad, &k, &AS_SIGNER).0, 1, "excluded path");
 }
@@ -473,12 +509,25 @@ fn doctor_checks_the_signer_workflow_and_key_under_the_autonomous_policy() {
     let d = tempfile::tempdir().unwrap();
     write(d.path(), ".bosun/bosun.toml", "project = \"w\"\n");
     assert!(doctor_item(d.path(), &fake).is_none());
-    // Autonomous (via the mode preset), nothing set up: a warning with the owner step.
+    // Autonomous without `[approvals] signer = true`: off by default, no setup warnings.
     let d = tempfile::tempdir().unwrap();
     write(
         d.path(),
         ".bosun/bosun.toml",
         "project = \"w\"\n\n[mode]\nname = \"autonomous\"\n",
+    );
+    let it = doctor_item(d.path(), &fake).expect("item");
+    assert_eq!(it["status"], "skipped", "{it}");
+    assert!(
+        it["detail"].as_str().unwrap().contains("off (default)"),
+        "{it}"
+    );
+    // Autonomous (via the mode preset), nothing set up: a warning with the owner step.
+    let d = tempfile::tempdir().unwrap();
+    write(
+        d.path(),
+        ".bosun/bosun.toml",
+        "project = \"w\"\n\n[mode]\nname = \"autonomous\"\n\n[approvals]\nsigner = true\n",
     );
     let it = doctor_item(d.path(), &fake).expect("item");
     assert_eq!(it["status"], "warn", "{it}");
@@ -510,47 +559,65 @@ fn doctor_checks_the_signer_workflow_and_key_under_the_autonomous_policy() {
     assert_eq!(doctor_item(d.path(), &fake).unwrap()["status"], "ok");
 }
 
-/// A PR whose clean verdict is the gate App's comment, as in `[checks] mode = "checks"`.
-fn gate_pr(k: &Key) -> FakeGithub {
-    let fake = pr_v(k, "signer", "autonomous", "octocat", None);
-    let r = json!({"bosun": "verdict", "session": "session_r", "head_sha": HEAD,
-        "approved": true, "confidence": 0.95, "major": 0});
-    let text = format!("Review verdict: approve 0.95.\n\n{r}");
-    fake.comment_by(1, "gate-app[bot]", &text);
-    fake
+#[test]
+fn the_signer_is_opt_in_and_needs_checks_mode() {
+    let k = key();
+    let cfg_at = |f: &FakeGithub, text: &str| {
+        f.content(".bosun/bosun.toml", BASE, text);
+        f.content(".bosun/bosun.toml", MAIN, text);
+    };
+    let (off, on_statuses) = (
+        config("autonomous", false, true),
+        config("autonomous", true, false),
+    );
+    let signer_false = off.replace(
+        "policy = \"autonomous\"\n",
+        "policy = \"autonomous\"\nsigner = false\n",
+    );
+    for (what, text, want) in [
+        ("signer not set", off.clone(), "signer"),
+        ("signer = false", signer_false, "signer"),
+        ("statuses mode", on_statuses, "checks"),
+    ] {
+        let fake = pr(&k, "signer", "autonomous", "octocat");
+        ci_ok(&fake);
+        cfg_at(&fake, &text);
+        let before = fake.comments_of(1).len();
+        let (code, v) = sign(&fake, &k, &AS_SIGNER);
+        assert_eq!(code, 1, "{what}: {v}");
+        let fix = v["error"]["fix"].as_str().unwrap();
+        assert!(fix.contains(want), "{what}: {fix}");
+        assert_eq!(fake.comments_of(1).len(), before, "{what}: nothing signed");
+    }
+    // A checkout without the checks config cannot trust the gate App either.
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    ci_ok(&fake);
+    assert_eq!(sign_at(&fake, &k, &AS_SIGNER, Some(&checkout(false))).0, 1);
+    // On, in checks mode, with the gate App's green run: signs.
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    ci_ok(&fake);
+    assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 0);
 }
 
 #[test]
-fn in_checks_mode_only_the_gate_apps_ci_ok_counts() {
+fn turning_the_signer_on_is_an_r_weaken_finding() {
     let k = key();
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
-    std::fs::write(
-        dir.path().join(".bosun/bosun.toml"),
-        "[checks]\nmode = \"checks\"\napp_id = 4242\napp_slug = \"gate-app\"\n",
-    )
-    .unwrap();
-    // GitHub Actions' ci-ok is not the gate App's: refused in checks mode.
-    let fake = gate_pr(&k);
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
-    let (code, v) = sign_at(&fake, &k, &AS_SIGNER, Some(dir.path()));
-    assert_eq!(code, 1, "{v}");
-    // The gate App's run counts (in checks mode its verdicts are the App's comments).
-    let fake = gate_pr(&k);
-    fake.app_run(HEAD, "ci-ok", "success", "ok", "gate-app", 4242);
-    let (code, v) = sign_at(&fake, &k, &AS_SIGNER, Some(dir.path()));
-    assert_eq!(code, 0, "{v}");
-    // Another app's run never counts, in either mode.
-    let fake = gate_pr(&k);
-    fake.app_run(HEAD, "ci-ok", "success", "ok", "other", 7);
-    assert_eq!(sign_at(&fake, &k, &AS_SIGNER, Some(dir.path())).0, 1);
-    // statuses mode: another app's, and the gate App's, are no GitHub Actions run.
-    let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.app_run(HEAD, "ci-ok", "success", "ok", "other", 7);
-    assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 1);
-    let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.app_run(HEAD, "ci-ok", "success", "ok", "gate-app", 4242);
-    assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 1);
+    let fake = pr(&k, "owner", "owner-gated", "octocat");
+    let off = config("owner-gated", false, false);
+    fake.content(".bosun/bosun.toml", BASE, &off);
+    fake.pull_file(1, ".bosun/bosun.toml", "modified", 1, 0, Some(PLAIN));
+    fake.content(
+        ".bosun/bosun.toml",
+        HEAD,
+        &config("owner-gated", true, false),
+    );
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 5, "{v}");
+    let m = v["data"]["matches"].to_string();
+    assert!(
+        m.contains("R-weaken") && m.contains("approvals.signer"),
+        "{m}"
+    );
 }
 
 #[test]
@@ -559,7 +626,7 @@ fn the_signer_refuses_what_risk_check_calls_a_weakening() {
     let t = "#[test]\nfn a() { assert!(x); }\n";
     let weak = format!("{t}#[test]\n#[ignore]\nfn b() {{ assert!(y); }}\n");
     let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     fake.pull_file(1, "tests/a.rs", "modified", 3, 0, Some(PLAIN));
     fake.content("tests/a.rs", BASE, t);
     fake.content("tests/a.rs", HEAD, &weak);
@@ -573,14 +640,14 @@ fn the_signer_refuses_what_risk_check_calls_a_weakening() {
     assert_eq!(fake.comments_of(1).len(), before, "nothing signed");
     // The same file without the weakening signs.
     let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     fake.pull_file(1, "tests/a.rs", "modified", 3, 0, Some(PLAIN));
     fake.content("tests/a.rs", BASE, t);
     fake.content("tests/a.rs", HEAD, t);
     assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 0);
     // A `weaken` capability label is the owner's too.
     let fake = pr(&k, "signer", "autonomous", "octocat");
-    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    ci_ok(&fake);
     fake.pull_set(1, "labels", json!([{"name": "bosun:capability/weaken"}]));
     let (code, v) = sign(&fake, &k, &AS_SIGNER);
     assert_eq!(code, 1, "{v}");
@@ -595,7 +662,7 @@ fn doctor_remote(fake: &FakeGithub, remote: bool) -> (Value, Value) {
     };
     write(
         ".bosun/bosun.toml",
-        "project = \"w\"\n\n[mode]\nname = \"autonomous\"\n",
+        "project = \"w\"\n\n[mode]\nname = \"autonomous\"\n\n[approvals]\nsigner = true\n",
     );
     write(
         ".github/workflows/signer.yml",

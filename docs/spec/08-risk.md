@@ -262,7 +262,15 @@ High-risk PRs:
   covered: release environments, secrets, tags. `policy =
   "autonomous"` under an older pinned release is a parse error (fails closed); set it only after
   pinning a release that knows it.
-- Keyless fast lane: the CI signer (D-017 in ephemeral sessions). Cloud and Claude Tag sessions
+- Keyless fast lane: the CI signer (D-017 in ephemeral sessions). Off by default: `[approvals]
+  signer = true` turns it on (an `[approvals]` change, so R-weaken: the owner decides), it needs
+  `[checks] mode = "checks"` with the gate App (`approve --as signer` refuses otherwise, exit 1, and
+  only the gate App's newest `ci-ok` run counts, never GitHub Actions': in statuses mode a push
+  workflow on any branch can post one), and the orchestrator-held key path stays the recommended
+  default. Trust model, plainly: verdict session tags and the dispatch `requester` are
+  self-declared, so with the signer on, independence rests on honest agents, with no cryptographic
+  separation; the accepted residual is an author who leases as session A, posts a verdict as B and
+  requests as C. Cloud and Claude Tag sessions
   are ephemeral and hold no secrets, so no session keeps the autonomous key. Chosen over a
   verdict-only approval with no signature: risk-check keeps its one trust root (a signature by a
   key enrolled on the default branch, checks unchanged), the key never reaches a session, and
@@ -279,15 +287,14 @@ High-risk PRs:
   channel's `core` piece, owned; R-ci, so owner-class) runs on `workflow_dispatch` only (inputs
   `pr`, `head`, `requester`), only from the default branch, never checks out the PR: job `sign` (environment
   `bosun-signer`) installs the release pinned in `.bosun/version` and runs `bosun approve
-  <pr>@<head> --sign-key <pem> --bootstrap --as signer`; job `judge` (needs `sign`, environment
+  <pr>@<head> --sign-key <pem> --bootstrap --as signer`; job `judge` (needs `sign`, the same default-branch `if:`, environment
   `bosun-app`) runs `bosun risk-check <pr>`, because a comment posted with `GITHUB_TOKEN` starts
   no workflow. Two jobs on purpose (D-007 exception): the signer key and the App key never share
   a job. `--as signer` signs only when the policy at the default branch is autonomous, the head is
   the PR's current head, every D-017 check `approve` runs passes (the session that asked, the
   workflow's `requester` input, is excluded as a reviewer like the signer's own, so signer !=
   reviewer holds in CI), and the head's `ci-ok` is green as `ci_green` reads it: the newest
-  GitHub Actions check run, never a status (in `[checks] mode = "checks"` (§15) only the gate App's
-  run, by `checks.app_id`). The hole it narrows: anyone or any workflow with `checks: write`, or any
+  check run of the gate App (`checks.app_id`, §15), never a status and never GitHub Actions'. The hole it narrows: anyone or any workflow with `checks: write`, or any
   App, can create a check run named `ci-ok` (D32), so no other creator counts. `approve --as signer`
   also refuses, as risk-check does, a PR with R-weaken findings or a `weaken` capability (label or
   linked task), which are the owner's (else exit 1, nothing signed; `data.ci_ok`). Any session asks for it
@@ -297,7 +304,7 @@ High-risk PRs:
   no barrier: a dispatch with `ref` set to another branch runs that branch's copy of the file, and
   anyone who can push a branch can remove the guard. The one real barrier is the environment's
   deployment-branch rule: `bosun-signer` must allow only the default branch, so a run from any other
-  branch cannot read `BOSUN_SIGNER_KEY`. `bosun doctor` checks, under the autonomous policy, that
+  branch cannot read `BOSUN_SIGNER_KEY`. `bosun doctor` shows the step as `off (default)` unless `signer` is on; when on, under the autonomous policy, it checks that
   `signer.yml` exists and a `signer` key is enrolled, and with `--remote` that `bosun-signer`
   allows exactly the default branch (custom branch policy, one entry of type branch; protected-branches
   mode counts as not verified); unreadable (no token, 403) it says `verify: owner`. It cannot see

@@ -179,8 +179,10 @@ For each PR:
 `booster` also sets `[approvals] policy = "autonomous"` when the table leaves it unset. The pinned release
 must know `autonomous` (step 2 does that). An explicit `policy` in the file wins.
 
-**[computer]** Cloud and Claude Tag sessions hold no keys, so under `autonomous` they ask the CI signer
-(`bosun approve <pr>@<head> --via-signer`). One owner step per repo makes that work:
+**[computer] Optional, off by default.** Cloud and Claude Tag sessions hold no keys; the recommended
+default stays the orchestrator-held key. To let them ask the CI signer instead
+(`bosun approve <pr>@<head> --via-signer`) the owner first sets `[approvals] signer = true` (needs a pinned release that
+knows the key; R-weaken, owner-approved) and `[checks] mode = "checks"` with the gate App, then does this one step per repo:
 `bosun keygen --role signer --id signer-ci --out <pem outside the repo> --enroll`, merge that
 `.bosun/approvers.toml` PR (R-gov), create the GitHub environment `bosun-signer` with the secret `BOSUN_SIGNER_KEY` (the PEM), then delete the PEM.
 This item is the real barrier, do not skip it: **Settings → Environments → `bosun-signer` → Deployment branches → Selected branches, only

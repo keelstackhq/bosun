@@ -542,7 +542,7 @@ fn via_signer(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
 }
 
 /// What the head's `ci-ok` is for the CI signer: the newest GitHub Actions check run (in
-/// `[checks] mode = "checks"`: the gate App's), as
+/// `[checks] mode = "checks"` is required: the gate App's), as
 /// `ci_green` reads it (a commit status never counts). Returns (green, what was seen).
 fn ci_ok_state(gh: &dyn Github, sha: &str) -> Result<(bool, String)> {
     let runs: Vec<Run> = gh
@@ -553,12 +553,12 @@ fn ci_ok_state(gh: &dyn Github, sha: &str) -> Result<(bool, String)> {
             name: r.name,
             conclusion: r.conclusion,
             at: r.completed_at.or(r.started_at).unwrap_or_default(),
-            // In `checks` mode only the gate App's run counts (read as the trusted creator);
-            // otherwise GitHub Actions' (`ci_green`). Any other app can write a `ci-ok` run.
+            // Only the gate App's run counts (`checks` mode is required for the signer): read as
+            // the trusted creator for `ci_green`; every other creator, GitHub Actions too, is
+            // nobody. A push workflow on any branch can post a github-actions `ci-ok`.
             app: match crate::github::gate::trusted_app_id() {
                 Some(id) if r.app_id == id => crate::core::approve::TRUSTED_APP.into(),
-                Some(_) => String::new(),
-                None => r.app,
+                _ => String::new(),
             },
         })
         .collect();
@@ -646,10 +646,11 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     }
     if role == Role::Signer {
         let text = gh.file_at(CONFIG_FILE, &default_ref(gh)?)?;
-        let policy = match text {
-            Some(t) => Config::parse(&t, CONFIG_FILE)?.approvals.policy(),
-            None => Default::default(),
+        let config = match text {
+            Some(t) => Config::parse(&t, CONFIG_FILE)?,
+            None => Config::default(),
         };
+        let policy = config.approvals.policy();
         if policy != Policy::Autonomous {
             return Err(BosunError::error(
                 format!(
@@ -657,6 +658,21 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
                     policy.name()
                 ),
                 "set `[approvals] policy = \"autonomous\"` (or the booster mode) on the default branch with a PR the owner approves, or ask the owner",
+            ));
+        }
+        if !config.approvals.signer {
+            return Err(BosunError::error(
+                "the CI signer is off: `[approvals] signer` is not true on the default branch; nothing was signed",
+                "the owner decides: set `[approvals] signer = true` in .bosun/bosun.toml with a PR (R-weaken, owner-approved); the default is the orchestrator-held key (`--sign-key` as owner)",
+            ));
+        }
+        let gate_app = config.checks.mode == crate::config::CheckMode::Checks
+            && config.checks.app_id.is_some()
+            && crate::github::gate::trusted_app_id() == config.checks.app_id;
+        if !gate_app {
+            return Err(BosunError::error(
+                "the CI signer needs `[checks] mode = \"checks\"` with the gate App on the default branch (and in this checkout): in statuses mode any push workflow can post a ci-ok; nothing was signed",
+                "set `[checks] mode = \"checks\"`, `app_id` and `app_slug` (spec section 15), or sign with the orchestrator-held key",
             ));
         }
     }

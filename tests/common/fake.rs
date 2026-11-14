@@ -573,6 +573,22 @@ impl FakeGithub {
         s.check_runs.get(sha).cloned().unwrap_or_default()
     }
 
+    /// A check run in any state by App `slug` (id `id`).
+    pub fn check_run_app(
+        &self,
+        sha: &str,
+        name: &str,
+        status: &str,
+        conclusion: Option<&str>,
+        slug: &str,
+        id: u64,
+    ) {
+        self.check_run(sha, name, status, conclusion);
+        let mut s = self.state.lock().unwrap();
+        let last = s.check_runs.get_mut(sha).unwrap().last_mut().unwrap();
+        last["app"] = json!({"slug": slug, "id": id});
+    }
+
     /// A check run created by the GitHub App `app` (check runs default to `github-actions`).
     pub fn check_run_by(&self, sha: &str, name: &str, conclusion: &str, app: &str) {
         self.check_run(sha, name, "completed", Some(conclusion));

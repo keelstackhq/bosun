@@ -262,8 +262,9 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    when every verdict on the exact head is clean and one is from an independent reviewer session, for a PR that
    closes an open task leased by its author. Everything else (workflows, `.bosun`, `channel/`,
    root files such as `Cargo.toml`, secrets, releases, tags, key or owner changes) still needs you.
-   Keyless sessions ask the CI signer (`bosun approve <pr>@<head> --via-signer`); one computer step per
-   repo: `bosun keygen --role signer --id signer-ci --out <pem> --enroll`, merge that PR, create the environment
+   Optional, off by default (the orchestrator-held key stays the default): first `[approvals] signer = true` and `[checks] mode = "checks"`
+   (owner-approved PR, pin a release that knows the key), then keyless sessions ask the CI signer
+   (`bosun approve <pr>@<head> --via-signer`); one computer step per repo: `bosun keygen --role signer --id signer-ci --out <pem> --enroll`, merge that PR, create the environment
    `bosun-signer` with the secret `BOSUN_SIGNER_KEY`, delete the PEM. Required: Settings → Environments → `bosun-signer` →
    Deployment branches → Selected branches, only the default branch (the real barrier: any other branch's copy of `signer.yml` could
    otherwise read the key). Verify there or with `gh api repos/<owner>/<repo>/environments/bosun-signer/deployment-branch-policies`;

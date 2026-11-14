@@ -895,7 +895,15 @@ fn check_api_url() -> Result<(), BosunError> {
 /// workflow and an enrolled `signer` key must exist (signer.yml runs `--as signer`; an owner key
 /// never belongs in CI). The environment `bosun-signer` and its secret are invisible to bosun: a
 /// warning, never a failure.
-fn signer_item(root: &Path, remote: bool) -> Value {
+fn signer_item(root: &Path, remote: bool, enabled: bool) -> Value {
+    if !enabled {
+        return skipped(
+            16,
+            "CI signer",
+            "off (default): `[approvals] signer` is not true",
+            "optional: to let keyless sessions ask the CI signer, the owner sets `[approvals] signer = true` (R-weaken) and does the one-time setup in docs/migrate-booster.md",
+        );
+    }
     let workflow = root.join(".github/workflows/signer.yml").is_file();
     let enrolled = read(root, ".bosun/approvers.toml")
         .and_then(|t| crate::core::approve::parse_approvers(&t).ok())
@@ -1305,7 +1313,7 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
 
     // Step 16: the keyless fast lane (D-017, spec section 8), only under the autonomous policy.
     if ctx.config.approvals.policy() == crate::core::approve::Policy::Autonomous {
-        items.push(signer_item(root, remote));
+        items.push(signer_item(root, remote, ctx.config.approvals.signer));
     }
 
     if let Some(slack) = ctx.config.slack.as_ref() {
