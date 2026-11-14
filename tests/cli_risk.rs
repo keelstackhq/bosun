@@ -349,7 +349,7 @@ fn more_changed_files_than_listed_is_high() {
 }
 
 #[test]
-fn text_file_without_a_patch_is_high_but_binary_is_not() {
+fn a_file_without_a_patch_is_high_but_a_pure_rename_is_not() {
     let fake = pr("");
     fake.pull_file(1, "src/huge.rs", "modified", 5000, 10, None);
     let (code, v) = check(&fake);
@@ -361,8 +361,16 @@ fn text_file_without_a_patch_is_high_but_binary_is_not() {
     let (code, v) = check(&fake);
     assert_eq!((code, rule_ids(&v)), (5, vec!["R-unseen".to_string()]));
 
+    // A binary lists no patch and 0 changed lines: unseen too (it may hide a payload).
     let fake = pr("");
     fake.pull_file(1, "logo.png", "added", 0, 0, None);
+    fake.pull_set(1, "changed_files", serde_json::json!(1));
+    let (code, v) = check(&fake);
+    assert_eq!((code, rule_ids(&v)), (5, vec!["R-unseen".to_string()]));
+
+    // A pure rename has no patch either and stays normal.
+    let fake = pr("");
+    fake.pull_file(1, "moved.png", "renamed", 0, 0, None);
     fake.pull_set(1, "changed_files", serde_json::json!(1));
     let (code, v) = check(&fake);
     assert_eq!(code, 0, "{v}");
