@@ -98,7 +98,7 @@ The state machine, stop rules and resume.
    counts for all its tasks) are not parallel: claim and wave keep apart tasks whose raw touch globs overlap
    (the companions apply only to this check for now), and the warning only tells the planner. Add a `depends:` or give the file to one task. A file that 3 or
    more tasks touch, that overlap each other and are not already in one order, is a hotspot: give
-   it to one task and chain the others, or split the file. At most 20 overlap warnings are shown;
+   it to one task and chain the others, or split the file. A pair of two merged tasks is not warned about (nor a hotspot counted for merged tasks). At most 20 overlap warnings are shown;
    the count stops at 1000 ("at least N more overlapping pairs").
 6. The critical path of an item (the longest chain of `depends` inside it) has at most 4 tasks still
    open. When only this rule fails, `bosun plan check`, `import` and `amend` read the issues on GitHub

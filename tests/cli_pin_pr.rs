@@ -97,3 +97,42 @@ fn a_fork_pr_named_like_the_pin_branch_does_not_hide_the_create_call() {
     assert_eq!(v["data"]["pr"], Value::Null, "{v}");
     assert_eq!(v["next"][0]["tool"], "mcp__github__create_pull_request");
 }
+
+/// A pin that turns on the ci-minutes gate (bosun 0.7.0 or later) lists what main would fail on.
+#[test]
+fn a_bosun_pin_lists_the_ci_minutes_findings_the_new_release_enforces() {
+    let fake = FakeGithub::start();
+    let d = repo();
+    let wf = d.path().join(".github/workflows/ci.yml");
+    std::fs::create_dir_all(wf.parent().unwrap()).unwrap();
+    std::fs::write(
+        &wf,
+        "name: ci\non:\n  pull_request:\njobs:\n  ci:\n    runs-on: macos-latest\n    steps:\n      - run: echo hi\n",
+    )
+    .unwrap();
+    let reg = Registry::start(
+        &[
+            ("splice", "0.4.0"),
+            ("hoist", "0.4.0"),
+            ("berth", "0.1.0"),
+            ("bosun", "0.10.0"),
+        ],
+        None,
+        None,
+    );
+    let out = bosun()
+        .env("BOSUN_NPM_REGISTRY", &reg.base)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .args(["-C", d.path().to_str().unwrap(), "pin", "--latest"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    let found = v["data"]["ci_minutes"].as_array().expect("findings");
+    assert!(!found.is_empty(), "{v}");
+    let body = v["next"][0]["args"]["body"].as_str().unwrap();
+    assert!(
+        body.contains("ci-minutes") && body.contains("ci.yml"),
+        "{body}"
+    );
+}

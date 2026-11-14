@@ -304,6 +304,33 @@ fn a_repo_override_keeps_nextest_for_the_test_gate() {
     );
 }
 
+/// With cargo-nextest installed the built-in test gate runs it, like CI; without, `cargo test`.
+#[test]
+fn the_test_gate_runs_nextest_when_installed() {
+    let r = repo();
+    r.change("b/src/lib.rs");
+    let path = format!(
+        "{}:{}",
+        r.bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = bosun()
+        .env("PATH", path)
+        .env_remove("BOSUN_NO_NEXTEST")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI")
+        .arg("-C")
+        .arg(&r.root)
+        .args(["gate", "test", "--base", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        r.calls(),
+        vec!["nextest --version", "nextest run --locked -p b"]
+    );
+}
+
 #[test]
 fn stdout_stays_one_json_object_and_child_output_goes_to_stderr() {
     let r = repo();

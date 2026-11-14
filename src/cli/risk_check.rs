@@ -311,16 +311,29 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // Every linked issue counts: the agent writes the PR body, so a decoy first link must not
     // hide the real task's capabilities.
     let mut task = None;
+    let mut plan_high = Vec::new();
     for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
         if let Some(issue) = gh.get_issue(i)?
             && let Some(meta) = task_meta(&issue)
         {
             capabilities.extend(meta.capabilities);
+            if meta.risk == "high" {
+                plan_high.push(format!("#{i} is `risk: high` in the plan"));
+            }
             task.get_or_insert(i);
         }
     }
 
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
+    // The plan rates a task high on more than paths (D-016); the PR never rates lower.
+    if !plan_high.is_empty() {
+        matches.push(risk::Match {
+            rule: "R-plan".into(),
+            why: "the linked task is `risk: high` in the plan, so the owner decides".into(),
+            approval: Approval::Owner,
+            evidence: plan_high,
+        });
+    }
     // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
     // rule with the `weaken` capability only adds its own match, made owner-class too).
     let mut findings = findings;

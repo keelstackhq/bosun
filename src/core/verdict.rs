@@ -35,8 +35,26 @@ pub struct Verdict {
     /// The 1-based review chunks (`bosun review-pack` `chunks`) the reviewers covered. A verdict
     /// comment carries them in its own marker line ([`comment_chunks`]), not in the JSON: the
     /// pinned applier of an older release refuses unknown fields.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// A count `n` (an older prompt) means chunks 1..=n.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "chunks_list_or_count"
+    )]
     pub chunks_reviewed: Vec<u32>,
+}
+
+fn chunks_list_or_count<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u32>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Chunks {
+        List(Vec<u32>),
+        Count(u32),
+    }
+    Ok(match Chunks::deserialize(d)? {
+        Chunks::List(l) => l,
+        Chunks::Count(n) => (1..=n).collect(),
+    })
 }
 
 /// What the verdict amounts to once the rules are applied.
@@ -88,10 +106,10 @@ impl Verdict {
             .count()
     }
 
-    /// The status description, for example `approve 0.92, 0 blocker, 1 major`.
+    /// The status description, for example `approve 0.92 (approves at 0.85), 0 blocker, 1 major`.
     pub fn summary(&self) -> String {
         format!(
-            "{} {:.2}, {} blocker, {} major",
+            "{} {:.2} (approves at {APPROVE_MIN:.2}), {} blocker, {} major",
             self.verdict,
             self.confidence,
             self.count("blocker"),
@@ -251,6 +269,17 @@ mod tests {
     }
 
     #[test]
+    fn chunks_reviewed_takes_a_count_or_a_list() {
+        let head =
+            r#"{"pr":1,"head_sha":"a","verdict":"approve","confidence":0.9,"chunks_reviewed":"#;
+        let n = Verdict::parse(&format!("{head}3}}")).unwrap();
+        assert_eq!(n.chunks_reviewed, vec![1, 2, 3]);
+        let l = Verdict::parse(&format!("{head}[2,1]}}")).unwrap();
+        assert_eq!(l.chunks_reviewed, vec![2, 1]);
+        assert!(Verdict::parse(&format!("{head}\"x\"}}")).is_err());
+    }
+
+    #[test]
     fn threshold_is_inclusive() {
         assert!(!effective(&v("approve", 0.84, &[])).approve);
         assert!(effective(&v("approve", 0.85, &[])).approve);
@@ -263,7 +292,7 @@ mod tests {
     fn summary_matches_the_spec_style() {
         assert_eq!(
             v("approve", 0.92, &["major"]).summary(),
-            "approve 0.92, 0 blocker, 1 major"
+            "approve 0.92 (approves at 0.85), 0 blocker, 1 major"
         );
     }
 

@@ -296,6 +296,12 @@ fn execute(
     let diff_str = diff.as_ref().map(|d| d.to_string_lossy().into_owned());
     let argv = gate.expand_packages(gate.expand_cmd(files, diff_str.as_deref()), extra);
 
+    let argv = if nextest_installed() {
+        profile::with_nextest(argv)
+    } else {
+        argv
+    };
+
     let result = spawn(&argv, &dir);
     if let Some(d) = &diff {
         let _ = std::fs::remove_file(d);
@@ -311,6 +317,17 @@ fn execute(
         "over_budget": secs > gate.budget() as f64,
         "skipped": false,
     }))
+}
+
+/// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).
+fn nextest_installed() -> bool {
+    std::env::var_os("BOSUN_NO_NEXTEST").is_none()
+        && Command::new("cargo")
+            .args(["nextest", "--version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
 }
 
 /// Run `argv` in `dir` with stdout and stderr both on bosun's stderr; (exit status, seconds).
