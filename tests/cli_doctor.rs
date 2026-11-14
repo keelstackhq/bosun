@@ -14,7 +14,7 @@ fn doctor(fake: &FakeGithub, dir: &Path, routines_ok: bool) -> (i32, Value) {
         .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
         .arg("-C")
         .arg(dir)
-        .arg("doctor");
+        .args(["doctor", "--full"]);
     if routines_ok {
         cmd.env("BOSUN_ROUTINES_OK", "1");
     }
@@ -454,7 +454,7 @@ mod environments {
             .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
             .arg("-C")
             .arg(dir)
-            .args(["doctor", "--remote"])
+            .args(["doctor", "--full", "--remote"])
             .output()
             .unwrap();
         (out.status.code().unwrap(), one_object(&out.stdout))
@@ -719,7 +719,7 @@ fn tag_doctor_with(
         .env("CLAUDE_CONFIG_DIR", tmp.path().join(".test-claude"))
         .arg("-C")
         .arg(tmp.path())
-        .arg("doctor");
+        .args(["doctor", "--full"]);
     for (k, v) in extra_env {
         cmd.env(k, v);
     }

@@ -103,7 +103,7 @@ fn doctor_names_a_malformed_api_url() {
         .env("CLAUDE_CONFIG_DIR", t.path().join(".test-claude"))
         .arg("-C")
         .arg(t.path())
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     let v = one_object(&out.stdout);

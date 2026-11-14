@@ -892,6 +892,7 @@ fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
                 &PlanCmd::Amend(PlanAmendArgs {
                     file: file.clone(),
                     dry_run: false,
+                    full: false,
                 }),
             );
             match r {

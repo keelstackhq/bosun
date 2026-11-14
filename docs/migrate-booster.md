@@ -307,7 +307,7 @@ The PR touches `.splice/**`: it is R-gov, and the owner approves. A repo with th
 
 Routines are human-only. **[computer]** claude.ai/code → Routines.
 
-1. Janitor (hourly). `bosun doctor` prints it in `data.routines`. Add this sentence at the end:
+1. Janitor (hourly). `bosun doctor --full` prints it in `data.routines`. Add this sentence at the end:
 
 ```text
 Then run `bosun heal` and make only the calls in its `next`; report data.prs.

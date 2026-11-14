@@ -75,7 +75,7 @@ fn ids(v: &Value) -> Vec<&str> {
 /// A fake with PLAN imported; returns the plan file path.
 fn imported(fake: &FakeGithub, dir: &Path) -> String {
     let file = write_plan(dir, PLAN);
-    let (code, v) = plan(fake, dir, &["import", &file]);
+    let (code, v) = plan(fake, dir, &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     file
 }
@@ -89,7 +89,7 @@ fn removing_an_item_closes_its_epic_tasks_and_plan_task() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = imported(&fake, tmp.path());
     write_plan(tmp.path(), &plan_without_m2());
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["command"], "plan amend");
     assert_eq!(ids(&v["data"]["closed"]), ["M2", "M2/P", "M2/T1"]);
@@ -117,7 +117,7 @@ fn removing_a_task_closes_only_that_task() {
         tmp.path(),
         &PLAN.replace("- T2: Stop rules\n  touch: src/core/stop.rs\n", ""),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ids(&v["data"]["closed"]), ["M1/T2"]);
     let t2 = fake.issue_state(find(&fake, "<!-- bosun:plan M1/T2 -->"));
@@ -148,7 +148,7 @@ fn a_changed_task_is_updated_in_place() {
             "- T1: State machine v2\n  touch: src/core/state.rs, src/core/lease.rs\n  kind: bookkeeping\n  risk: high\n",
         ),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ids(&v["data"]["updated"]), ["M1/T1"]);
     assert_eq!(v["data"]["closed"], serde_json::json!([]));
@@ -211,7 +211,7 @@ fn other_plans_and_hand_made_issues_are_never_touched() {
         .iter()
         .map(|n| fake.issue_state(*n))
         .collect();
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["closed"], serde_json::json!([]));
     for (n, b) in [900, 901, 902, 903].iter().zip(before) {
@@ -232,7 +232,7 @@ fn dry_run_reports_and_writes_nothing() {
         &plan_without_m2().replace("touch: src/core/state.rs", "touch: src/core/other.rs"),
     );
     let before = writes(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run"]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(writes(&fake), before);
     assert_eq!(v["data"]["dry_run"], true);
@@ -249,10 +249,10 @@ fn a_second_amend_changes_nothing() {
         tmp.path(),
         &plan_without_m2().replace("State machine", "State machine v2"),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     let before = writes(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(writes(&fake), before);
     assert_eq!(v["data"]["closed"], serde_json::json!([]));
@@ -269,7 +269,7 @@ fn amend_also_imports_new_items() {
             "{PLAN}\n## M3: New\n\narea: new\n\n### Tasks\n\n- T1: Fresh\n  touch: src/n.rs\n\n### Done when\n\n- UC-M3-1: it works.\n"
         ),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["epics"][2]["action"], "created");
     assert_eq!(v["data"]["epics"][0]["action"], "existing");
@@ -327,7 +327,7 @@ fn amend_after_intake(merged: bool, plan_file_in_pr: bool) -> (FakeGithub, serde
         (true, false) => "not-added",
     };
     let (tmp, fake, file) = intake_env(mode);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     (fake, v)
 }
@@ -336,7 +336,7 @@ fn amend_after_intake(merged: bool, plan_file_in_pr: bool) -> (FakeGithub, serde
 fn amend_dry_run_reports_the_intake_promotion_and_writes_nothing() {
     let (tmp, fake, file) = intake_env("merged");
     let before = writes(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run"]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(writes(&fake), before);
     assert_eq!(
@@ -348,10 +348,10 @@ fn amend_dry_run_reports_the_intake_promotion_and_writes_nothing() {
 #[test]
 fn a_second_amend_after_the_intake_promotion_changes_nothing() {
     let (tmp, fake, file) = intake_env("merged");
-    let (_, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(v["data"]["promoted"], serde_json::json!(["M3", "M3/T1"]));
     let before = writes(&fake);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(writes(&fake), before);
     assert_eq!(v["data"]["promoted"], serde_json::json!([]));
@@ -372,7 +372,7 @@ fn the_born_closed_plan_task_is_reported_closed() {
 #[test]
 fn a_plan_file_missing_at_the_base_counts_as_all_added() {
     let (tmp, fake, file) = intake_env("no-base-file");
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!(["M3", "M3/T1"]));
 }
@@ -380,7 +380,7 @@ fn a_plan_file_missing_at_the_base_counts_as_all_added() {
 #[test]
 fn a_plan_file_that_does_not_parse_at_the_base_is_not_trusted() {
     let (tmp, fake, file) = intake_env("bad-base");
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]));
 }
@@ -439,7 +439,7 @@ fn two_merged_intakes_each_promote_their_own_item() {
     landed_intake(&fake, tmp.path(), "add M3", 60, ("b0", "m60"), (&p0, &p3));
     landed_intake(&fake, tmp.path(), "add M4", 61, ("b1", "m61"), (&p3, &p34));
     write_plan(tmp.path(), &p34);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(
         v["data"]["promoted"],
@@ -475,12 +475,12 @@ fn the_scan_stops_once_every_new_item_has_an_owner() {
     );
     landed_intake(&fake, tmp.path(), "add M3", 60, ("b0", "m60"), (&p0, &p3));
     write_plan(tmp.path(), &p3);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     landed_intake(&fake, tmp.path(), "add M4", 61, ("b1", "m61"), (&p3, &p34));
     write_plan(tmp.path(), &p34);
     let seen = fake.requests().len();
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(
         v["data"]["promoted"],
@@ -500,7 +500,7 @@ fn the_scan_stops_once_every_new_item_has_an_owner() {
 #[test]
 fn a_linked_pr_closed_without_merging_promotes_nothing() {
     let (tmp, fake, file) = intake_env("unmerged");
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]));
 }
@@ -509,7 +509,7 @@ fn a_linked_pr_closed_without_merging_promotes_nothing() {
 fn an_unknown_merge_parent_promotes_nothing() {
     // GitHub does not know the merge commit: what the PR added cannot be told, so trust nothing.
     let (tmp, fake, file) = intake_env("no-parent");
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]));
 }
@@ -522,7 +522,7 @@ fn a_linked_pr_into_another_branch_promotes_nothing() {
         "base",
         serde_json::json!({"sha": "base0000", "ref": "release"}),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]));
 }
@@ -547,7 +547,7 @@ fn an_item_another_pr_added_between_the_base_and_the_merge_is_not_credited() {
     // The PR's base predates M3, but the merge commit's first parent already has it.
     fake.content("plan.md", "parent60", &format!("{PLAN}{M3}"));
     fake.first_parent("merge60", "parent60");
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]), "{v}");
 }
@@ -560,7 +560,7 @@ fn amend_trusts_only_what_the_default_branch_has() {
         "- T2: Unreviewed\n  touch: .github/workflows/ci.yml\n\n### Done when",
     );
     write_plan(tmp.path(), &format!("{PLAN}{extra}"));
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["promoted"], serde_json::json!([]), "{v}");
     let p = fake.issue_state(find(&fake, "<!-- bosun:plan M3/P -->"));
@@ -581,7 +581,7 @@ fn amend_trusts_nothing_when_the_default_branch_has_no_parsable_plan() {
                 s.contents.insert("main:plan.md".into(), t.into());
             }
         }
-        let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+        let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
         assert_eq!(code, 0, "{v}");
         assert_eq!(
             v["data"]["promoted"],
@@ -624,7 +624,7 @@ fn every_spelling_of_the_plan_path_reconciles_the_same() {
             spelling
         };
         // Import with the spelling under test: the epic stores the relative form.
-        let (code, v) = plan(&fake, tmp.path(), &["import", spelling]);
+        let (code, v) = plan(&fake, tmp.path(), &["import", spelling, "--full"]);
         assert_eq!(code, 0, "{spelling}: {v}");
         let epic = fake.issue_state(find(&fake, "<!-- bosun:plan M2 -->"));
         assert!(
@@ -633,7 +633,7 @@ fn every_spelling_of_the_plan_path_reconciles_the_same() {
             epic.body
         );
         std::fs::write(&abs, plan_without_m2()).unwrap();
-        let (code, v) = plan(&fake, tmp.path(), &["amend", spelling]);
+        let (code, v) = plan(&fake, tmp.path(), &["amend", spelling, "--full"]);
         assert_eq!(code, 0, "{spelling}: {v}");
         assert_eq!(
             ids(&v["data"]["closed"]),
@@ -649,7 +649,7 @@ fn an_unknown_path_warns_and_reconciles_nothing() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     imported(&fake, tmp.path());
     std::fs::write(tmp.path().join("other.md"), plan_without_m2()).unwrap();
-    let (code, v) = plan(&fake, tmp.path(), &["amend", "other.md"]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", "other.md", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["closed"], serde_json::json!([]));
     let w = v["data"]["warnings"].to_string();
@@ -672,7 +672,7 @@ fn an_active_task_is_not_closed_and_keeps_its_epic_open() {
         i.labels.push("bosun:state/building".into());
     }
     write_plan(tmp.path(), &plan_without_m2());
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ids(&v["data"]["closed"]), ["M2/P"]);
     assert_eq!(ids(&v["data"]["skipped"]), ["M2", "M2/T1"]);
@@ -703,7 +703,7 @@ fn a_task_with_a_live_lease_is_not_closed() {
         tmp.path(),
         &PLAN.replace("- T2: Stop rules\n  touch: src/core/stop.rs\n", ""),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ids(&v["data"]["skipped"]), ["M1/T2"]);
     assert_eq!(fake.issue_state(t).state, "open");
@@ -714,7 +714,7 @@ fn a_re_added_item_reopens_its_epic_and_tasks() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = imported(&fake, tmp.path());
     write_plan(tmp.path(), &plan_without_m2());
-    let (code, _) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, _) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0);
     let epic = find(&fake, "<!-- bosun:plan M2 -->");
     assert_eq!(fake.issue_state(epic).state, "closed");
@@ -726,7 +726,7 @@ fn a_re_added_item_reopens_its_epic_and_tasks() {
     };
     let before = posts(&fake);
     write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(ids(&v["data"]["reopened"]), ["M2", "M2/P", "M2/T1"]);
     assert_eq!(posts(&fake), before);
@@ -811,7 +811,7 @@ fn amend_reopens_an_epic_reap_closed_when_it_gets_a_new_task() {
     let epic = reaped_epic(&fake);
     write_plan(tmp.path(), &plan_with_t2());
     let before = writes(&fake);
-    let (_, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run"]);
+    let (_, v) = plan(&fake, tmp.path(), &["amend", &file, "--dry-run", "--full"]);
     assert_eq!(writes(&fake), before);
     assert!(ids(&v["data"]["would_reopen"]).contains(&"M2"), "{v}");
     // GitHub's list lags: the new T2 (#8) is not listed right after it was made.
@@ -821,7 +821,7 @@ fn amend_reopens_an_epic_reap_closed_when_it_gets_a_new_task() {
             .filter(|i| i.number == 8)
             .for_each(|i| i.hidden = true);
     });
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_reopened(&fake, &v, epic);
     let t2 = fake.issue_state(find(&fake, "<!-- bosun:plan M2/T2 -->"));
@@ -832,15 +832,15 @@ fn amend_reopens_an_epic_reap_closed_when_it_gets_a_new_task() {
 fn a_dropped_task_added_back_reopens_the_epic_reap_closed() {
     let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
     let file = write_plan(tmp.path(), &plan_with_t2());
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     // The amendment drops T2 (closed as not planned); reap then finds the epic complete.
     write_plan(tmp.path(), PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     let epic = reaped_epic(&fake);
     write_plan(tmp.path(), &plan_with_t2());
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_reopened(&fake, &v, epic);
 }
@@ -857,7 +857,7 @@ fn amend_reopens_an_epic_closed_as_completed_that_never_got_the_merged_label() {
         e.labels = vec!["bosun:source/plan".into(), "bosun:state/ready".into()];
     }
     write_plan(tmp.path(), &plan_with_t2());
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_reopened(&fake, &v, epic);
 }

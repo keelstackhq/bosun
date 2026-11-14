@@ -296,7 +296,35 @@ fn execute(
     let diff_str = diff.as_ref().map(|d| d.to_string_lossy().into_owned());
     let argv = gate.expand_packages(gate.expand_cmd(files, diff_str.as_deref()), extra);
 
-    let result = spawn(&argv, &dir);
+    // Only the built-in test command: a repo's own `cargo test ...` override stays as written.
+    let builtin_test = gate.cmd == ["cargo", "test", "--locked"];
+    let swapped = builtin_test && nextest_installed();
+    let argv = if swapped {
+        profile::with_nextest(argv)
+    } else {
+        argv
+    };
+
+    let mut result = spawn(&argv, &dir);
+    // nextest never runs doctests: `cargo test --doc` closes that gap, for the affected packages
+    // that have a library target (`--doc` exits 101 on a bin-only package).
+    if swapped && matches!(result, Ok((0, _))) {
+        let libs = lib_packages(&dir);
+        let pkgs: Vec<&String> = libs
+            .iter()
+            .filter(|l| names.is_empty() || names.contains(l))
+            .collect();
+        if !pkgs.is_empty() {
+            let mut doc: Vec<String> = ["cargo", "test", "--doc", "--locked"]
+                .map(String::from)
+                .to_vec();
+            for p in pkgs {
+                doc.extend(["-p".to_string(), p.clone()]);
+            }
+            result =
+                spawn(&doc, &dir).map(|(s, secs)| (s, secs + result.as_ref().map_or(0.0, |r| r.1)));
+        }
+    }
     if let Some(d) = &diff {
         let _ = std::fs::remove_file(d);
     }
@@ -311,6 +339,47 @@ fn execute(
         "over_budget": secs > gate.budget() as f64,
         "skipped": false,
     }))
+}
+
+/// Workspace packages with a library target (`lib`, `rlib` or `proc-macro`).
+fn lib_packages(dir: &Path) -> Vec<String> {
+    let Ok(out) = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(dir)
+        .output()
+    else {
+        return Vec::new();
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else {
+        return Vec::new();
+    };
+    let is_lib = |k: &Value| matches!(k.as_str(), Some("lib" | "rlib" | "proc-macro"));
+    let has_lib = |p: &Value| {
+        p["targets"].as_array().is_some_and(|ts| {
+            ts.iter()
+                .any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(is_lib)))
+        })
+    };
+    v["packages"]
+        .as_array()
+        .map(|ps| {
+            ps.iter()
+                .filter(|p| has_lib(p))
+                .filter_map(|p| p["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).
+fn nextest_installed() -> bool {
+    std::env::var_os("BOSUN_NO_NEXTEST").is_none()
+        && Command::new("cargo")
+            .args(["nextest", "--version"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
 }
 
 /// Run `argv` in `dir` with stdout and stderr both on bosun's stderr; (exit status, seconds).

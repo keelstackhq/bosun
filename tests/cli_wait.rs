@@ -166,3 +166,17 @@ fn a_github_5xx_exits_1_with_kind_upstream_and_a_retry_hint() {
     assert!(v["error"]["fix"].as_str().unwrap().contains("retry"), "{v}");
     assert_eq!(v["data"], json!({}));
 }
+
+#[test]
+fn once_reads_the_state_and_returns_at_once() {
+    let fake = FakeGithub::start();
+    fake.pull(5, "Work", "claude/work", "");
+    fake.check_run("sha5", "rust", "in_progress", None);
+    let t = std::time::Instant::now();
+    let (code, v) = wait(&fake, &["--pr", "5", "--once"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(t.elapsed().as_secs() < 5);
+    assert_eq!(v["data"]["changed"], false);
+    assert_eq!(v["data"]["polls"], 1);
+    assert_eq!(v["data"]["before"]["head_sha"], "sha5");
+}

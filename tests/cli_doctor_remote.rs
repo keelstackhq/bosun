@@ -57,7 +57,7 @@ fn run(hoist: &Path, repo: &Path, remote: bool) -> (i32, Value) {
         .env("BOSUN_HOIST", hoist)
         .arg("-C")
         .arg(repo)
-        .arg("doctor");
+        .args(["doctor", "--full"]);
     if remote {
         cmd.arg("--remote");
     }
@@ -308,7 +308,7 @@ fn a_hung_hoist_is_killed_after_the_timeout() {
         .env("BOSUN_HOIST_TIMEOUT_SECS", "1")
         .arg("-C")
         .arg(repo.path())
-        .args(["doctor", "--remote"])
+        .args(["doctor", "--full", "--remote"])
         .output()
         .unwrap();
     assert!(started.elapsed().as_secs() < 15);
@@ -360,7 +360,7 @@ fn a_timeout_kills_the_whole_process_group() {
         .env("BOSUN_HOIST_TIMEOUT_SECS", "1")
         .arg("-C")
         .arg(repo.path())
-        .args(["doctor", "--remote"])
+        .args(["doctor", "--full", "--remote"])
         .output()
         .unwrap();
     let pid = std::fs::read_to_string(&pidfile)
@@ -394,7 +394,7 @@ fn a_zero_or_invalid_timeout_uses_the_default() {
             .env("BOSUN_HOIST_TIMEOUT_SECS", bad)
             .arg("-C")
             .arg(repo.path())
-            .args(["doctor", "--remote"])
+            .args(["doctor", "--full", "--remote"])
             .output()
             .unwrap();
         let v = one_object(&out.stdout);

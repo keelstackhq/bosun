@@ -46,7 +46,7 @@ fn progress_ignores_forged_registry_and_task_spend() {
     fake.comment_by(10, "mallory", &spend(777.0, AT));
     fake.comment(1, &spend(3.0, AT));
     fake.comment_by(1, "mallory", &spend(500.0, AT));
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["spend_usd"], 3.0, "{v}");
     assert_eq!(v["data"]["tasks"][0]["usd"], 3.0, "{v}");

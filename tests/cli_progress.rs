@@ -71,7 +71,7 @@ fn no_writes(fake: &FakeGithub) {
 #[test]
 fn uc_m4_4_cost_per_merged_task_over_7_days() {
     let fake = seeded();
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     let d = &v["data"];
     assert_eq!(v["command"], "progress");
@@ -95,7 +95,12 @@ fn uc_m4_4_cost_per_merged_task_over_7_days() {
 #[test]
 fn uc_m4_4_days_30_includes_the_older_task() {
     let fake = seeded();
-    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--days", "30"]);
+    let (code, v) = run(
+        &fake,
+        "session_a",
+        NOW,
+        &["progress", "--full", "--days", "30"],
+    );
     assert_eq!(code, 0, "{v}");
     let d = &v["data"];
     assert_eq!(d["days"], 30);
@@ -124,7 +129,7 @@ fn uc_m4_4_zero_merged_has_null_headline_and_exit_0() {
         3.0,
         "2026-10-22T11:00:00Z",
     );
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     let d = &v["data"];
     assert_eq!(d["merged"], 0);
@@ -137,7 +142,7 @@ fn uc_m4_4_zero_merged_has_null_headline_and_exit_0() {
 #[test]
 fn uc_m4_4_empty_repo_is_ok() {
     let fake = FakeGithub::start();
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["spend_usd"], 0.0);
     assert!(v["data"]["cost_per_merged_task_usd"].is_null());
@@ -154,7 +159,7 @@ fn uc_m4_4_not_planned_tasks_non_tasks_and_future_spend_do_not_count() {
     fake.close_issue(15, "2026-10-22T12:00:00Z");
     // A registry record stamped after now (clock skew) is outside the window.
     fake.comment(1, &spend(100.0, "2026-10-24T00:00:00Z"));
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     let d = &v["data"];
     assert_eq!(d["merged"], 2);

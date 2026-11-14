@@ -123,7 +123,7 @@ pub enum Command {
     /// Make an ed25519 approval key (PEM, mode 0600, outside the repo); `--enroll` adds it to .bosun/approvers.toml.
     Keygen(KeygenArgs),
     /// Judge a PR with the risk rules of its base branch.
-    RiskCheck(PrArg),
+    RiskCheck(RiskCheckArgs),
     /// Refuse deleted tests, new skips and fewer assertions.
     TestIntegrity(IntegrityArgs),
     /// Build the input of a review: diff, task, UCs, lessons, REVIEW.md.
@@ -521,6 +521,9 @@ pub struct WaitArgs {
     /// Give up after this many seconds (exit 0, changed: false).
     #[arg(long, default_value_t = WAIT_TIMEOUT_SECS)]
     pub timeout: u64,
+    /// Read the current state once and return at once (a status check; same as `--timeout 0`).
+    #[arg(long, conflicts_with = "timeout")]
+    pub once: bool,
 }
 
 #[derive(Debug, Args)]
@@ -553,6 +556,16 @@ pub struct GateArgs {
 pub struct PrArg {
     /// The PR number.
     pub pr: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct RiskCheckArgs {
+    /// The PR number.
+    pub pr: u64,
+    /// Print the judgment and write nothing (no status, check run or comment): for a cloud
+    /// session, which cannot post statuses.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -680,6 +693,9 @@ pub struct DoctorArgs {
     /// unknown items and verify notes are listed in data.hoist
     #[arg(long)]
     pub remote: bool,
+    /// Print every checklist step and Routine; by default only the steps that need action.
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Args)]
@@ -840,6 +856,9 @@ pub struct ProgressArgs {
     /// Show the lessons view instead: open, blocking, mechanized, hits per week (spec §6).
     #[arg(long, conflicts_with = "days")]
     pub lessons: bool,
+    /// List every merged task; by default only the totals.
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Args)]
@@ -905,6 +924,9 @@ pub struct PlanAmendArgs {
     /// Show what would be created, closed and updated; write nothing.
     #[arg(long)]
     pub dry_run: bool,
+    /// List every epic and task; by default only those that changed.
+    #[arg(long)]
+    pub full: bool,
 }
 
 #[derive(Debug, Args)]
@@ -940,6 +962,9 @@ pub struct PlanImportArgs {
     /// this one (by default they are closed: there is nothing left to commit).
     #[arg(long)]
     pub keep_plan_tasks_open: bool,
+    /// List every epic and task; by default only those that changed.
+    #[arg(long)]
+    pub full: bool,
 }
 
 /// `intake "<text>" --source ...` opens a plan issue; a text of exactly `check` is the subcommand.

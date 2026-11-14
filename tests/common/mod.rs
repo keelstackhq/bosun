@@ -23,6 +23,7 @@ pub fn bosun() -> Command {
         .env("BOSUN_GITHUB_API", "http://127.0.0.1:9")
         .env("BOSUN_REPO", "acme/widget")
         .env("BOSUN_PIN_CHECK", "0")
+        .env("BOSUN_NO_NEXTEST", "1")
         .env("BOSUN_SESSION", "session_test")
         .env("BOSUN_NOW", "2026-10-22T10:00:00Z")
         .env_remove("ANTHROPIC_API_KEY")

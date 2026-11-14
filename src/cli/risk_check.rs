@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::PrArg;
+use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
 use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
@@ -17,6 +17,7 @@ use crate::core::approve::{
 };
 use crate::core::lease::leases_of;
 use crate::core::meta::{closing_issues_in, linked_issues_in};
+use crate::core::records::Record;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
@@ -73,7 +74,7 @@ fn is_manifest(path: &str) -> bool {
     )
 }
 
-pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
+pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let n = args.pr;
@@ -83,7 +84,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             "check the number; `gh pr list` lists the open PRs",
         )
     })?;
-    let w = GateWriter::for_ctx(gh, &app.ctx);
+    let w = GateWriter::for_ctx(gh, &app.ctx).dry(args.dry_run);
     // In flight, a required check is pending, so auto-merge waits for this run's verdict.
     if let Err(e) = w.post(&pull.head_sha, CONTEXT, "pending", PENDING) {
         eprintln!(
@@ -94,7 +95,23 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     let out = judge(&app, &w, pull.clone());
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
+        // The cleanup write must not fail on the time budget that stopped the run.
+        gh.set_budget(None);
         _ = w.post(&pull.head_sha, CONTEXT, "error", UNFINISHED);
+    }
+    if args.dry_run {
+        return match out {
+            Ok(mut o) => {
+                o.data["dry_run"] = json!(true);
+                Ok(o)
+            }
+            Err(mut e) => {
+                if let Some(d) = e.data.as_mut().filter(|d| d.is_object()) {
+                    d["dry_run"] = json!(true);
+                }
+                Err(e)
+            }
+        };
     }
     out
 }
@@ -104,6 +121,35 @@ const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run 
 
 /// R-weaken evidence (spec §8): gate files compared at base and head, diffs, deleted or thinned
 /// tests. Deduplicated, in file order.
+/// Whether the plan file at `base` rates the task bound to issue `n` (a trusted `bind` record)
+/// `risk: high`. No bind, no plan file or an unparsable one: no.
+fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
+    // A read error fails the check: never a silent "not high".
+    for (_, r) in crate::cli::budget::binds_of(gh, n)? {
+        if let Record::Bind {
+            plan,
+            item,
+            task: Some(t),
+            ..
+        } = r
+        {
+            let Some(text) = gh.file_at(&plan, base)? else {
+                return Ok(false);
+            };
+            let Ok(parsed) = crate::core::plan::parse(&text) else {
+                return Ok(false);
+            };
+            return Ok(parsed
+                .items
+                .iter()
+                .filter(|i| i.id == item)
+                .flat_map(|i| &i.tasks)
+                .any(|x| x.id == t && x.risk == "high"));
+        }
+    }
+    Ok(false)
+}
+
 fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
@@ -311,16 +357,34 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // Every linked issue counts: the agent writes the PR body, so a decoy first link must not
     // hide the real task's capabilities.
     let mut task = None;
+    let mut plan_high = Vec::new();
     for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
-        if let Some(issue) = gh.get_issue(i)?
-            && let Some(meta) = task_meta(&issue)
-        {
+        let issue = gh.get_issue(i)?;
+        let meta = issue.as_ref().and_then(task_meta);
+        // The body is the author's: it can only add. The plan file on the base, reached through
+        // the trusted bind (plan, item, task), is the authority, also when the body has no task
+        // block at all.
+        let high = meta.as_ref().is_some_and(|m| m.risk == "high")
+            || (issue.is_some() && bound_task_is_high(gh, i, base)?);
+        if high {
+            plan_high.push(format!("#{i} is `risk: high` in the plan"));
+        }
+        if let Some(meta) = meta {
             capabilities.extend(meta.capabilities);
             task.get_or_insert(i);
         }
     }
 
     let mut matches = evaluate(&rules, &files, &new_deps, &capabilities);
+    // The plan rates a task high on more than paths (D-016); the PR never rates lower.
+    if !plan_high.is_empty() {
+        matches.push(risk::Match {
+            rule: "R-plan".into(),
+            why: "the linked task is `risk: high` in the plan, so the owner decides".into(),
+            approval: Approval::Owner,
+            evidence: plan_high,
+        });
+    }
     // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
     // rule with the `weaken` capability only adds its own match, made owner-class too).
     let mut findings = findings;
@@ -400,7 +464,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         }
     });
     let body = replace_note(&pull.body, note.as_deref());
-    if body != pull.body {
+    if body != pull.body && !w.is_dry() {
         gh.update_pull_body(n, &body)?;
     }
 
@@ -853,6 +917,9 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
 /// its statuses before and after posting (verdict.yml is not serialized with us). Never an error.
 fn carry_status(gh: &dyn Github, w: &GateWriter, pull: &Pull, linked: &[u64]) -> Option<String> {
     let head = pull.head_sha.as_str();
+    if w.is_dry() {
+        return None;
+    }
     // A carried status on top of a real verdict (a run was cancelled mid-post) is repaired first.
     let top = crate::github::gate::gate_statuses(gh, head)
         .ok()

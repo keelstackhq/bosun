@@ -94,7 +94,7 @@ fn the_pin_is_the_trust_root_when_the_label_is_removed_from_it() {
 fn doctor_warns_about_a_missing_pin() {
     let fake = FakeGithub::start();
     fake.issue(1, "bosun registry", &[LABEL], "");
-    let (_, v) = run(&fake, "session_a", T0, &["doctor"]);
+    let (_, v) = run(&fake, "session_a", T0, &["doctor", "--full"]);
     let item = v["data"]["items"]
         .as_array()
         .or_else(|| v["data"]["steps"].as_array())
