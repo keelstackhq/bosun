@@ -182,8 +182,10 @@ must know `autonomous` (step 2 does that). An explicit `policy` in the file wins
 **[computer]** Cloud and Claude Tag sessions hold no keys, so under `autonomous` they ask the CI signer
 (`bosun approve <pr>@<head> --via-signer`). One owner step per repo makes that work:
 `bosun keygen --role signer --id signer-ci --out <pem outside the repo> --enroll`, merge that
-`.bosun/approvers.toml` PR (R-gov), create the GitHub environment `bosun-signer` (deployment branches:
-the default branch only) with the secret `BOSUN_SIGNER_KEY` (the PEM), then delete the PEM. The channel's
+`.bosun/approvers.toml` PR (R-gov), create the GitHub environment `bosun-signer` with the secret `BOSUN_SIGNER_KEY` (the PEM), then delete the PEM.
+This item is the real barrier, do not skip it: **Settings → Environments → `bosun-signer` → Deployment branches → Selected branches, only
+the default branch** (a dispatch from another branch runs that branch's copy of `signer.yml`; only this rule keeps it from the key).
+Verify in the same page, or `gh api repos/<owner>/<repo>/environments/bosun-signer/deployment-branch-policies` (one entry, the default branch, type `branch`); `bosun doctor --remote` checks it too. The channel's
 `core` piece ships `.github/workflows/signer.yml`. `bosun doctor` warns until the workflow and a key are there; it cannot see the
 environment's secret. The signer key signs only the autonomous form, so it never approves anything D-017 does not allow.
 

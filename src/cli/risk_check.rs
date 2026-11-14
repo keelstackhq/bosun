@@ -104,7 +104,7 @@ const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run 
 
 /// R-weaken evidence (spec §8): gate files compared at base and head, diffs, deleted or thinned
 /// tests. Deduplicated, in file order.
-fn weaken_findings(
+pub(crate) fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
     base: &str,

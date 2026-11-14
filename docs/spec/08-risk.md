@@ -286,12 +286,22 @@ High-risk PRs:
   the PR's current head, every D-017 check `approve` runs passes (the session that asked, the
   workflow's `requester` input, is excluded as a reviewer like the signer's own, so signer !=
   reviewer holds in CI), and the head's `ci-ok` is green as `ci_green` reads it: the newest
-  GitHub Actions check run, never a status (else exit 1, nothing signed; `data.ci_ok`). Any session asks for it
+  GitHub Actions check run, never a status (in `[checks] mode = "checks"` (§15) only the gate App's
+  run, by `checks.app_id`). The hole it narrows: anyone or any workflow with `checks: write`, or any
+  App, can create a check run named `ci-ok` (D32), so no other creator counts. `approve --as signer`
+  also refuses, as risk-check does, a PR with R-weaken findings or a `weaken` capability (label or
+  linked task), which are the owner's (else exit 1, nothing signed; `data.ci_ok`). Any session asks for it
   with `bosun approve <pr>@<head> --via-signer` (no key; exit 4 while halted, exit 3 on a stale
   head): it posts nothing and returns the `mcp__github__actions_run_trigger` call in `next` (exit 2 without a plain `BOSUN_SESSION`). A
-  dispatch by anyone signs nothing the gates do not allow. `bosun doctor` checks, under the
-  autonomous policy, that `signer.yml` exists and a `signer` (or `owner`) key is enrolled;
-  it cannot see environment secrets and says so.
+  dispatch by anyone signs nothing the gates do not allow. The `if: github.ref` guard in `sign` is
+  no barrier: a dispatch with `ref` set to another branch runs that branch's copy of the file, and
+  anyone who can push a branch can remove the guard. The one real barrier is the environment's
+  deployment-branch rule: `bosun-signer` must allow only the default branch, so a run from any other
+  branch cannot read `BOSUN_SIGNER_KEY`. `bosun doctor` checks, under the autonomous policy, that
+  `signer.yml` exists and a `signer` key is enrolled, and with `--remote` that `bosun-signer`
+  allows exactly the default branch (custom branch policy, one entry of type branch; protected-branches
+  mode counts as not verified); unreadable (no token, 403) it says `verify: owner`. It cannot see
+  environment secrets and says so.
 - Author is the owner. Agents open PRs through the Claude GitHub App as the owner's login, and
   GitHub refuses a review of one's own PR, so the owner cannot approve those PRs with a review.
   When the PR author is an owner of `governance/owners.toml` at base and the PR waits for the

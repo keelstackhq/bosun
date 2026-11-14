@@ -541,7 +541,8 @@ fn via_signer(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
     .with_next("mcp__github__actions_run_trigger", args))
 }
 
-/// What the head's `ci-ok` is for the CI signer: the newest GitHub Actions check run, as
+/// What the head's `ci-ok` is for the CI signer: the newest GitHub Actions check run (in
+/// `[checks] mode = "checks"`: the gate App's), as
 /// `ci_green` reads it (a commit status never counts). Returns (green, what was seen).
 fn ci_ok_state(gh: &dyn Github, sha: &str) -> Result<(bool, String)> {
     let runs: Vec<Run> = gh
@@ -552,7 +553,13 @@ fn ci_ok_state(gh: &dyn Github, sha: &str) -> Result<(bool, String)> {
             name: r.name,
             conclusion: r.conclusion,
             at: r.completed_at.or(r.started_at).unwrap_or_default(),
-            app: r.app,
+            // In `checks` mode only the gate App's run counts (read as the trusted creator);
+            // otherwise GitHub Actions' (`ci_green`). Any other app can write a `ci-ok` run.
+            app: match crate::github::gate::trusted_app_id() {
+                Some(id) if r.app_id == id => crate::core::approve::TRUSTED_APP.into(),
+                Some(_) => String::new(),
+                None => r.app,
+            },
         })
         .collect();
     let seen = (runs.iter())
@@ -876,7 +883,27 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
                 .unwrap_or_default(),
         })
         .collect();
-    let matches = risk::evaluate(&rules, &changed, &[], &[]);
+    // R-weaken and capabilities, as risk-check computes them: a weakening is the owner's.
+    let findings =
+        crate::cli::risk_check::weaken_findings(gh, &files, &pull.base_sha, &pull.head_sha)?;
+    if !findings.is_empty() {
+        return Err(BosunError::error(
+            format!(
+                "autonomous mode (D-017) never covers a PR with R-weaken findings: the owner approves ({})",
+                findings.join("; ")
+            ),
+            fix,
+        ));
+    }
+    let mut capabilities = risk::capability_labels(&pull.labels);
+    for i in crate::core::meta::linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
+        if let Some(issue) = gh.get_issue(i)?
+            && let Some(meta) = crate::app::task_meta(&issue)
+        {
+            capabilities.extend(meta.capabilities);
+        }
+    }
+    let matches = risk::evaluate(&rules, &changed, &[], &capabilities);
     let mut hit = risk::autonomous_excluded(&paths, &matches);
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))

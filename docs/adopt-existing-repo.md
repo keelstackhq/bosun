@@ -264,7 +264,10 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    root files such as `Cargo.toml`, secrets, releases, tags, key or owner changes) still needs you.
    Keyless sessions ask the CI signer (`bosun approve <pr>@<head> --via-signer`); one computer step per
    repo: `bosun keygen --role signer --id signer-ci --out <pem> --enroll`, merge that PR, create the environment
-   `bosun-signer` (default branch only) with the secret `BOSUN_SIGNER_KEY`, delete the PEM (`bosun doctor` checks the rest).
+   `bosun-signer` with the secret `BOSUN_SIGNER_KEY`, delete the PEM. Required: Settings → Environments → `bosun-signer` →
+   Deployment branches → Selected branches, only the default branch (the real barrier: any other branch's copy of `signer.yml` could
+   otherwise read the key). Verify there or with `gh api repos/<owner>/<repo>/environments/bosun-signer/deployment-branch-policies`;
+   `bosun doctor --remote` checks it.
 5. **Permission checks (Claude Code behaviour, not bosun's).** Each cloud session asks for its
    own permissions. An orchestrator's go
    does not carry over to a child it spawns: a child that pushes or opens a PR can wait for your

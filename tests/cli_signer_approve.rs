@@ -98,12 +98,28 @@ fn bosun_run(fake: &FakeGithub, args: &[&str]) -> (i32, Value) {
 }
 
 fn sign(fake: &FakeGithub, k: &Key, extra: &[&str]) -> (i32, Value) {
+    sign_at(fake, k, extra, None)
+}
+
+/// As `sign`, from a checkout directory `at` (its .bosun/bosun.toml sets `[checks]`).
+fn sign_at(
+    fake: &FakeGithub,
+    k: &Key,
+    extra: &[&str],
+    at: Option<&std::path::Path>,
+) -> (i32, Value) {
     let path = tempfile::tempdir().unwrap().keep().join("key.pem");
     std::fs::write(&path, &k.1).unwrap();
     let target = format!("1@{HEAD}");
     let mut args = vec!["approve", &target, "--sign-key", path.to_str().unwrap()];
     args.extend_from_slice(extra);
-    bosun_run(fake, &args)
+    let at = at.map(|d| d.to_str().unwrap().to_string());
+    let mut full = Vec::new();
+    if let Some(d) = &at {
+        full.extend(["-C", d.as_str()]);
+    }
+    full.extend(args);
+    bosun_run(fake, &full)
 }
 
 const AS_SIGNER: [&str; 5] = ["--bootstrap", "--as", "signer", "--requester", "session_q"];
@@ -492,4 +508,161 @@ fn doctor_checks_the_signer_workflow_and_key_under_the_autonomous_policy() {
         "[[key]]\nid = \"s\"\ned25519 = \"AAAA\"\nrole = \"signer\"\n",
     );
     assert_eq!(doctor_item(d.path(), &fake).unwrap()["status"], "ok");
+}
+
+/// A PR whose clean verdict is the gate App's comment, as in `[checks] mode = "checks"`.
+fn gate_pr(k: &Key) -> FakeGithub {
+    let fake = pr_v(k, "signer", "autonomous", "octocat", None);
+    let r = json!({"bosun": "verdict", "session": "session_r", "head_sha": HEAD,
+        "approved": true, "confidence": 0.95, "major": 0});
+    let text = format!("Review verdict: approve 0.95.\n\n{r}");
+    fake.comment_by(1, "gate-app[bot]", &text);
+    fake
+}
+
+#[test]
+fn in_checks_mode_only_the_gate_apps_ci_ok_counts() {
+    let k = key();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".bosun")).unwrap();
+    std::fs::write(
+        dir.path().join(".bosun/bosun.toml"),
+        "[checks]\nmode = \"checks\"\napp_id = 4242\napp_slug = \"gate-app\"\n",
+    )
+    .unwrap();
+    // GitHub Actions' ci-ok is not the gate App's: refused in checks mode.
+    let fake = gate_pr(&k);
+    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    let (code, v) = sign_at(&fake, &k, &AS_SIGNER, Some(dir.path()));
+    assert_eq!(code, 1, "{v}");
+    // The gate App's run counts (in checks mode its verdicts are the App's comments).
+    let fake = gate_pr(&k);
+    fake.app_run(HEAD, "ci-ok", "success", "ok", "gate-app", 4242);
+    let (code, v) = sign_at(&fake, &k, &AS_SIGNER, Some(dir.path()));
+    assert_eq!(code, 0, "{v}");
+    // Another app's run never counts, in either mode.
+    let fake = gate_pr(&k);
+    fake.app_run(HEAD, "ci-ok", "success", "ok", "other", 7);
+    assert_eq!(sign_at(&fake, &k, &AS_SIGNER, Some(dir.path())).0, 1);
+    // statuses mode: another app's, and the gate App's, are no GitHub Actions run.
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    fake.app_run(HEAD, "ci-ok", "success", "ok", "other", 7);
+    assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 1);
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    fake.app_run(HEAD, "ci-ok", "success", "ok", "gate-app", 4242);
+    assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 1);
+}
+
+#[test]
+fn the_signer_refuses_what_risk_check_calls_a_weakening() {
+    let k = key();
+    let t = "#[test]\nfn a() { assert!(x); }\n";
+    let weak = format!("{t}#[test]\n#[ignore]\nfn b() {{ assert!(y); }}\n");
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    fake.pull_file(1, "tests/a.rs", "modified", 3, 0, Some(PLAIN));
+    fake.content("tests/a.rs", BASE, t);
+    fake.content("tests/a.rs", HEAD, &weak);
+    let before = fake.comments_of(1).len();
+    let (code, v) = sign(&fake, &k, &AS_SIGNER);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("R-weaken"),
+        "{v}"
+    );
+    assert_eq!(fake.comments_of(1).len(), before, "nothing signed");
+    // The same file without the weakening signs.
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    fake.pull_file(1, "tests/a.rs", "modified", 3, 0, Some(PLAIN));
+    fake.content("tests/a.rs", BASE, t);
+    fake.content("tests/a.rs", HEAD, t);
+    assert_eq!(sign(&fake, &k, &AS_SIGNER).0, 0);
+    // A `weaken` capability label is the owner's too.
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    fake.check_run(HEAD, "ci-ok", "completed", Some("success"));
+    fake.pull_set(1, "labels", json!([{"name": "bosun:capability/weaken"}]));
+    let (code, v) = sign(&fake, &k, &AS_SIGNER);
+    assert_eq!(code, 1, "{v}");
+}
+
+fn doctor_remote(fake: &FakeGithub, remote: bool) -> (Value, Value) {
+    let d = tempfile::tempdir().unwrap();
+    let write = |rel: &str, t: &str| {
+        let p = d.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, t).unwrap();
+    };
+    write(
+        ".bosun/bosun.toml",
+        "project = \"w\"\n\n[mode]\nname = \"autonomous\"\n",
+    );
+    write(
+        ".github/workflows/signer.yml",
+        "on: workflow_dispatch\njobs:\n  sign:\n    environment: bosun-signer\n    steps:\n      - run: x\n",
+    );
+    let mut cmd = bosun();
+    cmd.env("BOSUN_GITHUB_API", fake.url())
+        .env("CLAUDE_CONFIG_DIR", d.path().join(".test-claude"))
+        .arg("-C")
+        .arg(d.path())
+        .arg("doctor");
+    if remote {
+        cmd.arg("--remote");
+    }
+    let v = one_object(&cmd.output().unwrap().stdout);
+    let items = v["data"]["items"].as_array().unwrap();
+    let signer = items
+        .iter()
+        .find(|i| i["name"] == "CI signer")
+        .cloned()
+        .unwrap();
+    let envs = v["data"]["environments"]
+        .as_array()
+        .and_then(|e| e.first().cloned());
+    (signer, envs.unwrap_or(Value::Null))
+}
+
+#[test]
+fn doctor_checks_the_signer_environment_is_limited_to_the_default_branch() {
+    let custom = json!({"protected_branches": false, "custom_branch_policies": true});
+    // ok: only the default branch.
+    let fake = FakeGithub::start();
+    fake.environment(
+        "bosun-signer",
+        custom.clone(),
+        json!([{"name": "main", "type": "branch"}]),
+    );
+    let (_, env) = doctor_remote(&fake, true);
+    assert_eq!(env["status"], "ok", "{env}");
+    // A wrong branch, any branch or a missing environment warns.
+    for (policy, branches, want) in [
+        (
+            custom.clone(),
+            json!([{"name": "dev", "type": "branch"}]),
+            "dev",
+        ),
+        (Value::Null, json!([]), "any branch"),
+    ] {
+        let fake = FakeGithub::start();
+        fake.environment("bosun-signer", policy, branches);
+        let (_, env) = doctor_remote(&fake, true);
+        assert_eq!(env["status"], "warn", "{env}");
+        assert!(env["detail"].as_str().unwrap().contains(want), "{env}");
+    }
+    // Unreadable (403): says what the owner verifies.
+    let fake = FakeGithub::start();
+    fake.fail_path("/environments/bosun-signer", 403);
+    let (_, env) = doctor_remote(&fake, true);
+    assert_eq!(env["status"], "warn", "{env}");
+    assert!(
+        env["detail"].as_str().unwrap().contains("verify: owner"),
+        "{env}"
+    );
+    // Without --remote the signer item itself names the owner step.
+    let (signer, _) = doctor_remote(&FakeGithub::start(), false);
+    assert!(
+        signer["detail"].as_str().unwrap().contains("verify: owner"),
+        "{signer}"
+    );
 }
