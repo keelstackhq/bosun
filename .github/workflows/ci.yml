@@ -201,7 +201,7 @@ jobs:
             git show "$BASE:$p" > "$p"
           done
       - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.97"
           components: rustfmt, clippy
@@ -215,12 +215,12 @@ jobs:
         working-directory: ${{ steps.boot.outputs.dir }}
         run: echo "sha256=$(sha256sum target/release/bosun | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - if: steps.plan.outputs.work == 'true' && (steps.plan.outputs.setup == 'true' || steps.pin.outputs.version == '')
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Not ~/.cargo/bin: a cache a PR's earlier run saved must not put a binary on PATH.
           cache-bin: "false"
       - if: steps.plan.outputs.setup == 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
         with:
           tool: cargo-nextest,cargo-deny
       # The kinds test-integrity may allow come from the PR's linked task (the plan's `allow:`),

@@ -37,3 +37,20 @@ assert_cmd = "=2.2.2"
 predicates = "=3.1.4"
 tempfile = "=3.27.0"
 tiny_http = "=0.12.0"
+
+# Dev builds: line tables are enough for backtraces; dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# Release binary: small and single-unit. panic must stay "unwind": the hooks (pre_tool_use, stop,
+# compact) wrap their work in catch_unwind so a panic fails open or closed on purpose instead of
+# aborting with no hook output.
+[profile.release]
+panic = "unwind"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
