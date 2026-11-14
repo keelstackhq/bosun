@@ -171,7 +171,110 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         eprintln!("result: closing the epic failed: {e}");
         data["epic_error"] = json!(e.to_string());
     }
-    Ok(Outcome::data(data))
+    // Green PRs of this work wait for the parent: bosun never merges (D13) and a child cannot
+    // (D-008), so the result names them and hands the parent a message to finish them.
+    // After the comment, lease end and leave: a failed lookup must not fail the command (a retry
+    // would post a second result).
+    let green = green_prs(&app, n, args.pr).unwrap_or_else(|e| {
+        eprintln!("result: cannot list the green PRs: {e}");
+        Vec::new()
+    });
+    data["ready_to_merge"] = json!(
+        green
+            .iter()
+            .map(|(p, sha)| json!({"pr": p, "head_sha": sha}))
+            .collect::<Vec<_>>()
+    );
+    let parent = parent_session(&app).unwrap_or_else(|e| {
+        eprintln!("result: cannot find the parent: {e}");
+        None
+    });
+    data["parent"] = json!(parent);
+    let mut out = Outcome::data(data);
+    if let Some(parent) = parent {
+        let message = parent_message(session, n, &args.outcome, args.pr, &green);
+        out = out.with_next(
+            "send_message",
+            json!({"session_id": parent, "message": message}),
+        );
+    }
+    Ok(out)
+}
+
+/// Open, non-draft PRs of epic `n` (its own, or linking one of its tasks, or `pr`) that GitHub
+/// reports `clean`: every required check is green, so nothing but a merge is left.
+fn green_prs(app: &App, n: u64, pr: Option<u64>) -> crate::app::Result<Vec<(u64, String)>> {
+    let gh = app.gh.as_ref();
+    let repo = app.ctx.repo.to_string();
+    let mut out = Vec::new();
+    for p in gh.list_pulls(None, IssueState::Open)?.into_iter().take(100) {
+        let mut mine = Some(p.number) == pr;
+        for i in crate::core::meta::linked_issues_in(&p.body, &repo) {
+            if i == n {
+                mine = true;
+            } else if let Some(t) = gh.get_issue(i)?
+                && parse_task_meta(t.body_text()).is_some_and(|m| m.epic == Some(n))
+            {
+                mine = true;
+            }
+        }
+        // A fork's PR, or one by a commenter without write access, is never offered for a merge.
+        let own = p.head_repo.eq_ignore_ascii_case(&repo)
+            && matches!(
+                gh.permission(&p.user)?.unwrap_or_default().as_str(),
+                "admin" | "write"
+            );
+        if !mine || p.draft || !own {
+            continue;
+        }
+        if let Some(d) = gh.get_pull(p.number)?
+            && d.state == "open"
+            && !d.draft
+            && d.mergeable_state.as_deref() == Some("clean")
+        {
+            out.push((d.number, d.head_sha));
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// The session that spawned this one (registry record); `None` for a root or a wave agent
+/// (which runs inside its orchestrator, so a message would reach itself).
+fn parent_session(app: &App) -> crate::app::Result<Option<String>> {
+    let (gh, session) = (app.gh.as_ref(), &app.ctx.session);
+    if session.contains('/') {
+        return Ok(None);
+    }
+    Ok(match registry::load(gh)? {
+        Some((number, _)) => crate::core::handoff::parent_of(&trusted_notes(gh, number)?, session),
+        None => None,
+    })
+}
+
+/// At most 500 characters, as `bosun msg`.
+fn parent_message(
+    session: &str,
+    epic: u64,
+    outcome: &str,
+    pr: Option<u64>,
+    green: &[(u64, String)],
+) -> String {
+    let pr = pr.map_or(String::new(), |p| format!(", PR #{p}"));
+    let mut m = format!("bosun result from {session}: epic #{epic} {outcome}{pr}.");
+    if green.is_empty() {
+        m.push_str(" No PR is waiting for a merge.");
+    } else {
+        let list: Vec<String> = green
+            .iter()
+            .map(|(p, sha)| format!("#{p} ({})", sha.get(..7).unwrap_or(sha)))
+            .collect();
+        m.push_str(&format!(
+            " Green and mergeable, waiting for you (I never merge; GitHub cannot auto-merge a clean PR): {}. Merge them, then run `bosun reap`.",
+            list.join(", ")
+        ));
+    }
+    crate::core::text::inert(&m, 500)
 }
 
 /// Why `partial` must not move epic `n` back to ready (the result is still recorded): only the

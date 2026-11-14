@@ -10,6 +10,8 @@ pub struct TaskTouch {
     pub item: String,
     pub touch: Vec<String>,
     pub depends: Vec<String>,
+    /// Already merged: a pair of two merged tasks is history, not a conflict to warn about.
+    pub merged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -203,7 +205,10 @@ pub fn parallel_overlaps(
     let mut out = Overlaps::default();
     for i in 0..tasks.len() {
         for j in i + 1..tasks.len() {
-            if reach[i].contains(&j) || reach[j].contains(&i) {
+            if reach[i].contains(&j)
+                || reach[j].contains(&i)
+                || (tasks[i].merged && tasks[j].merged)
+            {
                 continue;
             }
             let Some((ga, gb)) = glob::first_overlap(&globs[i], &globs[j]) else {
@@ -248,7 +253,7 @@ pub fn hotspots(
     for key in keys {
         let Ok(k) = Glob::parse(key) else { continue };
         let hit: Vec<usize> = (0..tasks.len())
-            .filter(|&i| globs[i].iter().any(|g| g.overlaps(&k)))
+            .filter(|&i| !tasks[i].merged && globs[i].iter().any(|g| g.overlaps(&k)))
             .collect();
         let near: Vec<Vec<Glob>> = hit
             .iter()
@@ -296,7 +301,26 @@ mod tests {
             item: id.split('/').next().unwrap().into(),
             touch: companions(&s(touch)),
             depends: s(depends),
+            merged: false,
         }
+    }
+
+    #[test]
+    fn two_merged_tasks_do_not_overlap_but_a_merged_and_an_open_one_do() {
+        let (mut a, mut b, c) = (
+            task("M1/T1", &["src/x.rs"], &[]),
+            task("M1/T2", &["src/x.rs"], &[]),
+            task("M1/T3", &["src/x.rs"], &[]),
+        );
+        a.merged = true;
+        b.merged = true;
+        let none: HashMap<String, Vec<String>> = HashMap::new();
+        assert!(
+            parallel_overlaps(&[a.clone(), b.clone()], &none, 9)
+                .pairs
+                .is_empty()
+        );
+        assert_eq!(parallel_overlaps(&[a, b, c], &none, 9).pairs.len(), 2);
     }
 
     #[test]

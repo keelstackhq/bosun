@@ -15,7 +15,7 @@ use crate::core::budget::{Feature, feature_estimate, feature_level, level, to_st
 use crate::core::lease::members;
 use crate::core::meta::TaskMeta;
 use crate::core::mode::BudgetFeature;
-use crate::core::records::{Record, parse_record, spend_total};
+use crate::core::records::{Record, parse_record, spend_total, spend_total_today};
 use crate::core::state::{State, state_of};
 use crate::github::{Issue, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -54,7 +54,7 @@ fn feature_spend(app: &App, epic: u64, all: &[Issue], bound: &[u64]) -> Result<f
 }
 
 /// The trusted `bind` records of issue `n` with their comment ids, oldest first.
-fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<(u64, Record)>> {
+pub(crate) fn binds_of(gh: &dyn crate::github::Github, n: u64) -> Result<Vec<(u64, Record)>> {
     let notes = crate::app::trusted_notes(gh, n)?;
     let all = notes
         .iter()
@@ -613,6 +613,53 @@ pub(crate) fn spawn_guard(
     }
 }
 
+/// `--at`: a day (`YYYY-MM-DD`, taken as noon UTC) or an RFC 3339 time.
+pub(super) fn parse_at(s: &str) -> Result<crate::time::Timestamp> {
+    let full = if s.len() == 10 {
+        format!("{s}T12:00:00Z")
+    } else {
+        s.to_string()
+    };
+    let now = crate::time::Timestamp::now();
+    let at =
+        crate::time::parse_rfc3339(&full).filter(|t| *t <= now && *t >= now.minus_secs(48 * 3600));
+    at.ok_or_else(|| {
+        BosunError::usage(
+            format!("--at {s:?} is not a date or an RFC 3339 time within the last 48 hours"),
+            "pass --at 2026-11-13, or --at 2026-11-13T09:30:00Z",
+        )
+    })
+}
+
+/// The session id of a get_session result, at the top level or in a ccr wrapper.
+pub(super) fn session_id_of(v: &Value) -> Option<String> {
+    [
+        &v["session_id"],
+        &v["session"]["id"],
+        &v["id"],
+        &v["ccr"]["session_id"],
+        &v["ccr"]["id"],
+        &v["data"]["session_id"],
+        &v["data"]["id"],
+    ]
+    .into_iter()
+    .find_map(|x| x.as_str().filter(|s| !s.is_empty()))
+    .map(String::from)
+}
+
+/// What the notes already hold of the spend of `session`.
+pub(super) fn session_spent(notes: &[crate::core::records::Note], session: &str) -> f64 {
+    notes
+        .iter()
+        .filter_map(|n| match crate::core::records::parse_record(&n.body) {
+            Some(Record::Spend {
+                session: s, usd, ..
+            }) if s == session && usd.is_finite() && usd >= 0.0 => Some(usd),
+            _ => None,
+        })
+        .sum()
+}
+
 pub(super) fn read_input(from: &str) -> Result<Value> {
     let mut text = String::new();
     let read = if from == "-" {
@@ -660,16 +707,54 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     if !a.pr.is_empty() {
         return super::budget_pr::run(dir, a);
     }
-    let Some(n) = a.issue else {
-        return Err(BosunError::usage(
-            "budget record needs an issue number or --pr",
-            "pass the task issue, or --pr <n> for each PR the session made",
-        ));
-    };
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
-    let usd = usd_of(a, &ctx.config.prices)?;
+    let at = match a.at.as_deref() {
+        Some(s) => parse_at(s)?,
+        None => ctx.now,
+    };
+    // A claude-sessions result is the session total so far: only what the registry ledger does
+    // not hold yet for that session is new (no double count when recorded twice).
+    let input = match (a.provider.as_str(), a.from.as_deref()) {
+        ("claude-sessions", Some(from)) => Some(read_input(from)?),
+        _ => None,
+    };
+    let mut usd = match &input {
+        Some(v) => usage::from_claude_session(v)?,
+        None => usd_of(a, &ctx.config.prices)?,
+    };
+    // The delta is tied to the session id in the get_session result: a `--session` that names
+    // another session would subtract that session's ledger (an undercount), so it is refused.
+    let in_input = input.as_ref().and_then(session_id_of);
+    if let (Some(s), Some(i)) = (&a.session, &in_input)
+        && s != i
+    {
+        return Err(BosunError::usage(
+            format!("--session {s} does not match the session {i} in the get_session result"),
+            "drop --session, or pass the get_session result of that session",
+        ));
+    }
+    // Without a session id in the result the cost is taken as new (nothing to subtract from).
+    // Only the id in the result (never `--session` alone) ties a delta to a ledger.
+    let named = in_input.clone();
+    let session = a
+        .session
+        .clone()
+        .or(in_input)
+        .unwrap_or_else(|| ctx.session.clone());
+    let mut previous = 0.0;
+    if named.is_some() && input.is_some() && usd.is_finite() && usd >= 0.0 {
+        previous = session_spent(&registry::trusted_spend_notes(gh)?, &session);
+        if usd <= previous + 1e-9 {
+            return Ok(Outcome::data(json!({
+                "issue": a.issue, "session": session, "usd": 0.0, "session_total_usd": usd,
+                "recorded_before_usd": previous, "provider": a.provider,
+                "no_new_spend": true,
+            })));
+        }
+        usd -= previous;
+    }
     if !usd.is_finite() || usd < 0.0 {
         return Err(BosunError::error(
             format!("the cost {usd} is negative or not a number"),
@@ -677,6 +762,23 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         ));
     }
     let limits = limits_from_default(gh, ctx)?;
+    let Some(n) = a.issue else {
+        // No task: the session-level ledger (an orchestrator's own spend). It counts for
+        // `daily_usd` (read from the registry), never for a task's `per_task_usd`.
+        let spend = Record::Spend {
+            session: session.clone(),
+            usd,
+            at: at.to_string(),
+            issue: None,
+            model: None,
+        };
+        let (registry_issue, _) = registry::ensure(gh)?;
+        gh.add_comment(registry_issue, &spend.to_line())?;
+        return Ok(Outcome::data(json!({
+            "issue": null, "ledger": true, "session": session, "usd": usd,
+            "session_total_usd": usd + previous, "provider": a.provider, "at": at.to_string(),
+        })));
+    };
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
             format!("issue #{n} does not exist"),
@@ -684,9 +786,9 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         )
     })?;
     let spend = Record::Spend {
-        session: ctx.session.clone(),
+        session: session.clone(),
         usd,
-        at: ctx.now.to_string(),
+        at: at.to_string(),
         issue: Some(n),
         model: None,
     };
@@ -745,10 +847,7 @@ fn check(dir: Option<&Path>) -> CmdResult {
     let daily = limits.budget.daily_usd;
     let (mut spent, mut live) = (0.0, Vec::new());
     if let Some((_, notes)) = registry::load(gh)? {
-        spent = spend_total(
-            &registry::trusted_spend_notes(gh)?,
-            Some(ctx.now.day_start()),
-        );
+        spent = spend_total_today(&registry::trusted_spend_notes(gh)?, ctx.now.day_start());
         live = members(&notes);
     }
     let lvl = level(spent, daily);

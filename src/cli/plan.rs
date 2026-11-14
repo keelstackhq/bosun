@@ -71,6 +71,12 @@ fn read_plan_text(dir: Option<&Path>, file: &str) -> Result<(String, Plan)> {
         )
     })?;
     let plan = match plan::parse(&text) {
+        // Overlap warnings skip pairs of merged tasks: look them up only when there are warnings.
+        Ok(p) if !p.warnings.is_empty() => App::load(dir)
+            .and_then(|app| merged_plan_ids(app.gh.as_ref()))
+            .ok()
+            .and_then(|done| plan::parse_with_done(&text, &done).ok())
+            .unwrap_or(p),
         Ok(p) => p,
         // Rule 6 counts only open tasks: look up the merged ones only when it is all that failed,
         // so a good plan is still checked without GitHub.

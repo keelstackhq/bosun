@@ -324,6 +324,31 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
     if files.is_empty() {
         return Ok(Outcome::data(data));
     }
+    // bosun 0.7.0 added the ci-minutes gate to bosun-ok, but the PR's own CI runs the old pin and
+    // passes; main then fails. Run that gate here so the PR lists what the new pin will enforce.
+    let from_old = changed
+        .iter()
+        .find(|c| c["tool"] == "bosun")
+        .and_then(|c| c["from"].as_str())
+        .and_then(parse_semver);
+    let gate_new = from_old.is_some_and(|f| f < (0, 7, 0))
+        && latest
+            .iter()
+            .find(|(t, _)| *t == "bosun")
+            .and_then(|(_, m)| parse_semver(&m.version))
+            .is_some_and(|v| v >= (0, 7, 0));
+    let ci_findings: Vec<String> = if gate_new {
+        let (_, found) = super::ci_minutes::scan(&root);
+        found
+            .iter()
+            .map(|f| format!("{} {}: {}", f.file, f.job.as_deref().unwrap_or("-"), f.fix))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !ci_findings.is_empty() {
+        data["ci_minutes"] = json!(ci_findings);
+    }
     let moves: Vec<String> = changed
         .iter()
         .map(|c| {
@@ -337,8 +362,21 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
         })
         .collect();
     let body = format!(
-        "Tool pins moved by `bosun pin --latest` (tarballs checked against npm dist.integrity):\n{}\n\nGated R-gov: needs owner approval.",
-        moves.join("\n")
+        "Tool pins moved by `bosun pin --latest` (tarballs checked against npm dist.integrity):\n{}\n\nGated R-gov: needs owner approval.{}",
+        moves.join("\n"),
+        if ci_findings.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nThe new bosun enforces the ci-minutes gate; main would fail with {} finding(s). Fix them in this PR or a PR before it:\n{}",
+                ci_findings.len(),
+                ci_findings
+                    .iter()
+                    .map(|f| format!("- {f}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        }
     );
     if let Some(pre) = pre {
         let to = latest

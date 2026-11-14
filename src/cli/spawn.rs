@@ -17,7 +17,7 @@ use crate::cli::status::process_red;
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::lease::{Lease, Member, TTL_SECS, leases_of, members, thread_of};
 use crate::core::meta::area_of;
-use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::records::{Note, Record, parse_record, spend_total_today};
 use crate::core::spawn::{SpawnInput, check};
 use crate::core::state::{State, state_of};
 use crate::ctx::Origin;
@@ -106,9 +106,9 @@ fn gather(
         mainfix: !restricted
             && (meta.as_ref().is_some_and(|m| m.kind == "mainfix")
                 || labels.iter().any(|l| l == "bosun:kind/mainfix")),
-        spent_today_usd: spend_total(
+        spent_today_usd: spend_total_today(
             &registry::trusted_spend_notes(app.gh.as_ref())?,
-            Some(now.day_start()),
+            now.day_start(),
         ),
         daily_usd: limits.budget.daily_usd,
         parent_depth,
