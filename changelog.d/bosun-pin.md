@@ -1,0 +1,1 @@
+- chore: pin bosun 0.15.0 (.bosun/version, docs/setup-script.sh)
