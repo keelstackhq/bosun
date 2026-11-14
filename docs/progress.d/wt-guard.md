@@ -1,0 +1,1 @@
+- guard audit: gh merge via quotes/-R, shell indirection, `| sh`, env-dump reason (spec 04); backstop is branch protection plus a token without merge scope

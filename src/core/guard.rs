@@ -636,6 +636,27 @@ fn check(
                     }
                 }),
             };
+            // A command name the shell expands (`$g`, `${G:-gh}`, `$(echo gh)`, a backtick) cannot
+            // be read. Text inside quotes or a heredoc is data, not a command.
+            let named = words
+                .iter()
+                .find(|w| !(w.contains('=') && !w.starts_with('-')) && !WRAPPERS.contains(w));
+            if depth == 0
+                && named.is_some_and(|w| w.starts_with(['$', '`']))
+                && !in_quotes(before)
+                && !command.contains("<<")
+            {
+                return Some(format!(
+                    "`{}` is refused (a command name built by the shell cannot be read): {MERGE_FIX}",
+                    segment.trim()
+                ));
+            }
+            if matches!(prev, "|" | "|&") && reads_pipe(&words) {
+                return Some(format!(
+                    "`{}` is refused (a script piped into a shell cannot be read): {MERGE_FIX}",
+                    segment.trim()
+                ));
+            }
             if let Some(why) = merge_rule(&words, segment, &target) {
                 if why == PUSH_ALONE {
                     let fix = alone_fix(&words);
@@ -1547,6 +1568,9 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         }
     });
     let first = first.as_deref().map(|w| w.rsplit('/').next().unwrap_or(w));
+    if let Some(why) = exec_rule(first, words, segment, &target) {
+        return Some(why);
+    }
     match first {
         Some("gh") => gh_rule(&words[1..], segment),
         // `GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`: config from the environment.
@@ -1560,6 +1584,61 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
+}
+
+/// Commands that run another command: `find -exec`, `fd -x`, and `awk system()`.
+fn exec_rule(
+    first: Option<&str>,
+    words: &[&str],
+    segment: &str,
+    target: &Target,
+) -> Option<&'static str> {
+    match first {
+        Some("find" | "fd" | "fdfind") => {
+            let at = words.iter().position(|w| {
+                matches!(
+                    *w,
+                    "-exec"
+                        | "-execdir"
+                        | "-ok"
+                        | "-okdir"
+                        | "-x"
+                        | "-X"
+                        | "--exec"
+                        | "--exec-batch"
+                )
+            })?;
+            let end = words[at + 1..]
+                .iter()
+                .position(|w| matches!(*w, ";" | "+" | "\\;"))
+                .map_or(words.len(), |e| at + 1 + e);
+            let inner = &words[at + 1..end];
+            // `{}` stands for names find adds: judged like the command without them.
+            merge_rule(inner, &inner.join(" "), target)
+        }
+        Some("awk" | "gawk" | "mawk" | "nawk") => segment
+            .contains("system")
+            .then_some("`awk` runs commands through system()"),
+        _ => None,
+    }
+}
+
+/// A shell or interpreter that reads its script from the pipe it is fed: `curl .. | sh`.
+fn reads_pipe(words: &[&str]) -> bool {
+    let (cmd, _, _) = unwrap_runners(words);
+    let name = cmd.first().map_or("", |w| base(w));
+    let name = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    if ![
+        "sh", "bash", "zsh", "dash", "ksh", "fish", "python", "perl", "ruby", "node",
+    ]
+    .contains(&name)
+    {
+        return false;
+    }
+    let args = &cmd[1..];
+    args.contains(&"-s")
+        || args.iter().all(|a| a.starts_with('-') && *a != "-c")
+        || args.contains(&"-")
 }
 
 fn destructive(what: &str) -> String {
@@ -1773,6 +1852,15 @@ const DECRYPT_FIX: &str = "secrets stay encrypted; the owner runs `hoist secrets
 
 fn decrypt_reason(what: &str) -> String {
     format!("decrypting secrets is refused for agents ({what}): {DECRYPT_FIX}")
+}
+
+/// An environment dump or a read of the process environment: it can hold tokens and keys, but it
+/// is not a decrypt, so it gets its own reason.
+fn env_reason(what: &str) -> String {
+    format!(
+        "dumping {what} is refused for agents (it can hold tokens and keys): read only the \
+         variables you need, by name (spec §8)"
+    )
 }
 
 const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
@@ -2195,7 +2283,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             _ => false,
         };
         if dump {
-            return Some(decrypt_reason("the environment"));
+            return Some(env_reason("the environment"));
         }
         // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
         let (mut it, git) = (args.iter(), name == "git");
@@ -2381,7 +2469,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             if args.iter().any(env)
                 && !(search && pos.first().is_some_and(env) && !pos[1..].iter().any(env))
             {
-                return Some(decrypt_reason("the process environment"));
+                return Some(env_reason("the process environment"));
             }
             // ack and ugrep take commands in options (`--pager`, `--view`, `--filter`, abbreviated)
             // and from the environment, so only their pattern is data.
@@ -2466,7 +2554,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         {
             let w = w.as_str();
             if procenv(w) {
-                return Some(decrypt_reason("the process environment"));
+                return Some(env_reason("the process environment"));
             }
             let t = if assigned(w).is_some() {
                 w.split_once('=').map_or(w, |p| p.1)
@@ -2529,6 +2617,16 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 _ => false,
             };
             if refused {
+                // Code or a filter that reads the environment (and names no secrets tool).
+                let env_read = !mentions
+                    && (matches!(n.as_str(), "awk" | "gawk" | "mawk" | "jq")
+                        || INTERPS.contains(&n.as_str())
+                            && after
+                                .iter()
+                                .any(|a| ENV_READS.iter().any(|e| a.contains(e))));
+                if env_read {
+                    return Some(env_reason(&format!("the environment (`{n}`)")));
+                }
                 return Some(decrypt_reason(&format!("`{n}`")));
             }
         }
@@ -2604,7 +2702,25 @@ fn http_rule(segment: &str) -> Option<&'static str> {
 }
 
 fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
-    match args {
+    // Quotes and backslashes do not hide a word (`gh pr "merge"`, `gh p""r merge`), and a global
+    // `-R o/r` or `--repo o/r` before the command does not move it.
+    let clean: Vec<String> = args
+        .iter()
+        .map(|a| a.replace(['\'', '"', '\\'], ""))
+        .collect();
+    let mut i = 0;
+    while i < clean.len() && clean[i].starts_with('-') {
+        let a = clean[i].as_str();
+        let value_next = matches!(a, "-R" | "--repo");
+        i += if value_next { 2 } else { 1 };
+    }
+    let at = i.min(clean.len());
+    // `gh api` is judged on the words as written (quotes shape a GraphQL query).
+    if clean.get(at).map(String::as_str) == Some("api") {
+        return api_rule(&args[at + 1..], segment);
+    }
+    let args: Vec<&str> = clean[at..].iter().map(String::as_str).collect();
+    match &args[..] {
         ["pr", "merge", ..] => Some("gh pr merge"),
         [
             "release",
@@ -2616,26 +2732,31 @@ fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
         ["secret" | "variable", "set" | "delete" | "remove", ..] => {
             Some("secrets and variables are the owner's")
         }
-        ["api", ..] if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) => {
-            Some("GraphQL merge or ref mutation")
-        }
-        ["api", rest @ ..] if graphql_hidden(rest) => Some("a GraphQL query the guard cannot see"),
-        ["api", rest @ ..] if gh_api_read(rest, segment) => None,
-        ["api", rest @ ..] if rest.iter().any(|a| a.contains("/merge")) => Some("merge API"),
-        ["api", rest @ ..] if rest.iter().any(|a| a.contains("/releases")) => {
-            Some("a release makes a tag")
-        }
-        ["api", rest @ ..] if rest.iter().any(|a| a.contains("auto_merge")) => {
-            Some("auto-merge API")
-        }
-        ["api", rest @ ..]
-            if rest
-                .iter()
-                .any(|a| a.contains("git/refs") || a.contains("/tags")) =>
-        {
-            Some("ref or tag API")
-        }
         _ => None,
+    }
+}
+
+/// `gh api ARGS`: the args after `api`.
+fn api_rule(rest: &[&str], segment: &str) -> Option<&'static str> {
+    if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) {
+        Some("GraphQL merge or ref mutation")
+    } else if graphql_hidden(rest) {
+        Some("a GraphQL query the guard cannot see")
+    } else if gh_api_read(rest, segment) {
+        None
+    } else if rest.iter().any(|a| a.contains("/merge")) {
+        Some("merge API")
+    } else if rest.iter().any(|a| a.contains("/releases")) {
+        Some("a release makes a tag")
+    } else if rest.iter().any(|a| a.contains("auto_merge")) {
+        Some("auto-merge API")
+    } else if rest
+        .iter()
+        .any(|a| a.contains("git/refs") || a.contains("/tags"))
+    {
+        Some("ref or tag API")
+    } else {
+        None
     }
 }
 

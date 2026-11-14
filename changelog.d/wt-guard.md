@@ -1,0 +1,1 @@
+- Guard: quoted or `-R`/`--repo` gh merges, `$g`/`$(..)` command words, `find -exec`, `awk system`, and `| sh` are refused; env dumps get their own reason.
