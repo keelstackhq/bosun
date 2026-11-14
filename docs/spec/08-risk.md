@@ -502,7 +502,7 @@ changes work (including `bosun pr` and `bosun verdict post`) is exit 4:
 `bosun status` and the SessionStart context show whether bosun is halted; `bosun doctor` step 5
 checks that the `bosun:halt` label exists and that the kill switch is readable.
 
-Audit: `bosun progress --risk` lists the high PRs, who approved them, and the time to approval.
+Audit: the high PRs, who approved them and the time to approval are read from the `risk-check` statuses and the approval comments (no dedicated command).
 
 Verdict carry-over (design 2026-10-27 §3 C7, rules 1-5): after its own status, `bosun risk-check` (every level) posts `review-verdict` `success` ("carried from <7 hex>: clean merge of the default branch") on the head checked, and `data.verdict_carried_from` (the sha of `h`, or null). Only `review-verdict` is carried. Any error or doubt means no carry, never a failed check. It re-reads the head's statuses before and after posting, and restores a real verdict that raced it (or withdraws the carry when it cannot tell); every run on the head repairs a carried status that sits on top of a real verdict. It carries when:
 - the head has no `review-verdict` yet and is at most 5 clean merges of the default branch into an older head `h` (`core::carry` accepts the merge);

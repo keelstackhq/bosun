@@ -9,8 +9,7 @@ crates.io `keel-bosun`, GitHub Release) and pinned in `.bosun/version`; gate CI 
 pinned in each PR's base commit and checks a PR's own pin.
 
 Open follow-ups: a `bosun result` command for child results (D14); the merge queue (M3); F12, work
-outside the plan has no `bosun pr` path (proposal: `bosun pr --no-task` for `docs/**` and
-`plans/**` diffs, bookkeeping record, no lease or state). F7 stays: splice update PRs change
+outside the plan uses `bosun pr --pr <n>` (no task, no lease or state). F7 stays: splice update PRs change
 governance paths, so each needs `/bosun approve <sha>`. A building, review or fixing issue closed
 without a merge costs one PR listing per `reap`; a PR linked only by the bosun marker is seen by
 `bosun pr`, not `reap` or `result`. Label-lock misses: spec §4.
