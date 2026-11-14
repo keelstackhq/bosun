@@ -28,7 +28,7 @@ fn commands(v: &Value) -> Vec<String> {
 }
 
 fn keyless_repo() -> tempfile::TempDir {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
     std::fs::write(t.path().join(".bosun/approvers.toml"), "# no key yet\n").unwrap();
     t
@@ -96,7 +96,7 @@ fn a_noop_rerun_adds_the_approvers_file_only_when_git_shows_it_changed() {
 
 #[test]
 fn doctor_names_a_malformed_api_url() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let out = bosun()
         .env("GITHUB_TOKEN", "t")
         .env("BOSUN_GITHUB_API", "not-a-url")

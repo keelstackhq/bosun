@@ -84,7 +84,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     plan: str | null, own_ci: bool, claude_md: bool, excluded: [str], changes: [{action: str,
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
-    pr_body?: str, intake?: str, routines?: [{name: str, model: str, schedule: str, prompt: str}]};
+    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};

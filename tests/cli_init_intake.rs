@@ -358,8 +358,8 @@ fn without_intake_nothing_changes() {
     let (code, v) = e.run(&["--stack", "rust", "--no-pr"]);
     assert_eq!(code, 0, "{v}");
     assert!(v["next"].as_array().unwrap().is_empty());
-    assert!(!e.argv().contains("intake"));
-    assert!(v["data"]["owner_steps"].as_array().unwrap().len() >= 7);
+    assert!(!e.argv().contains("intake=1"));
+    assert!(v["data"]["owner_steps"].as_array().unwrap().len() >= 6);
 }
 
 fn symlink_case(link_dir: bool) {

@@ -1,6 +1,6 @@
 //! `bosun doctor`: report each step of the human checklist (spec §11) as ok or missing.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -956,8 +956,29 @@ fn summarize(data: &mut Value) {
     }
 }
 
+/// A config that does not parse is usually a newer repo read by an older binary: when
+/// `.bosun/version` differs from this binary, say so with the one fix.
+fn skew_hint(dir: Option<&Path>, e: BosunError) -> BosunError {
+    if !e.message.contains(".bosun/") {
+        return e;
+    }
+    let start = dir.map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let root = crate::ctx::git_out(&start, &["rev-parse", "--show-toplevel"])
+        .map_or(start, PathBuf::from);
+    match read(&root, ".bosun/version").map(|v| v.trim().to_string()) {
+        Some(pin) if super::init::is_semver(&pin) && pin != env!("CARGO_PKG_VERSION") => BosunError {
+            fix: format!(
+                "installed {}, repo pins {pin}: run bash docs/setup-script.sh, then rerun (the config may be newer than this binary)",
+                env!("CARGO_PKG_VERSION")
+            ),
+            ..e
+        },
+        _ => e,
+    }
+}
+
 pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
-    let ctx = Ctx::load(dir)?;
+    let ctx = Ctx::load(dir).map_err(|e| skew_hint(dir, e))?;
     // Without a token the GitHub steps are skipped; the local steps still run.
     check_api_url()?;
     let live_gh = LiveGithub::new(&ctx.repo.owner, &ctx.repo.name).ok();
@@ -1159,6 +1180,19 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         ),
         "run `bosun setup-snippet` and paste its script once as the setup script of the shared cloud environment \"keelstack\" (claude.ai/code > Environments); it runs each checkout's docs/setup-script.sh (the content field), so keep that file and .bosun/version",
     );
+    // The binary on this machine against the repo's pin: one line with the one fix.
+    if let Some(pin) = version
+        .as_deref()
+        .filter(|v| super::init::is_semver(v) && *v != env!("CARGO_PKG_VERSION"))
+        && setup["status"] == "ok"
+    {
+        setup["status"] = json!("warn");
+        setup["detail"] = json!(format!(
+            "installed {}, repo pins {pin}: run bash docs/setup-script.sh",
+            env!("CARGO_PKG_VERSION")
+        ));
+        setup["fix"] = json!("bash docs/setup-script.sh");
+    }
     setup["environment"] = json!("keelstack");
     setup["run"] = json!("bosun setup-snippet");
     setup["content"] = json!(script);
@@ -1284,30 +1318,54 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         )
     });
 
+    // Routines are optional: SessionStart runs `bosun reap` as the janitor. They are a step only
+    // once configured: a [slack] table (the notify Routine) or BOSUN_ROUTINES_OK set.
     let routines_ok = std::env::var("BOSUN_ROUTINES_OK").is_ok_and(|v| v.trim() == "1");
-    items.push(item(
-        11,
-        "Routines",
-        (!routines_ok).then(|| "bosun cannot see Routines; create them from the prompts in data.routines".into()),
-        "BOSUN_ROUTINES_OK=1: the owner confirmed the Routines in data.routines".into(),
-        if slack_set {
-            "create the janitor, curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
-        } else {
-            "create the janitor and curator Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
-        },
-    ));
+    let routines_fix = if slack_set {
+        "create the janitor, curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+    } else {
+        "create the janitor and curator Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+    };
+    items.push(if slack_set || routines_ok {
+        item(
+            11,
+            "Routines",
+            (!routines_ok).then(|| "bosun cannot see Routines; create them from the prompts in data.routines".into()),
+            "BOSUN_ROUTINES_OK=1: the owner confirmed the Routines in data.routines".into(),
+            routines_fix,
+        )
+    } else {
+        skipped(
+            11,
+            "Routines",
+            "optional and not configured: `bosun reap` runs at every SessionStart as the janitor",
+            "to add hourly sweeps, create the Routines from data.routines (`bosun doctor --full`)",
+        )
+    });
 
     let has_plan = std::fs::read_dir(root.join("plans")).is_ok_and(|d| {
         d.filter_map(Result::ok)
             .any(|e| e.path().extension().is_some_and(|x| x == "md"))
     });
-    items.push(item(
-        12,
-        "plan",
-        (!has_plan).then(|| "no plans/*.md".into()),
-        "plans/ holds a plan".into(),
-        "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
-    ));
+    // A plan is a step only once the repo asks for one (intake on, or an intake file); a repo that
+    // works from goals needs none.
+    let plan_wanted = ctx.config.intake || root.join(".bosun/intake.toml").exists();
+    items.push(if plan_wanted || has_plan {
+        item(
+            12,
+            "plan",
+            (!has_plan).then(|| "no plans/*.md".into()),
+            "plans/ holds a plan".into(),
+            "write plans/<name>.md in the plan format (docs/plan-format.md) and approve the plan PR",
+        )
+    } else {
+        skipped(
+            12,
+            "plan",
+            "optional and not configured (no .bosun/intake.toml, no plans/*.md)",
+            "to work from a plan: write plans/<name>.md in the plan format (docs/plan-format.md)",
+        )
+    });
 
     items.push(plugins_item(root, script.as_deref()));
 
@@ -1403,7 +1461,13 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         items.push(it);
     }
 
-    items.push(match super::pin::update_check(root) {
+    let channel_repo = root.join(".splice/channels/bosun.toml").exists();
+    let update = super::pin::update_check(root);
+    // A repo with no tool pins and no channel has nothing to update: no step-17 line at all.
+    let no_pins = !channel_repo
+        && matches!(&update, Check::Skipped(why, _) if why.starts_with("no docs/setup-script.sh"));
+    if !no_pins {
+    items.push(match update {
         Check::Skipped(why, fix) | Check::Failed(why, fix) => skipped(17, "update", &why, &fix),
         Check::Current => item(
             17,
@@ -1441,6 +1505,7 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
             it
         }
     });
+    }
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));
     if let (true, Some(gh), Ok(Some(info))) = (remote, gh, &repo) {
@@ -1464,6 +1529,8 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
             names.push("hoist check".into());
             names.push("workflow environments".into());
         }
+        // One line for all of them, not one item each.
+        items.retain(|i| !(i["status"] == "skipped" && i["fix"] == NO_TOKEN_FIX));
         items.push(json!({
             "step": 0, "name": "remote checks", "status": "skipped",
             "detail": format!("not run, no GITHUB_TOKEN or GH_TOKEN: {}", names.join(", ")),

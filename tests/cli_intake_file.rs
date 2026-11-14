@@ -31,7 +31,7 @@ impl Env {
     /// A working tree whose approvers file enrols key `orch` (the signer) with `role`.
     fn new(role: &str) -> Env {
         let e = Env {
-            dir: tempfile::tempdir().unwrap(),
+            dir: common::git_tempdir(),
         };
         e.write("key.pem", common::TEST_ED25519_PEM);
         e.write(".bosun/intake.toml", OK);
@@ -517,7 +517,7 @@ fn structural_errors_name_the_key() {
 // UC-ZI-7: the old form fails with exit 2 before it needs any repo context.
 #[test]
 fn the_old_form_checks_its_arguments_before_any_repo_or_github_access() {
-    let d = tempfile::tempdir().unwrap();
+    let d = common::git_tempdir();
     let run = |args: &[&str]| {
         let out = common::bosun()
             .current_dir(d.path())
@@ -544,7 +544,7 @@ fn the_old_form_checks_its_arguments_before_any_repo_or_github_access() {
 #[test]
 fn the_old_intake_text_form_still_opens_a_plan_issue() {
     let fake = FakeGithub::start();
-    let d = tempfile::tempdir().unwrap();
+    let d = common::git_tempdir();
     std::fs::create_dir_all(d.path().join("plans")).unwrap();
     std::fs::write(
         d.path().join("plans/widget.md"),
