@@ -228,24 +228,45 @@ pub fn spend_notes(gh: &dyn Github, number: u64) -> Result<Vec<Note>> {
 }
 
 fn notes_from(gh: &dyn Github, number: u64, bot: bool) -> Result<Vec<Note>> {
-    let mut cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    #[derive(Clone, Copy, PartialEq)]
+    enum Who {
+        Writer,
+        Unknown,
+        Other,
+    }
+    let mut cache: std::collections::HashMap<String, Who> = std::collections::HashMap::new();
     let mut out = Vec::new();
     for c in gh.list_comments(number)? {
         let is_bot = bot
             && c.user
                 .eq_ignore_ascii_case(crate::core::risk::VERDICT_AUTHOR);
-        let trusted = match cache.get(&c.user) {
-            _ if is_bot => true,
-            Some(t) => *t,
+        let who = match cache.get(&c.user) {
+            _ if is_bot => Who::Writer,
+            Some(w) => *w,
             None => {
                 let perm = gh.permission(&c.user)?.unwrap_or_default();
                 // GitHub reports the maintain role as `write`.
-                let t = matches!(perm.as_str(), "admin" | "write");
-                cache.insert(c.user.clone(), t);
-                t
+                let w = match perm.as_str() {
+                    "admin" | "write" => Who::Writer,
+                    crate::github::UNKNOWN_PERMISSION => Who::Unknown,
+                    _ => Who::Other,
+                };
+                cache.insert(c.user.clone(), w);
+                w
             }
         };
-        if trusted {
+        // A proxy that hides permissions makes a login `unknown`: its lease and spend records
+        // still count (dropping them would loosen the lease and the spend caps); nothing that
+        // approves or answers does.
+        let counts = match who {
+            Who::Writer => true,
+            Who::Unknown => matches!(
+                parse_record(&c.body),
+                Some(Record::Lease { .. } | Record::Spend { .. })
+            ),
+            Who::Other => false,
+        };
+        if counts {
             out.push(Note {
                 id: c.id,
                 body: c.body,

@@ -163,8 +163,11 @@ fn permission_of_another_user_degrades_to_unknown_when_collaborators_is_blocked(
         "permissions",
         json!({"admin": true, "push": true, "pull": true}),
     );
-    // not an error: unknown counts as no write access
-    assert_eq!(gh.permission("someone").unwrap(), None);
+    // not an error and never write: `unknown`
+    assert_eq!(
+        gh.permission("someone").unwrap().as_deref(),
+        Some("unknown")
+    );
 }
 
 #[test]
@@ -187,7 +190,7 @@ fn the_blocked_collaborators_path_is_asked_once_per_client() {
     let (fake, gh) = setup();
     proxy_blocks_collaborators(&fake, "me");
     for u in ["a", "b", "c"] {
-        assert_eq!(gh.permission(u).unwrap(), None);
+        assert_eq!(gh.permission(u).unwrap().as_deref(), Some("unknown"));
     }
     let asked = fake
         .requests()

@@ -78,6 +78,9 @@ pub type Pin = (String, Option<u64>);
 /// Pages (of 100) that `recent_issues` reads.
 pub const RECENT_PAGES: usize = 5;
 
+/// What `permission` returns when a proxy hides the answer: not a writer, not known to lack access.
+pub const UNKNOWN_PERMISSION: &str = "unknown";
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
@@ -575,11 +578,16 @@ impl Github for LiveGithub {
             Ok(v) => Ok(v.and_then(|v| v["permission"].as_str().map(str::to_string))),
             // A proxy (Claude Code cloud) answers 403 for /collaborators. Degrade, never fail:
             // only the token's own login gets the rights the repo document shows; any other
-            // login (or an unknown own login) is unknown and counts as no write access.
+            // login (or an unknown own login) is `unknown`: not a writer, but not known to be
+            // harmless either.
             Err(()) => match self.own_login() {
-                Some(l) if l == user => Ok(self.own_permission().ok().flatten()),
-                // Another login, or none known: fail closed, never trust a record on a guess.
-                _ => Ok(None),
+                Some(l) if l == user => match self.own_permission() {
+                    Ok(p) => Ok(p),
+                    Err(_) => Ok(Some(UNKNOWN_PERMISSION.into())),
+                },
+                // Another login, or none known: `unknown`, never write. Readers of approvals
+                // and verdicts treat it as untrusted; leases and spend still count it.
+                _ => Ok(Some(UNKNOWN_PERMISSION.into())),
             },
         }
     }
