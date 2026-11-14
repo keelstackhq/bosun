@@ -61,7 +61,12 @@ fn uc_m4_1_exactly_80_percent_refuses_with_exit_6_and_no_lease() {
 #[test]
 fn uc_m4_1_yesterdays_spend_does_not_count() {
     let fake = setup();
-    spend(&fake, 900.0, "2026-10-21T23:59:00Z");
+    fake.comment_at(
+        1,
+        "octocat",
+        r#"{"bosun":"spend","session":"s","usd":900.0,"at":"2026-10-21T23:59:00Z"}"#,
+        "2026-10-21T23:59:00Z",
+    );
     let (code, v) = claim(&fake, "10");
     assert_eq!(code, 0, "{v}");
 }
@@ -127,4 +132,12 @@ fn uc_m4_1_spawn_refuses_at_80_percent_and_a_mainfix_epic_passes() {
     assert_eq!(v["data"]["name"], "budget");
     let (code, v) = run(&fake, "session_a", NOW, &["spawn", "11"]);
     assert_eq!(code, 0, "{v}");
+}
+
+#[test]
+fn a_back_dated_record_created_today_still_counts_today() {
+    let fake = setup();
+    spend(&fake, 900.0, "2026-10-21T23:59:00Z");
+    let (code, v) = claim(&fake, "10");
+    assert_ne!(code, 0, "{v}");
 }
