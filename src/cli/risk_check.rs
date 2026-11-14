@@ -349,15 +349,18 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let mut task = None;
     let mut plan_high = Vec::new();
     for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
-        if let Some(issue) = gh.get_issue(i)?
-            && let Some(meta) = task_meta(&issue)
-        {
+        let issue = gh.get_issue(i)?;
+        let meta = issue.as_ref().and_then(task_meta);
+        // The body is the author's: it can only add. The plan file on the base, reached through
+        // the trusted bind (plan, item, task), is the authority, also when the body has no task
+        // block at all.
+        let high = meta.as_ref().is_some_and(|m| m.risk == "high")
+            || (issue.is_some() && bound_task_is_high(gh, i, base)?);
+        if high {
+            plan_high.push(format!("#{i} is `risk: high` in the plan"));
+        }
+        if let Some(meta) = meta {
             capabilities.extend(meta.capabilities);
-            // The body is the author's: it can only add. The plan file on the base, reached
-            // through the trusted bind (plan, item, task), is the authority.
-            if meta.risk == "high" || bound_task_is_high(gh, i, base)? {
-                plan_high.push(format!("#{i} is `risk: high` in the plan"));
-            }
             task.get_or_insert(i);
         }
     }

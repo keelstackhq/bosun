@@ -308,7 +308,7 @@ fn execute(
 
     let mut result = spawn(&argv, &dir);
     // nextest never runs doctests: `cargo test --doc` closes that gap.
-    if swapped && matches!(result, Ok((0, _))) {
+    if swapped && matches!(result, Ok((0, _))) && has_lib_target(&dir) {
         let mut doc = plain;
         doc.insert(2, "--doc".into());
         result =
@@ -328,6 +328,29 @@ fn execute(
         "over_budget": secs > gate.budget() as f64,
         "skipped": false,
     }))
+}
+
+/// Whether the workspace has a library target: `cargo test --doc` exits 101 without one.
+fn has_lib_target(dir: &Path) -> bool {
+    let Ok(out) = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .current_dir(dir)
+        .output()
+    else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else {
+        return false;
+    };
+    let is_lib = |k: &Value| matches!(k.as_str(), Some("lib" | "rlib" | "proc-macro"));
+    v["packages"].as_array().is_some_and(|ps| {
+        ps.iter().any(|p| {
+            p["targets"].as_array().is_some_and(|ts| {
+                ts.iter()
+                    .any(|t| t["kind"].as_array().is_some_and(|k| k.iter().any(is_lib)))
+            })
+        })
+    })
 }
 
 /// Whether `cargo nextest` runs here (BOSUN_NO_NEXTEST=1 forces plain `cargo test`).

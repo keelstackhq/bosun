@@ -58,7 +58,8 @@ fn repo() -> Repo {
     let script = format!(
         "#!/bin/sh\necho \"$@\" >> {log}\n\
          if [ \"$1\" = metadata ]; then\n\
-         printf '{{\"packages\":[{{\"name\":\"a\",\"manifest_path\":\"{root}/a/Cargo.toml\"}},{{\"name\":\"b\",\"manifest_path\":\"{root}/b/Cargo.toml\"}}]}}'\n\
+         kind=lib; [ -n \"$FAKE_BIN_ONLY\" ] && kind=bin\n\
+         printf '{{\"packages\":[{{\"name\":\"a\",\"manifest_path\":\"{root}/a/Cargo.toml\",\"targets\":[{{\"kind\":[\"%s\"]}}]}},{{\"name\":\"b\",\"manifest_path\":\"{root}/b/Cargo.toml\",\"targets\":[{{\"kind\":[\"%s\"]}}]}}]}}' $kind $kind\n\
          exit 0\nfi\n\
          echo fake cargo stdout\nexit ${{FAKE_CARGO_EXIT:-0}}\n",
         log = log.display(),
@@ -332,6 +333,33 @@ fn the_test_gate_runs_nextest_when_installed() {
             "nextest run --locked -p b",
             "test --doc --locked -p b"
         ]
+    );
+}
+
+#[test]
+fn a_bin_only_workspace_gets_no_doc_pass() {
+    let r = repo();
+    r.change("b/src/lib.rs");
+    let path = format!(
+        "{}:{}",
+        r.bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = bosun()
+        .env("PATH", path)
+        .env_remove("BOSUN_NO_NEXTEST")
+        .env("FAKE_BIN_ONLY", "1")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI")
+        .arg("-C")
+        .arg(&r.root)
+        .args(["gate", "test", "--base", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        r.calls(),
+        vec!["nextest --version", "nextest run --locked -p b"]
     );
 }
 
