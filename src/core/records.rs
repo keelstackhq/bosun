@@ -305,6 +305,22 @@ pub fn spend_total(notes: &[Note], since: Option<crate::time::Timestamp>) -> f64
         .sum()
 }
 
+/// `spend_total` for the daily guards: a record also counts when its comment was created at or
+/// after `since`, so a back-dated `at` cannot move spend out of today.
+pub fn spend_total_today(notes: &[Note], since: crate::time::Timestamp) -> f64 {
+    notes
+        .iter()
+        .filter_map(|n| match parse_record(&n.body) {
+            Some(Record::Spend { usd, at, .. }) if usd.is_finite() && usd >= 0.0 => {
+                let by_at = crate::time::parse_rfc3339(&at).is_some_and(|t| t >= since);
+                let by_creation = n.created_at.0 > 0 && n.created_at >= since;
+                (by_at || by_creation).then_some(usd)
+            }
+            _ => None,
+        })
+        .sum()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

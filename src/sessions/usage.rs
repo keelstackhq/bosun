@@ -20,11 +20,26 @@ const BUILTIN: [(&str, f64, f64); 3] = [
     ("opus", 4.00, 20.00),
 ];
 
-/// `usage.cost_usd` of a `get_session` result, at the top level or under `session`.
+/// The cost of a `get_session` result: `usage.cost_usd` at the top level, under `session`, under
+/// `external_metadata`, or any of those inside a `ccr` (or `data`) wrapper.
 pub fn from_claude_session(v: &Value) -> Result<f64, BosunError> {
-    v["usage"]["cost_usd"]
-        .as_f64()
-        .or_else(|| v["session"]["usage"]["cost_usd"].as_f64())
+    let usage_of = |r: &Value| {
+        [
+            &r["usage"],
+            &r["external_metadata"]["usage"],
+            &r["session"]["usage"],
+            &r["session"]["external_metadata"]["usage"],
+        ]
+        .into_iter()
+        .find_map(|u| {
+            u["cost_usd"]
+                .as_f64()
+                .or_else(|| u["total_cost_usd"].as_f64())
+        })
+    };
+    usage_of(v)
+        .or_else(|| usage_of(&v["ccr"]))
+        .or_else(|| usage_of(&v["data"]))
         .ok_or_else(|| {
             BosunError::error(
                 "the session result has no usage.cost_usd",
@@ -91,6 +106,13 @@ mod tests {
             from_claude_session(&json!({"session": {"usage": {"cost_usd": 2.0}}})).unwrap(),
             2.0
         );
+        for v in [
+            json!({"external_metadata": {"usage": {"cost_usd": 3.0}}}),
+            json!({"ccr": {"external_metadata": {"usage": {"cost_usd": 3.0}}}}),
+            json!({"ccr": {"usage": {"total_cost_usd": 3.0}}}),
+        ] {
+            assert_eq!(from_claude_session(&v).unwrap(), 3.0, "{v}");
+        }
         let e = from_claude_session(&json!({"usage": {}})).unwrap_err();
         assert!(e.fix.contains("--provider generic"));
     }

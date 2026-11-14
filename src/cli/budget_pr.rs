@@ -23,12 +23,16 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
+    let at = match a.at.as_deref() {
+        Some(s) => super::budget::parse_at(s)?,
+        None => ctx.now,
+    };
     let mut prs = a.pr.clone();
     prs.sort_unstable();
     prs.dedup();
     let input = a.from.as_deref().map(read_input).transpose()?;
     // stdin is read once: the cost comes from the input already read.
-    let usd = match (a.usd, &input) {
+    let mut usd = match (a.usd, &input) {
         (Some(u), _) => u,
         (None, Some(v)) if a.provider == "claude-sessions" => usage::from_claude_session(v)?,
         _ => usd_of(a, &ctx.config.prices)?,
@@ -42,7 +46,18 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let session = a.session.clone().unwrap_or_else(|| {
         input
             .as_ref()
-            .and_then(|v| text(v, &[&["session_id"], &["session", "id"], &["id"]]))
+            .and_then(|v| {
+                text(
+                    v,
+                    &[
+                        &["session_id"],
+                        &["session", "id"],
+                        &["id"],
+                        &["ccr", "session_id"],
+                        &["ccr", "id"],
+                    ],
+                )
+            })
             .unwrap_or(&ctx.session)
             .to_string()
     });
@@ -54,10 +69,28 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
                 &["session_context", "model"],
                 &["external_metadata", "last_served_model"],
                 &["model"],
+                &["ccr", "session_context", "model"],
+                &["ccr", "external_metadata", "last_served_model"],
             ],
         )
         .map(String::from)
     });
+    // A session total from get_session already counted on a task (the registry ledger) is not
+    // counted again on the PRs.
+    let in_id = input.as_ref().and_then(super::budget::session_id_of);
+    if let (Some(s), Some(i)) = (&a.session, &in_id)
+        && s != i
+    {
+        return Err(BosunError::usage(
+            format!("--session {s} does not match the session {i} in the get_session result"),
+            "drop --session, or pass the get_session result of that session",
+        ));
+    }
+    if a.usd.is_none() && in_id.is_some() && a.provider == "claude-sessions" {
+        let held =
+            super::budget::session_spent(&crate::registry::trusted_spend_notes(gh)?, &session);
+        usd = (usd - held).max(0.0);
+    }
     // Check every PR before writing any. A PR that already has this session's record is left
     // alone, so a retry after a failed write adds only what is missing.
     let (mut todo, mut done) = (Vec::new(), Vec::new());
@@ -98,7 +131,7 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         let spend = Record::Spend {
             session: session.clone(),
             usd: share,
-            at: ctx.now.to_string(),
+            at: at.to_string(),
             issue: None,
             model: model.clone(),
         };

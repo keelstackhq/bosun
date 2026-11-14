@@ -26,7 +26,7 @@ use crate::core::lease::{TTL_SECS, leases_of, members};
 use crate::core::meta::closing_issues;
 use crate::core::metrics::{CiRun, ci_head};
 use crate::core::mode::{Brake, HealMain, HealPr, brake};
-use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::records::{Note, Record, parse_record, spend_total_today};
 use crate::core::risk::{clean_verdicts, revert_targets};
 use crate::core::signature::signature;
 use crate::core::spawn::{SpawnInput, check};
@@ -355,9 +355,9 @@ impl Run<'_> {
             process_red: process_red(gh)?.is_some(),
             mainfix: false,
             process_fix: false,
-            spent_today_usd: spend_total(
+            spent_today_usd: spend_total_today(
                 &registry::trusted_spend_notes(gh)?,
-                Some(now.day_start()),
+                now.day_start(),
             ),
             daily_usd: limits.budget.daily_usd,
             parent_depth: depth,
