@@ -724,11 +724,19 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         Some(v) => usage::from_claude_session(v)?,
         None => usd_of(a, &ctx.config.prices)?,
     };
+    // The delta is tied to the session id in the get_session result: a `--session` that names
+    // another session would subtract that session's ledger (an undercount), so it is refused.
+    let in_input = input.as_ref().and_then(session_id_of);
+    if let (Some(s), Some(i)) = (&a.session, &in_input)
+        && s != i
+    {
+        return Err(BosunError::usage(
+            format!("--session {s} does not match the session {i} in the get_session result"),
+            "drop --session, or pass the get_session result of that session",
+        ));
+    }
     // Without a session id in the result the cost is taken as new (nothing to subtract from).
-    let named = a
-        .session
-        .clone()
-        .or_else(|| input.as_ref().and_then(session_id_of));
+    let named = a.session.clone().or(in_input);
     let session = named.clone().unwrap_or_else(|| ctx.session.clone());
     let mut previous = 0.0;
     if named.is_some() && input.is_some() && usd.is_finite() && usd >= 0.0 {

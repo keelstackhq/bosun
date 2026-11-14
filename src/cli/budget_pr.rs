@@ -77,6 +77,15 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     });
     // A session total from get_session already counted on a task (the registry ledger) is not
     // counted again on the PRs.
+    let in_id = input.as_ref().and_then(super::budget::session_id_of);
+    if let (Some(s), Some(i)) = (&a.session, &in_id)
+        && s != i
+    {
+        return Err(BosunError::usage(
+            format!("--session {s} does not match the session {i} in the get_session result"),
+            "drop --session, or pass the get_session result of that session",
+        ));
+    }
     if a.usd.is_none() && input.is_some() && a.provider == "claude-sessions" {
         let held =
             super::budget::session_spent(&crate::registry::trusted_spend_notes(gh)?, &session);

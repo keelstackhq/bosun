@@ -111,3 +111,12 @@ fn at_is_bounded_and_a_back_dated_record_still_counts_today() {
     let v = one_object(&out.stdout);
     assert_eq!(v["data"]["spent_today_usd"], 4.0, "{v}");
 }
+
+#[test]
+fn a_session_flag_that_contradicts_the_result_is_refused() {
+    let fake = FakeGithub::start();
+    let body = r#"{"session_id":"session_x","usage":{"cost_usd":2.0}}"#;
+    let (code, v) = budget(&fake, body, &["--from", "-", "--session", "session_y"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(registry_spends(&fake).is_empty());
+}
