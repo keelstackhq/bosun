@@ -173,14 +173,22 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     }
     // Green PRs of this work wait for the parent: bosun never merges (D13) and a child cannot
     // (D-008), so the result names them and hands the parent a message to finish them.
-    let green = green_prs(&app, n, args.pr)?;
+    // After the comment, lease end and leave: a failed lookup must not fail the command (a retry
+    // would post a second result).
+    let green = green_prs(&app, n, args.pr).unwrap_or_else(|e| {
+        eprintln!("result: cannot list the green PRs: {e}");
+        Vec::new()
+    });
     data["ready_to_merge"] = json!(
         green
             .iter()
             .map(|(p, sha)| json!({"pr": p, "head_sha": sha}))
             .collect::<Vec<_>>()
     );
-    let parent = parent_session(&app)?;
+    let parent = parent_session(&app).unwrap_or_else(|e| {
+        eprintln!("result: cannot find the parent: {e}");
+        None
+    });
     data["parent"] = json!(parent);
     let mut out = Outcome::data(data);
     if let Some(parent) = parent {
@@ -210,7 +218,13 @@ fn green_prs(app: &App, n: u64, pr: Option<u64>) -> crate::app::Result<Vec<(u64,
                 mine = true;
             }
         }
-        if !mine || p.draft {
+        // A fork's PR, or one by a commenter without write access, is never offered for a merge.
+        let own = p.head_repo.eq_ignore_ascii_case(&repo)
+            && matches!(
+                gh.permission(&p.user)?.unwrap_or_default().as_str(),
+                "admin" | "write"
+            );
+        if !mine || p.draft || !own {
             continue;
         }
         if let Some(d) = gh.get_pull(p.number)?

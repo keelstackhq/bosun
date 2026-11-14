@@ -19,6 +19,9 @@ fn a_clean_pr_of_the_epic_is_named_to_the_parent() {
     fake.pull_set(42, "mergeable_state", json!("clean"));
     fake.pull(43, "other", "claude/y", "Closes #77");
     fake.pull_set(43, "mergeable_state", json!("clean"));
+    fake.pull_from_fork(44, "evil", "mallory/widget");
+    fake.pull_set(44, "body", json!("Closes #9"));
+    fake.pull_set(44, "mergeable_state", json!("clean"));
     let (code, v) = run(&fake, CHILD, NOW, &["join", "--parent", "session_root"]);
     assert_eq!(code, 0, "{v}");
     let (code, v) = run(

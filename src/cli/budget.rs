@@ -620,9 +620,10 @@ pub(super) fn parse_at(s: &str) -> Result<crate::time::Timestamp> {
     } else {
         s.to_string()
     };
-    crate::time::parse_rfc3339(&full).ok_or_else(|| {
+    let at = crate::time::parse_rfc3339(&full).filter(|t| *t <= crate::time::Timestamp::now());
+    at.ok_or_else(|| {
         BosunError::usage(
-            format!("--at {s:?} is not a date or an RFC 3339 time"),
+            format!("--at {s:?} is not a date or an RFC 3339 time in the past"),
             "pass --at 2026-11-13, or --at 2026-11-13T09:30:00Z",
         )
     })
@@ -636,6 +637,8 @@ pub(super) fn session_id_of(v: &Value) -> Option<String> {
         &v["id"],
         &v["ccr"]["session_id"],
         &v["ccr"]["id"],
+        &v["data"]["session_id"],
+        &v["data"]["id"],
     ]
     .into_iter()
     .find_map(|x| x.as_str().filter(|s| !s.is_empty()))
@@ -643,7 +646,7 @@ pub(super) fn session_id_of(v: &Value) -> Option<String> {
 }
 
 /// What the notes already hold of the spend of `session`.
-fn session_spent(notes: &[crate::core::records::Note], session: &str) -> f64 {
+pub(super) fn session_spent(notes: &[crate::core::records::Note], session: &str) -> f64 {
     notes
         .iter()
         .filter_map(|n| match crate::core::records::parse_record(&n.body) {

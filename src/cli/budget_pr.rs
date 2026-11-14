@@ -32,7 +32,7 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     prs.dedup();
     let input = a.from.as_deref().map(read_input).transpose()?;
     // stdin is read once: the cost comes from the input already read.
-    let usd = match (a.usd, &input) {
+    let mut usd = match (a.usd, &input) {
         (Some(u), _) => u,
         (None, Some(v)) if a.provider == "claude-sessions" => usage::from_claude_session(v)?,
         _ => usd_of(a, &ctx.config.prices)?,
@@ -75,6 +75,13 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         )
         .map(String::from)
     });
+    // A session total from get_session already counted on a task (the registry ledger) is not
+    // counted again on the PRs.
+    if a.usd.is_none() && input.is_some() && a.provider == "claude-sessions" {
+        let held =
+            super::budget::session_spent(&crate::registry::trusted_spend_notes(gh)?, &session);
+        usd = (usd - held).max(0.0);
+    }
     // Check every PR before writing any. A PR that already has this session's record is left
     // alone, so a retry after a failed write adds only what is missing.
     let (mut todo, mut done) = (Vec::new(), Vec::new());
