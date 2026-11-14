@@ -483,6 +483,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         unlinked,
         autonomous: auto.as_ref(),
         models: models.as_deref(),
+        signer_on: signer_on(gh, base)?,
     };
     let found = if high {
         approval_on(gh, &need, head)?
@@ -803,6 +804,8 @@ struct Need<'a> {
     autonomous: Option<&'a (Vec<Comment>, Vec<String>)>,
     /// `[approvals] review_models` at base: when set, only verdicts by these models count.
     models: Option<&'a [String]>,
+    /// `[approvals] signer` at base: a signer key's signature counts only while it is true.
+    signer_on: bool,
 }
 
 /// How a head is approved: by an owner or delegate (`approved_by`), or by two verdicts.
@@ -851,7 +854,15 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         Form::Bootstrap
     };
     let bootstrap = bootstrap.map(|l| (l, form));
-    found.approved_by = approver(gh, repo, pr, sha, owners, need.signed_ok, bootstrap)?;
+    found.approved_by = approver(
+        gh,
+        repo,
+        pr,
+        sha,
+        owners,
+        need.signed_ok,
+        (bootstrap, need.signer_on),
+    )?;
     let open = found.approved_by.is_none() && !need.unlinked;
     // Two verdicts only matter when the owner has not approved and the class allows them.
     if open && need.requirement == Approval::TwoVerdicts {
@@ -876,7 +887,8 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
             );
             if !found.delegate_verdicts.is_empty() && !owners_withdrawn(gh, pr, sha, owners)? {
                 let v1 = |f: Form| f == Form::V1;
-                let key = signed_approver(gh, repo, pr, sha, &comments, Role::Delegate, &v1)?;
+                let key =
+                    signed_approver(gh, repo, pr, sha, &comments, (Role::Delegate, false), &v1)?;
                 found.approved_by = key.map(|id| format!("delegate {id}"));
             }
         }
@@ -1048,7 +1060,7 @@ fn approver(
     head: &str,
     owners: &[String],
     signed_ok: bool,
-    bootstrap: Option<(&str, Form)>,
+    (bootstrap, signer_on): (Option<(&str, Form)>, bool),
 ) -> Result<Option<String>> {
     let reviews = gh.list_reviews(pr)?;
     let state = |o: &str| decisive_review(&reviews, o, head);
@@ -1085,7 +1097,15 @@ fn approver(
         return Ok(None);
     }
     let sign = |accept: &dyn Fn(Form) -> bool| {
-        signed_approver(gh, repo, pr, head, &comments, Role::Owner, accept)
+        signed_approver(
+            gh,
+            repo,
+            pr,
+            head,
+            &comments,
+            (Role::Owner, signer_on),
+            accept,
+        )
     };
     let ids: Vec<u64> = (owners.iter())
         .filter_map(|o| dismissed_review(&reviews, o, head))
@@ -1262,6 +1282,14 @@ pub(crate) fn autonomous_clean(
 
 /// `[approvals] review_models` on `base` (D-017 and the verdict classes): `None` when unset. A
 /// base config that does not parse fails closed (an empty list: no verdict counts).
+/// `[approvals] signer` at base; a config that does not parse turns it off (fail closed).
+fn signer_on(gh: &dyn Github, base: &str) -> Result<bool> {
+    Ok(match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => Config::parse(&t, CONFIG_FILE).is_ok_and(|c| c.approvals.signer),
+        None => false,
+    })
+}
+
 pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
     Ok(match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => match Config::parse(&t, CONFIG_FILE) {
@@ -1283,7 +1311,7 @@ fn signed_approver(
     pr: u64,
     head: &str,
     comments: &[Comment],
-    role: Role,
+    (role, signer_on): (Role, bool),
     accept: &dyn Fn(Form) -> bool,
 ) -> Result<Option<String>> {
     let sigs: Vec<(u64, Form, &str, &str)> = comments
@@ -1322,7 +1350,10 @@ fn signed_approver(
         };
         // A signer key counts only for the autonomous form, in place of an owner key.
         let role_ok = key.role == role
-            || (role == Role::Owner && form == Form::Autonomous && key.role == Role::Signer);
+            || (signer_on
+                && role == Role::Owner
+                && form == Form::Autonomous
+                && key.role == Role::Signer);
         if !role_ok {
             eprintln!(
                 "bosun: risk-check: comment {comment}: key {id:?} is a {} key, not counted as {}",

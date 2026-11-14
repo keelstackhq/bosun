@@ -285,7 +285,9 @@ High-risk PRs:
   never v1, v2, bootstrap, delegate or any other owner use (`approve`, `answer`, `digest`,
   `intake`, budget raises), so a leaked signer key can at most sign what D-017 already lets the
   orchestrator approve. risk-check counts an autonomous signature by an `owner` or `signer` key,
-  with every D-017 condition above unchanged. `.github/workflows/signer.yml` (bosun's own and the
+  a `signer` key only while `[approvals] signer = true` at the PR's base (unset, false or a base
+  config that does not parse revokes every signer signature), with every D-017 condition above
+  unchanged. `.github/workflows/signer.yml` (bosun's own and the
   channel's `core` piece, owned; R-ci, so owner-class) runs on `workflow_dispatch` only (inputs
   `pr`, `head`, `requester`), only from the default branch, never checks out the PR: job `sign` (environment
   `bosun-signer`) installs the release pinned in `.bosun/version` and runs `bosun approve

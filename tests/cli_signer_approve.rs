@@ -157,6 +157,24 @@ fn sign_at(
 const AS_SIGNER: [&str; 5] = ["--bootstrap", "--as", "signer", "--requester", "session_q"];
 
 #[test]
+fn turning_the_signer_off_at_base_revokes_its_signatures() {
+    let k = key();
+    let fake = pr(&k, "signer", "autonomous", "octocat");
+    ci_ok(&fake);
+    let (code, v) = sign(&fake, &k, &AS_SIGNER);
+    assert_eq!(code, 0, "{v}");
+    // The PR's base turns the signer off: its signature counts for nothing.
+    fake.content(
+        ".bosun/bosun.toml",
+        BASE,
+        &config("autonomous", false, true),
+    );
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["data"]["approved_by"].is_null(), "{v}");
+}
+
+#[test]
 fn the_signer_signs_the_autonomous_form_once_ci_ok_is_green() {
     let k = key();
     let fake = pr(&k, "signer", "autonomous", "octocat");
