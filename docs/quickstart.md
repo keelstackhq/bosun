@@ -156,40 +156,25 @@ thing that needs the Routine. `bosun metrics --propose` itself is read-only.
 
 ## 5. Migration: a repo that already runs bosun
 
-For a move to `booster`, with exact commands per environment and a prompt for Claude, see
-[migrate-booster.md](migrate-booster.md).
+One command, one owner approval ([migrate-booster.md](migrate-booster.md): steps and a prompt for the CLI,
+web/cloud and Claude Tag in Slack; the manual path is its appendix).
 
-One step at a time (gatekeeper → steady → booster → autonomous). Never skip a step, never move lighter on
-a red week.
+```bash
+bosun migrate --to booster --dry-run   # survey: version, mode, registry, unmarked epics, hull lock, baseline
+bosun migrate --to booster             # one governance PR: version pin, registry pin, [mode]
+bosun pr --pr <n> --ready              # after the local gates: ready + auto-merge (no task needed)
+bosun migrate --finish                 # after the merge: join, plan amend (idempotent)
+```
 
-1. Baseline. `bosun metrics --days 30` in the repo. Write the numbers on the PR.
-2. **[computer]** Owner publishes a release that reads `[mode]`. An agent runs `bosun pin --latest --pr`
-   (or the splice bot's PR); **[phone]** you approve it. Check: `cat .bosun/version`; `bosun mode` exits 0.
-3. Prep notes before `steady` (an agent does them, in order):
-   - Every open epic needs a plan marker (the `bosun:epic` marker in its body, naming plan and
-     item) before `budget_feature` is not `off` (`steady` sets `warn`; `booster` sets `ask`). For each plan file
-     run `bosun plan check <plan>` then `bosun plan amend <plan>` (`--dry-run` first). Without the
-     marker `claim` and `spawn` refuse a task of the epic; the refusal's `error.fix` names the step.
-   - `steady` sets `heal_main = "revert-pr"`: on a red main, `bosun heal` opens a **draft** revert PR
-     (it never merges). Tell the orchestrator to review it, or set `heal_main = "off"` as an override.
-   - Lighter means toward `autonomous`; tighter, toward `gatekeeper`. Every step in this section is a
-     lighter mode: an owner-approved R-weaken change (gatekeeper → steady too). A tighter mode is no
-     finding, but the file is R-gov, so you still approve it.
-   - Pin the registry first, right away and before turning any budget knob on: an agent commits `.bosun/registry` holding the live registry issue number (an R-gov PR the owner approves). A repo that rotated its registry (old closed, new opened) must name the live one (without a pin the lowest open labelled issue wins, and a swap of the registry drops the indexes until `bosun plan amend` runs); `bosun doctor` warns until the pin exists.
-4. An agent opens a PR that sets `[mode] name = "steady"` (section 0). **[phone]** Owner approves
-   the exact head (chat form: repo, PR, head SHA). Merge as usual (orchestrator). Right after the
-   merge an agent runs `bosun plan amend <plan>` again for every plan, after the orchestrator's `bosun join` (no registry issue, no index): only now (knob on) does it
-   write the bind and epic-index records, and until it does `claim` and `spawn` refuse plan tasks.
-5. `bosun mode` → `mode_source: "explicit"`; `bosun metrics --days 7`. Watch red-CI rate (target
-   < 30 %), owner touches (≤ 5 a day), `data.brake`.
-6. **[computer]** Add the heal line to the janitor Routine (section 2), then daily run
-   `bosun digest`; reply by section 1.
-7. After two weeks on target: repeat steps 4-6 for `booster` (target red-CI < 20 %, ≤ 3 touches).
-   `booster` also sets `[approvals] policy = "autonomous"` when the table leaves it unset
-   (an explicit `policy` wins; the pinned release must know `autonomous`). **[computer]**
-   Replace the curator Routine prompt (section 4).
-8. `autonomous` the same way (red-CI < 15 %, ≤ 1 touch). Going back (tighter) is one PR too: no
-   R-weaken finding, but R-gov, so the owner still approves.
+- One rung per PR (gatekeeper → steady → booster → autonomous) unless the owner says `--direct`; the PR body
+  records that choice. Never move lighter on a red week.
+- **[phone]** The owner approves the exact head: the PR is R-gov, and R-weaken when lighter. risk-check waits
+  for it; nothing else needs a GitHub click.
+- **[computer]** Routines stay owner-only: the PR body lists them (janitor heal line from `steady`, curator
+  prompt from `booster`, section 4).
+- Targets before the next rung: `steady` red-CI < 30 % and ≤ 5 owner touches a day for two weeks; `booster`
+  < 20 %, ≤ 3; `autonomous` < 15 %, ≤ 1 (`bosun metrics --days 7`, `data.brake`).
+- Going tighter is the same command (`--to steady`): no R-weaken, still R-gov.
 
 Gatekeeper without `[mode]` is byte-for-byte today's behaviour; deleting the table goes back.
 What mode never changes: R-weaken, R-gov, R-secrets, R-prod-write, workflows, releases and tags

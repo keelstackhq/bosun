@@ -1,0 +1,1 @@
+- `bosun migrate --to <mode> [--direct] [--dry-run]` opens one governance PR for a mode move (version and registry pins, `[mode]`), with a best-effort metrics baseline; `--finish` joins and amends plans after the merge; `bosun pr --pr <n> --ready` readies and auto-merges a PR with no task; `docs/migrate-booster.md` leads with the short path per environment.
