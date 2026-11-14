@@ -44,11 +44,25 @@ fn without_a_token_local_steps_run_and_github_steps_are_skipped() {
     let (code, v) = doctor(tmp.path(), false);
     assert_eq!(code, 5, "{v}");
     assert_eq!(step(&v, 4)["status"], "missing", "owners is judged locally");
-    assert_eq!(step(&v, 12)["status"], "missing", "plan is judged locally");
-    for n in [1, 2, 5, 8, 9] {
-        let it = step(&v, n);
-        assert_eq!(it["status"], "skipped", "{it}");
-        assert_eq!(it["fix"], GH_FIX, "{it}");
+    // The plan and the Routines are optional until configured (P1-4).
+    assert_eq!(step(&v, 12)["status"], "skipped", "plan is optional");
+    assert_eq!(step(&v, 11)["status"], "skipped", "Routines are optional");
+    // The GitHub steps are one line, not one item each (P1-16).
+    let line = step(&v, 0);
+    assert_eq!(line["fix"], GH_FIX, "{line}");
+    for name in [
+        "repo readable",
+        "Claude GitHub App",
+        "kill switch",
+        "registry issue",
+        "auto-merge",
+    ] {
+        assert!(line["detail"].as_str().unwrap().contains(name), "{line}");
+        let items = v["data"]["items"].as_array().unwrap();
+        assert!(
+            items.iter().all(|i| i["name"] != name),
+            "{name} is its own item"
+        );
     }
     let items = v["data"]["items"].as_array().unwrap();
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
@@ -217,4 +231,33 @@ fn with_a_token_doctor_is_not_offline() {
             .iter()
             .all(|i| i["name"] != "remote checks")
     );
+}
+
+/// P0-6: a repo pinned to another release than the binary gets one line with the one fix, and a
+/// config the binary cannot parse says the same instead of a bare parse error.
+#[test]
+fn a_pin_that_differs_from_the_binary_is_one_line_with_the_fix() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.1.0\n").unwrap();
+    std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
+    std::fs::write(tmp.path().join("docs/setup-script.sh"), "#!/bin/sh\n").unwrap();
+    let (_, v) = doctor(tmp.path(), false);
+    let it = step(&v, 6);
+    assert_eq!(it["status"], "warn", "{it}");
+    let want = format!(
+        "installed {}, repo pins 0.1.0: run bash docs/setup-script.sh",
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(it["detail"], want.as_str(), "{it}");
+    std::fs::write(
+        tmp.path().join(".bosun/bosun.toml"),
+        "from_the_future = 1\n",
+    )
+    .unwrap();
+    let (code, v) = doctor(tmp.path(), false);
+    assert_eq!(code, 1, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains(&want), "{fix}");
+    assert!(!v["error"]["message"].as_str().unwrap().contains("GitHub"));
 }

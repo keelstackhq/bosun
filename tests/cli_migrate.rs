@@ -70,11 +70,14 @@ fn migrate_with(
     for (k, v) in vars {
         cmd.env(k, v);
     }
+    // The tests of the PR itself stop at the draft; the ready step has tests of its own.
+    let draft_only = args.contains(&"--to") && !args.contains(&"--dry-run");
     let out = cmd
         .arg("-C")
         .arg(env.work.path())
         .arg("migrate")
         .args(args)
+        .args(draft_only.then_some("--no-ready"))
         .output()
         .unwrap();
     let v = one_object(&out.stdout);
@@ -712,12 +715,75 @@ fn a_target_that_is_already_set_changes_nothing() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["changed"], false);
     assert_eq!(v["data"]["pr"], Value::Null);
+    // Already merged: the same run finishes the migration (join).
+    assert_eq!(v["data"]["finish"]["joined"], true, "{v}");
+    assert!(v["data"]["then"].to_string().contains("finished"));
+}
+
+/// P1-10: `--dry-run` is a local survey and needs no token.
+#[test]
+fn a_dry_run_works_without_a_token() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    let out = bosun()
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(e.work.path())
+        .args(["migrate", "--to", "steady", "--dry-run"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{v}");
+    assert_eq!(v["data"]["files"], json!([BOSUN_TOML]));
+    let notes = v["data"]["survey"]["notes"].to_string();
+    assert!(notes.contains("no token"), "{notes}");
+    assert!(v["data"]["then"].to_string().contains("GITHUB_TOKEN"));
+    assert_eq!(read(&e, BOSUN_TOML), CONFIG);
+    assert!(fake.requests().is_empty());
+    // A real run still needs the token and says what to do.
+    let out = bosun()
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .env("BOSUN_GITHUB_API", fake.url())
+        .arg("-C")
+        .arg(e.work.path())
+        .args(["migrate", "--to", "steady"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0));
     assert!(
-        v["data"]["then"]
-            .to_string()
-            .contains("bosun migrate --finish")
+        one_object(&out.stdout)["error"]["fix"]
+            .as_str()
+            .is_some_and(|f| !f.is_empty())
     );
-    assert_eq!(writes(&fake), 0);
+}
+
+/// P1-10: without `--no-ready` the run goes on after the draft PR: the gates, then ready +
+/// auto-merge. A step that cannot finish is `data.ready` with its reason, never an error.
+#[test]
+fn the_run_goes_on_to_ready_and_reports_what_stopped_it() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_MIGRATE_METRICS_TIMEOUT", "0")
+        .arg("-C")
+        .arg(e.work.path())
+        .args(["migrate", "--to", "steady"])
+        .output()
+        .unwrap();
+    let (code, v) = (out.status.code().unwrap(), one_object(&out.stdout));
+    assert_eq!(code, 0, "{v}");
+    let ready = &v["data"]["ready"];
+    assert!(ready["done"].is_boolean(), "{v}");
+    if ready["done"] == false {
+        assert!(!ready["fix"].as_str().unwrap().is_empty(), "{ready}");
+    }
+    assert!(v["data"]["pr"]["number"].as_u64().is_some());
+    // Never a merge.
+    assert!(fake.requests().iter().all(|r| !r.path.ends_with("/merge")));
 }
 
 #[test]

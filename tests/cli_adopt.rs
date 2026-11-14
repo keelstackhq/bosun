@@ -72,7 +72,7 @@ fn write(dir: &Path, rel: &str, text: &str) {
 #[test]
 fn detects_stacks() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (_, v) = adopt(&fake, t.path(), &["--dry-run"]);
     assert_eq!(v["data"]["stacks"], serde_json::json!([]));
     write(t.path(), "Cargo.toml", "[package]\n");
@@ -94,7 +94,7 @@ fn read_opt(dir: &Path, rel: &str) -> Option<String> {
 #[test]
 fn dry_run_writes_nothing_and_lists_all() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (code, v) = adopt(&fake, t.path(), &["--dry-run", "--stack", "rust"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["dry_run"], true);
@@ -102,14 +102,15 @@ fn dry_run_writes_nothing_and_lists_all() {
         assert_eq!(action(&v, p), "create", "{p}");
     }
     assert_eq!(action(&v, ".bosun/adopt.toml"), "create");
-    assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 0);
+    // Only the .git of `git init` is there.
+    assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 1);
     assert!(fake.label_names().is_empty());
 }
 
 #[test]
 fn writes_files_labels_registry_and_manifest() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (code, v) = adopt(&fake, t.path(), &["--stack", "rust", "--owner", "alice"]);
     assert_eq!(code, 0, "{v}");
     for p in ALL {
@@ -186,7 +187,7 @@ fn writes_files_labels_registry_and_manifest() {
 #[test]
 fn second_run_is_all_unchanged() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     adopt(&fake, t.path(), &["--stack", "rust", "--owner", "alice"]);
     let first = read(t.path(), ".bosun/adopt.toml");
     let (code, v) = adopt(&fake, t.path(), &["--stack", "rust", "--owner", "alice"]);
@@ -204,7 +205,7 @@ fn second_run_is_all_unchanged() {
 #[test]
 fn existing_differing_file_is_kept_byte_identical() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     write(t.path(), ".bosun/limits.toml", "# mine\n");
     write(t.path(), ".claude/settings.json", "{}\n");
     let (code, v) = adopt(&fake, t.path(), &["--stack", "rust"]);
@@ -229,6 +230,14 @@ fn no_remote_needs_no_token_and_repo() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().join("my app");
     std::fs::create_dir(&dir).unwrap();
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
     write(&dir, "Cargo.toml", "[package]\n");
     let v = no_remote(&dir, &["--bosun-version", "0.9.1"]);
     assert_eq!(v["data"]["stacks"], serde_json::json!(["rust"]));
@@ -242,7 +251,7 @@ fn no_remote_needs_no_token_and_repo() {
 #[test]
 fn existing_ci_ok_job_renders_bosun_ok_and_stays_stable() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     write(
         t.path(),
         ".github/workflows/ci.yml",
@@ -257,7 +266,7 @@ fn existing_ci_ok_job_renders_bosun_ok_and_stays_stable() {
 #[test]
 fn preexisting_label_is_not_recorded_as_created() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     fake.add_label("bosun:halt", "000000");
     let (_, v) = adopt(&fake, t.path(), &["--stack", "rust"]);
     let halt = v["data"]["labels"]
@@ -299,7 +308,7 @@ fn every_template_renders_for_each_stack_set() {
 #[test]
 fn bad_bosun_version_is_a_usage_error() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (code, v) = adopt(&fake, t.path(), &["--bosun-version", "1.2", "--dry-run"]);
     assert_eq!(code, 2, "{v}");
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
@@ -308,7 +317,7 @@ fn bad_bosun_version_is_a_usage_error() {
 #[test]
 fn a_remote_failure_still_records_what_was_created() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     fake.fail_path("issues", 500);
     let (code, _) = adopt(&fake, t.path(), &["--stack", "rust"]);
     assert_eq!(code, 1);
@@ -319,7 +328,7 @@ fn a_remote_failure_still_records_what_was_created() {
 #[test]
 fn owner_steps_name_the_right_required_check() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (_, v) = adopt(&fake, t.path(), &["--dry-run"]);
     let steps = v["data"]["owner_steps"].to_string();
     assert!(
@@ -337,7 +346,7 @@ fn owner_steps_name_the_right_required_check() {
 
 #[test]
 fn dry_run_without_a_token_lists_files_and_marks_remote_unknown() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let out = bosun()
         .env_remove("GITHUB_TOKEN")
         .args(["-C", t.path().to_str().unwrap(), "adopt", "--dry-run"])
@@ -358,7 +367,7 @@ fn dry_run_without_a_token_lists_files_and_marks_remote_unknown() {
 
 #[test]
 fn an_unreadable_file_is_an_error_not_absent() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join(".bosun/version")).unwrap();
     let out = bosun()
         .env_remove("GITHUB_TOKEN")
@@ -374,8 +383,8 @@ fn an_unreadable_file_is_an_error_not_absent() {
 #[test]
 fn symlinks_are_never_written_through() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
-    let outside = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
+    let outside = common::git_tempdir();
     // A dangling symlink as a file, and a symlinked parent directory.
     std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
     let target = outside.path().join("elsewhere");
@@ -395,7 +404,7 @@ fn symlinks_are_never_written_through() {
 #[test]
 fn a_symlinked_manifest_directory_is_an_error() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let outside = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink(outside.path(), t.path().join(".bosun")).unwrap();
     let (code, v) = adopt(&fake, t.path(), &["--stack", "rust"]);
@@ -407,11 +416,51 @@ fn a_symlinked_manifest_directory_is_an_error() {
 #[test]
 fn the_manifest_records_only_the_dirs_adopt_created() {
     let fake = FakeGithub::start();
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir(t.path().join(".github")).unwrap();
     adopt(&fake, t.path(), &["--stack", "rust"]);
     let m = Manifest::parse(&read(t.path(), ".bosun/adopt.toml")).unwrap();
     assert!(m.dirs.contains(&".bosun".to_string()));
     assert!(m.dirs.contains(&".github/workflows".to_string()));
     assert!(!m.dirs.contains(&".github".to_string()));
+}
+
+#[test]
+fn adopt_outside_a_git_repo_is_an_error_that_writes_nothing() {
+    let t = tempfile::tempdir().unwrap();
+    write(t.path(), "Cargo.toml", "[package]\n");
+    let out = bosun()
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("BOSUN_REPO")
+        .env("GIT_CEILING_DIRECTORIES", t.path().parent().unwrap())
+        .args(["-C", t.path().to_str().unwrap(), "adopt", "--no-remote"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let v = one_object(&out.stdout);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not inside a git repository")
+    );
+    assert!(v["error"]["fix"].as_str().unwrap().contains("git init"));
+    assert!(read_opt(t.path(), ".bosun/bosun.toml").is_none());
+}
+
+#[test]
+fn a_monorepo_is_detected_below_the_root() {
+    let t = common::git_tempdir();
+    write(t.path(), "packages/web/package.json", "{}");
+    write(t.path(), "packages/web/pnpm-lock.yaml", "");
+    write(t.path(), "crates/core/Cargo.toml", "[package]\n");
+    write(t.path(), "node_modules/x/Cargo.toml", "[package]\n");
+    let v = no_remote(t.path(), &["--dry-run"]);
+    assert_eq!(v["data"]["stacks"], serde_json::json!(["rust", "ts-pnpm"]));
+    // A pnpm workspace file at the root counts without a lockfile.
+    let u = common::git_tempdir();
+    write(u.path(), "package.json", "{}");
+    write(u.path(), "pnpm-workspace.yaml", "packages: []\n");
+    let v = no_remote(u.path(), &["--dry-run"]);
+    assert_eq!(v["data"]["stacks"], serde_json::json!(["ts-pnpm"]));
 }

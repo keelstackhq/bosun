@@ -49,7 +49,7 @@ fn action<'a>(v: &'a Value, path: &str) -> &'a str {
 }
 
 fn adopted() -> (tempfile::TempDir, FakeGithub) {
-    let (t, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (t, fake) = (common::git_tempdir(), FakeGithub::start());
     write(t.path(), "src/main.rs", "fn main() {}\n");
     write(t.path(), ".github/workflows/ci.yml", "name: mine\n");
     let (code, v) = cmd(&fake, t.path(), "adopt", &["--stack", "rust"]);
@@ -114,7 +114,7 @@ fn dry_run_changes_nothing() {
 
 #[test]
 fn labels_deletes_created_labels_only_and_closes_registry() {
-    let (t, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (t, fake) = (common::git_tempdir(), FakeGithub::start());
     fake.add_label("bosun:halt", "000000");
     let (_, a) = cmd(&fake, t.path(), "adopt", &["--stack", "rust"]);
     let n = a["data"]["registry"]["number"].as_u64().unwrap();
@@ -144,7 +144,7 @@ fn never_touches_paths_outside_the_manifest() {
 
 #[test]
 fn no_manifest_is_an_error_with_a_fix() {
-    let (t, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (t, fake) = (common::git_tempdir(), FakeGithub::start());
     let (code, v) = cmd(&fake, t.path(), "uninstall", &[]);
     assert_eq!(code, 1);
     assert_eq!(v["ok"], false);
@@ -159,7 +159,7 @@ fn no_manifest_is_an_error_with_a_fix() {
 #[test]
 fn a_manifest_path_outside_the_repo_is_never_deleted() {
     let (t, fake) = adopted();
-    let outside = tempfile::tempdir().unwrap();
+    let outside = common::git_tempdir();
     write(outside.path(), "victim", "precious\n");
     let rel = format!(
         "../{}/victim",
@@ -187,7 +187,7 @@ fn a_manifest_path_outside_the_repo_is_never_deleted() {
 #[test]
 fn a_symlinked_directory_is_never_followed() {
     let (t, fake) = adopted();
-    let outside = tempfile::tempdir().unwrap();
+    let outside = common::git_tempdir();
     let moved = outside.path().join("gh");
     std::fs::rename(t.path().join(".github"), &moved).unwrap();
     std::os::unix::fs::symlink(&moved, t.path().join(".github")).unwrap();
@@ -223,7 +223,7 @@ fn labels_still_on_open_issues_are_kept() {
 #[test]
 fn a_symlinked_manifest_directory_is_refused() {
     let (t, fake) = adopted();
-    let outside = tempfile::tempdir().unwrap();
+    let outside = common::git_tempdir();
     let moved = outside.path().join("b");
     std::fs::rename(t.path().join(".bosun"), &moved).unwrap();
     std::os::unix::fs::symlink(&moved, t.path().join(".bosun")).unwrap();
@@ -235,7 +235,7 @@ fn a_symlinked_manifest_directory_is_refused() {
 
 #[test]
 fn only_dirs_adopt_created_are_removed() {
-    let (t, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    let (t, fake) = (common::git_tempdir(), FakeGithub::start());
     std::fs::create_dir(t.path().join(".github")).unwrap();
     std::fs::create_dir(t.path().join(".claude")).unwrap();
     cmd(&fake, t.path(), "adopt", &["--stack", "rust"]);

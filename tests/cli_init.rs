@@ -163,14 +163,16 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     assert_eq!(d["plan"], "plans/my-plan.md");
     assert_eq!(d["pieces"][0], "rust");
     assert_eq!(d["changes"][0]["path"], ".bosun/bosun.toml");
-    assert_eq!(d["owner_steps"].as_array().unwrap().len(), 7);
+    // --owner seeds owners.toml and the token makes the labels: four steps are left.
+    assert_eq!(d["owner_steps"].as_array().unwrap().len(), 4);
+    assert!(d["labels_created"].to_string().contains("bosun:halt"));
     // D-012: signed approvals count once the orchestrator's key is enrolled.
     let steps = d["owner_steps"].to_string();
     assert_eq!(
         steps
             .matches("once its key is in .bosun/approvers.toml")
             .count(),
-        2,
+        1,
         "{steps}"
     );
     assert!(d["pr"]["number"].as_u64().is_some());
@@ -195,7 +197,7 @@ fn happy_path_commits_pushes_and_opens_the_pr() {
     assert!(body.contains(r#""base":"main""#), "{body}");
     assert!(
         body.contains("R-gov")
-            && body.contains("hoist apply")
+            && !body.contains("hoist apply")
             && body.contains("form in the Claude Code chat"),
         "{body}"
     );
@@ -354,10 +356,11 @@ fn a_plain_repo_gets_claude_md_and_no_own_ci() {
     let argv = e.argv();
     assert!(argv.contains("--piece rust --piece claude-md"), "{argv}");
     assert!(!argv.contains("own_ci"), "{argv}");
-    assert!(!argv.contains("--exclude"), "{argv}");
+    // Only the files init never seeds are excluded.
+    assert!(!argv.contains("--exclude hoist.toml"), "{argv}");
     assert_eq!(v["data"]["own_ci"], false);
     assert_eq!(v["data"]["hoist_checks_added"].as_array().unwrap().len(), 0);
-    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 7);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
 }
 
 fn commit_file(e: &Env, path: &str, body: &str) {
@@ -426,7 +429,7 @@ fn a_hull_repo_gets_own_ci_excludes_and_hoist_checks() {
             .body
             .as_deref()
             .unwrap()
-            .contains("hooks are missing from .claude/settings.json")
+            .contains("Kept the repo's own")
     );
 }
 
@@ -446,7 +449,7 @@ fn settings_with_the_hooks_need_no_owner_step() {
     let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
     assert_eq!(code, 0, "{v}");
     assert!(e.argv().contains("--exclude .claude/settings.json"));
-    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 7);
+    assert_eq!(v["data"]["owner_steps"].as_array().unwrap().len(), 6);
 }
 
 /// An invalid hoist.toml fails before splice runs, so there is nothing to roll back.
@@ -792,4 +795,77 @@ fn a_non_bool_merge_queue_is_refused() {
         git_out(r.e.repo.path(), &["branch", "--show-current"]),
         "main"
     );
+}
+
+/// P1-5: --stack is optional; the detector adopt uses finds a pnpm workspace in a subdirectory.
+#[test]
+fn init_without_stack_detects_it_and_without_one_is_a_usage_error() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--no-pr"]);
+    assert_eq!(code, 2, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("--stack"));
+    assert!(e.argv().is_empty());
+    commit_file(&e, "web/package.json", "{}");
+    commit_file(&e, "web/pnpm-workspace.yaml", "packages: []\n");
+    commit_file(&e, "Cargo.toml", "[package]\n");
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "stacks"]);
+    let (code, v) = e.run(&fake, &splice, &["--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["pieces"][0], "rust");
+    assert_eq!(v["data"]["pieces"][1], "ts-pnpm");
+    let argv = e.argv();
+    assert!(argv.contains("--piece rust --piece ts-pnpm"), "{argv}");
+}
+
+/// P1-7, P1-8: init never seeds intake.toml (without --intake) or session-rules.toml.
+#[test]
+fn init_seeds_neither_intake_nor_session_rules() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    let argv = e.argv();
+    assert!(argv.contains("--exclude .bosun/intake.toml"), "{argv}");
+    assert!(
+        argv.contains("--exclude .bosun/session-rules.toml"),
+        "{argv}"
+    );
+}
+
+/// P1-6: with a token init makes the kill-switch label; P1-16: the PR body does not repeat the
+/// owner steps.
+#[test]
+fn init_makes_the_labels_and_the_body_has_no_step_list() {
+    let e = Env::new();
+    let fake = FakeGithub::start();
+    let splice = e.splice(OK_JSON, 0);
+    let (code, v) = e.run(&fake, &splice, &["--stack", "rust", "--owner", "octocat"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(
+        v["data"]["labels_created"]
+            .to_string()
+            .contains("bosun:halt")
+    );
+    let posts = fake
+        .requests()
+        .into_iter()
+        .filter(|r| r.method == "POST" && r.path.ends_with("/labels"))
+        .count();
+    assert!(posts > 0);
+    assert!(!v["data"]["owner_steps"].to_string().contains("bosun:halt"));
+    let (_, v2) = {
+        let e = Env::new();
+        let s = e.splice(OK_JSON, 0);
+        e.run(&FakeGithub::start(), &s, &["--stack", "rust", "--no-pr"])
+    };
+    let body = v2["data"]["pr_body"].as_str().unwrap();
+    assert!(
+        !body.contains("Owner steps:") && !body.contains("SPLICE_BOT_TOKEN"),
+        "{body}"
+    );
+    assert!(v2["data"]["owner_steps"].to_string().contains("bosun:halt"));
 }
