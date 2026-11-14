@@ -18,7 +18,7 @@ fn a_readers_forged_lease_does_not_keep_a_dropped_task_open() {
         common::run(&fake, "session_test", T0, &a)
     };
     let f = file.to_str().unwrap();
-    let (code, v) = run(&["import", f]);
+    let (code, v) = run(&["import", f, "--full"]);
     assert_eq!(code, 0, "{v}");
     let t = {
         let s = fake.state.lock().unwrap();
@@ -39,7 +39,7 @@ fn a_readers_forged_lease_does_not_keep_a_dropped_task_open() {
         PLAN.replace("- T2: Stop rules\n  touch: src/core/stop.rs\n", ""),
     )
     .unwrap();
-    let (code, v) = run(&["amend", f]);
+    let (code, v) = run(&["amend", f, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["skipped"], serde_json::json!([]), "{v}");
     assert_eq!(fake.issue_state(t).state, "closed");

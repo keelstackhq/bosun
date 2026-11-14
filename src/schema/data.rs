@@ -31,8 +31,8 @@ lesson add = {id?: str, issue?: int, count?: int, global_count?: int, dup?: str,
 lesson hit = {id: str, hits: int, comment_id: int | null};
 lesson capture = {issue: int, kind: str, signature: str, created: bool, reopened: bool, hits: int};
 lesson triage = {issue: int, as: str, lesson?: str, process_red?: int, task?: int};
-doctor = {offline: bool, missing: int, items: [{step: int, name: str, status: str, detail: str,
-    fix: str, content?: str, environment?: str, run?: str}], routines: [{name: str, model: str,
+doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{step: int, name: str, status: str, detail: str,
+    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str,
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
     skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
@@ -57,7 +57,7 @@ plan import = {file: str, dry_run: bool, warnings: [str], skipped?: [str], epics
     issue: int | null, state: str | null, closed?: bool}], held: [{task: str, needs: [str]}],
     on_default: [any], on_default_open: [any], promoted?: [str], would_promote?: [str],
     closed?: [str], would_close?: [str], reopened?: [str], would_reopen?: [str], updated?: [str],
-    would_update?: [str]};
+    would_update?: [str], unchanged?: {epics?: int, tasks?: int}, summary?: bool};
 plan amend = plan import;
 plan pr = {claim: {..} | null, intake: {..}, pr: {..}};
 fail = {issue: int, signature: str, streak: int, stopped: bool, rule?: str, state?: str,
@@ -71,7 +71,7 @@ handoff = {issue: int, comment: int, session: str, count: int, lines: [str]};
 handoff-pr = {pr: int, head_sha: str, parent: str, risk_paths: [str], review_minors: [str]};
 progress = {days?: int, since?: str, merged?: int, held?: int, reverted?: int, spend_usd?: num,
     cost_per_merged_task_usd?: num | null, cost_per_held_task_usd?: num | null,
-    task_cost_avg_usd?: num | null, tasks?: [{issue: int, title: str, closed_at: str, usd: num}],
+    task_cost_avg_usd?: num | null, summary?: bool, tasks?: [{issue: int, title: str, closed_at: str, usd: num}],
     lessons?: {open: int, blocking: int, advice: int, mechanized: int, hits_last_7_days: int,
     hits_by_week: [{week_start: str, hits: int}]}};
 result = {epic: int, outcome: str, pr: int | null, comment_id: int, task_state: str,
@@ -159,7 +159,7 @@ risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
-    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, author_is_owner?: bool};
+    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, dry_run?: bool, author_is_owner?: bool};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};

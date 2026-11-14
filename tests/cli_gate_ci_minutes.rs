@@ -119,7 +119,7 @@ fn doctor_step_14(tmp: &Path) -> Value {
         .env("CLAUDE_CONFIG_DIR", tmp.join(".test-claude"))
         .arg("-C")
         .arg(tmp)
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     let v = one_object(&out.stdout);

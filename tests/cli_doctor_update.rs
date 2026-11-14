@@ -17,7 +17,12 @@ fn doctor(latest: &[(&str, &str)], check: bool) -> Value {
     if check {
         cmd.env_remove("BOSUN_PIN_CHECK");
     }
-    let out = cmd.arg("-C").arg(d.path()).arg("doctor").output().unwrap();
+    let out = cmd
+        .arg("-C")
+        .arg(d.path())
+        .args(["doctor", "--full"])
+        .output()
+        .unwrap();
     one_object(&out.stdout)
 }
 
@@ -81,7 +86,7 @@ fn only_the_binary_behind_points_at_npm_not_at_a_pin_pr() {
         .env_remove("BOSUN_PIN_CHECK")
         .arg("-C")
         .arg(d.path())
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     let it = update(&one_object(&out.stdout)).expect("step 17");
@@ -127,7 +132,7 @@ fn a_channel_repo_still_checks_the_binary() {
         .env_remove("BOSUN_PIN_CHECK")
         .arg("-C")
         .arg(d.path())
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     let it = update(&one_object(&out.stdout)).expect("item");
@@ -145,7 +150,7 @@ fn an_unreachable_registry_does_not_fail_doctor() {
         .env_remove("BOSUN_PIN_CHECK")
         .arg("-C")
         .arg(d.path())
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     let v = one_object(&out.stdout);
@@ -167,7 +172,7 @@ fn doctor_in(d: &tempfile::TempDir, latest: &[(&str, &str)]) -> Value {
         .env_remove("BOSUN_PIN_CHECK")
         .arg("-C")
         .arg(d.path())
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     one_object(&out.stdout)

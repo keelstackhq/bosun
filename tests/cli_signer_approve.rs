@@ -487,7 +487,7 @@ fn doctor_item(dir: &std::path::Path, fake: &FakeGithub) -> Option<Value> {
         .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
         .arg("-C")
         .arg(dir)
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     let v = one_object(&out.stdout);
@@ -675,7 +675,7 @@ fn doctor_remote(fake: &FakeGithub, remote: bool) -> (Value, Value) {
         .env("CLAUDE_CONFIG_DIR", d.path().join(".test-claude"))
         .arg("-C")
         .arg(d.path())
-        .arg("doctor");
+        .args(["doctor", "--full"]);
     if remote {
         cmd.arg("--remote");
     }
