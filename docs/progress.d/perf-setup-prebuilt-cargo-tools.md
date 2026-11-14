@@ -1,1 +1,0 @@
-- setup-script: prebuilt cargo-deny 0.20.2 + cargo-nextest 0.9.152 (sha256-pinned, github.com assets) replace the 4-minute cargo install; D23 updated

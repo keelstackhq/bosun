@@ -1,1 +1,0 @@
-- 2026-11-13 · docs: migrate-booster follow-up (registry pick wording, doctor/join number)

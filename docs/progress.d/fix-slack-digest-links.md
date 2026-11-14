@@ -1,1 +1,0 @@
-- 2026-11-14 · fix/slack-digest-links · `bosun notify` kind `digest` (opt-in): owner-waiting PR links for Slack, approval stays on GitHub
