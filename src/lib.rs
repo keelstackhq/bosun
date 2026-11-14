@@ -74,6 +74,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Adopt(a) => cli::adopt::run(dir, a),
         Command::Uninstall(a) => cli::uninstall::run(dir, a),
         Command::Pin(a) => cli::pin::run(dir, a),
+        Command::Migrate(a) => cli::migrate::run(dir, a),
         Command::SetupSnippet => cli::setup_snippet::run(dir),
         Command::Schema(a) => cli::schema::run(a),
     }
