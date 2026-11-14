@@ -1,0 +1,1 @@
+- 2026-11-14 · keyless approvals · CI signer (`signer` role, `approve --as signer|--via-signer`, signer.yml), author-is-owner note in risk-check, doctor check

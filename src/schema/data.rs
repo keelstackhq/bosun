@@ -153,12 +153,13 @@ approve = {approved?: [{pr: int, head_sha: str, comment_id: int, repost?: bool,
     skipped?: [{pr: int | null, why: str}], waiting?: [{pr: int, why: str}], skipped_fix?: str,
     main_open?: {head_sha: str, pr: int}, bodies?: [{after_review: int | null, body: str}],
     body?: str, bootstrap_until?: str | null, head_sha?: str, key_id?: str, policy?: str | null,
-    policy_source?: str | null, pr?: int, role?: str};
+    policy_source?: str | null, pr?: int, role?: str, requested?: bool, workflow?: str,
+    ref?: str, ci_ok?: str};
 risk-check = {pr: int, head_sha: str, level: str, matches: [{rule: str, why: str, approval: str,
     evidence: [str]}], out_of_touch: [str] | null, approved_by: str | null,
     approval_carried_from: str | null, verdict_carried_from: str | null, requirement?: str,
     policy?: str, policy_source?: str, verdicts?: [str], autonomous_verdicts?: [str],
-    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool};
+    delegate_verdicts?: [str], delegate_blocked?: str | null, checks_skipped?: bool, author_is_owner?: bool};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
 verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};

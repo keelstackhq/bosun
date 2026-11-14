@@ -196,7 +196,7 @@ pub const APPROVERS_PATH: &str = ".bosun/approvers.toml";
 pub struct ApproverKey {
     pub id: String,
     pub ed25519: String,
-    /// `owner` (the default) or `delegate`.
+    /// `owner` (the default), `delegate` or `signer`.
     #[serde(default)]
     pub role: Role,
 }
@@ -209,6 +209,8 @@ pub enum Role {
     #[default]
     Owner,
     Delegate,
+    /// The CI signer: verifies only the autonomous form, never any other owner use.
+    Signer,
 }
 
 impl Role {
@@ -216,6 +218,7 @@ impl Role {
         match self {
             Role::Owner => "owner",
             Role::Delegate => "delegate",
+            Role::Signer => "signer",
         }
     }
 
@@ -224,6 +227,8 @@ impl Role {
         match self {
             Role::Owner => "bosun-approve",
             Role::Delegate => "bosun-delegate",
+            // Nothing accepts a v1 message with this prefix: a signer signs only the autonomous form.
+            Role::Signer => "bosun-signer",
         }
     }
 }

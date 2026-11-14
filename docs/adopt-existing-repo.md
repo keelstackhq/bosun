@@ -262,6 +262,9 @@ Design: [spec.md](spec.md). Defaults: [defaults.md](defaults.md). Plans:
    when every verdict on the exact head is clean and one is from an independent reviewer session, for a PR that
    closes an open task leased by its author. Everything else (workflows, `.bosun`, `channel/`,
    root files such as `Cargo.toml`, secrets, releases, tags, key or owner changes) still needs you.
+   Keyless sessions ask the CI signer (`bosun approve <pr>@<head> --via-signer`); one computer step per
+   repo: `bosun keygen --role signer --id signer-ci --out <pem> --enroll`, merge that PR, create the environment
+   `bosun-signer` (default branch only) with the secret `BOSUN_SIGNER_KEY`, delete the PEM (`bosun doctor` checks the rest).
 5. **Permission checks (Claude Code behaviour, not bosun's).** Each cloud session asks for its
    own permissions. An orchestrator's go
    does not carry over to a child it spawns: a child that pushes or opens a PR can wait for your

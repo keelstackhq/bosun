@@ -262,6 +262,43 @@ High-risk PRs:
   covered: release environments, secrets, tags. `policy =
   "autonomous"` under an older pinned release is a parse error (fails closed); set it only after
   pinning a release that knows it.
+- Keyless fast lane: the CI signer (D-017 in ephemeral sessions). Cloud and Claude Tag sessions
+  are ephemeral and hold no secrets, so no session keeps the autonomous key. Chosen over a
+  verdict-only approval with no signature: risk-check keeps its one trust root (a signature by a
+  key enrolled on the default branch, checks unchanged), the key never reaches a session, and
+  the signing decision runs from default-branch code with the pinned release, never PR code.
+  The owner does one computer step per repo (setup docs): `bosun keygen --role signer --id
+  signer-ci --out <pem outside the repo> --enroll` in a checkout, merge that `.bosun/approvers.toml`
+  PR (R-gov, owner-approved), create the GitHub environment `bosun-signer` with deployment
+  branches limited to the default branch and the secret `BOSUN_SIGNER_KEY` (the PEM), then delete
+  the PEM. A `role = "signer"` key verifies only the autonomous form (`bosun-autonomous v1`):
+  never v1, v2, bootstrap, delegate or any other owner use (`approve`, `answer`, `digest`,
+  `intake`, budget raises), so a leaked signer key can at most sign what D-017 already lets the
+  orchestrator approve. risk-check counts an autonomous signature by an `owner` or `signer` key,
+  with every D-017 condition above unchanged. `.github/workflows/signer.yml` (bosun's own and the
+  channel's `core` piece, owned; R-ci, so owner-class) runs on `workflow_dispatch` only (inputs
+  `pr`, `head`, `requester`), only from the default branch, never checks out the PR: job `sign` (environment
+  `bosun-signer`) installs the release pinned in `.bosun/version` and runs `bosun approve
+  <pr>@<head> --sign-key <pem> --bootstrap --as signer`; job `judge` (needs `sign`, environment
+  `bosun-app`) runs `bosun risk-check <pr>`, because a comment posted with `GITHUB_TOKEN` starts
+  no workflow. Two jobs on purpose (D-007 exception): the signer key and the App key never share
+  a job. `--as signer` signs only when the policy at the default branch is autonomous, the head is
+  the PR's current head, every D-017 check `approve` runs passes (the session that asked, the
+  workflow's `requester` input, is excluded as a reviewer like the signer's own, so signer !=
+  reviewer holds in CI), and the head's `ci-ok` is green as `ci_green` reads it: the newest
+  GitHub Actions check run, never a status (else exit 1, nothing signed; `data.ci_ok`). Any session asks for it
+  with `bosun approve <pr>@<head> --via-signer` (no key; exit 4 while halted, exit 3 on a stale
+  head): it posts nothing and returns the `mcp__github__actions_run_trigger` call in `next` (exit 2 without a plain `BOSUN_SESSION`). A
+  dispatch by anyone signs nothing the gates do not allow. `bosun doctor` checks, under the
+  autonomous policy, that `signer.yml` exists and a `signer` (or `owner`) key is enrolled;
+  it cannot see environment secrets and says so.
+- Author is the owner. Agents open PRs through the Claude GitHub App as the owner's login, and
+  GitHub refuses a review of one's own PR, so the owner cannot approve those PRs with a review.
+  When the PR author is an owner of `governance/owners.toml` at base and the PR waits for the
+  owner, risk-check sets `data.author_is_owner = true` and its `fix` says so and names what still
+  works: a plain `/bosun approve <head>` comment from the owner's own account (agents' app comments
+  never count), a signed approval (`bosun approve`, chat form, D-012), the CI signer where D-017
+  covers the PR, or the owner merges it themselves. Nothing that needs the owner is relaxed.
 - Delegated decisions let one Claude session decide high-risk PRs itself; only critical
   changes go to the owner. A key in `.bosun/approvers.toml` has `role = "owner"` (the default,
   as above) or `role = "delegate"`; one public key under two ids is a malformed file. A delegate

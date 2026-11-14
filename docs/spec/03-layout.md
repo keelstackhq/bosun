@@ -43,7 +43,7 @@ A branch or sha ref has no release version; such a consumer sets the template va
 The channel's workflows run the release pinned in `.bosun/version` from npm, never bosun built
 from the change: bosun.yml reads the pin of the PR's base commit (the setup PR, whose base has no
 pin yet, uses its own and says so in a warning); risk.yml and verdict.yml read it from the base
-or the default branch and never check out PR code. main-health's weekly run calls bosun.yml
+or the default branch and never check out PR code; signer.yml (`workflow_dispatch`, default branch only, D-017 keyless lane, spec section 8) signs with the `bosun-signer` environment's key. main-health's weekly run calls bosun.yml
 (`workflow_call`), so it runs `bosun gate <name> --all` for any stack. No channel workflow runs
 on a review event (those run the PR's copy of the file). Consumers inherit the open residual of
 spec §8 and PROGRESS Blocked item 5: a same-repo PR can add or edit an `on: pull_request`

@@ -558,8 +558,8 @@ pub struct KeygenArgs {
     /// Key id for .bosun/approvers.toml (default `<role>-<YYYY-MM>`); A-Z a-z 0-9 . _ - only.
     #[arg(long)]
     pub id: Option<String>,
-    /// The key's role: `owner` (default) or `delegate`.
-    #[arg(long, value_parser = ["owner", "delegate"])]
+    /// The key's role: `owner` (default), `delegate` or `signer` (the CI signer, autonomous form only).
+    #[arg(long, value_parser = ["owner", "delegate", "signer"])]
     pub role: Option<String>,
     /// Append the key to <repo>/.bosun/approvers.toml (created when missing).
     #[arg(long)]
@@ -578,6 +578,10 @@ pub struct ApproveArgs {
     /// Post the `main-open` status on this PR (bootstrap: the PR changes main-open.yml).
     #[arg(long, value_name = "PR")]
     pub main_open: Option<u64>,
+    /// Ask the CI signer for `<pr>@<head>`: posts nothing, returns the workflow dispatch call in
+    /// `next` (D-017, keyless sessions).
+    #[arg(long, conflicts_with_all = ["list", "main_open", "sign_key", "print", "bootstrap", "role", "requester"])]
+    pub via_signer: bool,
     /// Sign the approval of one `<pr>@<head>` (the head the owner approved; it must still be
     /// the PR's head) with this ed25519 PKCS#8 PEM key, enrolled in .bosun/approvers.toml.
     #[arg(long, value_name = "PEM", conflicts_with_all = ["list", "main_open"])]
@@ -585,10 +589,14 @@ pub struct ApproveArgs {
     /// With --sign-key: print the comment body in data.body instead of posting it.
     #[arg(long, requires = "sign_key")]
     pub print: bool,
-    /// With --sign-key: sign as `owner` (default) or `delegate`; it must be the key's enrolled
-    /// role.
-    #[arg(long = "as", value_name = "ROLE", requires = "sign_key", value_parser = ["owner", "delegate"])]
+    /// With --sign-key: sign as `owner` (default), `delegate` or `signer` (needs --bootstrap and
+    /// the autonomous policy); it must be the key's enrolled role.
+    #[arg(long = "as", value_name = "ROLE", requires = "sign_key", value_parser = ["owner", "delegate", "signer"])]
     pub role: Option<String>,
+    /// With `--as signer` (required there): the session that asked for the signature; it cannot
+    /// be the independent reviewer.
+    #[arg(long, value_name = "SESSION", requires = "sign_key")]
+    pub requester: Option<String>,
     /// With --sign-key: sign in bootstrap mode (D-012), until `[approvals] bootstrap_until` on
     /// the default branch; an owner key only.
     #[arg(long, requires = "sign_key")]

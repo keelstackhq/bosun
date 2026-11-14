@@ -179,6 +179,14 @@ For each PR:
 `booster` also sets `[approvals] policy = "autonomous"` when the table leaves it unset. The pinned release
 must know `autonomous` (step 2 does that). An explicit `policy` in the file wins.
 
+**[computer]** Cloud and Claude Tag sessions hold no keys, so under `autonomous` they ask the CI signer
+(`bosun approve <pr>@<head> --via-signer`). One owner step per repo makes that work:
+`bosun keygen --role signer --id signer-ci --out <pem outside the repo> --enroll`, merge that
+`.bosun/approvers.toml` PR (R-gov), create the GitHub environment `bosun-signer` (deployment branches:
+the default branch only) with the secret `BOSUN_SIGNER_KEY` (the PEM), then delete the PEM. The channel's
+`core` piece ships `.github/workflows/signer.yml`. `bosun doctor` warns until the workflow and a key are there; it cannot see the
+environment's secret. The signer key signs only the autonomous form, so it never approves anything D-017 does not allow.
+
 Expect after merge: `bosun mode` → `data.mode: "booster"`, `data.mode_source: "explicit"`.
 
 If the config fails to parse (`unknown field`): the pin is older than the key. Go back to step 2.

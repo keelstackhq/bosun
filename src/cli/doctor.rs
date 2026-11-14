@@ -877,6 +877,35 @@ fn check_api_url() -> Result<(), BosunError> {
     ))
 }
 
+/// Step 16: under the autonomous policy a session without keys asks the CI signer, so the
+/// workflow and an enrolled `signer` key must exist (signer.yml runs `--as signer`; an owner key
+/// never belongs in CI). The environment `bosun-signer` and its secret are invisible to bosun: a
+/// warning, never a failure.
+fn signer_item(root: &Path) -> Value {
+    let workflow = root.join(".github/workflows/signer.yml").is_file();
+    let enrolled = read(root, ".bosun/approvers.toml")
+        .and_then(|t| crate::core::approve::parse_approvers(&t).ok())
+        .is_some_and(|keys| (keys.iter()).any(|k| k.role == crate::core::approve::Role::Signer));
+    let mut missing = Vec::new();
+    if !workflow {
+        missing.push(".github/workflows/signer.yml is missing");
+    }
+    if !enrolled {
+        missing.push(".bosun/approvers.toml enrolls no `signer` key");
+    }
+    let blind = "bosun cannot see the environment bosun-signer or its secret BOSUN_SIGNER_KEY";
+    let mut it = json!({"step": 16, "name": "CI signer", "status": "ok", "fix": "",
+        "detail": format!("signer.yml exists and a signer key is enrolled; {blind}, so check them in GitHub")});
+    if !missing.is_empty() {
+        it["status"] = json!("warn");
+        it["detail"] = json!(format!("{}; {blind}", missing.join("; ")));
+        it["fix"] = json!(
+            "owner, once per repo, on a computer: `bosun keygen --role signer --id signer-ci --out <pem outside the repo> --enroll`, merge that .bosun/approvers.toml PR, create the GitHub environment bosun-signer (deployment branches: the default branch only) with the secret BOSUN_SIGNER_KEY (the signer PEM, never an owner key), delete the PEM; the workflow comes with `splice update` (core piece) or copy .github/workflows/signer.yml"
+        );
+    }
+    it
+}
+
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     let ctx = Ctx::load(dir)?;
     // Without a token the GitHub steps are skipped; the local steps still run.
@@ -1255,6 +1284,11 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
             |f| format!("{}; `bosun gate ci-minutes` lists every finding", f.fix),
         ),
     ));
+
+    // Step 16: the keyless fast lane (D-017, spec section 8), only under the autonomous policy.
+    if ctx.config.approvals.policy() == crate::core::approve::Policy::Autonomous {
+        items.push(signer_item(root));
+    }
 
     if let Some(slack) = ctx.config.slack.as_ref() {
         let seat = gh.map_or(Ok(None), |g| registry::seat_of(g, &ctx.session, ctx.now));

@@ -621,12 +621,31 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     } else {
         owner_fix
     };
+    // Agents open PRs through the Claude GitHub App as the owner's login: GitHub refuses the
+    // owner's review of it, so say what still works.
+    let author_is_owner = owners.iter().any(|o| o.eq_ignore_ascii_case(&pull.user));
+    let author_note = if author_is_owner {
+        data["author_is_owner"] = json!(true);
+        let signer = if autonomous {
+            format!(
+                ", the CI signer (`bosun approve {n}@{head} --via-signer`) where D-017 covers the PR"
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "; the PR author {} is the owner (agents open PRs through the Claude GitHub App as the owner), so GitHub refuses a self-review: the owner approves with a plain `/bosun approve {head}` comment from their own account, a signed approval (`bosun approve {n}@{head} --sign-key <pem>`){signer}, or merges it themselves",
+            pull.user
+        )
+    } else {
+        String::new()
+    };
     Err(BosunError::needs_human(
         format!(
             "{boot}PR #{n} is high risk ({}) and not approved on head {head}",
             ids.join(", ")
         ),
-        format!("{boot}{fix}{model_note}"),
+        format!("{boot}{fix}{model_note}{author_note}"),
     )
     .with_data(data))
 }
@@ -1282,7 +1301,10 @@ fn signed_approver(
             eprintln!("bosun: risk-check: comment {comment}: unknown key {id:?}, not counted");
             continue;
         };
-        if key.role != role {
+        // A signer key counts only for the autonomous form, in place of an owner key.
+        let role_ok = key.role == role
+            || (role == Role::Owner && form == Form::Autonomous && key.role == Role::Signer);
+        if !role_ok {
             eprintln!(
                 "bosun: risk-check: comment {comment}: key {id:?} is a {} key, not counted as {}",
                 key.role.name(),

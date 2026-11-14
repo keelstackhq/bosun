@@ -1555,6 +1555,7 @@ fn the_gate_jobs_get_the_app_token_and_nothing_else_does() {
         ("verdict.yml", "verdict"),
         ("main-open.yml", "judge"),
         ("main-health.yml", "report"),
+        ("signer.yml", "judge"),
     ];
     let mut problems = Vec::new();
     let mut found = Vec::new();
@@ -1649,4 +1650,27 @@ fn the_app_job_scan_catches_each_problem() {
     assert!(job(target, &old).iter().any(|p| p.contains("client-id")));
     let run = "  workflow_run:\n    workflows: [ci]\n";
     assert!(job(run, &good.replace("pull_request.base.sha", "sha"))[0].contains("filter"));
+}
+
+/// The signer key reaches job `sign` of signer.yml only (never the App job, never another file).
+#[test]
+fn the_signer_key_is_in_the_sign_job_only() {
+    let mut seen = 0;
+    for (path, yaml) in all_workflows() {
+        let (jobs, _) = jobs_of(&yaml);
+        for (id, job) in jobs {
+            let has = job.contains("BOSUN_SIGNER_KEY");
+            let is_sign = path.contains("signer.yml") && id == "sign";
+            assert!(!has || is_sign, "{path} job {id} names BOSUN_SIGNER_KEY");
+            if has {
+                seen += 1;
+                assert_eq!(
+                    environment_of(&job).as_deref(),
+                    Some("bosun-signer"),
+                    "{path}"
+                );
+            }
+        }
+    }
+    assert_eq!(seen, 2, "signer.yml and its jinja");
 }

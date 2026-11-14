@@ -51,6 +51,8 @@ fn board(dir: Option<&Path>, app: &App) -> Result<Board, BosunError> {
         print: false,
         role: None,
         bootstrap: false,
+        via_signer: false,
+        requester: None,
     };
     let data = super::approve::run(dir, &list)?.data;
     // Mainfix PRs skip the batch only while main is red, as main-open judges them.
