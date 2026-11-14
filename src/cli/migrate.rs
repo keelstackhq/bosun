@@ -544,7 +544,7 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
             format!("run `git switch {base}` (up to date), then rerun"),
         ));
     }
-    if !git(&root, &["status", "--porcelain"])?.is_empty() {
+    if !git(&root, &["status", "--porcelain", "--untracked-files=all"])?.is_empty() {
         return Err(BosunError::conflict(
             "the working tree has changes",
             "commit or stash them, then rerun",
@@ -567,7 +567,7 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
     let mut files: Vec<String> = Vec::new();
     let made = (|| -> Result<Pull, BosunError> {
         if need_pin {
-            files.extend(pin_bosun(&root, to)?);
+            pin_bosun(&root, to, &mut files)?;
         }
         let write = |rel: &str, text: &str| {
             std::fs::write(root.join(rel), text).map_err(|e| {
@@ -618,7 +618,7 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
         Ok(p) => p,
         Err(mut e) => {
             let drop_branch = (wrote.branch && !wrote.pushed).then_some(branch.as_str());
-            let back = rollback(&root, &base, drop_branch);
+            let back = rollback(&root, &base, drop_branch, &files);
             if wrote.pushed {
                 // The branch is on origin: the PR is the only step left.
                 e.fix = format!(
@@ -651,10 +651,11 @@ struct Wrote {
     pushed: bool,
 }
 
-/// Put the tree back: drop every change in it (the tree was clean before bosun wrote), return to
-/// `base` and drop `branch`. Whether it all worked.
-fn rollback(root: &Path, base: &str, branch: Option<&str>) -> bool {
-    let mut ok = clean_tree(root);
+/// Put the tree back: return to `base`, drop `branch`, then undo exactly `files` (what bosun
+/// wrote; the tree was clean before): a file in HEAD is restored, any other was created by bosun
+/// and is deleted. Nothing else is touched. Whether it all worked.
+fn rollback(root: &Path, base: &str, branch: Option<&str>, files: &[String]) -> bool {
+    let mut ok = true;
     let on = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
     if on != base {
         ok &= git(root, &["switch", "-q", "-f", base]).is_ok();
@@ -662,29 +663,26 @@ fn rollback(root: &Path, base: &str, branch: Option<&str>) -> bool {
     if let Some(b) = branch {
         ok &= git(root, &["branch", "-q", "-D", b]).is_ok();
     }
-    ok & clean_tree(root)
-}
-
-/// Restore changed tracked files and delete new untracked ones.
-fn clean_tree(root: &Path) -> bool {
-    let Ok(out) = git_raw(
-        root,
-        &["status", "--porcelain", "-z", "--untracked-files=all"],
-        None,
-    ) else {
-        return false;
-    };
-    let mut ok = true;
-    let mut entries = out.split('\0').filter(|e| e.len() > 3);
-    while let Some(e) = entries.next() {
-        let (code, path) = (&e[..2], &e[3..]);
-        if code.contains('R') || code.contains('C') {
-            entries.next(); // the old name follows a rename
-        }
-        if code == "??" {
-            ok &= std::fs::remove_file(root.join(path)).is_ok();
+    for f in files {
+        if git(root, &["cat-file", "-e", &format!("HEAD:{f}")]).is_ok() {
+            ok &= git(
+                root,
+                &[
+                    "restore",
+                    "--source=HEAD",
+                    "--staged",
+                    "--worktree",
+                    "--",
+                    f,
+                ],
+            )
+            .is_ok();
         } else {
-            ok &= git(root, &["restore", "--staged", "--worktree", "--", path]).is_ok();
+            let _ = git(root, &["rm", "-q", "--cached", "--ignore-unmatch", "--", f]);
+            let p = root.join(f);
+            if p.exists() {
+                ok &= std::fs::remove_file(p).is_ok();
+            }
         }
     }
     ok
@@ -693,7 +691,7 @@ fn clean_tree(root: &Path) -> bool {
 /// `bosun pin --latest --tool bosun`: the files it changed, plus `.bosun/version` when the repo
 /// had none. A failure is a conflict that names the pin step and carries the child's own fix; a
 /// release still below [`MODE_MIN`] gets the owner's release fix. The caller restores the tree.
-fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
+fn pin_bosun(root: &Path, to: ModeName, written: &mut Vec<String>) -> Result<(), BosunError> {
     let pin = |why: String, fix: String| {
         BosunError::conflict(
             format!("the pin step (`bosun pin --latest --tool bosun`) failed: {why}"),
@@ -722,14 +720,16 @@ fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
         }
         return Err(e);
     }
-    let mut files: Vec<String> = v["data"]["files"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|f| f.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+    written.extend(
+        v["data"]["files"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|f| f.as_str().map(str::to_string))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+    );
     // The version now pinned: pin's own report, else the script's line (already at the latest).
     let pinned = v["data"]["changed"]
         .as_array()
@@ -748,8 +748,8 @@ fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
                 "check the file permissions, then rerun",
             )
         })?;
-        if !files.iter().any(|f| f == VERSION_FILE) {
-            files.push(VERSION_FILE.to_string());
+        if !written.iter().any(|f| f == VERSION_FILE) {
+            written.push(VERSION_FILE.to_string());
         }
     }
     let now = read(root, VERSION_FILE).map(|v| v.trim().to_string());
@@ -769,7 +769,7 @@ fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
             ),
         ));
     }
-    Ok(files)
+    Ok(())
 }
 
 /// Branch, commit, push (never forced), draft PR. `wrote` says how far it got; the caller rolls
@@ -791,7 +791,8 @@ fn publish(
     add.extend(files.iter().map(String::as_str));
     git(root, &add)?;
     git(root, &["commit", "-q", "-m", title])?;
-    git_net(root, &["push", "-q", "-u", "origin", branch])?;
+    let spec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    git_net(root, &["push", "-q", "-u", "origin", &spec])?;
     wrote.pushed = true;
     app.gh.create_pull(title, branch, base, body, true)
 }

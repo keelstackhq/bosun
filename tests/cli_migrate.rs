@@ -899,3 +899,62 @@ fn finish_reports_the_mode_of_the_default_branch() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["mode"], "booster");
 }
+
+#[test]
+fn a_user_file_survives_when_untracked_files_are_hidden() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    git(
+        e.work.path(),
+        &["config", "status.showUntrackedFiles", "no"],
+    );
+    std::fs::write(e.work.path().join("mine.txt"), "keep").unwrap();
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(read(&e, "mine.txt"), "keep");
+    assert_eq!(writes(&fake), 0);
+}
+
+#[test]
+fn a_failed_run_deletes_only_what_it_created() {
+    let fake = FakeGithub::start();
+    fake.issue(3, "bosun registry", &["bosun:registry"], "");
+    let e = env(&[
+        (BOSUN_TOML, CONFIG),
+        VERSION,
+        (".gitignore", "scratch.txt\n"),
+    ]);
+    std::fs::write(e.work.path().join("scratch.txt"), "keep").unwrap();
+    let hook = e.work.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(read(&e, "scratch.txt"), "keep");
+    assert!(!e.work.path().join(".bosun/registry").exists());
+    assert_eq!(read(&e, BOSUN_TOML), CONFIG);
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_planted_push_refspec_cannot_retarget_the_push() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    let before = git(e.origin.path(), &["rev-parse", "refs/heads/main"]);
+    git(
+        e.work.path(),
+        &["config", "remote.origin.push", "HEAD:refs/heads/main"],
+    );
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        git(e.origin.path(), &["rev-parse", "refs/heads/main"]),
+        before
+    );
+    let pushed = git(
+        e.origin.path(),
+        &["branch", "--list", "bosun/migrate-steady"],
+    );
+    assert!(pushed.contains("bosun/migrate-steady"), "{pushed}");
+}
