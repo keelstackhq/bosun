@@ -116,6 +116,14 @@ fn the_allow_marker_exempts_nothing() {
     ] {
         assert!(secret_match("config/app.toml", line), "{line}");
     }
+    assert!(secret_match(
+        "src/a.rs",
+        "@TOK@ = \"s3cr3t\" # bosun:allow-secret  -->"
+    ));
+    assert!(secret_match(
+        "src/a.rs",
+        "/* bosun:allow-secret demo */ @TOK@ = \"s3cr3t\""
+    ));
 }
 
 #[test]
