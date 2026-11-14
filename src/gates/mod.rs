@@ -298,13 +298,22 @@ fn execute(
 
     // Only the built-in test command: a repo's own `cargo test ...` override stays as written.
     let builtin_test = gate.cmd == ["cargo", "test", "--locked"];
-    let argv = if builtin_test && nextest_installed() {
+    let swapped = builtin_test && nextest_installed();
+    let plain = argv.clone();
+    let argv = if swapped {
         profile::with_nextest(argv)
     } else {
         argv
     };
 
-    let result = spawn(&argv, &dir);
+    let mut result = spawn(&argv, &dir);
+    // nextest never runs doctests: `cargo test --doc` closes that gap.
+    if swapped && matches!(result, Ok((0, _))) {
+        let mut doc = plain;
+        doc.insert(2, "--doc".into());
+        result =
+            spawn(&doc, &dir).map(|(s, secs)| (s, secs + result.as_ref().map_or(0.0, |r| r.1)));
+    }
     if let Some(d) = &diff {
         let _ = std::fs::remove_file(d);
     }

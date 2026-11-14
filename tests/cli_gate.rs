@@ -327,7 +327,11 @@ fn the_test_gate_runs_nextest_when_installed() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(
         r.calls(),
-        vec!["nextest --version", "nextest run --locked -p b"]
+        vec![
+            "nextest --version",
+            "nextest run --locked -p b",
+            "test --doc --locked -p b"
+        ]
     );
 }
 

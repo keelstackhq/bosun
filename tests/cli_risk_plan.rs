@@ -55,3 +55,17 @@ fn hulls_deny_overlay_and_its_merge_script_are_r_ci() {
         );
     }
 }
+
+#[test]
+fn the_plan_file_on_the_base_decides_even_when_the_task_body_drops_the_risk_line() {
+    let fake = pr("{}");
+    let plan = "# Plan: x\n\nproject: widget\n\n## M1: One\n\narea: a\n\n### Tasks\n\n- T1: t\n  touch: docs/note.md\n  risk: high\n\n### Done when\n\n- UC-M1-1: ok\n";
+    fake.content("plans/x.md", "base0000", plan);
+    fake.comment(
+        7,
+        r#"{"bosun":"bind","session":"s","plan":"plans/x.md","item":"M1","task":"T1","epic":3}"#,
+    );
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(v["data"]["matches"].to_string().contains("R-plan"), "{v}");
+}

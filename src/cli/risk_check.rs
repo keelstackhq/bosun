@@ -17,6 +17,7 @@ use crate::core::approve::{
 };
 use crate::core::lease::leases_of;
 use crate::core::meta::{closing_issues_in, linked_issues_in};
+use crate::core::records::Record;
 use crate::core::risk::{
     self, Approval, ChangedFile, FileView, Rules, VERDICTS_NEEDED, added_lines, apply_floor,
     capability_labels, clean_verdicts, comment_approves, evaluate, lease_sessions,
@@ -104,6 +105,41 @@ const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run 
 
 /// R-weaken evidence (spec §8): gate files compared at base and head, diffs, deleted or thinned
 /// tests. Deduplicated, in file order.
+/// Whether the plan file at `base` rates the task bound to issue `n` (a trusted `bind` record)
+/// `risk: high`. No bind, no plan file or an unparsable one: no.
+fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
+    let binds = crate::cli::budget::binds_of(gh, n).unwrap_or_else(|e| {
+        eprintln!(
+            "bosun: risk-check: cannot read the binds of #{n}: {}",
+            e.message
+        );
+        Vec::new()
+    });
+    for (_, r) in binds {
+        if let Record::Bind {
+            plan,
+            item,
+            task: Some(t),
+            ..
+        } = r
+        {
+            let Some(text) = gh.file_at(&plan, base)? else {
+                return Ok(false);
+            };
+            let Ok(parsed) = crate::core::plan::parse(&text) else {
+                return Ok(false);
+            };
+            return Ok(parsed
+                .items
+                .iter()
+                .filter(|i| i.id == item)
+                .flat_map(|i| &i.tasks)
+                .any(|x| x.id == t && x.risk == "high"));
+        }
+    }
+    Ok(false)
+}
+
 fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
@@ -317,7 +353,9 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             && let Some(meta) = task_meta(&issue)
         {
             capabilities.extend(meta.capabilities);
-            if meta.risk == "high" {
+            // The body is the author's: it can only add. The plan file on the base, reached
+            // through the trusted bind (plan, item, task), is the authority.
+            if meta.risk == "high" || bound_task_is_high(gh, i, base)? {
                 plan_high.push(format!("#{i} is `risk: high` in the plan"));
             }
             task.get_or_insert(i);
