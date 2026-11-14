@@ -113,6 +113,22 @@ fn at_is_bounded_and_a_back_dated_record_still_counts_today() {
 }
 
 #[test]
+fn an_id_less_result_records_the_full_amount_without_subtracting() {
+    let fake = FakeGithub::start();
+    fake.issue(5, "task", &["bosun:state/building"], "");
+    let with_id = r#"{"session_id":"session_x","usage":{"cost_usd":2.0}}"#;
+    budget(&fake, with_id, &["5", "--from", "-"]);
+    let no_id = r#"{"usage":{"cost_usd":3.0}}"#;
+    let (code, v) = budget(
+        &fake,
+        no_id,
+        &["5", "--from", "-", "--session", "session_x"],
+    );
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["usd"], 3.0, "{v}");
+}
+
+#[test]
 fn a_session_flag_that_contradicts_the_result_is_refused() {
     let fake = FakeGithub::start();
     let body = r#"{"session_id":"session_x","usage":{"cost_usd":2.0}}"#;

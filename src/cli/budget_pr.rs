@@ -86,7 +86,7 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
             "drop --session, or pass the get_session result of that session",
         ));
     }
-    if a.usd.is_none() && input.is_some() && a.provider == "claude-sessions" {
+    if a.usd.is_none() && in_id.is_some() && a.provider == "claude-sessions" {
         let held =
             super::budget::session_spent(&crate::registry::trusted_spend_notes(gh)?, &session);
         usd = (usd - held).max(0.0);

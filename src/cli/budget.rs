@@ -736,8 +736,13 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         ));
     }
     // Without a session id in the result the cost is taken as new (nothing to subtract from).
-    let named = a.session.clone().or(in_input);
-    let session = named.clone().unwrap_or_else(|| ctx.session.clone());
+    // Only the id in the result (never `--session` alone) ties a delta to a ledger.
+    let named = in_input.clone();
+    let session = a
+        .session
+        .clone()
+        .or(in_input)
+        .unwrap_or_else(|| ctx.session.clone());
     let mut previous = 0.0;
     if named.is_some() && input.is_some() && usd.is_finite() && usd >= 0.0 {
         previous = session_spent(&registry::trusted_spend_notes(gh)?, &session);
