@@ -16,13 +16,15 @@ use crate::app::{App, default_branch, kill_switch};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::meta::parse_task_meta;
 use crate::core::migrate::{
-    BodyIn, MODE_MIN, below_min, body, is_lighter, owner_steps, parse_mode, set_mode_name, step,
+    BodyIn, MODE_MIN, below_min, body, branch_step, is_lighter, owner_steps, parse_mode,
+    redact_credentials, semver_lt, set_mode_name, step,
 };
 use crate::core::mode::{BudgetFeature, ModeName};
+use crate::core::pin::{get_line, keys};
 use crate::github::{Github, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 
-const BRANCH: &str = "bosun/migrate";
+const BRANCH: &str = "bosun/migrate-";
 const VERSION_FILE: &str = ".bosun/version";
 const REGISTRY_FILE: &str = ".bosun/registry";
 
@@ -58,17 +60,46 @@ impl Survey {
 }
 
 fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
+    Ok(git_raw(root, args, None)?.trim().to_string())
+}
+
+/// A git call that talks to the remote: killed after 60 s (`BOSUN_MIGRATE_GIT_TIMEOUT` seconds).
+fn git_net(root: &Path, args: &[&str]) -> Result<String, BosunError> {
+    let secs = std::env::var("BOSUN_MIGRATE_GIT_TIMEOUT")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(60);
+    Ok(git_raw(root, args, Some(Duration::from_secs(secs)))?
+        .trim()
+        .to_string())
+}
+
+/// Run git in `root` with prompts off, stdout untrimmed. Anything quoted from git's stderr has
+/// URL credentials removed.
+fn git_raw(root: &Path, args: &[&str], limit: Option<Duration>) -> Result<String, BosunError> {
+    let fail = |what: String| {
+        BosunError::error(
+            redact_credentials(&what),
+            "fix the git error above, then rerun `bosun migrate`",
+        )
+    };
+    let base = || {
+        let mut c = Command::new("git");
+        c.arg("-C")
+            .arg(root)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "true")
+            .stdin(Stdio::null());
+        c
+    };
     // A runner with no git identity still commits, as bosun.
     let has = |key: &str| {
-        Command::new("git")
-            .arg("-C")
-            .arg(root)
+        base()
             .args(["config", key])
             .output()
             .is_ok_and(|o| o.status.success())
     };
-    let mut c = Command::new("git");
-    c.arg("-C").arg(root);
+    let mut c = base();
     if !(has("user.email") && has("user.name")) {
         c.args([
             "-c",
@@ -77,20 +108,55 @@ fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
             "user.email=bosun@users.noreply.github.com",
         ]);
     }
-    let out = c.args(args).output().map_err(|e| {
-        BosunError::error(format!("cannot run git: {e}"), "install git, then rerun")
-    })?;
-    if !out.status.success() {
-        return Err(BosunError::error(
-            format!(
-                "git {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            "fix the git error above, then rerun `bosun migrate`",
-        ));
+    let mut child = c
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            BosunError::error(format!("cannot run git: {e}"), "install git, then rerun")
+        })?;
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as _));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as _));
+    let deadline = limit.map(|l| Instant::now() + l);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if deadline.is_some_and(|d| Instant::now() >= d) => {
+                // A helper (ssh) may still hold the pipes: leave the readers behind.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(fail(format!(
+                    "git {} timed out after {}s",
+                    args.join(" "),
+                    limit.map_or(0, |l| l.as_secs())
+                )));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(e) => return Err(fail(format!("cannot wait for git: {e}"))),
+        }
+    };
+    let (out, err) = (
+        out.join().unwrap_or_default(),
+        err.join().unwrap_or_default(),
+    );
+    if !status.success() {
+        return Err(fail(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&err).trim()
+        )));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&out).to_string())
 }
 
 /// Run this binary with `args` in `root`: its exit code and the JSON object it printed. `Err`
@@ -142,6 +208,13 @@ fn error_text(v: &Value) -> String {
         .as_str()
         .unwrap_or("no error message")
         .to_string()
+}
+
+fn error_fix(v: &Value) -> String {
+    match v["error"]["fix"].as_str() {
+        Some(f) if !f.trim().is_empty() => f.to_string(),
+        _ => "see the error above, then rerun `bosun migrate`".to_string(),
+    }
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -278,7 +351,8 @@ fn compact(v: &Value) -> String {
     }
 }
 
-/// The open migration PR of this repo (a fork's PR of that name is not ours).
+/// The open migration PR of this repo, head `bosun/migrate-*` (a fork's PR of that name is not
+/// ours).
 fn find_open(gh: &dyn Github, repo: &str) -> Result<Option<Pull>, BosunError> {
     Ok(gh
         .list_pulls(None, IssueState::Open)?
@@ -294,9 +368,9 @@ fn free_branch(root: &Path, step: ModeName) -> Result<String, BosunError> {
             &["rev-parse", "--verify", "-q", &format!("refs/heads/{b}")],
         )
         .is_ok()
-            || git(root, &["ls-remote", "--exit-code", "--heads", "origin", b]).is_ok()
+            || git_net(root, &["ls-remote", "--exit-code", "--heads", "origin", b]).is_ok()
     };
-    let plain = format!("{BRANCH}-{}", step.as_str());
+    let plain = format!("{BRANCH}{}", step.as_str());
     let day = crate::time::Timestamp::now().to_string().replace('-', "");
     let dated = format!("{plain}-{}", &day[..8]);
     if !taken(&plain) {
@@ -440,6 +514,18 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
     }
     let repo = app.ctx.repo.to_string();
     if let Some(p) = find_open(app.gh.as_ref(), &repo)? {
+        if branch_step(&p.head_ref) != Some(next.as_str()) {
+            return Err(BosunError::conflict(
+                format!(
+                    "PR #{} ({}) is an open migration to another step than {}",
+                    p.number,
+                    p.head_ref,
+                    next.as_str()
+                ),
+                format!("merge or close #{} first, then rerun", p.number),
+            )
+            .with_data(json!({"pr": {"number": p.number, "head_sha": p.head_sha}})));
+        }
         data["reused"] = json!(true);
         data["changed"] = json!(false);
         data["files"] = json!([]);
@@ -464,21 +550,33 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
             "commit or stash them, then rerun",
         ));
     }
-    let branch = free_branch(&root, next)?;
-    // The edits.
-    let mut files: Vec<String> = Vec::new();
-    if need_pin {
-        files.extend(pin_bosun(&root, to)?);
+    git_net(&root, &["fetch", "-q", "origin", &base])?;
+    let (head, remote) = (
+        git(&root, &["rev-parse", "HEAD"])?,
+        git(&root, &["rev-parse", "FETCH_HEAD"])?,
+    );
+    if head != remote {
+        return Err(BosunError::conflict(
+            format!("{base} is not at origin/{base} (HEAD {head}, origin {remote})"),
+            "run `git pull --ff-only`, or push or drop the local commits, then rerun",
+        ));
     }
-    let write = |rel: &str, text: &str| {
-        std::fs::write(root.join(rel), text).map_err(|e| {
-            BosunError::error(
-                format!("cannot write {rel}: {e}"),
-                "check the file permissions, then rerun",
-            )
-        })
-    };
-    let edits = (|| {
+    let branch = free_branch(&root, next)?;
+    // From here on every failure restores the tree and the branch.
+    let mut wrote = Wrote::default();
+    let mut files: Vec<String> = Vec::new();
+    let made = (|| -> Result<Pull, BosunError> {
+        if need_pin {
+            files.extend(pin_bosun(&root, to)?);
+        }
+        let write = |rel: &str, text: &str| {
+            std::fs::write(root.join(rel), text).map_err(|e| {
+                BosunError::error(
+                    format!("cannot write {rel}: {e}"),
+                    "check the file permissions, then rerun",
+                )
+            })
+        };
         if let Some(n) = need_registry {
             write(REGISTRY_FILE, &format!("{n}\n"))?;
             files.push(REGISTRY_FILE.to_string());
@@ -487,38 +585,57 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
             write(CONFIG_FILE, t)?;
             files.push(CONFIG_FILE.to_string());
         }
-        Ok::<(), BosunError>(())
+        let title = format!("chore: bosun mode {} -> {}", from.as_str(), next.as_str());
+        let text = body(&BodyIn {
+            from,
+            to,
+            step: next,
+            direct: a.direct,
+            version: s.version.as_deref(),
+            binary: env!("CARGO_PKG_VERSION"),
+            registry: format!(
+                "pinned {}, live {}",
+                s.pinned.map_or("none".into(), |n| format!("#{n}")),
+                s.live.first().map_or("none".into(), |n| format!("#{n}"))
+            ),
+            epics_unmarked: &s.epics_unmarked,
+            hull: if s.hull_lock {
+                format!(
+                    "yes (version {})",
+                    s.hull_version.as_deref().unwrap_or("unknown")
+                )
+            } else {
+                "no".into()
+            },
+            baseline: s.baseline.as_ref().map(compact).map_err(Clone::clone),
+            files: &files,
+        });
+        publish(
+            &app, &root, &files, &base, &branch, &title, &text, &mut wrote,
+        )
     })();
-    if let Err(e) = edits {
-        undo(&root, &files);
-        return Err(e);
-    }
-    let title = format!("chore: bosun mode {} -> {}", from.as_str(), next.as_str());
-    let text = body(&BodyIn {
-        from,
-        to,
-        step: next,
-        direct: a.direct,
-        version: s.version.as_deref(),
-        binary: env!("CARGO_PKG_VERSION"),
-        registry: format!(
-            "pinned {}, live {}",
-            s.pinned.map_or("none".into(), |n| format!("#{n}")),
-            s.live.first().map_or("none".into(), |n| format!("#{n}"))
-        ),
-        epics_unmarked: &s.epics_unmarked,
-        hull: if s.hull_lock {
-            format!(
-                "yes (version {})",
-                s.hull_version.as_deref().unwrap_or("unknown")
-            )
-        } else {
-            "no".into()
-        },
-        baseline: s.baseline.as_ref().map(compact).map_err(Clone::clone),
-        files: &files,
-    });
-    let pull = publish(&app, &root, &files, &base, &branch, &title, &text)?;
+    let pull = match made {
+        Ok(p) => p,
+        Err(mut e) => {
+            let drop_branch = (wrote.branch && !wrote.pushed).then_some(branch.as_str());
+            let back = rollback(&root, &base, drop_branch);
+            if wrote.pushed {
+                // The branch is on origin: the PR is the only step left.
+                e.fix = format!(
+                    "{branch} is pushed: open its PR by hand with `gh pr create --draft --head {branch} --base {base} --title \"chore: bosun mode {} -> {}\"`",
+                    from.as_str(),
+                    next.as_str()
+                );
+            } else if !back {
+                e.fix = format!(
+                    "could not restore the tree: run `git restore --staged --worktree .`, `git switch -f {base}` and `git branch -D {branch}`, then rerun"
+                );
+            } else if wrote.branch {
+                e.fix = format!("rolled back to {base}; {}", e.fix);
+            }
+            return Err(e);
+        }
+    };
     data["files"] = json!(files);
     data["branch"] = json!(branch);
     data["pr"] = json!({"number": pull.number, "head_sha": pull.head_sha});
@@ -527,28 +644,60 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
     Ok(Outcome::data(data))
 }
 
-/// Drop what a failed step wrote (tracked edits and new files); best effort.
-fn undo(root: &Path, files: &[String]) {
-    for f in files {
-        let _ = git(root, &["restore", "--staged", "--worktree", "--", f]);
-        let tracked = git(root, &["ls-files", "--error-unmatch", f]).is_ok();
-        if !tracked {
-            let _ = std::fs::remove_file(root.join(f));
-        }
-    }
+/// How far a run got, for the rollback.
+#[derive(Default)]
+struct Wrote {
+    branch: bool,
+    pushed: bool,
 }
 
-/// `bosun pin --latest --tool bosun`: the files it changed. A failure or a version still below
-/// [`MODE_MIN`] is a conflict that names the pin step.
+/// Put the tree back: drop every change in it (the tree was clean before bosun wrote), return to
+/// `base` and drop `branch`. Whether it all worked.
+fn rollback(root: &Path, base: &str, branch: Option<&str>) -> bool {
+    let mut ok = clean_tree(root);
+    let on = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+    if on != base {
+        ok &= git(root, &["switch", "-q", "-f", base]).is_ok();
+    }
+    if let Some(b) = branch {
+        ok &= git(root, &["branch", "-q", "-D", b]).is_ok();
+    }
+    ok & clean_tree(root)
+}
+
+/// Restore changed tracked files and delete new untracked ones.
+fn clean_tree(root: &Path) -> bool {
+    let Ok(out) = git_raw(
+        root,
+        &["status", "--porcelain", "-z", "--untracked-files=all"],
+        None,
+    ) else {
+        return false;
+    };
+    let mut ok = true;
+    let mut entries = out.split('\0').filter(|e| e.len() > 3);
+    while let Some(e) = entries.next() {
+        let (code, path) = (&e[..2], &e[3..]);
+        if code.contains('R') || code.contains('C') {
+            entries.next(); // the old name follows a rename
+        }
+        if code == "??" {
+            ok &= std::fs::remove_file(root.join(path)).is_ok();
+        } else {
+            ok &= git(root, &["restore", "--staged", "--worktree", "--", path]).is_ok();
+        }
+    }
+    ok
+}
+
+/// `bosun pin --latest --tool bosun`: the files it changed, plus `.bosun/version` when the repo
+/// had none. A failure is a conflict that names the pin step and carries the child's own fix; a
+/// release still below [`MODE_MIN`] gets the owner's release fix. The caller restores the tree.
 fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
-    let fix = format!(
-        "the owner publishes a bosun release >= {MODE_MIN} (docs/releasing.md); then rerun `bosun migrate --to {}`",
-        to.as_str()
-    );
-    let pin = |why: String| {
+    let pin = |why: String, fix: String| {
         BosunError::conflict(
             format!("the pin step (`bosun pin --latest --tool bosun`) failed: {why}"),
-            fix.clone(),
+            fix,
         )
     };
     let (code, v) = run_self(
@@ -556,8 +705,24 @@ fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
         &["pin", "--latest", "--tool", "bosun"],
         Duration::from_secs(300),
     )
-    .map_err(&pin)?;
-    let files: Vec<String> = v["data"]["files"]
+    .map_err(|why| {
+        pin(
+            why,
+            "run `bosun pin --latest --tool bosun` by hand to see why, then rerun `bosun migrate`"
+                .into(),
+        )
+    })?;
+    if code != 0 {
+        let mut e = pin(error_text(&v), error_fix(&v));
+        if let Some(x) = crate::output::Exit::ALL
+            .into_iter()
+            .find(|x| i32::from(x.code()) == code && *x != crate::output::Exit::Ok)
+        {
+            e.exit = x;
+        }
+        return Err(e);
+    }
+    let mut files: Vec<String> = v["data"]["files"]
         .as_array()
         .map(|a| {
             a.iter()
@@ -565,21 +730,51 @@ fn pin_bosun(root: &Path, to: ModeName) -> Result<Vec<String>, BosunError> {
                 .collect()
         })
         .unwrap_or_default();
-    if code != 0 {
-        return Err(pin(error_text(&v)));
+    // The version now pinned: pin's own report, else the script's line (already at the latest).
+    let pinned = v["data"]["changed"]
+        .as_array()
+        .and_then(|c| c.iter().find(|c| c["tool"] == "bosun"))
+        .and_then(|c| c["to"].as_str().map(str::to_string))
+        .or_else(|| {
+            let script = read(root, "docs/setup-script.sh")?;
+            get_line(&script, &keys("bosun")[0]).map(str::to_string)
+        });
+    if let Some(ver) = &pinned
+        && read(root, VERSION_FILE).as_deref().map(str::trim) != Some(ver.as_str())
+    {
+        std::fs::write(root.join(VERSION_FILE), format!("{ver}\n")).map_err(|e| {
+            BosunError::error(
+                format!("cannot write {VERSION_FILE}: {e}"),
+                "check the file permissions, then rerun",
+            )
+        })?;
+        if !files.iter().any(|f| f == VERSION_FILE) {
+            files.push(VERSION_FILE.to_string());
+        }
     }
     let now = read(root, VERSION_FILE).map(|v| v.trim().to_string());
-    if below_min(now.as_deref()) {
-        undo(root, &files);
-        return Err(pin(format!(
-            "npm's newest bosun is {}, older than {MODE_MIN}",
-            now.as_deref().unwrap_or("not recorded in .bosun/version")
-        )));
+    let still_below = match pinned.as_deref().or(now.as_deref()) {
+        Some(v) => crate::core::pin::parse_semver(v).is_none() || semver_lt(v, MODE_MIN),
+        None => true,
+    };
+    if still_below {
+        return Err(pin(
+            format!(
+                "npm's newest bosun is {}, older than {MODE_MIN}",
+                pinned.as_deref().unwrap_or("not recorded anywhere")
+            ),
+            format!(
+                "the owner publishes a bosun release >= {MODE_MIN} (docs/releasing.md); then rerun `bosun migrate --to {}`",
+                to.as_str()
+            ),
+        ));
     }
     Ok(files)
 }
 
-/// Branch, commit, push (never forced), draft PR. A failed push leaves the base branch clean.
+/// Branch, commit, push (never forced), draft PR. `wrote` says how far it got; the caller rolls
+/// back.
+#[allow(clippy::too_many_arguments)]
 fn publish(
     app: &App,
     root: &Path,
@@ -588,38 +783,29 @@ fn publish(
     branch: &str,
     title: &str,
     body: &str,
+    wrote: &mut Wrote,
 ) -> Result<Pull, BosunError> {
     git(root, &["switch", "-q", "-c", branch])?;
+    wrote.branch = true;
     let mut add = vec!["add", "--"];
     add.extend(files.iter().map(String::as_str));
-    let pushed = git(root, &add)
-        .and_then(|_| git(root, &["commit", "-q", "-m", title]))
-        .and_then(|_| git(root, &["push", "-q", "-u", "origin", branch]));
-    if let Err(e) = pushed {
-        let back = git(root, &["switch", "-q", "-f", base])
-            .and_then(|_| git(root, &["branch", "-q", "-D", branch]));
-        undo(root, files);
-        let fix = if back.is_ok() {
-            format!("rolled back to {base}; {}", e.fix)
-        } else {
-            format!(
-                "could not roll back: run `git switch -f {base}` and `git branch -D {branch}`, then rerun"
-            )
-        };
-        return Err(BosunError { fix, ..e });
-    }
-    app.gh
-        .create_pull(title, branch, base, body, true)
-        .map_err(|e| BosunError {
-            fix: format!(
-                "{branch} is pushed: open its PR by hand with `gh pr create --draft --head {branch} --base {base} --title \"{title}\"`"
-            ),
-            ..e
-        })
+    git(root, &add)?;
+    git(root, &["commit", "-q", "-m", title])?;
+    git_net(root, &["push", "-q", "-u", "origin", branch])?;
+    wrote.pushed = true;
+    app.gh.create_pull(title, branch, base, body, true)
 }
 
 /// `--finish`: join, then amend each plan (both idempotent).
 fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
+    let repo = app.ctx.repo.to_string();
+    if let Some(p) = find_open(app.gh.as_ref(), &repo)? {
+        return Err(BosunError::conflict(
+            format!("PR #{} not merged yet ({})", p.number, p.head_ref),
+            "wait for the merge, then rerun `bosun migrate --finish`",
+        )
+        .with_data(json!({"pr": {"number": p.number, "head_sha": p.head_sha}})));
+    }
     super::join::run(
         dir,
         &JoinArgs {
@@ -645,7 +831,13 @@ fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
             plans.push(p);
         }
     }
-    let mode = app.ctx.config.mode_effective().mode;
+    // The merged config decides, not this checkout (which may be behind).
+    let base = default_branch(app.gh.as_ref())?;
+    let merged = match app.gh.file_at(CONFIG_FILE, &base)? {
+        Some(t) => Config::parse(&t, &format!("{CONFIG_FILE} on {base}"))?,
+        None => Config::default(),
+    };
+    let mode = merged.mode_effective().mode;
     let mut amended: Vec<Value> = Vec::new();
     let mut failed: Option<BosunError> = None;
     if super::budget::knob_from_default(app.gh.as_ref())? == BudgetFeature::Off {

@@ -34,6 +34,30 @@ pub fn step(current: ModeName, target: ModeName, direct: bool) -> ModeName {
     }
 }
 
+/// The rungs a move from `from` to `step` passes over (later than `from`, earlier than `step`).
+pub fn skipped_rungs(from: ModeName, step: ModeName) -> Vec<ModeName> {
+    LADDER
+        .into_iter()
+        .filter(|m| *m > from && *m < step)
+        .collect()
+}
+
+/// The mode a migration branch name carries: `bosun/migrate-<step>` or `bosun/migrate-<step>-<date>`.
+pub fn branch_step(branch: &str) -> Option<&str> {
+    branch
+        .strip_prefix("bosun/migrate-")?
+        .split('-')
+        .next()
+        .filter(|s| !s.is_empty())
+}
+
+/// `text` without the `user:password@` part of any URL in it (git echoes remotes in errors).
+pub fn redact_credentials(text: &str) -> String {
+    static RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"://[^/\s@]+@").expect("static regex"));
+    RE.replace_all(text, "://").into_owned()
+}
+
 /// `a < b` for two `X.Y.Z` versions; false when either is not one.
 pub fn semver_lt(a: &str, b: &str) -> bool {
     matches!((parse_semver(a), parse_semver(b)), (Some(x), Some(y)) if x < y)
@@ -160,8 +184,13 @@ pub fn body(b: &BodyIn) -> String {
         s += ", and R-weaken because the mode gets lighter";
     }
     s += ".";
-    if b.direct {
-        s += "\n\nThe owner chose --direct (skip the steady step); recorded here.";
+    let skipped = skipped_rungs(b.from, b.step);
+    if b.direct && lighter && !skipped.is_empty() {
+        let names: Vec<&str> = skipped.iter().map(|m| m.as_str()).collect();
+        s += &format!(
+            "\n\nThe owner chose --direct (skips {}); recorded here.",
+            names.join(", ")
+        );
     }
     s += "\n\n## Owner-only steps left\n\n";
     let steps = owner_steps(b.step);
@@ -171,7 +200,7 @@ pub fn body(b: &BodyIn) -> String {
     for t in steps {
         s += &format!("- {t}\n");
     }
-    s += "\n## After merge\n\n`bosun migrate --finish` (or it runs on the next orchestrator command): bosun join, then bosun plan amend for each plan; both idempotent.\n\n";
+    s += "\n## After merge\n\n`bosun migrate --finish`: bosun join, then bosun plan amend for each plan; both idempotent.\n\n";
     s += &format!("<!-- bosun:migrate {} -->\n", b.to.as_str());
     s
 }
@@ -295,7 +324,40 @@ mod tests {
         ] {
             assert!(b.contains(s), "{s}\n{b}");
         }
-        assert!(!b.contains("--direct"));
-        assert!(body(&input(true, Booster, &files)).contains("The owner chose --direct"));
+        assert!(!b.contains("--direct") && !b.contains("orchestrator command"));
+        let d = body(&input(true, Booster, &files));
+        assert!(d.contains("The owner chose --direct (skips steady)"), "{d}");
+    }
+
+    #[test]
+    fn the_direct_note_needs_a_lighter_move_that_skips_a_rung() {
+        let files = vec![".bosun/bosun.toml".to_string()];
+        // --direct onto the next rung skips nothing.
+        assert!(!body(&input(true, Steady, &files)).contains("--direct"));
+        // --direct to a tighter mode is not lighter.
+        let mut tight = input(true, Gatekeeper, &files);
+        tight.from = Autonomous;
+        tight.to = Gatekeeper;
+        assert!(!body(&tight).contains("--direct"));
+        let mut far = input(true, Autonomous, &files);
+        far.to = Autonomous;
+        assert!(body(&far).contains("(skips steady, booster)"));
+    }
+
+    #[test]
+    fn skipped_rungs_branch_steps_and_credentials() {
+        assert_eq!(skipped_rungs(Gatekeeper, Booster), vec![Steady]);
+        assert!(skipped_rungs(Steady, Booster).is_empty());
+        assert!(skipped_rungs(Booster, Gatekeeper).is_empty());
+        assert_eq!(branch_step("bosun/migrate-steady"), Some("steady"));
+        assert_eq!(branch_step("bosun/migrate-steady-20261022"), Some("steady"));
+        assert_eq!(branch_step("bosun/migrate"), None);
+        assert_eq!(branch_step("bosun/pin"), None);
+        assert_eq!(
+            redact_credentials("fatal: https://bob:s3cret@github.com/a/b.git denied"),
+            "fatal: https://github.com/a/b.git denied"
+        );
+        assert_eq!(redact_credentials("ssh://git@host/x"), "ssh://host/x");
+        assert_eq!(redact_credentials("no url, a@b"), "no url, a@b");
     }
 }

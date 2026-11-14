@@ -3,6 +3,29 @@
 Audience: Claude (an agent) in a repo that already runs bosun, and the owner. Goal: one command, one owner
 approval. Modes run gatekeeper < steady < booster < autonomous (quickstart §0).
 
+## Quick start
+
+Cloud environment setup script (`bosun setup-snippet` prints it as `data.short`; paste it once):
+
+```bash
+for d in . ./*/; do
+  [ -f "$d/.bosun/version" ] && [ -f "$d/docs/setup-script.sh" ] || continue
+  (cd "$d" && timeout -k 10 1800 bash docs/setup-script.sh </dev/null) || echo "bosun: $d/docs/setup-script.sh failed" >&2
+done; exit 0
+```
+
+Each repo's own `docs/setup-script.sh` installs the pinned bosun (sha512 checked) and the rest. A repo without that
+script needs the long form, `data.script`.
+
+The prompt, the same in the CLI, on the web and to Claude Tag in Slack:
+
+```text
+Run `bosun migrate --to booster --direct`; do what its `next` and `data.then` say; stop when it asks for the owner.
+After the merge run `bosun migrate --finish`.
+```
+
+Leave out `--direct` to move one rung (gatekeeper → steady). The owner approves the one PR head.
+
 ## What `bosun migrate` does
 
 ```bash
@@ -30,16 +53,16 @@ human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 
 1. **[computer]** `npm i -g @keelstackhq/bosun` (a release where `bosun migrate --help` works), `gh auth login` once.
 2. Set `GITHUB_TOKEN` to `gh auth token` in your shell. Never in a file.
-3. Open Claude Code in the repo, on the default branch, clean tree. Paste the prompt below.
+3. Open Claude Code in the repo, on the default branch, clean tree. Paste the prompt from Quick start.
 4. **[phone]** Approve the PR head when Claude asks.
 5. **[computer]** Do the Routine steps the PR body lists.
 
 ## Web / cloud (claude.ai/code)
 
-1. **[computer]** Environment (session title bar → Edit), once per repo: paste `bosun setup-snippet`'s
-   `data.script` as the Setup script; Network access: Limited with "Allow package managers"; add only hosts
+1. **[computer]** Environment (session title bar → Edit), once per repo: paste the Quick start script as the
+   Setup script; Network access: Limited with "Allow package managers"; add only hosts
    your `docs/setup-script.sh` downloads from (see A.4). No secrets, no PAT: GitHub comes from the Claude GitHub App.
-2. Start a session on the repo in that environment. Paste the prompt below.
+2. Start a session on the repo in that environment. Paste the prompt from Quick start.
 3. **[phone]** Approve the PR head when Claude asks.
 4. **[computer]** Do the Routine steps the PR body lists.
 
@@ -48,33 +71,9 @@ human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 1. **[computer]** Once: a private channel, your Slack ID in `governance/owners.toml`, `[slack] channel`,
    `may_spawn = true` and `[cloud] environment_id` in `.bosun/bosun.toml` (an R-gov PR; A.5). The environment is
    the one from the web steps.
-2. In the channel, start a thread and post the Slack prompt below to Claude.
-3. Claude spawns one cloud session for the migration and reports in the thread.
-4. **[phone]** Approve the PR head when bosun asks.
-5. **[computer]** Do the Routine steps the PR body lists.
-
-## Prompts
-
-CLI or web (one session does it all):
-
-```text
-Move this repo to bosun mode <steady|booster|autonomous>. Use bosun only; act on its JSON.
-1. bosun migrate --to <mode> --dry-run. Tell me in one checklist what only I must do, phone or computer.
-2. bosun migrate --to <mode> (add --direct only if I said "direct" here: <yes/no>).
-   On exit 3 do what error.fix says, then rerun.
-3. Run the gate loop, then bosun pr --pr <n> --ready. Ask me once to approve the head (repo, PR, head SHA).
-4. When it merged: bosun migrate --finish. Report bosun mode and the PR number.
-Never merge, tag or force-push. Never guess: ask.
-```
-
-Slack (Claude Tag):
-
-```text
-Move this repo to bosun mode <mode>. Run bosun join --origin slack --slack-channel <channel> --slack-thread <ts>,
-then bosun spawn --slack-thread <ts> --slack-user <my Slack ID> --request - with the request
-"run the docs/migrate-booster.md CLI-or-web prompt for mode <mode>". Make the create_session call in next,
-record it, and post progress here through bosun notify. Ask me only for the one approval.
-```
+2. In the channel, start a thread and post the Quick start prompt to Claude.
+3. **[phone]** Approve the PR head when bosun asks.
+4. **[computer]** Do the Routine steps the PR body lists.
 
 ## Appendix A. The manual path
 

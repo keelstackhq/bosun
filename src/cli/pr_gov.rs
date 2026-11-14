@@ -9,10 +9,20 @@ use std::path::Path;
 use serde_json::json;
 
 use super::pr::{check_local_gates, enforced_checks, merge_gates, not_green, update_pull_call};
-use crate::app::{App, default_branch, kill_switch};
-use crate::core::meta::linked_issues;
+use crate::app::{App, default_branch, is_writer, kill_switch};
+use crate::core::glob::Glob;
+use crate::core::meta::linked_issues_in;
 use crate::github::{Pull, enable_auto_merge_any, is_already_clean, is_ccr_refusal, is_unstable};
 use crate::output::{BosunError, CmdResult, Outcome};
+
+/// The paths a task-less PR may change: the governance files bosun migrate and splice write.
+const GOVERNANCE_PATHS: [&str; 5] = [
+    ".bosun/**",
+    ".claude/**",
+    "governance/**",
+    ".splice/**",
+    "docs/setup-script.sh",
+];
 
 fn pr_json(p: &Pull) -> serde_json::Value {
     json!({"number": p.number, "head_sha": p.head_sha, "draft": p.draft})
@@ -51,8 +61,10 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             format!("retarget the PR to {base}, then rerun `{rerun}`"),
         ));
     }
-    if pull.body.contains("<!-- bosun:task-pr") || !linked_issues(&pull.body).is_empty() {
-        let fix = match linked_issues(&pull.body).first() {
+    let repo = app.ctx.repo.to_string();
+    let linked = linked_issues_in(&pull.body, &repo);
+    if pull.body.contains("<!-- bosun:task-pr") || !linked.is_empty() {
+        let fix = match linked.first() {
             Some(k) => format!("PR #{n} belongs to task #{k}: run `bosun pr {k} --ready` instead"),
             None => format!(
                 "PR #{n} carries a task marker: run `bosun pr <task> --ready` with that task's number"
@@ -63,9 +75,39 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             fix,
         ));
     }
+    // Only a governance PR of a repo writer goes this way; anything else is a task's work.
+    let not_governance = |why: String| {
+        BosunError::conflict(
+            format!("PR #{n} is not a governance PR: {why}"),
+            "open it for a task: `bosun pr <issue>`",
+        )
+    };
+    if !is_writer(gh, &pull.user)? {
+        return Err(not_governance(format!(
+            "its author {} is not a repo writer",
+            pull.user
+        )));
+    }
+    let globs: Vec<Glob> = GOVERNANCE_PATHS
+        .iter()
+        .map(|g| Glob::parse(g).expect("static glob"))
+        .collect();
+    let outside = |f: &str| !globs.iter().any(|g| g.matches(f));
+    for f in gh.pull_files(n)? {
+        let moved = f.previous_filename.as_deref();
+        if outside(&f.filename) || moved.is_some_and(&outside) {
+            return Err(not_governance(format!(
+                "it changes {}, outside {}",
+                f.filename,
+                GOVERNANCE_PATHS.join(", ")
+            )));
+        }
+    }
+    let trailers = super::trailers::check_pr(gh, n, app.ctx.config.trailers.require)?;
     if !ready {
         return Ok(Outcome::data(json!({
             "pr": pr_json(&pull), "task": null, "ready": !pull.draft, "auto_merge": false,
+            "trailers": trailers,
         })));
     }
     check_local_gates(&app, &rerun, &pull)?;
@@ -91,7 +133,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
                 eprintln!("bosun: {note}");
                 let mut out = Outcome::data(json!({
                     "pr": pr_json(&pull), "task": null, "ready": "pending", "auto_merge": false,
-                    "enforced_checks": enforced, "note": note,
+                    "enforced_checks": enforced, "note": note, "trailers": trailers,
                 }));
                 out.next.push(update_pull_call(&app, n, false));
                 return Ok(out);
@@ -127,7 +169,7 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
     })?;
     Ok(Outcome::data(json!({
         "pr": pr_json(&pull), "task": null, "ready": true, "auto_merge": true,
-        "auto_merge_route": route, "enforced_checks": enforced,
+        "auto_merge_route": route, "enforced_checks": enforced, "trailers": trailers,
         "gates": gates.iter().map(|(c, s)| json!({"context": c, "state": s})).collect::<Vec<_>>(),
         "pending_checks": pending.iter().map(|(c, s)| json!({"context": c, "state": s}))
             .collect::<Vec<_>>(),

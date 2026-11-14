@@ -97,6 +97,65 @@ fn a_pr_that_closes_a_task_is_refused_with_the_task_command() {
 }
 
 #[test]
+fn a_repo_qualified_closing_reference_is_a_task_pr_too() {
+    let (fake, dir) = setup();
+    fake.pull(33, "feat: z", "claude/t12", "Closes acme/widget#12");
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "33"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["fix"].as_str().unwrap().contains("bosun pr 12"));
+}
+
+#[test]
+fn only_governance_paths_of_a_writer_go_this_way() {
+    let (fake, dir) = setup();
+    for f in [
+        ".bosun/bosun.toml",
+        ".bosun/version",
+        "docs/setup-script.sh",
+        ".splice/lock.toml",
+    ] {
+        fake.pull_file(30, f, "modified", 1, 1, None);
+    }
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 0, "{v}");
+    assert!(v["data"]["trailers"].is_object(), "{v}");
+    // One file outside the list, even beside governance ones.
+    fake.pull_file(30, "src/main.rs", "modified", 1, 1, None);
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["error"]["fix"], "open it for a task: `bosun pr <issue>`");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("src/main.rs")
+    );
+    let (code, _) = pr(&fake, dir.path(), &["--pr", "30", "--ready"]);
+    assert_eq!(code, 3);
+    assert!(fake.pull_is_draft(30));
+}
+
+#[test]
+fn a_rename_out_of_governance_paths_is_refused() {
+    let (fake, dir) = setup();
+    fake.pull_file(30, ".bosun/x.toml", "renamed", 0, 0, None);
+    fake.renamed_from(30, "src/x.rs");
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30"]);
+    assert_eq!(code, 3, "{v}");
+}
+
+#[test]
+fn a_pr_of_a_non_writer_is_refused() {
+    let (fake, dir) = setup();
+    fake.permission("octocat", "read");
+    fake.pull_file(30, ".bosun/bosun.toml", "modified", 1, 1, None);
+    let (code, v) = pr(&fake, dir.path(), &["--pr", "30", "--ready"]);
+    assert_eq!(code, 3, "{v}");
+    assert_eq!(v["error"]["fix"], "open it for a task: `bosun pr <issue>`");
+    assert!(fake.pull_is_draft(30));
+}
+
+#[test]
 fn a_missing_closed_or_fork_pr_is_refused() {
     let (fake, dir) = setup();
     let (code, v) = pr(&fake, dir.path(), &["--pr", "99"]);

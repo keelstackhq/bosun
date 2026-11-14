@@ -42,6 +42,7 @@ fn env(files: &[(&str, &str)]) -> Env {
     git(work.path(), &["commit", "-q", "-m", "x", "--allow-empty"]);
     let url = origin.path().to_str().unwrap();
     git(work.path(), &["remote", "add", "origin", url]);
+    git(work.path(), &["push", "-q", "origin", "main"]);
     Env { work, origin }
 }
 
@@ -127,7 +128,11 @@ fn direct_goes_to_the_target_and_the_body_records_the_choice() {
     assert_eq!(v["data"]["direct"], true);
     let pr = v["data"]["pr"]["number"].as_u64().unwrap();
     let body = fake.pull_body(pr);
-    assert!(body.contains("The owner chose --direct"), "{body}");
+    assert!(
+        body.contains("The owner chose --direct (skips steady)"),
+        "{body}"
+    );
+    assert!(!body.contains("orchestrator command"), "{body}");
     assert!(body.contains("R-weaken"), "{body}");
     assert!(body.contains("<!-- bosun:migrate booster -->"), "{body}");
     assert!(read(&e, BOSUN_TOML).contains("[mode]\nname = \"booster\"\n"));
@@ -287,7 +292,7 @@ fn an_old_version_is_pinned_and_its_files_join_the_commit() {
 #[test]
 fn a_failed_pin_names_the_pin_step() {
     let fake = FakeGithub::start();
-    let e = env(&[(BOSUN_TOML, CONFIG), (".bosun/version", "0.9.0\n")]);
+    let e = pin_env(Some("0.9.0\n"));
     let (code, v) = migrate_with(
         &e,
         &fake,
@@ -297,12 +302,261 @@ fn a_failed_pin_names_the_pin_step() {
             ("BOSUN_NPM_REGISTRY", "http://127.0.0.1:9"),
         ],
     );
-    assert_eq!(code, 3, "{v}");
+    // The child's own exit code (a network error) comes through.
+    assert_eq!(code, 1, "{v}");
     let msg = v["error"]["message"].as_str().unwrap();
     assert!(msg.contains("bosun pin"), "{msg}");
-    assert!(v["error"]["fix"].as_str().unwrap().contains("0.14.0"));
+    // Not below the minimum: the child's own message and fix come through.
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(!fix.contains("publishes a bosun release"), "{fix}");
+    assert!(msg.len() > "the pin step (`bosun pin --latest --tool bosun`) failed: ".len());
     assert_eq!(read(&e, BOSUN_TOML), CONFIG);
     assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+fn setup_script_files() -> Vec<(String, String)> {
+    let r = npm_repo();
+    [
+        "docs/setup-script.sh",
+        "channel/pieces/core/files/docs/setup-script.sh.jinja",
+    ]
+    .iter()
+    .map(|rel| {
+        (
+            rel.to_string(),
+            std::fs::read_to_string(r.path().join(rel)).unwrap(),
+        )
+    })
+    .collect()
+}
+
+fn pin_env(version: Option<&str>) -> Env {
+    let files = setup_script_files();
+    let mut all: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    all.push((BOSUN_TOML, CONFIG));
+    if let Some(v) = version {
+        all.push((".bosun/version", v));
+    }
+    env(&all)
+}
+
+fn registry(bosun_version: &str) -> Registry {
+    Registry::start(
+        &[
+            ("splice", "0.4.0"),
+            ("hoist", "0.4.1"),
+            ("berth", "0.1.0"),
+            ("bosun", bosun_version),
+        ],
+        None,
+        None,
+    )
+}
+
+fn with_registry(reg: &Registry) -> [(&'static str, String); 2] {
+    [
+        ("BOSUN_MIGRATE_METRICS_TIMEOUT", "0".to_string()),
+        ("BOSUN_NPM_REGISTRY", reg.base.clone()),
+    ]
+}
+
+fn run_pinned(e: &Env, fake: &FakeGithub, reg: &Registry, args: &[&str]) -> (i32, Value) {
+    let vars = with_registry(reg);
+    let vars: Vec<(&str, &str)> = vars.iter().map(|(a, b)| (*a, b.as_str())).collect();
+    migrate_with(e, fake, args, &vars)
+}
+
+#[test]
+fn a_newest_release_below_the_minimum_is_the_release_fix_and_leaves_the_tree_clean() {
+    let fake = FakeGithub::start();
+    let reg = registry("0.13.0");
+    let e = pin_env(Some("0.9.0\n"));
+    let (code, v) = run_pinned(&e, &fake, &reg, &["--to", "steady"]);
+    assert_eq!(code, 3, "{v}");
+    let fix = v["error"]["fix"].as_str().unwrap();
+    assert!(fix.contains("publishes a bosun release"), "{fix}");
+    // The pin wrote files before the check failed: all of it is undone.
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(read(&e, ".bosun/version"), "0.9.0\n");
+    assert_eq!(git(e.work.path(), &["branch", "--show-current"]), "main");
+    assert_eq!(writes(&fake), 0);
+}
+
+#[test]
+fn a_repo_without_a_version_file_gets_the_pinned_version_written() {
+    let fake = FakeGithub::start();
+    let reg = registry("0.15.0");
+    let e = pin_env(None);
+    let (code, v) = run_pinned(&e, &fake, &reg, &["--to", "steady"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(read(&e, ".bosun/version"), "0.15.0\n");
+    assert!(v["data"]["files"].to_string().contains(".bosun/version"));
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    let shown = git(
+        e.work.path(),
+        &["show", "--stat", "--format=", "bosun/migrate-steady"],
+    );
+    assert!(shown.contains(".bosun/version"), "{shown}");
+}
+
+#[test]
+fn a_repo_without_a_version_file_refuses_a_newest_release_below_the_minimum() {
+    let fake = FakeGithub::start();
+    let reg = registry("0.13.0");
+    let e = pin_env(None);
+    let (code, v) = run_pinned(&e, &fake, &reg, &["--to", "steady"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("publishes a bosun release")
+    );
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert!(!e.work.path().join(".bosun/version").exists());
+}
+
+#[test]
+fn a_failed_commit_restores_the_tree_and_the_branch() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    let hook = e.work.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 1, "{v}");
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(read(&e, BOSUN_TOML), CONFIG);
+    assert_eq!(git(e.work.path(), &["branch", "--show-current"]), "main");
+    assert_eq!(
+        git(e.work.path(), &["branch", "--list", "bosun/migrate-*"]),
+        ""
+    );
+    assert_eq!(writes(&fake), 0);
+}
+
+#[test]
+fn a_local_head_that_is_not_origins_is_a_conflict_before_any_write() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    git(
+        e.work.path(),
+        &["commit", "-q", "--allow-empty", "-m", "local only"],
+    );
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("git pull --ff-only"),
+        "{v}"
+    );
+    assert_eq!(read(&e, BOSUN_TOML), CONFIG);
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+    assert_eq!(writes(&fake), 0);
+}
+
+#[test]
+fn an_unreachable_origin_is_an_error_with_no_credentials_in_it() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    git(
+        e.work.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "http://bob:hunter2@127.0.0.1:9/x.git",
+        ],
+    );
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(!v.to_string().contains("hunter2"), "{v}");
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_hanging_fetch_is_killed_at_the_limit() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    let hang = e.origin.path().join("hang-ssh.sh");
+    std::fs::write(&hang, "#!/bin/sh\nsleep 30\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hang, std::fs::Permissions::from_mode(0o755)).unwrap();
+    git(
+        e.work.path(),
+        &["remote", "set-url", "origin", "ssh://example.invalid/x.git"],
+    );
+    let t = std::time::Instant::now();
+    let (code, v) = migrate_with(
+        &e,
+        &fake,
+        &["--to", "steady"],
+        &[
+            ("BOSUN_MIGRATE_METRICS_TIMEOUT", "0"),
+            ("BOSUN_MIGRATE_GIT_TIMEOUT", "1"),
+            ("GIT_SSH_COMMAND", hang.to_str().unwrap()),
+        ],
+    );
+    assert!(t.elapsed().as_secs() < 20, "took {:?}", t.elapsed());
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("timed out"),
+        "{v}"
+    );
+    assert_eq!(git(e.work.path(), &["status", "--porcelain"]), "");
+}
+
+#[test]
+fn an_open_migrate_pr_for_another_step_is_a_conflict_naming_it() {
+    let fake = FakeGithub::start();
+    fake.pull(
+        12,
+        "chore: bosun mode gatekeeper -> steady",
+        "bosun/migrate-steady",
+        "",
+    );
+    let e = plain();
+    let (code, v) = migrate(&e, &fake, &["--to", "booster", "--direct"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(v["error"]["message"].as_str().unwrap().contains("#12"));
+    assert!(
+        v["error"]["fix"]
+            .as_str()
+            .unwrap()
+            .contains("merge or close #12")
+    );
+    assert_eq!(writes(&fake), 0);
+    assert_eq!(read(&e, BOSUN_TOML), CONFIG);
+}
+
+#[test]
+fn only_a_bosun_migrate_dash_branch_counts_as_the_migration_pr() {
+    let fake = FakeGithub::start();
+    fake.pull(12, "x", "bosun/migrate", "");
+    fake.pull(13, "x", "bosun/migrated-things", "");
+    let e = plain();
+    let (code, v) = migrate(&e, &fake, &["--to", "steady"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["reused"], false);
+}
+
+#[test]
+fn a_direct_move_onto_the_next_rung_has_no_skip_note() {
+    let fake = FakeGithub::start();
+    let e = plain();
+    let (code, v) = migrate(&e, &fake, &["--to", "steady", "--direct"]);
+    assert_eq!(code, 0, "{v}");
+    let pr = v["data"]["pr"]["number"].as_u64().unwrap();
+    assert!(!fake.pull_body(pr).contains("--direct"));
 }
 
 #[test]
@@ -604,4 +858,44 @@ fn finish_skips_the_amend_while_the_budget_feature_is_off() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["amended"], json!([]));
     assert_eq!(v["data"]["joined"], true);
+}
+
+#[test]
+fn finish_waits_while_a_migration_pr_is_open() {
+    let (e, fake) = finish_env();
+    fake.pull(
+        12,
+        "chore: bosun mode gatekeeper -> steady",
+        "bosun/migrate-steady",
+        "",
+    );
+    let (code, v) = migrate(&e, &fake, &["--finish"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("PR #12 not merged yet")
+    );
+    assert_eq!(
+        v["error"]["fix"],
+        "wait for the merge, then rerun `bosun migrate --finish`"
+    );
+    assert_eq!(writes(&fake), 0);
+}
+
+#[test]
+fn finish_reports_the_mode_of_the_default_branch() {
+    let fake = FakeGithub::start();
+    fake.content(
+        BOSUN_TOML,
+        "main",
+        "project = \"widget\"\n\n[mode]\nname = \"booster\"\n",
+    );
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    // The checkout still has the old config: the merged one decides.
+    let e = plain();
+    let (code, v) = migrate(&e, &fake, &["--finish"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["mode"], "booster");
 }
