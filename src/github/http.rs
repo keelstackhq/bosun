@@ -129,8 +129,10 @@ impl Http {
 
     /// Change the budget for all calls (`None` = none); `wait` blocks on purpose.
     pub fn set_budget(&self, secs: Option<u64>) {
-        self.budget_ms
-            .store(secs.map_or(0, |s| s.saturating_mul(1000)), Ordering::Relaxed);
+        self.budget_ms.store(
+            secs.map_or(0, |s| s.saturating_mul(1000)),
+            Ordering::Relaxed,
+        );
     }
 
     /// Fail instead of hanging: `extra_ms` is a sleep the caller is about to take.

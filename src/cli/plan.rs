@@ -743,8 +743,10 @@ fn summarize_import(data: &mut Value) {
     let mut unchanged = serde_json::Map::new();
     for key in ["epics", "tasks"] {
         if let Some(rows) = data[key].as_array() {
-            let (same, changed): (Vec<_>, Vec<_>) =
-                rows.iter().cloned().partition(|r| r["action"] == "existing");
+            let (same, changed): (Vec<_>, Vec<_>) = rows
+                .iter()
+                .cloned()
+                .partition(|r| r["action"] == "existing");
             unchanged.insert(key.into(), json!(same.len()));
             data[key] = Value::Array(changed);
         }

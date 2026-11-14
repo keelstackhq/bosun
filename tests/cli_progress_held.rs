@@ -43,7 +43,7 @@ fn reverted_task_is_not_held() {
     merged_pull(&fake, 40, "bosun/revert-30");
     // An open revert PR does not count yet.
     fake.pull(41, "Revert #31", "bosun/revert-31", "");
-    let (code, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (code, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(code, 0, "{v}");
     let d = &v["data"];
     assert_eq!(d["merged"], 2);
@@ -60,12 +60,12 @@ fn nothing_reverted_or_all_reverted() {
     fake.issue(1, "bosun registry", &["bosun:registry"], "");
     task(&fake, 10, 30);
     merged_pull(&fake, 30, "feat/a");
-    let (_, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (_, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(v["data"]["reverted"], 0);
     assert_eq!(v["data"]["held"], 1);
     assert_eq!(v["data"]["cost_per_held_task_usd"], 4.0);
     merged_pull(&fake, 40, "bosun/revert-30");
-    let (_, v) = run(&fake, "session_a", NOW, &["progress"]);
+    let (_, v) = run(&fake, "session_a", NOW, &["progress", "--full"]);
     assert_eq!(v["data"]["held"], 0);
     assert!(v["data"]["cost_per_held_task_usd"].is_null());
 }

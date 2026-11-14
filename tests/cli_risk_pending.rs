@@ -109,7 +109,12 @@ fn a_high_risk_run_waiting_for_the_owner_keeps_failure_not_error() {
 #[test]
 fn dry_run_prints_the_judgment_and_writes_nothing() {
     let fake = pr();
-    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1", "--dry-run"]);
+    let (code, v) = run(
+        &fake,
+        "session_test",
+        NOW,
+        &["risk-check", "1", "--dry-run"],
+    );
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["dry_run"], true);
     assert_eq!(v["data"]["level"], "normal");

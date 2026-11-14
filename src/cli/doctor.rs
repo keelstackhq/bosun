@@ -888,9 +888,11 @@ fn summarize(data: &mut Value) {
         return;
     };
     let (ok, todo): (Vec<_>, Vec<_>) = items.into_iter().partition(|i| i["status"] == "ok");
-    let wants_routines = todo
-        .iter()
-        .any(|i| i["fix"].as_str().is_some_and(|f| f.contains("data.routines")));
+    let wants_routines = todo.iter().any(|i| {
+        i["fix"]
+            .as_str()
+            .is_some_and(|f| f.contains("data.routines"))
+    });
     data["items"] = Value::Array(todo);
     data["items_ok"] = json!(ok.len());
     data["summary"] = json!(true);

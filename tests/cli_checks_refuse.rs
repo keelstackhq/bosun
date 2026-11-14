@@ -113,7 +113,7 @@ fn doctor_reads_the_table_form_of_required_checks() {
     fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     let tables = "\"ci-ok\", { context = \"risk-check\", app = \"gate\" }, \
         { context = \"review-verdict\", app = \"gate\" }, { context = \"main-open\", integration_id = 4242 }";
-    let (_, v) = bosun_in(&fake, &repo("", tables), &["doctor"]);
+    let (_, v) = bosun_in(&fake, &repo("", tables), &["doctor", "--full"]);
     let s = step3(&v);
     assert_eq!(s["status"], "ok", "{s}");
 }
@@ -123,7 +123,7 @@ fn doctor_says_when_required_checks_cannot_be_read() {
     let fake = FakeGithub::start();
     fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
     let bad = format!("{ALL}, {{ context = \"x\", colour = \"red\" }}");
-    let (_, v) = bosun_in(&fake, &repo("", &bad), &["doctor"]);
+    let (_, v) = bosun_in(&fake, &repo("", &bad), &["doctor", "--full"]);
     let s = step3(&v);
     assert_eq!(s["status"], "missing", "{s}");
     assert!(
@@ -141,7 +141,7 @@ fn doctor_remote_warns_when_a_gate_is_not_pinned_to_the_app() {
         "review-verdict",
         "main-open@99",
     ]);
-    let (_, v) = bosun_in(&fake, &repo(CHECKS, ALL), &["doctor", "--remote"]);
+    let (_, v) = bosun_in(&fake, &repo(CHECKS, ALL), &["doctor", "--full", "--remote"]);
     let s = step3(&v);
     let detail = s["detail"].as_str().unwrap();
     assert!(
@@ -156,7 +156,7 @@ fn doctor_remote_warns_when_a_gate_is_not_pinned_to_the_app() {
         "review-verdict@4242",
         "main-open@4242",
     ]);
-    let (_, v) = bosun_in(&fake, &repo(CHECKS, ALL), &["doctor", "--remote"]);
+    let (_, v) = bosun_in(&fake, &repo(CHECKS, ALL), &["doctor", "--full", "--remote"]);
     let detail = step3(&v)["detail"].as_str().unwrap().to_string();
     assert!(!detail.contains("not pinned"), "{detail}");
 }
@@ -171,7 +171,7 @@ fn doctor_remote_warns_when_the_token_can_read_the_actions_secrets() {
         "main-open@4242",
     ]);
     fake.present("actions/secrets");
-    let (_, v) = bosun_in(&fake, &repo(CHECKS, ALL), &["doctor", "--remote"]);
+    let (_, v) = bosun_in(&fake, &repo(CHECKS, ALL), &["doctor", "--full", "--remote"]);
     let detail = step3(&v)["detail"].as_str().unwrap().to_string();
     assert!(detail.contains("Actions secrets"), "{detail}");
 }
@@ -180,7 +180,7 @@ fn doctor_remote_warns_when_the_token_can_read_the_actions_secrets() {
 fn statuses_mode_checks_no_pins() {
     let fake = FakeGithub::start();
     fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
-    let (_, v) = bosun_in(&fake, &repo("", ALL), &["doctor", "--remote"]);
+    let (_, v) = bosun_in(&fake, &repo("", ALL), &["doctor", "--full", "--remote"]);
     let detail = step3(&v)["detail"].as_str().unwrap().to_string();
     assert!(!detail.contains("not pinned"), "{detail}");
 }

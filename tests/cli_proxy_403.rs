@@ -17,7 +17,12 @@ fn no_command_fails_on_the_proxys_collaborators_403() {
         &["reap"],
         &["budget", "check"],
         &["digest"],
-        &["plan", "amend", "docs/superpowers/plans/none.md", "--dry-run"],
+        &[
+            "plan",
+            "amend",
+            "docs/superpowers/plans/none.md",
+            "--dry-run",
+        ],
         &["heal"],
         &["wave", "tick", "1"],
     ];
