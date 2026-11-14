@@ -114,3 +114,31 @@ fn a_stalled_registry_is_cut_off_by_the_deadline() {
     assert!(!text.contains("tool pins behind"), "{text}");
     assert!(err.contains("pin check"), "{err}");
 }
+
+#[test]
+fn the_npm_answer_is_kept_for_a_day_per_checkout() {
+    let (d, reg) = (repo(), registry("0.4.1"));
+    // The answer is kept in the git common dir, so the checkout must be a git repo.
+    assert!(
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(d.path())
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (first, _) = start(d.path(), &reg, None);
+    let asked = reg.log.lock().unwrap().len();
+    assert!(asked > 0);
+    let (second, _) = start(d.path(), &reg, None);
+    assert_eq!(
+        first.contains("tool pins behind"),
+        second.contains("tool pins behind")
+    );
+    assert_eq!(
+        reg.log.lock().unwrap().len(),
+        asked,
+        "second start asked npm again"
+    );
+}

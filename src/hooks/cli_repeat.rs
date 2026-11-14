@@ -21,6 +21,20 @@ fn dir_of(dir: &Path) -> Option<PathBuf> {
     Some(dir.join(common).join("bosun").join("cli-repeat"))
 }
 
+/// The `-C <dir>` of the call (the last one), so one command aimed at two repos counts apart.
+fn c_dir(args: &[String]) -> String {
+    let mut dir = String::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-C" => dir = it.next().cloned().unwrap_or_default(),
+            a if a.starts_with("-C") && a.len() > 2 => dir = a[2..].to_string(),
+            _ => {}
+        }
+    }
+    dir
+}
+
 /// Count this call (`args` without the program name); the refusal when it ran too often in a
 /// row. A warning goes to stderr. Any I/O failure skips the count.
 pub fn check(args: &[String]) -> Option<BosunError> {
@@ -35,7 +49,7 @@ pub fn check(args: &[String]) -> Option<BosunError> {
     // The shell's directory, not `-C`: the hook resets from the repo the session runs in.
     let store = dir_of(&std::env::current_dir().ok()?)?;
     let session = caller();
-    let file = store.join(format!("{}.json", repeat_key(&session, "", "")));
+    let file = store.join(format!("{}.json", repeat_key(&session, "", &c_dir(args))));
     let prev: Option<Repeat> = std::fs::read(&file)
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())

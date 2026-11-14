@@ -27,7 +27,8 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> String {
         eprintln!("bosun: trailers hook: {}", e.message);
     }
     let lessons = format!(
-        "{}{}",
+        "{}{}{}",
+        skew_block(dir.as_deref()),
         lessons_block(dir.as_deref()),
         pin_block(dir.as_deref())
     );
@@ -45,10 +46,24 @@ pub fn run(cwd: Option<&Path>, input: &Value) -> String {
         _ => lessons,
     };
     match registered {
-        Ok(text) => output(&format!(
-            "{text}{lessons}\n{}",
-            rules_context(dir.as_deref())
-        )),
+        Ok(text) => {
+            // The janitor: expired leases go back to ready (spec §4); a failure is only a warning.
+            if let Err(e) = crate::cli::reap::run(dir.as_deref()) {
+                eprintln!("bosun: warning: reap: {}", e.message);
+            }
+            output(&format!(
+                "{text}{lessons}\n{}",
+                rules_context(dir.as_deref())
+            ))
+        }
+        Err(why) if why.contains(".bosun/") => {
+            eprintln!("bosun: warning: session start: {why}");
+            output(&format!(
+                "bosun cannot read its config, so this session is not registered: {why}. Fix the \
+                 file, then run `bosun join`.{lessons}\n{}",
+                rules_context(dir.as_deref())
+            ))
+        }
         Err(why) => {
             eprintln!("bosun: warning: session start: {why}");
             output(&format!(
@@ -83,18 +98,62 @@ fn lessons_block(dir: Option<&Path>) -> String {
     }
 }
 
+/// One line when the installed binary differs from the repo's `.bosun/version` pin.
+fn skew_block(dir: Option<&Path>) -> String {
+    let root = dir.map(|d| {
+        crate::ctx::git_out(d, &["rev-parse", "--show-toplevel"])
+            .map_or_else(|| d.to_path_buf(), PathBuf::from)
+    });
+    let pinned = root.and_then(|r| std::fs::read_to_string(r.join(".bosun/version")).ok());
+    match pinned.as_deref().map(str::trim) {
+        Some(p) if !p.is_empty() && p != env!("CARGO_PKG_VERSION") => format!(
+            "\ninstalled {}, repo pins {p}: run bash docs/setup-script.sh",
+            env!("CARGO_PKG_VERSION")
+        ),
+        _ => String::new(),
+    }
+}
+
 /// One line when a tool pin is behind npm (spec D35); empty otherwise, any error goes to stderr.
 fn pin_block(dir: Option<&Path>) -> String {
     let Some(dir) = dir else {
         return String::new();
     };
+    // BOSUN_PIN_CHECK=0 opts out of the lookup, so it must not read an old answer either.
+    let store = (std::env::var("BOSUN_PIN_CHECK").as_deref() != Ok("0"))
+        .then(|| cache::path(dir))
+        .flatten()
+        .map(|p| p.with_file_name("pin-notice.json"));
+    let now = crate::time::Timestamp::now().0;
+    if let Some(hit) = store.as_deref().and_then(|p| read_notice(p, now)) {
+        return hit.map(|l| format!("\n{l}")).unwrap_or_default();
+    }
     match crate::cli::pin::session_notice(dir) {
-        Ok(line) => line.map(|l| format!("\n{l}")).unwrap_or_default(),
+        Ok(line) => {
+            if let Some(p) = store.as_deref() {
+                let body = json!({"at": now, "line": line});
+                let _ = std::fs::create_dir_all(p.parent().unwrap_or(dir))
+                    .and_then(|()| std::fs::write(p, body.to_string()));
+            }
+            line.map(|l| format!("\n{l}")).unwrap_or_default()
+        }
         Err(e) => {
             eprintln!("bosun: warning: pin check: {}", e.message);
             String::new()
         }
     }
+}
+
+/// npm is asked at most once a day per checkout: the answer is kept next to the lease cache.
+const PIN_TTL_SECS: i64 = 86_400;
+
+/// The kept answer (`Some(None)` is "nothing behind"); `None` when missing, old or unreadable.
+fn read_notice(file: &Path, now: i64) -> Option<Option<String>> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    let at = v.get("at")?.as_i64()?;
+    (0..PIN_TTL_SECS)
+        .contains(&(now - at))
+        .then(|| v.get("line").and_then(Value::as_str).map(String::from))
 }
 
 fn context(dir: Option<&Path>) -> Result<String, String> {
