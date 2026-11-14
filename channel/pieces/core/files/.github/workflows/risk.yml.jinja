@@ -91,6 +91,7 @@ jobs:
 {% endraw %}{% if bosun_app %}{% raw %}          BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}
 {% endraw %}{% endif %}{% raw %}          BOSUN_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
         # Exit 5 (needs-human) is the verdict, carried by the status; only errors fail the job.
         # On a push to main: every open PR against main is judged again (the base moved).

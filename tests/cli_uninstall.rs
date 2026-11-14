@@ -24,6 +24,9 @@ fn files_under(dir: &Path) -> Vec<String> {
     fn walk(base: &Path, d: &Path, out: &mut Vec<String>) {
         for e in std::fs::read_dir(d).unwrap().flatten() {
             let p = e.path();
+            if p.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
             if p.is_dir() {
                 walk(base, &p, out);
             } else {

@@ -1,4 +1,1 @@
-- guard audit: gh merge via quotes/-R, shell indirection, `| sh`, env-dump reason (spec 04); backstop is branch protection plus a token without merge scope
-- 2026-11-14 · hooks hardening · stale-cache fail-closed, skew line, reap at SessionStart, env scrub, https base, cli-repeat -C
-- Risk audit fixes P0-2..5, 12-14, 16 (spec 08, defaults)
-- 2026-11-14 · audit fixes (docs, init/migrate/doctor, CI, cargo profiles)
+- 2026-11-14 · audit fixes (tightening): guard, risk, hooks, init/migrate/doctor, docs, CI, cargo profiles

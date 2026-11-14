@@ -128,7 +128,7 @@ fn a_rerun_with_nothing_new_suggests_no_commit() {
     let t = common::git_tempdir();
     adopt(t.path(), &["--owner", "alice"]);
     // Committed, so nothing is new or changed (an uncommitted file would be listed again).
-    for args in [["add", "-A"], ["commit", "-qm", "x"]] {
+    for args in [vec!["add", "-A"], vec!["commit", "-qm", "x"]] {
         let st = std::process::Command::new("git")
             .arg("-C")
             .arg(t.path())

@@ -1181,7 +1181,7 @@ fn risk_rechecks_on_a_bosun_recheck_comment() {
     }
     assert_eq!(
         events(&yaml),
-        ["pull_request_target", "issue_comment"],
+        ["pull_request_target", "issue_comment", "push"],
         "risk.yml events"
     );
     // A withdrawal re-runs nothing: both copies tell the owner how to make it count.
@@ -1527,7 +1527,9 @@ fn app_job_problems(yaml: &str, job: &str) -> Vec<String> {
             // bosun's own copies run the pinned binary, the channel's the installed `bosun`.
             let bosun = code.contains("run: ./target/release/bosun ")
                 || code.contains("run: bosun ")
-                || (code.contains("run: |") && code.contains("./target/release/bosun "));
+                || (code.contains("run: |")
+                    && (code.contains("./target/release/bosun ")
+                        || code.contains("bosun risk-check ")));
             if !bosun || !code.contains("BOSUN_APP_TOKEN: ${{ steps.app.outputs.token }}") {
                 out.push("the token outside a bosun step's BOSUN_APP_TOKEN".into());
             }
