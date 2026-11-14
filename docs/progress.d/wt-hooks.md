@@ -1,1 +1,1 @@
-- 2026-11-14 · hooks hardening · stale-cache fail-closed, skew line, reap at SessionStart, env scrub, https base, cli-repeat -C · PR #0
+- 2026-11-14 · hooks hardening · stale-cache fail-closed, skew line, reap at SessionStart, env scrub, https base, cli-repeat -C

@@ -1,0 +1,4 @@
+- Guard: quoted or `-R`/`--repo` gh merges, `$g`/`$(..)` command words, `find -exec`, `awk system`, and `| sh` are refused; env dumps get their own reason.
+- Hooks: the edit-lock stays closed for paths in a stale lease cache, SessionStart reports version skew and config errors, reaps and caches the npm pin check for a day; the gate child loses `GITHUB_TOKEN`/`GH_TOKEN`; `BOSUN_GITHUB_API` must be https or loopback; cli-repeat keys include `-C`.
+- fix(risk): added lines keep ++ lines, wider R-secrets (no marker or file-name exemption), CODEOWNERS in R-gov, build and script files in R-ci, lockfile source hosts in R-deps, binaries are R-unseen, a missing bound plan fails risk-check
+- Docs/CLI/CI: setup-script asserts the installed version; init/adopt/doctor/migrate flow (optional --stack, labels, doctor skew, migrate does the whole flow); shorter AGENTS.md section and migrate doc; SHA-pinned actions, risk re-judge on push to main, tuned cargo profiles.
