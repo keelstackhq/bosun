@@ -14,7 +14,7 @@ use crate::app::{App, kill_switch, limits_from_default};
 use crate::config::ReviewMode;
 use crate::core::agreement::approved;
 use crate::core::budget::{Level, level};
-use crate::core::records::{Record, spend_total};
+use crate::core::records::{Record, spend_total_today};
 use crate::core::risk::{FileView, unseen_diff};
 use crate::core::verdict::{Finding, Verdict, valid_model};
 use crate::github::Github;
@@ -200,10 +200,7 @@ pub fn run(dir: Option<&Path>, args: &ReviewCiArgs) -> CmdResult {
 fn budget_guard(app: &App) -> Result<(), BosunError> {
     let gh = app.gh.as_ref();
     let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
-    let spent = spend_total(
-        &registry::trusted_spend_notes(gh)?,
-        Some(app.ctx.now.day_start()),
-    );
+    let spent = spend_total_today(&registry::trusted_spend_notes(gh)?, app.ctx.now.day_start());
     if level(spent, daily) == Level::Stop {
         return Err(BosunError::limit(
             format!("spent ${spent:.2} of ${daily:.2} today; no CI review"),

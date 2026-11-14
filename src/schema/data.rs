@@ -36,10 +36,10 @@ doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
     skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
-budget record = {usd: num, provider?: str, session?: str, model?: str | null, issue?: int,
+budget record = {usd: num, provider?: str, session?: str, model?: str | null, issue?: int | null,
     blocked?: bool, over_task_cap?: bool, task_total_usd?: num, prs?: [int], recorded?: [int],
     already_recorded?: [int], usd_per_pr?: num, lesson?: {created?: bool, hits?: int, issue?: int,
-    error?: str, fix?: str} | null};
+    error?: str, fix?: str} | null, no_new_spend?: bool, ledger?: bool, session_total_usd?: num, recorded_before_usd?: num, at?: str};
 budget check = {daily_usd: num, spent_today_usd: num, pct: num, level: str, stopped: [str]};
 budget raise = {recorded: [{epic: int, usd: int, digest: str}], refused: [{epic: int | null,
     usd: int | null, why: str}]};
@@ -77,7 +77,7 @@ progress = {days?: int, since?: str, merged?: int, held?: int, reverted?: int, s
 result = {epic: int, outcome: str, pr: int | null, comment_id: int, task_state: str,
     tasks_merged: [int], lease_ended: bool, left: bool, epic_closed: bool,
     epic_already_closed: bool, partial_skipped: str | null, state_skipped: str | null,
-    epic_error?: str};
+    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null};
 main-triage = {good: str, bad: str, run: str, runs: int, candidates: int, first_bad: {pr: int,
     sha: str, subject: str} | null, note?: str};
 init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [str], risk: str,
@@ -92,7 +92,7 @@ uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels
     name: str, fix?: str}], registry: {action: str, number?: int}};
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
     from: str, to: str}], files?: [str], branch?: str, title?: str, pr?: int | {number: int,
-    head_sha?: str} | null, pr_lookup?: str, left?: [str], steps?: [str]};
+    head_sha?: str} | null, pr_lookup?: str, left?: [str], steps?: [str], ci_minutes?: [str]};
 setup-snippet = {script: str, paste_into: str, repo_script: str, client_message: str,
     autocompact?: {cloud_env: {CLAUDE_CODE_AUTO_COMPACT_WINDOW?: str}, local_exports: [str],
     paste_into: str, note?: str}};

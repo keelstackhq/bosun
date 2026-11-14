@@ -13,7 +13,7 @@ use super::spawn::valid_ts;
 use crate::app::{App, HALT_LABEL, default_ref, limits_from_default, main_red};
 use crate::cli::risk_check::owner_logins;
 use crate::core::budget::{Level, level};
-use crate::core::records::{Record, SlackSeat, parse_record, spend_total};
+use crate::core::records::{Record, SlackSeat, parse_record, spend_total_today};
 use crate::core::state::State;
 use crate::github::{Github, IssueState, Variable};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -274,7 +274,7 @@ fn collect(
     {
         let limits = limits_from_default(gh, ctx).and_then(|l| {
             let n = registry::trusted_spend_notes(gh)?;
-            Ok((l, spend_total(&n, Some(ctx.now.day_start()))))
+            Ok((l, spend_total_today(&n, ctx.now.day_start())))
         });
         match limits {
             Ok((l, spent)) => {

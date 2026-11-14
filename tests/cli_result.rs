@@ -47,7 +47,8 @@ fn a_result_ends_the_lease_leaves_the_registry_and_wakes_the_parent() {
         (&d["lease_ended"], &d["left"]),
         (&Value::Bool(true), &Value::Bool(true))
     );
-    assert_eq!(v["next"], serde_json::json!([]));
+    assert_eq!(v["next"][0]["tool"], "send_message", "{v}");
+    assert_eq!(v["next"][0]["args"]["session_id"], "session_root");
 
     let epic = bodies(&fake, 9);
     assert!(

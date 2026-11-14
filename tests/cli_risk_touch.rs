@@ -131,12 +131,13 @@ fn a_cut_file_list_gives_null() {
 }
 
 #[test]
-fn an_unreadable_task_comment_list_keeps_the_check_and_gives_null() {
+fn an_unreadable_task_comment_list_fails_the_check_closed() {
+    // The binds of the task are read for R-plan: an unreadable list must not become "not high".
     let fake = pr(Some(LIVE), &[("src/other.rs", "modified", None)]);
     fake.fail_path("/issues/7/comments", 500);
-    let v = check(&fake);
-    assert_eq!(v["data"]["out_of_touch"], Value::Null);
-    assert_eq!(status(&fake)["state"], "success");
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 1, "{v}");
+    assert_ne!(status(&fake)["state"], "success");
 }
 
 #[test]
