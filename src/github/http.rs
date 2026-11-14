@@ -3,12 +3,25 @@
 
 use crate::output::BosunError;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub type Result<T> = std::result::Result<T, BosunError>;
 
 const MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_MAX_SLEEP_MS: u64 = 60_000;
+/// All GitHub calls of one command may take this long (`BOSUN_HTTP_BUDGET_SECS`, 0 = no limit).
+const DEFAULT_BUDGET_SECS: u64 = 120;
+
+/// The budget in seconds: an explicit `BOSUN_HTTP_BUDGET_SECS` wins; else none in CI (gate jobs
+/// run long on purpose), else the default.
+fn budget_secs(explicit: Option<&str>, ci: bool) -> u64 {
+    match explicit.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(s) => s,
+        None if ci => 0,
+        None => DEFAULT_BUDGET_SECS,
+    }
+}
 
 /// Percent-encode a path segment or query value.
 pub fn enc(s: &str) -> String {
@@ -45,6 +58,10 @@ pub struct Http {
     agent: ureq::Agent,
     max_sleep_ms: u64,
     verbose: bool,
+    /// Milliseconds spent in GitHub calls and retry sleeps so far (local work does not count).
+    used_ms: AtomicU64,
+    /// Budget in ms for `used_ms`; 0 means none.
+    budget_ms: AtomicU64,
 }
 
 impl std::fmt::Debug for Http {
@@ -110,7 +127,42 @@ impl Http {
             agent,
             max_sleep_ms,
             verbose: std::env::var("BOSUN_VERBOSE").is_ok_and(|v| v == "1"),
+            used_ms: AtomicU64::new(0),
+            budget_ms: AtomicU64::new(
+                budget_secs(
+                    std::env::var("BOSUN_HTTP_BUDGET_SECS").ok().as_deref(),
+                    ["CI", "GITHUB_ACTIONS"]
+                        .iter()
+                        .any(|k| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "false")),
+                )
+                .saturating_mul(1000),
+            ),
         }
+    }
+
+    /// Change the budget for all calls (`None` = none); `wait` blocks on purpose.
+    pub fn set_budget(&self, secs: Option<u64>) {
+        self.budget_ms.store(
+            secs.map_or(0, |s| s.saturating_mul(1000)),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Fail instead of hanging: `extra_ms` is a sleep the caller is about to take.
+    fn check_budget(&self, method: &str, path: &str, extra_ms: u64) -> Result<()> {
+        let budget = self.budget_ms.load(Ordering::Relaxed);
+        let used = self.used_ms.load(Ordering::Relaxed);
+        if budget > 0 && used.saturating_add(extra_ms) > budget {
+            return Err(BosunError::error(
+                format!(
+                    "GitHub calls ran past the {}s budget (next: {method} {})",
+                    budget / 1000,
+                    bare(path)
+                ),
+                "retry; narrow the command (for example `bosun metrics --days 1`), or raise BOSUN_HTTP_BUDGET_SECS (0 = no limit)",
+            ));
+        }
+        Ok(())
     }
 
     /// GET one JSON document; 404 is `None`.
@@ -326,13 +378,20 @@ impl Http {
     fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Resp> {
         let mut attempt = 1;
         loop {
-            let r = self.once(method, path, body)?;
+            self.check_budget(method, path, 0)?;
+            let t0 = Instant::now();
+            let r = self.once(method, path, body);
+            self.used_ms
+                .fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+            let r = r?;
             let limited = r.status == 429
                 || (r.status == 403 && (r.retry_after.is_some() || r.rate_remaining_zero));
             if method != "POST" && attempt < MAX_ATTEMPTS && (r.status >= 500 || limited) {
                 let ms = (r.retry_after.unwrap_or(1) * 1000).min(self.max_sleep_ms);
+                self.check_budget(method, path, ms)?;
                 if ms > 0 {
                     std::thread::sleep(Duration::from_millis(ms));
+                    self.used_ms.fetch_add(ms, Ordering::Relaxed);
                 }
                 attempt += 1;
                 continue;
@@ -498,6 +557,16 @@ fn parse_link_next(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ci_has_no_budget_unless_set_explicitly() {
+        use super::{DEFAULT_BUDGET_SECS, budget_secs};
+        assert_eq!(budget_secs(None, false), DEFAULT_BUDGET_SECS);
+        assert_eq!(budget_secs(None, true), 0, "a long CI run is not cut");
+        assert_eq!(budget_secs(Some("30"), true), 30);
+        assert_eq!(budget_secs(Some("0"), false), 0);
+        assert_eq!(budget_secs(Some("junk"), true), 0);
+    }
+
     use super::*;
 
     #[test]

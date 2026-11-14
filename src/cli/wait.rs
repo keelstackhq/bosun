@@ -54,7 +54,12 @@ pub fn run(dir: Option<&Path>, args: &WaitArgs) -> CmdResult {
         .and_then(|v| v.trim().parse::<u64>().ok())
         .map_or(Duration::from_secs(BEAT_SECS), Duration::from_millis);
     let (mut delay, cap) = (base, base * CAP_FACTOR);
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    let timeout = if args.once { 0 } else { args.timeout };
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    if timeout > 0 {
+        // Blocking is the point of a wait; the per-call timeouts still apply.
+        gh.set_budget(None);
+    }
 
     // Keep the caller alive while it waits (its leases and registry record), and reap what
     // expired, at the start and every BEAT_SECS

@@ -12,7 +12,7 @@ fn step6(dir: &Path) -> Value {
         .env("BOSUN_NOW", "2026-11-03T10:00:00Z")
         .arg("-C")
         .arg(dir)
-        .arg("doctor")
+        .args(["doctor", "--full"])
         .output()
         .unwrap();
     one_object(&out.stdout)["data"]["items"][5].clone()

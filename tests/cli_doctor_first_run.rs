@@ -17,7 +17,7 @@ fn doctor(dir: &Path, token: bool) -> (i32, Value) {
         .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
         .arg("-C")
         .arg(dir)
-        .arg("doctor");
+        .args(["doctor", "--full"]);
     if !token {
         cmd.env_remove("GITHUB_TOKEN").env_remove("GH_TOKEN");
     }
@@ -138,7 +138,7 @@ fn local_pass(token: bool, remote: bool) -> (i32, Value) {
         .env("BOSUN_ROUTINES_OK", "1")
         .arg("-C")
         .arg(root)
-        .arg("doctor");
+        .args(["doctor", "--full"]);
     if remote {
         cmd.arg("--remote");
     }

@@ -52,7 +52,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::Answer(a) => cli::answer::run(dir, a),
         Command::Lesson(a) => cli::lesson::run(dir, a),
         Command::Hook(a) => hooks::dispatch(dir, a),
-        Command::Doctor(a) => cli::doctor::run(dir, a.remote),
+        Command::Doctor(a) => cli::doctor::run_with(dir, a.remote, a.full),
         Command::Budget(a) => cli::budget::run(dir, a),
         Command::Plan(a) => cli::plan::run(dir, a),
         Command::Fail(a) => cli::stop::run(dir, a),

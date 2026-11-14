@@ -75,7 +75,7 @@ fn setup(text: &str) -> (tempfile::TempDir, FakeGithub, String) {
 fn a_plan_already_on_main_closes_its_plan_tasks_on_the_first_import() {
     let (tmp, fake, file) = setup(PLAN);
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
     for p in ["M1/P", "M2/P"] {
@@ -98,7 +98,7 @@ fn a_file_that_differs_on_main_closes_nothing_and_ready_ones_close_later() {
         "main",
         &PLAN.replace("- T1: Import", "- T1: Import it"),
     );
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!([]));
     for p in ["M1/P", "M2/P"] {
@@ -109,12 +109,12 @@ fn a_file_that_differs_on_main_closes_nothing_and_ready_ones_close_later() {
 
     // A trailing newline is a different file too.
     fake.content("plan.md", "main", &format!("{PLAN}\n"));
-    let (_, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (_, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(v["data"]["on_default"], json!([]));
 
     // Main catches up: the existing `ready` plan tasks are closed.
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
     assert_eq!(
@@ -129,7 +129,7 @@ fn a_file_that_differs_on_main_closes_nothing_and_ready_ones_close_later() {
 fn a_dry_run_only_reports_it() {
     let (tmp, fake, file) = setup(PLAN);
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run"]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--dry-run", "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
     assert!(fake.requests().iter().all(|r| r.method == "GET"));
@@ -142,7 +142,7 @@ fn keep_plan_tasks_open_only_lists_them() {
     let (code, v) = plan(
         &fake,
         tmp.path(),
-        &["import", &file, "--keep-plan-tasks-open"],
+        &["import", &file, "--keep-plan-tasks-open", "--full"],
     );
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!([]));
@@ -158,7 +158,7 @@ fn keep_plan_tasks_open_only_lists_them() {
 fn plan_amend_never_closes_them() {
     let (tmp, fake, file) = setup(PLAN);
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["amend", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["amend", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!([]));
     assert_eq!(
@@ -170,7 +170,7 @@ fn plan_amend_never_closes_them() {
 #[test]
 fn a_plan_task_someone_works_on_is_left_alone() {
     let (tmp, fake, file) = setup(PLAN);
-    plan(&fake, tmp.path(), &["import", &file]);
+    plan(&fake, tmp.path(), &["import", &file, "--full"]);
     let n = {
         let mut s = fake.state.lock().unwrap();
         let i = s
@@ -182,7 +182,7 @@ fn a_plan_task_someone_works_on_is_left_alone() {
         i.number
     };
     fake.content("plan.md", "main", PLAN);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M2/P"]));
     assert_eq!(fake.issue_state(n).labels, ["bosun:state/review"]);
@@ -203,7 +203,7 @@ fn a_plan_long_only_by_merged_tasks_still_closes_on_default() {
         "<!-- bosun:plan M1/T1 -->\n",
     );
     fake.content("plan.md", "main", &long);
-    let (code, v) = plan(&fake, tmp.path(), &["import", &file]);
+    let (code, v) = plan(&fake, tmp.path(), &["import", &file, "--full"]);
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["on_default"], json!(["M1/P", "M2/P"]));
 }

@@ -25,7 +25,12 @@ fn step13(repo: &Path, config: Option<&Path>, home: &Path) -> (i32, Value) {
     if let Some(c) = config {
         cmd.env("CLAUDE_CONFIG_DIR", c);
     }
-    let out = cmd.arg("-C").arg(repo).arg("doctor").output().unwrap();
+    let out = cmd
+        .arg("-C")
+        .arg(repo)
+        .args(["doctor", "--full"])
+        .output()
+        .unwrap();
     let v = one_object(&out.stdout);
     (out.status.code().unwrap(), v["data"]["items"][12].clone())
 }
