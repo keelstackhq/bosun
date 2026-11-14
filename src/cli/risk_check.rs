@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::PrArg;
+use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
 use super::verdict::CONTEXT as VERDICT;
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
@@ -73,7 +73,7 @@ fn is_manifest(path: &str) -> bool {
     )
 }
 
-pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
+pub fn run(dir: Option<&Path>, args: &RiskCheckArgs) -> CmdResult {
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
     let n = args.pr;
@@ -83,7 +83,7 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             "check the number; `gh pr list` lists the open PRs",
         )
     })?;
-    let w = GateWriter::for_ctx(gh, &app.ctx);
+    let w = GateWriter::for_ctx(gh, &app.ctx).dry(args.dry_run);
     // In flight, a required check is pending, so auto-merge waits for this run's verdict.
     if let Err(e) = w.post(&pull.head_sha, CONTEXT, "pending", PENDING) {
         eprintln!(
@@ -95,6 +95,12 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
     // A run that cannot finish must not leave `pending` behind (exit 5 posted its verdict).
     if out.as_ref().is_err_and(|e| e.exit != Exit::NeedsHuman) {
         _ = w.post(&pull.head_sha, CONTEXT, "error", UNFINISHED);
+    }
+    if args.dry_run {
+        return out.map(|mut o| {
+            o.data["dry_run"] = json!(true);
+            o
+        });
     }
     out
 }

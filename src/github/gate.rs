@@ -21,6 +21,7 @@ pub struct GateWriter<'a> {
     /// `(sha, context)` -> id of the `in_progress` run this process created, for the verdict.
     pending: RefCell<HashMap<(String, String), u64>>,
     skipped: Cell<bool>,
+    dry: bool,
 }
 
 impl<'a> GateWriter<'a> {
@@ -32,7 +33,14 @@ impl<'a> GateWriter<'a> {
             mode,
             pending: RefCell::new(HashMap::new()),
             skipped: Cell::new(false),
+            dry: false,
         }
+    }
+
+    /// Write nothing: `post` and `post_full` only say they worked (`risk-check --dry-run`).
+    pub fn dry(mut self, on: bool) -> Self {
+        self.dry = on;
+        self
     }
 
     /// Statuses only, as before `[checks]`.
@@ -84,6 +92,9 @@ impl<'a> GateWriter<'a> {
         description: &str,
         summary: &str,
     ) -> Result<()> {
+        if self.dry {
+            return Ok(());
+        }
         if self.mode != CheckMode::Checks {
             self.gh
                 .create_status(sha, context, state, description, None)?;

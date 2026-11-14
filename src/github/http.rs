@@ -3,12 +3,15 @@
 
 use crate::output::BosunError;
 use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub type Result<T> = std::result::Result<T, BosunError>;
 
 const MAX_ATTEMPTS: u32 = 3;
 const DEFAULT_MAX_SLEEP_MS: u64 = 60_000;
+/// All GitHub calls of one command may take this long (`BOSUN_HTTP_BUDGET_SECS`, 0 = no limit).
+const DEFAULT_BUDGET_SECS: u64 = 120;
 
 /// Percent-encode a path segment or query value.
 pub fn enc(s: &str) -> String {
@@ -45,6 +48,9 @@ pub struct Http {
     agent: ureq::Agent,
     max_sleep_ms: u64,
     verbose: bool,
+    started: Instant,
+    /// Budget in ms for all calls since `started`; 0 means none.
+    budget_ms: AtomicU64,
 }
 
 impl std::fmt::Debug for Http {
@@ -110,7 +116,38 @@ impl Http {
             agent,
             max_sleep_ms,
             verbose: std::env::var("BOSUN_VERBOSE").is_ok_and(|v| v == "1"),
+            started: Instant::now(),
+            budget_ms: AtomicU64::new(
+                std::env::var("BOSUN_HTTP_BUDGET_SECS")
+                    .ok()
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+                    .unwrap_or(DEFAULT_BUDGET_SECS)
+                    .saturating_mul(1000),
+            ),
         }
+    }
+
+    /// Change the budget for all calls (`None` = none); `wait` blocks on purpose.
+    pub fn set_budget(&self, secs: Option<u64>) {
+        self.budget_ms
+            .store(secs.map_or(0, |s| s.saturating_mul(1000)), Ordering::Relaxed);
+    }
+
+    /// Fail instead of hanging: `extra_ms` is a sleep the caller is about to take.
+    fn check_budget(&self, method: &str, path: &str, extra_ms: u64) -> Result<()> {
+        let budget = self.budget_ms.load(Ordering::Relaxed);
+        let used = self.started.elapsed().as_millis() as u64;
+        if budget > 0 && used.saturating_add(extra_ms) > budget {
+            return Err(BosunError::error(
+                format!(
+                    "GitHub calls ran past the {}s budget (next: {method} {})",
+                    budget / 1000,
+                    bare(path)
+                ),
+                "retry; narrow the command (for example `bosun metrics --days 1`), or raise BOSUN_HTTP_BUDGET_SECS (0 = no limit)",
+            ));
+        }
+        Ok(())
     }
 
     /// GET one JSON document; 404 is `None`.
@@ -326,11 +363,13 @@ impl Http {
     fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Resp> {
         let mut attempt = 1;
         loop {
+            self.check_budget(method, path, 0)?;
             let r = self.once(method, path, body)?;
             let limited = r.status == 429
                 || (r.status == 403 && (r.retry_after.is_some() || r.rate_remaining_zero));
             if method != "POST" && attempt < MAX_ATTEMPTS && (r.status >= 500 || limited) {
                 let ms = (r.retry_after.unwrap_or(1) * 1000).min(self.max_sleep_ms);
+                self.check_budget(method, path, ms)?;
                 if ms > 0 {
                     std::thread::sleep(Duration::from_millis(ms));
                 }

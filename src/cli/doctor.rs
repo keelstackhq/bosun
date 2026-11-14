@@ -878,6 +878,28 @@ fn check_api_url() -> Result<(), BosunError> {
 }
 
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
+    run_with(dir, remote, true)
+}
+
+/// The default view (`full` false): only the steps that need action, and the Routines only
+/// when such a step points at them; `items_ok` counts the rest.
+fn summarize(data: &mut Value) {
+    let Some(items) = data["items"].as_array().cloned() else {
+        return;
+    };
+    let (ok, todo): (Vec<_>, Vec<_>) = items.into_iter().partition(|i| i["status"] == "ok");
+    let wants_routines = todo
+        .iter()
+        .any(|i| i["fix"].as_str().is_some_and(|f| f.contains("data.routines")));
+    data["items"] = Value::Array(todo);
+    data["items_ok"] = json!(ok.len());
+    data["summary"] = json!(true);
+    if !wants_routines && let Some(o) = data.as_object_mut() {
+        o.remove("routines");
+    }
+}
+
+pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
     let ctx = Ctx::load(dir)?;
     // Without a token the GitHub steps are skipped; the local steps still run.
     check_api_url()?;
@@ -1404,6 +1426,9 @@ pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
         data["next_step"] = n;
     } else if offline {
         data["next_step"] = json!({"step": 0, "fix": NO_TOKEN_FIX});
+    }
+    if !full {
+        summarize(&mut data);
     }
     if offline {
         let message = if missing > 0 {

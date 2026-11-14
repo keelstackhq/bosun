@@ -43,6 +43,10 @@ the one JSON object it prints (`ok`, `exit_code`, `data`, `error.fix`, `next`). 
   call from `next`, then runs `bosun spawn <epic> --record --from -` with the result.
 - `bosun wait --child <session>` waits for a child's result; `bosun msg` returns a
   `send_message` call for steering.
+- `bosun wait` blocks (up to `--timeout`, 30 min): for a status check use `bosun wait --pr N --once`
+  (or `--issue N`), which reads the state and returns at once. Output is a summary by default
+  (`plan amend`, `doctor`, `progress`: counts and what needs action); `--full` lists everything.
+  In a cloud session `bosun risk-check <pr> --dry-run` prints the judgment without posting.
 - After a container restart, read your leases with `bosun status` and continue.
 
 ### Rules

@@ -156,19 +156,15 @@ fn permission_of_self_comes_from_the_repo_when_collaborators_is_blocked() {
 }
 
 #[test]
-fn permission_of_another_user_is_still_refused_when_collaborators_is_blocked() {
+fn permission_of_another_user_degrades_to_unknown_when_collaborators_is_blocked() {
     let (fake, gh) = setup();
     proxy_blocks_collaborators(&fake, "me");
     fake.repo_set(
         "permissions",
         json!({"admin": true, "push": true, "pull": true}),
     );
-    let e = gh.permission("someone").unwrap_err();
-    assert!(
-        e.message.contains("not permitted through this proxy"),
-        "{}",
-        e.message
-    );
+    // not an error: unknown counts as no write access
+    assert_eq!(gh.permission("someone").unwrap(), None);
 }
 
 #[test]
@@ -184,4 +180,19 @@ fn permission_uses_collaborators_when_it_answers() {
     fake.permission("other", "admin");
     assert_eq!(gh.permission("other").unwrap().as_deref(), Some("admin"));
     assert!(fake.requests().iter().all(|r| r.path != "/user"));
+}
+
+#[test]
+fn the_blocked_collaborators_path_is_asked_once_per_client() {
+    let (fake, gh) = setup();
+    proxy_blocks_collaborators(&fake, "me");
+    for u in ["a", "b", "c"] {
+        assert_eq!(gh.permission(u).unwrap(), None);
+    }
+    let asked = fake
+        .requests()
+        .iter()
+        .filter(|r| r.path.ends_with("/permission"))
+        .count();
+    assert_eq!(asked, 1);
 }

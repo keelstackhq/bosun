@@ -105,3 +105,14 @@ fn a_high_risk_run_waiting_for_the_owner_keeps_failure_not_error() {
     assert_eq!(st[0].0, "pending");
     assert_eq!(st.last().unwrap().0, "failure", "{st:?}");
 }
+
+#[test]
+fn dry_run_prints_the_judgment_and_writes_nothing() {
+    let fake = pr();
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1", "--dry-run"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["dry_run"], true);
+    assert_eq!(v["data"]["level"], "normal");
+    assert!(fake.statuses_of(HEAD).is_empty());
+    assert!(fake.requests().iter().all(|r| r.method == "GET"));
+}
