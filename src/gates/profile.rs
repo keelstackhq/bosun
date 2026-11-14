@@ -195,6 +195,17 @@ impl Gate {
     }
 }
 
+/// `cargo test ...` as `cargo nextest run ...`: CI runs nextest (one process per test), and a
+/// test that shares process state passes there but fails under `cargo test`. Other argv unchanged.
+pub fn with_nextest(argv: Vec<String>) -> Vec<String> {
+    if argv.len() >= 2 && argv[0] == "cargo" && argv[1] == "test" {
+        let mut out = vec!["cargo".to_string(), "nextest".into(), "run".into()];
+        out.extend(argv.into_iter().skip(2));
+        return out;
+    }
+    argv
+}
+
 /// The built-in profile text by name.
 pub fn builtin(name: &str) -> Option<&'static str> {
     match name {
@@ -253,6 +264,16 @@ impl Profile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cargo_test_becomes_nextest() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            with_nextest(a(&["cargo", "test", "--locked", "-p", "x"])),
+            a(&["cargo", "nextest", "run", "--locked", "-p", "x"])
+        );
+        assert_eq!(with_nextest(a(&["cargo", "fmt"])), a(&["cargo", "fmt"]));
+    }
+
     use super::*;
 
     #[test]

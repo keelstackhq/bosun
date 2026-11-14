@@ -190,6 +190,16 @@ pub fn publish(
         })?;
     data["branch"] = json!(branch);
     data["pr"] = json!({"number": pull.number, "head_sha": pull.head_sha});
-    data["left"] = json!(left(pull.number, bosun_to));
+    let mut left = left(pull.number, bosun_to);
+    if let Some(found) = data["ci_minutes"].as_array() {
+        left.insert(
+            1,
+            format!(
+                "The new bosun enforces the ci-minutes gate and main would fail with {} finding(s) (data.ci_minutes): fix them before merging this PR.",
+                found.len()
+            ),
+        );
+    }
+    data["left"] = json!(left);
     Ok(Outcome::data(data))
 }

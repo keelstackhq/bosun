@@ -58,7 +58,8 @@ fn repo() -> Repo {
     let script = format!(
         "#!/bin/sh\necho \"$@\" >> {log}\n\
          if [ \"$1\" = metadata ]; then\n\
-         printf '{{\"packages\":[{{\"name\":\"a\",\"manifest_path\":\"{root}/a/Cargo.toml\"}},{{\"name\":\"b\",\"manifest_path\":\"{root}/b/Cargo.toml\"}}]}}'\n\
+         ka=lib; kb=lib; [ -n \"$FAKE_B_BIN\" ] && kb=bin; [ -n \"$FAKE_BIN_ONLY\" ] && ka=bin && kb=bin\n\
+         printf '{{\"packages\":[{{\"name\":\"a\",\"manifest_path\":\"{root}/a/Cargo.toml\",\"targets\":[{{\"kind\":[\"%s\"]}}]}},{{\"name\":\"b\",\"manifest_path\":\"{root}/b/Cargo.toml\",\"targets\":[{{\"kind\":[\"%s\"]}}]}}]}}' $ka $kb\n\
          exit 0\nfi\n\
          echo fake cargo stdout\nexit ${{FAKE_CARGO_EXIT:-0}}\n",
         log = log.display(),
@@ -304,6 +305,64 @@ fn a_repo_override_keeps_nextest_for_the_test_gate() {
     );
 }
 
+/// With cargo-nextest installed the built-in test gate runs it, like CI; without, `cargo test`.
+#[test]
+fn the_test_gate_runs_nextest_when_installed() {
+    let r = repo();
+    r.change("b/src/lib.rs");
+    let path = format!(
+        "{}:{}",
+        r.bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = bosun()
+        .env("PATH", path)
+        .env_remove("BOSUN_NO_NEXTEST")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI")
+        .arg("-C")
+        .arg(&r.root)
+        .args(["gate", "test", "--base", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        r.calls(),
+        vec![
+            "nextest --version",
+            "nextest run --locked -p b",
+            "test --doc --locked -p b"
+        ]
+    );
+}
+
+#[test]
+fn a_bin_only_workspace_gets_no_doc_pass() {
+    let r = repo();
+    r.change("b/src/lib.rs");
+    let path = format!(
+        "{}:{}",
+        r.bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let out = bosun()
+        .env("PATH", path)
+        .env_remove("BOSUN_NO_NEXTEST")
+        .env("FAKE_BIN_ONLY", "1")
+        .env_remove("GITHUB_BASE_REF")
+        .env_remove("CI")
+        .arg("-C")
+        .arg(&r.root)
+        .args(["gate", "test", "--base", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        r.calls(),
+        vec!["nextest --version", "nextest run --locked -p b"]
+    );
+}
+
 #[test]
 fn stdout_stays_one_json_object_and_child_output_goes_to_stderr() {
     let r = repo();
@@ -501,4 +560,36 @@ fn each_worktree_keeps_its_own_gate_record() {
     assert_eq!(code, 0, "{v}");
     assert!(r.root.join(".git/worktrees/wt/bosun/gate.json").exists());
     assert!(!r.root.join(".git/bosun/gate.json").exists());
+}
+
+/// Workspace with lib `a` and bin-only `b`: `--doc` runs for `a` only, never `-p b`.
+#[test]
+fn the_doc_pass_names_only_packages_with_a_lib_target() {
+    for (changed, docs) in [
+        ("b/src/lib.rs", vec![]),
+        ("a/src/lib.rs", vec!["test --doc --locked -p a"]),
+    ] {
+        let r = repo();
+        r.change(changed);
+        let path = format!(
+            "{}:{}",
+            r.bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let out = bosun()
+            .env("PATH", path)
+            .env_remove("BOSUN_NO_NEXTEST")
+            .env("FAKE_B_BIN", "1")
+            .env_remove("GITHUB_BASE_REF")
+            .env_remove("CI")
+            .arg("-C")
+            .arg(&r.root)
+            .args(["gate", "test", "--base", "main"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{changed}");
+        let calls = r.calls();
+        assert_eq!(calls[0], "nextest --version");
+        assert_eq!(calls[2..], docs, "{changed}: {calls:?}");
+    }
 }

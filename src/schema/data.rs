@@ -92,7 +92,7 @@ uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels
     name: str, fix?: str}], registry: {action: str, number?: int}};
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
     from: str, to: str}], files?: [str], branch?: str, title?: str, pr?: int | {number: int,
-    head_sha?: str} | null, pr_lookup?: str, left?: [str], steps?: [str]};
+    head_sha?: str} | null, pr_lookup?: str, left?: [str], steps?: [str], ci_minutes?: [str]};
 setup-snippet = {script: str, paste_into: str, repo_script: str, client_message: str,
     autocompact?: {cloud_env: {CLAUDE_CODE_AUTO_COMPACT_WINDOW?: str}, local_exports: [str],
     paste_into: str, note?: str}};

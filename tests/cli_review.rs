@@ -44,7 +44,10 @@ fn approve_at_threshold_sets_success() {
     let st = fake.statuses_of("sha42");
     assert_eq!(st[0]["context"], "review-verdict");
     assert_eq!(st[0]["state"], "success");
-    assert_eq!(st[0]["description"], "approve 0.85, 0 blocker, 1 major");
+    assert_eq!(
+        st[0]["description"],
+        "approve 0.85 (approves at 0.85), 0 blocker, 1 major"
+    );
     // Task 15 queues the task, not the verdict
     assert!(fake.labels_of(7).contains(&"bosun:state/review".into()));
     let rec = fake.comments_of(42);

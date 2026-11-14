@@ -27,7 +27,7 @@ const CHUNK_BYTES: usize = 40_000;
 const INSTRUCTIONS: &str = "Return JSON for `bosun verdict post` (cloud sessions: `bosun verdict comment`): {\"pr\":N,\"head_sha\":\"<head_sha>\",\
 \"verdict\":\"approve\"|\"request-changes\",\"confidence\":0..1,\"findings\":[{\"severity\":\
 \"blocker\"|\"major\"|\"minor\"|\"nit\",\"file\":\"\",\"line\":N,\"claim\":\"\",\"evidence\":\"\"}],\
-\"lessons_hit\":[\"L-NNN\"],\"escalate_risk\":false,\"chunks_reviewed\":[1,2]}. Approve needs confidence >= 0.85 and no blocker. \
+\"lessons_hit\":[\"L-NNN\"],\"escalate_risk\":false,\"chunks_reviewed\":[1,2]}. Approve needs confidence >= 0.85 and no blocker: an approve below 0.85 sets review-verdict to failure, so say request-changes then, with findings. \
 Set `escalate_risk` only when the change touches governance, CI, secrets, dependencies or production writes \
 and the risk rules did not catch it; an escalated verdict never turns green, so do not escalate what \
 risk-check already flags (R-gov, R-ci, ...). If `task.touch_added` is not empty, the claimant widened \
