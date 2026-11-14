@@ -99,6 +99,52 @@ pub struct Changed {
     pub path: String,
     pub status: String,
     pub previous: Option<String>,
+    /// A plan file whose patch only ticks checkboxes ([`plan_tick_patch`]): never outside a lease.
+    pub tick_only: bool,
+}
+
+/// A markdown file under a `plans` directory (`plans/x.md`, `docs/superpowers/plans/x.md`).
+pub fn is_plan_file(path: &str) -> bool {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    let name = parts.pop().unwrap_or("");
+    name.to_ascii_lowercase().ends_with(".md") && parts.contains(&"plans")
+}
+
+/// Whether `new` is `old` with task checkboxes ticked: `- [ ]` to `- [x]` (or `*`) on lines of
+/// the same count, at least one tick, nothing else changed.
+pub fn is_plan_tick(old: &str, new: &str) -> bool {
+    ticks(old.lines(), new.lines())
+}
+
+/// Whether the patch of a plan file only ticks checkboxes: as many removed as added lines, each
+/// pair a tick. `None` (no patch shown) never counts.
+pub fn plan_tick_patch(path: &str, patch: Option<&str>) -> bool {
+    let Some(patch) = patch.filter(|_| is_plan_file(path)) else {
+        return false;
+    };
+    let side = |c: char, hdr: &str| {
+        (patch.lines())
+            .filter(move |l| l.starts_with(c) && !l.starts_with(hdr))
+            .map(|l| &l[1..])
+            .collect::<Vec<_>>()
+    };
+    let (old, new) = (side('-', "---"), side('+', "+++"));
+    ticks(old.into_iter(), new.into_iter())
+}
+
+fn ticks<'a>(old: impl Iterator<Item = &'a str>, new: impl Iterator<Item = &'a str>) -> bool {
+    let (old, new): (Vec<_>, Vec<_>) = (old.collect(), new.collect());
+    let flip = |o: &str, n: &str| {
+        let t = o.trim_start();
+        let pad = &o[..o.len() - t.len()];
+        ["- [ ]", "* [ ]"].iter().any(|m| {
+            t.strip_prefix(m)
+                .is_some_and(|rest| n == format!("{pad}{}[x]{rest}", &m[..2]))
+        })
+    };
+    old.len() == new.len()
+        && old.iter().zip(&new).all(|(o, n)| o == n || flip(o, n))
+        && old.iter().zip(&new).any(|(o, n)| o != n)
 }
 
 /// A per-PR fragment: `changelog.d/*.md`, `docs/progress.d/*.md` or a changeset
@@ -120,7 +166,12 @@ pub fn is_fragment(path: &str) -> bool {
 pub fn outside(changed: &[Changed], touch: &[String]) -> Vec<String> {
     // A bad glob is dropped alone; the rest still count.
     let globs = parsed(&companions(touch));
-    let covered = |p: &str| is_fragment(p) || globs.iter().any(|g| g.matches(p));
+    let ticked: Vec<&str> = (changed.iter())
+        .filter(|c| c.tick_only)
+        .map(|c| c.path.as_str())
+        .collect();
+    let covered =
+        |p: &str| is_fragment(p) || ticked.contains(&p) || globs.iter().any(|g| g.matches(p));
     let mut out: Vec<String> = Vec::new();
     for c in changed {
         // A rename's new path is effectively added: only the old name is edited.
@@ -324,6 +375,36 @@ mod tests {
     }
 
     #[test]
+    fn plan_ticks_are_free_and_only_ticks() {
+        let p = "docs/superpowers/plans/a.md";
+        let tick = "@@ -1,2 +1,2 @@\n-- [ ] **T1** x\n+- [x] **T1** x\n ctx\n";
+        assert!(plan_tick_patch(p, Some(tick)));
+        assert!(plan_tick_patch(
+            "plans/a.md",
+            Some("-  * [ ] a\n+  * [x] a")
+        ));
+        assert!(!plan_tick_patch("src/a.md", Some(tick)));
+        assert!(!plan_tick_patch(p, None));
+        assert!(!plan_tick_patch(p, Some("-- [ ] a\n+- [x] b")));
+        assert!(!plan_tick_patch(p, Some("-- [x] a\n+- [ ] a")));
+        assert!(!plan_tick_patch(p, Some("+- [ ] new task")));
+        assert!(!plan_tick_patch(
+            p,
+            Some("-- [ ] a\n+- [x] a\n+- [x] extra")
+        ));
+        assert!(is_plan_tick("- [ ] a\nb", "- [x] a\nb"));
+        assert!(!is_plan_tick("b", "b"));
+        let t = |tick_only| Changed {
+            path: p.into(),
+            status: "modified".into(),
+            previous: None,
+            tick_only,
+        };
+        assert!(outside(&[t(true)], &["src/**".into()]).is_empty());
+        assert_eq!(outside(&[t(false)], &["src/**".into()]), [p]);
+    }
+
+    #[test]
     fn companions_add_lockfiles_once() {
         let all = [
             "a/Cargo.toml",
@@ -376,6 +457,7 @@ w/pnpm-lock.yaml pnpm-lock.yaml x-Cargo.toml"
     #[test]
     fn outside_checks_the_old_name_of_a_rename_and_spares_added_and_copied_files() {
         let c = |path: &str, status: &str, previous: Option<&str>| Changed {
+            tick_only: false,
             path: path.into(),
             status: status.into(),
             previous: previous.map(String::from),

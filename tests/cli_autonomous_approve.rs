@@ -306,7 +306,6 @@ fn approve_refuses_excluded_paths_even_with_a_verdict() {
     for (file, patch) in [
         (".github/workflows/release.yml", PLAIN),
         (".github/workflows/ci.yml", PLAIN),
-        ("Cargo.toml", PLAIN),
         (".bosun/limits.toml", PLAIN),
         ("docs/agents/org-decisions.md", PLAIN),
         ("hoist.toml", PLAIN),
@@ -360,8 +359,6 @@ fn a_secret_match_keeps_the_owner_path() {
 #[test]
 fn only_the_allowlist_counts_and_its_denied_paths_stay_with_the_owner() {
     for file in [
-        "channel/pieces/core/files/src/a.rs",
-        "deny.toml",
         "build.rs",
         "src/x/build.rs",
         "src/templates/a.rs.jinja",

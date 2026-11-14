@@ -24,7 +24,7 @@ use crate::core::risk::{
     new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
-use crate::core::touch::{Changed, outside};
+use crate::core::touch::{Changed, outside, plan_tick_patch};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
@@ -323,8 +323,10 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let rules = base_rules(gh, base)?;
 
     let pr_files = gh.pull_files(n)?;
+    // A plan file that only ticks checkboxes (spec §8) is no change for the rules.
     let files: Vec<ChangedFile> = pr_files
         .iter()
+        .filter(|f| !plan_tick_patch(&f.filename, f.patch.as_deref()))
         .map(|f| ChangedFile {
             path: f.filename.clone(),
             previous_path: f.previous_filename.clone(),
@@ -1054,6 +1056,7 @@ fn out_of_touch(
             path: f.filename.clone(),
             status: f.status.clone(),
             previous: f.previous_filename.clone(),
+            tick_only: plan_tick_patch(&f.filename, f.patch.as_deref()),
         })
         .collect();
     Some(outside(&changed, &lease.touch))
@@ -1338,6 +1341,18 @@ fn signer_on(gh: &dyn Github, base: &str) -> Result<bool> {
     })
 }
 
+/// `[approvals] autonomous_allow` on `base`: `None` when unset; a base config that does not parse
+/// allows nothing.
+pub(crate) fn autonomous_allow(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
+    Ok(match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => match Config::parse(&t, CONFIG_FILE) {
+            Ok(c) => c.approvals.autonomous_allow,
+            Err(_) => Some(Vec::new()),
+        },
+        None => None,
+    })
+}
+
 pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
     Ok(match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => match Config::parse(&t, CONFIG_FILE) {
@@ -1446,7 +1461,8 @@ fn orchestrator_window(
         .collect();
     let workflows = risk::workflow_files(&paths);
     let rules: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
-    let mut autonomous_excluded = risk::autonomous_excluded(&paths, matches);
+    let mut autonomous_excluded =
+        risk::autonomous_excluded(&paths, matches, approvals.autonomous_allow.as_deref());
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();

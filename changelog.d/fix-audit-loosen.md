@@ -1,0 +1,1 @@
+- Fewer owner stops: plan checkbox ticks need no lease or owner, `[approvals] autonomous_allow` (default every path outside the deny set), `bosun pr --one-off` opens and claims a task for unplanned work.

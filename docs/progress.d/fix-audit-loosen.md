@@ -1,0 +1,1 @@
+- 2026-11-14 · audit loosening: plan ticks exempt, `[approvals] autonomous_allow`, `bosun pr --one-off`; gate test already runs nextest

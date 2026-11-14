@@ -19,7 +19,7 @@ use crate::core::records::Record;
 use crate::core::stamps::gate_loop;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
-use crate::core::touch::{Changed, outside};
+use crate::core::touch::{Changed, outside, plan_tick_patch};
 use crate::github::{
     CheckRun, Github, IssueState, Live, PrFile, Pull, Status, enable_auto_merge_any,
     is_already_clean, is_ccr_refusal, is_unstable,
@@ -261,6 +261,7 @@ fn touch_check(
     let files: Vec<Changed> = files
         .into_iter()
         .map(|f| Changed {
+            tick_only: plan_tick_patch(&f.filename, f.patch.as_deref()),
             path: f.filename,
             status: f.status,
             previous: f.previous_filename,
@@ -367,6 +368,9 @@ pub(crate) fn enforced_checks(
 pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
     if let Some(n) = args.pr {
         return super::pr_gov::run(dir, n, args.ready);
+    }
+    if args.one_off {
+        return super::pr_oneoff::run(dir, args);
     }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();

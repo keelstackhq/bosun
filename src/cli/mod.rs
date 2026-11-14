@@ -41,6 +41,7 @@ pub mod plan_pr;
 pub mod pr;
 mod pr_bundle;
 pub mod pr_gov;
+pub mod pr_oneoff;
 pub mod prereqs;
 pub mod prereqs_gate;
 pub mod progress;
@@ -665,7 +666,7 @@ pub struct FromArg {
 #[derive(Debug, Args)]
 pub struct PrArgs {
     /// The task issue number (or `--pr N` for a PR with no task).
-    #[arg(required_unless_present = "pr")]
+    #[arg(required_unless_present_any = ["pr", "one_off"])]
     pub issue: Option<u64>,
     /// A PR with no task (a governance PR such as `bosun migrate` opens): the same draft, gates
     /// and auto-merge flow, with no task state to move.
@@ -681,6 +682,13 @@ pub struct PrArgs {
     /// Another issue of the lead's single-shape bundle (repeatable): the PR closes it too.
     #[arg(long = "bundle", value_name = "ISSUE")]
     pub bundle: Vec<u64>,
+    /// Work nobody planned (a Slack request, a quick fix): open a task from `--title`, claim it
+    /// with `--touch` and run the flow for it (spec §4).
+    #[arg(long = "one-off", requires = "title", conflicts_with_all = ["issue", "pr", "bundle"])]
+    pub one_off: bool,
+    /// With `--one-off`: the paths the PR edits (the task's touch), repeatable.
+    #[arg(long = "touch", value_name = "GLOB", requires = "one_off")]
+    pub touch: Vec<String>,
 }
 
 #[derive(Debug, Args)]

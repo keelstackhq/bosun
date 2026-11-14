@@ -889,6 +889,7 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         None => risk::Rules::defaults(),
     };
     let changed: Vec<_> = (files.iter())
+        .filter(|f| !crate::core::touch::plan_tick_patch(&f.filename, f.patch.as_deref()))
         .map(|f| risk::ChangedFile {
             path: f.filename.clone(),
             previous_path: f.previous_filename.clone(),
@@ -920,7 +921,8 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         }
     }
     let matches = risk::evaluate(&rules, &changed, &[], &capabilities);
-    let mut hit = risk::autonomous_excluded(&paths, &matches);
+    let allow = crate::cli::risk_check::autonomous_allow(gh, &pull.base_sha)?;
+    let mut hit = risk::autonomous_excluded(&paths, &matches, allow.as_deref());
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();
