@@ -1,1 +1,0 @@
-- Cloud and Claude Tag sessions: a proxy 403 on the collaborators lookup degrades instead of failing every command; GitHub calls stop after a 120 s budget (`BOSUN_HTTP_BUDGET_SECS`); `wait --once`; `risk-check --dry-run`; `doctor`, `plan amend`/`import` and `progress` print a summary unless `--full`.

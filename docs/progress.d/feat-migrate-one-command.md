@@ -1,1 +1,0 @@
-- 2026-11-14 · feat: bosun migrate (one command, one owner approval), bosun pr --pr, short migrate guide

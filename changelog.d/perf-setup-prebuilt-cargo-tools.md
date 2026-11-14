@@ -1,1 +1,0 @@
-- perf: setup script installs cargo-deny and cargo-nextest from pinned sha256-checked prebuilt release binaries (cargo install only as fallback)

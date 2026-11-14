@@ -1,1 +1,0 @@
-- gates: test gate runs nextest when installed; verdict threshold visible, `chunks_reviewed` accepts a count; risk-check rates a plan `risk: high` task high (R-plan); plan check skips merged pairs; pin lists ci-minutes findings

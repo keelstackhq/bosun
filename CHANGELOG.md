@@ -4,6 +4,18 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+- chore: pin bosun 0.14.0 (.bosun/version, docs/setup-script.sh)
+- Spec 05 residual (c) and the migrate-booster registry step now match `registry::pick` (lowest open labelled issue, else lowest in any state).
+- `docs/migrate-booster.md`: runbook for an agent (and the owner) that moves a repo on bosun to booster mode, for the CLI, cloud and Slack, with prompts, rollback and troubleshooting; linked from the README and `docs/quickstart.md`.
+- `bosun migrate --to <mode> [--direct] [--dry-run]` opens one governance PR for a mode move (version and registry pins, `[mode]`), with a best-effort metrics baseline; `--finish` joins and amends plans after the merge; `bosun pr --pr <n> --ready` readies and auto-merges a PR with no task; `docs/migrate-booster.md` leads with the short path per environment.
+- budget record: ccr/external_metadata shapes, session totals recorded as deltas, session ledger without an issue, --at (at most 48 h back), `--session` must match the `get_session` id; result lists green PRs and returns send_message to the parent
+- gates: test gate runs nextest when installed; verdict threshold visible, `chunks_reviewed` accepts a count; risk-check rates a plan `risk: high` task high (R-plan); plan check skips merged pairs; pin lists ci-minutes findings
+- Cloud and Claude Tag sessions: a proxy 403 on the collaborators lookup degrades instead of failing every command; GitHub calls stop after a 120 s budget (`BOSUN_HTTP_BUDGET_SECS`; exempt in CI); leases of unknown logins only block and their spend counts; `wait --once`; `risk-check --dry-run`; `doctor`, `plan amend`/`import` and `progress` print a summary unless `--full`.
+- Keyless fast lane for D-017 (signer is OFF by default: enable it with `[approvals] signer = true` (R-weaken) and `[checks] mode = "checks"` with the gate App; signer signatures are ignored while it is off at base): `role = "signer"` keys (autonomous form only), `bosun approve --as signer` (needs `ci-ok` green) and `--via-signer`, `.github/workflows/signer.yml` (bosun and the channel `core` piece), `bosun doctor` signer check, and risk-check `author_is_owner` when the PR author is the owner.
+- `bosun notify` gains the opt-in `digest` kind (`[slack] notify` must name it): one post per UTC day listing the owner-waiting PRs with GitHub links and the comment to approve with; Slack still approves nothing (spec §10, §14).
+- risk-check: `deny.local.toml`, `.deny.local.toml` and `scripts/deny.mjs` are R-ci; a growing allow list is R-weaken (pairs with hull v0.10.0).
+- perf: setup script installs cargo-deny and cargo-nextest from pinned sha256-checked prebuilt release binaries (cargo install only as fallback)
+
 ## 0.14.0 (2026-11-13)
 
 - `.bosun/version` and `docs/setup-script.sh` pin bosun 0.13.0 with npm sha512 values via `bosun pin --latest`; CLAUDE.md runs tests with `cargo test --locked` (fresh cloud containers no longer build nextest).

@@ -441,3 +441,13 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-12 · modes PR 7e · feature-budget warnings in status, digest asks with raise hint, wave tick
 - 2026-11-12 · modes registry pin · registry pinned by `.bosun/registry`, else the lowest-numbered labelled issue in any state
 - 2026-11-13 · guard: CDPATH from the hook environment; spec 05 unpinned mainfix residual
+- 2026-11-13 · pin bosun 0.14.0 (bosun pin --latest)
+- 2026-11-13 · docs: migrate-booster follow-up (registry pick wording, doctor/join number)
+- 2026-11-13 · docs: migrate-booster.md (booster migration runbook, three environments, prompts) · PR #576
+- 2026-11-14 · feat: bosun migrate (one command, one owner approval), bosun pr --pr, short migrate guide
+- C7-C8 feedback fixes landed (budget record shapes/delta/ledger/--at, result names green PRs and messages the parent)
+- C1-C6 feedback fixes landed (pin ci-minutes findings, count chunks, nextest gate, threshold text, R-plan, merged overlaps)
+- 2026-11-14 · fix: bosun works behind the cloud proxy (A1-A5 of the 0.14.0 booster feedback: permission 403 degrade, HTTP budget, wait --once, risk-check --dry-run, summary output)
+- 2026-11-14 · keyless approvals · CI signer (`signer` role, `approve --as signer|--via-signer`, signer.yml), author-is-owner note in risk-check, doctor check
+- 2026-11-14 · fix/slack-digest-links · `bosun notify` kind `digest` (opt-in): owner-waiting PR links for Slack, approval stays on GitHub
+- setup-script: prebuilt cargo-deny 0.20.2 + cargo-nextest 0.9.152 (sha256-pinned, github.com assets) replace the 4-minute cargo install; D23 updated
