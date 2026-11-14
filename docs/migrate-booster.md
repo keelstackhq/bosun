@@ -24,7 +24,8 @@ Run `bosun migrate --to booster --direct`; do what its `next` and `data.then` sa
 After the merge run `bosun migrate --finish`.
 ```
 
-Leave out `--direct` to move one rung (gatekeeper → steady). The owner approves the one PR head.
+This prompt goes straight to booster: `--direct` is the owner's choice, and the PR body records it. Drop
+`--direct` to move one step (gatekeeper → steady). The owner approves the one PR head.
 
 ## What `bosun migrate` does
 
@@ -153,7 +154,7 @@ Expect:
 - `bosun doctor`: each step `ok`, `warn`, `skipped` or `missing`, each with its `fix`. Step 17 `update` shows what is behind.
 
 Write the `metrics` numbers on the first PR. It is the baseline. If the repo is on `gatekeeper`, do the whole
-sequence for `steady` first (quickstart §5). Return here when `bosun mode` shows `steady`.
+sequence for `steady` first. Return here when `bosun mode` shows `steady`.
 
 If `bosun mode` exits non-zero or `bosun doctor` shows a `missing` step: do its `fix`.
 
@@ -230,7 +231,7 @@ name = "booster"
 # heal_main = "off"
 ```
 
-**Direct (gatekeeper to booster in one PR).** The quickstart says never skip a step. Do it only when the owner
+**Direct (gatekeeper to booster in one PR).** One rung per PR is the default. Do it only when the owner
 says so in the chat form. Write that answer in the PR body. The PR is R-gov and R-weaken, so the owner still approves
 the exact head. Without that answer, use the two steps.
 
@@ -455,7 +456,7 @@ Start the migration from a thread. An owner posts the request. The session:
 
 A thread spawn inherits the caller's environment. `wave tick` uses `[cloud]`'s.
 
-The steps of §2 run in the spawned session, in environment A or B. Slack only starts and reports.
+The steps of A.2 run in the spawned session, in environment A.3 or A.4. Slack only starts and reports.
 
 Approvals never come from Slack. bosun answers needs-human in the thread. **[phone]** The owner approves
 by chat form or on GitHub. `bosun answer <issue> --slack-user <U...>` records an owner's answer from Slack on a needs-human task.

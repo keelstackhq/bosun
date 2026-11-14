@@ -91,7 +91,9 @@ exact-inverse check.
   origin's; any failure restores the tree. An open `bosun/migrate-<step>` PR for the same step is
   reused; one for another step exits 3. The body names the one owner approval (R-gov; R-weaken when lighter) and the owner-only
   Routine steps. `--finish [--plan F]` after the merge (an open migrate PR exits 3): `bosun join`, then `bosun plan amend` for
-  each plan an open epic marker names (and each `--plan`) when `budget_feature` is not `off`;
+  each plan an open epic marker names (and each `--plan`) when `budget_feature` is not `off`
+  (only a repo-relative `.md` path with no `..` that resolves inside the repo; a bad marker path
+  is a note, a bad `--plan` exit 2);
   both idempotent.
 - `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
   (a task's spend once), lead time p50 per epic, owner touches (an owner's own approve or

@@ -958,3 +958,27 @@ fn a_planted_push_refspec_cannot_retarget_the_push() {
     );
     assert!(pushed.contains("bosun/migrate-steady"), "{pushed}");
 }
+
+#[test]
+fn finish_amends_no_plan_path_outside_the_repo() {
+    let (e, fake) = finish_env();
+    for (n, p) in [
+        (11, "/etc/plan.md"),
+        (12, "../outside.md"),
+        (13, "plans/../../x.md"),
+    ] {
+        fake.issue(
+            n,
+            "epic",
+            &["bosun:source/plan"],
+            &format!("<!-- bosun:epic {{\"item\":\"M1\",\"plan\":\"{p}\"}} -->"),
+        );
+    }
+    let (code, v) = migrate(&e, &fake, &["--finish"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["amended"], json!([]), "{v}");
+    let notes = v["data"]["notes"].to_string();
+    assert!(notes.contains("not a plan path inside the repo"), "{notes}");
+    let (code, v) = migrate(&e, &fake, &["--finish", "--plan", "../outside.md"]);
+    assert_eq!(code, 2, "{v}");
+}

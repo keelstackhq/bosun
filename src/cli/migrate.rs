@@ -798,6 +798,35 @@ fn publish(
 }
 
 /// `--finish`: join, then amend each plan (both idempotent).
+/// A plan path from an issue body or `--plan`: repo-relative, no `..`, a `.md` file that,
+/// resolved (symlinks too), stays inside the repo.
+fn plan_path_ok(root: &Path, p: &str) -> bool {
+    use std::path::Component;
+    let path = Path::new(p);
+    if p.is_empty()
+        || path.extension().and_then(|e| e.to_str()) != Some("md")
+        || !path
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        return false;
+    }
+    // The nearest existing ancestor, resolved, must stay inside the repo (a missing file is
+    // then plan amend's own error).
+    let Ok(r) = root.canonicalize() else {
+        return false;
+    };
+    let mut at = root.join(path);
+    loop {
+        if let Ok(f) = at.canonicalize() {
+            return f.starts_with(&r);
+        }
+        if !at.pop() {
+            return false;
+        }
+    }
+}
+
 fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
     let repo = app.ctx.repo.to_string();
     if let Some(p) = find_open(app.gh.as_ref(), &repo)? {
@@ -826,9 +855,20 @@ fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
             (Vec::new(), Vec::new())
         }
     };
+    let root = &app.ctx.dir;
+    if let Some(bad) = a.plan.iter().find(|p| !plan_path_ok(root, p)) {
+        return Err(BosunError::usage(
+            format!("--plan {bad} is not a plan path inside the repo"),
+            "name a repo-relative `.md` plan file with no `..`, for example plans/bosun.md",
+        ));
+    }
     let mut plans = a.plan.clone();
     for p in found {
-        if !plans.contains(&p) {
+        if !plan_path_ok(root, &p) {
+            notes.push(format!(
+                "an epic marker names {p}, which is not a plan path inside the repo: not amended; fix the epic body or pass `--plan <file>`"
+            ));
+        } else if !plans.contains(&p) {
             plans.push(p);
         }
     }

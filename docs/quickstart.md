@@ -166,8 +166,8 @@ bosun pr --pr <n> --ready              # after the local gates: ready + auto-mer
 bosun migrate --finish                 # after the merge: join, plan amend (idempotent)
 ```
 
-- One rung per PR (gatekeeper → steady → booster → autonomous) unless the owner says `--direct`; the PR body
-  records that choice. Never move lighter on a red week.
+- One rung per PR (gatekeeper → steady → booster → autonomous) unless the owner chooses `--direct` (the
+  guide's prompt uses it: straight to the target); the PR body records that choice. Never move lighter on a red week.
 - **[phone]** The owner approves the exact head: the PR is R-gov, and R-weaken when lighter. risk-check waits
   for it; nothing else needs a GitHub click.
 - **[computer]** Routines stay owner-only: the PR body lists them (janitor heal line from `steady`, curator
