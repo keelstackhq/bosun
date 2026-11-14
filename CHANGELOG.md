@@ -4,6 +4,8 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.15.0 (2026-11-14)
+
 - chore: pin bosun 0.14.0 (.bosun/version, docs/setup-script.sh)
 - Spec 05 residual (c) and the migrate-booster registry step now match `registry::pick` (lowest open labelled issue, else lowest in any state).
 - `docs/migrate-booster.md`: runbook for an agent (and the owner) that moves a repo on bosun to booster mode, for the CLI, cloud and Slack, with prompts, rollback and troubleshooting; linked from the README and `docs/quickstart.md`.
