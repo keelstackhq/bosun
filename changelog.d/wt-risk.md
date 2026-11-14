@@ -1,0 +1,1 @@
+- fix(risk): added lines keep ++ lines, wider R-secrets (no marker or file-name exemption), CODEOWNERS in R-gov, build and script files in R-ci, lockfile source hosts in R-deps, binaries are R-unseen, a missing bound plan fails risk-check

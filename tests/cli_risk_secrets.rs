@@ -85,12 +85,13 @@ fn test_files_and_fixtures_are_not_secrets() {
         "crates/x/tests/fixtures/app.toml",
         "client_@SEC@=s3cr3t-value-xyz"
     ));
-    assert!(!secret_match("src/login_test.go", "@TOK@ = \"fake\""));
-    assert!(!secret_match(
+    // A file name is the author's choice: only the directory exempts.
+    assert!(secret_match("src/login_test.go", "@TOK@ = \"fake\""));
+    assert!(secret_match(
         "web/src/login.spec.ts",
         "const t = '@TOK@ = fake';"
     ));
-    assert!(!secret_match("src/snapshots/x__y.snap", "@TOK@ = fake"));
+    assert!(secret_match("src/snapshots/x__y.snap", "@TOK@ = fake"));
 }
 
 #[test]
@@ -107,22 +108,11 @@ fn env_and_config_files_are_never_test_files() {
 }
 
 #[test]
-fn the_marker_needs_a_reason_in_a_trailing_comment() {
-    assert!(!secret_match(
-        "config/app.toml",
-        "@TOK@ = \"s3cr3t-public-demo\" # bosun:allow-secret public demo key from the vendor docs"
-    ));
-    assert!(!secret_match(
-        "src/a.rs",
-        "let @TOK@ = \"s3cr3t-demo\"; // bosun:allow-secret documented sandbox value"
-    ));
+fn the_allow_marker_exempts_nothing() {
     for line in [
+        "@TOK@ = \"s3cr3t-public-demo\" # bosun:allow-secret public demo key from the vendor docs",
+        "let @TOK@ = \"s3cr3t-demo\"; // bosun:allow-secret documented sandbox value",
         "@TOK@ = \"s3cr3t\" # bosun:allow-secret",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secret  -->",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secrets demo",
-        "@TOK@ = \"s3cr3t\" bosun:allow-secret demo",
-        "/* bosun:allow-secret demo */ @TOK@ = \"s3cr3t\"",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secret @TOK@ = s3cr3t",
     ] {
         assert!(secret_match("config/app.toml", line), "{line}");
     }

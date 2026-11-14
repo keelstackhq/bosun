@@ -5,19 +5,20 @@
 [[rule]]
 id = "R-gov"
 why = "Governance files decide who approves what, and the rules agents and reviewers follow."
-paths = [".bosun/**", "governance/**", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "docs/setup-script.sh",
+paths = [".bosun/**", "governance/**", "CODEOWNERS", "docs/CODEOWNERS", ".github/CODEOWNERS", ".claude/**", ".splice/**", "**/hoist.toml", "docs/setup-script.sh",
   "REVIEW.md", "src/core/session_rules.rs", "src/core/session_rules/**", "src/hooks/session_rules.rs", "src/hooks/session_rules/**", ".claude-plugin/**", "docs/agents/**", "**/agents.md", "**/claude.md", "**/claude.local.md", "**/plans/**"]
 
 [[rule]]
 id = "R-ci"
 why = "CI decides what is verified."
-paths = [".github/workflows/**", ".github/actions/**", "**/action.yml", "**/action.yaml", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml"{% if "rust" in pieces %}, "**/deny.toml", "**/.deny.toml", "**/deny.exceptions.toml", "**/.deny.exceptions.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
+paths = [".github/workflows/**", ".github/actions/**", ".github/dependabot.yml", "scripts/**", "Makefile", "**/Makefile", "justfile", "**/justfile", "Dockerfile", "**/Dockerfile", ".husky/**", "**/action.yml", "**/action.yaml", ".circleci/**", ".gitlab-ci.yml", ".gitlab/ci/**", ".buildkite/**", "**/jenkinsfile", "azure-pipelines.y*ml", "bitbucket-pipelines.yml", ".travis.yml", ".drone.yml"{% if "rust" in pieces %}, "**/deny.toml", "**/.deny.toml", "**/deny.exceptions.toml", "**/.deny.exceptions.toml", "rust-toolchain.toml"{% endif %}{% if "ts-pnpm" in pieces %}, ".npmrc"{% endif %}]
 
 [[rule]]
 id = "R-secrets"
 why = "A secret in the repo is a leak."
 paths = ["**/secrets.toml", "**/access.toml", "**/*.sops.*"]
-content = '(?i)(api[_-]?key|secret|token)\s*=|AGE-SECRET-KEY-1|SOPS_AGE_KEY\s*[:=]'
+# A name, an optional quote, then `=` or `:`; a URL with user:password; strong formats always.
+content = '''(?i)(api[_-]?key|secret[\w-]*|token|passw(or)?d|private[_-]?key)["']?\s*[:=]|AGE-SECRET-KEY-1|SOPS_AGE_KEY\s*[:=]|://[^/\s:@]+:[^/\s@]+@'''
 
 [[rule]]
 id = "R-deps"

@@ -122,7 +122,7 @@ const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run 
 /// R-weaken evidence (spec §8): gate files compared at base and head, diffs, deleted or thinned
 /// tests. Deduplicated, in file order.
 /// Whether the plan file at `base` rates the task bound to issue `n` (a trusted `bind` record)
-/// `risk: high`. No bind, no plan file or an unparsable one: no.
+/// `risk: high`. No bind: no. A bind whose plan is missing or unparsable at base: an error.
 fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
     // A read error fails the check: never a silent "not high".
     for (_, r) in crate::cli::budget::binds_of(gh, n)? {
@@ -133,18 +133,31 @@ fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
             ..
         } = r
         {
+            // The bind names this plan: if it cannot be read at the base, the task's risk is
+            // unknown, and a plan an author deleted or broke must not read as "not high".
+            let unknown = |why: &str| {
+                BosunError::error(
+                    format!("plan {plan} {why} at {base}, so the risk of task #{n} is unknown"),
+                    format!(
+                        "restore {plan} on the base branch (or fix its syntax), then re-run the risk workflow"
+                    ),
+                )
+            };
             let Some(text) = gh.file_at(&plan, base)? else {
-                return Ok(false);
+                return Err(unknown("is missing"));
             };
             let Ok(parsed) = crate::core::plan::parse(&text) else {
-                return Ok(false);
+                return Err(unknown("does not parse"));
             };
-            return Ok(parsed
-                .items
-                .iter()
+            let mut tasks = (parsed.items.iter())
                 .filter(|i| i.id == item)
                 .flat_map(|i| &i.tasks)
-                .any(|x| x.id == t && x.risk == "high"));
+                .filter(|x| x.id == t)
+                .peekable();
+            if tasks.peek().is_none() {
+                return Err(unknown("has no such task"));
+            }
+            return Ok(tasks.any(|x| x.risk == "high"));
         }
     }
     Ok(false)

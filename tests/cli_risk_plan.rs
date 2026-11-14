@@ -86,3 +86,23 @@ fn removing_the_task_block_from_the_body_does_not_skip_r_plan() {
     assert_eq!(code, 5, "{v}");
     assert!(v["data"]["matches"].to_string().contains("R-plan"), "{v}");
 }
+
+#[test]
+fn a_bound_plan_missing_or_broken_at_base_fails_the_check() {
+    for plan in [None, Some("# not a plan\n")] {
+        let fake = pr("{}");
+        if let Some(text) = plan {
+            fake.content("plans/x.md", "base0000", text);
+        }
+        fake.comment(
+            7,
+            r#"{"bosun":"bind","session":"s","plan":"plans/x.md","item":"M1","task":"T1","epic":3}"#,
+        );
+        let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+        assert_eq!(code, 1, "{v}");
+        assert!(
+            v["error"]["message"].to_string().contains("plans/x.md"),
+            "{v}"
+        );
+    }
+}

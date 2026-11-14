@@ -90,6 +90,17 @@ A model name matches a built-in price when it contains `haiku`, `sonnet` or `opu
 | Step to the next lighter mode | one mode at a time, two weeks on target | `docs/quickstart.md` (migration). Estimate. |
 | `bosun metrics` window | 30 days | Estimate; review after 30 days of metrics (design open point 4). |
 
+## Risk rules (`src/core/risk_default.toml`, spec §8)
+
+| Value | Default | Evidence |
+| ----- | ------- | -------- |
+| R-secrets content | name (`api_key`, `secret*`, `token`, `password`, `private_key`) then `=` or `:`, plus `user:pw@` URLs | Audit of 0.15.0: `SECRET_KEY=`, `"apiKey": "x"` and `postgres://u:pw@h` slipped through. Wider on purpose: a false hit costs one owner look, a miss leaks. |
+| R-secrets exemptions | only `tests`/`fixtures`-style directories and literal-free code bindings; no file-name or marker exemption | The author of a line picks its file name and comment, so neither can vouch for it. |
+| R-ci paths | adds `scripts/**`, `Makefile`, `justfile`, `Dockerfile`, `.husky/**`, `.github/dependabot.yml` | These run in CI or on every checkout, as a workflow does. |
+| R-gov paths | adds root and `docs/CODEOWNERS` | GitHub reads CODEOWNERS from three places; only one was gated. |
+| R-deps lockfiles | a `source`/`resolved` line with a host other than crates.io, npm or yarn | A lockfile-only PR can redirect every download. |
+| Patchless files | any file but a removed one or a pure rename without a patch is R-unseen | A binary has 0 changed lines and no patch, and the name is the author's choice. |
+
 ## Lessons
 
 | Value | Default | Evidence |

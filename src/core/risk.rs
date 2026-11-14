@@ -129,13 +129,19 @@ pub struct ChangedFile {
     pub added_lines: Vec<String>,
 }
 
-/// The added lines of a patch: `+` lines, not the `+++` header.
+/// The added lines of a patch: the `+` lines of its hunks, not the file headers.
 pub fn added_lines(patch: &str) -> Vec<String> {
-    patch
-        .lines()
-        .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
-        .map(|l| l[1..].to_string())
-        .collect()
+    // File headers (`+++ b/x`) come before the first hunk; inside one, `++x` is the added `+x`.
+    let mut in_hunk = false;
+    let mut out = Vec::new();
+    for l in patch.lines() {
+        if l.starts_with("@@") {
+            in_hunk = true;
+        } else if in_hunk && let Some(rest) = l.strip_prefix('+') {
+            out.push(rest.to_string());
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -181,6 +187,16 @@ pub fn evaluate(
         }
         if rule.new_dependency {
             evidence.extend(new_deps.iter().map(|d| format!("new dependency {d}")));
+            for f in files {
+                if let Some(i) = (f.added_lines.iter()).position(|l| lock_source_moved(&f.path, l))
+                {
+                    evidence.push(format!(
+                        "{}: added line {} names a new source",
+                        f.path,
+                        i + 1
+                    ));
+                }
+            }
         }
         if let Some(c) = &rule.capability
             && capabilities.contains(c)
@@ -199,6 +215,40 @@ pub fn evaluate(
     out
 }
 
+/// Whether an added lockfile line (`source =`, `resolved:`) points at a host other than the
+/// default registries (crates.io, npm, yarn): the lock then fetches from somewhere else.
+fn lock_source_moved(path: &str, line: &str) -> bool {
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"(?i)^\s*"?(?:source|resolved)"?\s*[:=]?\s*"?[a-z+]+://([^/"'\s?#]+)"#)
+            .expect("static regex")
+    });
+    const LOCKS: [&str; 5] = [
+        "cargo.lock",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    ];
+    const HOSTS: [&str; 3] = [
+        "index.crates.io",
+        "registry.npmjs.org",
+        "registry.yarnpkg.com",
+    ];
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    if !LOCKS.contains(&name.as_str()) {
+        return false;
+    }
+    let Some(c) = RE.captures(line) else {
+        return false;
+    };
+    let host = c[1].to_ascii_lowercase();
+    let crates_io = host == "github.com"
+        && line
+            .to_ascii_lowercase()
+            .contains("registry+https://github.com/rust-lang/crates.io-index");
+    !(crates_io || HOSTS.contains(&host.as_str()))
+}
+
 /// Secret formats that are never exempt (R-secrets): age, PEM and PGP private keys, GitHub,
 /// Anthropic, OpenAI, Stripe, AWS and Slack tokens. They match even where the rule's own
 /// `content` does not.
@@ -209,10 +259,6 @@ const STRONG_SECRETS: &str = concat!(
     r"|\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|\b[sr]k_live_[A-Za-z0-9]{16,}",
     r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}",
 );
-
-/// The per-line marker that exempts a line from R-secrets: `bosun:allow-secret <reason>`, in a
-/// trailing comment.
-pub const ALLOW_SECRET: &str = "bosun:allow-secret";
 
 fn strong_secret(line: &str) -> bool {
     static RE: std::sync::LazyLock<Regex> =
@@ -253,6 +299,21 @@ pub fn test_path(path: &str) -> bool {
             .any(|s| stem.ends_with(s))
 }
 
+/// A `test`, `tests`, `__tests__`, `fixtures` or `testdata` directory at any depth, any case. A
+/// file name never exempts (an agent picks it): `test_*`, `*.spec.*` and `.snap` are no exemption.
+/// An env or config file never is: a `.env*` or `*.env` name, or a `config` or `deploy`
+/// directory, even under a test directory.
+fn secret_test_dir(path: &str) -> bool {
+    const DIRS: [&str; 5] = ["test", "tests", "__tests__", "fixtures", "testdata"];
+    let lower = path.to_ascii_lowercase();
+    let mut parts: Vec<&str> = lower.split('/').collect();
+    let name = parts.pop().unwrap_or_default();
+    let config = name.starts_with(".env")
+        || name.ends_with(".env")
+        || parts.iter().any(|d| *d == "config" || *d == "deploy");
+    !config && parts.iter().any(|d| DIRS.contains(d))
+}
+
 /// A code binding whose value holds no literal, like `let <name> = cfg.k`. Any quote after the
 /// `=` (a string, `String::from("...")`, `Some("...")`, an `||` fallback) makes it a literal.
 fn code_binding(stmt: &str) -> bool {
@@ -270,30 +331,16 @@ fn code_binding(stmt: &str) -> bool {
     !v.is_empty() && !v.contains(['"', '\'', '`']) && !v.starts_with(|c: char| c.is_ascii_digit())
 }
 
-/// The part of `line` before a trailing `bosun:allow-secret <reason>` comment, when the line
-/// has one: the marker is its own token after a comment opener (`#`, `//`, `--`, `/*`, `<!--`),
-/// and the reason has a letter or digit.
-fn before_marker(line: &str) -> Option<&str> {
-    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        Regex::new(r"(?:#|//|--|/\*|<!--)\s*bosun:allow-secret[ \t]+[^\s]*[A-Za-z0-9]")
-            .expect("static regex")
-    });
-    RE.find(line).map(|m| &line[..m.start()])
-}
-
 /// Whether an added line that the R-secrets content matched is exempt. A strong secret never
-/// is. Otherwise: any line of a test file or fixture; a line with a trailing
-/// `bosun:allow-secret <reason>` comment whose reason the content does not match; a line where
-/// every statement (split on `;`) the content matches is a code binding without a literal.
+/// is. Otherwise: any line under a `tests` or `fixtures` directory; a line where every
+/// statement (split on `;`) the content matches is a code binding without a literal. No marker
+/// comment exempts a line: the author of the line would write it.
 pub fn secret_exempt(path: &str, line: &str, matches: impl Fn(&str) -> bool) -> bool {
     if strong_secret(line) {
         return false;
     }
-    if test_path(path) {
+    if secret_test_dir(path) {
         return true;
-    }
-    if let Some(code) = before_marker(line) {
-        return !matches(&line[code.len()..]);
     }
     line.split(';')
         .all(|stmt| !matches(stmt) || code_binding(stmt))
@@ -310,8 +357,8 @@ pub struct FileView {
 
 /// `R-unseen` when bosun could not see the whole diff: GitHub listed fewer files than the PR
 /// changed (it lists at most 3000), or a file with changed lines has no patch (large diffs).
-/// GitHub reports 0 changed lines for a binary file; the file name is the author's choice, so
-/// it never exempts a file. Built in, not a rule file: a PR must not hide behind a missing diff.
+/// GitHub reports 0 changed lines and no patch for a binary file: unseen too (the file name is
+/// the author's choice, so it never exempts a file; a pure rename is exempt). Built in, not a rule file: a PR must not hide behind a missing diff.
 pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
     let mut evidence = Vec::new();
     if (files.len() as u64) < changed_files {
@@ -322,7 +369,10 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
     }
     for f in files {
         // A deny-list on purpose: a status GitHub adds later counts as unseen, not as safe.
-        if !matches!(f.status.as_str(), "removed" | "unchanged") && !f.has_patch && f.changes > 0 {
+        // A binary file reports 0 changed lines, so it counts too; a pure rename (0 changes) does
+        // not, its new path is judged by the rules.
+        let renamed = f.status == "renamed" && f.changes == 0;
+        if !matches!(f.status.as_str(), "removed" | "unchanged") && !f.has_patch && !renamed {
             evidence.push(format!("no patch for {}", f.path));
         }
     }
@@ -643,7 +693,10 @@ pub fn critical(matches: &[Match], files: &[ChangedFile], bosun_code: bool) -> V
 /// Windows) `Secrets.toml` or `.CircleCI/` is the same file, and a wider match only asks for
 /// more review. Patterns are written in lowercase where case can vary.
 fn matches_any_case(g: &Glob, path: &str) -> bool {
-    g.matches(path) || g.matches(&path.to_lowercase())
+    let lower = path.to_lowercase();
+    g.matches(path)
+        || g.matches(&lower)
+        || Glob::parse(&g.as_str().to_lowercase()).is_ok_and(|l| l.matches(&lower))
 }
 
 /// The floor: on a critical PR every delegate match needs the owner.
@@ -1471,7 +1524,7 @@ mod tests {
         assert!(!m[0].evidence[0].contains("abc"));
         assert!(eval(&[file("a.env", &["let tokens = 3;"])]).is_empty());
         let added = added_lines("@@ -1,2 +1,1 @@\n-secret = 1\n keep\n+++ header\n+ok");
-        assert_eq!(added, ["ok"]);
+        assert_eq!(added, ["++ header", "ok"]);
         let refs: Vec<&str> = added.iter().map(String::as_str).collect();
         assert!(eval(&[file("a", &refs)]).is_empty());
     }
@@ -1863,7 +1916,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
         };
         let ok = [
             f("a.rs", "modified", true, 3),
-            f("logo.png", "added", false, 0),
+            f("moved.png", "renamed", false, 0),
         ];
         assert!(unseen_diff(&ok, 2).is_none());
         assert!(unseen_diff(&ok, 0).is_none());
@@ -1871,8 +1924,8 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
         let m = unseen_diff(&[f("big.rs", "modified", false, 900)], 1).unwrap();
         assert_eq!(m.rule, "R-unseen");
         assert!(m.evidence[0].contains("big.rs"));
-        // GitHub reports 0 added and 0 deleted lines for a binary file.
-        assert!(unseen_diff(&[f("img.PNG", "added", false, 0)], 1).is_none());
+        // GitHub reports 0 added and 0 deleted lines and no patch for a binary file: unseen.
+        assert!(unseen_diff(&[f("img.PNG", "added", false, 0)], 1).is_some());
         assert!(unseen_diff(&[f("gone.rs", "removed", false, 5)], 1).is_none());
         // The extension is the author's choice: a file with changed lines and no patch is unseen.
         let m = unseen_diff(&[f("payload.bin", "added", false, 5000)], 1).unwrap();
