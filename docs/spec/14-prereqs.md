@@ -62,7 +62,7 @@ titles and the reply `approve 12 15`), `data.message_id` (8 hex of the SHA-256 o
 sorted `<pr>@<head>` lines) and `data.message_pairs`. Only the latest relayed message is
 answerable; PR numbers come only from the owner's chat; each (id, pr) is signed at most once (§8).
 
-**Daily digest (§18, `approvals_batch = "daily"`).** `bosun digest` (the orchestrator, once a day)
+**Daily digest (§18, `approvals_batch = "daily"`).** For Claude-Tag-first repos the Slack kind `digest` (§10, opt-in) posts the owner-waiting PRs with GitHub links and the comment to approve with; Slack itself approves nothing. `bosun digest` (the orchestrator, once a day)
 reads the `approve --list` board and the needs-human issues, and writes nothing. `data.message`
 is one D-012 chat form for the repo: its first line `Daily digest <owner>/<repo> <id>`, every
 owner-waiting PR (`#<pr>@<short head>`, its `R-` rule ids, the inert title), the open asks

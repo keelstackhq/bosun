@@ -1,0 +1,1 @@
+- `bosun notify` gains the opt-in `digest` kind (`[slack] notify` must name it): one post per UTC day listing the owner-waiting PRs with GitHub links and the comment to approve with; Slack still approves nothing (spec §10, §14).

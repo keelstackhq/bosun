@@ -376,7 +376,7 @@ The Claude Tag session labels itself:
 
 ```bash
 bosun join --origin slack --slack-channel C0123456789 [--slack-thread <ts>]
-bosun notify --channel-info -     # posts due: halt, main-red, asks
+bosun notify --channel-info -     # posts due: halt, main-red, asks (+ digest links if [slack] notify names "digest")
 ```
 
 Start the migration from a thread. An owner posts the request. The session:

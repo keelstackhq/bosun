@@ -36,13 +36,13 @@ use crate::registry;
 const TOKEN_VAR: &str = "BOSUN_OWNER_TOKEN";
 const MAIN_OPEN_WORKFLOW: &str = ".github/workflows/main-open.yml";
 
-struct Ready {
-    pr: u64,
-    title: String,
-    head_sha: String,
-    base_sha: String,
-    risk: Vec<String>,
-    files: Vec<String>,
+pub(crate) struct Ready {
+    pub(crate) pr: u64,
+    pub(crate) title: String,
+    pub(crate) head_sha: String,
+    pub(crate) base_sha: String,
+    pub(crate) risk: Vec<String>,
+    pub(crate) files: Vec<String>,
 }
 
 /// GitHub's compare API lists at most this many files and does not say when it cut the list.
@@ -82,13 +82,13 @@ const CLOUD_FIX: &str = "ask the owner with a form in the Claude Code chat; on a
 const LIST_HINT: &str = "ask the owner with a form in the Claude Code chat (repo, PR, head; approve or hold); on approve the orchestrator posts the signed comment (`bosun approve <pr>@<head> --sign-key <pem>`); fallback: the owner runs data.approve_command (bosun approve) on their own machine or approves in the GitHub UI; an unsigned /bosun approve comment posted through Claude's GitHub tool never counts; relay data.message and keep data.message_pairs: only the latest message is answerable";
 
 #[derive(Default)]
-struct Board {
-    ready: Vec<Ready>,
+pub(crate) struct Board {
+    pub(crate) ready: Vec<Ready>,
     waiting: Vec<(u64, &'static str)>,
     /// Waiting PRs whose dismissed withdrawal a fresh `bosun approve` comment ends: (pr, head, base).
     dismissed: Vec<(u64, String, String)>,
     /// What a tokenless listing could not read: (pr, or `None` for the PR list; why).
-    skipped: Vec<(Option<u64>, String)>,
+    pub(crate) skipped: Vec<(Option<u64>, String)>,
 }
 
 /// Why a tokenless listing may miss PRs, and the fix.
@@ -110,7 +110,7 @@ fn hold(gh: &dyn Github, p: &Pull, board: &mut Board) -> Result<bool> {
 /// The open PRs whose risk-check waits for an owner, split into ready and waiting, by number.
 /// Statuses, check runs and files all describe the head sha read with the PR. With `lenient`
 /// (a tokenless listing) a failed read skips that PR, or the whole list, into `skipped`.
-fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
+pub(crate) fn board(gh: &dyn Github, lenient: bool) -> Result<Board> {
     let mut pulls = match gh.list_pulls(None, IssueState::Open) {
         Ok(p) => p,
         Err(e) if lenient => {

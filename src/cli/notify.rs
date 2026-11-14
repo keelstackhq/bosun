@@ -25,6 +25,8 @@ use crate::time::{Timestamp, parse_rfc3339};
 const MAX_ASKS: usize = 5;
 /// At most this many pending thread replies per run.
 const MAX_RESULTS: usize = 10;
+/// At most this many PRs in one digest post.
+const MAX_DIGEST: usize = 20;
 /// Issues updated within this many seconds (7 days) are searched for results.
 const WINDOW_SECS: i64 = 7 * 86_400;
 /// Without `--thread`, a result younger than this is left to the live thread (15 minutes).
@@ -88,7 +90,11 @@ fn ack(dir: Option<&Path>, key: &str) -> CmdResult {
     if found.done.iter().any(|k| k == key) {
         return Ok(Outcome::data(json!({"acked": key, "already": true})));
     }
-    if !found.pending.iter().any(|p| p.key == key) {
+    // Today's digest key is checked by its format and the config, not by rebuilding the board.
+    let slack = app.ctx.config.slack.clone().unwrap_or_default();
+    let digest_today = key == format!("digest:{}", &app.ctx.now.to_string()[..10])
+        && slack.notify.iter().any(|k| k == "digest");
+    if !digest_today && !found.pending.iter().any(|p| p.key == key) {
         return Err(BosunError::conflict(
             format!("{key} is not a pending notification"),
             "ack only keys that `bosun notify` lists now; run it again",
@@ -289,6 +295,17 @@ fn collect(
             Err(e) => errors.push(json!({"kind": "budget-halt", "message": e.message})),
         }
     }
+    // Opt-in: an empty notify list does not include the digest. Never on an ack.
+    if matches!(results, Results::Scan)
+        && wants("digest")
+        && slack.notify.iter().any(|k| k == "digest")
+    {
+        match digest_post(app, &mut errors) {
+            Ok(Some(p)) => pending.push(p),
+            Ok(None) => {}
+            Err(e) => errors.push(json!({"kind": "digest", "message": e.message})),
+        }
+    }
     let ask_only = match results {
         Results::Ask(n) => Some(n),
         _ => None,
@@ -375,6 +392,50 @@ fn collect(
         done,
         errors,
     })
+}
+
+/// The daily post with one approve-by-GitHub-comment line per PR that waits for the owner.
+/// Slack approves nothing: bosun cannot verify a Slack user id, so the owner approves on GitHub.
+fn digest_post(app: &App, errors: &mut Vec<Value>) -> Result<Option<Pending>, BosunError> {
+    let (items, _, skipped) = super::digest::board_read(app)?;
+    if let Some(s) = skipped.as_array().filter(|s| !s.is_empty()) {
+        // A tokenless listing reads less; say so instead of posting a partial board silently.
+        errors.push(json!({"kind": "digest", "message": format!(
+            "some PRs could not be read with this session's token, so the digest may be short: {}",
+            Value::Array(s.clone()))}));
+    }
+    if items.is_empty() {
+        return Ok(None);
+    }
+    let r = &app.ctx.repo;
+    let mut text = format!("{} PR(s) wait for the owner:", items.len());
+    for i in items.iter().take(MAX_DIGEST) {
+        text.push_str(&format!(
+            "\n#{} https://github.com/{}/{}/pull/{} \u{2014} approve: comment `/bosun approve {}` from your own GitHub account (check the head on the PR page) \u{2014} {} {}",
+            i.pr,
+            r.owner,
+            r.name,
+            i.pr,
+            neutralise(&i.head),
+            tick_free(&i.title),
+            tick_free(&i.rules.join(", ")),
+        ));
+    }
+    if items.len() > MAX_DIGEST {
+        text.push_str(&format!("\nand {} more", items.len() - MAX_DIGEST));
+    }
+    text.push_str("\nSlack replies approve nothing.");
+    Ok(Some(Pending {
+        key: format!("digest:{}", &app.ctx.now.to_string()[..10]),
+        kind: "digest",
+        text,
+        thread_ts: None,
+    }))
+}
+
+/// Escaped text with no backtick, so a title cannot close or open the command's code span.
+fn tick_free(text: &str) -> String {
+    neutralise(text).replace('`', "'")
 }
 
 /// One `result` record that counts: by a writer, written after a writer's thread lease, which
