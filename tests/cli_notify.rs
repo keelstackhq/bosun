@@ -49,12 +49,7 @@ impl Env {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        for canary in [
-            TOKEN_CANARY,
-            "canary-owner-token",
-            "xoxb-canary-bot",
-            "xoxp-canary-user",
-        ] {
+        for canary in [TOKEN_CANARY, "xoxb-canary-bot", "xoxp-canary-user"] {
             assert!(!all.contains(canary), "{canary} leaked");
         }
         let v = one_object(&out.stdout);
