@@ -80,6 +80,21 @@ exact-inverse check.
 ### Commands
 
 - `bosun mode`: the effective mode and knobs with their sources; no GitHub call.
+- `bosun migrate --to <mode> [--direct] [--dry-run]`: survey (pinned version, mode, registry,
+  epics without a marker, hull lock, a 30-day metrics baseline with a timeout that never blocks:
+  `BOSUN_MIGRATE_METRICS_TIMEOUT`, default 20 s), then one draft governance PR on
+  `bosun/migrate-<mode>` with every file step: the `.bosun/version` pin (through `bosun pin --latest
+  --tool bosun` when the pin is older than 0.14.0; a bosun splice channel or an unpublished release
+  exits 3 naming the pin step), the `.bosun/registry` pin (the live registry; two open and no pin
+  exits 3) and `[mode] name`. One rung per run, lighter; `--direct` goes to the target and the
+  body records it as the owner's choice. A tighter target is one PR. It needs a clean tree on the default branch equal to
+  origin's; any failure restores the tree. An open `bosun/migrate-<step>` PR for the same step is
+  reused; one for another step exits 3. The body names the one owner approval (R-gov; R-weaken when lighter) and the owner-only
+  Routine steps. `--finish [--plan F]` after the merge (an open migrate PR exits 3): `bosun join`, then `bosun plan amend` for
+  each plan an open epic marker names (and each `--plan`) when `budget_feature` is not `off`
+  (only a repo-relative `.md` path with no `..` that resolves inside the repo; a bad marker path
+  is a note, a bad `--plan` exit 2);
+  both idempotent.
 - `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
   (a task's spend once), lead time p50 per epic, owner touches (an owner's own approve or
   answer, or a plain or after-review signature of an owner-role key) and owner-rule blocks;

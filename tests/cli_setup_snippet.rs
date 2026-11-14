@@ -342,3 +342,35 @@ fn a_merged_pin_reaches_the_next_session_without_a_new_paste() {
         "install record is keyed by tool@version"
     );
 }
+
+#[test]
+fn the_short_script_has_at_most_five_lines_and_runs_each_repo_script() {
+    let out = bosun().arg("setup-snippet").output().unwrap();
+    let v = one_object(&out.stdout);
+    let s = v["data"]["short"].as_str().unwrap().to_string();
+    assert!(s.lines().count() <= 5, "{s}");
+    assert!(
+        s.contains("docs/setup-script.sh") && s.contains(".bosun/version"),
+        "{s}"
+    );
+    let t = tempfile::tempdir().unwrap();
+    checkout(t.path(), "ok", true, Some("echo ran-ok >> \"$LOG\"\n"));
+    checkout(t.path(), "bad", true, Some("exit 7\n"));
+    checkout(
+        t.path(),
+        "plain",
+        false,
+        Some("echo ran-plain >> \"$LOG\"\n"),
+    );
+    let log = t.path().join("log");
+    let o = Command::new("bash")
+        .arg("-c")
+        .arg(&s)
+        .current_dir(t.path())
+        .env("LOG", &log)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    let l = fs::read_to_string(&log).unwrap_or_default();
+    assert!(l.contains("ran-ok") && !l.contains("ran-plain"), "{l}");
+}

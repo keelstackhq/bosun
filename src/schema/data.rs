@@ -93,7 +93,14 @@ uninstall = {dry_run: bool, files: [{action: str, path: str, fix?: str}], labels
 pin = {unchanged: [str], changed?: [{tool: str, from: str, to: str}], behind?: [{tool: str,
     from: str, to: str}], files?: [str], branch?: str, title?: str, pr?: int | {number: int,
     head_sha?: str} | null, pr_lookup?: str, left?: [str], steps?: [str], ci_minutes?: [str]};
-setup-snippet = {script: str, paste_into: str, repo_script: str, client_message: str,
+migrate = {from: str, to: str, step: str, direct: bool, lighter: bool, dry_run: bool,
+    changed: bool, reused: bool, survey: {version: str | null, binary: str, registry: {pinned: int | null,
+    live: int | null}, epics_unmarked: [int], plans: [str], hull: {lock: bool, version: str | null},
+    bosun_channel: bool, baseline: any, notes: [str]}, files: [str], pr: {number: int,
+    head_sha: str} | null, branch: str | null, owner: {approval: str, steps: [str]}, then: [str]}
+    | {joined: bool, amended: [{plan: str, ok: bool, exit_code: int, error: {..} | null}],
+    epics_unmarked: [int], mode: str, notes: [str]};
+setup-snippet = {script: str, short: str, paste_into: str, repo_script: str, client_message: str,
     autocompact?: {cloud_env: {CLAUDE_CODE_AUTO_COMPACT_WINDOW?: str}, local_exports: [str],
     paste_into: str, note?: str}};
 revert = {pr: int, revert_pr: int, reverted_sha: str, branch: str, base: str,
@@ -168,7 +175,11 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,
     gates?: [{context: str, state: str}], pending_checks?: [{context: str, state: str}],
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]},
-    epic_error?: str};
+    epic_error?: str} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
+    ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
+    enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
+    pending_checks?: [{context: str, state: str}],
+    trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]}};
 status = {repo: str, session: str, origin: str, halted: bool, integrity: str,
     integrity_reason?: str, main_red: int | null, process_red: int | null,
     issues_by_state: {[str]: int}, leases: [{issue: int, expires: str, session: str,

@@ -65,7 +65,8 @@ pub fn run(dir: Option<&Path>, a: &PlanPrArgs) -> CmdResult {
     let pr = super::pr::run(
         dir,
         &PrArgs {
-            issue: n,
+            issue: Some(n),
+            pr: None,
             title: None,
             ready: a.auto_merge,
             bundle: vec![],

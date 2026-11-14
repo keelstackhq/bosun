@@ -18,7 +18,8 @@ mod writes;
 pub use writes::bash_writes;
 
 const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open the PR with \
-    `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates";
+    `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates \
+    (a PR with no task: `bosun pr --pr <n> --auto-merge`)";
 
 /// The tools that write one file, and the input key that names it.
 pub fn edited_path(tool: &str, input: &Value) -> Option<String> {
@@ -4549,11 +4550,9 @@ mod tests {
             "mcp__github__merge_pull_request",
             "mcp__github__enable_pr_auto_merge",
         ] {
-            assert!(
-                tool_rules(t, &json!({}), &|_| None, "main")
-                    .unwrap()
-                    .contains("D13")
-            );
+            let why = tool_rules(t, &json!({}), &|_| None, "main").unwrap();
+            assert!(why.contains("D13"));
+            assert!(why.contains("bosun pr --pr <n> --auto-merge"), "{why}");
         }
     }
 
