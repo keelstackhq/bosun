@@ -60,8 +60,9 @@ human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 ## Web / cloud (claude.ai/code)
 
 1. **[computer]** Environment (session title bar → Edit), once per repo: paste the Quick start script as the
-   Setup script; Network access: Limited with "Allow package managers"; add only hosts
-   your `docs/setup-script.sh` downloads from (see A.4). No secrets, no PAT: GitHub comes from the Claude GitHub App.
+   Setup script; Network access: Limited with "Allow package managers"; add the hosts
+   your `docs/setup-script.sh` downloads from (A.4; a Rust repo needs `github.com` and
+   `release-assets.githubusercontent.com` for the prebuilt cargo tools). No secrets, no PAT: GitHub comes from the Claude GitHub App.
 2. Start a session on the repo in that environment. Paste the prompt from Quick start.
 3. **[phone]** Approve the PR head when Claude asks.
 4. **[computer]** Do the Routine steps the PR body lists.
@@ -385,7 +386,10 @@ Settings live in the cloud environment menu (session title bar → Edit). Source
    from and that package managers do not cover. In this repo's script they are:
    - `registry.npmjs.org`: the pinned tools (`npm pack`, `npm install`). Covered by package managers.
    - `deb.nodesource.com`: Node 24, only when the container has no Node 24 yet.
-   - `github.com`: the plugin marketplace clone (`claude plugin marketplace add`). It only warns on failure.
+   - `github.com`: the plugin marketplace clone (`claude plugin marketplace add`), and the prebuilt cargo tools
+     (cargo-nextest, cargo-deny) that redirect to the next host.
+   - `release-assets.githubusercontent.com`: those prebuilt cargo tools. Without it a Limited network falls back to
+     a slow `cargo install`.
    - `tuf-repo-cdn.sigstore.dev`: only when the checkout has no repo script (the bootstrap checks npm signatures).
    If your own setup script installs other tools, add exactly the hosts it downloads from. A denied host shows as a
    proxy refusal that names the host.
