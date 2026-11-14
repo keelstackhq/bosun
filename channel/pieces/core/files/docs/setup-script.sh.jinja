@@ -204,22 +204,26 @@ install_tool berth "$BERTH_VERSION" "$BERTH_SHA512" "$BERTH_LINUX_X64_SHA512" "$
 {% if "rust" in pieces %}# cargo-deny for the deps gate: the pinned npm packages when their pin is set, else (or when that
 # install fails) built by cargo. The test gate's own tool (cargo-nextest) installs below. Only a verified install
 # (its recorded fingerprint) counts, not another cargo-deny on PATH.
-# cargo_tool <crate> <version> <url> <sha256> <version args...>: the pinned prebuilt binary in
-# $CARGO_HOME/bin, else `cargo install --locked`. Warm: the binary there already reports the pin.
-# Never fails the script.
+# cargo_tool <crate> <version> <url> <sha256>: the pinned prebuilt binary in $CARGO_HOME/bin, else
+# `cargo install --locked`. Warm: skipped only when the binary there has the sha256 recorded at
+# its verified install (a binary that merely prints the version is not trusted). Never fails.
 cargo_tool() {
   crate="$1" ver="$2" url="$3" sum="$4"
-  shift 4
   dest="${CARGO_HOME:-${HOME:-/root}/.cargo}/bin"
-  if [ -x "$dest/$crate" ] && "$dest/$crate" "$@" 2>/dev/null | grep -Eq "(^|[[:space:]])${ver}([[:space:]]|\$)"; then return 0; fi
-  d="$(mktemp -d)"
-  if curl -fsSL --retry 2 --connect-timeout 15 -m 180 -o "$d/t.tgz" "$url" 2>/dev/null &&
+  rec="$SETUP_STATE_DIR/$crate@$ver.bin.sha256"
+  if [ -f "$rec" ] && [ -x "$dest/$crate" ] &&
+    [ "$(sha256sum "$dest/$crate" 2>/dev/null | cut -d' ' -f1)" = "$(cat "$rec")" ]; then return 0; fi
+  if d="$(mktemp -d)" &&
+    curl -fsSL --retry 2 --connect-timeout 15 -m 180 -o "$d/t.tgz" "$url" 2>/dev/null &&
     [ "$(sha256sum "$d/t.tgz" 2>/dev/null | cut -d' ' -f1)" = "$sum" ] &&
     tar -xzf "$d/t.tgz" -C "$d" && b="$(find "$d" -name "$crate" -type f | head -n1)" && [ -n "$b" ] &&
     mkdir -p "$dest" && install -m 0755 "$b" "$dest/$crate"; then
-    rm -rf "$d"; return 0
+    rm -rf "$d"
+    mkdir -p "$SETUP_STATE_DIR" && sha256sum "$dest/$crate" | cut -d' ' -f1 >"$rec" ||
+      echo "setup-script: could not record the fingerprint of $crate; it installs again on the next run" >&2
+    return 0
   fi
-  rm -rf "$d"
+  [ -z "${d:-}" ] || rm -rf "$d"
   echo "setup-script: prebuilt $crate $ver unavailable or not matching its pinned sha256; building it with cargo (minutes)" >&2
   if command -v cargo >/dev/null 2>&1; then
     cargo install --locked "$crate" || echo "setup-script: cargo install of $crate failed; continuing without it" >&2
@@ -241,7 +245,7 @@ if [ -n "$HAS_RUST" ]; then
   else
     cargo_tool cargo-deny "$CARGO_DENY_BIN_VERSION" \
       "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_BIN_VERSION}/cargo-deny-${CARGO_DENY_BIN_VERSION}-${DENY_ARCH}-unknown-linux-musl.tar.gz" \
-      "$DENY_SUM" --version
+      "$DENY_SUM"
   fi
   # cargo-nextest only while the pinned bosun's test gate runs it (releases before 0.12.0, spec
   # §7) or a repo profile names it: `cargo install` builds it from source (minutes).
@@ -249,7 +253,7 @@ if [ -n "$HAS_RUST" ]; then
     grep -qs nextest .bosun/profiles/rust.toml; }; then
     cargo_tool cargo-nextest "$NEXTEST_VERSION" \
       "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${DENY_ARCH}-unknown-linux-gnu.tar.gz" \
-      "$NEXTEST_SUM" nextest --version
+      "$NEXTEST_SUM"
   fi
 fi
 {% endif %}# bosun's integrity is not known when the channel is written (the pin is the channel's release

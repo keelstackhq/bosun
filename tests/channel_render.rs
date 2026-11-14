@@ -2102,6 +2102,50 @@ fn setup_scripts_download_prebuilt_cargo_tools_verified_and_fall_back_to_cargo()
         assert!(ok, "{name}: {err}");
         assert_eq!(tool_calls(&sb.calls(), "curl").len(), before, "{name}");
 
+        // A binary that only prints the pinned version is not trusted: it installs again.
+        fs::write(
+            sb.path("cargo-home/bin/cargo-deny"),
+            format!("#!/bin/sh\n# planted\necho 'cargo-deny {dv}'\n"),
+        )
+        .unwrap();
+        let before = tool_calls(&sb.calls(), "curl").len();
+        let (ok, err) = sb.run(&script_ok, "node24");
+        assert!(ok, "{name}: {err}");
+        assert_eq!(tool_calls(&sb.calls(), "curl").len(), before + 1, "{name}");
+
+        // A failing mktemp never aborts the step: cargo builds the tool.
+        let start = script.find("# cargo_tool <crate>").unwrap();
+        let end = script
+            .find("case \"$(uname -m)\" in\n  aarch64 | arm64) DENY_ARCH")
+            .unwrap();
+        let sb = SetupSandbox::new();
+        sb.stub("bin", "mktemp", "exit 1");
+        let body = format!(
+            "set -euo pipefail\nSETUP_STATE_DIR={}\n{}cargo_tool cargo-deny 1 http://x/y abc\necho done >> {}",
+            sb.path("state").display(),
+            &script[start..end],
+            sb.path("calls").display()
+        );
+        fs::write(sb.path("f.sh"), body).unwrap();
+        let path = format!(
+            "{}:{}",
+            sb.path("bin").display(),
+            std::env::var("PATH").unwrap()
+        );
+        let out = Command::new("bash")
+            .arg(sb.path("f.sh"))
+            .env("PATH", path)
+            .env("CARGO_HOME", sb.path("cargo-home"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{name}: {out:?}");
+        let calls = sb.calls();
+        assert!(
+            calls.contains("cargo install --locked cargo-deny"),
+            "{name}: {calls}"
+        );
+        assert!(calls.contains("done"), "{name}: {calls}");
+
         // Mismatch: the pinned sha256 does not match, so cargo builds both and the script still ends 0.
         let sb = SetupSandbox::new();
         rust(&sb);
