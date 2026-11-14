@@ -78,6 +78,9 @@ pub type Pin = (String, Option<u64>);
 /// Pages (of 100) that `recent_issues` reads.
 pub const RECENT_PAGES: usize = 5;
 
+/// What `permission` returns when a proxy hides the answer: not a writer, not known to lack access.
+pub const UNKNOWN_PERMISSION: &str = "unknown";
+
 pub trait Github {
     /// Issues (never pull requests) carrying all of `labels`.
     fn list_issues(&self, labels: &[&str], state: IssueState) -> Result<Vec<Issue>>;
@@ -105,6 +108,9 @@ pub trait Github {
     /// A user's permission on the repository (`admin`, `write`, `read` or `none`; maintain
     /// reads as `write`); `None` when GitHub does not know the user.
     fn permission(&self, user: &str) -> Result<Option<String>>;
+
+    /// Set the time budget for all GitHub calls of this command (`None` = none).
+    fn set_budget(&self, _secs: Option<u64>) {}
     /// One issue or PR comment by id; `None` when it does not exist.
     fn get_comment(&self, id: u64) -> Result<Option<Comment>>;
     fn update_comment(&self, id: u64, body: &str) -> Result<Comment>;
@@ -321,6 +327,8 @@ pub struct LiveGithub {
     repo: String,
     /// The token's login (`GET /user`), looked up once; `None` when unknown.
     login: std::sync::OnceLock<Option<String>>,
+    /// The proxy refused `/collaborators` once: later lookups skip the call.
+    collab_blocked: std::sync::atomic::AtomicBool,
 }
 
 impl LiveGithub {
@@ -331,6 +339,7 @@ impl LiveGithub {
             owner: owner.to_string(),
             repo: repo.to_string(),
             login: std::sync::OnceLock::new(),
+            collab_blocked: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -341,6 +350,7 @@ impl LiveGithub {
             owner: owner.to_string(),
             repo: repo.to_string(),
             login: std::sync::OnceLock::new(),
+            collab_blocked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -356,6 +366,7 @@ impl LiveGithub {
             owner: owner.to_string(),
             repo: repo.to_string(),
             login: std::sync::OnceLock::new(),
+            collab_blocked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -548,16 +559,36 @@ impl Github for LiveGithub {
         self.parse("comment", v)
     }
 
+    fn set_budget(&self, secs: Option<u64>) {
+        self.http.set_budget(secs);
+    }
+
     fn permission(&self, user: &str) -> Result<Option<String>> {
+        use std::sync::atomic::Ordering::Relaxed;
         let path = self.path(&format!("/collaborators/{}/permission", enc(user)));
-        match self.http.get_json(&path) {
+        let asked = if self.collab_blocked.load(Relaxed) {
+            Err(())
+        } else {
+            self.http.get_json_or_forbidden(&path)?
+        };
+        if asked.is_err() {
+            self.collab_blocked.store(true, Relaxed);
+        }
+        match asked {
             Ok(v) => Ok(v.and_then(|v| v["permission"].as_str().map(str::to_string))),
-            // A proxy (Claude Code cloud) may block /collaborators; the repo document still
-            // holds the token's own rights, so only the token's own login falls back to it.
-            Err(e) if self.own_login().as_deref() == Some(user) => {
-                self.own_permission().map_err(|_| e)
-            }
-            Err(e) => Err(e),
+            // A proxy (Claude Code cloud) answers 403 for /collaborators. Degrade, never fail:
+            // only the token's own login gets the rights the repo document shows; any other
+            // login (or an unknown own login) is `unknown`: not a writer, but not known to be
+            // harmless either.
+            Err(()) => match self.own_login() {
+                Some(l) if l == user => match self.own_permission() {
+                    Ok(p) => Ok(p),
+                    Err(_) => Ok(Some(UNKNOWN_PERMISSION.into())),
+                },
+                // Another login, or none known: `unknown`, never write. Readers of approvals
+                // and verdicts treat it as untrusted; leases and spend still count it.
+                _ => Ok(Some(UNKNOWN_PERMISSION.into())),
+            },
         }
     }
 

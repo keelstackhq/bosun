@@ -1,0 +1,1 @@
+- 2026-11-14 · fix: bosun works behind the cloud proxy (A1-A5 of the 0.14.0 booster feedback: permission 403 degrade, HTTP budget, wait --once, risk-check --dry-run, summary output)

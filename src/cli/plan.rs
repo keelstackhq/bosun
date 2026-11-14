@@ -594,6 +594,7 @@ fn amend(dir: Option<&Path>, a: &PlanAmendArgs) -> CmdResult {
         dry_run: a.dry_run,
         item: vec![],
         keep_plan_tasks_open: false,
+        full: a.full,
     };
     run_import(dir, &args, true)
 }
@@ -737,7 +738,27 @@ fn run_import(dir: Option<&Path>, a: &PlanImportArgs, amend: bool) -> CmdResult 
         )
         .with_data(data));
     }
+    if !a.full {
+        summarize_import(&mut data);
+    }
     Ok(Outcome::data(data))
+}
+
+/// The default view: epics and tasks the import left as they were are counted, not listed.
+fn summarize_import(data: &mut Value) {
+    let mut unchanged = serde_json::Map::new();
+    for key in ["epics", "tasks"] {
+        if let Some(rows) = data[key].as_array() {
+            let (same, changed): (Vec<_>, Vec<_>) = rows
+                .iter()
+                .cloned()
+                .partition(|r| r["action"] == "existing");
+            unchanged.insert(key.into(), json!(same.len()));
+            data[key] = Value::Array(changed);
+        }
+    }
+    data["unchanged"] = Value::Object(unchanged);
+    data["summary"] = json!(true);
 }
 
 /// A plan with prerequisites gets its checklist issue refreshed (as `bosun

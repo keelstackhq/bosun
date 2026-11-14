@@ -39,7 +39,7 @@ setup PR and merge it yourself. The rest, once, each listed by `bosun doctor`:
    (claude.ai/code > Environments > Setup script). It never needs a change.
 
 Rerun `bosun doctor` until only `plan` is `missing` (plus, on a computer, `plugins`, which
-cloud sessions install, and the optional Routines: create them from `data.routines`, then set
+cloud sessions install, and the optional Routines: create them from `data.routines` of `bosun doctor --full`, then set
 `BOSUN_ROUTINES_OK=1`). Then write your first plan: section 6 of
 [docs/adopt-existing-repo.md](docs/adopt-existing-repo.md), the long version, which also has undo.
 
