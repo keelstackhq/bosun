@@ -18,7 +18,7 @@ use crate::core::lease::{
 };
 use crate::core::lessons;
 use crate::core::meta::area_of;
-use crate::core::records::{Note, Record, parse_record, spend_total};
+use crate::core::records::{Note, Record, parse_record, spend_total_today};
 use crate::core::shape::{meta_gated, touch_gated_in};
 use crate::core::state::{State, state_of};
 use crate::github::{Github, Issue};
@@ -105,7 +105,7 @@ pub fn run(dir: Option<&Path>, args: &ClaimArgs) -> CmdResult {
     // idempotent re-claim above, which is not new work.
     if !mainfix {
         let daily = limits_from_default(gh, &app.ctx)?.budget.daily_usd;
-        let spent = spend_total(&registry::trusted_spend_notes(gh)?, Some(now.day_start()));
+        let spent = spend_total_today(&registry::trusted_spend_notes(gh)?, now.day_start());
         if no_new_work(spent, daily) {
             return Err(BosunError::limit(
                 format!(

@@ -15,7 +15,7 @@ use crate::core::budget::{Feature, feature_estimate, feature_level, level, to_st
 use crate::core::lease::members;
 use crate::core::meta::TaskMeta;
 use crate::core::mode::BudgetFeature;
-use crate::core::records::{Record, parse_record, spend_total};
+use crate::core::records::{Record, parse_record, spend_total, spend_total_today};
 use crate::core::state::{State, state_of};
 use crate::github::{Issue, IssueState};
 use crate::output::{BosunError, CmdResult, Outcome};
@@ -620,10 +620,12 @@ pub(super) fn parse_at(s: &str) -> Result<crate::time::Timestamp> {
     } else {
         s.to_string()
     };
-    let at = crate::time::parse_rfc3339(&full).filter(|t| *t <= crate::time::Timestamp::now());
+    let now = crate::time::Timestamp::now();
+    let at =
+        crate::time::parse_rfc3339(&full).filter(|t| *t <= now && *t >= now.minus_secs(48 * 3600));
     at.ok_or_else(|| {
         BosunError::usage(
-            format!("--at {s:?} is not a date or an RFC 3339 time in the past"),
+            format!("--at {s:?} is not a date or an RFC 3339 time within the last 48 hours"),
             "pass --at 2026-11-13, or --at 2026-11-13T09:30:00Z",
         )
     })
@@ -832,10 +834,7 @@ fn check(dir: Option<&Path>) -> CmdResult {
     let daily = limits.budget.daily_usd;
     let (mut spent, mut live) = (0.0, Vec::new());
     if let Some((_, notes)) = registry::load(gh)? {
-        spent = spend_total(
-            &registry::trusted_spend_notes(gh)?,
-            Some(ctx.now.day_start()),
-        );
+        spent = spend_total_today(&registry::trusted_spend_notes(gh)?, ctx.now.day_start());
         live = members(&notes);
     }
     let lvl = level(spent, daily);

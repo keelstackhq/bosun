@@ -43,7 +43,12 @@ fn status_with_a_seeded_repo() {
     fake.comment(1, &join_note("session_b", "2026-10-22T10:20:00Z"));
     fake.comment(1, &join_note("session_old", "2026-10-22T09:00:00Z"));
     fake.comment(1, &spend(15.0, "2026-10-22T08:00:00Z"));
-    fake.comment(1, &spend(99.0, "2026-10-21T23:00:00Z"));
+    fake.comment_at(
+        1,
+        "octocat",
+        &spend(99.0, "2026-10-21T23:00:00Z"),
+        "2026-10-21T23:00:00Z",
+    );
     fake.issue(2, "red", &["bosun:main-red"], "");
     fake.issue(3, "proc", &["bosun:process-red"], "");
     fake.issue(10, "t", &["bosun:state/building"], "");

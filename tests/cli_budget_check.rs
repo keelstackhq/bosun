@@ -101,7 +101,12 @@ fn uc_m4_2_below_80_percent_is_normal() {
 #[test]
 fn yesterdays_spend_is_ignored() {
     let fake = setup(10.0);
-    fake.comment(1, &spend(900.0, "2026-10-21T23:00:00Z"));
+    fake.comment_at(
+        1,
+        "octocat",
+        &spend(900.0, "2026-10-21T23:00:00Z"),
+        "2026-10-21T23:00:00Z",
+    );
     let v = check(&fake);
     assert_eq!(v["data"]["spent_today_usd"], 10.0);
     assert_eq!(v["data"]["level"], "normal");

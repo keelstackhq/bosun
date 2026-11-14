@@ -92,3 +92,22 @@ fn the_ledger_counts_for_the_daily_budget() {
     let v = one_object(&out.stdout);
     assert_eq!(v["data"]["spent_today_usd"], 4.0, "{v}");
 }
+
+#[test]
+fn at_is_bounded_and_a_back_dated_record_still_counts_today() {
+    let fake = FakeGithub::start();
+    let body = r#"{"session_id":"session_orch","usage":{"cost_usd":4.0}}"#;
+    let (code, v) = budget(&fake, body, &["--from", "-", "--at", "2026-10-10"]);
+    assert_eq!(code, 2, "{v}");
+    let (code, v) = budget(&fake, body, &["--from", "-", "--at", "2026-10-21"]);
+    assert_eq!(code, 0, "{v}");
+    // The comment was created "now" (the fake's clock), so `check` counts it for today.
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_NOW", T0)
+        .args(["budget", "check"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(v["data"]["spent_today_usd"], 4.0, "{v}");
+}

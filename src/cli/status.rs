@@ -12,7 +12,7 @@ use crate::app::{
 use crate::core::handoff::{children_of, finished_children};
 use crate::core::lease::{live_leases, members, orchestrator_of};
 use crate::core::mode::BudgetFeature;
-use crate::core::records::{Note, spend_total};
+use crate::core::records::{Note, spend_total_today};
 use crate::core::state::State;
 use crate::gates::integrity::reduced_reason;
 use crate::github::{Github, IssueState};
@@ -47,7 +47,7 @@ pub fn run(dir: Option<&Path>) -> CmdResult {
                 "depth": m.depth, "expires": m.expires.to_string()}),
             );
         }
-        spend = spend_total(&registry::trusted_spend_notes(gh)?, Some(now.day_start()));
+        spend = spend_total_today(&registry::trusted_spend_notes(gh)?, now.day_start());
     }
 
     let held: Vec<_> = active_issues(gh)?
