@@ -21,12 +21,14 @@ use crate::core::migrate::{
 };
 use crate::core::mode::{BudgetFeature, ModeName};
 use crate::core::pin::{get_line, keys};
+use crate::ctx::Ctx;
 use crate::github::{Github, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 const BRANCH: &str = "bosun/migrate-";
 const VERSION_FILE: &str = ".bosun/version";
 const REGISTRY_FILE: &str = ".bosun/registry";
+const NO_TOKEN: &str = "export GITHUB_TOKEN (repo scope), then rerun; `--dry-run` needs none";
 
 /// Everything the survey read; every failure is a note, never an error.
 struct Survey {
@@ -277,8 +279,9 @@ fn baseline(root: &Path) -> Result<Value, String> {
     }
 }
 
-fn survey(app: &App, with_baseline: bool) -> Survey {
-    let root = app.ctx.dir.as_path();
+/// `gh` is `None` for a tokenless dry run: the registry and epics then stay unknown (a note).
+fn survey(ctx: &Ctx, gh: Option<&dyn Github>, with_baseline: bool) -> Survey {
+    let root = ctx.dir.as_path();
     let mut s = Survey {
         version: read(root, VERSION_FILE).map(|v| v.trim().to_string()),
         pin_file: false,
@@ -302,10 +305,19 @@ fn survey(app: &App, with_baseline: bool) -> Survey {
             ));
         }
     }
-    match app
-        .gh
-        .list_issues(&[crate::registry::LABEL], IssueState::Open)
-    {
+    let Some(gh) = gh else {
+        s.notes.push(
+            "GitHub not read (no token): the registry issues and open epics are unknown; export GITHUB_TOKEN (or run in a cloud session) for the full survey"
+                .into(),
+        );
+        if let Some(t) = read(root, ".splice/lock.toml") {
+            s.hull_lock = true;
+            s.hull_version = first_version(&t);
+        }
+        s.baseline = Err("skipped".into());
+        return s;
+    };
+    match gh.list_issues(&[crate::registry::LABEL], IssueState::Open) {
         Ok(v) => {
             s.live = v
                 .iter()
@@ -318,7 +330,7 @@ fn survey(app: &App, with_baseline: bool) -> Survey {
             .notes
             .push(format!("cannot list the registry issues: {}", e.message)),
     }
-    match epics(app.gh.as_ref()) {
+    match epics(gh) {
         Ok((u, p)) => {
             s.epics_unmarked = u;
             s.plans = p;
@@ -418,16 +430,33 @@ fn then(pr: Option<u64>, step: ModeName, to: ModeName) -> Vec<String> {
 }
 
 pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
-    let app = App::load(dir)?;
     if !a.finish && !a.plan.is_empty() {
         return Err(BosunError::usage(
             "--plan only goes with --finish",
             "add --finish, or drop --plan",
         ));
     }
-    kill_switch(app.gh.as_ref())?;
+    // A dry run is a local survey and works without a token; everything else needs GitHub.
+    let (app, local);
+    let (ctx, gh): (&Ctx, Option<&dyn Github>) = match App::load(dir) {
+        Ok(x) => {
+            app = x;
+            (&app.ctx, Some(app.gh.as_ref()))
+        }
+        Err(e) if a.dry_run && !a.finish => {
+            local = Ctx::load(dir).map_err(|_| e)?;
+            (&local, None)
+        }
+        Err(e) => return Err(e),
+    };
+    if let Some(gh) = gh {
+        kill_switch(gh)?;
+    }
     if a.finish {
-        return finish(dir, &app, a);
+        let Some(gh) = gh else {
+            return Err(BosunError::error("--finish needs GitHub", NO_TOKEN));
+        };
+        return finish(dir, ctx, gh, a);
     }
     let to = a.to.as_deref().and_then(parse_mode).ok_or_else(|| {
         BosunError::usage(
@@ -435,11 +464,11 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
             "pass --to gatekeeper|steady|booster|autonomous",
         )
     })?;
-    let root = app.ctx.dir.clone();
-    let from = app.ctx.config.mode.name.unwrap_or(ModeName::Gatekeeper);
+    let root = ctx.dir.clone();
+    let from = ctx.config.mode.name.unwrap_or(ModeName::Gatekeeper);
     let next = step(from, to, a.direct);
     let lighter = is_lighter(from, next);
-    let s = survey(&app, true);
+    let s = survey(ctx, gh, true);
     if s.pinned.is_none() && !s.pin_file && s.live.len() > 1 {
         return Err(BosunError::conflict(
             format!(
@@ -507,13 +536,37 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
         data["then"] = json!([
             "nothing left to change here: `bosun migrate --finish` (join and amend, both idempotent)"
         ]);
+        // The change is on the default branch: finish the migration now (join, amend the plans).
+        if let (false, Some(gh)) = (a.dry_run, gh) {
+            match finish(dir, ctx, gh, a) {
+                Ok(o) => {
+                    data["finish"] = o.data;
+                    data["then"] = json!(["migration finished: joined and plans amended"]);
+                }
+                Err(e) => {
+                    let mut why = json!({"done": false, "reason": e.message, "fix": e.fix});
+                    if let Some(d) = &e.data {
+                        why["data"] = d.clone();
+                    }
+                    data["finish"] = why;
+                }
+            }
+        }
         return Ok(Outcome::data(data));
     }
     if a.dry_run {
+        if gh.is_none() {
+            data["then"] = json!([
+                "export GITHUB_TOKEN (repo scope) for the registry and epics survey, then `bosun migrate --to <mode>` does the rest: it opens the PR, runs the gates, turns on auto-merge, and finishes on the rerun after the merge"
+            ]);
+        }
         return Ok(Outcome::data(data));
     }
-    let repo = app.ctx.repo.to_string();
-    if let Some(p) = find_open(app.gh.as_ref(), &repo)? {
+    let Some(gh) = gh else {
+        return Err(BosunError::error("migrate needs GitHub", NO_TOKEN));
+    };
+    let repo = ctx.repo.to_string();
+    if let Some(p) = find_open(gh, &repo)? {
         if branch_step(&p.head_ref) != Some(next.as_str()) {
             return Err(BosunError::conflict(
                 format!(
@@ -536,7 +589,7 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
         return Ok(Outcome::data(data));
     }
     // Before anything is written.
-    let base = default_branch(app.gh.as_ref())?;
+    let base = default_branch(gh)?;
     let on = git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if on != base {
         return Err(BosunError::conflict(
@@ -610,9 +663,7 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
             baseline: s.baseline.as_ref().map(compact).map_err(Clone::clone),
             files: &files,
         });
-        publish(
-            &app, &root, &files, &base, &branch, &title, &text, &mut wrote,
-        )
+        publish(gh, &root, &files, &base, &branch, &title, &text, &mut wrote)
     })();
     let pull = match made {
         Ok(p) => p,
@@ -641,7 +692,82 @@ pub fn run(dir: Option<&Path>, a: &MigrateArgs) -> CmdResult {
     data["pr"] = json!({"number": pull.number, "head_sha": pull.head_sha});
     data["owner"]["approval"] = json!(approval(lighter, Some((pull.number, &pull.head_sha))));
     data["then"] = json!(then(Some(pull.number), next, to));
+    if !a.no_ready {
+        let ready = auto_ready(&root, pull.number);
+        if ready["done"] == true {
+            data["then"] = json!(after_ready(next, to));
+        }
+        data["ready"] = ready;
+    }
     Ok(Outcome::data(data))
+}
+
+/// What is left once the PR is ready with auto-merge on: the owner's approval, then the rerun.
+fn after_ready(step: ModeName, to: ModeName) -> Vec<String> {
+    let mut v = vec![
+        "wait for the owner's approval and the merge (auto-merge is on; bosun never merges)"
+            .to_string(),
+        format!(
+            "rerun `bosun migrate --to {}`: once merged it finishes (join, plan amend)",
+            step.as_str()
+        ),
+    ];
+    if step != to {
+        v.push(format!(
+            "after two weeks on {}, rerun `bosun migrate --to {}`",
+            step.as_str(),
+            to.as_str()
+        ));
+    }
+    v
+}
+
+/// Run the ready gates on the migration branch, then mark the PR ready with auto-merge on
+/// (`bosun pr --pr N --ready`). Never an error: what stopped it is `reason` and `fix`, and the
+/// owner or the session does the rest by hand (`data.then`).
+fn auto_ready(root: &Path, pr: u64) -> Value {
+    let stop = |reason: String, fix: String| json!({"done": false, "reason": reason, "fix": fix});
+    let gates = match super::stamps::ready_gates(root) {
+        Ok(g) => g,
+        Err(e) => return stop(format!("cannot list the gates: {}", e.message), e.fix),
+    };
+    let secs = std::env::var("BOSUN_MIGRATE_GATE_TIMEOUT")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(1800);
+    for g in &gates {
+        match run_self(root, &["gate", g], Duration::from_secs(secs)) {
+            Ok((0, _)) => {}
+            Ok((code, v)) => {
+                return stop(
+                    format!("gate {g} exited {code}: {}", error_text(&v)),
+                    error_fix(&v),
+                );
+            }
+            Err(why) => {
+                return stop(
+                    why,
+                    format!("run `bosun gate {g}` by hand, then `bosun pr --pr {pr} --ready`"),
+                );
+            }
+        }
+    }
+    let n = pr.to_string();
+    match run_self(
+        root,
+        &["pr", "--pr", &n, "--ready"],
+        Duration::from_secs(120),
+    ) {
+        Ok((0, v)) => json!({"done": true, "gates": gates, "pr": v["data"]}),
+        Ok((code, v)) => stop(
+            format!(
+                "`bosun pr --pr {pr} --ready` exited {code}: {}",
+                error_text(&v)
+            ),
+            error_fix(&v),
+        ),
+        Err(why) => stop(why, format!("run `bosun pr --pr {pr} --ready`")),
+    }
 }
 
 /// How far a run got, for the rollback.
@@ -776,7 +902,7 @@ fn pin_bosun(root: &Path, to: ModeName, written: &mut Vec<String>) -> Result<(),
 /// back.
 #[allow(clippy::too_many_arguments)]
 fn publish(
-    app: &App,
+    gh: &dyn Github,
     root: &Path,
     files: &[String],
     base: &str,
@@ -794,7 +920,7 @@ fn publish(
     let spec = format!("refs/heads/{branch}:refs/heads/{branch}");
     git_net(root, &["push", "-q", "-u", "origin", &spec])?;
     wrote.pushed = true;
-    app.gh.create_pull(title, branch, base, body, true)
+    gh.create_pull(title, branch, base, body, true)
 }
 
 /// `--finish`: join, then amend each plan (both idempotent).
@@ -827,9 +953,9 @@ fn plan_path_ok(root: &Path, p: &str) -> bool {
     }
 }
 
-fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
-    let repo = app.ctx.repo.to_string();
-    if let Some(p) = find_open(app.gh.as_ref(), &repo)? {
+fn finish(dir: Option<&Path>, ctx: &Ctx, gh: &dyn Github, a: &MigrateArgs) -> CmdResult {
+    let repo = ctx.repo.to_string();
+    if let Some(p) = find_open(gh, &repo)? {
         return Err(BosunError::conflict(
             format!("PR #{} not merged yet ({})", p.number, p.head_ref),
             "wait for the merge, then rerun `bosun migrate --finish`",
@@ -848,14 +974,14 @@ fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
         },
     )?;
     let mut notes: Vec<String> = Vec::new();
-    let (unmarked, found) = match epics(app.gh.as_ref()) {
+    let (unmarked, found) = match epics(gh) {
         Ok(x) => x,
         Err(e) => {
             notes.push(format!("cannot read the epics: {}", e.message));
             (Vec::new(), Vec::new())
         }
     };
-    let root = &app.ctx.dir;
+    let root = &ctx.dir;
     if let Some(bad) = a.plan.iter().find(|p| !plan_path_ok(root, p)) {
         return Err(BosunError::usage(
             format!("--plan {bad} is not a plan path inside the repo"),
@@ -873,15 +999,15 @@ fn finish(dir: Option<&Path>, app: &App, a: &MigrateArgs) -> CmdResult {
         }
     }
     // The merged config decides, not this checkout (which may be behind).
-    let base = default_branch(app.gh.as_ref())?;
-    let merged = match app.gh.file_at(CONFIG_FILE, &base)? {
+    let base = default_branch(gh)?;
+    let merged = match gh.file_at(CONFIG_FILE, &base)? {
         Some(t) => Config::parse(&t, &format!("{CONFIG_FILE} on {base}"))?,
         None => Config::default(),
     };
     let mode = merged.mode_effective().mode;
     let mut amended: Vec<Value> = Vec::new();
     let mut failed: Option<BosunError> = None;
-    if super::budget::knob_from_default(app.gh.as_ref())? == BudgetFeature::Off {
+    if super::budget::knob_from_default(gh)? == BudgetFeature::Off {
         if !plans.is_empty() {
             notes.push("budget_feature is off: the plans are not amended".into());
         }

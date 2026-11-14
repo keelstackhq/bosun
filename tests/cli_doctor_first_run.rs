@@ -50,10 +50,19 @@ fn without_a_token_local_steps_run_and_github_steps_are_skipped() {
     // The GitHub steps are one line, not one item each (P1-16).
     let line = step(&v, 0);
     assert_eq!(line["fix"], GH_FIX, "{line}");
-    for name in ["repo readable", "Claude GitHub App", "kill switch", "registry issue", "auto-merge"] {
+    for name in [
+        "repo readable",
+        "Claude GitHub App",
+        "kill switch",
+        "registry issue",
+        "auto-merge",
+    ] {
         assert!(line["detail"].as_str().unwrap().contains(name), "{line}");
         let items = v["data"]["items"].as_array().unwrap();
-        assert!(items.iter().all(|i| i["name"] != name), "{name} is its own item");
+        assert!(
+            items.iter().all(|i| i["name"] != name),
+            "{name} is its own item"
+        );
     }
     let items = v["data"]["items"].as_array().unwrap();
     let missing = items.iter().filter(|i| i["status"] == "missing").count();
@@ -241,7 +250,11 @@ fn a_pin_that_differs_from_the_binary_is_one_line_with_the_fix() {
         env!("CARGO_PKG_VERSION")
     );
     assert_eq!(it["detail"], want.as_str(), "{it}");
-    std::fs::write(tmp.path().join(".bosun/bosun.toml"), "from_the_future = 1\n").unwrap();
+    std::fs::write(
+        tmp.path().join(".bosun/bosun.toml"),
+        "from_the_future = 1\n",
+    )
+    .unwrap();
     let (code, v) = doctor(tmp.path(), false);
     assert_eq!(code, 1, "{v}");
     let fix = v["error"]["fix"].as_str().unwrap();

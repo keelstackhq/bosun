@@ -29,7 +29,11 @@ fn step_6_prints_the_setup_script_and_names_the_environment() {
     let tmp = tempfile::tempdir().unwrap();
     let script = "#!/bin/sh\nset -e\necho hi\n";
     write(tmp.path(), "docs/setup-script.sh", script);
-    write(tmp.path(), ".bosun/version", &format!("{}\n", env!("CARGO_PKG_VERSION")));
+    write(
+        tmp.path(),
+        ".bosun/version",
+        &format!("{}\n", env!("CARGO_PKG_VERSION")),
+    );
     let it = step6(tmp.path());
     assert_eq!(it["step"], 6);
     assert_eq!(it["status"], "ok", "{it}");
@@ -44,7 +48,11 @@ fn step_6_prints_the_setup_script_and_names_the_environment() {
 #[test]
 fn step_6_without_the_script_is_missing_with_null_content() {
     let tmp = tempfile::tempdir().unwrap();
-    write(tmp.path(), ".bosun/version", &format!("{}\n", env!("CARGO_PKG_VERSION")));
+    write(
+        tmp.path(),
+        ".bosun/version",
+        &format!("{}\n", env!("CARGO_PKG_VERSION")),
+    );
     let it = step6(tmp.path());
     assert_eq!(it["status"], "missing");
     assert!(it["content"].is_null());
@@ -62,7 +70,11 @@ fn problem(it: &Value) -> String {
 fn step_6_refuses_a_symlinked_script() {
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path(), "real.sh", "#!/bin/sh\n");
-    write(tmp.path(), ".bosun/version", &format!("{}\n", env!("CARGO_PKG_VERSION")));
+    write(
+        tmp.path(),
+        ".bosun/version",
+        &format!("{}\n", env!("CARGO_PKG_VERSION")),
+    );
     std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
     std::os::unix::fs::symlink(
         tmp.path().join("real.sh"),
@@ -75,7 +87,11 @@ fn step_6_refuses_a_symlinked_script() {
 #[test]
 fn step_6_reports_a_non_utf8_script_as_unreadable() {
     let tmp = tempfile::tempdir().unwrap();
-    write(tmp.path(), ".bosun/version", &format!("{}\n", env!("CARGO_PKG_VERSION")));
+    write(
+        tmp.path(),
+        ".bosun/version",
+        &format!("{}\n", env!("CARGO_PKG_VERSION")),
+    );
     std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
     std::fs::write(tmp.path().join("docs/setup-script.sh"), [0xff, 0xfe, 0x00]).unwrap();
     let d = problem(&step6(tmp.path()));
@@ -86,7 +102,11 @@ fn step_6_reports_a_non_utf8_script_as_unreadable() {
 #[test]
 fn step_6_caps_the_script_at_64_kib() {
     let tmp = tempfile::tempdir().unwrap();
-    write(tmp.path(), ".bosun/version", &format!("{}\n", env!("CARGO_PKG_VERSION")));
+    write(
+        tmp.path(),
+        ".bosun/version",
+        &format!("{}\n", env!("CARGO_PKG_VERSION")),
+    );
     write(
         tmp.path(),
         "docs/setup-script.sh",

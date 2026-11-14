@@ -230,7 +230,14 @@ fn no_remote_needs_no_token_and_repo() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().join("my app");
     std::fs::create_dir(&dir).unwrap();
-    assert!(std::process::Command::new("git").args(["init", "-q"]).arg(&dir).status().unwrap().success());
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&dir)
+            .status()
+            .unwrap()
+            .success()
+    );
     write(&dir, "Cargo.toml", "[package]\n");
     let v = no_remote(&dir, &["--bosun-version", "0.9.1"]);
     assert_eq!(v["data"]["stacks"], serde_json::json!(["rust"]));

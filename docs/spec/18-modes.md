@@ -95,6 +95,12 @@ exact-inverse check.
   (only a repo-relative `.md` path with no `..` that resolves inside the repo; a bad marker path
   is a note, a bad `--plan` exit 2);
   both idempotent.
+  The whole flow runs in one command: after the draft PR, `bosun migrate` runs each ready gate on the branch,
+  then `bosun pr --pr <n> --ready` (ready + auto-merge; bosun never merges); `data.ready` is
+  `{done, gates, pr}` or `{done: false, reason, fix}` (a failed step is never an error), and
+  `--no-ready` stops at the draft. Rerun the same command after the merge: with nothing left to change it
+  runs `--finish` itself (`data.finish`). `--dry-run` needs no token: a local survey (version, mode, files,
+  hull lock) with the registry and epics `unknown` in `survey.notes`; a real run without a token exits 1.
 - `bosun metrics [--days N]` (PR 5, read-only): over `--days`: red-CI rate, cost per merged PR
   (a task's spend once), lead time p50 per epic, owner touches (an owner's own approve or
   answer, or a plain or after-review signature of an owner-role key) and owner-rule blocks;

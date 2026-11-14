@@ -97,7 +97,7 @@ migrate = {from: str, to: str, step: str, direct: bool, lighter: bool, dry_run: 
     changed: bool, reused: bool, survey: {version: str | null, binary: str, registry: {pinned: int | null,
     live: int | null}, epics_unmarked: [int], plans: [str], hull: {lock: bool, version: str | null},
     bosun_channel: bool, baseline: any, notes: [str]}, files: [str], pr: {number: int,
-    head_sha: str} | null, branch: str | null, owner: {approval: str, steps: [str]}, then: [str]}
+    head_sha: str} | null, branch: str | null, owner: {approval: str, steps: [str]}, then: [str], ready?: any, finish?: any}
     | {joined: bool, amended: [{plan: str, ok: bool, exit_code: int, error: {..} | null}],
     epics_unmarked: [int], mode: str, notes: [str]};
 setup-snippet = {script: str, short: str, paste_into: str, repo_script: str, client_message: str,

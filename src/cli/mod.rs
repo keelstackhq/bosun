@@ -1275,6 +1275,9 @@ pub struct MigrateArgs {
     /// Survey and list the planned edits; write nothing, run no git, open no PR.
     #[arg(long, conflicts_with = "finish")]
     pub dry_run: bool,
+    /// Open the draft PR only: skip the local gates and the ready + auto-merge step that follow.
+    #[arg(long, conflicts_with_all = ["finish", "dry_run"])]
+    pub no_ready: bool,
     /// After the migration PR merged: join the registry and amend each plan (idempotent).
     #[arg(long, conflicts_with = "to")]
     pub finish: bool,

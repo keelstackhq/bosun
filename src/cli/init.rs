@@ -986,7 +986,6 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
 
     // With a token the labels (kill switch, registry, task states) are made now; a failure is a
     // warning, since the branch and the PR already exist.
-    let mut warnings = warnings;
     let mut labels: Vec<String> = Vec::new();
     if let (true, Some((app, _))) = (make_labels, &github) {
         for (name, color, desc) in super::adopt::labels_wanted() {
