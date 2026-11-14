@@ -843,8 +843,11 @@ pub struct BudgetRecordArgs {
     #[arg(long, requires = "pr")]
     pub usd: Option<f64>,
     /// With --pr: the session that spent it (an orchestrator recording for a child); default: the id in the get_session result, else the caller.
-    #[arg(long, requires = "pr")]
+    #[arg(long)]
     pub session: Option<String>,
+    /// The day (YYYY-MM-DD) or RFC 3339 time the spend happened; default: now.
+    #[arg(long)]
+    pub at: Option<String>,
     #[arg(long, default_value = "claude-sessions", value_parser = ["claude-sessions", "generic"])]
     pub provider: String,
     #[arg(long)]

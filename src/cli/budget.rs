@@ -613,6 +613,48 @@ pub(crate) fn spawn_guard(
     }
 }
 
+/// `--at`: a day (`YYYY-MM-DD`, taken as noon UTC) or an RFC 3339 time.
+pub(super) fn parse_at(s: &str) -> Result<crate::time::Timestamp> {
+    let full = if s.len() == 10 {
+        format!("{s}T12:00:00Z")
+    } else {
+        s.to_string()
+    };
+    crate::time::parse_rfc3339(&full).ok_or_else(|| {
+        BosunError::usage(
+            format!("--at {s:?} is not a date or an RFC 3339 time"),
+            "pass --at 2026-11-13, or --at 2026-11-13T09:30:00Z",
+        )
+    })
+}
+
+/// The session id of a get_session result, at the top level or in a ccr wrapper.
+pub(super) fn session_id_of(v: &Value) -> Option<String> {
+    [
+        &v["session_id"],
+        &v["session"]["id"],
+        &v["id"],
+        &v["ccr"]["session_id"],
+        &v["ccr"]["id"],
+    ]
+    .into_iter()
+    .find_map(|x| x.as_str().filter(|s| !s.is_empty()))
+    .map(String::from)
+}
+
+/// What the notes already hold of the spend of `session`.
+fn session_spent(notes: &[crate::core::records::Note], session: &str) -> f64 {
+    notes
+        .iter()
+        .filter_map(|n| match crate::core::records::parse_record(&n.body) {
+            Some(Record::Spend {
+                session: s, usd, ..
+            }) if s == session && usd.is_finite() && usd >= 0.0 => Some(usd),
+            _ => None,
+        })
+        .sum()
+}
+
 pub(super) fn read_input(from: &str) -> Result<Value> {
     let mut text = String::new();
     let read = if from == "-" {
@@ -660,16 +702,41 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     if !a.pr.is_empty() {
         return super::budget_pr::run(dir, a);
     }
-    let Some(n) = a.issue else {
-        return Err(BosunError::usage(
-            "budget record needs an issue number or --pr",
-            "pass the task issue, or --pr <n> for each PR the session made",
-        ));
-    };
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
-    let usd = usd_of(a, &ctx.config.prices)?;
+    let at = match a.at.as_deref() {
+        Some(s) => parse_at(s)?,
+        None => ctx.now,
+    };
+    // A claude-sessions result is the session total so far: only what the registry ledger does
+    // not hold yet for that session is new (no double count when recorded twice).
+    let input = match (a.provider.as_str(), a.from.as_deref()) {
+        ("claude-sessions", Some(from)) => Some(read_input(from)?),
+        _ => None,
+    };
+    let mut usd = match &input {
+        Some(v) => usage::from_claude_session(v)?,
+        None => usd_of(a, &ctx.config.prices)?,
+    };
+    // Without a session id in the result the cost is taken as new (nothing to subtract from).
+    let named = a
+        .session
+        .clone()
+        .or_else(|| input.as_ref().and_then(session_id_of));
+    let session = named.clone().unwrap_or_else(|| ctx.session.clone());
+    let mut previous = 0.0;
+    if named.is_some() && input.is_some() && usd.is_finite() && usd >= 0.0 {
+        previous = session_spent(&registry::trusted_spend_notes(gh)?, &session);
+        if usd <= previous + 1e-9 {
+            return Ok(Outcome::data(json!({
+                "issue": a.issue, "session": session, "usd": 0.0, "session_total_usd": usd,
+                "recorded_before_usd": previous, "provider": a.provider,
+                "no_new_spend": true,
+            })));
+        }
+        usd -= previous;
+    }
     if !usd.is_finite() || usd < 0.0 {
         return Err(BosunError::error(
             format!("the cost {usd} is negative or not a number"),
@@ -677,6 +744,23 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         ));
     }
     let limits = limits_from_default(gh, ctx)?;
+    let Some(n) = a.issue else {
+        // No task: the session-level ledger (an orchestrator's own spend). It counts for
+        // `daily_usd` (read from the registry), never for a task's `per_task_usd`.
+        let spend = Record::Spend {
+            session: session.clone(),
+            usd,
+            at: at.to_string(),
+            issue: None,
+            model: None,
+        };
+        let (registry_issue, _) = registry::ensure(gh)?;
+        gh.add_comment(registry_issue, &spend.to_line())?;
+        return Ok(Outcome::data(json!({
+            "issue": null, "ledger": true, "session": session, "usd": usd,
+            "session_total_usd": usd + previous, "provider": a.provider, "at": at.to_string(),
+        })));
+    };
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
             format!("issue #{n} does not exist"),
@@ -684,9 +768,9 @@ fn record(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         )
     })?;
     let spend = Record::Spend {
-        session: ctx.session.clone(),
+        session: session.clone(),
         usd,
-        at: ctx.now.to_string(),
+        at: at.to_string(),
         issue: Some(n),
         model: None,
     };

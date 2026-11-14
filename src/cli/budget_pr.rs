@@ -23,6 +23,10 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let app = App::load(dir)?;
     let (gh, ctx) = (app.gh.as_ref(), &app.ctx);
     kill_switch(gh)?;
+    let at = match a.at.as_deref() {
+        Some(s) => super::budget::parse_at(s)?,
+        None => ctx.now,
+    };
     let mut prs = a.pr.clone();
     prs.sort_unstable();
     prs.dedup();
@@ -42,7 +46,18 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
     let session = a.session.clone().unwrap_or_else(|| {
         input
             .as_ref()
-            .and_then(|v| text(v, &[&["session_id"], &["session", "id"], &["id"]]))
+            .and_then(|v| {
+                text(
+                    v,
+                    &[
+                        &["session_id"],
+                        &["session", "id"],
+                        &["id"],
+                        &["ccr", "session_id"],
+                        &["ccr", "id"],
+                    ],
+                )
+            })
             .unwrap_or(&ctx.session)
             .to_string()
     });
@@ -54,6 +69,8 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
                 &["session_context", "model"],
                 &["external_metadata", "last_served_model"],
                 &["model"],
+                &["ccr", "session_context", "model"],
+                &["ccr", "external_metadata", "last_served_model"],
             ],
         )
         .map(String::from)
@@ -98,7 +115,7 @@ pub fn run(dir: Option<&Path>, a: &BudgetRecordArgs) -> CmdResult {
         let spend = Record::Spend {
             session: session.clone(),
             usd: share,
-            at: ctx.now.to_string(),
+            at: at.to_string(),
             issue: None,
             model: model.clone(),
         };
