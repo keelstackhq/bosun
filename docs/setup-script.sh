@@ -29,6 +29,16 @@ CARGO_DENY_VERSION=""
 CARGO_DENY_SHA512=""
 CARGO_DENY_LINUX_X64_SHA512=""
 CARGO_DENY_LINUX_ARM64_SHA512=""
+# Prebuilt cargo tools (cargo install builds them from source: minutes). Release tarballs from
+# github.com (served by release-assets.githubusercontent.com), each pinned by the sha256 of the
+# tarball for this machine; a mismatch or a failed download falls back to `cargo install --locked`.
+# Move a pin with its checksums: curl -fsSL <asset url> | sha256sum.
+NEXTEST_VERSION=0.9.152
+NEXTEST_LINUX_X64_SHA256=d039b43c3e0958441b6ad0a39c8884d018b3d2e8fb9928f209074b1100b5e17a
+NEXTEST_LINUX_ARM64_SHA256=ca1f81a5b86533eb45ab97e0064aa88e925e53aab9a698ca6331a7cad1f85f07
+CARGO_DENY_BIN_VERSION=0.20.2
+CARGO_DENY_BIN_LINUX_X64_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+CARGO_DENY_BIN_LINUX_ARM64_SHA256=995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d
 # Claude Code plugins. `keelstack` is bosun's marketplace (.claude-plugin/marketplace.json on this
 # branch of keelstackhq/bosun, owner-reviewed); it pins each plugin source by sha. A marketplace ref
 # must be a branch or tag (`#<sha>` fails to clone). Move the plugin pins with marketplace.json;
@@ -187,6 +197,33 @@ install_tool bosun "$BOSUN_VERSION" "$BOSUN_SHA512" "$BOSUN_LINUX_X64_SHA512" "$
 # cargo-deny for the deps gate: the pinned npm packages when their pin is set, else (or when that
 # install fails) built by cargo. The test gate's own tool (cargo-nextest) installs below. Only a verified install
 # (its recorded fingerprint) counts, not another cargo-deny on PATH.
+# cargo_tool <crate> <version> <url> <sha256> <version args...>: the pinned prebuilt binary in
+# $CARGO_HOME/bin, else `cargo install --locked`. Warm: the binary there already reports the pin.
+# Never fails the script.
+cargo_tool() {
+  crate="$1" ver="$2" url="$3" sum="$4"
+  shift 4
+  dest="${CARGO_HOME:-${HOME:-/root}/.cargo}/bin"
+  if [ -x "$dest/$crate" ] && "$dest/$crate" "$@" 2>/dev/null | grep -Eq "(^|[[:space:]])${ver}([[:space:]]|\$)"; then return 0; fi
+  d="$(mktemp -d)"
+  if curl -fsSL --retry 2 --connect-timeout 15 -m 180 -o "$d/t.tgz" "$url" 2>/dev/null &&
+    [ "$(sha256sum "$d/t.tgz" 2>/dev/null | cut -d' ' -f1)" = "$sum" ] &&
+    tar -xzf "$d/t.tgz" -C "$d" && b="$(find "$d" -name "$crate" -type f | head -n1)" && [ -n "$b" ] &&
+    mkdir -p "$dest" && install -m 0755 "$b" "$dest/$crate"; then
+    rm -rf "$d"; return 0
+  fi
+  rm -rf "$d"
+  echo "setup-script: prebuilt $crate $ver unavailable or not matching its pinned sha256; building it with cargo (minutes)" >&2
+  if command -v cargo >/dev/null 2>&1; then
+    cargo install --locked "$crate" || echo "setup-script: cargo install of $crate failed; continuing without it" >&2
+  else
+    echo "setup-script: no cargo found; skipping $crate" >&2
+  fi
+}
+case "$(uname -m)" in
+  aarch64 | arm64) DENY_ARCH=aarch64 NEXTEST_SUM="$NEXTEST_LINUX_ARM64_SHA256" DENY_SUM="$CARGO_DENY_BIN_LINUX_ARM64_SHA256" ;;
+  *) DENY_ARCH=x86_64 NEXTEST_SUM="$NEXTEST_LINUX_X64_SHA256" DENY_SUM="$CARGO_DENY_BIN_LINUX_X64_SHA256" ;;
+esac
 if [ -n "$HAS_RUST" ]; then
   if [ -n "$CARGO_DENY_VERSION" ]; then
     install_tool cargo-deny "$CARGO_DENY_VERSION" "$CARGO_DENY_SHA512" "$CARGO_DENY_LINUX_X64_SHA512" "$CARGO_DENY_LINUX_ARM64_SHA512"
@@ -194,19 +231,18 @@ if [ -n "$HAS_RUST" ]; then
   if [ -n "$CARGO_DENY_VERSION" ] &&
     tool_warm cargo-deny "$(tool_arch)" "$SETUP_STATE_DIR/cargo-deny@${CARGO_DENY_VERSION}.sha256"; then
     : # installed from its pin
-  elif command -v cargo >/dev/null 2>&1; then
-    cargo install --locked cargo-deny ||
-      echo "setup-script: cargo install of cargo-deny failed; continuing without it" >&2
   else
-    echo "setup-script: no cargo found; skipping cargo-deny" >&2
+    cargo_tool cargo-deny "$CARGO_DENY_BIN_VERSION" \
+      "https://github.com/EmbarkStudios/cargo-deny/releases/download/${CARGO_DENY_BIN_VERSION}/cargo-deny-${CARGO_DENY_BIN_VERSION}-${DENY_ARCH}-unknown-linux-musl.tar.gz" \
+      "$DENY_SUM" --version
   fi
   # cargo-nextest only while the pinned bosun's test gate runs it (releases before 0.12.0, spec
   # §7) or a repo profile names it: `cargo install` builds it from source (minutes).
-  if command -v cargo >/dev/null 2>&1 &&
-    { [ "$(printf '%s\n0.12.0\n' "$BOSUN_VERSION" | sort -V | head -n1)" != 0.12.0 ] ||
-      grep -qs nextest .bosun/profiles/rust.toml; }; then
-    cargo install --locked cargo-nextest ||
-      echo "setup-script: cargo install of cargo-nextest failed; continuing without it" >&2
+  if { [ "$(printf '%s\n0.12.0\n' "$BOSUN_VERSION" | sort -V | head -n1)" != 0.12.0 ] ||
+    grep -qs nextest .bosun/profiles/rust.toml; }; then
+    cargo_tool cargo-nextest "$NEXTEST_VERSION" \
+      "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${DENY_ARCH}-unknown-linux-gnu.tar.gz" \
+      "$NEXTEST_SUM" nextest --version
   fi
 fi
 

@@ -1837,6 +1837,7 @@ impl SetupSandbox {
             .env("SETUP_NODE_LINK_DIR", self.path("link"))
             .env("SETUP_NODE_PROFILE", self.path("profile.sh"))
             .env("SETUP_STATE_DIR", self.path("state"))
+            .env("CARGO_HOME", self.path("cargo-home"))
             .output()
             .unwrap();
         (
@@ -1992,6 +1993,146 @@ fn nextest_skip_threshold_waits_for_the_cargo_test_default_gate() {
     }
 }
 
+/// A tarball with one executable `<name>` that prints `<name> <version>`, as `curl` would
+/// download it; returns (path, sha256).
+fn fake_release(sb: &SetupSandbox, name: &str, version: &str) -> (PathBuf, String) {
+    let src = sb.path(&format!("src-{name}"));
+    fs::create_dir_all(src.join(format!("{name}-rel"))).unwrap();
+    let bin = src.join(format!("{name}-rel")).join(name);
+    fs::write(&bin, format!("#!/bin/sh\necho '{name} {version}'\n")).unwrap();
+    fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let tgz = sb.path(&format!("{name}.tgz"));
+    assert!(
+        Command::new("tar")
+            .args([
+                "-czf",
+                tgz.to_str().unwrap(),
+                "-C",
+                src.to_str().unwrap(),
+                "."
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let sum = Command::new("sha256sum").arg(&tgz).output().unwrap().stdout;
+    let sum = String::from_utf8(sum).unwrap();
+    (tgz, sum.split_whitespace().next().unwrap().to_string())
+}
+
+/// The script with the pinned cargo tool checksums (both arches) set to `deny` and `nextest`.
+fn with_tool_sums(script: &str, deny: &str, nextest: &str) -> String {
+    script
+        .lines()
+        .map(|l| {
+            let pin =
+                |k: &str, v: &str| l.starts_with(&format!("{k}=")).then(|| format!("{k}={v}"));
+            pin("CARGO_DENY_BIN_LINUX_X64_SHA256", deny)
+                .or_else(|| pin("CARGO_DENY_BIN_LINUX_ARM64_SHA256", deny))
+                .or_else(|| pin("NEXTEST_LINUX_X64_SHA256", nextest))
+                .or_else(|| pin("NEXTEST_LINUX_ARM64_SHA256", nextest))
+                .unwrap_or_else(|| l.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+}
+
+/// cargo-deny and cargo-nextest come as pinned prebuilt release binaries (github.com assets,
+/// sha256-checked), not from `cargo install`; a mismatch falls back to cargo, a warm binary at the
+/// pinned version downloads nothing, and no cargo tool step runs without a Cargo.toml.
+#[test]
+fn setup_scripts_download_prebuilt_cargo_tools_verified_and_fall_back_to_cargo() {
+    for (name, script) in setup_scripts() {
+        let script = with_bosun_pin(&script, "0.11.0"); // an old pin: nextest installs too
+        let version = |k: &str| {
+            script
+                .lines()
+                .find_map(|l| l.strip_prefix(&format!("{k}=")))
+                .unwrap()
+                .to_string()
+        };
+        let (dv, nv) = (
+            version("CARGO_DENY_BIN_VERSION"),
+            version("NEXTEST_VERSION"),
+        );
+        let rust = |sb: &SetupSandbox| {
+            fs::write(sb.path("repo/Cargo.toml"), "[package]\nname = \"a\"\n").unwrap();
+        };
+        let curl_copies = |sb: &SetupSandbox| {
+            // copy the fixture that belongs to the requested asset to the -o target
+            sb.stub(
+                "bin",
+                "curl",
+                &format!(
+                    "echo \"curl $*\" >> {log}\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && o=\"$2\"; u=\"$1\"; shift; done\ncase \"$u\" in *cargo-deny*) cp {d} \"$o\" ;; *nextest*) cp {n} \"$o\" ;; esac",
+                    log = sb.path("calls").display(),
+                    d = sb.path("cargo-deny.tgz").display(),
+                    n = sb.path("cargo-nextest.tgz").display(),
+                ),
+            );
+        };
+
+        // Verified: both tools installed from github.com assets, cargo never builds.
+        let sb = SetupSandbox::new();
+        rust(&sb);
+        let (_, dsum) = fake_release(&sb, "cargo-deny", &dv);
+        let (_, nsum) = fake_release(&sb, "cargo-nextest", &nv);
+        curl_copies(&sb);
+        let script_ok = with_tool_sums(&script, &dsum, &nsum);
+        let (ok, err) = sb.run(&script_ok, "node24");
+        let calls = sb.calls();
+        assert!(ok, "{name}: {err}");
+        assert!(tool_calls(&calls, "cargo").is_empty(), "{name}: {calls}");
+        let urls = tool_calls(&calls, "curl")
+            .into_iter()
+            .filter(|c| c.contains("releases/download"))
+            .collect::<Vec<_>>();
+        assert_eq!(urls.len(), 2, "{name}: {calls}");
+        assert!(
+            urls.iter().all(|u| u.contains("https://github.com/")),
+            "{name}: {urls:?}"
+        );
+        assert!(sb.path("cargo-home/bin/cargo-deny").exists(), "{name}");
+        assert!(sb.path("cargo-home/bin/cargo-nextest").exists(), "{name}");
+
+        // Warm: the installed binaries report the pins, so a rerun downloads nothing.
+        let before = tool_calls(&sb.calls(), "curl").len();
+        let (ok, err) = sb.run(&script_ok, "node24");
+        assert!(ok, "{name}: {err}");
+        assert_eq!(tool_calls(&sb.calls(), "curl").len(), before, "{name}");
+
+        // Mismatch: the pinned sha256 does not match, so cargo builds both and the script still ends 0.
+        let sb = SetupSandbox::new();
+        rust(&sb);
+        fake_release(&sb, "cargo-deny", &dv);
+        fake_release(&sb, "cargo-nextest", &nv);
+        curl_copies(&sb);
+        let (ok, err) = sb.run(&script, "node24"); // the real pins match no fixture
+        let calls = sb.calls();
+        assert!(ok, "{name}: {err}");
+        assert_eq!(
+            tool_calls(&calls, "cargo"),
+            [
+                "cargo install --locked cargo-deny",
+                "cargo install --locked cargo-nextest"
+            ],
+            "{name}: {calls}"
+        );
+        assert!(err.contains("pinned sha256"), "{name}: {err}");
+        assert!(!sb.path("cargo-home/bin/cargo-deny").exists(), "{name}");
+
+        // No Cargo.toml: no cargo tool download or build.
+        let sb = SetupSandbox::new();
+        curl_copies(&sb);
+        let (ok, err) = sb.run(&script, "node24");
+        let calls = sb.calls();
+        assert!(ok, "{name}: {err}");
+        assert!(!calls.contains("releases/download"), "{name}: {calls}");
+        assert!(tool_calls(&calls, "cargo").is_empty(), "{name}: {calls}");
+    }
+}
+
 /// A checkout with neither Cargo.toml nor rust-toolchain.toml (a ts-only repo) gets no rustup and
 /// no cargo step at all, and no Rust warning.
 #[test]
@@ -2122,8 +2263,11 @@ fn setup_scripts_skip_cargo_deny_at_its_recorded_fingerprint() {
         let p = script.find("# cargo-deny for the deps gate").unwrap();
         let blk = &script[p..p + script[p..].find("\n  fi\nfi\n").unwrap() + 8];
         let pins = "HAS_RUST=1 BOSUN_VERSION=0.12.0 CARGO_DENY_VERSION=0.20.2 CARGO_DENY_SHA512=a \
-            CARGO_DENY_LINUX_X64_SHA512=b CARGO_DENY_LINUX_ARM64_SHA512=c\n\
-            cargo() { echo \"cargo $*\" >>\"$LOG\"; }\n";
+            CARGO_DENY_LINUX_X64_SHA512=b CARGO_DENY_LINUX_ARM64_SHA512=c \
+            NEXTEST_VERSION=1 NEXTEST_LINUX_X64_SHA256=x NEXTEST_LINUX_ARM64_SHA256=x \
+            CARGO_DENY_BIN_VERSION=0.20.2 CARGO_DENY_BIN_LINUX_X64_SHA256=x CARGO_DENY_BIN_LINUX_ARM64_SHA256=x\n\
+            cargo() { echo \"cargo $*\" >>\"$LOG\"; }\n\
+            curl() { return 22; }\nCARGO_HOME=\"$D/ch\"\n";
         let step = |extra: &str| {
             run_with_tool_tree(
                 "cargo-deny",
