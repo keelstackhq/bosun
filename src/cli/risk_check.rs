@@ -108,14 +108,8 @@ const UNFINISHED: &str = "risk-check could not finish; fix the error and re-run 
 /// Whether the plan file at `base` rates the task bound to issue `n` (a trusted `bind` record)
 /// `risk: high`. No bind, no plan file or an unparsable one: no.
 fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
-    let binds = crate::cli::budget::binds_of(gh, n).unwrap_or_else(|e| {
-        eprintln!(
-            "bosun: risk-check: cannot read the binds of #{n}: {}",
-            e.message
-        );
-        Vec::new()
-    });
-    for (_, r) in binds {
+    // A read error fails the check: never a silent "not high".
+    for (_, r) in crate::cli::budget::binds_of(gh, n)? {
         if let Record::Bind {
             plan,
             item,
