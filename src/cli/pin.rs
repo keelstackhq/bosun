@@ -326,11 +326,17 @@ pub fn run(dir: Option<&Path>, a: &PinArgs) -> CmdResult {
     }
     // bosun 0.7.0 added the ci-minutes gate to bosun-ok, but the PR's own CI runs the old pin and
     // passes; main then fails. Run that gate here so the PR lists what the new pin will enforce.
-    let gate_new = latest
+    let from_old = changed
         .iter()
-        .find(|(t, _)| *t == "bosun")
-        .and_then(|(_, m)| parse_semver(&m.version))
-        .is_some_and(|v| v >= (0, 7, 0));
+        .find(|c| c["tool"] == "bosun")
+        .and_then(|c| c["from"].as_str())
+        .and_then(parse_semver);
+    let gate_new = from_old.is_some_and(|f| f < (0, 7, 0))
+        && latest
+            .iter()
+            .find(|(t, _)| *t == "bosun")
+            .and_then(|(_, m)| parse_semver(&m.version))
+            .is_some_and(|v| v >= (0, 7, 0));
     let ci_findings: Vec<String> = if gate_new {
         let (_, found) = super::ci_minutes::scan(&root);
         found

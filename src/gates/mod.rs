@@ -296,7 +296,9 @@ fn execute(
     let diff_str = diff.as_ref().map(|d| d.to_string_lossy().into_owned());
     let argv = gate.expand_packages(gate.expand_cmd(files, diff_str.as_deref()), extra);
 
-    let argv = if nextest_installed() {
+    // Only the built-in test command: a repo's own `cargo test ...` override stays as written.
+    let builtin_test = gate.cmd == ["cargo", "test", "--locked"];
+    let argv = if builtin_test && nextest_installed() {
         profile::with_nextest(argv)
     } else {
         argv

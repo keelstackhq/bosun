@@ -103,6 +103,13 @@ fn a_fork_pr_named_like_the_pin_branch_does_not_hide_the_create_call() {
 fn a_bosun_pin_lists_the_ci_minutes_findings_the_new_release_enforces() {
     let fake = FakeGithub::start();
     let d = repo();
+    let script = d.path().join("docs/setup-script.sh");
+    let old = std::fs::read_to_string(&script).unwrap();
+    std::fs::write(
+        &script,
+        old.replace("BOSUN_VERSION=0.9.0", "BOSUN_VERSION=0.6.0"),
+    )
+    .unwrap();
     let wf = d.path().join(".github/workflows/ci.yml");
     std::fs::create_dir_all(wf.parent().unwrap()).unwrap();
     std::fs::write(

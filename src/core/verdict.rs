@@ -44,6 +44,9 @@ pub struct Verdict {
     pub chunks_reviewed: Vec<u32>,
 }
 
+/// A count above this is capped: the number comes from an untrusted verdict.
+const MAX_CHUNK_COUNT: u32 = 1000;
+
 fn chunks_list_or_count<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u32>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -53,7 +56,7 @@ fn chunks_list_or_count<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u3
     }
     Ok(match Chunks::deserialize(d)? {
         Chunks::List(l) => l,
-        Chunks::Count(n) => (1..=n).collect(),
+        Chunks::Count(n) => (1..=n.min(MAX_CHUNK_COUNT)).collect(),
     })
 }
 
@@ -277,6 +280,8 @@ mod tests {
         let l = Verdict::parse(&format!("{head}[2,1]}}")).unwrap();
         assert_eq!(l.chunks_reviewed, vec![2, 1]);
         assert!(Verdict::parse(&format!("{head}\"x\"}}")).is_err());
+        let big = Verdict::parse(&format!("{head}4294967295}}")).unwrap();
+        assert_eq!(big.chunks_reviewed.len(), MAX_CHUNK_COUNT as usize);
     }
 
     #[test]

@@ -44,8 +44,9 @@ profile has three adapters:
 - `bosun gate test` runs the built-in `cargo test ...` as `cargo nextest run ...` when `cargo nextest`
   is installed (CI runs nextest, one process per test, so a test that shares process state passes
   there and must pass here); without nextest, or with `BOSUN_NO_NEXTEST=1`, it stays `cargo test`.
-- Rust test gate: the built-in profile runs `cargo test --locked` (since 2026-11-10; was
-  `cargo nextest run --locked`). CI runs the release pinned in `.bosun/version`, and releases up to
+- Rust test gate: the built-in profile's command is `cargo test --locked` (since 2026-11-10; was
+  `cargo nextest run --locked`); the runner swaps in nextest when installed, as above, so doctests
+  run only where nextest is missing (only the built-in command is swapped, never a repo override). CI runs the release pinned in `.bosun/version`, and releases up to
   0.11.0 run nextest, so the channel's CI files keep installing cargo-nextest (prebuilt, seconds). `cargo test`
   also runs doctests, which nextest never ran: a repo with stale doctests may go red. A repo that
   wants nextest sets `[gates.test] cmd = ["cargo", "nextest", "run", "--locked"]` in
