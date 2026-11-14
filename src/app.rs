@@ -275,11 +275,11 @@ fn notes_from(gh: &dyn Github, number: u64, mode: Count) -> Result<Vec<Note>> {
         // approves or answers does, and no lease is evidence for anything.
         let counts = match who {
             Who::Writer => true,
-            Who::Unknown => match (mode, parse_record(&c.body)) {
-                (Count::Spend, Some(Record::Spend { .. })) => true,
-                (Count::Blocking, Some(Record::Lease { .. })) => true,
-                _ => false,
-            },
+            Who::Unknown => matches!(
+                (mode, parse_record(&c.body)),
+                (Count::Spend, Some(Record::Spend { .. }))
+                    | (Count::Blocking, Some(Record::Lease { .. }))
+            ),
             Who::Other => false,
         };
         if counts {
