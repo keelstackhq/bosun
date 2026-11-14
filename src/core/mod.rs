@@ -24,6 +24,7 @@ pub mod lessons;
 pub mod lockmerge;
 pub mod meta;
 pub mod metrics;
+pub mod migrate;
 pub mod mode;
 pub mod pin;
 pub mod plan;

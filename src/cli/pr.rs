@@ -101,7 +101,11 @@ fn check_state(statuses: &[Status], runs: &[CheckRun], ctx: &str) -> String {
 }
 
 /// `(context, state)` of every required check that is not green on `sha` (information only).
-fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+pub(crate) fn not_green(
+    gh: &dyn Github,
+    base: &str,
+    sha: &str,
+) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = gh.statuses(sha)?;
     let runs = gh.check_runs(sha)?;
     Ok(required(gh, base)?
@@ -117,7 +121,7 @@ fn not_green(gh: &dyn Github, base: &str, sha: &str) -> Result<Vec<(String, Stri
 /// The gates a merge relies on: `(context, state)` of `risk-check` and `review-verdict` on `sha`.
 /// Only a commit status posted by `github-actions[bot]` counts; a check run or a status from
 /// anyone else with the same name is ignored (`missing`), as in `risk-check` itself.
-fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
+pub(crate) fn merge_gates(gh: &dyn Github, sha: &str) -> Result<Vec<(String, String)>, BosunError> {
     let statuses = crate::github::gate::gate_statuses(gh, sha)?;
     Ok(["risk-check", "review-verdict"]
         .into_iter()
@@ -277,7 +281,7 @@ fn touch_check(
 
 /// `--ready`: the local HEAD is the PR head, and every ready gate passed on its tree.
 /// Exit 3 when the heads differ, exit 1 with `data.missing_gates` when a stamp is missing.
-fn check_local_gates(app: &App, issue: u64, pull: &Pull) -> Result<(), BosunError> {
+pub(crate) fn check_local_gates(app: &App, rerun: &str, pull: &Pull) -> Result<(), BosunError> {
     let (n, dir) = (pull.number, app.ctx.dir.as_path());
     let local = stamps::head_sha(dir).ok_or_else(|| {
         BosunError::error(
@@ -294,7 +298,7 @@ fn check_local_gates(app: &App, issue: u64, pull: &Pull) -> Result<(), BosunErro
                 short(&pull.head_sha)
             ),
             format!(
-                "push your commits (`git push`) or pull the branch (`git pull`) so the local HEAD is the PR head, then rerun `bosun pr {issue} --ready`"
+                "push your commits (`git push`) or pull the branch (`git pull`) so the local HEAD is the PR head, then rerun `{rerun}`"
             ),
         )
         .with_data(json!({"pr": n, "head_sha": pull.head_sha, "local_head": local})));
@@ -318,17 +322,60 @@ fn check_local_gates(app: &App, issue: u64, pull: &Pull) -> Result<(), BosunErro
             missing.join(", ")
         ),
         format!(
-            "commit your work, then run `{}`; fix what fails, then rerun `bosun pr {issue} --ready`",
+            "commit your work, then run `{}`; fix what fails, then rerun `{rerun}`",
             gate_loop(&missing)
         ),
     )
     .with_data(json!({"pr": n, "head_sha": pull.head_sha, "missing_gates": missing})))
 }
 
+/// What the branch enforces: `verified` when its ruleset requires every default check, `unknown`
+/// when that cannot be read (a 403 proves nothing). Needs-human when a check is not required:
+/// auto-merge would merge the PR ungated.
+pub(crate) fn enforced_checks(
+    gh: &dyn Github,
+    base: &str,
+    pull: &Pull,
+    rerun: &str,
+) -> Result<&'static str, BosunError> {
+    Ok(match gh.required_status_checks(base)? {
+        Live::Checks(on) => {
+            let missing: Vec<&str> = (REQUIRED.iter().copied())
+                .filter(|c| !on.iter().any(|o| o == c))
+                .collect();
+            if !missing.is_empty() {
+                return Err(BosunError::needs_human(
+                    format!(
+                        "{base} does not require {}, so auto-merge could merge PR #{} ungated",
+                        missing.join(", "),
+                        pull.number
+                    ),
+                    format!(
+                        "an admin runs `hoist apply --area github` so the ruleset requires them, then rerun `{rerun}`"
+                    ),
+                )
+                .with_data(json!({
+                    "pr": pull.number, "head_sha": pull.head_sha, "unenforced": missing,
+                })));
+            }
+            "verified"
+        }
+        Live::Partial(..) | Live::Forbidden => "unknown",
+    })
+}
+
 pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
+    if let Some(n) = args.pr {
+        return super::pr_gov::run(dir, n, args.ready);
+    }
     let app = App::load(dir)?;
     let gh = app.gh.as_ref();
-    let n = args.issue;
+    let n = args.issue.ok_or_else(|| {
+        BosunError::usage(
+            "no task issue and no --pr given",
+            "pass the task issue number, or --pr <N> for a PR with no task",
+        )
+    })?;
     kill_switch(gh)?;
     let issue = gh.get_issue(n)?.ok_or_else(|| {
         BosunError::error(
@@ -517,35 +564,17 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 "an escalated or blocked task needs the owner: wait for the owner's answer (the owner restores a missing state label), then rerun",
             ));
         }
-        check_local_gates(&app, n, &pull)?;
+        check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;
         gates = merge_gates(gh, &pull.head_sha)?;
         // Auto-merge waits only for what the branch enforces: never turn it on for a branch
         // that would merge without the gates. A 403 proves nothing, so it does not block.
-        enforced = Some(match gh.required_status_checks(&base)? {
-            Live::Checks(on) => {
-                let missing: Vec<&str> = (REQUIRED.iter().copied())
-                    .filter(|c| !on.iter().any(|o| o == c))
-                    .collect();
-                if !missing.is_empty() {
-                    return Err(BosunError::needs_human(
-                        format!(
-                            "{base} does not require {}, so auto-merge could merge PR #{} ungated",
-                            missing.join(", "),
-                            pull.number
-                        ),
-                        format!(
-                            "an admin runs `hoist apply --area github` so the ruleset requires them, then rerun `bosun pr {n} --ready`"
-                        ),
-                    )
-                    .with_data(json!({
-                        "pr": pull.number, "head_sha": pull.head_sha, "unenforced": missing,
-                    })));
-                }
-                "verified"
-            }
-            Live::Partial(..) | Live::Forbidden => "unknown",
-        });
+        enforced = Some(enforced_checks(
+            gh,
+            &base,
+            &pull,
+            &format!("bosun pr {n} --ready"),
+        )?);
         // Said before anything is turned on, and only once enforcement is known.
         let line: Vec<String> = gates.iter().map(|(c, s)| format!("{c}={s}")).collect();
         let why = if enforced == Some("verified") {

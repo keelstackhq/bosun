@@ -1,25 +1,90 @@
-# Migrate a repo to booster mode
+# Move a repo to another bosun mode
 
-Audience: Claude (an agent) that moves a repo from `gatekeeper` or `steady` to `booster`, and the
-owner, who does a few steps. The repo already runs hull and bosun.
+Audience: Claude (an agent) in a repo that already runs bosun, and the owner. Goal: one command, one owner
+approval. Modes run gatekeeper < steady < booster < autonomous (quickstart §0).
 
-Facts come from [quickstart.md](quickstart.md), [update.md](update.md),
-[prerequisites.md](prerequisites.md), the
-[modes design](superpowers/specs/2026-11-11-modes-booster-design.md), `AGENTS.md` and `bosun <command> --help`.
-A line marked **TODO** is not in these sources. Do not guess it. Ask the owner.
+## Quick start
 
-Rules for the whole page:
+Cloud environment setup script (`bosun setup-snippet` prints it as `data.short`; paste it once):
 
-- Run one command. Read the one JSON object it prints. Check `ok`, `exit_code`, `data`, `error.fix`, `next`.
-- On a refusal, do what `error.fix` says. Never work around it.
-- bosun never calls Claude Code tools (D29). Make each call it returns in `next`. Nothing else.
-- Agents never merge, tag or force-push (D-008). Auto-merge only.
-- Owner steps are **[phone]** or **[computer]** (D-009). Do them in the order given.
-- Go one step at a time: `gatekeeper` → `steady` → `booster`. Never skip `steady`. Never go lighter in a red week.
+```bash
+for d in . ./*/; do
+  [ -f "$d/.bosun/version" ] && [ -f "$d/docs/setup-script.sh" ] || continue
+  (cd "$d" && timeout -k 10 1800 bash docs/setup-script.sh </dev/null) || echo "bosun: $d/docs/setup-script.sh failed" >&2
+done; exit 0
+```
 
-## 1. Before you start
+Each repo's own `docs/setup-script.sh` installs the pinned bosun (sha512 checked) and the rest. A repo without that
+script needs the long form, `data.script`.
 
-### 1.1 Check
+The prompt, the same in the CLI, on the web and to Claude Tag in Slack:
+
+```text
+Run `bosun migrate --to booster --direct`; do what its `next` and `data.then` say; stop when it asks for the owner.
+After the merge run `bosun migrate --finish`.
+```
+
+This prompt goes straight to booster: `--direct` is the owner's choice, and the PR body records it. Drop
+`--direct` to move one step (gatekeeper → steady). The owner approves the one PR head.
+
+## What `bosun migrate` does
+
+```bash
+bosun migrate --to booster --dry-run   # survey and planned edits; writes nothing
+bosun migrate --to booster             # one governance PR (draft)
+bosun migrate --finish                 # after the merge: join, plan amend (idempotent)
+```
+
+- **Survey:** pinned version, current mode, registry issue, epics without a `bosun:epic` marker, hull lock,
+  and a 30-day metrics baseline (best effort, 20 s timeout: a missing baseline never blocks).
+- **One PR** with every file step: the `.bosun/version` pin (when the release is on npm; else exit 3 that names
+  the pin step), the `.bosun/registry` pin, and `[mode] name`. The PR body lists the one owner approval and the
+  owner-only steps left (Routines). An open PR for the same step is reused.
+- **One step at a time:** without `--direct` it moves one rung (gatekeeper → steady). With `--direct` it goes
+  straight to the target; the PR body records that the owner chose it.
+- **Auto-merge without a task:** `bosun pr --pr <n> --ready` marks the PR ready and turns on auto-merge after the
+  local gates. risk-check still waits for the owner: R-gov always, R-weaken for a lighter mode.
+- **After the merge:** `bosun migrate --finish` runs `bosun join`, then `bosun plan amend` for each plan an open
+  epic names (add `--plan <file>` for an epic without a marker). Run it twice: the second run changes nothing.
+
+The owner does one approval per PR: the exact head (repo, PR, head SHA) in the way bosun asks. Routines stay
+human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
+
+## CLI (Claude Code on your machine)
+
+1. **[computer]** `npm i -g @keelstackhq/bosun` (a release where `bosun migrate --help` works), `gh auth login` once.
+2. Set `GITHUB_TOKEN` to `gh auth token` in your shell. Never in a file.
+3. Open Claude Code in the repo, on the default branch, clean tree. Paste the prompt from Quick start.
+4. **[phone]** Approve the PR head when Claude asks.
+5. **[computer]** Do the Routine steps the PR body lists.
+
+## Web / cloud (claude.ai/code)
+
+1. **[computer]** Environment (session title bar → Edit), once per repo: paste the Quick start script as the
+   Setup script; Network access: Limited with "Allow package managers"; add the hosts
+   your `docs/setup-script.sh` downloads from (A.4; a Rust repo needs `github.com` and
+   `release-assets.githubusercontent.com` for the prebuilt cargo tools). No secrets, no PAT: GitHub comes from the Claude GitHub App.
+2. Start a session on the repo in that environment. Paste the prompt from Quick start.
+3. **[phone]** Approve the PR head when Claude asks.
+4. **[computer]** Do the Routine steps the PR body lists.
+
+## Claude Tag in Slack (the only entry)
+
+1. **[computer]** Once: a private channel, your Slack ID in `governance/owners.toml`, `[slack] channel`,
+   `may_spawn = true` and `[cloud] environment_id` in `.bosun/bosun.toml` (an R-gov PR; A.5). The environment is
+   the one from the web steps.
+2. In the channel, start a thread and post the Quick start prompt to Claude.
+3. **[phone]** Approve the PR head when bosun asks.
+4. **[computer]** Do the Routine steps the PR body lists.
+
+## Appendix A. The manual path
+
+The steps `bosun migrate` automates, for a release without `bosun migrate` or when a step needs a hand. bosun 0.14.0
+and newer read `[mode]`.
+
+### A.1 Before you start
+
+#### 1.1 Check
 
 | Check | Command | Pass |
 | ----- | ------- | ---- |
@@ -32,7 +97,7 @@ Rules for the whole page:
 If bosun 0.14.0 is not on npm, stop. **[computer]** The owner publishes the release ([releasing.md](releasing.md)).
 An older release refuses `[mode]` as an unknown key.
 
-### 1.2 What booster changes
+#### 1.2 What booster changes
 
 Booster is steady plus a fast lane. Values from the mode table:
 
@@ -58,7 +123,7 @@ take knobs only, never `policy`.
 
 Targets: red-CI rate under 20 %, at most 3 owner touches a day.
 
-### 1.3 What still needs the owner (in every mode)
+#### 1.3 What still needs the owner (in every mode)
 
 - Every PR that touches `.bosun/**` or `.claude/**` (R-gov). That includes the `[mode]` PR and the registry pin PR.
 - A lighter mode is R-weaken. The owner approves it. **[phone]** The chat form or `/bosun approve <head sha>` is enough.
@@ -70,11 +135,11 @@ Targets: red-CI rate under 20 %, at most 3 owner touches a day.
 List these as `## Prerequisites` in the plan ([prerequisites.md](prerequisites.md), "Modes: owner steps"). Use `verify: owner`.
 Then run `bosun prereqs <plan> --post` and send `data.message` to the owner once.
 
-## 2. The common sequence
+### A.2 The common sequence
 
 Do the steps in order. Use one PR per step. Follow the repo's own PR rules (for example fragments).
 
-### Step 1. Survey
+#### Step 1. Survey
 
 ```bash
 bosun mode          # offline
@@ -89,11 +154,11 @@ Expect:
 - `bosun doctor`: each step `ok`, `warn`, `skipped` or `missing`, each with its `fix`. Step 17 `update` shows what is behind.
 
 Write the `metrics` numbers on the first PR. It is the baseline. If the repo is on `gatekeeper`, do the whole
-sequence for `steady` first (quickstart §5). Return here when `bosun mode` shows `steady`.
+sequence for `steady` first. Return here when `bosun mode` shows `steady`.
 
 If `bosun mode` exits non-zero or `bosun doctor` shows a `missing` step: do its `fix`.
 
-### Step 2. Pin the new release
+#### Step 2. Pin the new release
 
 ```bash
 # Local only: give bosun your GitHub login from `gh auth token` (a cloud session needs none).
@@ -116,7 +181,7 @@ A repo that uses the bosun splice channel (`.splice/channels/bosun.toml`) does n
 If it refuses: use the table in [update.md](update.md) ("If verification fails"). Never install a package that failed a check.
 Never edit a sha512 by hand.
 
-### Step 3. Pin the registry
+#### Step 3. Pin the registry
 
 Do this first, before any budget knob turns on.
 
@@ -132,7 +197,7 @@ the new one. The real risk is a swap: another labelled issue or a changed regist
 
 Expect after merge: `bosun doctor` no longer warns about the registry.
 
-### Step 4. Epic markers
+#### Step 4. Epic markers
 
 Booster sets `budget_feature = "ask"`. Every open epic needs the `bosun:epic` marker in its body. The marker names
 the plan and the item. Without it, `claim` and `spawn` refuse a task of that epic.
@@ -151,7 +216,7 @@ when `budget_feature` is not `off` (`steady` already sets `warn`). Do it in step
 
 If `claim` or `spawn` exits non-zero with a missing marker, read `error.fix`. It names the step.
 
-### Step 5. Steady PR, then booster PR (or direct)
+#### Step 5. Steady PR, then booster PR (or direct)
 
 Two ways. Take the first unless the owner says otherwise.
 
@@ -166,7 +231,7 @@ name = "booster"
 # heal_main = "off"
 ```
 
-**Direct (gatekeeper to booster in one PR).** The quickstart says never skip a step. Do it only when the owner
+**Direct (gatekeeper to booster in one PR).** One rung per PR is the default. Do it only when the owner
 says so in the chat form. Write that answer in the PR body. The PR is R-gov and R-weaken, so the owner still approves
 the exact head. Without that answer, use the two steps.
 
@@ -195,7 +260,7 @@ Expect after merge: `bosun mode` → `data.mode: "booster"`, `data.mode_source: 
 
 If the config fails to parse (`unknown field`): the pin is older than the key. Go back to step 2.
 
-### Step 6. After the merge: join
+#### Step 6. After the merge: join
 
 The orchestrator runs `bosun join` first. It registers this session in the registry; the plan amend in step 7 needs that.
 
@@ -206,7 +271,7 @@ bosun join          # origin from BOSUN_ORIGIN, or --origin local|slack|routine|
 Expect `ok: true`. If it says GitHub is unreachable or the config is unknown: set `GH_TOKEN` or `GITHUB_TOKEN` and
 `BOSUN_REPO=owner/name`, then run it again.
 
-### Step 7. Amend the plans
+#### Step 7. Amend the plans
 
 Now `budget_feature` is not `off`. For every plan:
 
@@ -218,7 +283,7 @@ bosun plan amend <plan>
 Expect `ok: true`. It writes the bind and epic-index records. Until it does, `claim` and `spawn` refuse
 plan tasks. If it exits 5 (the epic index names another epic): the owner deletes the wrong index record.
 
-### Step 8. Verify
+#### Step 8. Verify
 
 ```bash
 bosun mode
@@ -233,7 +298,7 @@ Check:
 
 Watch two weeks. Targets: red-CI under 20 %, at most 3 owner touches a day, `data.brake` off.
 
-### Step 9. Hull: `splice update` to v0.9.0
+#### Step 9. Hull: `splice update` to v0.9.0
 
 Source: [hull docs/updating.md](https://github.com/keelstackhq/hull/blob/main/docs/updating.md). Normally the
 weekly splice bot opens this PR. Do it by hand only when the owner asks. Needs splice 0.3.0 or newer
@@ -250,7 +315,7 @@ Never edit owned files to fix an update. hull v0.9.0 moves vite-plus to 1.5.1 (w
 The PR touches `.splice/**`: it is R-gov, and the owner approves. A repo with the bosun channel
 (`.splice/channels/bosun.toml`) gets bosun pins from `splice update --channel bosun`, not `bosun pin`.
 
-### Step 10. Owner Routine prompts
+#### Step 10. Owner Routine prompts
 
 Routines are human-only. **[computer]** claude.ai/code → Routines.
 
@@ -268,7 +333,7 @@ Then run `bosun heal` and make only the calls in its `next`; report data.prs.
 
 Verify: no bosun command reads Routines back. The owner confirms in chat that each Routine is saved.
 
-### Step 11. Run
+#### Step 11. Run
 
 The orchestrator, per epic:
 
@@ -282,7 +347,7 @@ result, run `bosun spawn <n> --record --from -`. Run `wave tick` again when chil
 
 If `data.held_by` says `spawn_auto is off` or `brake on: <reasons>`: nothing is wrong. Read the reason.
 
-## 3. Environment A: Claude Code CLI on your machine
+### A.3 Environment A: Claude Code CLI on your machine
 
 Setup, once ([adopt-existing-repo.md](adopt-existing-repo.md) §1):
 
@@ -314,7 +379,7 @@ for g in fmt lint test deps test-integrity ci-minutes; do bosun gate "$g" || bre
 
 Run the push as its own command: `git push -u origin <branch>`.
 
-## 4. Environment B: Claude Code on the web (cloud container)
+### A.4 Environment B: Claude Code on the web (cloud container)
 
 Do these once per repo. The environment is shared. **[computer]** The owner does steps 1 and 3 to 5.
 
@@ -334,7 +399,10 @@ Settings live in the cloud environment menu (session title bar → Edit). Source
    from and that package managers do not cover. In this repo's script they are:
    - `registry.npmjs.org`: the pinned tools (`npm pack`, `npm install`). Covered by package managers.
    - `deb.nodesource.com`: Node 24, only when the container has no Node 24 yet.
-   - `github.com`: the plugin marketplace clone (`claude plugin marketplace add`). It only warns on failure.
+   - `github.com`: the plugin marketplace clone (`claude plugin marketplace add`), and the prebuilt cargo tools
+     (cargo-nextest, cargo-deny) that redirect to the next host.
+   - `release-assets.githubusercontent.com`: those prebuilt cargo tools. Without it a Limited network falls back to
+     a slow `cargo install`.
    - `tuf-repo-cdn.sigstore.dev`: only when the checkout has no repo script (the bootstrap checks npm signatures).
    If your own setup script installs other tools, add exactly the hosts it downloads from. A denied host shows as a
    proxy refusal that names the host.
@@ -369,7 +437,7 @@ in the Claude app.
 
 Start: the orchestrator runs `bosun wave tick <epic>` and makes the calls in `next`.
 
-## 5. Environment C: Claude Tag in Slack
+### A.5 Environment C: Claude Tag in Slack
 
 **[computer]** Once: a private channel, no guests, not shared. Put your Slack ID in `governance/owners.toml`.
 Then open a PR (R-gov):
@@ -400,53 +468,12 @@ Start the migration from a thread. An owner posts the request. The session:
 
 A thread spawn inherits the caller's environment. `wave tick` uses `[cloud]`'s.
 
-The steps of §2 run in the spawned session, in environment A or B. Slack only starts and reports.
+The steps of A.2 run in the spawned session, in environment A.3 or A.4. Slack only starts and reports.
 
 Approvals never come from Slack. bosun answers needs-human in the thread. **[phone]** The owner approves
 by chat form or on GitHub. `bosun answer <issue> --slack-user <U...>` records an owner's answer from Slack on a needs-human task.
 
-## 6. Prompts for Claude
-
-Copy a block. Send it to Claude in the right place. They name no repo. Claude reads this page.
-
-### Environment A (CLI)
-
-```text
-Migrate this repo to bosun booster mode. Read docs/migrate-booster.md. You work in my local Claude Code CLI.
-Rules: follow error.fix on every refusal; never merge, tag or force-push; make only the calls bosun returns in next.
-1. Do section 1 (checks). Stop and tell me if bosun 0.14.0 is not on npm.
-2. Give me ONE checklist of the steps only I can do, each marked phone or computer, computer first.
-3. Do section 2, steps 1 to 8, one PR per step. After each PR ask me with a chat form: repo, PR, head SHA. Turn on auto-merge when I approve.
-4. Mark TODO items and ask me. Do not guess flags, hosts or settings.
-5. At the end report: PR numbers, bosun mode output, bosun metrics --days 7 data.brake.
-```
-
-### Environment B (cloud)
-
-```text
-Migrate this repo to bosun booster mode. Read docs/migrate-booster.md. You run in a Claude Code cloud environment.
-Rules: follow error.fix on every refusal; never merge, tag or force-push; no PAT; use bosun verdict comment, not verdict post.
-1. Do section 1. Stop and tell me if bosun 0.14.0 is not on npm.
-2. Check this environment against section 4: setup script pasted, network hosts, [cloud] environment_id. Tell me what is missing.
-   I set the environment in claude.ai/code. Do not put a secret in the script or in an environment variable.
-3. Give me ONE checklist of my steps, each marked phone or computer.
-4. Do section 2, steps 1 to 8, one PR per step. Ask for each approval with a chat form: repo, PR, head SHA.
-5. Mark TODO items and ask me. Do not guess hosts or settings.
-6. At the end report: PR numbers, bosun mode output.
-```
-
-### Environment C (Slack)
-
-```text
-Migrate this repo to bosun booster mode. Read docs/migrate-booster.md, sections 1, 2 and 5.
-Join with: bosun join --origin slack --slack-channel <channel id> --slack-thread <ts>.
-Run bosun status. Then spawn one orchestrator session for the migration with bosun spawn --slack-thread <ts> --slack-user <my id> --request -.
-Make the create_session call in next, then record it. Post progress in this thread through bosun notify.
-Ask me for approvals in the thread; I answer by chat form or on GitHub, never in Slack.
-Mark TODO items and ask me. Never merge, tag or force-push.
-```
-
-## 7. Rollback
+### A.6 Rollback
 
 A tighter mode is one PR. It is no R-weaken finding. It is R-gov, so the owner still approves. **[phone]**
 
@@ -469,7 +496,7 @@ Rules:
 Find a session's commits to undo: `bosun trailers list <session>`. Revert a merged PR: `bosun revert`
 (it opens a `kind/mainfix` PR). Never force-push.
 
-## 8. Troubleshooting
+### A.7 Troubleshooting
 
 Always read `error.fix` first. Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit.
 
