@@ -30,6 +30,7 @@ pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
 pub mod metrics;
+pub mod migrate;
 pub mod mode;
 pub mod msg;
 pub mod notify;
@@ -39,6 +40,7 @@ pub mod plan;
 pub mod plan_pr;
 pub mod pr;
 mod pr_bundle;
+pub mod pr_gov;
 pub mod prereqs;
 pub mod prereqs_gate;
 pub mod progress;
@@ -202,6 +204,8 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Move the tool pins (setup script, .bosun/version, channel template) to the newest verified npm release.
     Pin(PinArgs),
+    /// Move [mode] one rung (or straight to the target) in one PR: survey, pins, registry; `--finish` after the merge.
+    Migrate(MigrateArgs),
     /// Print the bootstrap to paste once as a cloud environment's setup script.
     SetupSnippet,
     /// The output contract as JSON Schema or TypeScript: the envelope and each command's `data`.
@@ -259,6 +263,7 @@ pub const COMMANDS: &[&str] = &[
     "adopt",
     "uninstall",
     "pin",
+    "migrate",
     "setup-snippet",
     "schema",
 ];
@@ -324,6 +329,7 @@ impl Command {
             Command::Adopt(_) => "adopt",
             Command::Uninstall(_) => "uninstall",
             Command::Pin(_) => "pin",
+            Command::Migrate(_) => "migrate",
             Command::SetupSnippet => "setup-snippet",
             Command::Revert(_) => "revert",
             Command::Trailers(_) => "trailers",
@@ -650,8 +656,13 @@ pub struct FromArg {
 
 #[derive(Debug, Args)]
 pub struct PrArgs {
-    /// The task issue number.
-    pub issue: u64,
+    /// The task issue number (or `--pr N` for a PR with no task).
+    #[arg(required_unless_present = "pr")]
+    pub issue: Option<u64>,
+    /// A PR with no task (a governance PR such as `bosun migrate` opens): the same draft, gates
+    /// and auto-merge flow, with no task state to move.
+    #[arg(long = "pr", value_name = "N", conflicts_with_all = ["issue", "bundle"])]
+    pub pr: Option<u64>,
     #[arg(long)]
     pub title: Option<String>,
     /// Mark the draft PR ready for review (it needs the local HEAD pushed and every ready gate
@@ -1242,4 +1253,23 @@ pub struct PinArgs {
     /// Also branch `bosun/pin`, commit, push and open the draft PR; prints what is left for you.
     #[arg(long, conflicts_with = "check")]
     pub pr: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct MigrateArgs {
+    /// The mode to reach (required unless --finish).
+    #[arg(long, value_name = "MODE", value_parser = ["gatekeeper", "steady", "booster", "autonomous"], required_unless_present = "finish")]
+    pub to: Option<String>,
+    /// Go straight to the target (default: one rung of the ladder per PR when it gets lighter).
+    #[arg(long, conflicts_with = "finish")]
+    pub direct: bool,
+    /// Survey and list the planned edits; write nothing, run no git, open no PR.
+    #[arg(long, conflicts_with = "finish")]
+    pub dry_run: bool,
+    /// After the migration PR merged: join the registry and amend each plan (idempotent).
+    #[arg(long, conflicts_with = "to")]
+    pub finish: bool,
+    /// A plan file to amend with --finish (repeatable; the plans of open epics are added).
+    #[arg(long = "plan", value_name = "FILE")]
+    pub plan: Vec<String>,
 }

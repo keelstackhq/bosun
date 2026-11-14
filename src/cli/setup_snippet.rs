@@ -12,6 +12,14 @@ use crate::output::{BosunError, CmdResult, Outcome};
 /// The bootstrap text; README.md shows it verbatim (a test checks).
 pub const BOOTSTRAP: &str = include_str!("setup_bootstrap.sh");
 
+/// The short form: each checkout's own docs/setup-script.sh (it installs the pinned bosun and
+/// checks every sha512), never failing the session. No fallback for a repo without that script.
+pub const SHORT: &str = r#"for d in . ./*/; do
+  [ -f "$d/.bosun/version" ] && [ -f "$d/docs/setup-script.sh" ] || continue
+  (cd "$d" && timeout -k 10 1800 bash docs/setup-script.sh </dev/null) || echo "bosun: $d/docs/setup-script.sh failed" >&2
+done; exit 0
+"#;
+
 /// One line the owner can send a client together with the script.
 const CLIENT_MESSAGE: &str = "Paste this script once as the setup script of your Claude Code cloud environment (claude.ai/code > Environments > Setup script). You never change it again: each repo's own docs/setup-script.sh pins its tools.";
 
@@ -25,6 +33,7 @@ const PCT_NOTE: &str = "autocompact_pct is for local sessions only: a cloud sess
 pub fn run(dir: Option<&Path>) -> CmdResult {
     let mut data = json!({
         "script": BOOTSTRAP,
+        "short": SHORT,
         "paste_into": "claude.ai/code > Environments > <environment> > Setup script",
         "repo_script": "docs/setup-script.sh",
         "client_message": CLIENT_MESSAGE,
