@@ -376,6 +376,14 @@ impl Http {
 
     /// One logical request: up to 3 attempts on 5xx and rate limits (never for POST).
     fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Resp> {
+        // The token goes only over https (or to a loopback fake): a base from the environment
+        // must not send it in clear text to another host.
+        if !crate::anthropic::https_or_loopback(&self.base) {
+            return Err(BosunError::error(
+                "BOSUN_GITHUB_API must be an https:// URL (http:// only for 127.0.0.1 or localhost)",
+                "unset BOSUN_GITHUB_API to use https://api.github.com, or set an https:// URL",
+            ));
+        }
         let mut attempt = 1;
         loop {
             self.check_budget(method, path, 0)?;

@@ -1,0 +1,1 @@
+- Hooks: the edit-lock stays closed for paths in a stale lease cache, SessionStart reports version skew and config errors, reaps and caches the npm pin check for a day; the gate child loses `GITHUB_TOKEN`/`GH_TOKEN`; `BOSUN_GITHUB_API` must be https or loopback; cli-repeat keys include `-C`.
