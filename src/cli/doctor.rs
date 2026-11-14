@@ -193,16 +193,29 @@ fn workflow_environments(root: &Path) -> (Vec<String>, Vec<(String, String)>) {
 
 const ENV_GRANT_FIX: &str = "give the token Environments: read (or Administration: read), then run `bosun doctor --remote` again";
 
-/// One environment: ok only when its custom deployment branches are exactly `main`.
-fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
+/// For the signer environment, what the owner checks by hand when doctor cannot read it.
+fn owner_verify(name: &str, branch: &str) -> String {
+    if name == SIGNER_ENV {
+        format!("; verify: owner - {name} must allow only the default branch ({branch})")
+    } else {
+        String::new()
+    }
+}
+
+/// The environment that holds the CI signer key (D-017): its deployment-branch rule is the only
+/// barrier that stops a dispatch from another branch's copy of signer.yml.
+const SIGNER_ENV: &str = "bosun-signer";
+
+/// One environment: ok only when its custom deployment branches are exactly the default branch.
+fn environment_check(gh: &dyn Github, repo: &str, name: &str, branch: &str) -> Value {
     let page = format!("https://github.com/{repo}/settings/environments");
     let steps = format!(
-        "Settings → Environments → {name} → Deployment branches → Selected branches → add `main` and remove every other rule ({page})"
+        "Settings → Environments → {name} → Deployment branches → Selected branches → add `{branch}` and remove every other rule ({page})"
     );
     let warn = |detail: String, fix: String| json!({"name": name, "status": "warn", "detail": detail, "fix": fix});
     match gh.environment_branches(name) {
-        Ok(EnvBranches::Custom(p)) if p.len() == 1 && p[0].0 == "main" && p[0].1 == "branch" => {
-            json!({"name": name, "status": "ok", "detail": format!("only main deploys to {name}"), "fix": steps})
+        Ok(EnvBranches::Custom(p)) if p.len() == 1 && p[0].0 == branch && p[0].1 == "branch" => {
+            json!({"name": name, "status": "ok", "detail": format!("only {branch} deploys to {name}"), "fix": steps})
         }
         Ok(EnvBranches::Missing) => warn(
             format!(
@@ -215,11 +228,11 @@ fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
             steps,
         ),
         Ok(EnvBranches::Protected) => warn(
-            format!("environment {name} lets every protected branch deploy, not only main"),
+            format!("environment {name} lets every protected branch deploy, not only {branch}"),
             steps,
         ),
         Ok(EnvBranches::Custom(p)) if p.is_empty() => warn(
-            format!("environment {name} allows no branch, not main"),
+            format!("environment {name} allows no branch, not {branch}"),
             steps,
         ),
         Ok(EnvBranches::Custom(p)) => {
@@ -234,16 +247,16 @@ fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
                 })
                 .collect();
             warn(
-                format!("environment {name} allows {}, not only the branch main", list.join(", ")),
+                format!("environment {name} allows {}, not only the branch {branch}", list.join(", ")),
                 steps,
             )
         }
         Ok(EnvBranches::Forbidden) => warn(
-            format!("cannot verify environment {name} (403)"),
+            format!("cannot verify environment {name} (403){}", owner_verify(name, branch)),
             ENV_GRANT_FIX.into(),
         ),
         Err(e) => warn(
-            format!("cannot verify environment {name}: {}", e.message),
+            format!("cannot verify environment {name}: {}{}", e.message, owner_verify(name, branch)),
             "run `bosun doctor --remote` again; if it persists, check the token can read environments".into(),
         ),
     }
@@ -251,10 +264,11 @@ fn environment_check(gh: &dyn Github, repo: &str, name: &str) -> Value {
 
 /// Check each workflow environment and fold the warnings into step 5. Returns `data.environments`.
 fn apply_environments(items: &mut [Value], gh: &dyn Github, repo: &str, root: &Path) -> Value {
+    let branch = crate::app::default_branch(gh).unwrap_or_else(|_| "main".into());
     let (names, unread) = workflow_environments(root);
     let mut envs: Vec<Value> = names
         .iter()
-        .map(|n| environment_check(gh, repo, n))
+        .map(|n| environment_check(gh, repo, n, &branch))
         .collect();
     envs.extend(unread.iter().map(|(job, file)| json!({"job": job, "status": "warn",
         "detail": format!("cannot read the environment of job {job} in {file} (an expression, or no name)"),
@@ -273,7 +287,7 @@ fn apply_environments(items: &mut [Value], gh: &dyn Github, repo: &str, root: &P
     if warned.is_empty() {
         if !names.is_empty() && it["status"] == "ok" {
             it["detail"] = json!(format!(
-                "{detail}; only main deploys to {}",
+                "{detail}; only {branch} deploys to {}",
                 names.join(", ")
             ));
         }
@@ -877,6 +891,47 @@ fn check_api_url() -> Result<(), BosunError> {
     ))
 }
 
+/// Step 16: under the autonomous policy a session without keys asks the CI signer, so the
+/// workflow and an enrolled `signer` key must exist (signer.yml runs `--as signer`; an owner key
+/// never belongs in CI). The environment `bosun-signer` and its secret are invisible to bosun: a
+/// warning, never a failure.
+fn signer_item(root: &Path, remote: bool, enabled: bool) -> Value {
+    if !enabled {
+        return skipped(
+            16,
+            "CI signer",
+            "off (default): `[approvals] signer` is not true",
+            "optional: to let keyless sessions ask the CI signer, the owner sets `[approvals] signer = true` (R-weaken) and does the one-time setup in docs/migrate-booster.md",
+        );
+    }
+    let workflow = root.join(".github/workflows/signer.yml").is_file();
+    let enrolled = read(root, ".bosun/approvers.toml")
+        .and_then(|t| crate::core::approve::parse_approvers(&t).ok())
+        .is_some_and(|keys| (keys.iter()).any(|k| k.role == crate::core::approve::Role::Signer));
+    let mut missing = Vec::new();
+    if !workflow {
+        missing.push(".github/workflows/signer.yml is missing");
+    }
+    if !enrolled {
+        missing.push(".bosun/approvers.toml enrolls no `signer` key");
+    }
+    let blind = if remote {
+        "bosun cannot see the secret BOSUN_SIGNER_KEY (the environment's branch rule is in data.environments)"
+    } else {
+        "bosun cannot see the secret BOSUN_SIGNER_KEY, and `bosun doctor --remote` checks the environment bosun-signer's branch rule: verify: owner - bosun-signer must allow only the default branch"
+    };
+    let mut it = json!({"step": 16, "name": "CI signer", "status": "ok", "fix": "",
+        "detail": format!("signer.yml exists and a signer key is enrolled; {blind}, so check them in GitHub")});
+    if !missing.is_empty() {
+        it["status"] = json!("warn");
+        it["detail"] = json!(format!("{}; {blind}", missing.join("; ")));
+        it["fix"] = json!(
+            "owner, once per repo, on a computer: `bosun keygen --role signer --id signer-ci --out <pem outside the repo> --enroll`, merge that .bosun/approvers.toml PR, create the GitHub environment bosun-signer (Deployment branches: Selected branches, only the default branch; without it any branch's copy of signer.yml can run) with the secret BOSUN_SIGNER_KEY (the signer PEM, never an owner key), delete the PEM; the workflow comes with `splice update` (core piece) or copy .github/workflows/signer.yml"
+        );
+    }
+    it
+}
+
 pub fn run(dir: Option<&Path>, remote: bool) -> CmdResult {
     run_with(dir, remote, true)
 }
@@ -1279,6 +1334,11 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
             |f| format!("{}; `bosun gate ci-minutes` lists every finding", f.fix),
         ),
     ));
+
+    // Step 16: the keyless fast lane (D-017, spec section 8), only under the autonomous policy.
+    if ctx.config.approvals.policy() == crate::core::approve::Policy::Autonomous {
+        items.push(signer_item(root, remote, ctx.config.approvals.signer));
+    }
 
     if let Some(slack) = ctx.config.slack.as_ref() {
         let seat = gh.map_or(Ok(None), |g| registry::seat_of(g, &ctx.session, ctx.now));

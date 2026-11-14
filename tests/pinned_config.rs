@@ -283,6 +283,11 @@ const KNOWN_APPROVALS: &[(&str, &[&str])] = &[
     ("0.9.0", &["bootstrap_until", "policy"]),
     ("0.10.0", &["bootstrap_until", "policy"]),
     ("0.11.0", &["bootstrap_until", "policy", "review_models"]),
+    // `signer` (the opt-in for the CI signer) is read from 0.15.0: pin that release first.
+    (
+        "0.15.0",
+        &["bootstrap_until", "policy", "review_models", "signer"],
+    ),
 ];
 
 /// The `[approvals] policy` values each pinned release accepts (`autonomous` from 0.8.0).
@@ -488,4 +493,11 @@ fn review_models_is_known_from_0_11_0() {
     let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"review_models"));
     assert!(!has("0.10.0"));
     assert!(has("0.11.0"));
+}
+
+#[test]
+fn signer_is_known_from_0_15_0() {
+    let has = |v: &str| known_for(KNOWN_APPROVALS, v).is_some_and(|k| k.contains(&"signer"));
+    assert!(!has("0.14.0"));
+    assert!(has("0.15.0"));
 }

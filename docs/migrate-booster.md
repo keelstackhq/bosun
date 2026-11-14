@@ -244,6 +244,18 @@ For each PR:
 `booster` also sets `[approvals] policy = "autonomous"` when the table leaves it unset. The pinned release
 must know `autonomous` (step 2 does that). An explicit `policy` in the file wins.
 
+**[computer] Optional, off by default.** Cloud and Claude Tag sessions hold no keys; the recommended
+default stays the orchestrator-held key. To let them ask the CI signer instead
+(`bosun approve <pr>@<head> --via-signer`) the owner first sets `[approvals] signer = true` (needs a pinned release that
+knows the key; R-weaken, owner-approved) and `[checks] mode = "checks"` with the gate App, then does this one step per repo:
+`bosun keygen --role signer --id signer-ci --out <pem outside the repo> --enroll`, merge that
+`.bosun/approvers.toml` PR (R-gov), create the GitHub environment `bosun-signer` with the secret `BOSUN_SIGNER_KEY` (the PEM), then delete the PEM.
+This item is the real barrier, do not skip it: **Settings → Environments → `bosun-signer` → Deployment branches → Selected branches, only
+the default branch** (a dispatch from another branch runs that branch's copy of `signer.yml`; only this rule keeps it from the key).
+Verify in the same page, or `gh api repos/<owner>/<repo>/environments/bosun-signer/deployment-branch-policies` (one entry, the default branch, type `branch`); `bosun doctor --remote` checks it too. The channel's
+`core` piece ships `.github/workflows/signer.yml`. `bosun doctor` warns until the workflow and a key are there; it cannot see the
+environment's secret. The signer key signs only the autonomous form, so it never approves anything D-017 does not allow.
+
 Expect after merge: `bosun mode` → `data.mode: "booster"`, `data.mode_source: "explicit"`.
 
 If the config fails to parse (`unknown field`): the pin is older than the key. Go back to step 2.

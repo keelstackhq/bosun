@@ -1,0 +1,1 @@
+- Keyless fast lane for D-017: `role = "signer"` keys (autonomous form only), `bosun approve --as signer` (needs `ci-ok` green) and `--via-signer`, `.github/workflows/signer.yml` (bosun and the channel `core` piece), `bosun doctor` signer check, and risk-check `author_is_owner` when the PR author is the owner.

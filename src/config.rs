@@ -223,6 +223,11 @@ pub struct Approvals {
     /// approval. Unset: any model counts. A new model id stops counting until enrolled here.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_models: Option<Vec<String>>,
+    /// Opt in to the CI signer (`bosun approve --as signer`, D-017 keyless lane, spec §8). Off by
+    /// default; turning it on is R-weaken (any `[approvals]` change is). A pinned release older
+    /// than the one that adds this key fails to parse it: pin first, then set it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub signer: bool,
     /// `policy` came from the `[mode]` preset, not from this table.
     #[serde(skip)]
     pub policy_preset: bool,

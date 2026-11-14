@@ -316,8 +316,8 @@ fn every_variant_renders_to_files_that_parse() {
             }
         }
     }
-    // 3 stacks x 2 own_ci x 2 owner, 6 workflows each.
-    assert_eq!(yaml_files.len(), 3 * 2 * 2 * 6);
+    // 3 stacks x 2 own_ci x 2 owner, 7 workflows each (signer.yml included).
+    assert_eq!(yaml_files.len(), 3 * 2 * 2 * 7);
     match parse_yaml(&yaml_files) {
         Some(Ok(())) => {}
         Some(Err(e)) => panic!("rendered workflows do not parse as YAML:\n{e}"),

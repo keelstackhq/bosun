@@ -219,6 +219,11 @@ fn trusted_app() -> Option<&'static (u64, String)> {
     TRUSTED_APP.get().and_then(Option::as_ref)
 }
 
+/// In `checks` mode the id of the gate App whose check runs count; `None` in `statuses` mode.
+pub fn trusted_app_id() -> Option<u64> {
+    trusted_app().map(|(id, _)| *id)
+}
+
 /// Whether `[checks] mode = "checks"` is in force for this process.
 pub fn checks_mode() -> bool {
     trusted_app().is_some()

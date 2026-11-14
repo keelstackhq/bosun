@@ -21,9 +21,9 @@ use crate::cli::risk_check::{
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
-    api_url_ok, approve_command, batch_message, bootstrap_line, in_cloud, only_r_ci, parse_target,
-    policy_line, readiness, signed_comment, signed_message, signed_message_autonomous,
-    signed_message_bootstrap, signed_message_v2,
+    api_url_ok, approve_command, batch_message, bootstrap_line, ci_green, in_cloud, only_r_ci,
+    parse_target, policy_line, readiness, signed_comment, signed_message,
+    signed_message_autonomous, signed_message_bootstrap, signed_message_v2,
 };
 use crate::core::records::{PrHead, Record};
 use crate::core::risk;
@@ -193,6 +193,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             "approve needs PR@HEAD arguments, --list or --main-open PR",
             "run `bosun approve --list`, then the command in its data.approve_command",
         ));
+    }
+    if args.via_signer {
+        return via_signer(dir, args);
     }
     if let Some(key) = &args.sign_key {
         return sign(dir, args, key);
@@ -478,6 +481,100 @@ fn redact(token: &str, result: CmdResult) -> CmdResult {
     }
 }
 
+/// The workflow the CI signer runs from (D-017, keyless fast lane).
+const SIGNER_WORKFLOW: &str = "signer.yml";
+
+/// A session id the signer workflow accepts as `requester`: `^[A-Za-z0-9._/:-]{1,200}$`.
+fn requester_ok(s: &str) -> bool {
+    (1..=200).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._/:-".contains(&b))
+}
+
+/// `bosun approve <pr>@<head> --via-signer`: asks the CI signer for an approval. Posts nothing;
+/// the session dispatches the workflow with the call in `next` (D29).
+fn via_signer(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
+    let (pr, pinned) = match args.prs.as_slice() {
+        [target] => parse_target(target),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        BosunError::usage(
+            "--via-signer takes one <pr>@<40-hex head sha>: the head to approve",
+            "run `bosun approve --list`, then `bosun approve <pr>@<head> --via-signer`",
+        )
+    })?;
+    let app = App::load(dir)?;
+    let gh = app.gh.as_ref();
+    kill_switch(gh)?;
+    let pull = gh
+        .get_pull(pr)?
+        .filter(|p| p.state == "open")
+        .ok_or_else(|| {
+            BosunError::conflict(format!("PR #{pr} is not an open PR"), "name an open PR")
+        })?;
+    if pinned != pull.head_sha {
+        return Err(BosunError::conflict(
+            format!(
+                "PR #{pr} head changed (now {}); nothing was requested",
+                pull.head_sha
+            ),
+            "check the new head, then ask again with `bosun approve <pr>@<head> --via-signer`",
+        ));
+    }
+    // The reviewer-independence check in CI excludes the session that asked.
+    let requester = app.ctx.session.trim().to_string();
+    if !requester_ok(&requester) {
+        return Err(BosunError::usage(
+            format!("BOSUN_SESSION {requester:?} is empty or not a plain session id"),
+            "set BOSUN_SESSION to this session's id (A-Z a-z 0-9 . _ / : -, at most 200 characters)",
+        ));
+    }
+    let branch = crate::app::default_branch(gh)?;
+    let (owner, repo) = (&app.ctx.repo.owner, &app.ctx.repo.name);
+    let args = json!({"method": "run_workflow", "owner": owner, "repo": repo,
+        "workflow_id": SIGNER_WORKFLOW, "ref": branch,
+        "inputs": {"pr": pr.to_string(), "head": pinned, "requester": requester}});
+    Ok(Outcome::data(json!({"pr": pr, "head_sha": pull.head_sha, "requested": true,
+        "workflow": SIGNER_WORKFLOW, "ref": branch,
+        "message": "nothing was posted: make the tool call in `next`, then run `bosun risk-check` on the PR once the workflow is done"}))
+    .with_next("mcp__github__actions_run_trigger", args))
+}
+
+/// What the head's `ci-ok` is for the CI signer: the newest GitHub Actions check run (in
+/// `[checks] mode = "checks"` is required: the gate App's), as
+/// `ci_green` reads it (a commit status never counts). Returns (green, what was seen).
+fn ci_ok_state(gh: &dyn Github, sha: &str) -> Result<(bool, String)> {
+    let runs: Vec<Run> = gh
+        .check_runs(sha)?
+        .into_iter()
+        .map(|r| Run {
+            id: r.id,
+            name: r.name,
+            conclusion: r.conclusion,
+            at: r.completed_at.or(r.started_at).unwrap_or_default(),
+            // Only the gate App's run counts (`checks` mode is required for the signer): read as
+            // the trusted creator for `ci_green`; every other creator, GitHub Actions too, is
+            // nobody. A push workflow on any branch can post a github-actions `ci-ok`.
+            app: match crate::github::gate::trusted_app_id() {
+                Some(id) if r.app_id == id => crate::core::approve::TRUSTED_APP.into(),
+                _ => String::new(),
+            },
+        })
+        .collect();
+    let seen = (runs.iter())
+        .filter(|r| r.name == "ci-ok")
+        .max_by(|a, b| (&a.at, a.id).cmp(&(&b.at, b.id)))
+        .map_or("missing".to_string(), |r| {
+            format!(
+                "{} by {}",
+                r.conclusion.as_deref().unwrap_or("not completed"),
+                r.app
+            )
+        });
+    Ok((ci_green(&runs), seen))
+}
+
 /// `bosun approve <pr>@<head> --sign-key <pem>`: the signer (the orchestrator session, on the owner's
 /// word in chat) signs `signed_message` for the PR's current head and posts the comment with
 /// the session's own token. It works in a Claude cloud session: the signature, not the author,
@@ -522,8 +619,63 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
     }
     let role = match args.role.as_deref() {
         Some("delegate") => Role::Delegate,
+        Some("signer") => Role::Signer,
         _ => Role::Owner,
     };
+    match (&args.requester, role == Role::Signer) {
+        (Some(r), true) if requester_ok(r) => {}
+        (None, false) => {}
+        (_, true) => {
+            return Err(BosunError::usage(
+                "--as signer needs --requester <session id> (A-Z a-z 0-9 . _ / : -, at most 200 characters)",
+                "pass the session that asked: the signer workflow does it from its `requester` input",
+            ));
+        }
+        (Some(_), false) => {
+            return Err(BosunError::usage(
+                "--requester goes with --as signer only",
+                "drop --requester",
+            ));
+        }
+    }
+    if role == Role::Signer && !args.bootstrap {
+        return Err(BosunError::usage(
+            "--as signer signs only the autonomous form (D-017): it needs --bootstrap",
+            "add --bootstrap (the policy at the default branch must be autonomous)",
+        ));
+    }
+    if role == Role::Signer {
+        let text = gh.file_at(CONFIG_FILE, &default_ref(gh)?)?;
+        let config = match text {
+            Some(t) => Config::parse(&t, CONFIG_FILE)?,
+            None => Config::default(),
+        };
+        let policy = config.approvals.policy();
+        if policy != Policy::Autonomous {
+            return Err(BosunError::error(
+                format!(
+                    "--as signer signs only under the autonomous policy (D-017); the default branch's policy is {}",
+                    policy.name()
+                ),
+                "set `[approvals] policy = \"autonomous\"` (or the booster mode) on the default branch with a PR the owner approves, or ask the owner",
+            ));
+        }
+        if !config.approvals.signer {
+            return Err(BosunError::error(
+                "the CI signer is off: `[approvals] signer` is not true on the default branch; nothing was signed",
+                "the owner decides: set `[approvals] signer = true` in .bosun/bosun.toml with a PR (R-weaken, owner-approved); the default is the orchestrator-held key (`--sign-key` as owner)",
+            ));
+        }
+        let gate_app = config.checks.mode == crate::config::CheckMode::Checks
+            && config.checks.app_id.is_some()
+            && crate::github::gate::trusted_app_id() == config.checks.app_id;
+        if !gate_app {
+            return Err(BosunError::error(
+                "the CI signer needs `[checks] mode = \"checks\"` with the gate App on the default branch (and in this checkout): in statuses mode any push workflow can post a ci-ok; nothing was signed",
+                "set `[checks] mode = \"checks\"`, `app_id` and `app_slug` (spec section 15), or sign with the orchestrator-held key",
+            ));
+        }
+    }
     let boot = match args.bootstrap {
         true if role == Role::Delegate => {
             return Err(BosunError::usage(
@@ -531,9 +683,26 @@ fn sign(dir: Option<&Path>, args: &ApproveArgs, key_path: &Path) -> CmdResult {
                 "drop --as delegate, or drop --bootstrap",
             ));
         }
-        true => Some(bootstrap_mode(&app, &app.ctx.now.to_string()[..10], &pull)?),
+        true => Some(bootstrap_mode(
+            &app,
+            &app.ctx.now.to_string()[..10],
+            &pull,
+            args.requester.as_deref(),
+        )?),
         false => None,
     };
+    if role == Role::Signer {
+        let (green, ci_ok) = ci_ok_state(gh, &head)?;
+        if !green {
+            return Err(BosunError::error(
+                format!(
+                    "the head's ci-ok is not green ({ci_ok}; only the newest GitHub Actions check run counts); nothing was signed"
+                ),
+                "wait for ci-ok to pass on this head, then run the signer again",
+            )
+            .with_data(json!({"ci_ok": ci_ok, "head_sha": head})));
+        }
+    }
     // A request for changes, and any withdrawal for a delegate, cannot be signed away. After a
     // dismissal an owner key signs v2, bound to each dismissed owner review (spec section 8).
     let mut reviews = vec![None];
@@ -651,7 +820,7 @@ type Boot = (Option<String>, String, Policy, &'static str);
 /// How `--bootstrap` may sign for the PR at `head` today: the last day of the window (D-012)
 /// and its note line, or (after it) the note line of the approval policy (D-014) and no date. The
 /// setting is read on the default branch, which risk-check reads at the PR's base.
-fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<Boot> {
+fn bootstrap_mode(app: &App, today: &str, pull: &Pull, requester: Option<&str>) -> Result<Boot> {
     let gh = app.gh.as_ref();
     let (pr, head) = (pull.number, pull.head_sha.as_str());
     let text = gh.file_at(CONFIG_FILE, &default_ref(gh)?)?;
@@ -661,7 +830,7 @@ fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<Boot> {
     };
     let (policy, src) = (approvals.policy(), approvals.policy_source());
     if policy == Policy::Autonomous {
-        autonomous_ok(app, pull)?;
+        autonomous_ok(app, pull, requester)?;
         return Ok((None, AUTONOMOUS_LINE.into(), policy, src));
     }
     let end = approvals
@@ -706,7 +875,7 @@ fn bootstrap_mode(app: &App, today: &str, pull: &Pull) -> Result<Boot> {
 /// D-017: signs only when no excluded path changed and a reviewer other than the task's leaseholders
 /// and this signer has a clean verdict on the head. risk-check cannot see the signer's session, so
 /// this is where signer != reviewer is enforced.
-fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
+fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> {
     let gh = app.gh.as_ref();
     let fix = "nothing was signed: ask the owner with a form in the Claude Code chat and sign without --bootstrap on their answer";
     let files = gh.pull_files(pull.number)?;
@@ -730,7 +899,27 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
                 .unwrap_or_default(),
         })
         .collect();
-    let matches = risk::evaluate(&rules, &changed, &[], &[]);
+    // R-weaken and capabilities, as risk-check computes them: a weakening is the owner's.
+    let findings =
+        crate::cli::risk_check::weaken_findings(gh, &files, &pull.base_sha, &pull.head_sha)?;
+    if !findings.is_empty() {
+        return Err(BosunError::error(
+            format!(
+                "autonomous mode (D-017) never covers a PR with R-weaken findings: the owner approves ({})",
+                findings.join("; ")
+            ),
+            fix,
+        ));
+    }
+    let mut capabilities = risk::capability_labels(&pull.labels);
+    for i in crate::core::meta::linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
+        if let Some(issue) = gh.get_issue(i)?
+            && let Some(meta) = crate::app::task_meta(&issue)
+        {
+            capabilities.extend(meta.capabilities);
+        }
+    }
+    let matches = risk::evaluate(&rules, &changed, &[], &capabilities);
     let mut hit = risk::autonomous_excluded(&paths, &matches);
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
@@ -750,6 +939,8 @@ fn autonomous_ok(app: &App, pull: &Pull) -> Result<()> {
     let models = review_models(gh, &pull.base_sha)?;
     let clean = inputs.map_or(vec![], |(comments, mut excluded)| {
         excluded.push(app.ctx.session.clone());
+        // The CI signer's own session is no reviewer's: the session that asked is excluded too.
+        excluded.extend(requester.map(String::from));
         autonomous_clean(&comments, &pull.head_sha, &excluded, models.as_deref())
     });
     if clean.is_empty() {
