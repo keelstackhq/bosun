@@ -37,6 +37,8 @@ fn kind(path: &str) -> Option<Kind> {
             ".deny.toml",
             "deny.exceptions.toml",
             ".deny.exceptions.toml",
+            "deny.local.toml",
+            ".deny.local.toml",
         ]
         .contains(&name)
         {
@@ -1134,6 +1136,17 @@ mod tests {
         assert_eq!(t(f, base, "").len(), 2);
         let tight = "[bans]\nmultiple-versions = \"deny\"\ndeny = [\"x\", \"y\"]\n[licenses]\nallow = []\n[advisories]\nignore = []\n";
         assert!(t(".deny.toml", base, tight).is_empty());
+    }
+
+    #[test]
+    fn deny_local_overlay_licenses_allow_growth_is_a_weakening() {
+        let (base, head) = (
+            "[licenses]\nallow = [\"MIT\"]\n",
+            "[licenses]\nallow = [\"MIT\", \"GPL-3.0\"]\n",
+        );
+        assert!(!t("deny.local.toml", base, head).is_empty());
+        assert!(!t("sub/.deny.local.toml", base, head).is_empty());
+        assert!(t("deny.local.toml", head, base).is_empty());
     }
 
     #[test]

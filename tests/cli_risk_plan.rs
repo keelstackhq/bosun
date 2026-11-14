@@ -36,3 +36,22 @@ fn a_normal_task_stays_normal() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(v["data"]["level"], "normal");
 }
+
+#[test]
+fn hulls_deny_overlay_and_its_merge_script_are_r_ci() {
+    for file in [
+        "deny.local.toml",
+        "crates/x/.deny.local.toml",
+        "scripts/deny.mjs",
+    ] {
+        let fake = FakeGithub::start();
+        fake.pull(1, "change", "feature", "");
+        fake.pull_file(1, file, "modified", 1, 0, Some("@@ -1 +1 @@"));
+        let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+        assert_eq!(code, 5, "{file}: {v}");
+        assert!(
+            v["data"]["matches"].to_string().contains("R-ci"),
+            "{file}: {v}"
+        );
+    }
+}
