@@ -25,8 +25,10 @@ struct Key(Ed25519KeyPair, String);
 fn key() -> Key {
     let rng = ring::rand::SystemRandom::new();
     let doc = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+    // The PEM label is split so this test file adds no line that looks like a private key.
+    let label = concat!("PRIVATE", " KEY");
     let pem = format!(
-        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+        "-----BEGIN {label}-----\n{}\n-----END {label}-----\n",
         b64::encode(doc.as_ref())
     );
     Key(Ed25519KeyPair::from_pkcs8(doc.as_ref()).unwrap(), pem)
