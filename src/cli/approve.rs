@@ -889,7 +889,14 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         None => risk::Rules::defaults(),
     };
     let changed: Vec<_> = (files.iter())
-        .filter(|f| !crate::core::touch::plan_tick_patch(&f.filename, f.patch.as_deref()))
+        .filter(|f| {
+            !crate::core::touch::plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            )
+        })
         .map(|f| risk::ChangedFile {
             path: f.filename.clone(),
             previous_path: f.previous_filename.clone(),

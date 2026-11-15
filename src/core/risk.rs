@@ -495,19 +495,43 @@ pub fn bootstrap_excluded(
     why
 }
 
-/// Autonomous mode (D-017) covers every path by default; `[approvals] autonomous_allow` narrows
-/// it. The deny set below and the denied rules always apply.
-pub const AUTONOMOUS_ALLOWED: [&str; 1] = ["**"];
+/// Autonomous mode (D-017) covers only these paths by default; the owner widens or narrows the set
+/// with `[approvals] autonomous_allow` on the base. The deny set below and the denied rules
+/// always apply, whatever the allow set says.
+pub const AUTONOMOUS_ALLOWED: [&str; 5] = [
+    "src/**",
+    "tests/**",
+    "docs/**",
+    "changelog.d/**",
+    ".changeset/*.md",
+];
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
 /// and the files the review and the plans trust.
-pub const AUTONOMOUS_DENIED: [&str; 17] = [
+pub const AUTONOMOUS_DENIED: [&str; 34] = [
     // CI and release files run with secrets; governance files decide who approves what. Kept
     // here as well as in the rules, so a repo whose rules lack them stays owner-only.
     ".github/**",
+    "**/.github/**",
     ".circleci/**",
     ".bosun/**",
+    "**/.bosun/**",
     ".claude/**",
+    "**/.claude/**",
+    "Cargo.toml",
+    "**/Cargo.toml",
+    "deny.toml",
+    "channel/**",
+    ".cargo/**",
+    "rust-toolchain*",
+    "scripts/**",
+    "profiles/**",
+    "npm/**",
+    "**/package.json",
+    "*.yaml",
+    "REVIEW.md",
+    "**/AGENTS.md",
+    "**/CLAUDE.md",
     ".splice/**",
     "governance/**",
     "**/hoist.toml",
@@ -526,9 +550,18 @@ pub const AUTONOMOUS_DENIED: [&str; 17] = [
 
 /// The rules whose match autonomous mode never covers: secrets, production writes, the gate code
 /// (R-gate at base: what decides approvals, so the deny set follows the rule) and a weakened gate
-/// (agents may propose relaxing criteria, never apply them), and governance (who approves what).
-pub const AUTONOMOUS_DENIED_RULES: [&str; 5] =
-    ["R-secrets", "R-prod-write", "R-gate", "R-weaken", "R-gov"];
+/// (agents may propose relaxing criteria, never apply them), governance (who approves what),
+/// dependencies, CI and the shipped CI of other repos.
+pub const AUTONOMOUS_DENIED_RULES: [&str; 8] = [
+    "R-secrets",
+    "R-prod-write",
+    "R-gate",
+    "R-weaken",
+    "R-gov",
+    "R-deps",
+    "R-ci",
+    "R-ci-review",
+];
 
 /// The Rust files among `(path, patch)` whose diff is not shown or changes a line that may set a
 /// `#[path]` (also inside `cfg_attr`, over several lines): `path` then `=` and a quote, spaces
@@ -547,6 +580,17 @@ pub fn path_attributes(files: &[(&str, Option<&str>)]) -> Vec<String> {
         .collect()
 }
 
+/// The autonomous allow set: `[approvals] autonomous_allow` (`None`: [`AUTONOMOUS_ALLOWED`]); a
+/// glob that does not parse allows nothing.
+pub fn autonomous_allow_globs(allow: Option<&[String]>) -> Vec<Glob> {
+    match allow {
+        None => (AUTONOMOUS_ALLOWED.iter())
+            .map(|g| Glob::parse(g).expect("built-in autonomous glob"))
+            .collect(),
+        Some(l) => l.iter().filter_map(|g| Glob::parse(g).ok()).collect(),
+    }
+}
+
 /// What an autonomous-mode approval never covers among `(path, previous path)`: every path
 /// outside [`AUTONOMOUS_ALLOWED`] or inside [`AUTONOMOUS_DENIED`] (a rename counts on both sides,
 /// any case; a `..` segment too), and a match of [`AUTONOMOUS_DENIED_RULES`]. Empty: it can count.
@@ -563,10 +607,7 @@ pub fn autonomous_excluded(
             .collect()
     };
     let deny = globs(&AUTONOMOUS_DENIED);
-    let allow: Vec<Glob> = match allow {
-        None => globs(&AUTONOMOUS_ALLOWED),
-        Some(l) => l.iter().filter_map(|g| Glob::parse(g).ok()).collect(),
-    };
+    let allow = autonomous_allow_globs(allow);
     let any = |gs: &[Glob], p: &str| gs.iter().any(|g| matches_any_case(g, p));
     let mut why: Vec<String> = (files.iter())
         .filter(|(path, prev)| {
@@ -1278,12 +1319,29 @@ mod tests {
             "changelog.d/x.md",
             ".changeset/x.md",
             ".changeset/README.md",
-            // The default allows every path outside the deny set; rules decide the rest.
-            "Cargo.toml",
-            "deny.toml",
-            "channel/pieces/core/files/src/a.rs",
         ];
         let no = [
+            // Outside the narrow default allow set.
+            "Cargo.toml",
+            "crates/x/Cargo.toml",
+            "deny.toml",
+            "channel/pieces/core/files/src/a.rs",
+            "scripts/x.sh",
+            "profiles/rust.toml",
+            "npm/x/index.js",
+            "package.json",
+            "web/package.json",
+            "ci.yaml",
+            "REVIEW.md",
+            "AGENTS.md",
+            "docs/AGENTS.md",
+            "x/CLAUDE.md",
+            "rust-toolchain.toml",
+            ".cargo/config.toml",
+            "sub/.github/workflows/x.yml",
+            "sub/.bosun/x.toml",
+            "sub/.claude/x.json",
+            "other/x.txt",
             ".github/workflows/ci.yml",
             ".github/actions/x/action.yml",
             ".circleci/config.yml",
@@ -1316,6 +1374,13 @@ mod tests {
             assert_eq!(autonomous_excluded(&[(p, None)], &[], None), [p], "{p}");
         }
         // `[approvals] autonomous_allow` narrows the default; the deny set still wins.
+        // The owner widens the default through the base config; the deny set still wins.
+        let wide: Vec<String> = ["**".into()].into();
+        assert!(autonomous_excluded(&[("other/x.txt", None)], &[], Some(&wide)).is_empty());
+        assert_eq!(
+            autonomous_excluded(&[("Cargo.toml", None)], &[], Some(&wide)),
+            ["Cargo.toml"]
+        );
         let narrow: Vec<String> = ["src/**".into(), "plans/**".into(), "[".into()].into();
         let ex = |p: &str| autonomous_excluded(&[(p, None)], &[], Some(&narrow));
         assert!(ex("src/a.rs").is_empty());
@@ -1349,7 +1414,7 @@ mod tests {
         assert_eq!(autonomous_excluded(&f, &[], Some(&narrow)), ["src/a.rs"]);
         let f = [(".bosun/x.toml", Some("src/a.rs"))];
         assert_eq!(autonomous_excluded(&f, &[], Some(&narrow)).len(), 1);
-        // Default: everything outside the deny set; a rename out of a denied path is denied.
+        // A rename out of a denied path is denied.
         let f = [("src/a.rs", Some("docs/agents/x.md"))];
         assert_eq!(autonomous_excluded(&f, &[], None), ["src/a.rs"]);
         let m = |rule: &str| Match {
@@ -1372,6 +1437,9 @@ mod tests {
             ["R-weaken"]
         );
         assert_eq!(autonomous_excluded(&f, &[m("R-gov")], None), ["R-gov"]);
+        for r in ["R-deps", "R-ci", "R-ci-review"] {
+            assert_eq!(autonomous_excluded(&f, &[m(r)], None), [r]);
+        }
         // A `#[path]` attribute in a changed Rust line, or an unseen Rust diff, goes to the owner.
         let some = Some("@@\n+fn a() {}");
         let attr = Some("@@\n+#[cfg_attr(x,\n+   path = \"other.rs\")]\n+mod risk;");

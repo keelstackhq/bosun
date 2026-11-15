@@ -16,10 +16,11 @@ use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
 use crate::core::meta::{closing_issues_in, linked_issues, parse_task_meta};
 use crate::core::records::Record;
+use crate::core::shape::{ONE_OFF_ITEM, ONE_OFF_MAX};
 use crate::core::stamps::gate_loop;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
-use crate::core::touch::{Changed, outside, plan_tick_patch};
+use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::github::{
     CheckRun, Github, IssueState, Live, PrFile, Pull, Status, enable_auto_merge_any,
     is_already_clean, is_ccr_refusal, is_unstable,
@@ -261,7 +262,12 @@ fn touch_check(
     let files: Vec<Changed> = files
         .into_iter()
         .map(|f| Changed {
-            tick_only: plan_tick_patch(&f.filename, f.patch.as_deref()),
+            tick_only: plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            ),
             path: f.filename,
             status: f.status,
             previous: f.previous_filename,
@@ -567,6 +573,20 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 format!("#{n} is {now}; --ready needs the task in review"),
                 "an escalated or blocked task needs the owner: wait for the owner's answer (the owner restores a missing state label), then rerun",
             ));
+        }
+        if parse_task_meta(issue.body_text()).is_some_and(|m| m.item == ONE_OFF_ITEM) {
+            let lines: u64 = (gh.pull_files(pull.number)?.iter())
+                .map(|f| f.additions + f.deletions)
+                .sum();
+            if lines > ONE_OFF_MAX {
+                return Err(BosunError::conflict(
+                    format!(
+                        "PR #{} changes {lines} lines; a one-off is at most {ONE_OFF_MAX}",
+                        pull.number
+                    ),
+                    "split the work, or plan it (`bosun plan import`) so it gets a sized task, then rerun",
+                ));
+            }
         }
         check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;
         pending = not_green(gh, &base, &pull.head_sha)?;

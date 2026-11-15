@@ -15,6 +15,10 @@ use crate::core::touch::companions;
 pub const DEFAULT_TASK_SIZE: u32 = 200;
 /// D-016: a gated task is at most this many changed lines.
 pub const MAX_GATED: u32 = 400;
+/// A one-off task (`bosun pr --one-off`, item `oneoff`) is at most this many changed lines.
+pub const ONE_OFF_MAX: u64 = 300;
+/// The item id of a one-off task.
+pub const ONE_OFF_ITEM: &str = "oneoff";
 /// Tasks side by side (tasks per task of the longest chain) needed for a split to pay off.
 const SPLIT_WIDTH: f64 = 2.0;
 

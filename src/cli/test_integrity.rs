@@ -10,7 +10,7 @@ use crate::cli::IntegrityArgs;
 use crate::cli::gate::{repo_root, resolve_ci};
 use crate::config::Config;
 use crate::core::meta::{ALLOW_KINDS, linked_issues, parse_task_meta};
-use crate::core::touch::{Changed, outside, plan_tick_patch};
+use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::gates::integrity::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
@@ -55,8 +55,12 @@ fn from_pr(dir: Option<&Path>, base: Option<&str>, n: u64) -> CmdResult {
             path: p.clone(),
             status: "modified".into(),
             previous: None,
-            tick_only: f.previous_filename.is_none()
-                && plan_tick_patch(&f.filename, f.patch.as_deref()),
+            tick_only: plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            ),
         })
         .collect();
     let mut task = None;

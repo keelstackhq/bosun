@@ -24,7 +24,7 @@ use crate::core::risk::{
     new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
-use crate::core::touch::{Changed, outside, plan_tick_patch};
+use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
@@ -326,7 +326,14 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // A plan file that only ticks checkboxes (spec §8) is no change for the rules.
     let files: Vec<ChangedFile> = pr_files
         .iter()
-        .filter(|f| !plan_tick_patch(&f.filename, f.patch.as_deref()))
+        .filter(|f| {
+            !plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            )
+        })
         .map(|f| ChangedFile {
             path: f.filename.clone(),
             previous_path: f.previous_filename.clone(),
@@ -360,6 +367,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // hide the real task's capabilities.
     let mut task = None;
     let mut plan_high = Vec::new();
+    let mut one_off = false;
     for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
         let issue = gh.get_issue(i)?;
         let meta = issue.as_ref().and_then(task_meta);
@@ -372,6 +380,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             plan_high.push(format!("#{i} is `risk: high` in the plan"));
         }
         if let Some(meta) = meta {
+            one_off |= meta.item == crate::core::shape::ONE_OFF_ITEM;
             capabilities.extend(meta.capabilities);
             task.get_or_insert(i);
         }
@@ -385,6 +394,18 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             why: "the linked task is `risk: high` in the plan, so the owner decides".into(),
             approval: Approval::Owner,
             evidence: plan_high,
+        });
+    }
+    let lines: u64 = pr_files.iter().map(|f| f.additions + f.deletions).sum();
+    if one_off && lines > crate::core::shape::ONE_OFF_MAX {
+        matches.push(risk::Match {
+            rule: "R-oneoff-size".into(),
+            why: format!(
+                "a one-off task is at most {} changed lines; this PR changes {lines}",
+                crate::core::shape::ONE_OFF_MAX
+            ),
+            approval: Approval::Owner,
+            evidence: vec![format!("{lines} changed lines")],
         });
     }
     // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
@@ -1056,7 +1077,12 @@ fn out_of_touch(
             path: f.filename.clone(),
             status: f.status.clone(),
             previous: f.previous_filename.clone(),
-            tick_only: plan_tick_patch(&f.filename, f.patch.as_deref()),
+            tick_only: plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            ),
         })
         .collect();
     Some(outside(&changed, &lease.touch))

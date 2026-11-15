@@ -228,8 +228,8 @@ pub struct Approvals {
     /// than the one that adds this key fails to parse it: pin first, then set it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub signer: bool,
-    /// Globs autonomous approval (D-017) may cover. Unset: every path; the deny set and the denied
-    /// rules always apply. A glob that does not parse allows nothing. Any `[approvals]` change is
+    /// Globs autonomous approval (D-017) may cover. Unset: `src/**`, `tests/**`, `docs/**`,
+    /// `changelog.d/**`, `.changeset/*.md`; the deny set and the denied rules always apply. A glob that does not parse allows nothing. Any `[approvals]` change is
     /// the owner's (R-weaken).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autonomous_allow: Option<Vec<String>>,

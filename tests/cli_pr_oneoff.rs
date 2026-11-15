@@ -45,14 +45,14 @@ fn a_one_off_pr_opens_and_claims_its_own_task() {
             "--title",
             "feat: quick fix",
             "--touch",
-            "src/core/**",
+            "src/widget/**",
         ],
     );
     assert_eq!(code, 0, "{v}");
     let n = v["data"]["task"].as_u64().unwrap();
     assert_eq!(
         v["data"]["claim"]["lease"]["touch"],
-        serde_json::json!(["src/core/**"])
+        serde_json::json!(["src/widget/**"])
     );
     let labels = fake.issue_state(n).labels;
     assert!(
