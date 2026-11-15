@@ -217,6 +217,9 @@ pub struct PrFile {
     pub patch: Option<String>,
     #[serde(default)]
     pub previous_filename: Option<String>,
+    /// The blob sha of the file at the PR head.
+    #[serde(default)]
+    pub sha: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

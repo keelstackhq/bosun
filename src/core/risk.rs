@@ -224,7 +224,7 @@ pub fn evaluate(
 /// default registries (crates.io, npm, yarn): the lock then fetches from somewhere else.
 fn lock_source_moved(path: &str, line: &str) -> bool {
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        Regex::new(r#"(?i)^\s*"?(?:source|resolved)"?\s*[:=]?\s*"?[a-z+]+://([^/"'\s?#]+)"#)
+        Regex::new(r#"(?i)^\s*"?(?:source|resolved)"?\s*[:=]?\s*"?([a-z+]+://[^"'\s]*)"#)
             .expect("static regex")
     });
     const LOCKS: [&str; 5] = [
@@ -246,12 +246,14 @@ fn lock_source_moved(path: &str, line: &str) -> bool {
     let Some(c) = RE.captures(line) else {
         return false;
     };
-    let host = c[1].to_ascii_lowercase();
-    let crates_io = host == "github.com"
-        && line
-            .to_ascii_lowercase()
-            .contains("registry+https://github.com/rust-lang/crates.io-index");
-    !(crates_io || HOSTS.contains(&host.as_str()))
+    let url = c[1].to_ascii_lowercase();
+    let host = url
+        .split_once("://")
+        .map_or("", |(_, r)| r.split(['/', '?', '#']).next().unwrap_or(""));
+    // The crates.io git index is `github.com`: the whole value must be exactly it, so a path
+    // or query that merely holds the text does not pass.
+    let crates_io = url == "registry+https://github.com/rust-lang/crates.io-index";
+    !(crates_io || HOSTS.contains(&host))
 }
 
 /// Secret formats that are never exempt (R-secrets): age, PEM and PGP private keys, GitHub,
@@ -328,13 +330,31 @@ fn secret_test_dir(path: &str) -> bool {
 }
 
 /// A line without references that are no secret: `${{ .. }}`, `${VAR}`, `process.env.X`,
-/// `env::var(..)`. They read a secret from elsewhere.
+/// `env::var(..)`, `$VAR`. They read a secret from elsewhere; a literal glued after one
+/// (`${X}real`) stays, so the content regex sees `$real`.
 fn scrub_refs(line: &str) -> std::borrow::Cow<'_, str> {
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        Regex::new(r"\$\{\{.*?\}\}|\$\{[^}]*\}|process\.env\.[\w.]*|env::var\([^)]*\)")
-            .expect("static regex")
+        Regex::new(
+            r"\$\{\{.*?\}\}|\$\{[^}]*\}|\$\w+|process\.env\.[\w.]*|(?:std::)?env::var\([^)]*\)",
+        )
+        .expect("static regex")
     });
-    RE.replace_all(line, "$")
+    let mut out = String::new();
+    let mut last = 0;
+    for m in RE.find_iter(line) {
+        // `$password = "x"` (php, perl) names the secret on the left: it stays.
+        let assigned = m.as_str().starts_with('$')
+            && !m.as_str().starts_with("${")
+            && line[m.end()..].trim_start().starts_with('=');
+        out.push_str(&line[last..m.start()]);
+        out.push_str(if assigned { m.as_str() } else { "$" });
+        last = m.end();
+    }
+    if last == 0 {
+        return line.into();
+    }
+    out.push_str(&line[last..]);
+    out.into()
 }
 
 /// A code binding whose value holds no literal, like `let <name> = cfg.k`. Any quote after the
@@ -376,6 +396,9 @@ pub struct FileView {
     pub has_patch: bool,
     /// Added plus deleted lines; binary files and pure renames report 0.
     pub changes: u64,
+    /// A renamed file whose blob is the previous path's blob: nothing but the name changed.
+    /// GitHub lists a renamed binary that was also modified the same way (no patch, 0 changes).
+    pub same_blob: bool,
 }
 
 /// `R-unseen` when bosun could not see the whole diff: GitHub listed fewer files than the PR
@@ -394,7 +417,7 @@ pub fn unseen_diff(files: &[FileView], changed_files: u64) -> Option<Match> {
         // A deny-list on purpose: a status GitHub adds later counts as unseen, not as safe.
         // A binary file reports 0 changed lines, so it counts too; a pure rename (0 changes) does
         // not, its new path is judged by the rules.
-        let renamed = f.status == "renamed" && f.changes == 0;
+        let renamed = f.status == "renamed" && f.changes == 0 && f.same_blob;
         if !matches!(f.status.as_str(), "removed" | "unchanged") && !f.has_patch && !renamed {
             evidence.push(format!("no patch for {}", f.path));
         }
@@ -1936,6 +1959,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             status: status.into(),
             has_patch: patch,
             changes,
+            same_blob: status == "renamed" && path.starts_with("moved"),
         };
         let ok = [
             f("a.rs", "modified", true, 3),
@@ -1955,6 +1979,8 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
         assert!(m.evidence[0].contains("payload.bin"));
         assert!(unseen_diff(&[f("lib.so", "modified", false, 12)], 1).is_some());
         assert!(unseen_diff(&[f("copy.rs", "copied", false, 40)], 1).is_some());
+        // A renamed binary that also changed has no patch and 0 changes, like a pure rename.
+        assert!(unseen_diff(&[f("edited.png", "renamed", false, 0)], 1).is_some());
         assert_eq!(
             capability_labels(&["bug", "bosun:capability/prod-write"]),
             ["prod-write"]

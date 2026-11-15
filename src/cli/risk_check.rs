@@ -422,13 +422,39 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             evidence: findings.clone(),
         });
     }
+    // A renamed file with no patch and no changed lines is a pure rename or a renamed binary
+    // that changed: only the same blob under both names is the pure rename. One tree read, and
+    // only when such a file exists; an unreadable or cut tree proves nothing.
+    let mut base_tree = None;
     let views: Vec<FileView> = pr_files
         .iter()
-        .map(|f| FileView {
-            path: f.filename.clone(),
-            status: f.status.clone(),
-            has_patch: f.patch.is_some(),
-            changes: f.additions + f.deletions,
+        .map(|f| {
+            let candidate =
+                f.status == "renamed" && f.patch.is_none() && f.additions + f.deletions == 0;
+            let same_blob = candidate && {
+                let tree = base_tree.get_or_insert_with(|| {
+                    gh.tree(&pull.base_sha)
+                        .ok()
+                        .flatten()
+                        .filter(|t| !t.truncated)
+                });
+                let blob = |p: &str| {
+                    tree.as_ref()?
+                        .entries
+                        .iter()
+                        .find(|e| e.path == p && e.kind == "blob")
+                        .map(|e| e.sha.clone())
+                };
+                let old = f.previous_filename.as_deref().and_then(blob);
+                old.is_some() && old == f.sha
+            };
+            FileView {
+                path: f.filename.clone(),
+                status: f.status.clone(),
+                has_patch: f.patch.is_some(),
+                changes: f.additions + f.deletions,
+                same_blob,
+            }
         })
         .collect();
     matches.extend(unseen_diff(&views, pull.changed_files));

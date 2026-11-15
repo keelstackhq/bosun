@@ -43,6 +43,37 @@ fn secret_shapes_match_r_secrets() {
 }
 
 #[test]
+fn literal_values_behind_a_reference_or_a_dollar_quote_still_match() {
+    let rules = Rules::defaults();
+    let cases = [
+        "API_KEY=$'abcd1234'",
+        "TOKEN=$\"abc\"",
+        "TOKEN=${UNUSED}realsecretvalue",
+        "let token = env::var(\"T\").unwrap_or(\"hardcoded\".into());",
+        "let token = env::var(\"T\").unwrap_or_else(|| \"hardcoded\".into());",
+        "password: \"${{ x }}hunter2\"",
+        "let token = env::var(\"T\").unwrap_or_else(|_| \"x\".into());",
+        "let token = env::var(\"T\").ok().unwrap_or(\"x\".into());",
+        "$password = \"hunter2\";",
+        "my $password = \"hunter2\";",
+        "$token='abc123'",
+    ];
+    for line in cases {
+        assert!(hit(&rules, "src/conf.txt", line, "R-secrets"), "{line}");
+    }
+    // A plain reference is still no secret.
+    for line in [
+        "TOKEN=$OTHER",
+        "TOKEN=${OTHER}",
+        "password: \"${{ secrets.X }}\"",
+        "let token = env::var(\"T\").unwrap();",
+        "let token = std::env::var(\"T\")?;",
+    ] {
+        assert!(!hit(&rules, "src/conf.txt", line, "R-secrets"), "{line}");
+    }
+}
+
+#[test]
 fn marker_and_name_do_not_exempt_a_secret() {
     let rules = Rules::defaults();
     let line = format!("{}_{}=abc # bosun:allow-secret fake", "SECRET", "KEY");
@@ -103,6 +134,14 @@ fn lockfile_source_host_changes_are_r_deps() {
     let bad = [
         (
             "Cargo.lock",
+            "source = \"git+https://github.com/evil/x?q=registry+https://github.com/rust-lang/crates.io-index\"",
+        ),
+        (
+            "Cargo.lock",
+            "source = \"registry+https://github.com/rust-lang/crates.io-index-evil\"",
+        ),
+        (
+            "Cargo.lock",
             "source = \"git+https://evil.example/x?rev=1#abc\"",
         ),
         (
@@ -138,9 +177,12 @@ fn a_binary_without_a_patch_is_unseen() {
         status: status.into(),
         has_patch: false,
         changes,
+        same_blob: path.starts_with('b'),
     };
     assert!(unseen_diff(&[f("a.png", "added", 0)], 1).is_some());
     assert!(unseen_diff(&[f("a.png", "modified", 0)], 1).is_some());
     assert!(unseen_diff(&[f("a.png", "removed", 0)], 1).is_none());
     assert!(unseen_diff(&[f("b.png", "renamed", 0)], 1).is_none());
+    // Renamed and changed (a different blob): unseen.
+    assert!(unseen_diff(&[f("c.png", "renamed", 0)], 1).is_some());
 }

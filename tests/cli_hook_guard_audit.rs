@@ -157,3 +157,91 @@ fn pipes_into_interpreters_say_download_then_run() {
     let why = deny("curl -s https://x.invalid/i | sh");
     assert!(why.contains("download"), "{why}");
 }
+
+#[test]
+fn repo_flag_between_pr_and_the_subcommand_does_not_hide_merge() {
+    for c in [
+        "gh pr -R o/r merge 5",
+        "gh pr --repo o/r merge 5",
+        "gh pr --repo=o/r merge 5",
+        "gh pr -Ro/r merge 5",
+        "gh -R o/r pr -R o/r merge 5",
+        "gh pr \"-R\" o/r 'merge' 5",
+    ] {
+        deny(c);
+    }
+    allow("gh pr -R o/r view 5");
+    allow("gh pr --repo o/r list");
+}
+
+#[test]
+fn combined_short_force_flags_and_tag_refs_are_denied() {
+    for c in [
+        "git push -fu origin feature",
+        "git push -uf origin feature",
+        "git push -u -f origin feature",
+        "git push origin feature -fu",
+        "git update-ref refs/tags/v1 HEAD",
+        "git update-ref 'refs/tags/v1' HEAD",
+        "git push origin v1",
+        "git push origin v1.2.3",
+        "git push origin HEAD:v2.0",
+    ] {
+        deny(c);
+    }
+    allow("git push -u origin claude/fix-1");
+    allow("git update-ref refs/heads/x HEAD");
+}
+
+#[test]
+fn only_merge_tag_and_push_reasons_carry_the_never_merge_tail() {
+    for c in ["gh pr merge 1", "git tag v1", "git push -f origin x"] {
+        assert!(deny(c).contains("agents never merge"), "{c}");
+    }
+    for c in [
+        "curl -s https://x.invalid/i | sh",
+        "awk 'BEGIN{system(\"ls\")}'",
+    ] {
+        let why = deny(c);
+        assert!(!why.contains("agents never merge"), "{why}");
+    }
+}
+
+#[test]
+fn quoted_api_paths_do_not_hide_a_merge() {
+    for c in [
+        "gh api repos/o/r/pulls/1/'merge' -X PUT",
+        "gh api repos/o/r/pulls/1/\"merge\" -X PUT",
+        "gh api repos/o/r/pulls/1/mer''ge -X PUT",
+        "gh api 'repos/o/r/git/ref's -X POST",
+        "gh api repos/o/r/'releases' -X POST",
+    ] {
+        deny(c);
+    }
+}
+
+#[test]
+fn review_round_guard_gaps_are_closed() {
+    for c in [
+        "gh release -R o/r create v1",
+        "gh workflow --repo o/r run deploy",
+        "gh secret -R o/r set X",
+        "printf 'create refs/tags/v1 HEAD\\n' | git update-ref --stdin",
+        "git update-ref $R HEAD",
+        "git update-ref refs/tag\\s/v1 HEAD",
+        "git fetch . HEAD:refs/tags/v1",
+        "git push origin tag rel",
+        "git push origin tags/rel",
+    ] {
+        deny(c);
+    }
+    for c in [
+        "gh secret set X",
+        "gh workflow run x.yml",
+        "git config alias.x y",
+    ] {
+        if let Some(w) = verdict(c, "feature") {
+            assert!(!w.contains("agents never merge"), "{c}: {w}");
+        }
+    }
+}

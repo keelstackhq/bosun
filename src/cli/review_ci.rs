@@ -229,6 +229,7 @@ fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
             // so it does not also stop the review.
             has_patch: !f["patch"].is_null() || changed(f) == 0,
             changes: changed(f),
+            same_blob: false,
         })
         .collect();
     // A delta review lists the PR's files that a comparison since the last review names, a
