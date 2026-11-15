@@ -3263,18 +3263,44 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             }
             (sub == "push" && !explicit && !target.alone).then_some(PUSH_ALONE)
         }
-        // `--stdin`, a variable or an escape hides the ref: fail closed.
-        "update-ref" => (rest.iter().any(|a| {
-            a.contains(['$', '`', '\\']) || *a == "--stdin" || {
-                a.replace(['\'', '"'], "").contains("refs/tags/")
+        // `--stdin`, a variable, a backtick or an escape in the ref hides it: fail closed. A
+        // `$` in the value (`"$sha"`) is no ref.
+        "update-ref" => {
+            let mut refs = Vec::new();
+            let mut it = rest.iter();
+            while let Some(a) = it.next() {
+                if *a == "-m" {
+                    // A quoted message splits into tokens: skip to the closing quote.
+                    if let Some(m) = it.next() {
+                        let q = m.chars().next().filter(|c| matches!(c, '\'' | '"'));
+                        if let Some(q) = q {
+                            let mut m = *m;
+                            while m.len() < 2 || !m.ends_with(q) {
+                                match it.next() {
+                                    Some(n) => m = n,
+                                    None => break,
+                                }
+                            }
+                        }
+                    }
+                } else if !a.starts_with('-') {
+                    refs.push(*a);
+                }
             }
-        }))
-        .then_some("tag"),
-        // `git fetch . HEAD:refs/tags/v1` makes a tag too.
+            (rest.iter().any(|a| {
+                a.contains(['`', '\\'])
+                    || *a == "--stdin"
+                    || a.replace(['\'', '"'], "").contains("refs/tags/")
+            }) || refs.first().is_some_and(|r| r.contains('$')))
+            .then_some("tag")
+        }
+        // `git fetch . HEAD:refs/tags/v1` makes a tag too; mirroring the remote's own tags
+        // (`'refs/tags/*:refs/tags/*'`, as `--tags`) does not.
         "fetch"
-            if rest
-                .iter()
-                .any(|a| a.replace(['\'', '"'], "").contains("refs/tags/")) =>
+            if rest.iter().any(|a| {
+                let a = a.replace(['\'', '"', '\\'], "");
+                a.contains("refs/tags/") && a.trim_start_matches('+') != "refs/tags/*:refs/tags/*"
+            }) =>
         {
             Some("tag")
         }
@@ -4147,6 +4173,39 @@ mod tests {
             "timeout 60 cargo test",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn tag_mirror_fetch_and_update_ref_values() {
+        for cmd in [
+            "git fetch origin 'refs/tags/*:refs/tags/*'",
+            "git fetch origin +refs/tags/*:refs/tags/*",
+            "git fetch origin \"+refs/tags/*:refs/tags/*\"",
+            "git update-ref refs/heads/x \"$sha\"",
+            "git update-ref -m \"$msg\" refs/heads/x $sha",
+            "git update-ref -m 'a b' refs/heads/x $sha",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+        for cmd in [
+            "git fetch . HEAD:refs/tags/v1",
+            "git fetch origin main:refs/t\\ags/v1",
+            "git fetch origin refs/tags/v1:refs/tags/v1",
+            "git fetch origin 'refs/tags/*:refs/tags/*' HEAD:refs/tags/v1",
+            "git fetch origin refs/heads/*:refs/tags/*",
+            "git update-ref $ref abc",
+            "git update-ref -m 'a b' $r HEAD",
+            "git update-ref -m \"a b\" $r HEAD",
+            "git update-ref \"$ref\" abc",
+            "git update-ref -d $ref",
+            "git update-ref refs/tags/v1 abc",
+            "git update-ref refs/heads/x refs/tags/v1",
+            "git update-ref --stdin",
+            "git update-ref refs/heads/x `git rev-parse HEAD`",
+            "git update-ref refs/he\\ads/x abc",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
     }
 

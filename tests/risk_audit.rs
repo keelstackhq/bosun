@@ -81,8 +81,8 @@ fn marker_and_name_do_not_exempt_a_secret() {
     let line = format!("{}_{}=abc", "SECRET", "KEY");
     for p in [
         "src/test_conf.txt",
-        "src/conf_test.go",
-        "web/a.spec.ts",
+        "src/conf_test.txt",
+        "web/a.spec.json",
         "x.snap",
     ] {
         assert!(hit(&rules, p, &line, "R-secrets"), "{p}");
@@ -185,4 +185,89 @@ fn a_binary_without_a_patch_is_unseen() {
     assert!(unseen_diff(&[f("b.png", "renamed", 0)], 1).is_none());
     // Renamed and changed (a different blob): unseen.
     assert!(unseen_diff(&[f("c.png", "renamed", 0)], 1).is_some());
+}
+
+#[test]
+fn ordinary_code_is_no_secret() {
+    let rules = Rules::defaults();
+    let cases = [
+        ("app/main.py", "password = getenv(\"DB_PASSWORD\")"),
+        ("app/main.py", "password = os.getenv(\"DB_PASSWORD\")"),
+        ("app/main.py", "password = os.environ[\"DB_PASSWORD\"]"),
+        ("app/main.py", "password = os.environ.get(\"DB_PASSWORD\")"),
+        (
+            "src/X.java",
+            "String password = System.getenv(\"DB_PASSWORD\");",
+        ),
+        ("src/x.c", "char *password = getenv(\"DB_PASSWORD\");"),
+        ("src/x.php", "$password = getenv(\"DB_PASSWORD\");"),
+        ("src/x.rb", "password = ENV.fetch(\"DB_PASSWORD\")"),
+        ("src/x.rb", "password = ENV[\"DB_PASSWORD\"]"),
+        ("app/main.py", "self.password = password"),
+        ("app/main.py", "connect(user, password=password,"),
+        ("app/main.py", "password=password,"),
+        ("app/main.py", "password = config[\"password\"]"),
+        ("app/main.py", "password = None"),
+        ("app/main.py", "password = input(\"Password: \")"),
+        ("app/main.py", "passwd = getpass()"),
+        ("app/main.py", "private_key = read_file(\"k.pem\")"),
+        ("src/x.rs", "secret_name = \"prod-db\""),
+        ("src/x.rs", "let secret_id = \"prod-db\";"),
+        ("cfg/app.toml", "secret_name = \"prod-db\""),
+        ("cfg/app.toml", "private_key_path: \"/etc/k.pem\""),
+        ("cfg/app.toml", "token_file = \"/run/t\""),
+    ];
+    for (p, line) in cases {
+        assert!(!hit(&rules, p, line, "R-secrets"), "{p}: {line}");
+    }
+}
+
+#[test]
+fn literals_behind_calls_and_bindings_still_match() {
+    let rules = Rules::defaults();
+    let cases = [
+        ("app/main.py", "password = os.getenv(\"X\", \"hunter2\")"),
+        ("app/main.py", "password = os.getenv(\"X\") or \"hunter2\""),
+        (
+            "app/main.py",
+            "password = os.environ.get(\"X\") or 'hunter2'",
+        ),
+        ("app/main.py", "password = cfg.get(\"k\", \"hunter2\")"),
+        ("app/main.py", "password = Secret(\"hunter2\")"),
+        ("app/main.py", "password = config[\"k\"] or \"hunter2\""),
+        ("app/main.py", "password = getOrElse(\"hunter2\")"),
+        ("app/main.py", "self.password = \"hunter2\""),
+        ("app/main.py", "password = 12345"),
+        ("src/x.rs", "password = String::from(\"x\")"),
+        ("src/x.rb", "password = ENV.fetch(\"X\", \"hunter2\")"),
+        ("src/x.rb", "password = ENV[\"X\"] || \"hunter2\""),
+        (
+            "src/x.kt",
+            "val password = System.getenv(\"X\") ?: \"hunter2\"",
+        ),
+        ("app/main.py", "if a == b: password = \"hunter2\""),
+        ("app/main.py", "password = x; password = \"hunter2\""),
+        ("app/main.py", "# password = Pr0dP4ss"),
+        ("src/x.js", "// token = s3cr3tT0ken"),
+        (
+            "app/main.py",
+            "password = os.getenv(\"X\") if os.getenv(\"X\") else \"hunter2\"",
+        ),
+        ("app/main.py", "password = os.getenv(\"X\") + \"hunter2\""),
+        (
+            "app/main.py",
+            "password = os.getenv(\"X\") or (\"hunter2\")",
+        ),
+        ("src/x.rb", "password = ENV.fetch(\"X\") { \"hunter2\" }"),
+        ("app/main.py", "password = os.getenv(\"X\")\\"),
+        ("app/main.py", "password = getOr(\"hunter2\")"),
+        ("app/main.py", "a = 1; password = hunter2"),
+        ("conf/app.ini", "password = hunter2"),
+        ("conf/app.env", "password = prod_name"),
+        ("conf/app.ini", "secret_name_x = hunter2"),
+        ("conf/app.ini", "password = \"hunter2_id\""),
+    ];
+    for (p, line) in cases {
+        assert!(hit(&rules, p, line, "R-secrets"), "{p}: {line}");
+    }
 }

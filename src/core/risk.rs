@@ -334,9 +334,22 @@ fn secret_test_dir(path: &str) -> bool {
 /// (`${X}real`) stays, so the content regex sees `$real`.
 fn scrub_refs(line: &str) -> std::borrow::Cow<'_, str> {
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        Regex::new(
-            r"\$\{\{.*?\}\}|\$\{[^}]*\}|\$\w+|process\.env\.[\w.]*|(?:std::)?env::var\([^)]*\)",
-        )
+        Regex::new(concat!(
+            r"\$\{\{.*?\}\}|\$\{[^}]*\}",
+            // An env lookup with the name as the only argument: `getenv("X")`,
+            // `os.getenv("X")`, `System.getenv("X")`, `os.environ["X"]`, `os.environ.get("X")`,
+            // `ENV["X"]`, `ENV.fetch("X")`, `$_ENV["X"]`. A default (`, "d"`) stays.
+            r#"|(?:\w+(?:\.|::))*getenv\(\s*(?:"[\w.-]*"|'[\w.-]*')\s*\)"#,
+            r#"|(?:\w+\.)*environ\.get\(\s*(?:"[\w.-]*"|'[\w.-]*')\s*\)"#,
+            r#"|(?:\w+\.)*environ\[\s*(?:"[\w.-]*"|'[\w.-]*')\s*\]"#,
+            r#"|\$_(?:ENV|SERVER)\[\s*(?:"[\w.-]*"|'[\w.-]*')\s*\]"#,
+            r#"|\bENV\[\s*(?:"[\w.-]*"|'[\w.-]*')\s*\]"#,
+            r#"|\bENV\.fetch\(\s*(?:"[\w.-]*"|'[\w.-]*')\s*\)"#,
+            r"|\$\w+|process\.env\.[\w.]*|(?:std::)?env::var\([^)]*\)",
+            // A key that names or locates a secret, not the secret: `secret_name`,
+            // `token_file`, `private_key_path`, `api_key_id`.
+            r"|(?i:[\w-]*[_-](?:name|id|path|file))\b",
+        ))
         .expect("static regex")
     });
     let mut out = String::new();
@@ -347,7 +360,22 @@ fn scrub_refs(line: &str) -> std::borrow::Cow<'_, str> {
             && !m.as_str().starts_with("${")
             && line[m.end()..].trim_start().starts_with('=');
         out.push_str(&line[last..m.start()]);
-        out.push_str(if assigned { m.as_str() } else { "$" });
+        let key = !m.as_str().starts_with('$') && is_name_key(m.as_str());
+        // An env lookup is a reference only when nothing follows it but the end of the
+        // expression: `getenv("X") if a else "lit"`, `+ "lit"` and a block default stay.
+        let env = is_env_call(m.as_str());
+        let rest = line[m.end()..].trim_start();
+        let open = env
+            && !(rest.is_empty()
+                || rest.starts_with([';', ',', ')', '}', ']', '#'])
+                || rest.starts_with("//"));
+        out.push_str(if assigned || open {
+            m.as_str()
+        } else if key {
+            "k"
+        } else {
+            "$"
+        });
         last = m.end();
     }
     if last == 0 {
@@ -385,8 +413,87 @@ pub fn secret_exempt(path: &str, line: &str, matches: impl Fn(&str) -> bool) -> 
     if secret_test_dir(path) {
         return true;
     }
+    // One statement only: a second, unbound assignment on the line stays a match.
+    let code = code_file(path) && line.split(';').filter(|s| !s.trim().is_empty()).count() == 1;
     line.split(';')
-        .all(|stmt| !matches(stmt) || code_binding(stmt))
+        .all(|stmt| !matches(stmt) || code_binding(stmt) || (code && assignment_binding(stmt)))
+}
+
+/// A scrub match that is an env lookup by name (not `${X}`, `$X`, `env::var` or a key).
+fn is_env_call(m: &str) -> bool {
+    m.contains("getenv(") || m.contains("environ") || m.starts_with("ENV") || m.starts_with("$_")
+}
+
+/// A `*_name`, `*-id`, `*_path` or `*_file` key (a scrub match that is no env call).
+fn is_name_key(m: &str) -> bool {
+    let l = m.to_ascii_lowercase();
+    !l.contains(['(', '['])
+        && [
+            "_name", "-name", "_id", "-id", "_path", "-path", "_file", "-file",
+        ]
+        .iter()
+        .any(|s| l.ends_with(s))
+}
+
+/// A source file, where `x = y` binds a variable: not an env, ini, yaml, toml or shell file.
+fn code_file(path: &str) -> bool {
+    const EXT: [&str; 30] = [
+        "rs", "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "java", "kt", "kts", "scala", "go",
+        "c", "h", "cc", "cpp", "hpp", "cs", "rb", "php", "swift", "m", "dart", "lua", "pl", "pm",
+        "ex", "exs", "groovy",
+    ];
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    !name.starts_with(".env") && name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e))
+}
+
+/// In a code file: `name = value` where the value is a reference, not a literal: an identifier,
+/// attribute, call, subscript, `None` or `null`. A string literal anywhere outside a subscript
+/// or the one quoted argument of a reader call (`input("..")`, `read_file("..")`,
+/// `cfg.get("k")`: one argument, no fallback) makes it a literal. A digit start is one too.
+fn assignment_binding(stmt: &str) -> bool {
+    static CALL: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"([\w$]+)\(\s*(?:"[^"\\]*"|'[^'\\]*')\s*\)"#).expect("static regex")
+    });
+    static SUB: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"\[\s*(?:"[^"\\]*"|'[^'\\]*')\s*\]"#).expect("static regex")
+    });
+    static READER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r"(?i)^(?:get\w*|read\w*|input|prompt\w*|load\w*|fetch\w*|lookup\w*|find\w*|ask\w*|open\w*|env|param\w*|resolve\w*)$",
+        )
+        .expect("static regex")
+    });
+    static FALLBACK: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"(?:^|_)or(?:_|$)|[a-z]Or(?:[A-Z_]|$)|(?i:default|fallback|else)")
+            .expect("static regex")
+    });
+    let t = stmt.trim_start();
+    // A comment is no binding: it can hold anything.
+    if ["#", "//", "/*", "* ", "--", "<!--"]
+        .iter()
+        .any(|c| t.starts_with(c))
+    {
+        return false;
+    }
+    let Some((_, value)) = stmt.split_once('=') else {
+        return false;
+    };
+    let value = SUB.replace_all(value.trim(), "[]");
+    let value = CALL.replace_all(&value, |c: &regex::Captures| {
+        let f = &c[1];
+        if READER.is_match(f) && !FALLBACK.is_match(f) {
+            format!("{f}()")
+        } else {
+            c[0].to_string()
+        }
+    });
+    // A trailing `\` continues the expression on the next line, out of sight.
+    if value.trim_end().ends_with('\\') {
+        return false;
+    }
+    let v = value.trim_start_matches(['&', '*']);
+    v.starts_with(|c: char| c.is_ascii_alphabetic() || matches!(c, '_' | '@' | '$'))
+        && !v.contains(['"', '\'', '`'])
 }
 
 /// A file as listed by GitHub, for [`unseen_diff`].
