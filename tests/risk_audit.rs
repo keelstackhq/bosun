@@ -264,7 +264,7 @@ fn literals_behind_calls_and_bindings_still_match() {
         ("app/main.py", "a = 1; password = hunter2"),
         ("conf/app.ini", "password = hunter2"),
         ("conf/app.env", "password = prod_name"),
-        ("conf/app.ini", "secret_name_x = hunter2"),
+        ("conf/app.ini", "client_secret_key = hunter2"),
         ("conf/app.ini", "password = \"hunter2_id\""),
     ];
     for (p, line) in cases {
