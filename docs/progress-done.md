@@ -455,3 +455,6 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-15 · janitor Routine opt-in via [routines] janitor in .bosun/bosun.toml
 - 2026-11-15 · audit loosening reviewed: tick patches strict, narrow autonomous default with owner `autonomous_allow`, one-off touch and size limits
 - 2026-11-15 · R6: adopt dry-run tolerates an unreadable repo, pins splice 0.5.0 hoist 0.5.0 berth 0.2.0, janitor_cron validated, --ready cap uses is_one_off
+- 2026-11-15 · Pin 0.16.0 · .bosun/version and setup-script BOSUN_* version and sha512 (R-gov PR)
+- 2026-11-14 · audit fixes (tightening): guard, risk, hooks, init/migrate/doctor, docs, CI, cargo profiles
+- 2026-11-15 · Release 0.16.0 · version bump, CHANGELOG, tool pins splice 0.5.1 hoist 0.5.1 berth 0.2.1 · release PR

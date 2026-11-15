@@ -1,1 +1,0 @@
-- 2026-11-15 · Release 0.16.0 · version bump, CHANGELOG, tool pins splice 0.5.1 hoist 0.5.1 berth 0.2.1 · release PR
