@@ -1,1 +1,0 @@
-- 2026-11-15 · Pin 0.16.0 · .bosun/version and setup-script BOSUN_* version and sha512 (R-gov PR)
