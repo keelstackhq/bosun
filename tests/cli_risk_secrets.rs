@@ -222,3 +222,63 @@ fn typed_and_walrus_literals_still_match() {
     assert!(!secret_match("infra/a.tf", "password = var.db_password"));
     assert!(!secret_match("src/a.go", "password := cfg.Password"));
 }
+
+#[test]
+fn shell_defaults_with_a_literal_match() {
+    for line in [
+        "API_@TOK@^=${API_@TOK@^:-abcd1234efgh5678}",
+        "@TOK@^=\"${@TOK@^:-abcd1234efgh5678}\"",
+        "export SECRET=${SECRET-abcd1234efgh5678}",
+    ] {
+        let line = line.replace('^', "").replace("@TOK@", "TOKEN");
+        assert!(secret_match("src/a.sh", &line), "{line}");
+    }
+    // A default that is itself a reference, or empty, is no literal.
+    assert!(!secret_match("src/a.sh", "API_@TOK@=${API_@TOK@:-$OTHER}"));
+    assert!(!secret_match("src/a.sh", "API_@TOK@=${API_@TOK@:-}"));
+    assert!(!secret_match("src/a.sh", "API_@TOK@=${API_@TOK@}"));
+}
+
+#[test]
+fn quoted_literals_that_start_with_a_dollar_match() {
+    for (path, line) in [
+        ("src/a.py", "@TOK@ = '$ecret1234'"),
+        ("src/a.js", "const @SEC@ = '$up3rS3cret!';"),
+        ("src/a.py", "@TOK@ = \"$2b$10$abcdefghijk\""),
+        ("src/a.sh", "@TOK@='$ecret1234'"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+    // A double-quoted `$VAR` in shell or yaml reads a variable.
+    assert!(!secret_match("src/a.sh", "@TOK@=\"$GH_@TOK@\""));
+    assert!(!secret_match("ci/x.yml", "@TOK@: \"$GH_@TOK@\""));
+}
+
+#[test]
+fn secret_names_that_are_no_secret_do_not_match() {
+    for (path, line) in [
+        ("src/a.py", "@SEC@ary = \"Bob\""),
+        ("src/a.py", "@SEC@s = [\"a\", \"b\"]"),
+        ("src/a.py", "@SEC@s_dir = \"/run/@SEC@s\""),
+        ("src/a.py", "@SEC@_version = \"latest\""),
+        ("deploy/k8s.yml", "  @SEC@Name: \"tls-cert\""),
+        ("deploy/k8s.yml", "  @TOK@@SEC@: \"my-@TOK@\""),
+        ("src/a.yml", "    @SEC@Ref: \"db\""),
+        ("src/a.yml", "- @SEC@KeyRef: \"x\""),
+        ("src/a.yml", "  @SEC@_name: \"x\""),
+        ("src/a.yml", "  @SEC@_id: \"x\""),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+    for (path, line) in [
+        ("src/a.py", "@SEC@ = \"x\""),
+        ("src/a.py", "client_@SEC@ = \"x\""),
+        ("src/a.go", "@SEC@Key := \"x\""),
+        ("src/a.py", "SECRET_KEY = \"x\""),
+        ("src/a.py", "aws_@SEC@_access_key = \"x\""),
+        ("src/a.py", "@SEC@_@TOK@ = \"x\""),
+        ("src/a.yml", "  client_@SEC@: \"x\""),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}

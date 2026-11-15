@@ -3281,8 +3281,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             if rest.iter().any(|a| {
                 let a = a.replace(['\'', '"', '\\'], "");
                 a.contains("refs/tags/") && a.trim_start_matches('+') != "refs/tags/*:refs/tags/*"
-                    // `<src>:$T` writes a ref the hook cannot read.
-                    || a.rsplit_once(':').is_some_and(|(_, d)| d.contains(['$', '`']))
+                    // `<src>:$T` writes a ref the hook cannot read; `<src>:tags/x` is a DWIM tag.
+                    || a.rsplit_once(':').is_some_and(|(_, d)| d.contains(['$', '`']) || d.starts_with("tags/"))
             }) =>
         {
             Some("tag")
@@ -4176,6 +4176,8 @@ mod tests {
             "git fetch origin refs/tags/v1:refs/tags/v1",
             "git fetch origin 'refs/tags/*:refs/tags/*' HEAD:refs/tags/v1",
             "git fetch origin refs/heads/*:refs/tags/*",
+            "git fetch origin main:tags/v1",
+            "git fetch origin +HEAD:tags/v1",
             "git fetch origin HEAD:$T",
             "git fetch . \"HEAD:$T\"",
             "git -c push.followTags=true push origin feature",

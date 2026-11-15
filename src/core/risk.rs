@@ -175,13 +175,16 @@ pub fn evaluate(
             let secrets = rule.id == "R-secrets";
             for (i, line) in f.added_lines.iter().enumerate() {
                 let scrubbed = if secrets {
-                    scrub_refs(line)
+                    scrub_refs(line, code_file(&f.path))
                 } else {
                     line.into()
                 };
                 let hit = match &rule.content {
                     Some(re) if re.is_match(&scrubbed) => {
-                        !(secrets && secret_exempt(&f.path, line, |s| re.is_match(&scrub_refs(s))))
+                        !(secrets
+                            && secret_exempt(&f.path, line, |s| {
+                                re.is_match(&scrub_refs(s, code_file(&f.path)))
+                            }))
                     }
                     _ => secrets && strong_secret(line),
                 };
@@ -332,7 +335,12 @@ fn secret_test_dir(path: &str) -> bool {
 /// A line without references that are no secret: `${{ .. }}`, `${VAR}`, `process.env.X`,
 /// `env::var(..)`, `$VAR`. They read a secret from elsewhere; a literal glued after one
 /// (`${X}real`) stays, so the content regex sees `$real`.
-fn scrub_refs(line: &str) -> std::borrow::Cow<'_, str> {
+///
+/// A literal stays: the default in `${X:-lit}` and `${X-lit}`, a `$..` after a single quote, and
+/// in a code file (`code`) one after a double quote too (`'$ecret1'`, `"$2b$10$.."`).
+fn scrub_refs(line: &str, code: bool) -> std::borrow::Cow<'_, str> {
+    static DEFAULT: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"^\$\{\w+:?-([^}$]+)\}$").expect("static regex"));
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(concat!(
             r"\$\{\{.*?\}\}|\$\{[^}]*\}",
@@ -360,6 +368,22 @@ fn scrub_refs(line: &str) -> std::borrow::Cow<'_, str> {
             && !m.as_str().starts_with("${")
             && line[m.end()..].trim_start().starts_with('=');
         out.push_str(&line[last..m.start()]);
+        let before = line[..m.start()].chars().next_back();
+        let m_str = m.as_str();
+        let quoted_lit = m_str.starts_with('$')
+            && m_str.len() > 1
+            && !m_str.starts_with("${")
+            && (before == Some('\'') || (code && before == Some('"')));
+        if let Some(d) = DEFAULT.captures(m_str) {
+            out.push_str(&d[1]);
+            last = m.end();
+            continue;
+        }
+        if quoted_lit {
+            out.push_str(m_str);
+            last = m.end();
+            continue;
+        }
         let key = !m.as_str().starts_with('$') && is_name_key(m.as_str());
         // An env lookup is a reference only when nothing follows it but the end of the
         // expression: `getenv("X") if a else "lit"`, `+ "lit"` and a block default stay.

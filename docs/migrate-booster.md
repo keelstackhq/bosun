@@ -48,7 +48,7 @@ bosun migrate --finish                 # after the merge: join, plan amend (idem
   epic names (add `--plan <file>` for an epic without a marker). Run it twice: the second run changes nothing.
 
 The owner does one approval per PR: the exact head (repo, PR, head SHA) in the way bosun asks. Routines stay
-human-only (claude.ai/code → Routines); the PR body lists them.
+human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 
 ## CLI (Claude Code on your machine)
 
@@ -56,7 +56,7 @@ human-only (claude.ai/code → Routines); the PR body lists them.
 2. Local only: set `GITHUB_TOKEN` to `gh auth token` in your shell (scopes repo, workflow). Never in a file. A cloud session needs no token.
 3. Open Claude Code in the repo, on the default branch, clean tree. Paste the prompt from Quick start.
 4. **[phone]** Approve the PR head when Claude asks.
-5. Do the Routine steps the PR body lists.
+5. **[computer]** Do the Routine steps the PR body lists.
 
 ## Web / cloud (claude.ai/code)
 
@@ -66,7 +66,7 @@ human-only (claude.ai/code → Routines); the PR body lists them.
    `release-assets.githubusercontent.com` for the prebuilt cargo tools). No secrets, no PAT: GitHub comes from the session's proxy and the Claude GitHub App.
 2. Start a session on the repo in that environment. Paste the prompt from Quick start.
 3. **[phone]** Approve the PR head when Claude asks.
-4. Do the Routine steps the PR body lists.
+4. **[computer]** Do the Routine steps the PR body lists.
 
 ## Claude Tag in Slack (the only entry)
 
@@ -75,12 +75,12 @@ human-only (claude.ai/code → Routines); the PR body lists them.
    the one from the web steps.
 2. In the channel, start a thread and post the Quick start prompt to Claude.
 3. **[phone]** Approve the PR head when bosun asks.
-4. Do the Routine steps the PR body lists.
+4. **[computer]** Do the Routine steps the PR body lists.
 
 ## Optional: the CI signer
 
 Off by default; the orchestrator-held key stays the default. To let cloud and Claude Tag sessions run
-`bosun approve <pr>@<head> --via-signer`, the owner sets `[approvals] signer = true` (R-weaken) and
+`bosun approve <pr>@<head> --via-signer`, **[computer]** the owner sets `[approvals] signer = true` (R-weaken) and
 `[checks] mode = "checks"` with the gate App, then per repo: `bosun keygen --role signer --id signer-ci
 --out <pem outside the repo> --enroll`, merge that `.bosun/approvers.toml` PR (R-gov), create the GitHub
 environment `bosun-signer` with the secret `BOSUN_SIGNER_KEY` (the PEM), delete the PEM. The real barrier:
@@ -99,33 +99,6 @@ refusal that names it. Read the script before you add one.
 A cloud session cannot write commit statuses (use `bosun verdict comment --from -`), approve with
 `BOSUN_OWNER_TOKEN` (approve by chat form), or merge, tag or force-push. If `bosun pr --ready` returns
 `data.ready: "pending"`, make the `mcp__github__update_pull_request` call in `next` and run it again.
-
-## Rollback
-
-A tighter mode is one R-gov PR (no R-weaken): `bosun migrate --to steady` (or `gatekeeper`), or set
-`[mode] name` by hand; deleting the `[mode]` table restores the old behaviour byte for byte. Keep
-`.bosun/registry`, epic markers and bind records. Do not unpin bosun: pins only move up, a downgrade exits 3.
-Undo a session's commits: `bosun trailers list <session>`; revert a merged PR with `bosun revert`
-(a `kind/mainfix` PR). Never force-push.
-
-## Troubleshooting
-
-Read `error.fix` first. Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4 halted, 5 needs-human, 6 limit.
-
-| You see | What to do |
-| ------- | ---------- |
-| Session start: installed X, repo pins Y; or `unknown field` for `[mode]` or `[approvals]` | The installed bosun is older than the repo's pin. Run `bash docs/setup-script.sh`, then `bosun --version`. |
-| Exit 4 | The repo is halted (the owner closes the `bosun:halt` issue), or on `wave` main is red: wait for the fix. |
-| Exit 3 on `claim` | Another session holds an overlapping lease: `bosun wave plan <epic>`. |
-| Exit 3 on `pin` | Dirty tree, wrong branch, two pin branches, or npm latest is older than the pin: [update.md](update.md). |
-| Exit 5 | A task needs the owner or a budget ask is open: `bosun ask <issue> "<question>"`; see [quickstart.md](quickstart.md). |
-| `bosun pr --ready`: `missing_gates` | Run the loop in `error.fix`. |
-| `git push` refused | A gate has no stamp: run the gate loop, push alone. |
-| `wave tick`: `held_by spawn_auto is off` | The mode is below booster: `bosun mode`. |
-| `wave tick`: `brake on` | Main red twice, two reverts, or red-CI 10 points over target in 7 days: wait. |
-| `bosun join` reaches no GitHub | Local: set `GITHUB_TOKEN` and `BOSUN_REPO=owner/name`. Cloud: check the GitHub App. |
-
-If a step is not covered here, stop, run `bosun doctor`, read its `fix`, and ask the owner.
 
 ## Appendix A. The manual path
 
@@ -525,7 +498,7 @@ by chat form or on GitHub. `bosun answer <issue> --slack-user <U...>` records an
 
 ### A.6 Rollback
 
-A tighter mode is one PR. It is no R-weaken finding. It is R-gov, so the owner still approves. **[phone]**
+A tighter mode is one PR (`bosun migrate --to steady`, or `gatekeeper`, or set `[mode] name` by hand). It is no R-weaken finding. It is R-gov, so the owner still approves. **[phone]**
 
 ```toml
 # .bosun/bosun.toml
@@ -553,6 +526,7 @@ Always read `error.fix` first. Exit codes: 0 ok, 1 error, 2 usage, 3 conflict, 4
 | You see | Cause | What to do |
 | ------- | ----- | ---------- |
 | `bosun could not reach GitHub (… unknown field …)` at session start | The pin is older than a key in `.bosun/bosun.toml` | Step 2. Pin the new release. Set `GH_TOKEN` or `GITHUB_TOKEN` and `BOSUN_REPO`, then `bosun join`. |
+| `installed X, repo pins Y` at session start | The installed bosun is older than the repo's pin | `bash docs/setup-script.sh`, then `bosun --version`. |
 | `unknown field` for `[mode]` | The pinned release does not read `[mode]` | Step 2. Never set `[mode]` before the pin merged. |
 | `[approvals] policy = "autonomous"` is a parse error | The pinned release is older than 0.8.0 | Step 2. |
 | exit 4 | The repo is halted | The owner closes the `bosun:halt` issue. |

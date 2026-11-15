@@ -1,0 +1,1 @@
+- R-secrets: `${X:-lit}` defaults and `'$..'` literals match; `secret` keyword narrowed (no secrets, secretary, secretName, secretRef); migrate-booster one structure; deny `git fetch <r> <src>:tags/<x>`.
