@@ -1,0 +1,1 @@
+- 2026-11-15 · Pin bosun 0.17.0 · .bosun/version and docs/setup-script.sh version and sha512 pins · PR #597
