@@ -26,7 +26,8 @@ Human checklist (12 steps):
 11. Create the Routines: curator (daily, Sonnet), and with Slack notify (every hour, Haiku).
     `bosun doctor` prints their prompts. The janitor is opt-in (spec §5): only with
     `[routines] janitor = true` in `.bosun/bosun.toml` do doctor and `init --intake` list it too,
-    and the agent confirms it with the user before creating it. Doctor never flags its absence.
+    and the agent confirms it with the user before creating it. The intake file has no key for it: the
+    owner adds the table by hand. `janitor_cron` is validated (five cron fields) only with `janitor = true`. Doctor never flags its absence. Without the janitor, heal, epic closing and merged-task detection run only when a session runs them.
 12. Approve the plan PR and start the root session.
 
 `bosun init --intake FILE` (zero-touch onboarding, design section 3): the schema check of `bosun intake check` runs first (a missing answer exits 5, a bad value 2), and nothing is written before it passes. `--stack`, `--owner` and `--plan` come from the file (`stack`, `repo.owner`, `plan`) and `--stack` is no longer required; a flag that disagrees with the file exits 2, naming both values. The `repo.name` is the project, the `bosun_pieces` go to splice as `--piece`, and the channel var `intake=1` is set. The file is copied byte for byte to `.bosun/intake.toml` and that path is always excluded from the render. `next` holds one `create_trigger` call per Routine (the prompts of `bosun doctor`, built by the same code): curator daily (the janitor too, on `janitor_cron`, only with `[routines] janitor = true`), and notify only when `notify = "slack"`; each firing starts a fresh session, and `data.routines` names the model of each. `data.owner_steps` lists only the steps that stay human: the approval of the setup PR and of each splice update, and the first publish of a package (`hoist release bootstrap`) when `publish` has npm or crates.

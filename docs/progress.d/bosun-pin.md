@@ -1,1 +1,0 @@
-- 2026-11-14 · pin bosun 0.15.0 (post-release pin)

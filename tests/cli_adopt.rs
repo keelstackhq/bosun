@@ -464,3 +464,14 @@ fn a_monorepo_is_detected_below_the_root() {
     let v = no_remote(u.path(), &["--dry-run"]);
     assert_eq!(v["data"]["stacks"], serde_json::json!(["ts-pnpm"]));
 }
+
+#[test]
+fn dry_run_with_a_token_that_cannot_read_the_repo_still_succeeds() {
+    let fake = FakeGithub::start();
+    fake.fail_path("/labels/bosun%3Ahalt", 403);
+    fake.fail_path("/labels", 403);
+    let t = tempfile::tempdir().unwrap();
+    let (code, v) = adopt(&fake, t.path(), &["--dry-run"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["registry"]["action"], "unknown");
+}

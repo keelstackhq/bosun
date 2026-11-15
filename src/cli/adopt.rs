@@ -237,7 +237,7 @@ fn owner_steps(
         || "the default branch".to_string(),
         |u| format!("the default branch at {u}"),
     );
-    v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open."));
+    v.push(format!("Set branch protection on {place} with the required checks {first}, risk-check, review-verdict and main-open (with hoist: put them in hoist.toml `[github] required_checks`, then `hoist apply --area github --adopt --yes`)."));
     v.push("Cloud sessions: paste `bosun setup-snippet` once as the setup script of your Claude Code environment (claude.ai/code > Environments); it never needs a change.".to_string());
     v.push("Run the commands in `data.commands`, then open the setup PR and merge it yourself. The checks cannot run on main before it merges.".to_string());
     v.push("Run `bosun doctor --remote` to see what is still missing.".to_string());
@@ -486,13 +486,17 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
                 if !a.dry_run {
                     persist(&root, &mut manifest, &mut last)?;
                 }
-                res?;
+                match res {
+                    // A dry run writes nothing: a token that cannot read the repo yet is no reason to fail.
+                    Err(e) if a.dry_run => {
+                        labels = unknown_labels();
+                        registry_out = json!({"action": "unknown", "reason": e.message});
+                    }
+                    res => res?,
+                }
             }
             Err(e) if a.dry_run => {
-                labels = labels_wanted()
-                    .iter()
-                    .map(|(n, _, _)| json!({"name": n, "action": "unknown"}))
-                    .collect();
+                labels = unknown_labels();
                 registry_out = json!({"action": "unknown", "reason": e.message});
             }
             Err(e) => return Err(e),
@@ -619,6 +623,12 @@ fn write_file(path: &Path, text: &str, exec: bool) -> Result<()> {
     #[cfg(not(unix))]
     let _ = exec;
     Ok(())
+}
+
+fn unknown_labels() -> Vec<Value> {
+    (labels_wanted().iter())
+        .map(|(n, _, _)| json!({"name": n, "action": "unknown"}))
+        .collect()
 }
 
 /// Ensure the labels and the registry issue; a dry run only reads.

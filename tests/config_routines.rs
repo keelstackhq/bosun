@@ -17,8 +17,9 @@ fn bad_routines_keys_are_errors() {
     for t in [
         "[routines]\njanitor = \"yes\"\n",
         "[routines]\nbogus = 1\n",
-        "[routines]\njanitor_cron = \"\"\n",
-        "[routines]\njanitor_cron = \"0 0 * * * *\"\n",
+        "[routines]\njanitor = true\njanitor_cron = \"\"\n",
+        "[routines]\njanitor = true\njanitor_cron = \"0 0 * * * *\"\n",
+        "[routines]\njanitor = true\njanitor_cron = \"a b c d e\"\n",
     ] {
         let e = Config::parse(t, F).unwrap_err();
         assert!(!e.fix.is_empty(), "{t}");
