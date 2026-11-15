@@ -150,6 +150,48 @@ fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
     Ok(false)
 }
 
+/// A task is a one-off (the size cap and `R-oneoff-size` apply) unless it is planned: the issue
+/// has no `bosun:source/oneoff` label, its marker does not say `oneoff`, and the marker's item
+/// holds the marker's task in a plan file on `base`. The plan files read are the ones trusted
+/// binds name plus `plans/<project>.md`; the body is the agent's, so it can only make a task more
+/// of a one-off. A plan that is missing or does not parse leaves the task a one-off (fail closed).
+pub(crate) fn is_one_off(
+    gh: &dyn Github,
+    issue: &Issue,
+    meta: &crate::core::meta::TaskMeta,
+    base: &str,
+    project: &str,
+) -> Result<bool> {
+    use crate::core::shape::{ONE_OFF_ITEM, ONE_OFF_LABEL};
+    if meta.item == ONE_OFF_ITEM || issue.labels.iter().any(|l| l == ONE_OFF_LABEL) {
+        return Ok(true);
+    }
+    let mut plans = vec![format!("plans/{project}.md")];
+    for (_, r) in crate::cli::budget::binds_of(gh, issue.number)? {
+        if let Record::Bind { plan, .. } = r {
+            let plan = plan.trim_start_matches("./").to_string();
+            if !plans.contains(&plan) {
+                plans.push(plan);
+            }
+        }
+    }
+    for plan in plans {
+        let parsed = gh
+            .file_at(&plan, base)?
+            .and_then(|text| crate::core::plan::parse(&text).ok());
+        let planned = parsed.is_some_and(|p| {
+            (p.items.iter())
+                .filter(|i| i.id == meta.item)
+                .flat_map(|i| &i.tasks)
+                .any(|x| x.id == meta.task)
+        });
+        if planned {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn weaken_findings(
     gh: &dyn Github,
     pr_files: &[PrFile],
@@ -379,8 +421,8 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         if high {
             plan_high.push(format!("#{i} is `risk: high` in the plan"));
         }
-        if let Some(meta) = meta {
-            one_off |= meta.item == crate::core::shape::ONE_OFF_ITEM;
+        if let (Some(meta), Some(issue)) = (meta, issue.as_ref()) {
+            one_off |= is_one_off(gh, issue, &meta, base, &app.ctx.config.project)?;
             capabilities.extend(meta.capabilities);
             task.get_or_insert(i);
         }

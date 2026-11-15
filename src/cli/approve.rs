@@ -925,7 +925,13 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         if let Some(issue) = gh.get_issue(i)?
             && let Some(meta) = crate::app::task_meta(&issue)
         {
-            one_off |= meta.item == crate::core::shape::ONE_OFF_ITEM;
+            one_off |= crate::cli::risk_check::is_one_off(
+                gh,
+                &issue,
+                &meta,
+                &pull.base_sha,
+                &app.ctx.config.project,
+            )?;
             capabilities.extend(meta.capabilities);
         }
     }

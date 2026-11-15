@@ -54,7 +54,10 @@ pub fn run(dir: Option<&Path>, a: &PrArgs) -> CmdResult {
         gated: false,
         size: None,
     };
-    let labels = ["bosun:source/oneoff".to_string(), State::Ready.label()];
+    let labels = [
+        crate::core::shape::ONE_OFF_LABEL.to_string(),
+        State::Ready.label(),
+    ];
     for l in &labels {
         app.gh
             .ensure_label(l, "ededed", "opened by bosun pr --one-off")?;

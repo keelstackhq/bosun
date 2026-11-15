@@ -155,7 +155,7 @@ fn a_signature_with_a_clean_independent_verdict_counts() {
 fn source_docs_and_test_changes_count_together() {
     let k = key();
     let fake = auto(&k, GATE, PLAIN);
-    for p in ["docs/spec/08-risk.md", "tests/cli_x.rs", "changelog.d/x.md"] {
+    for p in ["docs/guide.md", "tests/cli_x.rs", "changelog.d/x.md"] {
         fake.pull_file(1, p, "added", 1, 0, Some(PLAIN));
     }
     post_verdict(&fake, "session_r", HEAD, 0);

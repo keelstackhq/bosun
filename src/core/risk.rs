@@ -508,7 +508,7 @@ pub const AUTONOMOUS_ALLOWED: [&str; 5] = [
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
 /// and the files the review and the plans trust.
-pub const AUTONOMOUS_DENIED: [&str; 36] = [
+pub const AUTONOMOUS_DENIED: [&str; 40] = [
     // CI and release files run with secrets; governance files decide who approves what. Kept
     // here as well as in the rules, so a repo whose rules lack them stays owner-only.
     ".github/**",
@@ -521,8 +521,8 @@ pub const AUTONOMOUS_DENIED: [&str; 36] = [
     // Who must approve a path: at any depth (lowercase globs match any case of the path).
     "codeowners",
     "**/codeowners",
-    "Cargo.toml",
-    "**/Cargo.toml",
+    "cargo.toml",
+    "**/cargo.toml",
     "deny.toml",
     "channel/**",
     ".cargo/**",
@@ -532,9 +532,11 @@ pub const AUTONOMOUS_DENIED: [&str; 36] = [
     "npm/**",
     "**/package.json",
     "*.yaml",
-    "REVIEW.md",
-    "**/AGENTS.md",
-    "**/CLAUDE.md",
+    "review.md",
+    "**/agents.md",
+    "**/claude.md",
+    "**/claude.local.md",
+    ".claude-plugin/**",
     ".splice/**",
     "governance/**",
     "**/hoist.toml",
@@ -542,6 +544,9 @@ pub const AUTONOMOUS_DENIED: [&str; 36] = [
     "docs/setup-script.sh",
     "docs/agents/**",
     "docs/lessons.toml",
+    // The spec is the source of truth the gates and reviews are written from.
+    "docs/spec/**",
+    "docs/superpowers/specs/**",
     "**/plans/**",
     "**/*.jinja",
     "**/build.rs",
@@ -1334,7 +1339,7 @@ mod tests {
         let ok = [
             "src/cli/claim.rs",
             "tests/cli_x.rs",
-            "docs/spec/08-risk.md",
+            "docs/guide.md",
             "changelog.d/x.md",
             ".changeset/x.md",
             ".changeset/README.md",
@@ -1376,6 +1381,10 @@ mod tests {
             "docs/lessons.toml",
             "docs/setup-script.sh",
             "docs/superpowers/plans/p.md",
+            "docs/spec/08-risk.md",
+            "docs/superpowers/specs/s.md",
+            ".claude-plugin/plugin.json",
+            "x/Claude.Local.md",
             "SRC/Build.RS",
             "Docs/Agents/X.md",
             // Module roots can swap a gated module for another file.
