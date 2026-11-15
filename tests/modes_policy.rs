@@ -98,8 +98,8 @@ fn an_allowlisted_r_gov_file_goes_to_the_owner() {
         evidence: vec![],
     };
     let files = [("src/core/session_rules.rs", None)];
-    assert!(autonomous_excluded(&files, &[]).is_empty());
-    assert_eq!(autonomous_excluded(&files, &[m]), ["R-gov"]);
+    assert!(autonomous_excluded(&files, &[], None).is_empty());
+    assert_eq!(autonomous_excluded(&files, &[m], None), ["R-gov"]);
 }
 
 #[test]

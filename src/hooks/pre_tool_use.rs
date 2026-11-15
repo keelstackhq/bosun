@@ -17,6 +17,7 @@ use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
 use crate::core::repeat::{Verdict, is_poll, repeat_key, repeat_step, repeat_verdict};
 use crate::core::stamps::gate_loop;
+use crate::core::touch::{is_plan_file, is_plan_tick};
 
 /// The deny output of the hook protocol.
 pub fn deny(reason: &str) -> String {
@@ -140,6 +141,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         let _ = std::fs::remove_file(file);
     }
     let path = edited_path(tool, &tool_input)?;
+    if plan_tick_in(&dir, tool, &path, &tool_input) {
+        return None; // a checkbox tick in a plan needs no lease (spec §4)
+    }
     match edit_reason(&dir, &path) {
         Ok(why) => why.map(|w| deny(&w)),
         Err(e) => {
@@ -528,6 +532,25 @@ fn registered_child(dir: &Path, write: &ChildTask) -> bool {
     })
 }
 
+/// [`plan_tick_edit`] on a path as the tool gave it (absolute or relative to `dir`).
+fn plan_tick_in(dir: &Path, tool: &str, path: &str, input: &Value) -> bool {
+    // Relative to the repo root (git top level), as `edit_reason` does, not the hook's cwd.
+    let root = crate::ctx::git_out(dir, &["rev-parse", "--show-toplevel"])
+        .map_or_else(|| dir.to_path_buf(), std::path::PathBuf::from);
+    repo_relative(&root, dir, path).is_some_and(|rel| plan_tick_edit(tool, &rel, input))
+}
+
+/// An `Edit` that only ticks task checkboxes in a plan file: no lease is needed for it.
+fn plan_tick_edit(tool: &str, path: &str, input: &Value) -> bool {
+    let get = |k: &str| input.get(k).and_then(Value::as_str);
+    tool == "Edit"
+        && is_plan_file(path)
+        && input.get("replace_all").and_then(Value::as_bool) != Some(true)
+        && get("old_string")
+            .zip(get("new_string"))
+            .is_some_and(|(o, n)| is_plan_tick(o, n))
+}
+
 fn edit_reason(dir: &Path, path: &str) -> Result<Option<String>, String> {
     let app = App::load(Some(dir)).map_err(|e| e.message)?;
     let Some(rel) = repo_relative(&app.ctx.dir, dir, path) else {
@@ -631,6 +654,76 @@ fn repo_relative(root: &Path, cwd: &Path, path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_checkbox_tick_in_a_plan_skips_the_edit_lock() {
+        let edit = |o: &str, n: &str| json!({"old_string": o, "new_string": n});
+        let p = "docs/superpowers/plans/x.md";
+        assert!(plan_tick_edit(
+            "Edit",
+            p,
+            &edit("- [ ] **T1**", "- [x] **T1**")
+        ));
+        assert!(!plan_tick_edit("Edit", p, &edit("- [ ] T1", "- [x] T2")));
+        assert!(!plan_tick_edit(
+            "Edit",
+            "src/a.md",
+            &edit("- [ ] a", "- [x] a")
+        ));
+        assert!(!plan_tick_edit("Write", p, &edit("- [ ] a", "- [x] a")));
+        let all = json!({"old_string": "- [ ] a", "new_string": "- [x] a", "replace_all": true});
+        assert!(!plan_tick_edit("Edit", p, &all));
+    }
+
+    #[test]
+    fn an_absolute_plan_path_is_made_repo_relative_before_the_tick_check() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(dir.path())
+                .args(["init", "-q"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let plans = dir.path().join("docs/superpowers/plans");
+        std::fs::create_dir_all(&plans).unwrap();
+        let tick = json!({"old_string": "- [ ] a", "new_string": "- [x] a"});
+        let abs = plans.join("x.md");
+        assert!(plan_tick_in(
+            dir.path(),
+            "Edit",
+            abs.to_str().unwrap(),
+            &tick
+        ));
+        assert!(plan_tick_in(
+            dir.path(),
+            "Edit",
+            "docs/superpowers/plans/x.md",
+            &tick
+        ));
+        let other = dir.path().join("src/x.md");
+        assert!(!plan_tick_in(
+            dir.path(),
+            "Edit",
+            other.to_str().unwrap(),
+            &tick
+        ));
+        // From a subdirectory the root is still the repo's, so `docs/plans/x.md` is no plan.
+        let sub = dir.path().join("docs");
+        let fake = plans.parent().unwrap().parent().unwrap().join("plans");
+        std::fs::create_dir_all(&fake).unwrap();
+        let f = fake.join("x.md");
+        assert!(!plan_tick_in(&sub, "Edit", f.to_str().unwrap(), &tick));
+        let up = dir.path().join("docs/superpowers/plans/../../../REVIEW.md");
+        assert!(!plan_tick_in(
+            dir.path(),
+            "Edit",
+            up.to_str().unwrap(),
+            &tick
+        ));
+    }
 
     #[test]
     fn a_panic_in_the_guard_denies() {

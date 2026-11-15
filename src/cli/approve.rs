@@ -889,6 +889,14 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         None => risk::Rules::defaults(),
     };
     let changed: Vec<_> = (files.iter())
+        .filter(|f| {
+            !crate::core::touch::plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            )
+        })
         .map(|f| risk::ChangedFile {
             path: f.filename.clone(),
             previous_path: f.previous_filename.clone(),
@@ -912,15 +920,26 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         ));
     }
     let mut capabilities = risk::capability_labels(&pull.labels);
+    let mut one_off = false;
     for i in crate::core::meta::linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
         if let Some(issue) = gh.get_issue(i)?
             && let Some(meta) = crate::app::task_meta(&issue)
         {
+            one_off |= crate::cli::risk_check::is_one_off(
+                gh,
+                &issue,
+                &meta,
+                &pull.base_sha,
+                &app.ctx.config.project,
+            )?;
             capabilities.extend(meta.capabilities);
         }
     }
-    let matches = risk::evaluate(&rules, &changed, &[], &capabilities);
-    let mut hit = risk::autonomous_excluded(&paths, &matches);
+    let mut matches = risk::evaluate(&rules, &changed, &[], &capabilities);
+    let lines: u64 = files.iter().map(|f| f.additions + f.deletions).sum();
+    matches.extend(risk::oneoff_size_match(one_off, lines));
+    let allow = crate::cli::risk_check::autonomous_allow(gh, &pull.base_sha)?;
+    let mut hit = risk::autonomous_excluded(&paths, &matches, allow.as_deref());
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();

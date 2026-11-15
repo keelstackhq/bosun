@@ -24,7 +24,7 @@ use crate::core::risk::{
     new_dependencies, parse_owners, plain, replace_note, requirement, risk_note, two_verdicts,
     unseen_diff,
 };
-use crate::core::touch::{Changed, outside};
+use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::core::weaken;
 use crate::ctx::RepoId;
 use crate::gates::{adapters, ts};
@@ -148,6 +148,48 @@ fn bound_task_is_high(gh: &dyn Github, n: u64, base: &str) -> Result<bool> {
         }
     }
     Ok(false)
+}
+
+/// A task is a one-off (the size cap and `R-oneoff-size` apply) unless it is planned: the issue
+/// has no `bosun:source/oneoff` label, its marker does not say `oneoff`, and the marker's item
+/// holds the marker's task in a plan file on `base`. The plan files read are the ones trusted
+/// binds name plus `plans/<project>.md`; the body is the agent's, so it can only make a task more
+/// of a one-off. A plan that is missing or does not parse leaves the task a one-off (fail closed).
+pub(crate) fn is_one_off(
+    gh: &dyn Github,
+    issue: &Issue,
+    meta: &crate::core::meta::TaskMeta,
+    base: &str,
+    project: &str,
+) -> Result<bool> {
+    use crate::core::shape::{ONE_OFF_ITEM, ONE_OFF_LABEL};
+    if meta.item == ONE_OFF_ITEM || issue.labels.iter().any(|l| l == ONE_OFF_LABEL) {
+        return Ok(true);
+    }
+    let mut plans = vec![format!("plans/{project}.md")];
+    for (_, r) in crate::cli::budget::binds_of(gh, issue.number)? {
+        if let Record::Bind { plan, .. } = r {
+            let plan = plan.trim_start_matches("./").to_string();
+            if !plans.contains(&plan) {
+                plans.push(plan);
+            }
+        }
+    }
+    for plan in plans {
+        let parsed = gh
+            .file_at(&plan, base)?
+            .and_then(|text| crate::core::plan::parse(&text).ok());
+        let planned = parsed.is_some_and(|p| {
+            (p.items.iter())
+                .filter(|i| i.id == meta.item)
+                .flat_map(|i| &i.tasks)
+                .any(|x| x.id == meta.task)
+        });
+        if planned {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 pub(crate) fn weaken_findings(
@@ -323,8 +365,17 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let rules = base_rules(gh, base)?;
 
     let pr_files = gh.pull_files(n)?;
+    // A plan file that only ticks checkboxes (spec §8) is no change for the rules.
     let files: Vec<ChangedFile> = pr_files
         .iter()
+        .filter(|f| {
+            !plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            )
+        })
         .map(|f| ChangedFile {
             path: f.filename.clone(),
             previous_path: f.previous_filename.clone(),
@@ -358,6 +409,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // hide the real task's capabilities.
     let mut task = None;
     let mut plan_high = Vec::new();
+    let mut one_off = false;
     for i in linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
         let issue = gh.get_issue(i)?;
         let meta = issue.as_ref().and_then(task_meta);
@@ -369,7 +421,8 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         if high {
             plan_high.push(format!("#{i} is `risk: high` in the plan"));
         }
-        if let Some(meta) = meta {
+        if let (Some(meta), Some(issue)) = (meta, issue.as_ref()) {
+            one_off |= is_one_off(gh, issue, &meta, base, &app.ctx.config.project)?;
             capabilities.extend(meta.capabilities);
             task.get_or_insert(i);
         }
@@ -385,6 +438,8 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
             evidence: plan_high,
         });
     }
+    let lines: u64 = pr_files.iter().map(|f| f.additions + f.deletions).sum();
+    matches.extend(risk::oneoff_size_match(one_off, lines));
     // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
     // rule with the `weaken` capability only adds its own match, made owner-class too).
     let mut findings = findings;
@@ -1054,6 +1109,12 @@ fn out_of_touch(
             path: f.filename.clone(),
             status: f.status.clone(),
             previous: f.previous_filename.clone(),
+            tick_only: plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            ),
         })
         .collect();
     Some(outside(&changed, &lease.touch))
@@ -1338,6 +1399,18 @@ fn signer_on(gh: &dyn Github, base: &str) -> Result<bool> {
     })
 }
 
+/// `[approvals] autonomous_allow` on `base`: `None` when unset; a base config that does not parse
+/// allows nothing.
+pub(crate) fn autonomous_allow(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
+    Ok(match gh.file_at(CONFIG_FILE, base)? {
+        Some(t) => match Config::parse(&t, CONFIG_FILE) {
+            Ok(c) => c.approvals.autonomous_allow,
+            Err(_) => Some(Vec::new()),
+        },
+        None => None,
+    })
+}
+
 pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {
     Ok(match gh.file_at(CONFIG_FILE, base)? {
         Some(t) => match Config::parse(&t, CONFIG_FILE) {
@@ -1446,7 +1519,8 @@ fn orchestrator_window(
         .collect();
     let workflows = risk::workflow_files(&paths);
     let rules: Vec<&str> = matches.iter().map(|m| m.rule.as_str()).collect();
-    let mut autonomous_excluded = risk::autonomous_excluded(&paths, matches);
+    let mut autonomous_excluded =
+        risk::autonomous_excluded(&paths, matches, approvals.autonomous_allow.as_deref());
     let patches: Vec<_> = (files.iter())
         .map(|f| (&*f.filename, f.patch.as_deref()))
         .collect();
