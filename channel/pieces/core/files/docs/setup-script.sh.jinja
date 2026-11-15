@@ -8,20 +8,20 @@ set -euo pipefail
 # Pinned tool versions; the bosun channel moves them with its own versions (a reviewed PR).
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
-SPLICE_VERSION=0.4.0
+SPLICE_VERSION=0.5.0
 # npm's dist.integrity (sha512) of each tool's launcher and linux binary packages, from
 # `npm view @keelstackhq/<package>@<version> dist.integrity`; move them with the version.
-SPLICE_SHA512=8/6VRlKzHY3nHFdZnKqGhgyxkj6SLyPeXtqzDgQjTEPlY1m6ZCzGkaXyzuHAj9PYDi1pDOYovlPClyUXRj7dMA==
-SPLICE_LINUX_X64_SHA512=0ZtX3mxakLqYUGKFPUZ1xQ8Vd+zkk+YRttlwxZHVSncBBGhe+i4cWCTTbEVjnfNX9qBV0HPfqwQNn2aGV3/suQ==
-SPLICE_LINUX_ARM64_SHA512=2UH1s2IWCD9lISISwwFmEhoCgujWmeVdrU1bK5SEPOWq8HPAdUgvSDkoTbHpKd3VrZUjYDTgJ/fsYKu06chNpg==
-HOIST_VERSION=0.4.1
-HOIST_SHA512=vZrurRfS8IzUf22HtHJnWrU+m+vZclJ06ivYi288Urf5TG6tII24kdY51waoYNuMi50SJ5QIv7k6q0kUKarv8A==
-HOIST_LINUX_X64_SHA512=eBWtbwxVHJ1DeshsnSa1ZpmkNiamyfkPgQr0/7mez8dOVQYBWTVOAAHtEE76RvXLV5gFQd41TyimX9LOwJx52Q==
-HOIST_LINUX_ARM64_SHA512=CCCPHyAVbnbheK9M/NN9xXCWw6ko7m7wwsHMexWPuyW+EZU4aLbiKSXsm5/OT37rfnTsoexD+BQlxasV9UdfSA==
-BERTH_VERSION=0.1.0
-BERTH_SHA512=4V71F1YqcduupUm/yqc3HaK5/VMH6bD1PZa6xskA+84UiSs1UZRnkX7W+zoLPNizoT2CM1bVGmEtk2cjjYg3Eg==
-BERTH_LINUX_X64_SHA512=3eaIWInNsevz8vPlkSN+QsPnf82ULEZJz2X4KFOsP3aQR9EanDBDxmm2+J+jEvUBHKxS3xfQMT7HqCO35TUysw==
-BERTH_LINUX_ARM64_SHA512=sG6PA8qfOmThoXxL/3P+DSTnr8OL+5MieaTWBv9QfjzcC/ocITUHqi5xptPh2u+71ZY8SqpEcgE6dPmvmi5YXw==
+SPLICE_SHA512=6L1PSFf3ozAjJOGmG6VZ51FjWAj+TbuAABS8tOa9L+Ka9XwncnGldXtO7PbQBK1QN9+31xWvhBA24cnohCqbBA==
+SPLICE_LINUX_X64_SHA512=+1VTeQqYJH7vkdONymP8j3Rsij2FW+XPGpyjFRi9uSGKPrfT4p2Pi7S+Ct6+jW3ZJdkk0z7QZ+oLN18pp6BorQ==
+SPLICE_LINUX_ARM64_SHA512=G+kAU3/vCxhM2VnR3joX2EJNETJAFL+0/06H8DhXGD+H+e80dELEPY4NZxwJ1fvatGazvbj0MZl17TEJB5woUw==
+HOIST_VERSION=0.5.0
+HOIST_SHA512=dFVW5ALptLkdwSMfIdpbG0QI0Qb0NgF8VRDtY+yy1vvbGttOJqIWuenfrCwXu+WmFK5fv9wEoVQMLbQi2AfR8w==
+HOIST_LINUX_X64_SHA512=04dg4fiNTdoAEXhup5wYVGRp/jThQO+SeG3eQaAVBJEhDdw4GEa9iHebtKDdfgIGCgi3j5zRIzR9DKgeu6LGjQ==
+HOIST_LINUX_ARM64_SHA512=BVBHxiEm1/lZl/+auhmLRbRHemA9aIHcBzD6+jlN25TGd/xK7m0P6wZlo0yo99RE0zQ9yWOV4bwPoX5fSBrg/g==
+BERTH_VERSION=0.2.0
+BERTH_SHA512=mMPuK1M3EoIQRvduOiQY34qOtYuqixQxSfU9g8LwTy0M+VlQ1sTNNvpjf1iAGA2cvrA2t/8Hy9OrafIw0H22xA==
+BERTH_LINUX_X64_SHA512=nkHs+I+0ZGdRhKYAUDCeJbub/tB/3cdwETmKayppjhs/74uWYQxg7N2aVCO0tWxoUzSN8l0whMIyiY0PweMYfw==
+BERTH_LINUX_ARM64_SHA512=cMiHw0O+5rD2UCyEJIXsoJe0hq5Yu9l9UdJvGDA76TK+dOXzDjmTQN/RGoqf9OejOwCmm72Rqug/I0R87dhHNA==
 # cargo-deny's prebuilt binary as npm packages (@keelstackhq/cargo-deny, its launcher, and
 # cargo-deny-linux-<arch>), pinned like the tools above. Empty until their first publish: then the
 # Rust step builds it with `cargo install --locked cargo-deny` (minutes) instead.

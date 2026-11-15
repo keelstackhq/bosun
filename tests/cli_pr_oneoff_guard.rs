@@ -116,3 +116,40 @@ fn a_one_off_pr_over_300_changed_lines_is_not_made_ready() {
         }
     }
 }
+
+#[test]
+fn the_oneoff_label_or_an_unplanned_item_caps_ready_like_the_marker_item() {
+    let review = format!("bosun:{}/review", "state");
+    let label = crate::stamps_label();
+    for (labels, body) in [
+        (
+            vec![review.as_str(), label.as_str()],
+            "<!-- bosun:task {\"item\":\"x\",\"task\":\"x\",\"touch\":[\"src/**\"]} -->",
+        ),
+        (
+            vec![review.as_str()],
+            "<!-- bosun:task {\"item\":\"nope\",\"task\":\"x\",\"touch\":[\"src/**\"]} -->",
+        ),
+    ] {
+        let fake = FakeGithub::start();
+        fake.issue(7, "the task", &labels, body);
+        fake.enforce_checks(&["ci-ok", "risk-check", "review-verdict", "main-open"]);
+        fake.pull(20, "t", "claude/t7", "Closes #7");
+        fake.pull_set(20, "draft", true.into());
+        fake.pull_file(20, "src/a.rs", "modified", 201, 100, Some("@@\n+x"));
+        let dir = repo("claude/t7");
+        stamps::ready(&fake, dir.path(), 20);
+        let (code, v) = common::run(
+            &fake,
+            "session_test",
+            T0,
+            &["-C", dir.path().to_str().unwrap(), "pr", "7", "--ready"],
+        );
+        assert_eq!(code, 3, "{v}");
+        assert!(fake.pull_is_draft(20));
+    }
+}
+
+fn stamps_label() -> String {
+    "bosun:source/oneoff".to_string()
+}

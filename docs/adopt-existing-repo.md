@@ -144,7 +144,7 @@ All but `splice.yml` run the release pinned in `.bosun/version`, never code from
 2. Review the setup PR. While main has no bosun workflows, `risk-check`, `review-verdict` and
    `main-open` cannot run on it: merge it yourself.
 3. Then turn on branch protection, auto-merge and the required checks (`ci-ok`, `risk-check`,
-   `review-verdict`, `main-open`, plus `bosun-ok` if the repo has its own `ci-ok`). From a
+   `review-verdict`, `main-open`, plus `bosun-ok` if the repo has its own `ci-ok`). `bosun adopt` writes no `hoist.toml` (`bosun init` seeds one): add `[github] required_checks = ["ci-ok", "risk-check", "review-verdict", "main-open"]` and `merge_queue = false` to yours. From a
    checkout of main with an admin token: `hoist plan --area github`, then
    `hoist apply --area github --adopt --yes` (`--adopt` only adds, never removes or loosens your
    existing rules).

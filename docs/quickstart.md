@@ -114,6 +114,10 @@ and lighter add this sentence at the end of the janitor prompt (owner step):
 Then run `bosun heal` and make only the calls in its `next`; report data.prs.
 ```
 
+Without the janitor, `bosun heal` and the closing of epics and detection of merged tasks run only
+when a session runs them. `janitor_cron` is checked (five valid cron fields) only when
+`janitor = true`. `bosun init --intake` has no key to enable the janitor: add the table by hand.
+
 ## 3. Claude in Slack (Claude Tag)
 
 **[computer]** Once: private channel, no guests, not shared; your Slack ID in

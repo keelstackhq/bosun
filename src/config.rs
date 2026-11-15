@@ -46,8 +46,7 @@ pub struct Config {
     pub routines: Routines,
 }
 
-/// `[routines]`: the janitor Routine is off unless the owner sets `janitor = true`;
-/// `janitor_cron` (5-field cron, UTC) is its schedule, hourly by default.
+/// `[routines]`: the janitor is off unless `janitor = true`; `janitor_cron` (UTC) is its schedule.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Routines {
@@ -422,6 +421,31 @@ fn read_optional(path: &Path, label: &str) -> Result<Option<String>, BosunError>
     }
 }
 
+/// A 5-field cron expression: each field is a comma list of `*`, `N` or `A-B`, with an optional
+/// `/step`, inside the field's range (day of week 0-7; month and day names are not accepted).
+fn valid_cron(expr: &str) -> bool {
+    const RANGES: [(u32, u32); 5] = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)];
+    let fields: Vec<&str> = expr.split_whitespace().collect();
+    fields.len() == 5
+        && fields
+            .iter()
+            .zip(RANGES)
+            .all(|(f, (lo, hi))| f.split(',').all(|part| cron_part(part, lo, hi)))
+}
+
+fn cron_part(part: &str, lo: u32, hi: u32) -> bool {
+    let (range, step) = part
+        .split_once('/')
+        .map_or((part, None), |(r, s)| (r, Some(s)));
+    let num = |t: &str| t.parse::<u32>().ok().filter(|n| (lo..=hi).contains(n));
+    let range_ok = range == "*"
+        || num(range).is_some()
+        || range
+            .split_once('-')
+            .is_some_and(|(a, b)| matches!((num(a), num(b)), (Some(a), Some(b)) if a <= b));
+    range_ok && step.is_none_or(|s| s.parse::<u32>().is_ok_and(|n| n > 0))
+}
+
 impl Config {
     /// Parse the text of `.bosun/bosun.toml`; `file` is the name used in errors.
     pub fn parse(text: &str, file: &str) -> Result<Config, BosunError> {
@@ -437,7 +461,7 @@ impl Config {
                 ));
             }
         }
-        if c.routines.janitor_cron.split_whitespace().count() != 5 {
+        if c.routines.janitor && !valid_cron(&c.routines.janitor_cron) {
             return Err(BosunError::error(
                 format!("{file}: routines.janitor_cron must be a 5-field cron expression"),
                 format!(
@@ -532,5 +556,38 @@ impl Limits {
             Some(t) => Limits::parse(&t, LIMITS_FILE),
             None => Ok(Limits::default()),
         }
+    }
+}
+
+#[cfg(test)]
+mod cron_tests {
+    use super::valid_cron;
+
+    #[test]
+    fn cron_fields_are_checked() {
+        for ok in ["0 * * * *", "*/15 9-17 * * 1-5", "0,30 0 1 1 7"] {
+            assert!(valid_cron(ok), "{ok}");
+        }
+        for bad in [
+            "a b c d e",
+            "* * * *",
+            "60 * * * *",
+            "* 24 * * *",
+            "0 * 0 * *",
+            "*/0 * * * *",
+            "5-1 * * * *",
+            "* * * * * *",
+        ] {
+            assert!(!valid_cron(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn only_an_enabled_janitor_is_validated() {
+        let off = "project = \"p\"\n[routines]\njanitor_cron = \"a b c d e\"\n";
+        assert!(super::Config::parse(off, "f").is_ok());
+        let on = format!("{off}janitor = true\n");
+        let e = super::Config::parse(&on, "f").unwrap_err();
+        assert!(!e.fix.is_empty());
     }
 }
