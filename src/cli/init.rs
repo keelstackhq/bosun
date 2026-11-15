@@ -51,10 +51,9 @@ const BOOTSTRAP_STEP: &str = "For each new package that publishes, run `hoist re
 /// The `create_trigger` call of one Routine from `doctor::routines`. Each firing starts a fresh
 /// session; the model stays in `data.routines` (create_trigger has no model argument).
 fn trigger_call(r: &Value, repo: &str) -> Value {
-    let cron = if r["name"] == "curator" {
-        "8 3 * * *"
-    } else {
-        "0 * * * *"
+    let cron = match r["name"].as_str() {
+        Some("curator") => "8 3 * * *",
+        _ => r["cron"].as_str().unwrap_or("0 * * * *"),
     };
     json!({
         "name": r["name"], "cron_expression": cron,
@@ -1024,7 +1023,16 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     }
     let mut outcome = Outcome::data(out);
     if let Some((i, _)) = &intake {
-        let routines = super::doctor::routines(i.notify == "slack");
+        let cfg = match crate::config::Config::load(&root) {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(w) = outcome.data["warnings"].as_array_mut() {
+                    w.push(json!(format!("janitor not read: {}", e.message)));
+                }
+                crate::config::Config::default()
+            }
+        };
+        let routines = super::doctor::routines(i.notify == "slack", Some(&cfg.routines));
         for r in routines.as_array().into_iter().flatten() {
             outcome = outcome.with_next(
                 "create_trigger",

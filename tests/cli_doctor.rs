@@ -74,12 +74,29 @@ fn an_empty_repo_reports_all_fourteen_steps_and_the_update_item() {
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
-    assert_eq!(v["error"]["message"], "8 checklist steps missing");
-    // Without [slack], the janitor skips notify and there is no notify Routine (F17).
-    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2);
+    assert_eq!(v["error"]["message"], "10 checklist steps missing");
+    // The janitor is opt-in; without [slack] there is no notify Routine (F17).
+    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 1);
+    assert_eq!(v["data"]["routines"][0]["name"], "curator");
     assert_eq!(v["data"]["notify"]["skipped"], true, "{v}");
-    let janitor = v["data"]["routines"][0]["prompt"].as_str().unwrap();
-    assert!(!janitor.contains("bosun notify"), "{janitor}");
+    assert!(!v.to_string().contains("janitor"), "{v}");
+}
+
+#[test]
+fn the_janitor_is_listed_only_when_enabled() {
+    let (tmp, fake) = (tempfile::tempdir().unwrap(), FakeGithub::start());
+    write(
+        tmp.path(),
+        ".bosun/bosun.toml",
+        "[routines]\njanitor = true\njanitor_cron = \"30 * * * *\"\n",
+    );
+    let (_, v) = doctor(&fake, tmp.path(), false);
+    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2, "{v}");
+    let janitor = &v["data"]["routines"][0];
+    assert_eq!(janitor["name"], "janitor");
+    assert_eq!(janitor["cron"], "30 * * * *");
+    let prompt = janitor["prompt"].as_str().unwrap();
+    assert!(!prompt.contains("bosun notify"), "{prompt}");
     for part in [
         "bosun reap",
         "bosun budget check",
@@ -87,10 +104,23 @@ fn an_empty_repo_reports_all_fourteen_steps_and_the_update_item() {
         "interrupt_session",
     ] {
         assert!(
-            janitor.contains(part),
-            "janitor prompt lacks {part}: {janitor}"
+            prompt.contains(part),
+            "janitor prompt lacks {part}: {prompt}"
         );
     }
+    let step = v["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["step"] == 11)
+        .unwrap();
+    assert!(
+        step["fix"]
+            .as_str()
+            .unwrap()
+            .contains("confirm the janitor"),
+        "{step}"
+    );
 }
 
 #[test]
@@ -601,12 +631,18 @@ fn slack_is_skipped_without_a_slack_section_and_missing_with_an_empty_channel() 
     let (_, v) = doctor(&fake, tmp.path(), false);
     assert_eq!(v["data"]["items"][6]["status"], "missing", "{v}");
     assert!(v["data"].get("notify").is_none(), "{v}");
-    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 3);
+    assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 2);
 }
 
 #[test]
 fn with_slack_the_janitor_still_runs_notify() {
     let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+    let cfg = std::fs::read_to_string(tmp.path().join(".bosun/bosun.toml")).unwrap_or_default();
+    write(
+        tmp.path(),
+        ".bosun/bosun.toml",
+        &format!("{cfg}\n[routines]\njanitor = true\n"),
+    );
     let (_, v) = doctor(&fake, tmp.path(), true);
     let janitor = v["data"]["routines"][0]["prompt"].as_str().unwrap();
     assert!(janitor.contains("bosun notify"), "{janitor}");

@@ -99,6 +99,80 @@ pub struct Changed {
     pub path: String,
     pub status: String,
     pub previous: Option<String>,
+    /// A plan file whose patch only ticks checkboxes ([`plan_tick_patch`]): never outside a lease.
+    pub tick_only: bool,
+}
+
+/// A markdown file of the plans: `plans/**` or `docs/superpowers/plans/**` at the repo root.
+pub fn is_plan_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md")
+        && !path.split('/').any(|s| s == ".." || s == ".")
+        && (path.starts_with("plans/") || path.starts_with("docs/superpowers/plans/"))
+}
+
+/// Whether `new` is `old` with task checkboxes ticked: `- [ ]` to `- [x]` (or `*`) on lines of
+/// the same count, at least one tick, nothing else changed.
+pub fn is_plan_tick(old: &str, new: &str) -> bool {
+    ticks(old.lines(), new.lines())
+}
+
+/// Whether the patch of a plan file only ticks checkboxes. A GitHub patch has no file headers, so
+/// every `-` and `+` line counts: each change block (the lines between two context lines) must
+/// remove as many lines as it adds, each pair a tick. `None` (no patch shown) never counts.
+pub fn plan_tick_patch(path: &str, patch: Option<&str>) -> bool {
+    let Some(patch) = patch.filter(|_| is_plan_file(path)) else {
+        return false;
+    };
+    let (mut old, mut new): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    let mut ticked = 0;
+    // A block ends at a context line, a hunk header or the end of the patch.
+    let mut close = |old: &mut Vec<&str>, new: &mut Vec<&str>| {
+        let ok = old.len() == new.len() && old.iter().zip(&*new).all(|(o, n)| flip(o, n));
+        ticked += old.len();
+        old.clear();
+        new.clear();
+        ok
+    };
+    for l in patch.lines() {
+        match l.as_bytes().first() {
+            Some(b'-') => old.push(&l[1..]),
+            Some(b'+') => new.push(&l[1..]),
+            Some(b'\\') => {}
+            _ => {
+                if !close(&mut old, &mut new) {
+                    return false;
+                }
+            }
+        }
+    }
+    close(&mut old, &mut new) && ticked > 0
+}
+
+/// A plan file that was only modified (never renamed, added or removed) with a tick-only patch.
+pub fn plan_tick_file(
+    path: &str,
+    status: &str,
+    previous: Option<&str>,
+    patch: Option<&str>,
+) -> bool {
+    status == "modified" && previous.is_none() && plan_tick_patch(path, patch)
+}
+
+fn flip(o: &str, n: &str) -> bool {
+    let t = o.trim_start();
+    let pad = &o[..o.len() - t.len()];
+    ["- [ ]", "* [ ]"].iter().any(|m| {
+        t.strip_prefix(m)
+            .is_some_and(|rest| n == format!("{pad}{}[x]{rest}", &m[..2]))
+    })
+}
+
+fn ticks<'a>(old: impl Iterator<Item = &'a str>, new: impl Iterator<Item = &'a str>) -> bool {
+    let (old, new): (Vec<_>, Vec<_>) = (old.collect(), new.collect());
+    old.len() == new.len()
+        && old.iter().zip(&new).all(|(o, n)| o == n || flip(o, n))
+        && old.iter().zip(&new).any(|(o, n)| o != n)
 }
 
 /// A per-PR fragment: `changelog.d/*.md`, `docs/progress.d/*.md` or a changeset
@@ -120,7 +194,12 @@ pub fn is_fragment(path: &str) -> bool {
 pub fn outside(changed: &[Changed], touch: &[String]) -> Vec<String> {
     // A bad glob is dropped alone; the rest still count.
     let globs = parsed(&companions(touch));
-    let covered = |p: &str| is_fragment(p) || globs.iter().any(|g| g.matches(p));
+    let ticked: Vec<&str> = (changed.iter())
+        .filter(|c| c.tick_only)
+        .map(|c| c.path.as_str())
+        .collect();
+    let covered =
+        |p: &str| is_fragment(p) || ticked.contains(&p) || globs.iter().any(|g| g.matches(p));
     let mut out: Vec<String> = Vec::new();
     for c in changed {
         // A rename's new path is effectively added: only the old name is edited.
@@ -324,6 +403,87 @@ mod tests {
     }
 
     #[test]
+    fn plan_ticks_are_free_and_only_ticks() {
+        let p = "docs/superpowers/plans/a.md";
+        let tick = "@@ -1,2 +1,2 @@\n-- [ ] **T1** x\n+- [x] **T1** x\n ctx\n";
+        assert!(plan_tick_patch(p, Some(tick)));
+        assert!(plan_tick_patch(
+            "plans/a.md",
+            Some("-  * [ ] a\n+  * [x] a")
+        ));
+        assert!(!plan_tick_patch("src/a.md", Some(tick)));
+        assert!(!plan_tick_patch(p, None));
+        assert!(!plan_tick_patch(p, Some("-- [ ] a\n+- [x] b")));
+        assert!(!plan_tick_patch(p, Some("-- [x] a\n+- [ ] a")));
+        assert!(!plan_tick_patch(p, Some("+- [ ] new task")));
+        assert!(!plan_tick_patch(
+            p,
+            Some("-- [ ] a\n+- [x] a\n+- [x] extra")
+        ));
+        assert!(is_plan_tick("- [ ] a\nb", "- [x] a\nb"));
+        assert!(!is_plan_tick("b", "b"));
+        let t = |tick_only| Changed {
+            path: p.into(),
+            status: "modified".into(),
+            previous: None,
+            tick_only,
+        };
+        assert!(outside(&[t(true)], &["src/**".into()]).is_empty());
+        assert_eq!(outside(&[t(false)], &["src/**".into()]), [p]);
+    }
+
+    #[test]
+    fn a_tick_patch_has_no_header_lines_and_pairs_inside_one_hunk() {
+        let p = "plans/a.md";
+        // GitHub patches carry no `---`/`+++` file headers: such lines are content.
+        assert!(!plan_tick_patch(
+            p,
+            Some("@@ -1 +1,2 @@\n-- [ ] T1\n+- [x] T1\n+++ any text")
+        ));
+        assert!(!plan_tick_patch(
+            p,
+            Some("@@ -1,2 +1 @@\n-- [ ] T1\n--- risk: high\n+- [x] T1")
+        ));
+        // Two ticks in two hunks still count; a removal in one hunk and an add in another do not.
+        let two = "@@ -1 +1 @@\n-- [ ] a\n+- [x] a\n@@ -9 +9 @@\n-- [ ] b\n+- [x] b";
+        assert!(plan_tick_patch(p, Some(two)));
+        let split = "@@ -1 +1,2 @@\n+- [x] a\n x\n@@ -9,2 +10 @@\n-- [ ] a\n y";
+        assert!(!plan_tick_patch(p, Some(split)));
+        // A change block is paired at its own position: removed and added counts must match.
+        let moved = "@@ -1,3 +1,3 @@\n-- [ ] a\n ctx\n-- [ ] b\n+- [x] a\n+- [x] b\n ctx";
+        assert!(!plan_tick_patch(p, Some(moved)));
+    }
+
+    #[test]
+    fn only_a_plain_modified_plan_file_is_tick_only() {
+        let tick = Some("@@ -1 +1 @@\n-- [ ] a\n+- [x] a");
+        assert!(plan_tick_file("plans/a.md", "modified", None, tick));
+        assert!(!plan_tick_file("plans/a.md", "renamed", None, tick));
+        assert!(!plan_tick_file("plans/a.md", "added", None, tick));
+        assert!(!plan_tick_file(
+            "plans/a.md",
+            "modified",
+            Some("src/a.rs"),
+            tick
+        ));
+    }
+
+    #[test]
+    fn a_plan_file_lives_in_plans_or_docs_superpowers_plans_only() {
+        assert!(is_plan_file("plans/a.md"));
+        assert!(is_plan_file("docs/superpowers/plans/a.md"));
+        assert!(is_plan_file("docs/superpowers/plans/sub/a.MD"));
+        assert!(!is_plan_file("src/plans/a.md"));
+        assert!(!is_plan_file("docs/plans/a.md"));
+        assert!(!is_plan_file("x/docs/superpowers/plans/a.md"));
+        assert!(!is_plan_file("plans/a.txt"));
+        // A `..` or `.` segment can leave the plans directory.
+        assert!(!is_plan_file("plans/../REVIEW.md"));
+        assert!(!is_plan_file("docs/superpowers/plans/../../../REVIEW.md"));
+        assert!(!is_plan_file("plans/./a.md"));
+    }
+
+    #[test]
     fn companions_add_lockfiles_once() {
         let all = [
             "a/Cargo.toml",
@@ -376,6 +536,7 @@ w/pnpm-lock.yaml pnpm-lock.yaml x-Cargo.toml"
     #[test]
     fn outside_checks_the_old_name_of_a_rename_and_spares_added_and_copied_files() {
         let c = |path: &str, status: &str, previous: Option<&str>| Changed {
+            tick_only: false,
             path: path.into(),
             status: status.into(),
             previous: previous.map(String::from),

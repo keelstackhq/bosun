@@ -62,6 +62,29 @@ impl Glob {
     }
 }
 
+impl Glob {
+    /// Does every path `other` matches also match this glob? Conservative: `false` when unsure.
+    pub fn covers(&self, other: &Glob) -> bool {
+        covers_segs(&self.segs, &other.segs)
+    }
+}
+
+fn covers_segs(a: &[String], b: &[String]) -> bool {
+    match a.split_first() {
+        None => b.is_empty(),
+        Some((x, ra)) if x == "**" => (0..=b.len()).any(|skip| covers_segs(ra, &b[skip..])),
+        Some((x, ra)) => match b.split_first() {
+            Some((y, rb)) => {
+                let wild = |s: &str| s.contains(['*', '?']);
+                (x == y || (!wild(y) && seg_match(x.as_bytes(), y.as_bytes())) || x == "*")
+                    && y != "**"
+                    && covers_segs(ra, rb)
+            }
+            None => false,
+        },
+    }
+}
+
 /// Parse a list of touch paths; the first bad one is the error.
 pub fn parse_all(raw: &[String]) -> Result<Vec<Glob>, String> {
     raw.iter().map(|r| Glob::parse(r)).collect()
@@ -135,6 +158,36 @@ mod tests {
 
     fn g(s: &str) -> Glob {
         Glob::parse(s).unwrap()
+    }
+
+    #[test]
+    fn covers_table() {
+        let yes = [
+            ("src/**", "src/core/**"),
+            ("src/**", "src/a.rs"),
+            ("src/**", "src/**"),
+            ("**", "src/a.rs"),
+            ("**/*.rs", "src/**/*.rs"),
+            ("docs/*.md", "docs/a.md"),
+            (".changeset/*.md", ".changeset/x.md"),
+            ("src/*", "src/*.rs"),
+        ];
+        let no = [
+            ("src/core/**", "src/**"),
+            ("src/**", "**"),
+            ("src/**", "Cargo.toml"),
+            ("src/**", "**/src/a.rs"),
+            ("docs/*.md", "docs/**"),
+            ("docs/*.md", "docs/a/b.md"),
+            (".changeset/*.md", ".changeset/*"),
+            ("src/a.rs", "src/*.rs"),
+        ];
+        for (a, b) in yes {
+            assert!(g(a).covers(&g(b)), "{a} covers {b}");
+        }
+        for (a, b) in no {
+            assert!(!g(a).covers(&g(b)), "{a} must not cover {b}");
+        }
     }
 
     #[test]

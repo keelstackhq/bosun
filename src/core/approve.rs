@@ -471,7 +471,7 @@ pub fn orchestrator_counts(c: &OrchestratorCase) -> Result<String, String> {
         // The rest of R-gov (hook settings, REVIEW.md, plans, agent instructions) and production
         // writes are not `BOOTSTRAP_EXCLUDED` paths, yet the window never covers them either.
         let gated: Vec<&str> = (c.rules.iter().copied())
-            .filter(|r| ["R-gov", "R-prod-write"].contains(r))
+            .filter(|r| ["R-gov", "R-prod-write", "R-oneoff-size"].contains(r))
             .collect();
         if !gated.is_empty() {
             return Err(format!(
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn the_window_never_covers_the_rest_of_r_gov_or_production_writes() {
-        for r in ["R-gov", "R-prod-write"] {
+        for r in ["R-gov", "R-prod-write", "R-oneoff-size"] {
             let mut c = case(Policy::Owner, Some("2026-11-30"), "2026-11-10");
             let rules = ["R-ci", r];
             c.rules = &rules;

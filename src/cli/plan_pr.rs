@@ -70,6 +70,8 @@ pub fn run(dir: Option<&Path>, a: &PlanPrArgs) -> CmdResult {
             title: None,
             ready: a.auto_merge,
             bundle: vec![],
+            one_off: false,
+            touch: vec![],
         },
     )
     .map_err(|e| with_steps(e, &data))?;

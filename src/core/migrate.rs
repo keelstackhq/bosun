@@ -119,7 +119,7 @@ pub fn set_mode_name(text: &str, name: ModeName) -> String {
 pub fn owner_steps(to: ModeName) -> Vec<String> {
     let mut v = Vec::new();
     if to >= ModeName::Steady {
-        v.push("[computer] Janitor Routine: add the line `Then run \\`bosun heal\\` and make only the calls in its \\`next\\`; report data.prs.`".to_string());
+        v.push("[computer] Janitor Routine (only if you enabled it with `[routines] janitor = true`): add the line `Then run \\`bosun heal\\` and make only the calls in its \\`next\\`; report data.prs.`".to_string());
     }
     if to >= ModeName::Booster {
         v.push("[computer] Curator Routine: replace its prompt with quickstart.md §4".to_string());

@@ -32,7 +32,7 @@ lesson hit = {id: str, hits: int, comment_id: int | null};
 lesson capture = {issue: int, kind: str, signature: str, created: bool, reopened: bool, hits: int};
 lesson triage = {issue: int, as: str, lesson?: str, process_red?: int, task?: int};
 doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{step: int, name: str, status: str, detail: str,
-    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str,
+    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str,
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
     skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
@@ -84,7 +84,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     plan: str | null, own_ci: bool, claude_md: bool, excluded: [str], changes: [{action: str,
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
-    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, schedule: str, prompt: str}]};
+    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};
@@ -176,7 +176,7 @@ pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     auto_merge_route?: str | null, enforced_checks?: str | null, note?: str, touch_check?: str,
     gates?: [{context: str, state: str}], pending_checks?: [{context: str, state: str}],
     trailers?: {checked: int, required: bool, unread: int, missing: [{sha: str, missing: [str]}]},
-    epic_error?: str} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
+    epic_error?: str, task?: int, claim?: {..}} | {pr: {number: int, head_sha: str, draft: bool}, task: null,
     ready: bool | "pending", auto_merge: bool, auto_merge_route?: str | null,
     enforced_checks?: str | null, note?: str, gates?: [{context: str, state: str}],
     pending_checks?: [{context: str, state: str}],

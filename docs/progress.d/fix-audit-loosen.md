@@ -1,0 +1,1 @@
+- 2026-11-15 · audit loosening reviewed: tick patches strict, narrow autonomous default with owner `autonomous_allow`, one-off touch and size limits

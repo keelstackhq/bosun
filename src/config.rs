@@ -41,6 +41,33 @@ pub struct Config {
     /// `[mode]`: a preset and knob overrides. Release ordering as for `intake`.
     #[serde(skip_serializing_if = "ModeConfig::is_unset")]
     pub mode: ModeConfig,
+    /// `[routines]`: opt-in Routines (spec §5). Release ordering as for `intake`.
+    #[serde(skip_serializing_if = "Routines::is_unset")]
+    pub routines: Routines,
+}
+
+/// `[routines]`: the janitor Routine is off unless the owner sets `janitor = true`;
+/// `janitor_cron` (5-field cron, UTC) is its schedule, hourly by default.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Routines {
+    pub janitor: bool,
+    pub janitor_cron: String,
+}
+
+impl Default for Routines {
+    fn default() -> Self {
+        Routines {
+            janitor: false,
+            janitor_cron: "0 * * * *".into(),
+        }
+    }
+}
+
+impl Routines {
+    fn is_unset(&self) -> bool {
+        *self == Routines::default()
+    }
 }
 
 /// `[session]`: the auto-compact point `bosun setup-snippet` prints. `autocompact_window`
@@ -131,6 +158,7 @@ impl Default for Config {
             checks: Checks::default(),
             session: Session::default(),
             mode: ModeConfig::default(),
+            routines: Routines::default(),
         }
     }
 }
@@ -228,6 +256,11 @@ pub struct Approvals {
     /// than the one that adds this key fails to parse it: pin first, then set it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub signer: bool,
+    /// Globs autonomous approval (D-017) may cover. Unset: `src/**`, `tests/**`, `docs/**`,
+    /// `changelog.d/**`, `.changeset/*.md`; the deny set and the denied rules always apply. A glob that does not parse allows nothing. Any `[approvals]` change is
+    /// the owner's (R-weaken).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autonomous_allow: Option<Vec<String>>,
     /// `policy` came from the `[mode]` preset, not from this table.
     #[serde(skip)]
     pub policy_preset: bool,
@@ -403,6 +436,14 @@ impl Config {
                     format!("edit {file}: set review.{key} to a positive number, or remove it"),
                 ));
             }
+        }
+        if c.routines.janitor_cron.split_whitespace().count() != 5 {
+            return Err(BosunError::error(
+                format!("{file}: routines.janitor_cron must be a 5-field cron expression"),
+                format!(
+                    "edit {file}: set routines.janitor_cron to five fields such as \"0 * * * *\", or remove it"
+                ),
+            ));
         }
         if let Some(d) = &c.approvals.bootstrap_until {
             let day = crate::time::parse_rfc3339(&format!("{d}T00:00:00Z"));

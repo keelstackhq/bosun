@@ -105,9 +105,10 @@ environment_id = "env_..."     # the id of the cloud environment the children ru
 | gatekeeper, steady | Start an orchestrator session on the repo. `bosun spawn <epic>` → make the `create_session` call in `next` → `bosun spawn <epic> --record --from -`. |
 | booster, autonomous | The orchestrator runs `bosun wave tick <epic>`; its `create_session` calls use `environment_id` from `[cloud]`. Run it again when children finish: it returns `archive_session` for done children. |
 
-The janitor Routine (hourly, **[computer]**, claude.ai/code → Routines; prompts: `bosun doctor --full`,
-`data.routines`) keeps leases and spend honest in every mode. For `steady` and lighter, add this
-sentence at the end of the janitor prompt (owner step):
+The optional janitor Routine (off by default; enable it with `[routines] janitor = true` in
+`.bosun/bosun.toml`, schedule `janitor_cron`, default hourly; **[computer]**, claude.ai/code → Routines;
+prompts: `bosun doctor --full`, `data.routines`) keeps leases and spend honest. If you run it, for `steady`
+and lighter add this sentence at the end of the janitor prompt (owner step):
 
 ```text
 Then run `bosun heal` and make only the calls in its `next`; report data.prs.
@@ -144,7 +145,7 @@ form or on GitHub **[phone]**.
 
 ## 4. Owner Routine prompts (owner-held)
 
-Routines are human-only. **[computer]** claude.ai/code → Routines. Janitor and notify: `bosun doctor --full`
+Routines are human-only. **[computer]** claude.ai/code → Routines. Notify (and the janitor, only if enabled): `bosun doctor --full`
 prints them. For `booster` and `autonomous` (`curator_loosen = "propose"`) replace the curator
 Routine prompt (daily, Sonnet) with exactly this text:
 
@@ -171,7 +172,7 @@ bosun migrate --finish                 # after the merge: join, plan amend (idem
   guide's prompt uses it: straight to the target); the PR body records that choice. Never move lighter on a red week.
 - **[phone]** The owner approves the exact head: the PR is R-gov, and R-weaken when lighter. risk-check waits
   for it; nothing else needs a GitHub click.
-- **[computer]** Routines stay owner-only: the PR body lists them (janitor heal line from `steady`, curator
+- **[computer]** Routines stay owner-only: the PR body lists them (janitor heal line from `steady` when the janitor is enabled, curator
   prompt from `booster`, section 4).
 - Targets before the next rung: `steady` red-CI < 30 % and ≤ 5 owner touches a day for two weeks; `booster`
   < 20 %, ≤ 3; `autonomous` < 15 %, ≤ 1 (`bosun metrics --days 7`, `data.brake`).

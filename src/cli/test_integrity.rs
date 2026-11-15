@@ -10,7 +10,7 @@ use crate::cli::IntegrityArgs;
 use crate::cli::gate::{repo_root, resolve_ci};
 use crate::config::Config;
 use crate::core::meta::{ALLOW_KINDS, linked_issues, parse_task_meta};
-use crate::core::touch::{Changed, outside};
+use crate::core::touch::{Changed, outside, plan_tick_file};
 use crate::gates::integrity::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
@@ -48,11 +48,19 @@ fn from_pr(dir: Option<&Path>, base: Option<&str>, n: u64) -> CmdResult {
     // borrow `skip` or `only` from a task whose touch it never edits. Checked as edits.
     let changed: Vec<Changed> = files
         .iter()
-        .flat_map(|f| std::iter::once(&f.filename).chain(&f.previous_filename))
-        .map(|p| Changed {
+        .flat_map(|f| {
+            (std::iter::once(&f.filename).chain(&f.previous_filename)).map(move |p| (p, f))
+        })
+        .map(|(p, f)| Changed {
             path: p.clone(),
             status: "modified".into(),
             previous: None,
+            tick_only: plan_tick_file(
+                &f.filename,
+                &f.status,
+                f.previous_filename.as_deref(),
+                f.patch.as_deref(),
+            ),
         })
         .collect();
     let mut task = None;

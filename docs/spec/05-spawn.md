@@ -101,7 +101,12 @@ another section or an unknown `[session]` key prints no `autocompact`, never an 
 bootstrap script does not change. Release ordering as for `intake`.
 
 Janitor, resume, results:
-- Janitor (Routine, every hour, Haiku): `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
+- Janitor (Routine, every hour, Haiku; **opt-in**): off by default, nothing creates, recommends or requires it.
+  The owner enables it with `[routines] janitor = true` in `.bosun/bosun.toml` (optional `janitor_cron`,
+  a 5-field UTC cron, default `0 * * * *`; the table is read from this release on, as for `[mode]`). Only then
+  do `bosun doctor` (`data.routines`, step 11) and `bosun init --intake` (`create_trigger` in `next`) list it,
+  and the agent asks the user before creating it. Without it, `bosun reap` and `bosun budget check` run only when
+  a session runs them. When on, the janitor runs `bosun reap`, a stale-session check, a budget check (`bosun budget check`),
   `bosun notify` (only when `.bosun/bosun.toml` has a `[slack]` table; without one the prompt `bosun doctor` prints leaves it out).
 - Resume: after a container restart, `bosun resume` reads the leases and the open PRs of the
   session and continues.

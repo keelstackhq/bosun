@@ -39,7 +39,7 @@ Cost:
 Spend guard:
 - Below 80 % of the daily budget: normal.
 - At 80 % or more: no new work; mainfix is exempt. `claim` checks it like spawn check 2 (exit 6).
-- At 100 %: the janitor stops the sessions.
+- At 100 %: the janitor (opt-in, §5) stops the sessions; without it, run `bosun budget check` yourself.
   The janitor runs `bosun budget check`, which returns one `interrupt_session` per live remote session in `next` (a wave agent `S/task` counts as `S`; never the caller's own session). It writes nothing, also works while halted, and a `daily_usd` of 0 turns it off. An interrupted session that resumes is still refused new work by spawn and claim.
 - The day resets at 00:00 UTC.
 - A task over `per_task_usd` goes to blocked and opens a lesson.
