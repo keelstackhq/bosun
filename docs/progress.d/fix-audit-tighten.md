@@ -1,0 +1,1 @@
+- 2026-11-14 · audit fixes (tightening): guard, risk, hooks, init/migrate/doctor, docs, CI, cargo profiles

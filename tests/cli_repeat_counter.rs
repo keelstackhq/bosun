@@ -245,3 +245,17 @@ fn a_dash_c_refusal_is_recorded_in_the_shells_repo() {
     assert_eq!(markers(here.path()), 1);
     assert_eq!(markers(other.path()), 0);
 }
+
+#[test]
+fn the_same_call_in_another_directory_counts_apart() {
+    let (a, b) = (repo(), repo());
+    let call = |d: &Path| -> i32 {
+        let args = ["-C", d.to_str().unwrap(), "release", "999"];
+        run(d, "s", &args).0
+    };
+    for _ in 0..4 {
+        assert_ne!(call(a.path()), 6);
+    }
+    assert_ne!(call(b.path()), 6, "-C b is a different call from -C a");
+    assert_eq!(call(a.path()), 6);
+}

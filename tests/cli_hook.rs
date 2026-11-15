@@ -382,7 +382,7 @@ fn session_start_rules_follow_the_origin() {
     let (fake, tmp) = (FakeGithub::start(), repo());
     let (local, _) = rules_start_text(Some(&fake), tmp.path(), &[]);
     assert!(
-        local.contains("Session rules (orchestrator): Split work"),
+        local.contains("Session rules (orchestrator): Delegate work"),
         "{local}"
     );
     assert!(local.contains("Caveman style everywhere"), "{local}");

@@ -98,8 +98,8 @@ pub fn refresh(app: &App, file: Option<&Path>) -> Result<Vec<Lease>> {
     Ok(leases)
 }
 
-/// Live leases for the edit-lock: the fresh cache, else GitHub, else a cache younger than the
-/// lease TTL (with a warning). `Err` means nothing usable: the caller fails open.
+/// Live leases for the edit-lock: the fresh cache, else GitHub, else any cache (with a
+/// warning; past the lease TTL its leases still hold). `Err` means no cache: the caller fails open.
 pub fn leases(app: &App, file: Option<&Path>) -> std::result::Result<Vec<Lease>, String> {
     let now = app.ctx.now;
     let cached = file.and_then(read);
@@ -122,7 +122,17 @@ pub fn leases(app: &App, file: Option<&Path>) -> std::result::Result<Vec<Lease>,
                 );
                 Ok(live(ls))
             }
-            _ => Err(e.message),
+            // Older than the lease TTL: every lease in it may have been renewed since, so its
+            // paths stay held (fail closed for them); paths it does not hold stay free.
+            Some((at, ls)) => {
+                eprintln!(
+                    "bosun: warning: cannot reach GitHub ({}); the lease cache is {}s old, so its paths stay locked",
+                    e.message,
+                    age(at)
+                );
+                Ok(ls)
+            }
+            None => Err(e.message),
         },
     }
 }

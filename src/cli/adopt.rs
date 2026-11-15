@@ -156,18 +156,41 @@ fn policy_min(value: &str) -> &'static str {
     }
 }
 
-fn detect(root: &Path) -> Vec<String> {
+/// A directory that holds a pnpm project: `package.json` with a pnpm lockfile or workspace file.
+fn pnpm_project(d: &Path) -> bool {
+    d.join("package.json").is_file()
+        && (d.join("pnpm-lock.yaml").is_file() || d.join("pnpm-workspace.yaml").is_file())
+}
+
+/// The stacks of a repo, shared by `adopt` and `init`: the root, then each subdirectory one level
+/// down (a monorepo's `packages/*`, `apps/*` or a lone `api/`), skipping hidden and vendored ones.
+pub(crate) fn detect(root: &Path) -> Vec<String> {
+    let mut dirs = vec![root.to_path_buf()];
+    for top in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let name = top.file_name().to_string_lossy().into_owned();
+        let skip = name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target");
+        if !skip && top.path().is_dir() {
+            dirs.push(top.path());
+            if matches!(name.as_str(), "packages" | "apps" | "crates" | "services") {
+                let inner = std::fs::read_dir(top.path())
+                    .into_iter()
+                    .flatten()
+                    .flatten();
+                dirs.extend(inner.map(|e| e.path()).filter(|p| p.is_dir()));
+            }
+        }
+    }
     let mut v = Vec::new();
-    if root.join("Cargo.toml").is_file() {
+    if dirs.iter().any(|d| d.join("Cargo.toml").is_file()) {
         v.push("rust".to_string());
     }
-    if root.join("package.json").is_file() && root.join("pnpm-lock.yaml").is_file() {
+    if dirs.iter().any(|d| pnpm_project(d)) {
         v.push("ts-pnpm".to_string());
     }
     v
 }
 
-fn labels_wanted() -> Vec<(String, &'static str, &'static str)> {
+pub(crate) fn labels_wanted() -> Vec<(String, &'static str, &'static str)> {
     let mut v = vec![
         ("bosun:halt".to_string(), "B60205", "kill switch"),
         (
@@ -297,8 +320,15 @@ pub fn run(dir: Option<&Path>, a: &AdoptArgs) -> CmdResult {
         Some(d) => d.to_path_buf(),
         None => std::env::current_dir().map_err(|e| io_err("read", Path::new("."), e))?,
     };
+    // Files land in the worktree and `data.commands` are git commands: outside a repo, stop.
     let root: PathBuf = git_out(&start, &["rev-parse", "--show-toplevel"])
-        .map_or_else(|| start.clone(), PathBuf::from);
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            BosunError::error(
+                format!("{} is not inside a git repository", start.display()),
+                "run `git init` (or `git clone`) first, or pass -C <repo>, then rerun `bosun adopt`",
+            )
+        })?;
     let owner = a.owner.clone().unwrap_or_default();
     if !owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(BosunError::usage(

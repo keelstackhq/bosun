@@ -35,19 +35,17 @@ const BRANCH: &str = "bosun/init";
 const CLOUD_BRANCH: &str = "claude/bosun-init";
 
 const PR_TITLE: &str = "chore: set up bosun";
-const OWNER_STEPS: [&str; 7] = [
-    "Fill governance/owners.toml with the owners' GitHub logins (the channel seeds it from --owner).",
-    "Run `hoist apply` for branch protection, auto-merge and the required checks ci-ok, risk-check, review-verdict, main-open (hoist.toml).",
-    "Create the kill-switch label: `gh label create bosun:halt --color B60205`.",
-    "Create the environment splice-bot (deployment branches: main only), then add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) to it, never as a repository secret, so the splice update bot's PRs run CI.",
-    "Review this setup PR; it is R-gov, so approve its head SHA: the session asks you with a form in the Claude Code chat and the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself). While main has no bosun workflows, risk-check, review-verdict and main-open cannot run on it: merge it yourself, then apply the required checks.",
-    "Create the Routine curator (daily; notify too once [slack] is set); `bosun doctor` prints their prompts. The janitor is off: add `[routines] janitor = true` to .bosun/bosun.toml only if you want it.",
-    "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA when the session asks with a form in the Claude Code chat; the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself).",
-];
-
-/// What stays human with `--intake` (design section 3.4): the approvals of the setup PR and of
-/// each splice update. The rest of `OWNER_STEPS` is provision.yml's, or a Routine in `next`.
-const INTAKE_KEEPS: [usize; 2] = [4, 6];
+/// Files `bosun init` never seeds: the intake file only exists with `--intake` (bosun copies it),
+/// and the session rules are the built-in text until the owner writes a file (P1-7, P1-8).
+const NOT_SEEDED: [&str; 2] = [".bosun/intake.toml", ".bosun/session-rules.toml"];
+const STEP_OWNERS: &str =
+    "Fill governance/owners.toml with the owners' GitHub logins (pass --owner to seed it).";
+const STEP_HOIST: &str = "Run `hoist apply` once: branch protection, auto-merge and the required checks ci-ok, risk-check, review-verdict, main-open (hoist.toml).";
+const STEP_HALT: &str =
+    "Create the kill-switch label: `gh label create bosun:halt --color B60205`.";
+const STEP_ENV: &str = "Create the environment splice-bot (deployment branches: main only), then add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) to it, never as a repository secret, so the splice update bot's PRs run CI.";
+const STEP_APPROVE: &str = "Review this setup PR; it is R-gov, so approve its head SHA: the session asks you with a form in the Claude Code chat and the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself). While main has no bosun workflows, risk-check, review-verdict and main-open cannot run on it: merge it yourself, then apply the required checks.";
+const STEP_UPDATES: &str = "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA the same way (a form in the Claude Code chat; the orchestrator posts the signed comment).";
 const BOOTSTRAP_STEP: &str = "For each new package that publishes, run `hoist release bootstrap` once on a computer after `npm login` and `cargo login`, then set up the crates.io trusted publisher; every release then needs a tap on the `release` environment.";
 
 /// The `create_trigger` call of one Routine from `doctor::routines`. Each firing starts a fresh
@@ -559,13 +557,7 @@ fn set_merge_queue(text: &str) -> Result<(String, MergeQueue), HoistErr> {
     Ok((out, MergeQueue::Added))
 }
 
-fn pr_body(
-    pieces: &[String],
-    changes: &Value,
-    kept: &[String],
-    steps: &[String],
-    warnings: &[String],
-) -> String {
+fn pr_body(pieces: &[String], changes: &Value, kept: &[String], warnings: &[String]) -> String {
     let files: Vec<&str> = changes
         .as_array()
         .map(|c| c.iter().filter_map(|x| x["path"].as_str()).collect())
@@ -578,10 +570,7 @@ fn pr_body(
     if !kept.is_empty() {
         s += &format!("\nKept the repo's own `{}`.\n", kept.join("`, `"));
     }
-    s += "\nRisk: high (R-gov). It needs the owner's approval on the head SHA.\n\nOwner steps:\n";
-    for (i, step) in steps.iter().enumerate() {
-        s += &format!("{}. {step}\n", i + 1);
-    }
+    s += "\nRisk: high (R-gov). It needs the owner's approval on the head SHA (a form in the Claude Code chat). The other owner steps are in the session's `owner_steps`, not repeated here.\n";
     if !warnings.is_empty() {
         s += "\nWarnings:\n";
         for w in warnings {
@@ -798,8 +787,10 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         .map(String::from)
         .collect();
     let mut excludes = kept.clone();
-    if intake.is_some() {
-        excludes.push(INTAKE_PATH.into());
+    for p in NOT_SEEDED {
+        if !excludes.iter().any(|e| e == p) {
+            excludes.push(p.into());
+        }
     }
     let own_ci = has_ci_ok_job(&root);
     let claude_md = !main_owns_claude_md(&root);
@@ -838,6 +829,15 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         _ => {}
     }
     let mut pieces = args.stack.clone();
+    if pieces.is_empty() && intake.is_none() {
+        pieces = super::adopt::detect(&root);
+        if pieces.is_empty() {
+            return Err(BosunError::usage(
+                "no stack found (no Cargo.toml, no package.json with a pnpm lockfile or workspace file)",
+                "pass --stack rust or --stack ts-pnpm",
+            ));
+        }
+    }
     if claude_md {
         pieces.push("claude-md".into());
     }
@@ -848,18 +848,34 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
             }
         }
     }
+    let owner_given = args.owner.is_some() || root.join("governance/owners.toml").exists();
+    // No token: bosun cannot make the labels, so the kill-switch label stays an owner step.
+    let make_labels = !args.no_pr;
     let mut steps: Vec<String> = match &intake {
         Some((i, _)) => {
-            let mut keep: Vec<String> = INTAKE_KEEPS.map(|n| OWNER_STEPS[n].to_string()).into();
+            let mut keep: Vec<String> = vec![STEP_APPROVE.into(), STEP_UPDATES.into()];
             if i.publish.iter().any(|p| p == "npm" || p == "crates") {
                 keep.push(BOOTSTRAP_STEP.into());
             }
             keep
         }
-        None => OWNER_STEPS.iter().map(|s| (*s).to_string()).collect(),
+        None => {
+            let mut v: Vec<String> = Vec::new();
+            if !owner_given {
+                v.push(STEP_OWNERS.into());
+            }
+            v.push(STEP_HOIST.into());
+            if !make_labels {
+                v.push(STEP_HALT.into());
+            }
+            v.extend([STEP_ENV, STEP_APPROVE, STEP_UPDATES].map(String::from));
+            v
+        }
     };
     if own_ci && intake.is_none() {
-        steps[1] = steps[1].replace("main-open (hoist.toml)", "main-open, bosun-ok (hoist.toml)");
+        for s in &mut steps {
+            *s = s.replace("main-open (hoist.toml)", "main-open, bosun-ok (hoist.toml)");
+        }
     }
     let hooks_present = std::fs::read_to_string(root.join(SETTINGS)).is_ok_and(|t| {
         t.contains("bosun hook pre-tool-use") && t.contains("bosun hook session-start")
@@ -951,7 +967,7 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     };
     let commit = git(&root, &["rev-parse", "HEAD"])?;
 
-    let body = pr_body(&pieces, &changes, &kept, &steps, &warnings);
+    let body = pr_body(&pieces, &changes, &kept, &warnings);
     let mut pr = None;
     if let Some((app, base)) = &github {
         let pull = app
@@ -967,7 +983,33 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
         pr = Some(json!({"number": pull.number, "head_sha": pull.head_sha}));
     }
 
+    // With a token the labels (kill switch, registry, task states) are made now; a failure is a
+    // warning, since the branch and the PR already exist.
+    let mut labels: Vec<String> = Vec::new();
+    if let (true, Some((app, _))) = (make_labels, &github) {
+        for (name, color, desc) in super::adopt::labels_wanted() {
+            match app.gh.label_exists(&name).and_then(|have| {
+                if have {
+                    Ok(())
+                } else {
+                    app.gh
+                        .ensure_label(&name, color, desc)
+                        .inspect(|()| labels.push(name.clone()))
+                }
+            }) {
+                Ok(()) => {}
+                Err(e) => {
+                    warnings.push(format!(
+                        "cannot create the label {name}: {}; run `bosun adopt` or `gh label create {name}`",
+                        e.message
+                    ));
+                    break;
+                }
+            }
+        }
+    }
     let mut out = json!({
+        "labels_created": labels,
         "channel": "bosun", "source": args.source, "ref": git_ref, "pieces": pieces,
         "changes": changes, "excluded": excludes, "plan": plan, "branch": branch,
         "commit": commit, "pr": pr, "risk": "high", "owner_steps": steps,

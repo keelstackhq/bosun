@@ -251,6 +251,22 @@ if [ -n "$HAS_RUST" ]; then
 fi
 
 bosun --version || echo "setup-script: bosun is not installed" >&2
+# The installed bosun must be the pinned one: an older bosun earlier on PATH shadows the install.
+# Mismatch: put the npm-global bin first on PATH for this script and warn loudly. Never fails.
+got="$(bosun --version 2>/dev/null | awk '{print $NF}')"
+if [ "$got" != "$BOSUN_VERSION" ]; then
+  gbin="$(npm prefix -g 2>/dev/null)/bin"
+  if [ -x "$gbin/bosun" ]; then
+    PATH="$gbin:$PATH"
+    export PATH
+    got="$(bosun --version 2>/dev/null | awk '{print $NF}')"
+  fi
+  if [ "$got" != "$BOSUN_VERSION" ]; then
+    echo "setup-script: WARNING: bosun on PATH is '${got:-none}', not the pinned $BOSUN_VERSION; add $gbin to the front of PATH" >&2
+  else
+    echo "setup-script: WARNING: an older bosun shadowed the pinned $BOSUN_VERSION; put $gbin first on PATH in your shell" >&2
+  fi
+fi
 
 # Prewarm the Claude Code plugins (user scope) so the first session does not clone them. Every
 # failure, an outage or a pin mismatch, only warns (owner decision): `bosun doctor` shows it red.

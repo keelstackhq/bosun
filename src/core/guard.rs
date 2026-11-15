@@ -21,6 +21,21 @@ const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open 
     `bosun pr <issue>` and let `bosun pr <issue> --auto-merge` hand it to GitHub after the gates \
     (a PR with no task: `bosun pr --pr <n> --auto-merge`)";
 
+/// Whether a refusal reason is about a merge, tag or push, so that the "never merge, tag or
+/// force-push" advice fits it. Reasons that carry their own fix, or are about something else,
+/// do not get it.
+fn tail_applies(why: &str) -> bool {
+    const OTHER: [&str; 6] = [
+        "xargs",
+        "cannot see",
+        "alias",
+        "secrets and variables",
+        "awk",
+        "workflow run",
+    ];
+    why != PUSH_CONFIG && why != UNREAD_PUSH && !OTHER.iter().any(|o| why.contains(o))
+}
+
 /// The tools that write one file, and the input key that names it.
 pub fn edited_path(tool: &str, input: &Value) -> Option<String> {
     let key = match tool {
@@ -636,14 +651,47 @@ fn check(
                     }
                 }),
             };
+            // A command name the shell expands (`$g`, `${G:-gh}`, `$(echo gh)`, a backtick) cannot
+            // be read. Text inside quotes or a heredoc is data, not a command.
+            let named = words
+                .iter()
+                .find(|w| !(w.contains('=') && !w.starts_with('-')) && !WRAPPERS.contains(w));
+            if depth == 0
+                && !in_quotes(before)
+                && !command.contains("<<")
+                && let Some(w) =
+                    named.filter(|w| w.trim_start_matches(['"', '\'']).starts_with(['$', '`']))
+                && let Some(name) = built_name_rule(w, segment, &target)
+            {
+                return Some(format!(
+                    "`{}` is refused (its command name is built by the shell and could be \
+                     `{name}`, which agents may not run to merge, tag or push): write the \
+                     command name out, not a variable or substitution",
+                    segment.trim()
+                ));
+            }
+            if matches!(prev, "|" | "|&") && reads_pipe(&words) {
+                return Some(format!(
+                    "`{}` is refused (a script piped into a shell cannot be read): download it \
+                     to a file, read it, then run the file",
+                    segment.trim()
+                ));
+            }
             if let Some(why) = merge_rule(&words, segment, &target) {
                 if why == PUSH_ALONE {
                     let fix = alone_fix(&words);
                     return Some(format!("`{}` is refused ({fix})", segment.trim()));
                 }
                 return Some(format!(
-                    "`{}` is refused ({why}): {MERGE_FIX}",
-                    segment.trim()
+                    "`{}` is refused ({why}){}",
+                    segment.trim(),
+                    if why.contains("awk") {
+                        ": run the command itself, not through awk's system()".to_string()
+                    } else if tail_applies(why) {
+                        format!(": {MERGE_FIX}")
+                    } else {
+                        String::new()
+                    }
                 ));
             }
         }
@@ -1547,6 +1595,9 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         }
     });
     let first = first.as_deref().map(|w| w.rsplit('/').next().unwrap_or(w));
+    if let Some(why) = exec_rule(first, words, segment, &target) {
+        return Some(why);
+    }
     match first {
         Some("gh") => gh_rule(&words[1..], segment),
         // `GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`: config from the environment.
@@ -1560,6 +1611,98 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         Some("curl" | "wget" | "http" | "https" | "xh") => http_rule(segment),
         _ => None,
     }
+}
+
+/// Commands that run another command: `find -exec`, `fd -x`, and `awk system()`.
+fn exec_rule(
+    first: Option<&str>,
+    words: &[&str],
+    segment: &str,
+    target: &Target,
+) -> Option<&'static str> {
+    match first {
+        Some("find" | "fd" | "fdfind") => {
+            let at = words.iter().position(|w| {
+                matches!(
+                    *w,
+                    "-exec"
+                        | "-execdir"
+                        | "-ok"
+                        | "-okdir"
+                        | "-x"
+                        | "-X"
+                        | "--exec"
+                        | "--exec-batch"
+                )
+            })?;
+            let end = words[at + 1..]
+                .iter()
+                .position(|w| matches!(*w, ";" | "+" | "\\;"))
+                .map_or(words.len(), |e| at + 1 + e);
+            let inner = &words[at + 1..end];
+            // `{}` stands for names find adds: judged like the command without them.
+            merge_rule(inner, &inner.join(" "), target)
+        }
+        Some("awk" | "gawk" | "mawk" | "nawk") => {
+            calls_system(segment).then_some("`awk` runs commands through system()")
+        }
+        _ => None,
+    }
+}
+
+/// Whether the text has `system` followed by optional blanks and `(`: an awk `system()` call.
+fn calls_system(s: &str) -> bool {
+    s.match_indices("system")
+        .any(|(i, m)| s[i + m.len()..].trim_start().starts_with('('))
+}
+
+/// For a command word the shell builds (`$g`, `"$G"`, `${X:-y}`, `$(..)`, a backtick span): the
+/// name (`gh`, `git`) that, put in its place, makes the segment a merge, tag or push. `None` when
+/// neither does, as for `$HOME/.cargo/bin/cargo test`.
+fn built_name_rule(word: &str, segment: &str, target: &Target) -> Option<&'static str> {
+    let start = word.as_ptr() as usize - segment.as_ptr() as usize;
+    let rest = &segment[start..];
+    // The word ends at the first blank outside quotes, `( )`, `{ }` and backtick spans.
+    let (mut depth, mut quote, mut tick) = (0i32, None::<char>, false);
+    let mut end = rest.len();
+    for (i, c) in rest.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '`') => tick = !tick,
+            (None, '(' | '{') => depth += 1,
+            (None, ')' | '}') => depth -= 1,
+            (None, c) if c.is_whitespace() && depth <= 0 && !tick => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    ["gh", "git"].into_iter().find(|name| {
+        let swapped = format!("{name}{}", &rest[end..]);
+        let words: Vec<&str> = swapped.split_whitespace().collect();
+        merge_rule(&words, &swapped, target).is_some()
+    })
+}
+
+/// A shell or interpreter that reads its script from the pipe it is fed: `curl .. | sh`.
+fn reads_pipe(words: &[&str]) -> bool {
+    let (cmd, _, _) = unwrap_runners(words);
+    let name = cmd.first().map_or("", |w| base(w));
+    let name = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    if ![
+        "sh", "bash", "zsh", "dash", "ksh", "fish", "python", "perl", "ruby", "node",
+    ]
+    .contains(&name)
+    {
+        return false;
+    }
+    let args = &cmd[1..];
+    args.contains(&"-s")
+        || args.iter().all(|a| a.starts_with('-') && *a != "-c")
+        || args.contains(&"-")
 }
 
 fn destructive(what: &str) -> String {
@@ -1773,6 +1916,15 @@ const DECRYPT_FIX: &str = "secrets stay encrypted; the owner runs `hoist secrets
 
 fn decrypt_reason(what: &str) -> String {
     format!("decrypting secrets is refused for agents ({what}): {DECRYPT_FIX}")
+}
+
+/// An environment dump or a read of the process environment: it can hold tokens and keys, but it
+/// is not a decrypt, so it gets its own reason.
+fn env_reason(what: &str) -> String {
+    format!(
+        "dumping {what} is refused for agents (it can hold tokens and keys): read only the \
+         variables you need, by name (spec §8)"
+    )
 }
 
 const HOIST_SECRETS: &[&str] = &["edit", "sync", "grant", "revoke", "rotate", "rotate-key"];
@@ -2195,7 +2347,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             _ => false,
         };
         if dump {
-            return Some(decrypt_reason("the environment"));
+            return Some(env_reason("the environment"));
         }
         // The verb skips git's global options and their values (`-C dir`, `-c k=v`).
         let (mut it, git) = (args.iter(), name == "git");
@@ -2381,7 +2533,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
             if args.iter().any(env)
                 && !(search && pos.first().is_some_and(env) && !pos[1..].iter().any(env))
             {
-                return Some(decrypt_reason("the process environment"));
+                return Some(env_reason("the process environment"));
             }
             // ack and ugrep take commands in options (`--pager`, `--view`, `--filter`, abbreviated)
             // and from the environment, so only their pattern is data.
@@ -2466,7 +2618,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
         {
             let w = w.as_str();
             if procenv(w) {
-                return Some(decrypt_reason("the process environment"));
+                return Some(env_reason("the process environment"));
             }
             let t = if assigned(w).is_some() {
                 w.split_once('=').map_or(w, |p| p.1)
@@ -2529,6 +2681,16 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
                 _ => false,
             };
             if refused {
+                // Code or a filter that reads the environment (and names no secrets tool).
+                let env_read = !mentions
+                    && (matches!(n.as_str(), "awk" | "gawk" | "mawk" | "jq")
+                        || INTERPS.contains(&n.as_str())
+                            && after
+                                .iter()
+                                .any(|a| ENV_READS.iter().any(|e| a.contains(e))));
+                if env_read {
+                    return Some(env_reason(&format!("the environment (`{n}`)")));
+                }
                 return Some(decrypt_reason(&format!("`{n}`")));
             }
         }
@@ -2604,7 +2766,38 @@ fn http_rule(segment: &str) -> Option<&'static str> {
 }
 
 fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
-    match args {
+    // Quotes and backslashes do not hide a word (`gh pr "merge"`, `gh p""r merge`), and a global
+    // `-R o/r` or `--repo o/r` before the command does not move it.
+    let clean: Vec<String> = args
+        .iter()
+        .map(|a| a.replace(['\'', '"', '\\'], ""))
+        .collect();
+    let mut i = 0;
+    while i < clean.len() && clean[i].starts_with('-') {
+        let a = clean[i].as_str();
+        let value_next = matches!(a, "-R" | "--repo");
+        i += if value_next { 2 } else { 1 };
+    }
+    let at = i.min(clean.len());
+    // `gh api` is judged on the words as written (quotes shape a GraphQL query).
+    if clean.get(at).map(String::as_str) == Some("api") {
+        return api_rule(&args[at + 1..], segment);
+    }
+    let mut args: Vec<&str> = clean[at..].iter().map(String::as_str).collect();
+    // `gh pr -R o/r merge 5`, `gh release --repo=o/r create v1`: a flag after the group word does
+    // not move the command.
+    if !args.is_empty() {
+        let mut j = 1;
+        while j < args.len() && args[j].starts_with('-') {
+            j += if matches!(args[j], "-R" | "--repo") {
+                2
+            } else {
+                1
+            };
+        }
+        args.drain(1..j.min(args.len()));
+    }
+    match &args[..] {
         ["pr", "merge", ..] => Some("gh pr merge"),
         [
             "release",
@@ -2616,26 +2809,36 @@ fn gh_rule(args: &[&str], segment: &str) -> Option<&'static str> {
         ["secret" | "variable", "set" | "delete" | "remove", ..] => {
             Some("secrets and variables are the owner's")
         }
-        ["api", ..] if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) => {
-            Some("GraphQL merge or ref mutation")
-        }
-        ["api", rest @ ..] if graphql_hidden(rest) => Some("a GraphQL query the guard cannot see"),
-        ["api", rest @ ..] if gh_api_read(rest, segment) => None,
-        ["api", rest @ ..] if rest.iter().any(|a| a.contains("/merge")) => Some("merge API"),
-        ["api", rest @ ..] if rest.iter().any(|a| a.contains("/releases")) => {
-            Some("a release makes a tag")
-        }
-        ["api", rest @ ..] if rest.iter().any(|a| a.contains("auto_merge")) => {
-            Some("auto-merge API")
-        }
-        ["api", rest @ ..]
-            if rest
-                .iter()
-                .any(|a| a.contains("git/refs") || a.contains("/tags")) =>
-        {
-            Some("ref or tag API")
-        }
         _ => None,
+    }
+}
+
+/// `gh api ARGS`: the args after `api`.
+fn api_rule(rest: &[&str], segment: &str) -> Option<&'static str> {
+    // Quotes and backslashes do not hide a path word (`pulls/1/'merge'`).
+    let clean: Vec<String> = rest
+        .iter()
+        .map(|a| a.replace(['\'', '"', '\\'], ""))
+        .collect();
+    if GRAPHQL_WRITES.iter().any(|m| segment.contains(m)) {
+        Some("GraphQL merge or ref mutation")
+    } else if graphql_hidden(rest) {
+        Some("a GraphQL query the guard cannot see")
+    } else if gh_api_read(rest, segment) {
+        None
+    } else if clean.iter().any(|a| a.contains("/merge")) {
+        Some("merge API")
+    } else if clean.iter().any(|a| a.contains("/releases")) {
+        Some("a release makes a tag")
+    } else if clean.iter().any(|a| a.contains("auto_merge")) {
+        Some("auto-merge API")
+    } else if clean
+        .iter()
+        .any(|a| a.contains("git/refs") || a.contains("/tags"))
+    {
+        Some("ref or tag API")
+    } else {
+        None
     }
 }
 
@@ -2765,6 +2968,7 @@ fn push_key(k: &str) -> bool {
     let k = cfg_key(k);
     k.contains('\\')
         || k == "include.path"
+        || k == "push.followtags"
         || k.starts_with("includeif.")
         || k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
 }
@@ -2837,6 +3041,11 @@ fn ff_only(rest: &[&str], default_branch: &str) -> bool {
 /// `v1.2.3`, `1.2` ...: a ref that looks like a version tag.
 fn version_like(r: &str) -> bool {
     let t = r.strip_prefix('v').unwrap_or(r);
+    // `v1`: whether a local tag of that name exists cannot be read here (core is pure), so a
+    // bare `v<digits>` counts too.
+    if r.starts_with('v') && !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
     t.split_once('.').is_some_and(|(a, b)| {
         !a.is_empty()
             && a.bytes().all(|c| c.is_ascii_digit())
@@ -2985,6 +3194,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                     "-f" | "--force" | "--tags" | "--follow-tags" | "--mirror" | "--delete" | "-d"
                 ) || a.starts_with("--force-with-lease")
                     || a.starts_with("--force-if-includes")
+                    // `-fu`, `-uf`, `-ud`: a short-flag cluster holding `f` or `d`.
+                    || (a.starts_with('-') && !a.starts_with("--") && a.contains(['f', 'd']))
             }) {
                 return Some("force, tag or delete push");
             }
@@ -3006,6 +3217,15 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 }
             }
             let refs: Vec<&str> = words.into_iter().skip(1).collect();
+            // `git push origin tag rel` and `tags/rel` push the tag `rel`.
+            if refs.first() == Some(&"tag")
+                || refs.iter().any(|r| {
+                    r.split(':')
+                        .any(|x| x.trim_start_matches('+').starts_with("tags/"))
+                })
+            {
+                return Some("force, tag or delete push");
+            }
             // `send-pack` without refs pushes every matching branch; `--stdin` reads them.
             if sub == "send-pack" && (refs.is_empty() || rest.contains(&"--stdin")) {
                 return Some(UNREAD_PUSH);
@@ -3043,6 +3263,29 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 });
             }
             (sub == "push" && !explicit && !target.alone).then_some(PUSH_ALONE)
+        }
+        // `--stdin`, a variable, a backtick or an escape in a ref hides it: fail closed. `-m`
+        // quoting is not parsed (`-m "a b"c $r`, `-dm x $r` hide the ref from any parser), so ANY
+        // non-flag argument with `$` or a backtick denies, a `"$sha"` value included.
+        "update-ref" => (rest.iter().any(|a| {
+            let q = a.replace(['\'', '"'], "");
+            a.contains(['`', '\\'])
+                || a.starts_with("--stdin")
+                || q.contains("refs/tags/")
+                || (!q.starts_with('-') && q.contains('$'))
+        }))
+        .then_some("tag"),
+        // `git fetch . HEAD:refs/tags/v1` makes a tag too; mirroring the remote's own tags
+        // (`'refs/tags/*:refs/tags/*'`, as `--tags`) does not.
+        "fetch"
+            if rest.iter().any(|a| {
+                let a = a.replace(['\'', '"', '\\'], "");
+                a.contains("refs/tags/") && a.trim_start_matches('+') != "refs/tags/*:refs/tags/*"
+                    // `<src>:$T` writes a ref the hook cannot read; `<src>:tags/x` is a DWIM tag.
+                    || a.rsplit_once(':').is_some_and(|(_, d)| d.contains(['$', '`']) || d.starts_with("tags/"))
+            }) =>
+        {
+            Some("tag")
         }
         "tag" => {
             let lists = rest.is_empty()
@@ -3913,6 +4156,50 @@ mod tests {
             "timeout 60 cargo test",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn tag_mirror_fetch_and_update_ref_values() {
+        for cmd in [
+            "git fetch origin 'refs/tags/*:refs/tags/*'",
+            "git fetch origin +refs/tags/*:refs/tags/*",
+            "git fetch origin \"+refs/tags/*:refs/tags/*\"",
+            "git update-ref refs/heads/x abc123",
+            "git update-ref -m 'a b' refs/heads/x abc123",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+        for cmd in [
+            "git fetch . HEAD:refs/tags/v1",
+            "git fetch origin main:refs/t\\ags/v1",
+            "git fetch origin refs/tags/v1:refs/tags/v1",
+            "git fetch origin 'refs/tags/*:refs/tags/*' HEAD:refs/tags/v1",
+            "git fetch origin refs/heads/*:refs/tags/*",
+            "git fetch origin main:tags/v1",
+            "git fetch origin +HEAD:tags/v1",
+            "git fetch origin HEAD:$T",
+            "git fetch . \"HEAD:$T\"",
+            "git -c push.followTags=true push origin feature",
+            "git config push.followTags true",
+            "git update-ref $ref abc",
+            "git update-ref -m 'a b' $r HEAD",
+            "git update-ref -m \"a b\" $r HEAD",
+            "git update-ref -m \"a b\"c $r HEAD",
+            "git update-ref -m a' 'b $r HEAD",
+            "git update-ref -m\"a b\" $r HEAD",
+            "git update-ref -dm x $r",
+            "git update-ref refs/heads/x \"$sha\"",
+            "git update-ref -m \"$msg\" refs/heads/x abc",
+            "git update-ref \"$ref\" abc",
+            "git update-ref -d $ref",
+            "git update-ref refs/tags/v1 abc",
+            "git update-ref refs/heads/x refs/tags/v1",
+            "git update-ref --stdin",
+            "git update-ref refs/heads/x `git rev-parse HEAD`",
+            "git update-ref refs/he\\ads/x abc",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
     }
 

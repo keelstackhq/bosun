@@ -1201,9 +1201,9 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
                         [
                             "actions/checkout@v4",
                             "actions/setup-node@v4",
-                            "taiki-e/install-action@v2"
+                            "taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21"
                         ]
-                        .contains(&u),
+                        .contains(&u.split(" #").next().unwrap_or(u)),
                         "{u} in {TRUSTED}"
                     );
                     assert!(s["with"].get("cache").is_none(), "{s}");
@@ -1273,8 +1273,9 @@ fn ts_pnpm_runs_pr_code_only_in_the_required_check_after_bosun_trusted() {
             let rust = stack.contains(&"rust");
             assert_eq!(b.iter().any(|s| s["name"] == "rust toolchain"), rust);
             assert_eq!(
-                b.iter()
-                    .any(|s| s["uses"].as_str() == Some("Swatinem/rust-cache@v2")),
+                b.iter().any(|s| s["uses"]
+                    .as_str()
+                    .is_some_and(|u| u.starts_with("Swatinem/rust-cache@"))),
                 rust
             );
         }
@@ -2633,5 +2634,52 @@ fn setup_scripts_skip_tools_only_at_their_recorded_fingerprint() {
         assert!(same.is_empty(), "{name}: pnpm re-installed: {same}");
         let log = run_with_stubs(&body, "12.14.0");
         assert!(log.contains("install -g pnpm@12.15.0"), "{name}: {log}");
+    }
+}
+
+/// After the install both setup scripts check `bosun --version` against BOSUN_VERSION: a stale
+/// bosun earlier on PATH is shadowed by the npm-global one and the script warns loudly.
+#[test]
+fn setup_scripts_assert_the_installed_bosun_is_the_pinned_one() {
+    use std::os::unix::fs::PermissionsExt;
+    let files = variant(&["rust"], "");
+    let own =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/setup-script.sh"))
+            .unwrap();
+    let stub = |dir: &Path, name: &str, body: &str| {
+        fs::create_dir_all(dir).unwrap();
+        let p = dir.join(name);
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    for script in [file(&files, "docs/setup-script.sh"), &own] {
+        let start = script
+            .find("# The installed bosun must be")
+            .expect("check block");
+        let end = start + script[start..].find("\nfi\n").unwrap() + 4;
+        let block = &script[start..end];
+        let t = tempfile::tempdir().unwrap();
+        let g = t.path().join("g");
+        stub(&t.path().join("old"), "bosun", "echo bosun 0.1.0");
+        stub(&g.join("bin"), "bosun", "echo bosun 9.9.9");
+        let npm = format!("[ \"$1\" = prefix ] && echo {}", g.display());
+        stub(&t.path().join("old"), "npm", &npm);
+        let run = |pinned: &str| {
+            let path = format!("{}:/usr/bin:/bin", t.path().join("old").display());
+            let cmd = format!("BOSUN_VERSION={pinned}\n{block}\nbosun --version");
+            let out = Command::new("bash")
+                .args(["-c", &cmd])
+                .env("PATH", path)
+                .output()
+                .unwrap();
+            let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+            (s(&out.stdout), s(&out.stderr))
+        };
+        let (o, e) = run("9.9.9");
+        assert!(o.contains("9.9.9") && e.contains("WARNING"), "{o}{e}");
+        let (o, e) = run("5.5.5");
+        assert!(e.contains("not the pinned 5.5.5"), "{o}{e}");
+        let (_, e) = run("0.1.0");
+        assert!(!e.contains("WARNING"), "{e}");
     }
 }

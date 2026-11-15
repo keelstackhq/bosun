@@ -60,7 +60,7 @@ fn an_empty_repo_reports_all_fourteen_steps_and_the_update_item() {
         assert!(!it["fix"].as_str().unwrap().is_empty());
     }
     // Step 1 (the fake repo is readable) is ok; Slack (7) and release (10) are not configured,
-    // so they are skipped, not missing (F11). Step 13 (plugins) is missing without the keelstack pins.
+    // so they are skipped, not missing (F11); Routines (11) and the plan (12) are optional too. Step 13 (plugins) is missing without the keelstack pins.
     let st = statuses(&v);
     assert_eq!(st[0], "ok");
     assert_eq!((st[6].as_str(), st[9].as_str()), ("skipped", "skipped"));
@@ -70,11 +70,11 @@ fn an_empty_repo_reports_all_fourteen_steps_and_the_update_item() {
         st.iter()
             .enumerate()
             .skip(1)
-            .filter(|(i, _)| ![6, 9, 12, 13, 14].contains(i))
+            .filter(|(i, _)| ![6, 9, 10, 11, 12, 13, 14].contains(i))
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
-    assert_eq!(v["error"]["message"], "10 checklist steps missing");
+    assert_eq!(v["error"]["message"], "8 checklist steps missing");
     // The janitor is opt-in; without [slack] there is no notify Routine (F17).
     assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 1);
     assert_eq!(v["data"]["routines"][0]["name"], "curator");

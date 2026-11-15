@@ -55,6 +55,45 @@ fn code_bindings_are_not_secrets() {
 }
 
 #[test]
+fn types_fields_and_references_are_not_secrets() {
+    for (path, line) in [
+        ("src/a.rs", "    pub @TOK@: String,"),
+        ("src/a.rs", "fn f(password: &str) {"),
+        ("src/a.rs", "    Self { @TOK@: None }"),
+        ("src/a.rs", "        @TOK@: cfg.@TOK@,"),
+        ("src/a.py", "def f(@TOK@: str):"),
+        ("src/a.ts", "  @TOK@: process.env.T,"),
+        ("src/a.ts", "const @TOK@ = process.env.T;"),
+        (
+            "src/a.rs",
+            "let t = std::env::var(\"X\"); self.@TOK@ = env::var(\"X\").ok();",
+        ),
+        ("ci/x.yml", "        GH_@TOK@: ${{ github.@TOK@ }}"),
+        ("ci/x.yml", "    @SEC@s: inherit"),
+        ("ci/x.yml", "    @AKEY@=${{ secrets.K }}"),
+        ("ci.sh", "@TOK@=$GH_@TOK@"),
+        ("docs/a.md", "The @TOK@: pass it in the header."),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn quoted_and_assigned_values_still_match() {
+    for (path, line) in [
+        ("config/a.json", "  \"api@TOK@\": \"x\""),
+        ("config/a.json", "  \"@AKEY@\": \"x\""),
+        ("config/a.yml", "@TOK@: 's3cr3t'"),
+        ("ci.sh", "SECRET_KEY=abc"),
+        ("ci.sh", "PASSWORD=abc"),
+        ("ci.sh", "private_key=abc"),
+        ("ci.sh", "url=https://u:p@host/x"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
 fn literals_in_code_still_match() {
     for line in [
         "    let @TOK@ = \"s3cr3t-value\";",
@@ -85,12 +124,15 @@ fn test_files_and_fixtures_are_not_secrets() {
         "crates/x/tests/fixtures/app.toml",
         "client_@SEC@=s3cr3t-value-xyz"
     ));
-    assert!(!secret_match("src/login_test.go", "@TOK@ = \"fake\""));
-    assert!(!secret_match(
+    // A file name is the author's choice: only the directory exempts.
+    assert!(secret_match("src/login_test.go", "@TOK@ = \"fake\""));
+    assert!(secret_match(
         "web/src/login.spec.ts",
         "const t = '@TOK@ = fake';"
     ));
     assert!(!secret_match("src/snapshots/x__y.snap", "@TOK@ = fake"));
+    assert!(!secret_match("web/__snapshots__/a.snap", "@TOK@ = fake"));
+    assert!(secret_match("src/x__y.snap", "@TOK@ = fake"));
 }
 
 #[test]
@@ -107,25 +149,22 @@ fn env_and_config_files_are_never_test_files() {
 }
 
 #[test]
-fn the_marker_needs_a_reason_in_a_trailing_comment() {
-    assert!(!secret_match(
-        "config/app.toml",
-        "@TOK@ = \"s3cr3t-public-demo\" # bosun:allow-secret public demo key from the vendor docs"
-    ));
-    assert!(!secret_match(
-        "src/a.rs",
-        "let @TOK@ = \"s3cr3t-demo\"; // bosun:allow-secret documented sandbox value"
-    ));
+fn the_allow_marker_exempts_nothing() {
     for line in [
+        "@TOK@ = \"s3cr3t-public-demo\" # bosun:allow-secret public demo key from the vendor docs",
+        "let @TOK@ = \"s3cr3t-demo\"; // bosun:allow-secret documented sandbox value",
         "@TOK@ = \"s3cr3t\" # bosun:allow-secret",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secret  -->",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secrets demo",
-        "@TOK@ = \"s3cr3t\" bosun:allow-secret demo",
-        "/* bosun:allow-secret demo */ @TOK@ = \"s3cr3t\"",
-        "@TOK@ = \"s3cr3t\" # bosun:allow-secret @TOK@ = s3cr3t",
     ] {
         assert!(secret_match("config/app.toml", line), "{line}");
     }
+    assert!(secret_match(
+        "src/a.rs",
+        "@TOK@ = \"s3cr3t\" # bosun:allow-secret  -->"
+    ));
+    assert!(secret_match(
+        "src/a.rs",
+        "/* bosun:allow-secret demo */ @TOK@ = \"s3cr3t\""
+    ));
 }
 
 #[test]
@@ -150,5 +189,133 @@ fn real_key_formats_are_never_exempt() {
     for line in &lines {
         assert!(secret_match("tests/fixtures/keys.txt", line), "{line}");
         assert!(secret_match("src/main.rs", line), "{line}");
+    }
+}
+
+#[test]
+fn a_keyword_inside_a_string_literal_is_not_a_key() {
+    for (path, line) in [
+        ("src/a.py", "print(\"Password: \" + x)"),
+        ("src/a.java", "log.info(\"@TOK@: %s\", v)"),
+        ("tools/a.sh", "read -p \"Token: \" T"),
+        ("tools/a.sh", "PASSWORD=\"$DB_PASSWORD\""),
+        ("tools/a.sh", "@TOK@=\"$GH_@TOK@\""),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn typed_and_walrus_literals_still_match() {
+    for (path, line) in [
+        ("src/a.go", "password := \"s3cr3t\""),
+        ("src/a.rs", "const TOKEN: &str = \"s3cr3t\";"),
+        ("src/a.rs", "static @TOK@: &'static str = \"s3cr3t\";"),
+        ("src/a.ts", "const password: string = \"s3cr3t\";"),
+        ("src/a.py", "password: str = \"s3cr3t\""),
+        ("infra/a.tf", "password = \"s3cr3t\""),
+        ("infra/a.tf", "{ @TOK@: \"s3cr3t\" }"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+    // A reference is no literal, in a .tf file too.
+    assert!(!secret_match("infra/a.tf", "password = var.db_password"));
+    assert!(!secret_match("src/a.go", "password := cfg.Password"));
+}
+
+#[test]
+fn shell_defaults_with_a_literal_match() {
+    for line in [
+        "API_@TOK@^=${API_@TOK@^:-abcd1234efgh5678}",
+        "@TOK@^=\"${@TOK@^:-abcd1234efgh5678}\"",
+        "export SECRET=${SECRET-abcd1234efgh5678}",
+    ] {
+        let line = line.replace('^', "").replace("@TOK@", "TOKEN");
+        assert!(secret_match("src/a.sh", &line), "{line}");
+    }
+    // A default that is itself a reference, or empty, is no literal.
+    assert!(!secret_match("src/a.sh", "API_@TOK@=${API_@TOK@:-$OTHER}"));
+    assert!(!secret_match("src/a.sh", "API_@TOK@=${API_@TOK@:-}"));
+    assert!(!secret_match("src/a.sh", "API_@TOK@=${API_@TOK@}"));
+}
+
+#[test]
+fn quoted_literals_that_start_with_a_dollar_match() {
+    for (path, line) in [
+        ("src/a.py", "@TOK@ = '$ecret1234'"),
+        ("src/a.js", "const @SEC@ = '$up3rS3cret!';"),
+        ("src/a.py", "@TOK@ = \"$2b$10$abcdefghijk\""),
+        ("src/a.sh", "@TOK@='$ecret1234'"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+    // A double-quoted `$VAR` in shell or yaml reads a variable.
+    assert!(!secret_match("src/a.sh", "@TOK@=\"$GH_@TOK@\""));
+    assert!(!secret_match("ci/x.yml", "@TOK@: \"$GH_@TOK@\""));
+}
+
+#[test]
+fn secret_names_that_are_no_secret_do_not_match() {
+    for (path, line) in [
+        ("src/a.py", "@SEC@ary = \"Bob\""),
+        ("src/a.py", "@SEC@s = [\"a\", \"b\"]"),
+        ("src/a.py", "@SEC@s_dir = \"/run/@SEC@s\""),
+        ("src/a.py", "@SEC@_version = \"latest\""),
+        ("deploy/k8s.yml", "  @SEC@Name: \"tls-cert\""),
+        ("deploy/k8s.yml", "  @TOK@@SEC@: \"my-@TOK@\""),
+        ("src/a.yml", "    @SEC@Ref: \"db\""),
+        ("src/a.yml", "- @SEC@KeyRef: \"x\""),
+        ("src/a.yml", "  @SEC@_name: \"x\""),
+        ("src/a.yml", "  @SEC@_id: \"x\""),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+    for (path, line) in [
+        ("src/a.py", "@SEC@ = \"x\""),
+        ("src/a.py", "client_@SEC@ = \"x\""),
+        ("src/a.go", "@SEC@Key := \"x\""),
+        ("src/a.py", "SECRET_KEY = \"x\""),
+        ("src/a.py", "aws_@SEC@_access_key = \"x\""),
+        ("src/a.py", "@SEC@_@TOK@ = \"x\""),
+        ("src/a.yml", "  client_@SEC@: \"x\""),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn everyday_references_are_not_secrets() {
+    for (path, line) in [
+        (
+            "ci/clone.yml",
+            "  - git clone https://oauth2:${CI_JOB_@TOK@}@gitlab.com/a/b",
+        ),
+        (
+            "ci/p.sh",
+            "git push https://$GITHUB_ACTOR:$GITHUB_@TOK@@github.com/a/b",
+        ),
+        (
+            "ci/p.sh",
+            "git remote set-url origin \"https://x-access-@TOK@:${GH_@TOK@}@github.com/$REPO\"",
+        ),
+        ("src/a.js", "`https://x:${@TOK@}@github.com/a/b`"),
+        ("config/s.php", "    '@TOK@' => env('@TOK@'),"),
+        ("config/s.php", "    'password' => Hash::make($pw),"),
+        ("src/h.go", "password := r.FormValue(\"password\")"),
+        ("src/h.go", "@TOK@ := c.Query(\"@TOK@\")"),
+        ("deploy/v.yml", "  password: \"{{ .Values.db.password }}\""),
+    ] {
+        assert!(!secret_match(path, &fill(line)), "{path}: {line}");
+    }
+    // Literals still match.
+    for (path, line) in [
+        ("ci/p.sh", "git clone https://bob:hunter22@gitlab.com/a/b"),
+        (
+            "deploy/v.yml",
+            "  password: \"{{ .Values.x | default \"abc\" }}\"",
+        ),
+        ("deploy/v.yml", "  password: \"{{ .Values.x }}hunter2\""),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
     }
 }

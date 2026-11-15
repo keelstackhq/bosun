@@ -31,7 +31,7 @@ fn commands(v: &Value) -> Vec<String> {
 
 #[test]
 fn owner_flag_drops_the_owners_step_and_key_step_is_exact() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let v = adopt(t.path(), &["--owner", "alice"]);
     let s = steps(&v);
     assert!(!s.contains("governance/owners.toml"), "{s}");
@@ -40,14 +40,14 @@ fn owner_flag_drops_the_owners_step_and_key_step_is_exact() {
 
 #[test]
 fn no_owner_says_to_rerun_with_owner() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let s = steps(&adopt(t.path(), &[]));
     assert!(s.contains("bosun adopt --owner <your-github-login>"), "{s}");
 }
 
 #[test]
 fn existing_owner_and_key_leave_neither_step() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join("governance")).unwrap();
     std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
     std::fs::write(
@@ -67,7 +67,7 @@ fn existing_owner_and_key_leave_neither_step() {
 
 #[test]
 fn git_add_lists_what_adopt_wrote() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let c = commands(&adopt(t.path(), &["--owner", "alice"]));
     assert_eq!(
         c[0],
@@ -97,7 +97,7 @@ fn git_add_lists_what_adopt_wrote() {
 
 #[test]
 fn branch_protection_link_from_a_github_origin() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let d = t.path().to_str().unwrap();
     let git = |a: &[&str]| {
         let st = std::process::Command::new("git")
@@ -125,15 +125,26 @@ fn branch_protection_link_from_a_github_origin() {
 
 #[test]
 fn a_rerun_with_nothing_new_suggests_no_commit() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     adopt(t.path(), &["--owner", "alice"]);
+    // Committed, so nothing is new or changed (an uncommitted file would be listed again).
+    for args in [vec!["add", "-A"], vec!["commit", "-qm", "x"]] {
+        let st = std::process::Command::new("git")
+            .arg("-C")
+            .arg(t.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
     let c = commands(&adopt(t.path(), &["--owner", "alice"]));
     assert_eq!(c, vec!["bosun doctor".to_string()], "{c:?}");
 }
 
 #[test]
 fn spaced_toml_headers_count_as_listed() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join("governance")).unwrap();
     std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
     std::fs::write(
@@ -153,7 +164,7 @@ fn spaced_toml_headers_count_as_listed() {
 
 #[test]
 fn a_kept_owners_file_without_an_owner_says_to_edit_it() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join("governance")).unwrap();
     std::fs::write(t.path().join("governance/owners.toml"), "# none yet\n").unwrap();
     let s = steps(&adopt(t.path(), &["--owner", "alice"]));
@@ -163,7 +174,7 @@ fn a_kept_owners_file_without_an_owner_says_to_edit_it() {
 
 #[test]
 fn dry_run_has_no_commands_and_steps_name_the_setup_snippet() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let v = adopt(t.path(), &["--owner", "alice", "--dry-run"]);
     assert_eq!(v["data"]["commands"], serde_json::json!([]));
     assert!(steps(&v).contains("bosun setup-snippet"), "{}", steps(&v));
@@ -171,7 +182,7 @@ fn dry_run_has_no_commands_and_steps_name_the_setup_snippet() {
 
 #[test]
 fn an_owners_file_without_owner_gets_the_edit_step_on_the_first_run() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join("governance")).unwrap();
     std::fs::write(t.path().join("governance/owners.toml"), "# none yet\n").unwrap();
     let s = steps(&adopt(t.path(), &[]));

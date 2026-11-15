@@ -1122,8 +1122,9 @@ pub struct MainTriageArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct InitArgs {
-    /// A stack to set up (repeatable for a mixed repo); with --intake it comes from the file.
-    #[arg(long = "stack", required_unless_present = "intake", value_parser = ["rust", "ts-pnpm"])]
+    /// A stack to set up (repeatable for a mixed repo). Default: detected as `bosun adopt` does;
+    /// with --intake it comes from the file.
+    #[arg(long = "stack", value_parser = ["rust", "ts-pnpm"])]
     pub stack: Vec<String>,
     /// The owner's intake file: derives --stack, --owner and --plan, becomes .bosun/intake.toml.
     #[arg(long, value_name = "FILE")]
@@ -1282,6 +1283,9 @@ pub struct MigrateArgs {
     /// Survey and list the planned edits; write nothing, run no git, open no PR.
     #[arg(long, conflicts_with = "finish")]
     pub dry_run: bool,
+    /// Open the draft PR only: skip the local gates and the ready + auto-merge step that follow.
+    #[arg(long, conflicts_with_all = ["finish", "dry_run"])]
+    pub no_ready: bool,
     /// After the migration PR merged: join the registry and amend each plan (idempotent).
     #[arg(long, conflicts_with = "to")]
     pub finish: bool,

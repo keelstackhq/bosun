@@ -33,7 +33,7 @@ fn policy_of(t: &toml::Table) -> Option<&str> {
 #[test]
 fn policy_is_written_under_approvals() {
     for policy in ["owner", "owner-gated", "orchestrator", "autonomous"] {
-        let t = tempfile::tempdir().unwrap();
+        let t = common::git_tempdir();
         let (code, v) = adopt(t.path(), &["--stack", "rust", "--policy", policy]);
         assert_eq!(code, 0, "{v}");
         let c = config(t.path());
@@ -48,7 +48,7 @@ fn policy_is_written_under_approvals() {
 
 #[test]
 fn without_the_flag_there_is_no_approvals_table() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (code, v) = adopt(t.path(), &["--stack", "rust"]);
     assert_eq!(code, 0, "{v}");
     let text = std::fs::read_to_string(t.path().join(".bosun/bosun.toml")).unwrap();
@@ -63,7 +63,7 @@ fn a_policy_the_pinned_release_cannot_parse_is_a_usage_error() {
         ("0.4.0", "owner-gated", "0.5.0"),
         ("0.4.0", "owner", "0.5.0"),
     ] {
-        let t = tempfile::tempdir().unwrap();
+        let t = common::git_tempdir();
         let (code, v) = adopt(t.path(), &["--bosun-version", pin, "--policy", policy]);
         assert_eq!(code, 2, "{pin} {policy}: {v}");
         let fix = v["error"]["fix"].as_str().unwrap();
@@ -71,7 +71,7 @@ fn a_policy_the_pinned_release_cannot_parse_is_a_usage_error() {
         assert!(!t.path().join(".bosun").exists(), "wrote files");
     }
     for (pin, policy) in [("0.8.0", "autonomous"), ("0.5.0", "orchestrator")] {
-        let t = tempfile::tempdir().unwrap();
+        let t = common::git_tempdir();
         let (code, v) = adopt(t.path(), &["--bosun-version", pin, "--policy", policy]);
         assert_eq!(code, 0, "{pin} {policy}: {v}");
         assert_eq!(policy_of(&config(t.path())), Some(policy));
@@ -80,7 +80,7 @@ fn a_policy_the_pinned_release_cannot_parse_is_a_usage_error() {
 
 #[test]
 fn an_unknown_policy_is_a_usage_error() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     let (code, v) = adopt(t.path(), &["--policy", "anyone"]);
     assert_eq!(code, 2, "{v}");
     assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
@@ -88,7 +88,7 @@ fn an_unknown_policy_is_a_usage_error() {
 
 #[test]
 fn a_kept_config_gets_an_owner_step_to_set_the_policy() {
-    let t = tempfile::tempdir().unwrap();
+    let t = common::git_tempdir();
     std::fs::create_dir_all(t.path().join(".bosun")).unwrap();
     std::fs::write(t.path().join(".bosun/bosun.toml"), "project = \"mine\"\n").unwrap();
     let (code, v) = adopt(t.path(), &["--stack", "rust", "--policy", "autonomous"]);

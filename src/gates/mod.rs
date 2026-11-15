@@ -394,6 +394,9 @@ fn spawn(argv: &[String], dir: &Path) -> Result<(i64, f64), BosunError> {
     let status = Command::new(program)
         .args(&argv[1..])
         .current_dir(dir)
+        // A repo's test command is repo code: it never sees the GitHub token.
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
         .stdin(Stdio::null())
         .stdout(Stdio::from(std::io::stderr()))
         .stderr(Stdio::inherit())

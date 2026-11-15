@@ -107,3 +107,15 @@ pub fn empty_dir() -> std::path::PathBuf {
 }
 
 pub mod anthropic;
+
+/// A fresh empty directory that is a git repository (adopt refuses a directory that is not).
+pub fn git_tempdir() -> tempfile::TempDir {
+    let t = tempfile::tempdir().expect("tempdir");
+    let st = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(t.path())
+        .status()
+        .expect("git init");
+    assert!(st.success());
+    t
+}

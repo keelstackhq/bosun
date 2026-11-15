@@ -212,6 +212,10 @@ fn budget_guard(app: &App) -> Result<(), BosunError> {
 
 /// Why the model cannot see the whole diff: files GitHub lists without a patch (binary files
 /// are exempt and listed to the model instead), or fewer files listed than the PR changed.
+fn changed(f: &Value) -> u64 {
+    f["additions"].as_u64().unwrap_or(0) + f["deletions"].as_u64().unwrap_or(0)
+}
+
 fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
     let views: Vec<FileView> = pack["files"]
         .as_array()
@@ -220,8 +224,12 @@ fn unseen(pack: &Value, changed_files: u64) -> Option<String> {
         .map(|f| FileView {
             path: f["filename"].as_str().unwrap_or_default().into(),
             status: f["status"].as_str().unwrap_or_default().into(),
-            has_patch: !f["patch"].is_null(),
-            changes: f["additions"].as_u64().unwrap_or(0) + f["deletions"].as_u64().unwrap_or(0),
+            // A binary file has no patch and 0 changed lines: the reviewer is told it is not
+            // shown (`not_shown_binary`), and risk-check holds the PR for the owner (R-unseen),
+            // so it does not also stop the review.
+            has_patch: !f["patch"].is_null() || changed(f) == 0,
+            changes: changed(f),
+            same_blob: false,
         })
         .collect();
     // A delta review lists the PR's files that a comparison since the last review names, a
