@@ -41,7 +41,7 @@ pub struct Config {
     /// `[mode]`: a preset and knob overrides. Release ordering as for `intake`.
     #[serde(skip_serializing_if = "ModeConfig::is_unset")]
     pub mode: ModeConfig,
-    /// `[routines]`: opt-in Routines (spec §11). Release ordering as for `intake`.
+    /// `[routines]`: opt-in Routines (spec §5). Release ordering as for `intake`.
     #[serde(skip_serializing_if = "Routines::is_unset")]
     pub routines: Routines,
 }
@@ -431,6 +431,14 @@ impl Config {
                     format!("edit {file}: set review.{key} to a positive number, or remove it"),
                 ));
             }
+        }
+        if c.routines.janitor_cron.split_whitespace().count() != 5 {
+            return Err(BosunError::error(
+                format!("{file}: routines.janitor_cron must be a 5-field cron expression"),
+                format!(
+                    "edit {file}: set routines.janitor_cron to five fields such as \"0 * * * *\", or remove it"
+                ),
+            ));
         }
         if let Some(d) = &c.approvals.bootstrap_until {
             let day = crate::time::parse_rfc3339(&format!("{d}T00:00:00Z"));

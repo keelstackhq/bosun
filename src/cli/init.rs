@@ -981,7 +981,15 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     }
     let mut outcome = Outcome::data(out);
     if let Some((i, _)) = &intake {
-        let cfg = crate::config::Config::load(&root).unwrap_or_default();
+        let cfg = match crate::config::Config::load(&root) {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(w) = outcome.data["warnings"].as_array_mut() {
+                    w.push(json!(format!("janitor not read: {}", e.message)));
+                }
+                crate::config::Config::default()
+            }
+        };
         let routines = super::doctor::routines(i.notify == "slack", Some(&cfg.routines));
         for r in routines.as_array().into_iter().flatten() {
             outcome = outcome.with_next(

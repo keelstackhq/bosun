@@ -18,7 +18,7 @@ changes this file in the same PR.
 
 | Value | Default | Evidence |
 | ----- | ------- | -------- |
-| Lease TTL | 30 min | Long enough for one build step between heartbeats; short enough that a dead session blocks a task for at most 90 min (TTL plus one hourly janitor run). |
+| Lease TTL | 30 min | Long enough for one build step between heartbeats; short enough that a dead session blocks a task for at most 90 min with the opt-in hourly janitor (TTL plus one run); without it, until a session runs `bosun reap`. |
 | Janitor interval | 1 hour (opt-in, off by default) | Routines run every hour (first-user feedback F10). Haiku, so the cost is small. |
 | Same failure signature | 3 times | One retry can be bad luck and two can be a flaky test; the third identical failure means the agent is stuck. Estimate. |
 | Fix round with 0 changed lines | blocked at once | A round that changes nothing cannot fix the failure; another round costs money for the same result. |

@@ -320,6 +320,7 @@ fn the_janitor_routine_is_added_only_when_enabled_in_config() {
     assert_eq!(code, 0, "{v}");
     assert_eq!(names(&v), ["janitor", "curator"]);
     assert_eq!(triggers(&v)[0]["args"]["cron_expression"], "15 * * * *");
+    assert!(v["data"]["routines"][0]["confirm"].is_string(), "{v}");
 }
 
 #[test]

@@ -73,7 +73,8 @@ pub(crate) fn routines(slack: bool, janitor: Option<&crate::config::Routines>) -
         };
         a.insert(
             0,
-            json!({"name": "janitor", "schedule": "every hour", "cron": r.janitor_cron,
+            json!({"name": "janitor", "schedule": if r.janitor_cron == "0 * * * *" { "every hour".to_string() } else { format!("cron {}", r.janitor_cron) },
+            "cron": r.janitor_cron, "confirm": "opt-in ([routines] janitor = true): ask the user before creating it",
             "model": "haiku", "prompt": prompt}),
         );
     }
