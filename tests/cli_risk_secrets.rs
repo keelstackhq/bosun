@@ -282,3 +282,40 @@ fn secret_names_that_are_no_secret_do_not_match() {
         assert!(secret_match(path, line), "{path}: {line}");
     }
 }
+
+#[test]
+fn everyday_references_are_not_secrets() {
+    for (path, line) in [
+        (
+            "ci/clone.yml",
+            "  - git clone https://oauth2:${CI_JOB_@TOK@}@gitlab.com/a/b",
+        ),
+        (
+            "ci/p.sh",
+            "git push https://$GITHUB_ACTOR:$GITHUB_@TOK@@github.com/a/b",
+        ),
+        (
+            "ci/p.sh",
+            "git remote set-url origin \"https://x-access-@TOK@:${GH_@TOK@}@github.com/$REPO\"",
+        ),
+        ("src/a.js", "`https://x:${@TOK@}@github.com/a/b`"),
+        ("config/s.php", "    '@TOK@' => env('@TOK@'),"),
+        ("config/s.php", "    'password' => Hash::make($pw),"),
+        ("src/h.go", "password := r.FormValue(\"password\")"),
+        ("src/h.go", "@TOK@ := c.Query(\"@TOK@\")"),
+        ("deploy/v.yml", "  password: \"{{ .Values.db.password }}\""),
+    ] {
+        assert!(!secret_match(path, &fill(line)), "{path}: {line}");
+    }
+    // Literals still match.
+    for (path, line) in [
+        ("ci/p.sh", "git clone https://bob:hunter22@gitlab.com/a/b"),
+        (
+            "deploy/v.yml",
+            "  password: \"{{ .Values.x | default \"abc\" }}\"",
+        ),
+        ("deploy/v.yml", "  password: \"{{ .Values.x }}hunter2\""),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}

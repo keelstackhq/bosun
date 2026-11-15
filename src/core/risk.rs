@@ -344,6 +344,8 @@ fn scrub_refs(line: &str, code: bool) -> std::borrow::Cow<'_, str> {
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(concat!(
             r"\$\{\{.*?\}\}|\$\{[^}]*\}",
+            // A template tag with no quoted default (`{{ .Values.x }}`).
+            r#"|\{\{[^}"']*\}\}"#,
             // An env lookup with the name as the only argument: `getenv("X")`,
             // `os.getenv("X")`, `System.getenv("X")`, `os.environ["X"]`, `os.environ.get("X")`,
             // `ENV["X"]`, `ENV.fetch("X")`, `$_ENV["X"]`. A default (`, "d"`) stays.
@@ -483,7 +485,7 @@ fn assignment_binding(stmt: &str) -> bool {
     });
     static READER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(
-            r"(?i)^(?:get\w*|read\w*|input|prompt\w*|load\w*|fetch\w*|lookup\w*|find\w*|ask\w*|open\w*|env|param\w*|resolve\w*)$",
+            r"(?i)^(?:get\w*|read\w*|input|prompt\w*|load\w*|fetch\w*|lookup\w*|find\w*|ask\w*|open\w*|env|param\w*|resolve\w*|\w*value|\w*form|query\w*|cookie\w*|header\w*|arg\w*|flag\w*)$",
         )
         .expect("static regex")
     });
