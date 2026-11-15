@@ -298,20 +298,20 @@ Check:
 
 Watch two weeks. Targets: red-CI under 20 %, at most 3 owner touches a day, `data.brake` off.
 
-#### Step 9. Hull: `splice update` to v0.9.0
+#### Step 9. Hull: `splice update` to v0.11.0
 
 Source: [hull docs/updating.md](https://github.com/keelstackhq/hull/blob/main/docs/updating.md). Normally the
-weekly splice bot opens this PR. Do it by hand only when the owner asks. Needs splice 0.3.0 or newer
+weekly splice bot opens this PR. Do it by hand only when the owner asks. Needs splice 0.5.0 or newer (the version the setup script pins)
 (`pnpm dlx @keelstackhq/splice …` if it is not installed). From the repo root, on a clean branch:
 
 1. `splice check --json`. Exit 1 means an update, drift or markers.
-2. `splice diff --json`. Read `changes`. A `conflict` or `delete` needs a decision. Add `--to 0.9.0` to pin.
+2. `splice diff --json`. Read `changes`. A `conflict` or `delete` needs a decision. Add `--to 0.11.0` to pin.
 3. `splice update --all --json`. It updates the template, the decisions channel and the rigging.
 4. Resolve any markers. Then `splice check` must exit 0.
 5. `pnpm install && pnpm run ci`.
-6. Commit `chore: splice update to hull v0.9.0`. One update per PR.
+6. Commit `chore: splice update to hull v0.11.0`. One update per PR.
 
-Never edit owned files to fix an update. hull v0.9.0 moves vite-plus to 1.5.1 (with a `vite-plus-core` override).
+Never edit owned files to fix an update. Read the hull release notes for what v0.11.0 changes.
 The PR touches `.splice/**`: it is R-gov, and the owner approves. A repo with the bosun channel
 (`.splice/channels/bosun.toml`) gets bosun pins from `splice update --channel bosun`, not `bosun pin`.
 

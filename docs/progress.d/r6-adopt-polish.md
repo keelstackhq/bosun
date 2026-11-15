@@ -1,0 +1,1 @@
+- 2026-11-15 · R6: adopt dry-run tolerates an unreadable repo, pins splice 0.5.0 hoist 0.5.0 berth 0.2.0, janitor_cron validated, --ready cap uses is_one_off

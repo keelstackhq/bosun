@@ -16,7 +16,7 @@ use crate::core::checks;
 use crate::core::lease::{leases_of, orchestrator_of};
 use crate::core::meta::{closing_issues_in, linked_issues, parse_task_meta};
 use crate::core::records::Record;
-use crate::core::shape::{ONE_OFF_ITEM, ONE_OFF_MAX};
+use crate::core::shape::ONE_OFF_MAX;
 use crate::core::stamps::gate_loop;
 use crate::core::state::{State, state_of};
 use crate::core::title::is_conventional;
@@ -574,7 +574,13 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 "an escalated or blocked task needs the owner: wait for the owner's answer (the owner restores a missing state label), then rerun",
             ));
         }
-        if parse_task_meta(issue.body_text()).is_some_and(|m| m.item == ONE_OFF_ITEM) {
+        let one_off = match parse_task_meta(issue.body_text()) {
+            Some(m) => {
+                crate::cli::risk_check::is_one_off(gh, &issue, &m, &base, &app.ctx.config.project)?
+            }
+            None => false,
+        };
+        if one_off {
             let lines: u64 = (gh.pull_files(pull.number)?.iter())
                 .map(|f| f.additions + f.deletions)
                 .sum();
