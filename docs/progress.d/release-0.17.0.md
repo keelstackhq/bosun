@@ -1,0 +1,1 @@
+- 2026-11-15 · Release 0.17.0 · version bump, CHANGELOG (audit hardening #589), tool pins unchanged (splice 0.5.1 hoist 0.5.1 berth 0.2.1) · release PR
