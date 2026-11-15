@@ -451,3 +451,7 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-14 · keyless approvals · CI signer (`signer` role, `approve --as signer|--via-signer`, signer.yml), author-is-owner note in risk-check, doctor check
 - 2026-11-14 · fix/slack-digest-links · `bosun notify` kind `digest` (opt-in): owner-waiting PR links for Slack, approval stays on GitHub
 - setup-script: prebuilt cargo-deny 0.20.2 + cargo-nextest 0.9.152 (sha256-pinned, github.com assets) replace the 4-minute cargo install; D23 updated
+- 2026-11-14 · pin bosun 0.15.0 (post-release pin)
+- 2026-11-15 · janitor Routine opt-in via [routines] janitor in .bosun/bosun.toml
+- 2026-11-15 · audit loosening reviewed: tick patches strict, narrow autonomous default with owner `autonomous_allow`, one-off touch and size limits
+- 2026-11-15 · R6: adopt dry-run tolerates an unreadable repo, pins splice 0.5.0 hoist 0.5.0 berth 0.2.0, janitor_cron validated, --ready cap uses is_one_off

@@ -1,1 +1,0 @@
-- feat: the janitor Routine is opt-in: `[routines] janitor = true` (and `janitor_cron`) in .bosun/bosun.toml; doctor, init and the docs no longer create, recommend or require it by default

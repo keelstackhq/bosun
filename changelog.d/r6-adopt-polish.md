@@ -1,1 +1,0 @@
-- fix: `bosun adopt --dry-run` succeeds when the token cannot read the repo; `janitor_cron` is a real cron check (only with `janitor = true`); `pr --ready` caps every one-off, also by label or unplanned item; tool pins: splice 0.5.0, hoist 0.5.0, berth 0.2.0
