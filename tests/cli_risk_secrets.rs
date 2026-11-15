@@ -191,3 +191,34 @@ fn real_key_formats_are_never_exempt() {
         assert!(secret_match("src/main.rs", line), "{line}");
     }
 }
+
+#[test]
+fn a_keyword_inside_a_string_literal_is_not_a_key() {
+    for (path, line) in [
+        ("src/a.py", "print(\"Password: \" + x)"),
+        ("src/a.java", "log.info(\"@TOK@: %s\", v)"),
+        ("tools/a.sh", "read -p \"Token: \" T"),
+        ("tools/a.sh", "PASSWORD=\"$DB_PASSWORD\""),
+        ("tools/a.sh", "@TOK@=\"$GH_@TOK@\""),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn typed_and_walrus_literals_still_match() {
+    for (path, line) in [
+        ("src/a.go", "password := \"s3cr3t\""),
+        ("src/a.rs", "const TOKEN: &str = \"s3cr3t\";"),
+        ("src/a.rs", "static @TOK@: &'static str = \"s3cr3t\";"),
+        ("src/a.ts", "const password: string = \"s3cr3t\";"),
+        ("src/a.py", "password: str = \"s3cr3t\""),
+        ("infra/a.tf", "password = \"s3cr3t\""),
+        ("infra/a.tf", "{ @TOK@: \"s3cr3t\" }"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+    // A reference is no literal, in a .tf file too.
+    assert!(!secret_match("infra/a.tf", "password = var.db_password"));
+    assert!(!secret_match("src/a.go", "password := cfg.Password"));
+}

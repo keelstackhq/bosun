@@ -437,10 +437,10 @@ fn is_name_key(m: &str) -> bool {
 
 /// A source file, where `x = y` binds a variable: not an env, ini, yaml, toml or shell file.
 fn code_file(path: &str) -> bool {
-    const EXT: [&str; 30] = [
+    const EXT: [&str; 31] = [
         "rs", "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "java", "kt", "kts", "scala", "go",
         "c", "h", "cc", "cpp", "hpp", "cs", "rb", "php", "swift", "m", "dart", "lua", "pl", "pm",
-        "ex", "exs", "groovy",
+        "ex", "exs", "groovy", "tf",
     ];
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     !name.starts_with(".env") && name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e))

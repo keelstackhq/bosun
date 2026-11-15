@@ -74,7 +74,7 @@ fn an_empty_repo_reports_all_fourteen_steps_and_the_update_item() {
             .all(|(_, s)| s == "missing"),
         "{st:?}"
     );
-    assert_eq!(v["error"]["message"], "10 checklist steps missing");
+    assert_eq!(v["error"]["message"], "8 checklist steps missing");
     // The janitor is opt-in; without [slack] there is no notify Routine (F17).
     assert_eq!(v["data"]["routines"].as_array().unwrap().len(), 1);
     assert_eq!(v["data"]["routines"][0]["name"], "curator");

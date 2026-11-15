@@ -1334,18 +1334,38 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
     // Routines are optional: SessionStart runs `bosun reap` as the janitor. They are a step only
     // once configured: a [slack] table (the notify Routine) or BOSUN_ROUTINES_OK set.
     let routines_ok = std::env::var("BOSUN_ROUTINES_OK").is_ok_and(|v| v.trim() == "1");
-    items.push(item(
-        11,
-        "Routines",
-        (!routines_ok).then(|| "bosun cannot see Routines; create them from the prompts in data.routines".into()),
-        "BOSUN_ROUTINES_OK=1: the owner confirmed the Routines in data.routines".into(),
-        match (ctx.config.routines.janitor, slack_set) {
-            (true, true) => "create the janitor, curator and notify Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1",
-            (true, false) => "create the janitor and curator Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1",
-            (false, true) => "create the curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1",
-            (false, false) => "create the curator Routine from data.routines, then set BOSUN_ROUTINES_OK=1",
-        },
-    ));
+    let routines_fix = match (ctx.config.routines.janitor, slack_set) {
+        (true, true) => {
+            "create the janitor, curator and notify Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1"
+        }
+        (true, false) => {
+            "create the janitor and curator Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1"
+        }
+        (false, true) => {
+            "create the curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+        }
+        (false, false) => {
+            "create the curator Routine from data.routines, then set BOSUN_ROUTINES_OK=1"
+        }
+    };
+    items.push(if slack_set || routines_ok || ctx.config.routines.janitor {
+        item(
+            11,
+            "Routines",
+            (!routines_ok).then(|| {
+                "bosun cannot see Routines; create them from the prompts in data.routines".into()
+            }),
+            "BOSUN_ROUTINES_OK=1: the owner confirmed the Routines in data.routines".into(),
+            routines_fix,
+        )
+    } else {
+        skipped(
+            11,
+            "Routines",
+            "optional and not configured: `bosun reap` runs at every SessionStart",
+            "to add the daily curator sweep, create the Routine from data.routines (`bosun doctor --full`)",
+        )
+    });
 
     let has_plan = std::fs::read_dir(root.join("plans")).is_ok_and(|d| {
         d.filter_map(Result::ok)

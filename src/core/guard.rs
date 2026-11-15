@@ -2968,6 +2968,7 @@ fn push_key(k: &str) -> bool {
     let k = cfg_key(k);
     k.contains('\\')
         || k == "include.path"
+        || k == "push.followtags"
         || k.starts_with("includeif.")
         || k.starts_with("remote.") && (k.ends_with(".push") || k.ends_with(".mirror"))
 }
@@ -3263,43 +3264,25 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             }
             (sub == "push" && !explicit && !target.alone).then_some(PUSH_ALONE)
         }
-        // `--stdin`, a variable, a backtick or an escape in the ref hides it: fail closed. A
-        // `$` in the value (`"$sha"`) is no ref.
-        "update-ref" => {
-            let mut refs = Vec::new();
-            let mut it = rest.iter();
-            while let Some(a) = it.next() {
-                if *a == "-m" {
-                    // A quoted message splits into tokens: skip to the closing quote.
-                    if let Some(m) = it.next() {
-                        let q = m.chars().next().filter(|c| matches!(c, '\'' | '"'));
-                        if let Some(q) = q {
-                            let mut m = *m;
-                            while m.len() < 2 || !m.ends_with(q) {
-                                match it.next() {
-                                    Some(n) => m = n,
-                                    None => break,
-                                }
-                            }
-                        }
-                    }
-                } else if !a.starts_with('-') {
-                    refs.push(*a);
-                }
-            }
-            (rest.iter().any(|a| {
-                a.contains(['`', '\\'])
-                    || *a == "--stdin"
-                    || a.replace(['\'', '"'], "").contains("refs/tags/")
-            }) || refs.first().is_some_and(|r| r.contains('$')))
-            .then_some("tag")
-        }
+        // `--stdin`, a variable, a backtick or an escape in a ref hides it: fail closed. `-m`
+        // quoting is not parsed (`-m "a b"c $r`, `-dm x $r` hide the ref from any parser), so ANY
+        // non-flag argument with `$` or a backtick denies, a `"$sha"` value included.
+        "update-ref" => (rest.iter().any(|a| {
+            let q = a.replace(['\'', '"'], "");
+            a.contains(['`', '\\'])
+                || a.starts_with("--stdin")
+                || q.contains("refs/tags/")
+                || (!q.starts_with('-') && q.contains('$'))
+        }))
+        .then_some("tag"),
         // `git fetch . HEAD:refs/tags/v1` makes a tag too; mirroring the remote's own tags
         // (`'refs/tags/*:refs/tags/*'`, as `--tags`) does not.
         "fetch"
             if rest.iter().any(|a| {
                 let a = a.replace(['\'', '"', '\\'], "");
                 a.contains("refs/tags/") && a.trim_start_matches('+') != "refs/tags/*:refs/tags/*"
+                    // `<src>:$T` writes a ref the hook cannot read.
+                    || a.rsplit_once(':').is_some_and(|(_, d)| d.contains(['$', '`']))
             }) =>
         {
             Some("tag")
@@ -4182,9 +4165,8 @@ mod tests {
             "git fetch origin 'refs/tags/*:refs/tags/*'",
             "git fetch origin +refs/tags/*:refs/tags/*",
             "git fetch origin \"+refs/tags/*:refs/tags/*\"",
-            "git update-ref refs/heads/x \"$sha\"",
-            "git update-ref -m \"$msg\" refs/heads/x $sha",
-            "git update-ref -m 'a b' refs/heads/x $sha",
+            "git update-ref refs/heads/x abc123",
+            "git update-ref -m 'a b' refs/heads/x abc123",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
@@ -4194,9 +4176,19 @@ mod tests {
             "git fetch origin refs/tags/v1:refs/tags/v1",
             "git fetch origin 'refs/tags/*:refs/tags/*' HEAD:refs/tags/v1",
             "git fetch origin refs/heads/*:refs/tags/*",
+            "git fetch origin HEAD:$T",
+            "git fetch . \"HEAD:$T\"",
+            "git -c push.followTags=true push origin feature",
+            "git config push.followTags true",
             "git update-ref $ref abc",
             "git update-ref -m 'a b' $r HEAD",
             "git update-ref -m \"a b\" $r HEAD",
+            "git update-ref -m \"a b\"c $r HEAD",
+            "git update-ref -m a' 'b $r HEAD",
+            "git update-ref -m\"a b\" $r HEAD",
+            "git update-ref -dm x $r",
+            "git update-ref refs/heads/x \"$sha\"",
+            "git update-ref -m \"$msg\" refs/heads/x abc",
             "git update-ref \"$ref\" abc",
             "git update-ref -d $ref",
             "git update-ref refs/tags/v1 abc",
