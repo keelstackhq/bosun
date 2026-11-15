@@ -25,12 +25,13 @@ const MERGE_FIX: &str = "agents never merge, tag or force-push (spec D13): open 
 /// force-push" advice fits it. Reasons that carry their own fix, or are about something else,
 /// do not get it.
 fn tail_applies(why: &str) -> bool {
-    const OTHER: [&str; 5] = [
+    const OTHER: [&str; 6] = [
         "xargs",
         "cannot see",
         "alias",
         "secrets and variables",
         "awk",
+        "workflow run",
     ];
     why != PUSH_CONFIG && why != UNREAD_PUSH && !OTHER.iter().any(|o| why.contains(o))
 }
