@@ -55,6 +55,45 @@ fn code_bindings_are_not_secrets() {
 }
 
 #[test]
+fn types_fields_and_references_are_not_secrets() {
+    for (path, line) in [
+        ("src/a.rs", "    pub @TOK@: String,"),
+        ("src/a.rs", "fn f(password: &str) {"),
+        ("src/a.rs", "    Self { @TOK@: None }"),
+        ("src/a.rs", "        @TOK@: cfg.@TOK@,"),
+        ("src/a.py", "def f(@TOK@: str):"),
+        ("src/a.ts", "  @TOK@: process.env.T,"),
+        ("src/a.ts", "const @TOK@ = process.env.T;"),
+        (
+            "src/a.rs",
+            "let t = std::env::var(\"X\"); self.@TOK@ = env::var(\"X\").ok();",
+        ),
+        ("ci/x.yml", "        GH_@TOK@: ${{ github.@TOK@ }}"),
+        ("ci/x.yml", "    @SEC@s: inherit"),
+        ("ci/x.yml", "    @AKEY@=${{ secrets.K }}"),
+        ("ci.sh", "@TOK@=$GH_@TOK@"),
+        ("docs/a.md", "The @TOK@: pass it in the header."),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn quoted_and_assigned_values_still_match() {
+    for (path, line) in [
+        ("config/a.json", "  \"api@TOK@\": \"x\""),
+        ("config/a.json", "  \"@AKEY@\": \"x\""),
+        ("config/a.yml", "@TOK@: 's3cr3t'"),
+        ("ci.sh", "SECRET_KEY=abc"),
+        ("ci.sh", "PASSWORD=abc"),
+        ("ci.sh", "private_key=abc"),
+        ("ci.sh", "url=https://u:p@host/x"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
 fn literals_in_code_still_match() {
     for line in [
         "    let @TOK@ = \"s3cr3t-value\";",
@@ -91,7 +130,9 @@ fn test_files_and_fixtures_are_not_secrets() {
         "web/src/login.spec.ts",
         "const t = '@TOK@ = fake';"
     ));
-    assert!(secret_match("src/snapshots/x__y.snap", "@TOK@ = fake"));
+    assert!(!secret_match("src/snapshots/x__y.snap", "@TOK@ = fake"));
+    assert!(!secret_match("web/__snapshots__/a.snap", "@TOK@ = fake"));
+    assert!(secret_match("src/x__y.snap", "@TOK@ = fake"));
 }
 
 #[test]

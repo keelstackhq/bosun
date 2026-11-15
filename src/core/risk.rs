@@ -174,9 +174,14 @@ pub fn evaluate(
             // strong secret format, which matches even where `content` does not.
             let secrets = rule.id == "R-secrets";
             for (i, line) in f.added_lines.iter().enumerate() {
+                let scrubbed = if secrets {
+                    scrub_refs(line)
+                } else {
+                    line.into()
+                };
                 let hit = match &rule.content {
-                    Some(re) if re.is_match(line) => {
-                        !(secrets && secret_exempt(&f.path, line, |s| re.is_match(s)))
+                    Some(re) if re.is_match(&scrubbed) => {
+                        !(secrets && secret_exempt(&f.path, line, |s| re.is_match(&scrub_refs(s))))
                     }
                     _ => secrets && strong_secret(line),
                 };
@@ -299,12 +304,20 @@ pub fn test_path(path: &str) -> bool {
             .any(|s| stem.ends_with(s))
 }
 
-/// A `test`, `tests`, `__tests__`, `fixtures` or `testdata` directory at any depth, any case. A
-/// file name never exempts (an agent picks it): `test_*`, `*.spec.*` and `.snap` are no exemption.
-/// An env or config file never is: a `.env*` or `*.env` name, or a `config` or `deploy`
-/// directory, even under a test directory.
+/// A `test`, `tests`, `__tests__`, `fixtures`, `testdata`, `snapshots` or `__snapshots__`
+/// directory at any depth, any case. A file name never exempts (an agent picks it): `test_*`,
+/// `*.spec.*` and `.snap` are no exemption. An env or config file never is: a `.env*` or `*.env`
+/// name, or a `config` or `deploy` directory, even under a test directory.
 fn secret_test_dir(path: &str) -> bool {
-    const DIRS: [&str; 5] = ["test", "tests", "__tests__", "fixtures", "testdata"];
+    const DIRS: [&str; 7] = [
+        "test",
+        "tests",
+        "__tests__",
+        "fixtures",
+        "testdata",
+        "snapshots",
+        "__snapshots__",
+    ];
     let lower = path.to_ascii_lowercase();
     let mut parts: Vec<&str> = lower.split('/').collect();
     let name = parts.pop().unwrap_or_default();
@@ -312,6 +325,16 @@ fn secret_test_dir(path: &str) -> bool {
         || name.ends_with(".env")
         || parts.iter().any(|d| *d == "config" || *d == "deploy");
     !config && parts.iter().any(|d| DIRS.contains(d))
+}
+
+/// A line without references that are no secret: `${{ .. }}`, `${VAR}`, `process.env.X`,
+/// `env::var(..)`. They read a secret from elsewhere.
+fn scrub_refs(line: &str) -> std::borrow::Cow<'_, str> {
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"\$\{\{.*?\}\}|\$\{[^}]*\}|process\.env\.[\w.]*|env::var\([^)]*\)")
+            .expect("static regex")
+    });
+    RE.replace_all(line, "$")
 }
 
 /// A code binding whose value holds no literal, like `let <name> = cfg.k`. Any quote after the

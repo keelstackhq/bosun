@@ -203,4 +203,5 @@ parse, pushes as today. A push whose checkout the guard cannot tell (a `cd` it c
 Refs pushed by config (`remote.<r>.push`, `remote.<r>.mirror`, `push.default = matching`) are refused by
 the merge-lock, which reads them for a push without `src:dst` run as the whole input (spec §4), so `HEAD` is the ref of a refspec-less push; `git send-pack` refs are
 checked like push refspecs. Known misses: `git subtree push` (its split commit has no stamp to read), and an interpreter push in a command that
-also has a shell push. `ready`: no change.
+also has a shell push. Guard limits (the merge-lock is a guard against accidents, not a sandbox): a command name the shell builds (`$g`, `"$G"`, `${X:-y}`, `$(..)`, a backtick) is refused only when `gh` or `git` in its place would match a merge, tag, push or release rule, with its own reason; `$HOME/bin/tool` and `${CARGO:-cargo} test` pass. A script piped into an interpreter is refused (download it to a file, read it, run the file). Residual, not read: `eval "$X"`, `sh < x.sh`, `parallel`, `make` recipes, `awk -f prog.awk` (an inline awk is refused only when it calls `system(`). CI, review and the owner's approval of R-ci remain the control for these.
+`ready`: no change.

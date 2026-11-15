@@ -33,7 +33,7 @@ never work around a refusal.
 
 ### Sessions
 
-- An orchestrator starts a child with `bosun spawn <epic>`, makes the `create_session` call from
+- An orchestrator starts a child only with `bosun spawn <epic>`, makes the `create_session` call from
   `next`, then runs `bosun spawn <epic> --record --from -` with the result.
 - `bosun wait --child <session>` waits for a child's result; `bosun msg` returns a `send_message`
   call. `bosun wait --pr N --once` returns at once; `--full` lists everything.

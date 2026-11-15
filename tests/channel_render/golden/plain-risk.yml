@@ -84,9 +84,11 @@ jobs:
         run: |
           if [ "$EVENT" = "push" ]; then
             prs="$(gh api --paginate "repos/$BOSUN_REPO/pulls?state=open&base=main&per_page=100" --jq '.[] | select(.draft | not) | .number')"
+            rc=0
             for n in $prs; do
-              bosun risk-check "$n" || test $? -eq 5
+              bosun risk-check "$n" || test $? -eq 5 || rc=1
             done
+            exit $rc
           else
             bosun risk-check "$PR" || test $? -eq 5
           fi

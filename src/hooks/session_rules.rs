@@ -22,7 +22,7 @@ pub fn role(origin: &str) -> Role {
     }
 }
 
-const ORCHESTRATOR: &str = "Delegate work to child sessions (models from `[models]`); archive each once its result is in. When context runs long: /compact or start fresh, and say which and why.";
+const ORCHESTRATOR: &str = "Delegate work to child sessions with `bosun spawn` (models from `[models]`); archive each once its result is in. When context runs long: /compact or start fresh, and say which and why.";
 const WORKER: &str = "Use superpowers (TDD) and caveman, with `[models]` subagents. Report in at most 10 lines. Spawn no sessions. At the end record spend: `bosun budget record --help`. When context runs long: compact or start fresh (handoff notes first), and say which.";
 const ALL: &str = "Caveman style everywhere, chat with the owner included. Max token efficiency: write only what is needed.";
 

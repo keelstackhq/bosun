@@ -642,18 +642,24 @@ fn check(
                 .iter()
                 .find(|w| !(w.contains('=') && !w.starts_with('-')) && !WRAPPERS.contains(w));
             if depth == 0
-                && named.is_some_and(|w| w.starts_with(['$', '`']))
                 && !in_quotes(before)
                 && !command.contains("<<")
+                && let Some(w) =
+                    named.filter(|w| w.trim_start_matches(['"', '\'']).starts_with(['$', '`']))
+                && let Some(name) = built_name_rule(w, segment, &target)
             {
                 return Some(format!(
-                    "`{}` is refused (a command name built by the shell cannot be read): {MERGE_FIX}",
+                    "`{}` is refused (its command name is built by the shell and could be \
+                     `{name}`, which agents may not run to merge, tag or push): write the \
+                     command name out, not a variable or substitution",
                     segment.trim()
                 ));
             }
             if matches!(prev, "|" | "|&") && reads_pipe(&words) {
                 return Some(format!(
-                    "`{}` is refused (a script piped into a shell cannot be read): {MERGE_FIX}",
+                    "`{}` is refused (a script piped into a shell cannot be read): download it \
+                     to a file, read it, then run the file; agents never merge, tag or \
+                     force-push (spec D13)",
                     segment.trim()
                 ));
             }
@@ -1616,11 +1622,48 @@ fn exec_rule(
             // `{}` stands for names find adds: judged like the command without them.
             merge_rule(inner, &inner.join(" "), target)
         }
-        Some("awk" | "gawk" | "mawk" | "nawk") => segment
-            .contains("system")
-            .then_some("`awk` runs commands through system()"),
+        Some("awk" | "gawk" | "mawk" | "nawk") => {
+            calls_system(segment).then_some("`awk` runs commands through system()")
+        }
         _ => None,
     }
+}
+
+/// Whether the text has `system` followed by optional blanks and `(`: an awk `system()` call.
+fn calls_system(s: &str) -> bool {
+    s.match_indices("system")
+        .any(|(i, m)| s[i + m.len()..].trim_start().starts_with('('))
+}
+
+/// For a command word the shell builds (`$g`, `"$G"`, `${X:-y}`, `$(..)`, a backtick span): the
+/// name (`gh`, `git`) that, put in its place, makes the segment a merge, tag or push. `None` when
+/// neither does, as for `$HOME/.cargo/bin/cargo test`.
+fn built_name_rule(word: &str, segment: &str, target: &Target) -> Option<&'static str> {
+    let start = word.as_ptr() as usize - segment.as_ptr() as usize;
+    let rest = &segment[start..];
+    // The word ends at the first blank outside quotes, `( )`, `{ }` and backtick spans.
+    let (mut depth, mut quote, mut tick) = (0i32, None::<char>, false);
+    let mut end = rest.len();
+    for (i, c) in rest.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '`') => tick = !tick,
+            (None, '(' | '{') => depth += 1,
+            (None, ')' | '}') => depth -= 1,
+            (None, c) if c.is_whitespace() && depth <= 0 && !tick => {
+                end = i;
+                break;
+            }
+            _ => {}
+        }
+    }
+    ["gh", "git"].into_iter().find(|name| {
+        let swapped = format!("{name}{}", &rest[end..]);
+        let words: Vec<&str> = swapped.split_whitespace().collect();
+        merge_rule(&words, &swapped, target).is_some()
+    })
 }
 
 /// A shell or interpreter that reads its script from the pipe it is fed: `curl .. | sh`.
