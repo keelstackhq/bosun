@@ -5,6 +5,7 @@ mod common;
 
 use std::process::Command;
 
+use bosun::core::shape::ONE_OFF_LABEL;
 use common::fake::FakeGithub;
 use common::stamps;
 
@@ -112,6 +113,10 @@ fn a_one_off_pr_over_300_changed_lines_is_not_made_ready() {
         if !ok {
             assert_eq!(code, 3, "{v}");
             assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+            assert!(
+                v["error"]["message"].as_str().unwrap().contains("one-off"),
+                "{v}"
+            );
             assert!(fake.pull_is_draft(20));
         }
     }
@@ -120,10 +125,10 @@ fn a_one_off_pr_over_300_changed_lines_is_not_made_ready() {
 #[test]
 fn the_oneoff_label_or_an_unplanned_item_caps_ready_like_the_marker_item() {
     let review = format!("bosun:{}/review", "state");
-    let label = crate::stamps_label();
+    let label = ONE_OFF_LABEL;
     for (labels, body) in [
         (
-            vec![review.as_str(), label.as_str()],
+            vec![review.as_str(), label],
             "<!-- bosun:task {\"item\":\"x\",\"task\":\"x\",\"touch\":[\"src/**\"]} -->",
         ),
         (
@@ -148,8 +153,4 @@ fn the_oneoff_label_or_an_unplanned_item_caps_ready_like_the_marker_item() {
         assert_eq!(code, 3, "{v}");
         assert!(fake.pull_is_draft(20));
     }
-}
-
-fn stamps_label() -> String {
-    "bosun:source/oneoff".to_string()
 }

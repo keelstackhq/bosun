@@ -422,28 +422,50 @@ fn read_optional(path: &Path, label: &str) -> Result<Option<String>, BosunError>
 }
 
 /// A 5-field cron expression: each field is a comma list of `*`, `N` or `A-B`, with an optional
-/// `/step`, inside the field's range (day of week 0-7; month and day names are not accepted).
+/// `/step` (1 up to the field's range), inside the field's range (day of week 0-7; JAN-DEC in
+/// the month and SUN-SAT in the day-of-week field, any case).
 fn valid_cron(expr: &str) -> bool {
     const RANGES: [(u32, u32); 5] = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)];
+    const MONTHS: &[&str] = &[
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+    ];
+    const DAYS: &[&str] = &["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
     let fields: Vec<&str> = expr.split_whitespace().collect();
     fields.len() == 5
         && fields
             .iter()
             .zip(RANGES)
-            .all(|(f, (lo, hi))| f.split(',').all(|part| cron_part(part, lo, hi)))
+            .enumerate()
+            .all(|(i, (f, (lo, hi)))| {
+                let names: (&[&str], u32) = match i {
+                    3 => (MONTHS, 1),
+                    4 => (DAYS, 0),
+                    _ => (&[], 0),
+                };
+                f.split(',').all(|part| cron_part(part, lo, hi, names))
+            })
 }
 
-fn cron_part(part: &str, lo: u32, hi: u32) -> bool {
+/// One list item; `names` are the field's names and the number of the first one.
+fn cron_part(part: &str, lo: u32, hi: u32, names: (&[&str], u32)) -> bool {
     let (range, step) = part
         .split_once('/')
         .map_or((part, None), |(r, s)| (r, Some(s)));
-    let num = |t: &str| t.parse::<u32>().ok().filter(|n| (lo..=hi).contains(n));
+    let num = |t: &str| {
+        let by_name =
+            (names.0.iter().position(|n| n.eq_ignore_ascii_case(t))).map(|i| i as u32 + names.1);
+        by_name.or_else(|| t.parse::<u32>().ok().filter(|n| (lo..=hi).contains(n)))
+    };
     let range_ok = range == "*"
         || num(range).is_some()
         || range
             .split_once('-')
             .is_some_and(|(a, b)| matches!((num(a), num(b)), (Some(a), Some(b)) if a <= b));
-    range_ok && step.is_none_or(|s| s.parse::<u32>().is_ok_and(|n| n > 0))
+    range_ok
+        && step.is_none_or(|s| {
+            s.parse::<u32>()
+                .is_ok_and(|n| (1..=hi - lo + 1).contains(&n))
+        })
 }
 
 impl Config {
@@ -463,7 +485,10 @@ impl Config {
         }
         if c.routines.janitor && !valid_cron(&c.routines.janitor_cron) {
             return Err(BosunError::error(
-                format!("{file}: routines.janitor_cron must be a 5-field cron expression"),
+                format!(
+                    "{file}: routines.janitor_cron {:?} is not a valid 5-field cron expression (minute 0-59, hour 0-23, day 1-31, month 1-12 or JAN-DEC, weekday 0-7 or SUN-SAT; steps 1 up to the range)",
+                    c.routines.janitor_cron
+                ),
                 format!(
                     "edit {file}: set routines.janitor_cron to five fields such as \"0 * * * *\", or remove it"
                 ),
@@ -565,7 +590,17 @@ mod cron_tests {
 
     #[test]
     fn cron_fields_are_checked() {
-        for ok in ["0 * * * *", "*/15 9-17 * * 1-5", "0,30 0 1 1 7"] {
+        for ok in [
+            "0 * * * *",
+            "*/15 9-17 * * 1-5",
+            "0,30 0 1 1 7",
+            "0 0 * * MON",
+            "0 0 * * MON-FRI",
+            "0 0 1 JAN,JUL *",
+            "0 0 * * mon-fri",
+            "0 0 * Feb-Mar sun,sat",
+            "*/59 */23 */31 */12 */7",
+        ] {
             assert!(valid_cron(ok), "{ok}");
         }
         for bad in [
@@ -576,6 +611,13 @@ mod cron_tests {
             "0 * 0 * *",
             "*/0 * * * *",
             "5-1 * * * *",
+            "*/100 * * * *",
+            "* */25 * * *",
+            "0 0 * * FRI-MON",
+            "0 0 * FOO *",
+            "0 0 * * MON-",
+            "0 0 JAN * *",
+            "MON * * * *",
             "* * * * * *",
         ] {
             assert!(!valid_cron(bad), "{bad}");
