@@ -49,16 +49,12 @@ fn join_note(detail: String, note: &Option<String>) -> String {
 
 const JANITOR: &str = "Run `bosun reap` (it ends expired leases and members and moves merged tasks to merged) and report its data.reaped, data.left and data.merged. Run `bosun budget check`: make only the interrupt_session calls in its `next`, with the claude-code-remote tools (one per live session at 100 % of the daily budget), and report data.level.";
 
-/// The Routine prompts the owner creates by hand (step 11). Without a `[slack]` table the
-/// janitor skips notify and there is no notify Routine (F17).
-pub(crate) fn routines(slack: bool) -> Value {
-    let janitor = if slack {
-        format!("{JANITOR} Then run `bosun notify` if this bosun has it.")
-    } else {
-        JANITOR.to_string()
-    };
+/// The Routine prompts the owner creates by hand (step 11). Without a `[slack]` table there is no
+/// notify Routine (F17).
+///
+/// The janitor is opt-in: it is listed only with `[routines] janitor = true`.
+pub(crate) fn routines(slack: bool, janitor: Option<&crate::config::Routines>) -> Value {
     let mut all = json!([
-        {"name": "janitor", "schedule": "every hour", "model": "haiku", "prompt": janitor},
         {"name": "curator", "schedule": "daily", "model": "sonnet",
          "prompt": "List the open issues labelled `bosun:lesson` that have no `bosun:lesson/*` label. For each one run `bosun lesson triage <n> --as blocking|mechanizable|advice` as in docs/spec.md section 6: blocking when the process must stop until it is fixed; mechanizable when a gate, a hook or a check can prevent it (add `--touch GLOB` for the paths it changes and `--area A`); advice only as the last choice (add `--rule TEXT` and `--scope GLOB`). Prefer mechanizable over advice. Add other rules with `bosun lesson add \"<rule, at most 160 characters>\" --evidence #<issue>` (the lesson issue or PR that proved it); at the cap (exit 6) mechanize, combine or retire a lesson first, and retire lessons with no hit in 30 days. Close a lesson issue when its mechanism has landed."},
         {"name": "notify", "schedule": "every hour", "model": "haiku",
@@ -66,6 +62,21 @@ pub(crate) fn routines(slack: bool) -> Value {
     ]);
     if !slack && let Some(a) = all.as_array_mut() {
         a.retain(|r| r["name"] != "notify");
+    }
+    if let Some(r) = janitor.filter(|r| r.janitor)
+        && let Some(a) = all.as_array_mut()
+    {
+        let prompt = if slack {
+            format!("{JANITOR} Then run `bosun notify` if this bosun has it.")
+        } else {
+            JANITOR.to_string()
+        };
+        a.insert(
+            0,
+            json!({"name": "janitor", "schedule": if r.janitor_cron == "0 * * * *" { "every hour".to_string() } else { format!("cron {}", r.janitor_cron) },
+            "cron": r.janitor_cron, "confirm": "opt-in ([routines] janitor = true): ask the user before creating it",
+            "model": "haiku", "prompt": prompt}),
+        );
     }
     all
 }
@@ -1290,10 +1301,11 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         "Routines",
         (!routines_ok).then(|| "bosun cannot see Routines; create them from the prompts in data.routines".into()),
         "BOSUN_ROUTINES_OK=1: the owner confirmed the Routines in data.routines".into(),
-        if slack_set {
-            "create the janitor, curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
-        } else {
-            "create the janitor and curator Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+        match (ctx.config.routines.janitor, slack_set) {
+            (true, true) => "create the janitor, curator and notify Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1",
+            (true, false) => "create the janitor and curator Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1",
+            (false, true) => "create the curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1",
+            (false, false) => "create the curator Routine from data.routines, then set BOSUN_ROUTINES_OK=1",
         },
     ));
 
@@ -1470,9 +1482,9 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
             "fix": NO_TOKEN_FIX,
         }));
     }
-    let mut data = json!({"items": items, "missing": missing, "offline": offline, "routines": routines(slack_set)});
+    let mut data = json!({"items": items, "missing": missing, "offline": offline, "routines": routines(slack_set, Some(&ctx.config.routines))});
     if !slack_set {
-        data["notify"] = json!({"skipped": true, "reason": "no [slack] table in .bosun/bosun.toml: the janitor skips notify and there is no notify Routine"});
+        data["notify"] = json!({"skipped": true, "reason": "no [slack] table in .bosun/bosun.toml: there is no notify Routine"});
     }
     if let Some(h) = hoist_data {
         data["hoist"] = h;

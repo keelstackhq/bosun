@@ -41,7 +41,7 @@ const OWNER_STEPS: [&str; 7] = [
     "Create the kill-switch label: `gh label create bosun:halt --color B60205`.",
     "Create the environment splice-bot (deployment branches: main only), then add the secret SPLICE_BOT_TOKEN (a fine-grained or app token) to it, never as a repository secret, so the splice update bot's PRs run CI.",
     "Review this setup PR; it is R-gov, so approve its head SHA: the session asks you with a form in the Claude Code chat and the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself). While main has no bosun workflows, risk-check, review-verdict and main-open cannot run on it: merge it yourself, then apply the required checks.",
-    "Create the Routines (janitor and curator, every hour and daily; notify too once [slack] is set); `bosun doctor` prints their prompts.",
+    "Create the Routine curator (daily; notify too once [slack] is set); `bosun doctor` prints their prompts. The janitor is off: add `[routines] janitor = true` to .bosun/bosun.toml only if you want it.",
     "Each weekly splice update PR touches .splice/** and is R-gov: approve its head SHA when the session asks with a form in the Claude Code chat; the orchestrator posts the signed `bosun approve` comment once its key is in .bosun/approvers.toml (fallback: comment `/bosun approve <sha>` yourself).",
 ];
 
@@ -53,10 +53,9 @@ const BOOTSTRAP_STEP: &str = "For each new package that publishes, run `hoist re
 /// The `create_trigger` call of one Routine from `doctor::routines`. Each firing starts a fresh
 /// session; the model stays in `data.routines` (create_trigger has no model argument).
 fn trigger_call(r: &Value, repo: &str) -> Value {
-    let cron = if r["name"] == "curator" {
-        "8 3 * * *"
-    } else {
-        "0 * * * *"
+    let cron = match r["name"].as_str() {
+        Some("curator") => "8 3 * * *",
+        _ => r["cron"].as_str().unwrap_or("0 * * * *"),
     };
     json!({
         "name": r["name"], "cron_expression": cron,
@@ -982,7 +981,16 @@ pub fn run(dir: Option<&Path>, args: &InitArgs) -> CmdResult {
     }
     let mut outcome = Outcome::data(out);
     if let Some((i, _)) = &intake {
-        let routines = super::doctor::routines(i.notify == "slack");
+        let cfg = match crate::config::Config::load(&root) {
+            Ok(c) => c,
+            Err(e) => {
+                if let Some(w) = outcome.data["warnings"].as_array_mut() {
+                    w.push(json!(format!("janitor not read: {}", e.message)));
+                }
+                crate::config::Config::default()
+            }
+        };
+        let routines = super::doctor::routines(i.notify == "slack", Some(&cfg.routines));
         for r in routines.as_array().into_iter().flatten() {
             outcome = outcome.with_next(
                 "create_trigger",
