@@ -397,17 +397,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         });
     }
     let lines: u64 = pr_files.iter().map(|f| f.additions + f.deletions).sum();
-    if one_off && lines > crate::core::shape::ONE_OFF_MAX {
-        matches.push(risk::Match {
-            rule: "R-oneoff-size".into(),
-            why: format!(
-                "a one-off task is at most {} changed lines; this PR changes {lines}",
-                crate::core::shape::ONE_OFF_MAX
-            ),
-            approval: Approval::Owner,
-            evidence: vec![format!("{lines} changed lines")],
-        });
-    }
+    matches.extend(risk::oneoff_size_match(one_off, lines));
     // Built in: a weakening is R-weaken and the owner's, whatever the repo's rules say (a repo
     // rule with the `weaken` capability only adds its own match, made owner-class too).
     let mut findings = findings;

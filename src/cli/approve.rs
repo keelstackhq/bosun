@@ -920,14 +920,18 @@ fn autonomous_ok(app: &App, pull: &Pull, requester: Option<&str>) -> Result<()> 
         ));
     }
     let mut capabilities = risk::capability_labels(&pull.labels);
+    let mut one_off = false;
     for i in crate::core::meta::linked_issues_in(&pull.body, &app.ctx.repo.to_string()) {
         if let Some(issue) = gh.get_issue(i)?
             && let Some(meta) = crate::app::task_meta(&issue)
         {
+            one_off |= meta.item == crate::core::shape::ONE_OFF_ITEM;
             capabilities.extend(meta.capabilities);
         }
     }
-    let matches = risk::evaluate(&rules, &changed, &[], &capabilities);
+    let mut matches = risk::evaluate(&rules, &changed, &[], &capabilities);
+    let lines: u64 = files.iter().map(|f| f.additions + f.deletions).sum();
+    matches.extend(risk::oneoff_size_match(one_off, lines));
     let allow = crate::cli::risk_check::autonomous_allow(gh, &pull.base_sha)?;
     let mut hit = risk::autonomous_excluded(&paths, &matches, allow.as_deref());
     let patches: Vec<_> = (files.iter())

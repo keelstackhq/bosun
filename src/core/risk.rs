@@ -508,7 +508,7 @@ pub const AUTONOMOUS_ALLOWED: [&str; 5] = [
 
 /// Inside the allowed set, always the owner's: code that runs as root or at build time, templates
 /// and the files the review and the plans trust.
-pub const AUTONOMOUS_DENIED: [&str; 34] = [
+pub const AUTONOMOUS_DENIED: [&str; 36] = [
     // CI and release files run with secrets; governance files decide who approves what. Kept
     // here as well as in the rules, so a repo whose rules lack them stays owner-only.
     ".github/**",
@@ -518,6 +518,9 @@ pub const AUTONOMOUS_DENIED: [&str; 34] = [
     "**/.bosun/**",
     ".claude/**",
     "**/.claude/**",
+    // Who must approve a path: at any depth (lowercase globs match any case of the path).
+    "codeowners",
+    "**/codeowners",
     "Cargo.toml",
     "**/Cargo.toml",
     "deny.toml",
@@ -552,7 +555,7 @@ pub const AUTONOMOUS_DENIED: [&str; 34] = [
 /// (R-gate at base: what decides approvals, so the deny set follows the rule) and a weakened gate
 /// (agents may propose relaxing criteria, never apply them), governance (who approves what),
 /// dependencies, CI and the shipped CI of other repos.
-pub const AUTONOMOUS_DENIED_RULES: [&str; 8] = [
+pub const AUTONOMOUS_DENIED_RULES: [&str; 9] = [
     "R-secrets",
     "R-prod-write",
     "R-gate",
@@ -561,7 +564,23 @@ pub const AUTONOMOUS_DENIED_RULES: [&str; 8] = [
     "R-deps",
     "R-ci",
     "R-ci-review",
+    // A one-off task is small by definition: over the cap the owner decides.
+    "R-oneoff-size",
 ];
+
+/// The `R-oneoff-size` match: a one-off task changes at most [`ONE_OFF_MAX`](super::shape::ONE_OFF_MAX)
+/// lines. Shared by risk-check and the autonomous signer so both see the same cap.
+pub fn oneoff_size_match(one_off: bool, lines: u64) -> Option<Match> {
+    use super::shape::ONE_OFF_MAX;
+    (one_off && lines > ONE_OFF_MAX).then(|| Match {
+        rule: "R-oneoff-size".into(),
+        why: format!(
+            "a one-off task is at most {ONE_OFF_MAX} changed lines; this PR changes {lines}"
+        ),
+        approval: Approval::Owner,
+        evidence: vec![format!("{lines} changed lines")],
+    })
+}
 
 /// The Rust files among `(path, patch)` whose diff is not shown or changes a line that may set a
 /// `#[path]` (also inside `cfg_attr`, over several lines): `path` then `=` and a quote, spaces
@@ -1363,6 +1382,10 @@ mod tests {
             "src/lib.rs",
             "src/main.rs",
             "src/cli/mod.rs",
+            "CODEOWNERS",
+            "docs/CODEOWNERS",
+            "src/CODEOWNERS",
+            "docs/x/codeowners",
         ];
         for p in ok {
             assert!(
@@ -1437,6 +1460,10 @@ mod tests {
             ["R-weaken"]
         );
         assert_eq!(autonomous_excluded(&f, &[m("R-gov")], None), ["R-gov"]);
+        assert_eq!(
+            autonomous_excluded(&f, &[m("R-oneoff-size")], None),
+            ["R-oneoff-size"]
+        );
         for r in ["R-deps", "R-ci", "R-ci-review"] {
             assert_eq!(autonomous_excluded(&f, &[m(r)], None), [r]);
         }

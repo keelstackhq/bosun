@@ -107,6 +107,7 @@ pub struct Changed {
 pub fn is_plan_file(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     lower.ends_with(".md")
+        && !path.split('/').any(|s| s == ".." || s == ".")
         && (path.starts_with("plans/") || path.starts_with("docs/superpowers/plans/"))
 }
 
@@ -476,6 +477,10 @@ mod tests {
         assert!(!is_plan_file("docs/plans/a.md"));
         assert!(!is_plan_file("x/docs/superpowers/plans/a.md"));
         assert!(!is_plan_file("plans/a.txt"));
+        // A `..` or `.` segment can leave the plans directory.
+        assert!(!is_plan_file("plans/../REVIEW.md"));
+        assert!(!is_plan_file("docs/superpowers/plans/../../../REVIEW.md"));
+        assert!(!is_plan_file("plans/./a.md"));
     }
 
     #[test]
