@@ -1,0 +1,1 @@
+- 2026-11-15 · janitor Routine opt-in via [routines] janitor in .bosun/bosun.toml

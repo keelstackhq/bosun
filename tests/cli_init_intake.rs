@@ -67,7 +67,7 @@ impl Env {
     fn splice(&self) -> PathBuf {
         let script = self.tools.path().join("splice");
         let body = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nwhile [ $# -gt 0 ]; do [ \"$1\" = -C ] && d=\"$2\"; shift; done\nmkdir -p \"$d/.splice/channels\" \"$d/.bosun\"\necho '# x' > \"$d/.splice/channels/bosun.toml\"\necho '# x' > \"$d/.bosun/bosun.toml\"\necho '{OK_JSON}'\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nwhile [ $# -gt 0 ]; do [ \"$1\" = -C ] && d=\"$2\"; shift; done\nmkdir -p \"$d/.splice/channels\" \"$d/.bosun\"\necho '# x' > \"$d/.splice/channels/bosun.toml\"\n[ -f \"$d/.bosun/bosun.toml\" ] || echo '# x' > \"$d/.bosun/bosun.toml\"\necho '{OK_JSON}'\n",
             log = self.log().display()
         );
         std::fs::write(&script, body).unwrap();
@@ -285,23 +285,41 @@ fn routines_are_create_trigger_calls_in_next() {
     let f = e.intake(INTAKE);
     let (code, v) = e.run(&["--intake", &f, "--no-pr"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(names(&v), ["janitor", "curator"], "no notify without slack");
+    assert_eq!(names(&v), ["curator"], "no janitor or notify by default");
+    assert!(!v.to_string().contains("janitor"), "{v}");
     let t = triggers(&v);
-    assert_eq!(t[0]["args"]["cron_expression"], "0 * * * *");
-    assert_eq!(t[1]["args"]["create_new_session_on_fire"], true);
+    assert_eq!(t[0]["args"]["cron_expression"], "8 3 * * *");
+    assert_eq!(t[0]["args"]["create_new_session_on_fire"], true);
     for n in &t {
         assert!(n["args"]["prompt"].as_str().unwrap().contains("bosun"));
         assert_eq!(n["args"]["initiation"], "human_request");
     }
     // The prompts are the ones `bosun doctor` prints.
     let routines = v["data"]["routines"].as_array().unwrap();
-    assert_eq!(routines[0]["model"], "haiku");
-    assert_eq!(routines[1]["model"], "sonnet");
+    assert_eq!(routines[0]["model"], "sonnet");
     for (r, n) in routines.iter().zip(&t) {
         let sent = n["args"]["prompt"].as_str().unwrap();
         let head = "Work in keelstackhq/app: attach it with add_repo and clone it first, then: ";
         assert_eq!(sent.strip_prefix(head), r["prompt"].as_str(), "{sent}");
     }
+}
+
+#[test]
+fn the_janitor_routine_is_added_only_when_enabled_in_config() {
+    let e = Env::new();
+    std::fs::create_dir_all(e.repo.path().join(".bosun")).unwrap();
+    std::fs::write(
+        e.repo.path().join(".bosun/bosun.toml"),
+        "[routines]\njanitor = true\njanitor_cron = \"15 * * * *\"\n",
+    )
+    .unwrap();
+    git(e.repo.path(), &["add", "-A"]);
+    git(e.repo.path(), &["commit", "-q", "-m", "janitor"]);
+    let f = e.intake(INTAKE);
+    let (code, v) = e.run(&["--intake", &f, "--no-pr"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(names(&v), ["janitor", "curator"]);
+    assert_eq!(triggers(&v)[0]["args"]["cron_expression"], "15 * * * *");
 }
 
 #[test]
@@ -313,12 +331,10 @@ fn notify_gets_a_routine_only_with_slack() {
     ));
     let (code, v) = e.run(&["--intake", &f, "--no-pr"]);
     assert_eq!(code, 0, "{v}");
-    assert_eq!(names(&v), ["janitor", "curator", "notify"]);
+    assert_eq!(names(&v), ["curator", "notify"]);
     let t = triggers(&v);
-    let janitor = t[0]["args"]["prompt"].as_str().unwrap();
-    assert!(janitor.contains("bosun notify"));
     assert!(
-        t[2]["args"]["prompt"]
+        t[1]["args"]["prompt"]
             .as_str()
             .unwrap()
             .contains("--channel-info")

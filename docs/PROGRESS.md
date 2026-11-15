@@ -36,7 +36,7 @@ Human-only items, in order. Each has the exact action.
    every environment, the owner's included; it runs each checkout's `docs/setup-script.sh`, so
    a pin bump needs no new paste.
 3. **Routines (checklist step 11).** `bosun doctor --full` prints the three prompts in
-   `data.routines`: janitor (every hour, Haiku), curator (daily, Sonnet), notify (every
+   `data.routines`: curator (daily, Sonnet), notify (every
    hour, Haiku; only with `[slack]`). Create them in claude.ai → Routines.
 4. **Workflow secrets into main-only environments (PR fix/secrets-environments).** A same-repo
    PR's own `on: pull_request` workflow can read repository secrets, so each secret moves into
