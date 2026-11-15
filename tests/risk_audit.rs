@@ -271,3 +271,58 @@ fn literals_behind_calls_and_bindings_still_match() {
         assert!(hit(&rules, p, line, "R-secrets"), "{p}: {line}");
     }
 }
+
+#[test]
+fn shell_default_forms_with_a_literal_match() {
+    let rules = Rules::defaults();
+    for line in [
+        "SECRET=${S:=hunter2}",
+        "SECRET=${S:+hunter2}",
+        "SECRET=${S=hunter2}",
+        "SECRET=${S+hunter2}",
+        "SECRET=${S:-hunter2}",
+    ] {
+        assert!(hit(&rules, "x.sh", line, "R-secrets"), "{line}");
+    }
+    assert!(!hit(&rules, "x.sh", "SECRET=${S}", "R-secrets"));
+}
+
+#[test]
+fn comparison_with_a_literal_matches() {
+    let rules = Rules::defaults();
+    for (p, line) in [
+        ("src/a.py", r#"if token == "s3cr3tvalue":"#),
+        ("src/a.py", r#"if api_key == "abcdef123":"#),
+        ("src/a.rs", r#"if token == "abc" {"#),
+        ("src/a.js", r#"if (secret === "abcdef") {"#),
+    ] {
+        assert!(hit(&rules, p, line, "R-secrets"), "{line}");
+    }
+    for (p, line) in [
+        ("src/a.py", "if secret == expected:"),
+        ("src/a.py", r#"if token == "":"#),
+    ] {
+        assert!(!hit(&rules, p, line, "R-secrets"), "{line}");
+    }
+}
+
+#[test]
+fn reader_call_with_a_secret_looking_literal_matches() {
+    let rules = Rules::defaults();
+    assert!(hit(
+        &rules,
+        "src/a.py",
+        r#"token = get_token("abc12345xyz")"#,
+        "R-secrets"
+    ));
+    for line in [
+        r#"password = getenv("DB_PASSWORD")"#,
+        r#"password = get_password("DB_PASSWORD")"#,
+        r#"key = read_file("k.pem")"#,
+        r#"token = read_file("/run/secrets/token")"#,
+        r#"token = input("Enter token:")"#,
+        r#"token = get_token("abc")"#,
+    ] {
+        assert!(!hit(&rules, "src/a.py", line, "R-secrets"), "{line}");
+    }
+}

@@ -336,11 +336,12 @@ fn secret_test_dir(path: &str) -> bool {
 /// `env::var(..)`, `$VAR`. They read a secret from elsewhere; a literal glued after one
 /// (`${X}real`) stays, so the content regex sees `$real`.
 ///
-/// A literal stays: the default in `${X:-lit}` and `${X-lit}`, a `$..` after a single quote, and
+/// A literal stays: the default in `${X:-lit}`, `${X-lit}`, `${X:=lit}`, `${X=lit}`, `${X:+lit}` and `${X+lit}`, a `$..` after a single quote, and
 /// in a code file (`code`) one after a double quote too (`'$ecret1'`, `"$2b$10$.."`).
 fn scrub_refs(line: &str, code: bool) -> std::borrow::Cow<'_, str> {
-    static DEFAULT: std::sync::LazyLock<Regex> =
-        std::sync::LazyLock::new(|| Regex::new(r"^\$\{\w+:?-([^}$]+)\}$").expect("static regex"));
+    static DEFAULT: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"^\$\{\w+:?[-=+]([^}$]+)\}$").expect("static regex")
+    });
     static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(concat!(
             r"\$\{\{.*?\}\}|\$\{[^}]*\}",
@@ -507,7 +508,7 @@ fn assignment_binding(stmt: &str) -> bool {
     let value = SUB.replace_all(value.trim(), "[]");
     let value = CALL.replace_all(&value, |c: &regex::Captures| {
         let f = &c[1];
-        if READER.is_match(f) && !FALLBACK.is_match(f) {
+        if READER.is_match(f) && !FALLBACK.is_match(f) && !secret_looking(&c[0]) {
             format!("{f}()")
         } else {
             c[0].to_string()
@@ -520,6 +521,22 @@ fn assignment_binding(stmt: &str) -> bool {
     let v = value.trim_start_matches(['&', '*']);
     v.starts_with(|c: char| c.is_ascii_alphabetic() || matches!(c, '_' | '@' | '$'))
         && !v.contains(['"', '\'', '`'])
+}
+
+/// The one string argument of a reader call looks like a secret: 8 or more characters, no path
+/// separator, dot or space, at least one digit (a field name like `"password"` has none), and
+/// not an env var name (`DB_PASSWORD`).
+fn secret_looking(call: &str) -> bool {
+    let arg = call
+        .split_once('(')
+        .map_or("", |(_, a)| a.trim_end_matches(')').trim())
+        .trim_matches(['"', '\'']);
+    arg.len() >= 8
+        && arg.bytes().any(|b| b.is_ascii_digit())
+        && !arg.contains(['/', '\\', '.', ' ', ':'])
+        && !arg
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// A file as listed by GitHub, for [`unseen_diff`].

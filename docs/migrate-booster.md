@@ -52,7 +52,7 @@ human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 
 ## CLI (Claude Code on your machine)
 
-1. `npm i -g @keelstackhq/bosun` (a release where `bosun migrate --help` works), `gh auth login` once.
+1. **[computer]** `npm i -g @keelstackhq/bosun` (a release where `bosun migrate --help` works), `gh auth login` once.
 2. Local only: set `GITHUB_TOKEN` to `gh auth token` in your shell (scopes repo, workflow). Never in a file. A cloud session needs no token.
 3. Open Claude Code in the repo, on the default branch, clean tree. Paste the prompt from Quick start.
 4. **[phone]** Approve the PR head when Claude asks.
@@ -60,7 +60,7 @@ human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 
 ## Web / cloud (claude.ai/code)
 
-1. Environment (session title bar → Edit), once per repo: paste the Quick start script as the
+1. **[computer]** Environment (session title bar → Edit), once per repo: paste the Quick start script as the
    Setup script; Network access: Limited with "Allow package managers"; add the hosts
    your `docs/setup-script.sh` downloads from (see "Cloud hosts" below; a Rust repo needs `github.com` and
    `release-assets.githubusercontent.com` for the prebuilt cargo tools). No secrets, no PAT: GitHub comes from the session's proxy and the Claude GitHub App.
@@ -70,7 +70,7 @@ human-only **[computer]** (claude.ai/code → Routines); the PR body lists them.
 
 ## Claude Tag in Slack (the only entry)
 
-1. Once: a private channel, your Slack ID in `governance/owners.toml`, `[slack] channel`,
+1. **[computer]** Once: a private channel, your Slack ID in `governance/owners.toml`, `[slack] channel`,
    `may_spawn = true` and `[cloud] environment_id` in `.bosun/bosun.toml` (an R-gov PR; the `[slack]` table is in [quickstart.md](quickstart.md) §3). The environment is
    the one from the web steps.
 2. In the channel, start a thread and post the Quick start prompt to Claude.
