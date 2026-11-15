@@ -34,7 +34,7 @@ fn secret_shapes_match_r_secrets() {
         format!("{p}WORD=abc"),
         format!("private_{}=abc", k.to_lowercase()),
         format!("\"api{k}\": \"abc\""),
-        "token: abc".to_string(),
+        "token: \"abc\"".to_string(),
         format!("url = postgres://user:{}@db.internal/x", "pw1"),
     ];
     for line in &cases {
