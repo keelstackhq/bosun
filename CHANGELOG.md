@@ -4,6 +4,9 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.16.0 (2026-11-15)
+
+- chore: pin splice 0.5.1, hoist 0.5.1, berth 0.2.1 (setup scripts, channel, splice workflow with the v0.5.1 action sha)
 - chore: pin bosun 0.15.0 (.bosun/version, docs/setup-script.sh)
 - feat: the janitor Routine is opt-in: `[routines] janitor = true` (and `janitor_cron`) in .bosun/bosun.toml; doctor, init and the docs no longer create, recommend or require it by default
 - Fewer owner stops: plan checkbox ticks (plan files only, modified status, no patch headers) need no lease or owner, `[approvals] autonomous_allow` widens the narrow default (`src/**`, `tests/**`, `docs/**`, `changelog.d/**`, `.changeset/*.md`) and a longer deny set stays owner-only, `bosun pr --one-off` (touch inside the allow set and outside gated paths, at most 300 lines, owner past that also in autonomous mode; `CODEOWNERS` at any depth and a plan-path `..` stay owner-only) opens and claims a task for unplanned work; autonomous one-off hardening: a task is a one-off unless its item and task are in a plan file on base (or it has the oneoff label); deny globs lowercase, plus claude.local.md, .claude-plugin, docs/spec.
