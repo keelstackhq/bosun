@@ -1,0 +1,1 @@
+- 2026-11-16 · Spec 04: the merge-lock fetch and remote rules, misses and over-denials moved into a wrapped paragraph (docs only) · PR
