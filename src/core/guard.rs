@@ -3424,12 +3424,17 @@ fn fetch_trusted(rest: &[&str]) -> bool {
 }
 
 /// A `fetch` or `pull` in a command that names `GIT_CONFIG*`, `HOME` or `XDG_CONFIG_HOME`
-/// (outside a commit message or other prose value) or has a word with `$` before its `=`: the
-/// config git reads cannot be told (`HOME=/tmp/h`, `read GIT_CONFIG_GLOBAL`, `export "$K"=..`),
-/// so it fails closed whatever the spelling.
+/// (outside a commit message or other prose value), has a word with `$` before its `=`, runs
+/// `source`/`.`, or `export`/`env`/`declare`/`typeset`/`readonly`/`local` with a `$( )` or
+/// backtick: the config git reads cannot be told (`HOME=/tmp/h`, `read GIT_CONFIG_GLOBAL`,
+/// `export "$K"=..`, `export $(cat f)`), so it fails closed whatever the spelling.
 fn unread_fetch_env(command: &str) -> bool {
     static NAME: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b(?:GIT_CONFIG\w*|HOME|XDG_CONFIG_HOME)\b").expect("static regex")
+        Regex::new(concat!(
+            r"\b(?:GIT_CONFIG\w*|HOME|XDG_CONFIG_HOME)\b|(?:^|[;&|(\n])\s*(?:source|\.)\s",
+            r"|(?:^|[;&|(\n])\s*(?:export|env|declare|typeset|readonly|local)\b[^;&|\n]*(?:\$\(|`)",
+        ))
+        .expect("static regex")
     });
     // A quoted `-m`, `--message`, `-b`, `--body` or `--title` value without `$` is prose.
     static PROSE: LazyLock<Regex> = LazyLock::new(|| {
@@ -3441,11 +3446,7 @@ fn unread_fetch_env(command: &str) -> bool {
         || text.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'));
     words().any(|w| matches!(w, "fetch" | "pull"))
         && (NAME.is_match(&text)
-            || words().any(|w| {
-                w.split('=')
-                    .next()
-                    .is_some_and(|k| w.contains('=') && k.contains('$'))
-            }))
+            || words().any(|w| w.split_once('=').is_some_and(|(k, _)| k.contains('$'))))
 }
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
@@ -5309,6 +5310,11 @@ mod tests {
             "env \"$K\"=remote.origin.fetch \"$V\"=+feat:main \"$C\"=1 git fetch origin",
             "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.x GIT_CONFIG_VALUE_0=1; git fetch origin",
             "export GIT_CONFIG_NOSYSTEM=1; git fetch origin",
+            "export $(cat f); git fetch origin",
+            "env $(cat f) git fetch origin",
+            "source f.sh; git fetch origin",
+            ". f.sh && git pull",
+            "export `echo Zm9v | base64 -d`; git fetch origin",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5352,6 +5358,7 @@ mod tests {
             "git config user.name x",
             "git config --get remote.origin.url",
             "export FOO=bar; git fetch",
+            "git fetch . feat:feat",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",
             "git fetch -pP origin",
