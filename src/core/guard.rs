@@ -3421,7 +3421,7 @@ fn fetch_trusted(rest: &[&str]) -> bool {
 /// Why a command is refused when a git fetch or pull is not a plain chain of `git ..`/`cd ..`
 /// segments, or a git command runs a local command (spec §4, fetch rules).
 fn fetch_not_plain(command: &str) -> Option<&'static str> {
-    let text = command.replace("2>&1", "");
+    let text = split_heredocs(command).0.replace("2>&1", "");
     let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
     // `fe""tch` and `\\fetch` run fetch too.
     let base = |w: &str| {
@@ -3452,21 +3452,6 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     let update = remote.is_some_and(|p| toks[p..].contains(&"update"));
     if !text.split(cut).any(bare) && !update {
         return None;
-    }
-    // A subcommand that runs commands (`bisect run`, `submodule foreach`, `difftool`,
-    // `filter-branch`, `rebase -x`) with a fetch word anywhere: its config cannot be told.
-    let pair = |a: &str, b: &str| toks.windows(2).any(|p| p[0] == a && p[1] == b);
-    let runs = pair("bisect", "run")
-        || pair("submodule", "foreach")
-        || toks.iter().any(|t| {
-            matches!(
-                *t,
-                "difftool" | "mergetool" | "filter-branch" | "filter-repo"
-            )
-        })
-        || toks.contains(&"rebase") && toks.iter().any(|t| *t == "-x" || t.starts_with("--exec"));
-    if runs && toks.iter().any(|t| bare(t) || *t == "update") {
-        return Some(FETCH_PLAIN);
     }
     // Any `$` in a fetch or pull (a lone one too) hides a word the guard cannot read.
     if text.contains('$') {
@@ -3530,17 +3515,20 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
 fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     let (mut segs, mut word, mut glob, mut quote, mut esc) =
         (vec![Vec::new()], String::new(), false, None, false);
-    for c in command.chars().chain([' ']) {
+    // Words with whether they hold an unquoted glob and whether any part was quoted.
+    let mut quoted = false;
+    for c in split_heredocs(command).0.chars().chain([' ']) {
         match (quote, c) {
             _ if esc => (esc, _) = (false, word.push(c)),
             (Some(q), c) if c == q => quote = None,
             (Some(_), c) => word.push(c),
             (None, '\\') => esc = true,
-            (None, '\'' | '"') => quote = Some(c),
+            (None, '\'' | '"') => (quote, quoted) = (Some(c), true),
             (None, c) if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')') => {
-                if !word.is_empty() || glob {
+                if !word.is_empty() || glob || quoted {
+                    let w = (std::mem::take(&mut word), std::mem::take(&mut glob));
                     segs.last_mut()?
-                        .push((std::mem::take(&mut word), std::mem::take(&mut glob)));
+                        .push((w.0, w.1, std::mem::take(&mut quoted)));
                 }
                 if !c.is_whitespace() || c == '\n' {
                     segs.push(Vec::new());
@@ -3561,11 +3549,48 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
         let git = seg
             .iter()
             .any(|w| w.0.rsplit('/').next() == Some("git") || w.1 && names_git(&w.0));
-        let assign = |w: &&(String, bool)| w.0.contains('=') && !w.0.starts_with('-');
+        // A fetch, pull or update word in a quoted or `=` value of a git command runs a fetch
+        // the guard cannot place (`rebase -x 'cd x && git fetch'`, `-c core.editor=..`); a
+        // message or search value (`-m`, `--grep`, `--format`) is prose.
+        let prose = [
+            "-m",
+            "--message",
+            "--grep",
+            "-S",
+            "-G",
+            "--format",
+            "--pretty",
+        ];
+        let is_prose = |i: usize, w: &str| {
+            i > 0 && prose.contains(&seg[i - 1].0.as_str())
+                || prose
+                    .iter()
+                    .any(|f| w.starts_with(f) && (f.len() == 2 || w[f.len()..].starts_with('=')))
+        };
+        let names_fetch = |w: &str| {
+            let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
+            w.to_ascii_lowercase()
+                .split(cut)
+                .any(|t| matches!(t.trim_start_matches("git-"), "fetch" | "pull" | "update"))
+        };
+        let gitw = |w: &str| {
+            w.rsplit('/')
+                .next()
+                .is_some_and(|b| b == "git" || b.starts_with("git-"))
+        };
+        if seg.iter().any(|w| !w.2 && gitw(&w.0))
+            && seg
+                .iter()
+                .enumerate()
+                .any(|(i, w)| (w.2 || w.0.contains('=')) && !is_prose(i, &w.0) && names_fetch(&w.0))
+        {
+            return Some(FETCH_PLAIN);
+        }
+        let assign = |w: &&(String, bool, bool)| w.0.contains('=') && !w.0.starts_with('-');
         let cmd = seg
             .iter()
             .find(|w| !assign(w) && !WRAPPERS.contains(&&*w.0));
-        let cmd_glob = cmd.is_some_and(|(c, g)| *g && c != "[" && c != "[[");
+        let cmd_glob = cmd.is_some_and(|(c, g, _)| *g && c != "[" && c != "[[");
         (cmd_glob && top || git && seg.iter().any(|w| w.1)).then_some(GLOB_WORD)
     })
 }
@@ -5485,6 +5510,19 @@ mod tests {
             "git difftool --extcmd='cd t2 && git fetch'",
             "git filter-branch --index-filter 'cd t2 && git fetch'",
             "git rebase -x 'git pull' main",
+            // A fetch word in a quoted or `=` value of any git command.
+            "git rebase --exe 'cd t2 && git fetch' main",
+            "git rebase --ex 'cd t2 && git fetch' main",
+            "git rebase -x'cd t2 && git fetch' main",
+            "git rebase -ix 'cd t2 && git fetch' main",
+            "git submodule --quiet foreach 'cd ../t2 && git fetch'",
+            "git -c sequence.editor='cd t2 && git fetch #' rebase -i main",
+            "git -c core.editor='cd t2 && git pull #' commit",
+            "git instaweb --browser='cd t2 && git fetch'",
+            "git web--browse --browser='cd t2 && git fetch' x",
+            "git -c browser.x.cmd='cd t2 && git fetch' help -w log",
+            "git send-email --to-cmd='cd t2 && git remote update' x.patch",
+            "git rebase -x 'git fe\"\"tch' main",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5550,6 +5588,9 @@ mod tests {
             "git-fetch origin",
             "git log --grep fetch",
             "git rebase -x 'cargo test' main",
+            "git commit --message='fix pull'",
+            "git log --format='%s update' -S fetch",
+            "git commit -q -F - <<'EOF'\nfix: don't fetch when 'git pull' runs\n* list item\nEOF",
             "git remote -v",
             "git -C t2 remote -v update",
             "git commit -m 'fix fetch and pull'",
