@@ -194,7 +194,8 @@ pub fn evaluate(
                         && (strong_secret(line)
                             || (!secret_test_dir(&f.path)
                                 && (config_secret(&f.path, prev, &scrubbed)
-                                    || arrow_secret(&scrubbed)))));
+                                    || arrow_secret(&scrubbed)
+                                    || arrow_dollar_literal(line)))));
                 if hit {
                     evidence.push(format!("{}: added line {} matches", f.path, i + 1));
                 }
@@ -533,6 +534,18 @@ fn arrow_secret(line: &str) -> bool {
         let v = c.get(1).or(c.get(2)).map_or("", |m| m.as_str());
         !setting(v)
     })
+}
+
+/// In any file (R-secrets, built in): a quoted secret key `=>` a single-quoted literal that
+/// starts with `$` (`'password' => '$ecret1'`). PHP and Ruby never interpolate in single
+/// quotes, so this is a literal, though the `$` scrub removed it; `"$x"`, `"{$x}"`, `"#{x}"`
+/// and a bare `$x` interpolate and are skipped. `line` is the raw line.
+fn arrow_dollar_literal(line: &str) -> bool {
+    static ARROW: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(r#"(?i)["']{SECRET_KEY}["']\s*=>\s*'\$[^'\s|]+'"#))
+            .expect("static regex")
+    });
+    ARROW.is_match(line)
 }
 
 /// Values that are no literal secret: null, booleans, type names, permissions (`id-token:

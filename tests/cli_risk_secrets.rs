@@ -493,6 +493,9 @@ fn versions_lockfiles_and_interpolations_are_not_secrets() {
         ("deploy/values.yml", "  jsonweb@TOK@: ~9.0.2"),
         ("config/db.rb", "  'password' => \"#{ENV['DB_PASS']}\","),
         ("config/db.php", "    'password' => \"{$pass}\","),
+        ("config/db.php", "    'password' => \"$pass\","),
+        ("config/db.rb", "  'password' => \"#{pw}\","),
+        ("config/db.php", "    'password' => $pass,"),
     ] {
         assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
     }
@@ -513,6 +516,10 @@ fn version_dollar_and_lock_lookalikes_still_match() {
         ("deploy/a.yml", "  password: P4ss$word9"),
         ("config/db.php", "    'password' => 'v1.2a',"),
         ("config/db.php", "    'password' => 'P4ss$w',"),
+        // Single quotes never interpolate in PHP or Ruby: `'$ecret1'` is a literal.
+        ("config/db.php", "    'password' => '$ecret1',"),
+        ("config/db.rb", "  'password' => '$ecret1',"),
+        ("config/db.php", "    '@TOK@' => '$3cr3t',"),
         ("deploy/deadlock.yaml", "  password: s3cr3tX"),
         ("deploy/block.yml", "  password: s3cr3tX"),
     ] {
