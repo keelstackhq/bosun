@@ -1701,6 +1701,10 @@ const UNREAD_BRACE: &str = "a `{x..y}` brace sequence the guard cannot see throu
 /// more than 64 words or more than 8 lists in one word. The scan starts at `from`, where no
 /// quote is open (all before it is already expanded).
 fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, ()>> {
+    // Each open `{` scans to the end of the word: a long one is not read (fail closed).
+    if word.len() > 1024 && word.contains('{') {
+        return Some(Err(()));
+    }
     let (mut quote, mut esc) = (None, false);
     for (i, c) in word[from..].char_indices().map(|(i, c)| (i + from, c)) {
         match (quote, c) {
@@ -1712,7 +1716,11 @@ fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, (
             (Some(_), _) => {}
             (None, '\'' | '"') => quote = Some(c),
             (None, '{') if !word[..i].ends_with('$') => {
+                // An open `{` with a list after it: a quote split it from its `}` (`{a,'b c'}`).
                 let Some((end, cuts)) = brace_list(&word[i..]) else {
+                    if word[i..].contains(',') || word[i..].contains("..") {
+                        return Some(Err(()));
+                    }
                     continue;
                 };
                 let alts: Vec<String> = if cuts.is_empty() {
@@ -1775,27 +1783,25 @@ fn sequence(inner: &str) -> Option<Vec<String>> {
         (_, _, Some(x), Some(y)) => (x, y, true),
         _ => return None,
     };
-    if lo.abs_diff(hi) / step >= 64 {
+    // A counted loop in i128: no bound or step near the i64 limits can overflow or spin.
+    let count = lo.abs_diff(hi) / step;
+    if count >= 64 {
         return None;
     }
     let pad = [a, b]
         .iter()
         .any(|x| x.trim_start_matches('-').len() > 1 && x.trim_start_matches('-').starts_with('0'));
     let width = if pad { a.len().max(b.len()) } else { 0 };
-    let mut out = Vec::new();
-    let mut v = lo;
-    while (lo <= hi && v <= hi) || (lo > hi && v >= hi) {
-        out.push(if text {
-            char::from(v as u8).to_string()
-        } else {
-            format!("{v:0width$}")
-        });
-        v = if lo <= hi {
-            v + step as i64
-        } else {
-            v - step as i64
-        };
-    }
+    let dir: i128 = if lo <= hi { 1 } else { -1 };
+    let out = (0..=count)
+        .map(|k| {
+            let v = i128::from(lo) + dir * i128::from(k) * i128::from(step);
+            match u8::try_from(v) {
+                Ok(c) if text => char::from(c).to_string(),
+                _ => format!("{v:0width$}"),
+            }
+        })
+        .collect();
     Some(out)
 }
 
@@ -4647,6 +4653,44 @@ mod tests {
 
     /// Third review: `{x..y}` in the command name, braces before runners, `branch` copy and
     /// move flags, stuck values, and globs that cannot reach the default branch.
+    /// Third review, round 2: sequence bounds near `i64` limits, braces a quote split leaves
+    /// open, and long words with many open braces.
+    #[test]
+    fn brace_sequences_at_the_i64_limits_and_open_braces_fail_closed() {
+        let start = std::time::Instant::now();
+        let max = i64::MAX;
+        assert_eq!(sequence(&format!("1..2..{max}")).unwrap(), ["1"]);
+        assert_eq!(
+            sequence(&format!("{max}..{max}")).unwrap(),
+            [max.to_string()]
+        );
+        assert_eq!(sequence(&format!("1..2..{}", i64::MIN)).unwrap(), ["1"]);
+        assert_eq!(sequence(&format!("n..n..{max}")).unwrap(), ["n"]);
+        assert_eq!(sequence(&format!("{}..{max}", i64::MIN)), None);
+        assert_eq!(
+            sequence(&format!("{max}..{}..{max}", i64::MIN))
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(sequence("1..5..2").unwrap(), ["1", "3", "5"]);
+        assert_eq!(sequence("c..a").unwrap(), ["c", "b", "a"]);
+        assert_eq!(sequence("01..03").unwrap(), ["01", "02", "03"]);
+        let long = format!("git push origin {}", "{".repeat(20_000));
+        assert!(bash(&long, "feature").is_some());
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        for cmd in [
+            "git push origin {HEAD:main,'--repo=x y'}",
+            "gh pr merge {1,'2 x'}",
+        ] {
+            let got = bash(cmd, "feature").unwrap_or_default();
+            assert!(got.contains(UNREAD_BRACE), "{cmd}: {got:?}");
+        }
+        for cmd in ["echo {a,'b c'}", "git log --format='{a,b'"] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
     #[test]
     fn merge_lock_expands_sequences_and_braces_before_runners() {
         const MAIN: &str = "push to the default branch";
