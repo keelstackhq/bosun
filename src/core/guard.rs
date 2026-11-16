@@ -3537,6 +3537,8 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
             (None, c) => (glob, _) = (glob || matches!(c, '*' | '?' | '['), word.push(c)),
         }
     }
+    static VAR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^\$(?:\{(\w+)\}|(\w+))$").expect("static regex"));
     static BRACE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("static regex"));
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
@@ -3572,14 +3574,24 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
         };
         let names_fetch = |w: &str| {
             let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
-            // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one.
+            // Any `$` or backtick builds words (`${IFS}`, `$(..)`), unless the value is one
+            // variable (`"$BRANCH"`) the command does not set: it comes from the session.
+            let var = VAR.captures(w).and_then(|c| c.get(1).or(c.get(2)));
+            let session = var.is_some_and(|n| {
+                let n = n.as_str();
+                let rest = command
+                    .replace(&format!("${{{n}}}"), "")
+                    .replace(&format!("${n}"), "");
+                !rest.contains(n)
+            });
+            // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one, and a
+            // git-core program (`git-fetch`) runs git. A refspec (`a:b`) is no command word.
             let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
-            // Brace expansion, `$( )` and backticks build words; a git-core program (`git-fetch`)
-            // or a glob that can name one runs git. A refspec (`a:b`) is no command word.
-            // Only in a value that is shell code (has a space); a word that is itself a brace
-            // expansion (`{a,b c}`) is judged by the brace rule.
-            let code = w.contains(char::is_whitespace) && !w.starts_with('{');
-            let built = code && (BRACE.is_match(&w) || w.contains("$(") || w.contains('`'));
+            // Shell code has a space or an operator; a word that is itself a brace expansion
+            // (`{a,b c}`) is judged by the brace rule.
+            let shell = |c: char| c.is_whitespace() || ";&|(){}<>".contains(c);
+            let code = w.contains(shell) && !w.starts_with('{');
+            let built = w.contains(['$', '`']) && !session || code && BRACE.is_match(&w);
             built
                 || w.split(cut).any(|t| {
                     let base = t.rsplit('/').next().unwrap_or(t);
@@ -5551,6 +5563,15 @@ mod tests {
             "git rebase -x 'cd t2 && /usr/lib/git-core/git-fetch' main",
             "git rebase -x 'cd t2 && ./git-core/git-fe*' main",
             "git rebase -x 'cd t2 && ./x/*' main",
+            // `${IFS}` and other `$` or backtick in a value, without a space.
+            "git rebase -x 'cd${IFS}t2;git${IFS}fe$@tch' main",
+            "git rebase -x 'git${IFS}{fetch,}' main",
+            "git rebase -x '$(echo${IFS}fe)tch' main",
+            "git rebase -x '`echo${IFS}fe`tch' main",
+            "git rebase -x 'f${x}etch' main",
+            "git rebase -x 'cd;git;{fetch,}' main",
+            "X=$(printf 'git f%stch' e); git rebase -x \"$X\" main",
+            "export X=$(printf x); git rebase -x '$X' main",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5619,6 +5640,7 @@ mod tests {
             "git log --format='%H {a,b} $(x)'",
             "git commit -m \"$(cat msg.txt)\"",
             "git rebase -x 'cargo test --workspace' main",
+            "git rebase -x \"$CMD\" main",
             "git commit --message='fix pull'",
             "git log --format='%s update' -S fetch",
             "git commit -q -F - <<'EOF'\nfix: don't fetch when 'git pull' runs\n* list item\nEOF",
