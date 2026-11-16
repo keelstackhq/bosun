@@ -502,3 +502,35 @@ fn versions_lockfiles_and_interpolations_are_not_secrets() {
         &["  db_password: s3cr3t"]
     ));
 }
+
+/// Skip-list holes: a version-looking, `$`-holding or lock-named value or file still hides no secret.
+#[test]
+fn version_dollar_and_lock_lookalikes_still_match() {
+    for (path, line) in [
+        ("deploy/a.yml", "  password: 9.Xk3mP2qLz"),
+        ("deploy/a.yml", "  password: 1.0-Xk3mP2qLzR8"),
+        ("deploy/a.yml", "  password: v1.2.3hunter"),
+        ("deploy/a.yml", "  password: P4ss$word9"),
+        ("config/db.php", "    'password' => 'v1.2a',"),
+        ("config/db.php", "    'password' => 'P4ss$w',"),
+        ("deploy/deadlock.yaml", "  password: s3cr3tX"),
+        ("deploy/block.yml", "  password: s3cr3tX"),
+    ] {
+        assert!(secret_match_lines(path, &[line]), "{path}: {line}");
+    }
+    assert!(secret_match_lines(
+        "k8s/deploy.yaml",
+        &[
+            "        - name: DB_PASSWORD",
+            "          value: \"v1.2.3x\""
+        ]
+    ));
+    // Real lockfiles and pure versions stay out.
+    for (path, line) in [
+        ("yarn.lock", "  jsonweb@TOK@: 9.0.2"),
+        ("app/poetry.lock", "  jsonweb@TOK@: 9.0.2"),
+        ("deploy/a.yml", "  jsonweb@TOK@: v9.0.2"),
+    ] {
+        assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
+    }
+}

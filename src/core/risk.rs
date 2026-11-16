@@ -463,7 +463,11 @@ fn config_file(path: &str) -> bool {
     const EXT: [&str; 4] = ["yml", "yaml", "properties", "env"];
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     // Lockfiles and pnpm's workspace list dependencies (`jsonwebtoken: 9.0.2`), not settings.
-    let deps = name.contains("lock.") || name == "pnpm-workspace.yaml";
+    let deps = name.ends_with(".lock")
+        || ["-lock.json", "-lock.yaml", "-lock.yml"]
+            .iter()
+            .any(|s| name.ends_with(s))
+        || name == "pnpm-workspace.yaml";
     !deps
         && (name.starts_with(".env")
             || name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e)))
@@ -580,18 +584,18 @@ fn setting(v: &str) -> bool {
     let duration = v
         .strip_suffix(['s', 'm', 'h', 'd', 'w'])
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    // A version or a range (`9.0.2`, `^9.0.2`, `~1.2`, `>=1.0`).
-    let ver = v.trim_start_matches(['^', '~', '=', '>', '<', 'v']);
-    let version = ver.starts_with(|c: char| c.is_ascii_digit())
-        && ver.contains('.')
-        && ver
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'));
-    // An interpolation (`"#{$}"`, `"{$}"` once references are scrubbed) holds no literal.
-    duration
-        || version
-        || v.contains('$')
-        || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
+    // A pure version or range (`9.0.2`, `^9.0.2`, `~1.2`, `>=1.0`, `v1.2.3`): digits and dots.
+    let ver = v.trim_start_matches(['^', '~', '=', '>', '<']);
+    let ver = ver.strip_prefix('v').unwrap_or(ver);
+    let version = ver.contains('.')
+        && !ver.starts_with('.')
+        && !ver.ends_with('.')
+        && !ver.contains("..")
+        && ver.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    // A reference (`$X`) or exactly one interpolation once references are scrubbed
+    // (`${..}`, `#{..}`, `{$..}` become `$`, `#{$}`, `{$}`); `P4ss$word` is a literal.
+    let reference = v.starts_with('$') || matches!(v, "#{$}" | "{$}" | "${$}");
+    duration || version || reference || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
 }
 
 /// A plain yaml scalar that is a literal: one word (prose has spaces), not a reference, alias,
