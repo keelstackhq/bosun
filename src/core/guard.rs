@@ -589,7 +589,10 @@ fn check(
         return Some(too_deep());
     }
     // A fetch or pull next to other shell commands reads an environment the guard cannot see.
-    if let Some(why) = fetch_not_plain(command).filter(|_| depth == 0) {
+    if let Some(why) = fetch_not_plain(command)
+        .or_else(|| glob_rule(command))
+        .filter(|_| depth == 0)
+    {
         return Some(format!("`{}` is refused ({why})", command.trim()));
     }
     for inner in nested(command) {
@@ -1689,9 +1692,8 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
     }
 }
 
-/// A brace word whose words can hold no option: letters, digits, `{}`, `,` and `.` only, and
-/// every `x..y` range between two digits or two letters of one case (`{!..~}` and `{0..z}` span
-/// `-` or `=`).
+/// A brace word of letters, digits, `{}`, `,` and `.` whose `x..y` ranges join two digits or two
+/// letters of one case: it can hold no option (`{!..~}` and `{0..z}` span `-` and `=`).
 fn plain_braces(w: &str) -> bool {
     let same = |a: char, b: char| {
         (a.is_ascii_digit() && b.is_ascii_digit())
@@ -3222,6 +3224,8 @@ fn alone_fix(words: &[&str]) -> String {
 
 const FETCH_PLAIN: &str = "a fetch or pull next to other shell commands, whose environment the guard cannot read, or a git command that runs a local command (`ext::`, `fd::`, `-c`, `--upload-pack`, `--exec-path` with a fetch); run a plain git fetch/pull as its own command (`cd` and other `git` commands may join it with `&&`)";
 
+const GLOB_WORD: &str = "a glob (`*`, `?`, `[`) in a command name or a git word, which bash expands against files the guard cannot see; spell the command name and git words literally, or quote them";
+
 const FETCH_MOVES: &str = "a fetch into the default branch or into a ref the guard cannot read; name the branch literally";
 
 const BUILT_SUB: &str = "a git subcommand built by the shell, which the guard cannot see: \
@@ -3340,26 +3344,9 @@ fn ff_only(rest: &[&str], default_branch: &str) -> bool {
 }
 
 /// The value options of `git fetch`; a long one also by a prefix (`--dept 1`), as git takes it.
-const FETCH_VALUES: [&str; 18] = [
-    "-s",
-    "--strategy",
-    "-X",
-    "--strategy-option",
-    "--depth",
-    "--deepen",
-    "--shallow-since",
-    "--shallow-exclude",
-    "-j",
-    "--jobs",
-    "--upload-pack",
-    "--negotiation-tip",
-    "--filter",
-    "-o",
-    "--server-option",
-    "--recurse-submodules-default",
-    "--submodule-prefix",
-    "--refmap",
-];
+const FETCH_VALUES: &str = "-s --strategy -X --strategy-option --depth --deepen --shallow-since \
+    --shallow-exclude -j --jobs --upload-pack --negotiation-tip --filter -o --server-option \
+    --recurse-submodules-default --submodule-prefix --refmap";
 
 /// The flag letters of a short-option cluster (`-pPt`) up to its first value option (`o`, `j`,
 /// `s`, `X`), whose value is the rest of the cluster or, when it is the last letter, the next word.
@@ -3376,14 +3363,14 @@ fn short_flags(a: &str) -> Option<&str> {
 /// The plain words of `git fetch` (the remote, then refspecs) and its `--refmap` values.
 fn fetch_words(rest: &[&str]) -> (Vec<String>, Vec<String>) {
     let takes_value = |a: &str| {
-        FETCH_VALUES.contains(&a)
+        FETCH_VALUES.split_whitespace().any(|v| v == a)
             // `-po origin`: a cluster whose first value option is its last letter takes the next
             // word (`-Xtheirs` holds its value).
             || short_flags(a).is_some_and(|f| f.len() + 1 == a.len() && f.ends_with(['o', 'j', 's', 'X']))
             || (a.len() > 3
                 && a.starts_with("--")
                 && a != "--recurse-submodules"
-                && FETCH_VALUES.iter().any(|v| v.starts_with(a)))
+                && FETCH_VALUES.split_whitespace().any(|v| v.starts_with(a)))
     };
     let (mut words, mut maps) = (Vec::new(), Vec::new());
     let mut it = rest.iter().map(|a| a.replace(['\'', '"'], ""));
@@ -3404,8 +3391,7 @@ fn fetch_words(rest: &[&str]) -> (Vec<String>, Vec<String>) {
     (words, maps)
 }
 
-/// A fetch word that names a local repository: `file:`, a variable, a word starting with
-/// `./`, `../`, `/` or `~` (a `:` after that is part of the path), or a dot name without `:`.
+/// A local-repository fetch word: `file:`, a variable, `./`, `../`, `/`, `~` (`./ev:il`), `.x`.
 fn local_word(w: &str) -> bool {
     w.starts_with("file:")
         || ["./", "../", "/", "~"].iter().any(|p| w.starts_with(p))
@@ -3423,11 +3409,8 @@ fn fetch_trusted(rest: &[&str]) -> bool {
             .is_none_or(|w| matches!(w.as_str(), "origin" | "upstream"))
 }
 
-/// A command with a `fetch` or `pull` word that is not a plain chain of `git ..` and `cd ..`
-/// segments (split at `;`, `&&`, `||`, `|`, `&` and newlines; a last `| tail -N` or `| head -N`
-/// reads): shell syntax can set what git reads (`HOME=`, `export`, `source`, `eval`, a loop),
-/// so only a fetch the guard can read alone passes. Quotes are not parsed (no prose is
-/// skipped), and a fetch or pull with `-c`, `--config-env`, `ext::` or `fd::` is refused too.
+/// Why a command is refused when a git fetch or pull is not a plain chain of `git ..`/`cd ..`
+/// segments, or a git command runs a local command (spec §4, fetch rules).
 fn fetch_not_plain(command: &str) -> Option<&'static str> {
     let text = command.replace("2>&1", "");
     let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
@@ -3489,6 +3472,42 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     .then_some(FETCH_PLAIN)
 }
 
+/// An unquoted `*`, `?` or `[` in a command word or any git word (`/usr/bin/gi[t]`, `git f?tch`);
+/// `[` and `[[` alone are the test builtin.
+fn glob_rule(command: &str) -> Option<&'static str> {
+    let (mut segs, mut word, mut glob, mut quote, mut esc) =
+        (vec![Vec::new()], String::new(), false, None, false);
+    for c in command.chars().chain([' ']) {
+        match (quote, c) {
+            _ if esc => (esc, _) = (false, word.push(c)),
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '\\') => esc = true,
+            (None, '\'' | '"') => quote = Some(c),
+            (None, c) if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')') => {
+                if !word.is_empty() || glob {
+                    segs.last_mut()?.push((std::mem::take(&mut word), glob));
+                    glob = false;
+                }
+                if !c.is_whitespace() || c == '\n' {
+                    segs.push(Vec::new());
+                }
+            }
+            (None, c) => (glob, _) = (glob || matches!(c, '*' | '?' | '['), word.push(c)),
+        }
+    }
+    segs.iter().find_map(|seg| {
+        let assign = |w: &&(String, bool)| w.0.contains('=') && !w.0.starts_with('-');
+        let mut words = seg
+            .iter()
+            .skip_while(assign)
+            .skip_while(|w| WRAPPERS.contains(&&*w.0));
+        let (cmd, cmd_glob) = words.next()?;
+        let git = cmd.rsplit('/').next() == Some("git") && seg.iter().any(|w| w.1);
+        (*cmd_glob && cmd != "[" && cmd != "[[" || git).then_some(GLOB_WORD)
+    })
+}
+
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
 fn fetch_cfg_moves(v: &str, default_branch: &str) -> bool {
     // Bash brace-expands an assigned value (`+feat:{x,main}`): fail closed.
@@ -3539,8 +3558,7 @@ fn remote_retargets(rest: &[&str]) -> bool {
     }
 }
 
-/// The value of a `--mirror` option of `git remote` in any unique prefix (`--mi`), quotes
-/// removed: `Some("")` for a bare one.
+/// The value of `git remote --mirror` in any prefix (`--mi`), unquoted; `Some("")` when bare.
 fn mirror(rest: &[&str]) -> Option<String> {
     rest.iter().find_map(|a| {
         let a = a.replace(['\'', '"'], "");
@@ -3549,8 +3567,7 @@ fn mirror(rest: &[&str]) -> Option<String> {
     })
 }
 
-/// `--tags` in any unique prefix, or `-t` in a short cluster: every tag of the remote.
-/// `--prune-tags` (`-P`) mirrors them too.
+/// `--tags`/`--prune-tags` in any unique prefix, or `-t`/`-P` in a short cluster: every tag.
 fn fetch_tags(rest: &[&str]) -> bool {
     rest.iter().any(|a| {
         let a = a.replace(['\'', '"'], "");
@@ -3568,10 +3585,8 @@ fn fetch_many(rest: &[&str]) -> bool {
     })
 }
 
-/// Config that points `origin` or `upstream` at a URL that is not on a network host
-/// (`remote.origin.url=evil2`) or rewrites URLs to one (`url./tmp/x.insteadOf`): a trusted name
-/// would then fetch from it. `k` is a key as `cfg_key` gives it; an empty `v` is a value the
-/// guard cannot see.
+/// Config that points `origin`/`upstream` at a non-network URL (`remote.origin.url=evil2`) or
+/// rewrites URLs to one (`url./tmp/x.insteadOf`); `k` as `cfg_key` gives it.
 fn retargets(k: &str, v: &str) -> bool {
     let v = v.replace(['\'', '"'], "");
     let base = k.strip_prefix("url.").and_then(|b| {
@@ -3582,10 +3597,9 @@ fn retargets(k: &str, v: &str) -> bool {
         || (matches!(k, "remote.origin.url" | "remote.upstream.url") && !network_url(&v))
 }
 
-/// `git fetch <remote> <src>:<dst>` moves local refs like `update-ref`: refused for `--stdin`,
-/// a backslash, a refspec in a variable, a glob destination that can match the default branch,
-/// or a destination naming the default branch, unless it fetches the default branch of
-/// `origin` or `upstream` (any other remote may be a directory) and no word is a local path.
+/// `git fetch <remote> <src>:<dst>` moves local refs like `update-ref`: refused for `--stdin`, a
+/// backslash, a refspec in a variable, a glob destination that can match the default branch, or
+/// a default-branch destination unless `origin`/`upstream` sends its own default branch.
 fn fetch_moves(rest: &[&str], default_branch: &str) -> bool {
     if rest
         .iter()
@@ -4877,7 +4891,6 @@ mod tests {
     fn tag_mirror_fetch_and_update_ref_values() {
         for cmd in [
             "git fetch origin 'refs/tags/*:refs/tags/*'",
-            "git fetch origin +refs/tags/*:refs/tags/*",
             "git fetch origin \"+refs/tags/*:refs/tags/*\"",
             "git update-ref refs/heads/x abc123",
             "git update-ref -m 'a b' refs/heads/x abc123",
@@ -5346,6 +5359,16 @@ mod tests {
             "git remote add x $'\\x65xt::sh p.sh'",
             "git remote add x $'\\145xt::sh p.sh'",
             "git fetch origin $BRANCH",
+            // Globs: bash expands them against files the guard cannot see.
+            "/usr/bin/gi[t] fetch '--upload-pack=sh p.sh #' .",
+            "/usr/bin/gi[t] fetch . +side:main",
+            "/usr/bin/g?t remote add x 'ext::sh p'",
+            "git f?tch '--upload-pack=sh p #' .",
+            "git fetch *upload-pack* .",
+            "git fetch . +side:mai[n]",
+            "g*t push origin HEAD:main",
+            // Unquoted, bash may expand it against planted files (was allowed).
+            "git fetch origin +refs/tags/*:refs/tags/*",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5395,6 +5418,10 @@ mod tests {
             "git -C x fetch origin",
             "git pull -Xours origin feature",
             "git fetch --update-head-ok origin",
+            "git commit -m 'why? fix *all* [x]'",
+            "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
+            "[ -d x ] && git status",
+            "ls *.rs",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",
             "git fetch -pP origin",
