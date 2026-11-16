@@ -319,3 +319,242 @@ fn everyday_references_are_not_secrets() {
         assert!(secret_match(path, line), "{path}: {line}");
     }
 }
+
+/// Risk-check of PR 1 that adds `lines` (in order) to `path`: true when R-secrets matches.
+fn secret_match_lines(path: &str, lines: &[&str]) -> bool {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "");
+    fake.content(
+        "governance/owners.toml",
+        BASE,
+        "[[owner]]\ngithub = \"ada\"\n",
+    );
+    let body: String = lines.iter().map(|l| format!("\n+{}", fill(l))).collect();
+    let patch = format!("@@ -0,0 +1,{} @@{body}", lines.len());
+    fake.pull_file(1, path, "modified", lines.len() as u64, 0, Some(&patch));
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    let hit = v["data"]["matches"]
+        .as_array()
+        .is_some_and(|m| m.iter().any(|m| m["rule"] == "R-secrets"));
+    assert_eq!(hit, code == 5, "{v}");
+    assert!(
+        !v.to_string().contains("s3cr3t"),
+        "evidence copies the line: {v}"
+    );
+    hit
+}
+
+#[test]
+fn unquoted_yaml_literals_match_in_config_files() {
+    for (path, line) in [
+        ("deploy/db.yml", "password: s3cr3t"),
+        ("deploy/db.yaml", "    db_password: s3cr3t # prod"),
+        ("deploy/db.yml", "  - password: s3cr3t"),
+        ("deploy/app.yml", "  client_@SEC@: s3cr3t-xyz"),
+        ("deploy/app.yml", "  @AKEY@: abcd1234s3cr3t"),
+        ("conf/app.properties", "db.password: s3cr3t"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn unquoted_yaml_types_and_references_are_not_secrets() {
+    for (path, line) in [
+        ("deploy/a.yml", "  password: string"),
+        ("deploy/a.yml", "  password: ${{ secrets.X }}"),
+        ("deploy/a.yml", "  @TOK@: ${@TOK@}"),
+        ("deploy/a.yml", "  password: !secret db"),
+        ("deploy/a.yml", "  password:"),
+        ("deploy/a.yml", "  password: null"),
+        ("deploy/a.yml", "  password: ~"),
+        ("deploy/a.yml", "  password: \"\""),
+        ("deploy/a.yml", "  password: true"),
+        ("deploy/a.yml", "  password: |"),
+        ("deploy/a.yml", "  password: *db_password"),
+        ("deploy/a.yml", "  password: \"{{ .Values.p }}\""),
+        ("deploy/a.yml", "  password: Enter your password"),
+        ("ci/release.yml", "      id-@TOK@: write"),
+        ("etc/nsswitch.conf", "passwd:         files"),
+        // Durations and paths under a secret key are settings, not secrets.
+        ("deploy/a.yml", "  access_@TOK@: 1h"),
+        ("deploy/a.yml", "  refresh_@TOK@: 720h"),
+        ("deploy/a.yml", "  @TOK@_ttl_@TOK@: 30s"),
+        ("deploy/a.yml", "  private_key: /etc/ssl/private/key.pem"),
+        (
+            "deploy/a.yml",
+            "  @TOK@: /var/run/secrets/kubernetes.io/serviceaccount/@TOK@",
+        ),
+        ("deploy/a.yml", "  password: ./secrets/db"),
+        ("deploy/a.yml", "  password: ../secrets/db"),
+        ("deploy/a.yml", "  password: ~/secrets/db"),
+        ("tests/fixtures/a.yml", "  password: s3cr3t"),
+        // Code files keep today's rules: a type, a field or a parameter.
+        ("src/a.rs", "    pub password: String,"),
+        ("src/a.rs", "    @TOK@: &str,"),
+        ("src/a.rs", "    password: Option<String>,"),
+        ("src/a.rs", "fn f(password: &str) {"),
+        ("src/a.ts", "  password: string;"),
+        ("src/a.py", "    password: str = field(default=None)"),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn php_array_literals_match() {
+    for line in [
+        "    'password' => 's3cr3t',",
+        "    \"@AKEY@\" => \"abc\",",
+        "    'db_password' => 's3cr3t'",
+    ] {
+        assert!(secret_match("config/database.php", line), "{line}");
+    }
+    for line in [
+        "    'password' => $pw,",
+        "    'password' => env('X'),",
+        "    '@TOK@' => '',",
+        // Laravel casts and validation rules name a type or a rule, not a value.
+        "    protected $casts = ['password' => 'hashed'];",
+        "    'password' => 'required',",
+        "    '@TOK@' => 'string',",
+        "    'password' => 'encrypted',",
+        "    'password' => 'confirmed',",
+        "    'api_@TOK@' => 'nullable',",
+        "    '@TOK@' => 'sometimes',",
+        "    'password' => 'required|min:8',",
+    ] {
+        assert!(!secret_match("config/database.php", line), "{line}");
+    }
+}
+
+#[test]
+fn kubernetes_env_values_under_a_secret_name_match() {
+    for lines in [
+        ["        - name: DB_PASSWORD", "          value: \"s3cr3t\""],
+        ["        - name: DB_PASSWORD", "          value: s3cr3t"],
+        ["        - name: API_@TOK@", "          value: 's3cr3t'"],
+        [
+            "        - name: DB_PASSWORD # prod db",
+            "          value: s3cr3t",
+        ],
+        [
+            "        - name: \"STRIPE_@SEC@_KEY\"",
+            "          value: s3cr3t",
+        ],
+    ] {
+        assert!(secret_match_lines("deploy/app.yaml", &lines), "{lines:?}");
+    }
+    for lines in [
+        ["        - name: DB_PASSWORD", "          valueFrom:"],
+        [
+            "        - name: DB_PASSWORD",
+            "          value: \"$(DB_PASS)\"",
+        ],
+        ["        - name: DB_PASSWORD", "          value: \"\""],
+        ["        - name: LOG_LEVEL", "          value: debug"],
+        [
+            "        - name: DB_PASSWORD",
+            "          value: /run/secrets/db",
+        ],
+        [
+            "        - name: DB_PASSWORD_FILE",
+            "          value: /run/s/db",
+        ],
+        [
+            "        - name: DB_PASSWORD",
+            "          value: ${{ secrets.X }}",
+        ],
+    ] {
+        assert!(!secret_match_lines("deploy/app.yaml", &lines), "{lines:?}");
+    }
+}
+
+/// A value that ends in a multi-byte character never panics risk-check (one JSON object out).
+#[test]
+fn non_ascii_values_do_not_panic() {
+    for (path, line) in [
+        ("config/locales/ja.yml", "パスワード: パスワード"),
+        ("config/locales/ja.yml", "  password: パスワード"),
+        ("deploy/a.yml", "  token: café"),
+        ("lang/ja/validation.php", "    'password' => 'パスワード',"),
+    ] {
+        secret_match_lines(path, &[line]);
+    }
+}
+
+/// Lockfile entries, versions and interpolated values are no literal secrets.
+#[test]
+fn versions_lockfiles_and_interpolations_are_not_secrets() {
+    for (path, line) in [
+        ("pnpm-lock.yaml", "      g@TOK@: 7.1.0"),
+        ("pnpm-lock.yaml", "      jsonweb@TOK@: 9.0.2"),
+        ("pnpm-workspace.yaml", "  jsonweb@TOK@: ^9.0.2"),
+        ("deploy/values.yml", "  jsonweb@TOK@: ~9.0.2"),
+        ("config/db.rb", "  'password' => \"#{ENV['DB_PASS']}\","),
+        ("config/db.php", "    'password' => \"{$pass}\","),
+    ] {
+        assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
+    }
+    // A real literal in a yaml that is no lockfile still matches.
+    assert!(secret_match_lines(
+        "deploy/values.yml",
+        &["  db_password: s3cr3t"]
+    ));
+}
+
+/// Skip-list holes: a version-looking, `$`-holding or lock-named value or file still hides no secret.
+#[test]
+fn version_dollar_and_lock_lookalikes_still_match() {
+    for (path, line) in [
+        ("deploy/a.yml", "  password: 9.Xk3mP2qLz"),
+        ("deploy/a.yml", "  password: 1.0-Xk3mP2qLzR8"),
+        ("deploy/a.yml", "  password: v1.2.3hunter"),
+        ("deploy/a.yml", "  password: P4ss$word9"),
+        ("config/db.php", "    'password' => 'v1.2a',"),
+        ("config/db.php", "    'password' => 'P4ss$w',"),
+        ("deploy/deadlock.yaml", "  password: s3cr3tX"),
+        ("deploy/block.yml", "  password: s3cr3tX"),
+    ] {
+        assert!(secret_match_lines(path, &[line]), "{path}: {line}");
+    }
+    assert!(secret_match_lines(
+        "k8s/deploy.yaml",
+        &[
+            "        - name: DB_PASSWORD",
+            "          value: \"v1.2.3x\""
+        ]
+    ));
+    // Real lockfiles and pure versions stay out.
+    for (path, line) in [
+        ("yarn.lock", "  jsonweb@TOK@: 9.0.2"),
+        ("app/poetry.lock", "  jsonweb@TOK@: 9.0.2"),
+        ("deploy/a.yml", "  jsonweb@TOK@: v9.0.2"),
+    ] {
+        assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
+    }
+}
+
+/// A reference glued in front of a literal does not hide it; a whole interpolation does.
+#[test]
+fn glued_references_do_not_hide_literals() {
+    assert!(secret_match_lines(
+        "deploy/a.yml",
+        &["  password: ${UNUSED}hunter2"]
+    ));
+    assert!(secret_match_lines(
+        "k8s/deploy.yaml",
+        &[
+            "        - name: DB_PASSWORD",
+            "          value: \"${X}hunter2\""
+        ]
+    ));
+    assert!(!secret_match_lines(
+        "config/db.rb",
+        &["  'password' => \"#{pw}\","]
+    ));
+    assert!(!secret_match_lines(
+        "deploy/a.yml",
+        &["  password: ${DB_PASSWORD}"]
+    ));
+}
