@@ -179,15 +179,22 @@ pub fn evaluate(
                 } else {
                     line.into()
                 };
-                let hit = match &rule.content {
+                let content = match &rule.content {
                     Some(re) if re.is_match(&scrubbed) => {
                         !(secrets
                             && secret_exempt(&f.path, line, |s| {
                                 re.is_match(&scrub_refs(s, code_file(&f.path)))
                             }))
                     }
-                    _ => secrets && strong_secret(line),
+                    _ => false,
                 };
+                let prev = i.checked_sub(1).map(|p| f.added_lines[p].as_str());
+                let hit = content
+                    || (secrets
+                        && (strong_secret(line)
+                            || (!secret_test_dir(&f.path)
+                                && (config_secret(&f.path, prev, &scrubbed)
+                                    || arrow_secret(&scrubbed)))));
                 if hit {
                     evidence.push(format!("{}: added line {} matches", f.path, i + 1));
                 }
@@ -449,6 +456,163 @@ pub fn secret_exempt(path: &str, line: &str, matches: impl Fn(&str) -> bool) -> 
 /// A scrub match that is an env lookup by name (not `${X}`, `$X`, `env::var` or a key).
 fn is_env_call(m: &str) -> bool {
     m.contains("getenv(") || m.contains("environ") || m.starts_with("ENV") || m.starts_with("$_")
+}
+
+/// A config file where `key: value` holds a plain value: yaml, properties or env.
+fn config_file(path: &str) -> bool {
+    const EXT: [&str; 4] = ["yml", "yaml", "properties", "env"];
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    // Lockfiles and pnpm's workspace list dependencies (`jsonwebtoken: 9.0.2`), not settings.
+    let deps = name.ends_with(".lock")
+        || ["-lock.json", "-lock.yaml", "-lock.yml"]
+            .iter()
+            .any(|s| name.ends_with(s))
+        || name == "pnpm-workspace.yaml";
+    !deps
+        && (name.starts_with(".env")
+            || name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e)))
+}
+
+/// A secret key name: one that ends in `api_key`, `token`, `password`, `passwd`, `private_key`,
+/// or `secret` whole or as `secret_key`, `secret_access_key` or `secret_token`.
+const SECRET_KEY: &str = concat!(
+    r"(?:[\w.-]*(?:api[_-]?key|token|passw(?:or)?d|private[_-]?key)",
+    r"|(?:[\w.-]*[_.-])?secret(?:[_-]?(?:access[_-]?)?key|[_-]?token)?)",
+);
+
+/// In a config file (R-secrets, built in): an unquoted yaml literal under a secret key
+/// (`password: hunter2`, `- db_password: x`), or a Kubernetes env `value:` literal right after
+/// a `name:` that names a secret (`- name: DB_PASSWORD` then `value: x`). `line` is scrubbed;
+/// `prev` is the added line before it.
+fn config_secret(path: &str, prev: Option<&str>, line: &str) -> bool {
+    static PLAIN: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(
+            r#"(?i)^\s*(?:-\s+)?["']?{SECRET_KEY}["']?\s*:\s+([^\s"'#].*?)\s*(?:\s#.*)?$"#
+        ))
+        .expect("static regex")
+    });
+    static NAME: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(
+            r#"(?i)^\s*(?:-\s+)?name:\s*["']?{SECRET_KEY}["']?\s*(?:\s#.*)?$"#
+        ))
+        .expect("static regex")
+    });
+    static VALUE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"^\s*value:\s*(?:"([^"]*)"|'([^']*)'|([^\s"'#].*?))\s*(?:\s#.*)?$"#)
+            .expect("static regex")
+    });
+    if !config_file(path) {
+        return false;
+    }
+    if PLAIN.captures(line).is_some_and(|c| plain_literal(&c[1])) {
+        return true;
+    }
+    let Some(c) = prev
+        .filter(|p| NAME.is_match(p))
+        .and_then(|_| VALUE.captures(line))
+    else {
+        return false;
+    };
+    match c.get(1).or(c.get(2)) {
+        Some(q) => !q.as_str().is_empty() && !setting(q.as_str()),
+        None => plain_literal(&c[3]),
+    }
+}
+
+/// In any file (R-secrets, built in): a php or ruby array entry, a quoted secret key `=>` a
+/// quoted one-word literal (`'password' => 'x'`), unless the value is a type, a cast or a
+/// validation rule (`'password' => 'hashed'`, `'required|min:8'`). `line` is scrubbed.
+fn arrow_secret(line: &str) -> bool {
+    static ARROW: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(
+            r#"(?i)["']{SECRET_KEY}["']\s*=>\s*(?:"([^"\s$|][^"\s|]*)"|'([^'\s$|][^'\s|]*)')"#
+        ))
+        .expect("static regex")
+    });
+    ARROW.captures_iter(line).any(|c| {
+        let v = c.get(1).or(c.get(2)).map_or("", |m| m.as_str());
+        !setting(v)
+    })
+}
+
+/// Values that are no literal secret: null, booleans, type names, permissions (`id-token:
+/// write`), and Laravel casts and validation rules (`'password' => 'hashed'`).
+const NOT_SECRET: [&str; 34] = [
+    "null",
+    "none",
+    "nil",
+    "true",
+    "false",
+    "yes",
+    "no",
+    "on",
+    "off",
+    "string",
+    "str",
+    "int",
+    "integer",
+    "number",
+    "bool",
+    "boolean",
+    "object",
+    "any",
+    "read",
+    "write",
+    "array",
+    "hashed",
+    "encrypted",
+    "required",
+    "confirmed",
+    "nullable",
+    "sometimes",
+    "present",
+    "filled",
+    "numeric",
+    "json",
+    "date",
+    "datetime",
+    "float",
+];
+
+/// A value under a secret key that is no secret: a word in `NOT_SECRET`, a duration (`1h`,
+/// `720h`, `30s`) or a path (`/etc/x`, `./x`, `../x`, `~/x`).
+fn setting(v: &str) -> bool {
+    if NOT_SECRET.contains(&v.to_ascii_lowercase().as_str()) {
+        return true;
+    }
+    // `strip_suffix`, not a byte slice: a value may end in a multi-byte character.
+    let duration = v
+        .strip_suffix(['s', 'm', 'h', 'd', 'w'])
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    // A pure version or range (`9.0.2`, `^9.0.2`, `~1.2`, `>=1.0`, `v1.2.3`): digits and dots.
+    let ver = v.trim_start_matches(['^', '~', '=', '>', '<']);
+    let ver = ver.strip_prefix('v').unwrap_or(ver);
+    let version = ver.contains('.')
+        && !ver.starts_with('.')
+        && !ver.ends_with('.')
+        && !ver.contains("..")
+        && ver.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    // A whole reference or interpolation once references are scrubbed (`$X`, `${..}` become
+    // `$`; `#{..}`, `{$..}` become `#{$}`, `{$}`; a ruby `#{pw}`, a k8s `$(X)`); `${X}pw` and
+    // `P4ss$w` are literals.
+    let one = |o: &str, c: char| {
+        v.strip_prefix(o)
+            .and_then(|r| r.strip_suffix(c))
+            .is_some_and(|r| !r.contains(['{', '}', '(', ')']))
+    };
+    let reference =
+        v == "$" || one("#{", '}') || one("{$", '}') || one("${", '}') || one("$(", ')');
+    duration || version || reference || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
+}
+
+/// A plain yaml scalar that is a literal: one word (prose has spaces), not a reference, alias,
+/// tag, block or flow (`$`, `*`, `&`, `!`, `|`, `>`, `{`, `[`, `%`, `@`, `<`, `~`), and no
+/// `setting` (null, a boolean, a type name, `id-token: write`, a duration, a version, a path).
+fn plain_literal(v: &str) -> bool {
+    !v.is_empty()
+        && !v.contains(char::is_whitespace)
+        && !v.starts_with(['*', '&', '!', '|', '>', '{', '[', '%', '@', '<', '~', '`'])
+        && !setting(v)
 }
 
 /// A `*_name`, `*-id`, `*_path` or `*_file` key (a scrub match that is no env call).

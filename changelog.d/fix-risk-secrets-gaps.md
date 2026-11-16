@@ -1,0 +1,1 @@
+- R-secrets also catches unquoted yaml literals (`password: x` in yaml, properties and env files), php/ruby `'password' => 'x'` array literals and Kubernetes env `value:` literals under a secret `name:`.
