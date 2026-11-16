@@ -91,7 +91,7 @@ publishers that step 4 registers expire when they are not used for 2 days (D24).
    (`npm login`) and crates.io (`cargo login`):
 
    ```bash
-   npm install -g @keelstackhq/hoist@0.2.0
+   npm install -g @keelstackhq/hoist@0.5.1
    git clone https://github.com/keelstackhq/bosun && cd bosun && git checkout v0.1.0
    hoist release bootstrap --dry-run
    hoist release bootstrap

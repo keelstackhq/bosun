@@ -291,9 +291,13 @@ fn release_workflow_is_gated_so_a_merge_publishes_nothing() {
     assert!(build.contains("workflow_dispatch") && build.contains("enabled == 'true'"));
     // Decision 3: hoist from npm, exact version, in both writing jobs; GH_TOKEN never meets cargo.
     assert_eq!(
-        text.matches("npm install -g @keelstackhq/hoist@0.2.0")
+        text.matches("npm install -g @keelstackhq/hoist@0.5.1")
             .count(),
         2
+    );
+    // hoist >= 0.5 reads the release PR token from HOIST_RELEASE_TOKEN (else exit 2 in Actions).
+    assert!(
+        job(&text, "prepare").contains("HOIST_RELEASE_TOKEN: ${{ secrets.HOIST_RELEASE_TOKEN }}")
     );
     let code: String = text
         .lines()

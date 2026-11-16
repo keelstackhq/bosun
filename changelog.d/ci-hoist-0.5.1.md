@@ -1,0 +1,1 @@
+- ci: release workflow pins hoist 0.5.1 and passes HOIST_RELEASE_TOKEN to `hoist release prepare`

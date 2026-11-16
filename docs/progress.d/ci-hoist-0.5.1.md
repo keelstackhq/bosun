@@ -1,0 +1,1 @@
+- 2026-11-16 · release.yml hoist 0.2.0 -> 0.5.1 (prepare gets HOIST_RELEASE_TOKEN) · PR
