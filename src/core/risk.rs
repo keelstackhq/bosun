@@ -543,12 +543,20 @@ fn arrow_secret(line: &str) -> bool {
 /// shell heredoc expands `'$X'`). `line` is the raw line.
 fn arrow_dollar_literal(path: &str, line: &str) -> bool {
     static ARROW: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-        Regex::new(&format!(r#"(?i)["']{SECRET_KEY}["']\s*=>\s*'\$[^'\s|{{][^'\s|]*'"#))
-            .expect("static regex")
+        Regex::new(&format!(
+            r#"(?i)["']{SECRET_KEY}["']\s*=>\s*'\$[^'\s|{{][^'\s|]*'"#
+        ))
+        .expect("static regex")
     });
-    let ext = path.rsplit('/').next().and_then(|n| n.rsplit_once('.')).map(|(_, e)| e.to_ascii_lowercase());
-    matches!(ext.as_deref(), Some("php" | "phtml" | "inc" | "rb" | "rake" | "pl" | "pm"))
-        && ARROW.is_match(line)
+    let ext = path
+        .rsplit('/')
+        .next()
+        .and_then(|n| n.rsplit_once('.'))
+        .map(|(_, e)| e.to_ascii_lowercase());
+    matches!(
+        ext.as_deref(),
+        Some("php" | "phtml" | "inc" | "rb" | "rake" | "pl" | "pm")
+    ) && ARROW.is_match(line)
 }
 
 /// Values that are no literal secret: null, booleans, type names, permissions (`id-token:

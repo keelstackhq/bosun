@@ -502,7 +502,10 @@ fn versions_lockfiles_and_interpolations_are_not_secrets() {
         ("config/db.php", "    'password' => '$',"),
         ("docker/entrypoint.sh", "  'password' => '$DB_PASSWORD',"),
         ("docker/entrypoint.sh", "  'password' => '${DB_PASSWORD}',"),
-        ("scripts/setup.sh", "echo \"'password' => '$DB_PASSWORD'\" > c.php"),
+        (
+            "tools/setup.sh",
+            "echo \"'password' => '$DB_PASSWORD'\" > c.php",
+        ),
     ] {
         assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
     }
