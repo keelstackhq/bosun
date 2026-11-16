@@ -3537,6 +3537,8 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
             (None, c) => (glob, _) = (glob || matches!(c, '*' | '?' | '['), word.push(c)),
         }
     }
+    static BRACE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("static regex"));
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
     static CLASS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("static regex"));
@@ -3572,12 +3574,21 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
             let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
             // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one.
             let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
-            w.split(cut).any(|t| {
-                let t = t.trim_start_matches("git-");
-                ["fetch", "pull", "update"].iter().any(|n| {
-                    t == *n || t.contains(['*', '?', '[']) && !t.contains(['/', ':']) && names(t, n)
+            // Brace expansion, `$( )` and backticks build words; a git-core program (`git-fetch`)
+            // or a glob that can name one runs git. A refspec (`a:b`) is no command word.
+            // Only in a value that is shell code (has a space); a word that is itself a brace
+            // expansion (`{a,b c}`) is judged by the brace rule.
+            let code = w.contains(char::is_whitespace) && !w.starts_with('{');
+            let built = code && (BRACE.is_match(&w) || w.contains("$(") || w.contains('`'));
+            built
+                || w.split(cut).any(|t| {
+                    let base = t.rsplit('/').next().unwrap_or(t);
+                    let glob = t.contains(['*', '?', '[']) && !t.contains(':');
+                    base.starts_with("git-")
+                        || ["fetch", "pull", "update", "git-fetch", "git-pull"]
+                            .iter()
+                            .any(|n| base == *n || glob && names(t, n))
                 })
-            })
         };
         let gitw = |w: &str| {
             w.rsplit('/')
@@ -5533,6 +5544,13 @@ mod tests {
             "git rebase -x 'cd t2 && git f\"e\"tch' main",
             "git rebase -x 'git fetc?' main",
             "git rebase -x 'git f*h' main",
+            // Expansions and git-core programs inside a value.
+            "git rebase -x 'cd t2 && git {fetch,}' main",
+            "git rebase -x 'git -C t2 $(echo fe)tch' main",
+            "git rebase -x 'git -C t2 `echo fe`tch' main",
+            "git rebase -x 'cd t2 && /usr/lib/git-core/git-fetch' main",
+            "git rebase -x 'cd t2 && ./git-core/git-fe*' main",
+            "git rebase -x 'cd t2 && ./x/*' main",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5598,6 +5616,9 @@ mod tests {
             "git-fetch origin",
             "git log --grep fetch",
             "git rebase -x 'cargo test' main",
+            "git log --format='%H {a,b} $(x)'",
+            "git commit -m \"$(cat msg.txt)\"",
+            "git rebase -x 'cargo test --workspace' main",
             "git commit --message='fix pull'",
             "git log --format='%s update' -S fetch",
             "git commit -q -F - <<'EOF'\nfix: don't fetch when 'git pull' runs\n* list item\nEOF",
