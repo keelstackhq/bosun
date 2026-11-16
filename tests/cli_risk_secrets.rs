@@ -482,3 +482,23 @@ fn non_ascii_values_do_not_panic() {
         secret_match_lines(path, &[line]);
     }
 }
+
+/// Lockfile entries, versions and interpolated values are no literal secrets.
+#[test]
+fn versions_lockfiles_and_interpolations_are_not_secrets() {
+    for (path, line) in [
+        ("pnpm-lock.yaml", "      g@TOK@: 7.1.0"),
+        ("pnpm-lock.yaml", "      jsonweb@TOK@: 9.0.2"),
+        ("pnpm-workspace.yaml", "  jsonweb@TOK@: ^9.0.2"),
+        ("deploy/values.yml", "  jsonweb@TOK@: ~9.0.2"),
+        ("config/db.rb", "  'password' => \"#{ENV['DB_PASS']}\","),
+        ("config/db.php", "    'password' => \"{$pass}\","),
+    ] {
+        assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
+    }
+    // A real literal in a yaml that is no lockfile still matches.
+    assert!(secret_match_lines(
+        "deploy/values.yml",
+        &["  db_password: s3cr3t"]
+    ));
+}

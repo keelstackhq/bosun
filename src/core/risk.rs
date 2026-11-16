@@ -462,7 +462,11 @@ fn is_env_call(m: &str) -> bool {
 fn config_file(path: &str) -> bool {
     const EXT: [&str; 4] = ["yml", "yaml", "properties", "env"];
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    name.starts_with(".env") || name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e))
+    // Lockfiles and pnpm's workspace list dependencies (`jsonwebtoken: 9.0.2`), not settings.
+    let deps = name.contains("lock.") || name == "pnpm-workspace.yaml";
+    !deps
+        && (name.starts_with(".env")
+            || name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e)))
 }
 
 /// A secret key name: one that ends in `api_key`, `token`, `password`, `passwd`, `private_key`,
@@ -576,12 +580,23 @@ fn setting(v: &str) -> bool {
     let duration = v
         .strip_suffix(['s', 'm', 'h', 'd', 'w'])
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    duration || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
+    // A version or a range (`9.0.2`, `^9.0.2`, `~1.2`, `>=1.0`).
+    let ver = v.trim_start_matches(['^', '~', '=', '>', '<', 'v']);
+    let version = ver.starts_with(|c: char| c.is_ascii_digit())
+        && ver.contains('.')
+        && ver
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'));
+    // An interpolation (`"#{$}"`, `"{$}"` once references are scrubbed) holds no literal.
+    duration
+        || version
+        || v.contains('$')
+        || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
 }
 
 /// A plain yaml scalar that is a literal: one word (prose has spaces), not a reference, alias,
-/// tag, block or flow (`$`, `*`, `&`, `!`, `|`, `>`, `{`, `[`, `%`, `@`, `<`, `~`), and not
-/// and no `setting` (null, a boolean, a type name, `id-token: write`, a duration, a path).
+/// tag, block or flow (`$`, `*`, `&`, `!`, `|`, `>`, `{`, `[`, `%`, `@`, `<`, `~`), and no
+/// `setting` (null, a boolean, a type name, `id-token: write`, a duration, a version, a path).
 fn plain_literal(v: &str) -> bool {
     !v.is_empty()
         && !v.contains(char::is_whitespace)
