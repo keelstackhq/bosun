@@ -590,8 +590,8 @@ fn check(
     }
     // A fetch or pull next to other shell commands reads an environment the guard cannot see.
     if let Some(why) = fetch_not_plain(command)
-        .or_else(|| glob_rule(command))
         .filter(|_| depth == 0)
+        .or_else(|| glob_rule(command, depth == 0))
     {
         return Some(format!("`{}` is refused ({why})", command.trim()));
     }
@@ -3399,11 +3399,13 @@ fn local_word(w: &str) -> bool {
         || (!w.contains(':') && w.starts_with('.'))
 }
 
-/// Whether the fetch reads `origin` or `upstream` (or the default remote): only those may write
-/// the default branch or mirror tags. Any other name may be a directory (`evil2`).
+/// Whether the fetch reads only `origin` or `upstream` (or the default remote; not `--all` or
+/// `--multiple` in any prefix): any other name may be a directory (`evil2`).
 fn fetch_trusted(rest: &[&str]) -> bool {
     let (words, _) = fetch_words(rest);
-    !words.iter().any(|w| local_word(w))
+    let many = |a: &&str| a.len() >= 4 && ["--all", "--multiple"].iter().any(|o| o.starts_with(a));
+    !rest.iter().any(many)
+        && !words.iter().any(|w| local_word(w))
         && words
             .first()
             .is_none_or(|w| matches!(w.as_str(), "origin" | "upstream"))
@@ -3440,7 +3442,6 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     let plain = |seg: &str| {
         let w: Vec<&str> = seg.split_whitespace().collect();
         match w.first() {
-            None => true,
             // Config (`-c protocol.ext.allow=always`), `--upload-pack` (`-u`, `--upl`) and
             // `--exec-path` run code: words are read unquoted (`'-c'`).
             Some(&"git") => {
@@ -3474,7 +3475,7 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
 
 /// An unquoted `*`, `?` or `[` in a command word or any git word (`/usr/bin/gi[t]`, `git f?tch`);
 /// `[` and `[[` alone are the test builtin.
-fn glob_rule(command: &str) -> Option<&'static str> {
+fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     let (mut segs, mut word, mut glob, mut quote, mut esc) =
         (vec![Vec::new()], String::new(), false, None, false);
     for c in command.chars().chain([' ']) {
@@ -3486,8 +3487,8 @@ fn glob_rule(command: &str) -> Option<&'static str> {
             (None, '\'' | '"') => quote = Some(c),
             (None, c) if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')') => {
                 if !word.is_empty() || glob {
-                    segs.last_mut()?.push((std::mem::take(&mut word), glob));
-                    glob = false;
+                    segs.last_mut()?
+                        .push((std::mem::take(&mut word), std::mem::take(&mut glob)));
                 }
                 if !c.is_whitespace() || c == '\n' {
                     segs.push(Vec::new());
@@ -3496,15 +3497,24 @@ fn glob_rule(command: &str) -> Option<&'static str> {
             (None, c) => (glob, _) = (glob || matches!(c, '*' | '?' | '['), word.push(c)),
         }
     }
+    // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
+    static CLASS: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("static regex"));
+    let names_git = |w: &str| {
+        let pat = CLASS.replace_all(w.rsplit('/').next().unwrap_or(w), "?");
+        let re = regex::escape(&pat).replace(r"\*", ".*").replace(r"\?", ".");
+        Regex::new(&format!("^{re}$")).is_ok_and(|r| r.is_match("git"))
+    };
     segs.iter().find_map(|seg| {
-        let assign = |w: &&(String, bool)| w.0.contains('=') && !w.0.starts_with('-');
-        let mut words = seg
+        let git = seg
             .iter()
-            .skip_while(assign)
-            .skip_while(|w| WRAPPERS.contains(&&*w.0));
-        let (cmd, cmd_glob) = words.next()?;
-        let git = cmd.rsplit('/').next() == Some("git") && seg.iter().any(|w| w.1);
-        (*cmd_glob && cmd != "[" && cmd != "[[" || git).then_some(GLOB_WORD)
+            .any(|w| w.0.rsplit('/').next() == Some("git") || w.1 && names_git(&w.0));
+        let assign = |w: &&(String, bool)| w.0.contains('=') && !w.0.starts_with('-');
+        let cmd = seg
+            .iter()
+            .find(|w| !assign(w) && !WRAPPERS.contains(&&*w.0));
+        let cmd_glob = cmd.is_some_and(|(c, g)| *g && c != "[" && c != "[[");
+        (cmd_glob && top || git && seg.iter().any(|w| w.1)).then_some(GLOB_WORD)
     })
 }
 
@@ -3574,14 +3584,6 @@ fn fetch_tags(rest: &[&str]) -> bool {
         (a.len() >= 5 && "--tags".starts_with(a.as_str()))
             || (a.len() >= 9 && "--prune-tags".starts_with(a.as_str()))
             || short_flags(&a).is_some_and(|f| f.contains(['t', 'P']))
-    })
-}
-
-/// `--all` or `--multiple` (any unique prefix): the fetch reads remotes it does not name.
-fn fetch_many(rest: &[&str]) -> bool {
-    rest.iter().any(|a| {
-        let a = a.replace(['\'', '"'], "");
-        a.len() >= 4 && ("--all".starts_with(a.as_str()) || "--multiple".starts_with(a.as_str()))
     })
 }
 
@@ -3971,7 +3973,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         // (`'refs/tags/*:refs/tags/*'`, as `--tags`) does not.
         // `git pull <remote> <src>:<dst>` hands its refspecs to fetch.
         "fetch" | "pull"
-            if (fetch_tags(rest) && (!fetch_trusted(rest) || fetch_many(rest)))
+            if (fetch_tags(rest) && !fetch_trusted(rest))
                 // `tag <name>` is git's shorthand for `refs/tags/<name>:refs/tags/<name>`.
                 || fetch_words(rest).0.iter().skip(1).any(|w| w.trim_start_matches('+') == "tag")
                 || rest.iter().any(|a| {
@@ -5367,6 +5369,24 @@ mod tests {
             "git fetch *upload-pack* .",
             "git fetch . +side:mai[n]",
             "g*t push origin HEAD:main",
+            // A glob that can name git, behind any wrapper or nesting.
+            "env -i /usr/bin/gi[t] fetch . +side:main",
+            "env -u X /usr/bin/gi[t] fetch . +side:main",
+            "nice -n 5 /usr/bin/gi[t] fetch . +side:main",
+            "sudo -u root /usr/bin/gi[t] fetch . +side:main",
+            "command -p /usr/bin/gi[t] fetch . +side:main",
+            "exec -a x /usr/bin/gi[t] fetch . +side:main",
+            "timeout 5 /usr/bin/gi[t] fetch . +side:main",
+            "stdbuf -o0 /usr/bin/gi[t] fetch . +side:main",
+            "setsid -w /usr/bin/gi[t] fetch . +side:main",
+            "xargs /usr/bin/gi[t] fetch . <<< '+side:main'",
+            "bash -c '/usr/bin/gi[t] fetch . +side:main'",
+            "eval '/usr/bin/gi[t] fetch . +side:main'",
+            "timeout 5 g?t push origin HEAD:main",
+            "nice *t push",
+            "echo x | xargs *",
+            // A bare `*` component can name git (was allowed).
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+refs/heads/*:refs/remotes/origin/*; git status",
             // Unquoted, bash may expand it against planted files (was allowed).
             "git fetch origin +refs/tags/*:refs/tags/*",
             "git remote rename evil upstream",
@@ -5382,7 +5402,6 @@ mod tests {
             "git fetch --dept 1 origin main:main",
             "git fetch --depth=1 origin main:main",
             "git fetch evil2 feat:feat",
-            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+refs/heads/*:refs/remotes/origin/*; git status",
             "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
             "git config --get remote.origin.fetch",
             "git log -n {1..100}",
@@ -5422,6 +5441,8 @@ mod tests {
             "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
             "[ -d x ] && git status",
             "ls *.rs",
+            "rm -f *.log",
+            "timeout 5 ls *.rs",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",
             "git fetch -pP origin",
@@ -6384,7 +6405,7 @@ mod tests {
         ("rg -uu x ../../../home/user", true), ("grep -r x ../*/*", true),
         ("grep -r x ../../*/*", true), ("rg TODO ../bosun", false), ("rg x ../.claude", false),
         ("grep -r x /*", true), ("grep -r x /r*", true), ("grep -r x /ro?t", true),
-        ("grep -r x /home/b*", true), ("grep -r x /tmp/*", false), ("grep -r x src/*", false),
+        ("grep -r x /home/b*", true), ("grep -r x /tmp/*", true), ("grep -r x src/*", true),
         // A pager or view is judged as a command run on a file; a shell there runs the output.
         ("ugrep --view sops x f", false), ("ug --view=sops x f", true), ("ugrep --vi=sops x f", true),
         ("ugrep --pager sops x f", false), ("ugrep --pager=sops x f", true), ("ack --pager sops x", true),
