@@ -3311,24 +3311,25 @@ fn fetch_moves(rest: &[&str], default_branch: &str) -> bool {
     let (mut words, mut maps) = (Vec::new(), Vec::new());
     let mut it = rest.iter().map(|a| a.replace(['\'', '"'], ""));
     while let Some(a) = it.next() {
-        // A `--refmap` value is a refspec too.
-        if let Some(m) = a.strip_prefix("--refmap=") {
-            maps.push(m.to_string());
-        } else if a == "--refmap" {
-            maps.extend(it.next());
+        // A `--refmap` value (also `--refm`, `--refma`) is a refspec too.
+        let key = a.split('=').next().unwrap_or(&a);
+        if key.len() >= 6 && "--refmap".starts_with(key) {
+            match a.split_once('=') {
+                Some((_, m)) => maps.push(m.to_string()),
+                None => maps.extend(it.next()),
+            }
         } else if value.split_whitespace().any(|v| v == a) {
             it.next();
         } else if !a.starts_with('-') {
             words.push(a);
         }
     }
-    let Some(remote) = words.first() else {
-        return false;
-    };
-    let local = remote.starts_with(['.', '/', '~'])
-        || remote.starts_with("file:")
-        || remote.contains(['$', '`']);
-    words[1..].iter().chain(&maps).any(|r| {
+    // Any word may be the remote: an abbreviated value option (`--dept 1 /tmp/x`) hides it.
+    let local = words.iter().any(|w| {
+        w.starts_with("file:")
+            || (!w.contains(':') && (w.starts_with(['.', '/', '~']) || w.contains(['$', '`'])))
+    });
+    words.iter().skip(1).chain(&maps).any(|r| {
         let spec = r.trim_start_matches('+');
         let Some((src, dst)) = spec.rsplit_once(':') else {
             return r.contains(['$', '`']);
@@ -4839,6 +4840,26 @@ mod tests {
             "git fetch --refmap='+refs/heads/*:refs/remotes/origin/*' origin",
             "git -c remote.origin.fetch=+refs/heads/*:refs/remotes/origin/* fetch origin",
             "git -c core.x=1 fetch origin",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    /// Owner review: abbreviated `--refmap` and value options must not hide a local remote.
+    #[test]
+    fn merge_lock_reads_abbreviated_fetch_options() {
+        for cmd in [
+            "git fetch --refm=+refs/heads/feat:refs/heads/main origin feat",
+            "git fetch --refma +refs/heads/feat:refs/heads/main origin feat",
+            "git fetch --dept 1 /tmp/evil +main:main",
+            "git fetch --jo 1 ../evil main:main",
+            "git fetch --upload-pa x . main:main",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+        for cmd in [
+            "git fetch --dept 1 origin main:main",
+            "git fetch --refm= origin",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
