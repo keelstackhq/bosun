@@ -493,6 +493,36 @@ fn versions_lockfiles_and_interpolations_are_not_secrets() {
         ("deploy/values.yml", "  jsonweb@TOK@: ~9.0.2"),
         ("config/db.rb", "  'password' => \"#{ENV['DB_PASS']}\","),
         ("config/db.php", "    'password' => \"{$pass}\","),
+        ("config/db.php", "    'password' => \"$pass\","),
+        ("config/db.rb", "  'password' => \"#{pw}\","),
+        ("config/db.php", "    'password' => $pass,"),
+        // A single-quoted reference is shell text outside PHP, Ruby and Perl; `'${X}'` and a
+        // lone `'$'` are references or nothing in any file.
+        ("config/db.php", "    'password' => '${DB_PASSWORD}',"),
+        // Password hashes are no secrets: bcrypt, argon2 and phpass.
+        (
+            "database/factories/UserFactory.php",
+            "    'password' => '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi',",
+        ),
+        (
+            "config/db.php",
+            "    'password' => '$2b$12$abcdefghijklmnopqrstuv',",
+        ),
+        (
+            "config/db.php",
+            "    'password' => '$argon2id$v=19$m=65536,t=4,p=1$c2FsdA$aGFzaA',",
+        ),
+        (
+            "config/db.php",
+            "    'password' => '$P$Babcdefghijklmnopqrstuvwxyz1',",
+        ),
+        ("config/db.php", "    'password' => '$',"),
+        ("docker/entrypoint.sh", "  'password' => '$DB_PASSWORD',"),
+        ("docker/entrypoint.sh", "  'password' => '${DB_PASSWORD}',"),
+        (
+            "tools/setup.sh",
+            "echo \"'password' => '$DB_PASSWORD'\" > c.php",
+        ),
     ] {
         assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
     }
@@ -513,6 +543,12 @@ fn version_dollar_and_lock_lookalikes_still_match() {
         ("deploy/a.yml", "  password: P4ss$word9"),
         ("config/db.php", "    'password' => 'v1.2a',"),
         ("config/db.php", "    'password' => 'P4ss$w',"),
+        // Single quotes never interpolate in PHP or Ruby: `'$ecret1'` is a literal.
+        ("config/db.php", "    'password' => '$ecret1',"),
+        ("config/db.php", "    'password' => '$2ecret1',"),
+        ("config/db.php", "    'password' => '$Password1',"),
+        ("config/db.rb", "  'password' => '$ecret1',"),
+        ("config/db.php", "    '@TOK@' => '$3cr3t',"),
         ("deploy/deadlock.yaml", "  password: s3cr3tX"),
         ("deploy/block.yml", "  password: s3cr3tX"),
     ] {
