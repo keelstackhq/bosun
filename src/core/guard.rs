@@ -3220,7 +3220,7 @@ fn alone_fix(words: &[&str]) -> String {
     format!("{PUSH_ALONE}; run the push as its own command, or name both sides: `{b}:{b}`")
 }
 
-const FETCH_PLAIN: &str = "a fetch or pull next to other shell commands, whose environment the guard cannot read; run git fetch/pull as its own command (`cd` and other `git` commands may join it with `&&`)";
+const FETCH_PLAIN: &str = "a fetch or pull next to other shell commands, whose environment the guard cannot read, or a git command that runs a local command (`ext::`, `fd::`, `-c`, `--upload-pack`, `--exec-path` with a fetch); run a plain git fetch/pull as its own command (`cd` and other `git` commands may join it with `&&`)";
 
 const FETCH_MOVES: &str = "a fetch into the default branch or into a ref the guard cannot read; name the branch literally";
 
@@ -3434,21 +3434,34 @@ fn fetch_not_plain(command: &str) -> bool {
     // `fe""tch` and `\\fetch` run fetch too.
     let bare = |w: &str| matches!(w.replace(['\'', '"', '\\'], "").as_str(), "fetch" | "pull");
     let git = |w: &str| w.replace(['\'', '"', '\\'], "").rsplit('/').next() == Some("git");
-    if !text.split(cut).any(bare) || !text.split(cut).any(git) {
+    if !text.split(cut).any(git) {
+        return false;
+    }
+    // `ext::<cmd>` and `fd::` transports run a command or read a descriptor, in any git command
+    // (`remote add x 'ext::sh p'`, then a fetch), however quoted.
+    let unquoted = text.replace(['\'', '"', '\\'], "");
+    if unquoted.contains("ext::") || unquoted.contains("fd::") {
+        return true;
+    }
+    if !text.split(cut).any(bare) {
         return false;
     }
     let plain = |seg: &str| {
         let w: Vec<&str> = seg.split_whitespace().collect();
         match w.first() {
             None => true,
-            // `-c protocol.ext.allow=always`, `url.ext::...insteadOf`: config that runs code.
+            // Config (`-c protocol.ext.allow=always`), `--upload-pack` (`-u`, `--upl`) and
+            // `--exec-path` run code: words are read unquoted (`'-c'`).
             Some(&"git") => {
-                !(w.iter().any(|a| bare(a))
-                    && (w
-                        .iter()
-                        .any(|a| *a == "-c" || a.starts_with("--config-env"))
-                        || seg.contains("ext::")
-                        || seg.contains("fd::")))
+                let u: Vec<String> = w.iter().map(|a| a.replace(['\'', '"', '\\'], "")).collect();
+                !(u.iter().any(|a| bare(a))
+                    && u.iter().any(|a| {
+                        a == "-c"
+                            || ["--config-env", "--upl", "--ex"]
+                                .iter()
+                                .any(|p| a.starts_with(p))
+                            || short_flags(a).is_some_and(|f| f.contains('u'))
+                    }))
             }
             Some(&"cd") => w.len() <= 2,
             Some(&("tail" | "head")) => {
@@ -5299,6 +5312,21 @@ mod tests {
             "git fetch 'ext::sh -c x'",
             "git fetch fd::3",
             "git -c protocol.ext.allow=always fe\"\"tch 'ext::sh -c x'",
+            // Unquoted words, upload-pack and command transports in any git command.
+            "git fetch --upload-pack='git update-ref refs/heads/ma''in abc #' .",
+            "git pull --upload-pack='x #' .",
+            "git fetch -u 'x #' .",
+            "git fetch --upl='x #' .",
+            "git fetch --upload-pack 'x #' .",
+            "git --exec-path=/tmp/d fetch origin",
+            "git '-c' protocol.ext.allow=always fetch 'e'\"xt::sh /tmp/p.sh\"",
+            "git '--config-env=protocol.ext.allow=E' fetch origin",
+            "git fetch 'fd'::3",
+            "git remote add x 'ext::sh /tmp/p.sh'",
+            "git remote set-url origin ext::sh",
+            "git config remote.x.url 'fd::3'",
+            "git clone 'ext::sh /tmp/p.sh' d",
+            "git push 'ext::sh x' feat:feat",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5346,6 +5374,8 @@ mod tests {
             "git fetch origin && git merge --ff-only origin/main",
             "git pull --rebase 2>&1 | tail -5",
             "git -C x fetch origin",
+            "git pull -Xours origin feature",
+            "git fetch --update-head-ok origin",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",
             "git fetch -pP origin",
