@@ -1,0 +1,1 @@
+- Merge-lock: refuse `git symbolic-ref` writes under `refs/tags/`, brace-expanded refspecs (`refs/{tags,x}/v1`, `{main,feat}`), local fetches into the default branch or from a variable refspec (`git fetch . feat:main`, `git fetch . $SPEC`), and a git subcommand held in a variable (`git $g x`).

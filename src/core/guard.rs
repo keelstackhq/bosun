@@ -1584,6 +1584,26 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
             return Some("`xargs` adds arguments the guard cannot see");
         }
     }
+    // Bash expands `{a,b}` before the command runs: judge the words it makes. A `{x..y}`
+    // sequence (or too many words) is not expanded, so a git or gh command with one fails closed.
+    let mut grown = (false, segment.to_string(), Vec::new());
+    for w in words {
+        match braces(w) {
+            Some(Ok(ex)) => {
+                grown.1 = grown.1.replacen(w, &ex.join(" "), 1);
+                grown.2.extend(ex);
+                grown.0 = true;
+            }
+            Some(Err(())) if matches!(words.first().map(|w| base(w)), Some("git" | "gh")) => {
+                return Some(UNREAD_BRACE);
+            }
+            _ => grown.2.push(w.to_string()),
+        }
+    }
+    if grown.0 {
+        let words: Vec<&str> = grown.2.iter().map(String::as_str).collect();
+        return merge_rule(&words, &grown.1, &target);
+    }
     // `\git`, `"git"`, `g''it` and `/usr/bin/git` all run git.
     // A word with an open quote is part of a longer string (`python -c 'gh ..'`): left as is.
     let first = words.first().map(|w| {
@@ -1654,6 +1674,78 @@ fn exec_rule(
 fn calls_system(s: &str) -> bool {
     s.match_indices("system")
         .any(|(i, m)| s[i + m.len()..].trim_start().starts_with('('))
+}
+
+const UNREAD_BRACE: &str = "a `{x..y}` brace sequence the guard cannot see through: \
+    write the words out";
+
+/// Bash brace expansion of one word: `None` when it has no unquoted `{a,b}` list (`${x}`,
+/// `@{u}`, `{}` stay as they are); `Err` for a `{x..y}` sequence or more than 64 words.
+fn braces(word: &str) -> Option<Result<Vec<String>, ()>> {
+    let (mut quote, mut esc) = (None, false);
+    for (i, c) in word.char_indices() {
+        match (quote, c) {
+            _ if std::mem::take(&mut esc) => {}
+            (Some('\''), '\'') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => esc = true,
+            (Some(_), '"') => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '{') if !word[..i].ends_with('$') => {
+                let Some((end, cuts)) = brace_list(&word[i..]) else {
+                    continue;
+                };
+                if cuts.is_empty() {
+                    if word[i..i + end].contains("..") {
+                        return Some(Err(()));
+                    }
+                    continue;
+                }
+                let (head, tail) = (&word[..i], &word[i + end + 1..]);
+                let mut out = Vec::new();
+                let mut from = 1;
+                for cut in cuts.into_iter().chain([end]) {
+                    let one = format!("{head}{}{tail}", &word[i + from..i + cut]);
+                    match braces(&one) {
+                        None => out.push(one),
+                        Some(Ok(more)) => out.extend(more),
+                        Some(Err(())) => return Some(Err(())),
+                    }
+                    from = cut + 1;
+                }
+                return Some(if out.len() > 64 { Err(()) } else { Ok(out) });
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// For text starting with `{`: the offset of its matching `}` and of its top-level commas.
+fn brace_list(s: &str) -> Option<(usize, Vec<usize>)> {
+    let (mut depth, mut quote, mut esc, mut cuts) = (0, None, false, Vec::new());
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            _ if std::mem::take(&mut esc) => {}
+            (Some('\''), '\'') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => esc = true,
+            (Some(_), '"') => quote = None,
+            (Some(_), _) => {}
+            (None, '\'' | '"') => quote = Some(c),
+            (None, '{') => depth += 1,
+            (None, '}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((i, cuts));
+                }
+            }
+            (None, ',') if depth == 1 => cuts.push(i),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// For a command word the shell builds (`$g`, `"$G"`, `${X:-y}`, `$(..)`, a backtick span): the
@@ -2936,6 +3028,9 @@ fn alone_fix(words: &[&str]) -> String {
     format!("{PUSH_ALONE}; run the push as its own command, or name both sides: `{b}:{b}`")
 }
 
+const BUILT_SUB: &str = "a git subcommand built by the shell, which the guard cannot see: \
+    write the subcommand out, not a variable or substitution";
+
 const UNREAD_PUSH: &str = "a push target the guard cannot read; name the branch literally, as in `git push -u origin claude/fix-1`";
 
 /// A command that is one plain `git` call: no other command, `$`, backtick, group, redirect
@@ -3036,6 +3131,44 @@ fn ff_only(rest: &[&str], default_branch: &str) -> bool {
             matches!(**r, "@{u}" | "@{upstream}")
                 || r.strip_prefix("origin/") == Some(default_branch)
         })
+}
+
+/// `git fetch . <refspec>` (or a path, or a remote in a variable) moves local refs like
+/// `update-ref`: refused for a refspec in a variable, `--stdin`, or one whose destination
+/// names the default branch (tags are refused for every remote).
+fn local_fetch(rest: &[&str], default_branch: &str) -> bool {
+    const VALUE: [&str; 9] = [
+        "--depth",
+        "--deepen",
+        "--shallow-since",
+        "--shallow-exclude",
+        "-j",
+        "--jobs",
+        "--upload-pack",
+        "--refmap",
+        "--negotiation-tip",
+    ];
+    let (mut words, mut it) = (Vec::new(), rest.iter().map(|a| a.replace(['\'', '"'], "")));
+    while let Some(a) = it.next() {
+        if VALUE.contains(&a.as_str()) || a == "-o" || a == "--server-option" {
+            it.next();
+        } else if !a.starts_with('-') {
+            words.push(a);
+        }
+    }
+    let Some(remote) = words.first() else {
+        return false;
+    };
+    let local = remote.starts_with(['.', '/', '~'])
+        || remote.starts_with("file:")
+        || remote.contains(['$', '`']);
+    local
+        && (rest.contains(&"--stdin")
+            || words[1..].iter().any(|r| {
+                r.contains(['$', '`'])
+                    || r.rsplit_once(':')
+                        .is_some_and(|(_, d)| names_default(d, default_branch))
+            }))
 }
 
 /// `v1.2.3`, `1.2` ...: a ref that looks like a version tag.
@@ -3144,6 +3277,10 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     }
     let sub = args.get(i)?.replace(['\'', '"', '\\'], "");
     let (sub, rest) = (sub.as_str(), &args[(i + 1).min(args.len())..]);
+    // `git $g`, `git "${G}"`: the subcommand could be `merge`, `push` or `tag`: fail closed.
+    if sub.contains(['$', '`']) {
+        return Some(BUILT_SUB);
+    }
     let at: Option<Vec<String>> = target
         .dir
         .filter(|_| known)
@@ -3267,11 +3404,13 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         // `--stdin`, a variable, a backtick or an escape in a ref hides it: fail closed. `-m`
         // quoting is not parsed (`-m "a b"c $r`, `-dm x $r` hide the ref from any parser), so ANY
         // non-flag argument with `$` or a backtick denies, a `"$sha"` value included.
-        "update-ref" => (rest.iter().any(|a| {
+        // `symbolic-ref` writes a ref the same way (`refs/tags/x` or `tags/x` as its name).
+        "update-ref" | "symbolic-ref" => (rest.iter().any(|a| {
             let q = a.replace(['\'', '"'], "");
             a.contains(['`', '\\'])
                 || a.starts_with("--stdin")
                 || q.contains("refs/tags/")
+                || (sub == "symbolic-ref" && q.starts_with("tags/"))
                 || (!q.starts_with('-') && q.contains('$'))
         }))
         .then_some("tag"),
@@ -3286,6 +3425,9 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             }) =>
         {
             Some("tag")
+        }
+        "fetch" if local_fetch(rest, default_branch) => {
+            Some("a local fetch into the default branch or into a ref held in a variable")
         }
         "tag" => {
             let lists = rest.is_empty()
@@ -4201,6 +4343,63 @@ mod tests {
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
+    }
+
+    /// Review of the merge-lock: `symbolic-ref` tags, brace refspecs, local fetches and a
+    /// subcommand the shell builds.
+    #[test]
+    fn merge_lock_refuses_symbolic_ref_braces_local_fetch_and_built_subcommands() {
+        refused_then_allowed(
+            &[
+                "git symbolic-ref refs/tags/x refs/heads/main",
+                "git symbolic-ref -m why refs/tags/x refs/heads/main",
+                "git symbolic-ref 'refs/tags/x' refs/heads/feature",
+                "git symbolic-ref tags/x refs/heads/main",
+                "git symbolic-ref $r refs/heads/main",
+                "git symbolic-ref refs/t\\ags/x refs/heads/main",
+                "git push origin refs/{tags,x}/v1",
+                "git push origin {main,feat}",
+                "git push origin feat:{main,x}",
+                "git push origin refs/{heads,tags}/{a,b}",
+                "git update-ref refs/{tags,heads}/v1 HEAD",
+                "git symbolic-ref refs/{tags,x}/v1 refs/heads/main",
+                "git fetch . refs/{tags,x}/v1:refs/{tags,x}/v1",
+                "git fetch . $SPEC",
+                "git fetch . \"$SPEC\"",
+                "git fetch . HEAD:refs/tags/v1",
+                "git fetch . feat:main",
+                "git fetch . +feat:refs/heads/main",
+                "git fetch ../other feat:main",
+                "git fetch /tmp/repo feat:heads/main",
+                "git fetch --depth 1 . feat:main",
+                "g=merge; git $g x",
+                "git \"$g\" x",
+                "git ${G} origin main",
+                "git -C wt $g x",
+                "git $(echo push) origin main",
+                "git push origin v{1..3}",
+            ],
+            &[
+                "git symbolic-ref HEAD",
+                "git symbolic-ref --short HEAD",
+                "git symbolic-ref -q HEAD",
+                "git symbolic-ref HEAD refs/heads/feature",
+                "git push origin {feat,feat}:{feat,feat}",
+                "git push -u origin feature:feature",
+                "git log --format='{a,b}' -1",
+                "git log '{a,b}'",
+                "gh api repos/{owner}/{repo}/pulls",
+                "find . -name x -exec grep -l y {} +",
+                "git fetch origin",
+                "git fetch origin main",
+                "git fetch origin main:refs/remotes/origin/main",
+                "git fetch --all --prune",
+                "git fetch . feat:other",
+                "for i in {1..3}; do echo $i; done",
+                "git -C \"$dir\" status",
+                "git status",
+            ],
+        );
     }
 
     #[test]
