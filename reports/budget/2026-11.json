@@ -1283,10 +1283,12 @@
       "models": null,
       "outcome": "held",
       "pr": 453,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "feat: bosun progress counts held outcomes, leaving out reverted tasks",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1294,10 +1296,12 @@
       "models": null,
       "outcome": "held",
       "pr": 454,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "feat: review pack and spawn prompts mark issue, PR and Slack text as untrusted data",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1316,10 +1320,12 @@
       "models": null,
       "outcome": "held",
       "pr": 456,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "fix: review-pack delta shows only the PR's own files after a main merge",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1327,10 +1333,12 @@
       "models": null,
       "outcome": "held",
       "pr": 457,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "feat: verdicts record the reviewer model; review_models resets trust on a model swap",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1349,10 +1357,12 @@
       "models": null,
       "outcome": "held",
       "pr": 459,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "fix: progress reads the task PR from writers only; revert lookup by head",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1360,10 +1370,12 @@
       "models": null,
       "outcome": "held",
       "pr": 460,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "fix: an empty BOSUN_GITHUB_API counts as unset",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1371,10 +1383,12 @@
       "models": null,
       "outcome": "held",
       "pr": 461,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "docs: operating-model round-end state and deferrals",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1426,10 +1440,12 @@
       "models": null,
       "outcome": "held",
       "pr": 466,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "test: pinned config knows review_models from 0.11.0; drop stale paste step",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1437,10 +1453,12 @@
       "models": null,
       "outcome": "held",
       "pr": 467,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "fix: review-pack and verdict hardening from review follow-ups",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1448,10 +1466,12 @@
       "models": null,
       "outcome": "held",
       "pr": 468,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "fix: spend records count only from writers",
       "tokens": null,
-      "usd": null
+      "usd": 7.226667
     },
     {
       "issue": null,
@@ -1481,23 +1501,1468 @@
       "models": null,
       "outcome": "held",
       "pr": 471,
-      "sessions": null,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
       "title": "fix: registry and lease records count only from writers",
+      "tokens": null,
+      "usd": 7.226667
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 472,
+      "sessions": null,
+      "title": "Budget reports",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T06:30:30Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 473,
+      "sessions": [
+        "session_01SsFUkgGF6kyTWKYMSRQbC6"
+      ],
+      "title": "fix: last raw lease, leave and task-pr readers use writers' records",
+      "tokens": null,
+      "usd": 7.226667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-09T19:39:45Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 474,
+      "sessions": null,
+      "title": "feat: bosun pin --latest --pr opens the pin PR in one step",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-09T19:57:28Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 475,
+      "sessions": null,
+      "title": "feat: doctor reports update available with the one-command fix",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T07:38:45Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 476,
+      "sessions": [
+        "session_01SsFUkdVsZQAo1gvGepoZ3p"
+      ],
+      "title": "feat: budget record --pr, report counts spend on the PR",
+      "tokens": null,
+      "usd": 3.02
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-09T20:21:56Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 477,
+      "sessions": null,
+      "title": "docs: update path (README, docs/update.md) and a no-re-paste test",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-09T21:26:49Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 478,
+      "sessions": null,
+      "title": "fix: update polish: dated pin branch, step 17 always, binary warning kept",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T07:23:06Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 479,
+      "sessions": [
+        "session_01SsFUkdXtcE49vVyLvaYkXE"
+      ],
+      "title": "fix: record-text follow-up to #473",
+      "tokens": null,
+      "usd": 0.64
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T09:18:58Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 480,
+      "sessions": null,
+      "title": "feat(adopt): --policy flag",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T09:49:04Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 481,
+      "sessions": null,
+      "title": "feat(npm): @keelstackhq/cargo-deny packages",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T09:49:00Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 482,
+      "sessions": null,
+      "title": "feat(gates): default rust test gate is cargo test",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T10:01:15Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 483,
+      "sessions": null,
+      "title": "feat(setup): skip absent stacks, no nextest build",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T09:49:32Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 484,
+      "sessions": null,
+      "title": "feat: changesets are fragments (CS-8)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 485,
+      "sessions": null,
+      "title": "feat(approve): chat approval record core + [approvals] chat",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 486,
+      "sessions": null,
+      "title": "feat: [ci] provider config + adopt detection (chat-approval T8)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 487,
+      "sessions": null,
+      "title": "feat(approve): --list returns ask + next (chat approval T3)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 488,
+      "sessions": null,
+      "title": "feat(risk-check): count chat approval records (chat-approval T2)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T10:35:06Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 489,
+      "sessions": [
+        "session_01SsFUkeohuFestXj1ZCs1yp"
+      ],
+      "title": "docs: fold changelog and progress fragments for 0.12.0",
+      "tokens": null,
+      "usd": 0.585
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 490,
+      "sessions": null,
+      "title": "feat(hooks): PostToolUse stores AskUserQuestion answers; holds (chat approval T4)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 491,
+      "sessions": null,
+      "title": "feat(guard): PreToolUse chat-lock against forged chat records (chat-approval T6)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 492,
+      "sessions": null,
+      "title": "feat(approve): --chat records the owner's chat approval (chat-approval T5)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T10:53:03Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 493,
+      "sessions": [
+        "session_01SsFUkeohuFestXj1ZCs1yp"
+      ],
+      "title": "chore(release): 0.12.0",
+      "tokens": null,
+      "usd": 0.585
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 494,
+      "sessions": null,
+      "title": "feat(hooks): user-scope hooks + session-start un-adopted detection (T7)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 495,
+      "sessions": null,
+      "title": "feat(intake): verify --chat counts the orchestrator's intake chat record (T12)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 496,
+      "sessions": null,
+      "title": "feat(pr): no-CI pr --ready; approve --list/--chat read local checks (T9)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T11:56:33Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 497,
+      "sessions": [
+        "session_01SsFUkej2NAJe1LVdMQn7CW"
+      ],
+      "title": "fix(github): own permission from the repo when a proxy blocks /collaborators",
+      "tokens": null,
+      "usd": 1.29
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 498,
+      "sessions": null,
+      "title": "feat(merge): `bosun merge <pr>` for the orchestrator (chat approval T10, D-019)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T12:41:11Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 499,
+      "sessions": [
+        "session_01SsFUkf9upRdJ5iF8yu4Q7Y"
+      ],
+      "title": "docs: fold changelog and progress fragments for 0.12.1",
+      "tokens": null,
+      "usd": 0.395
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 501,
+      "sessions": null,
+      "title": "docs: chat approval migration, approvers optional (T11)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T12:57:57Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 504,
+      "sessions": [
+        "session_01SsFUkf9upRdJ5iF8yu4Q7Y"
+      ],
+      "title": "chore(release): 0.12.1",
+      "tokens": null,
+      "usd": 0.395
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T14:04:31Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 505,
+      "sessions": [
+        "session_01SsFUkebnYh5oeTWBx51DCD"
+      ],
+      "title": "fix(guard): merge-lock reads interpreter code and scripts",
+      "tokens": null,
+      "usd": 5.963333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T13:43:09Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 506,
+      "sessions": [
+        "session_01SsFUkd887utx1WgQsW6ayv"
+      ],
+      "title": "fix(hooks): lock on the fixed kill-switch phrases in message or fix",
+      "tokens": null,
+      "usd": 4.67
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T13:24:17Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 507,
+      "sessions": [
+        "session_01SsFUkeT9PM5BC6PhxWQn9o"
+      ],
+      "title": "feat(schema): `bosun schema` prints the envelope and data contract (1/3)",
+      "tokens": null,
+      "usd": 3.613333
+    },
+    {
+      "issue": 508,
+      "merged_at": "2026-11-10T13:28:31Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 509,
+      "sessions": [
+        "session_01SsFUkhDWBT43SfMEzNCtZ5"
+      ],
+      "title": "docs(plan): number the B4 UCs without gaps (UC-B4-2b -> UC-B4-3)",
+      "tokens": null,
+      "usd": 3.275
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T14:30:30Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 511,
+      "sessions": [
+        "session_01SsFUkebnYh5oeTWBx51DCD"
+      ],
+      "title": "fix(guard): edit-lock judges plain Bash file writes",
+      "tokens": null,
+      "usd": 5.963333
+    },
+    {
+      "issue": 515,
+      "merged_at": "2026-11-10T13:50:12Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 521,
+      "sessions": [
+        "session_01SsFUkhDWBT43SfMEzNCtZ5"
+      ],
+      "title": "feat(github): check-run client for the gate App (B2/T1)",
+      "tokens": null,
+      "usd": 3.275
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T13:54:39Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 522,
+      "sessions": [
+        "session_01SsFUkeT9PM5BC6PhxWQn9o"
+      ],
+      "title": "feat(schema): describe the data of every remaining command (2/3)",
+      "tokens": null,
+      "usd": 3.613333
+    },
+    {
+      "issue": 516,
+      "merged_at": "2026-11-10T13:56:20Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 523,
+      "sessions": [
+        "session_01SsFUkhDWBT43SfMEzNCtZ5"
+      ],
+      "title": "feat(config): [checks] mode and the hoist.toml table form of required_checks (B2/T2)",
+      "tokens": null,
+      "usd": 3.275
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T14:15:24Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 525,
+      "sessions": [
+        "session_01SsFUkd887utx1WgQsW6ayv"
+      ],
+      "title": "test: common bosun() clears CI and CLAUDECODE, so no test is counted",
+      "tokens": null,
+      "usd": 4.67
+    },
+    {
+      "issue": 517,
+      "merged_at": "2026-11-10T14:13:26Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 526,
+      "sessions": [
+        "session_01SsFUkhDWBT43SfMEzNCtZ5"
+      ],
+      "title": "feat(gates): one gate writer for statuses, dual and checks modes (B2/T3)",
+      "tokens": null,
+      "usd": 3.275
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T14:21:48Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 527,
+      "sessions": [
+        "session_01SsFUkeT9PM5BC6PhxWQn9o"
+      ],
+      "title": "feat(schema): `--format ts` declarations and the Code Mode README (3/3)",
+      "tokens": null,
+      "usd": 3.613333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T14:34:21Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 529,
+      "sessions": [
+        "session_01SsFUkd887utx1WgQsW6ayv"
+      ],
+      "title": "fix(hooks): CLI repeat counter keyed to the hook's repo; deny parsed from JSON",
+      "tokens": null,
+      "usd": 4.67
+    },
+    {
+      "issue": 518,
+      "merged_at": "2026-11-10T14:40:19Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 530,
+      "sessions": [
+        "session_01SsFUkhDWBT43SfMEzNCtZ5"
+      ],
+      "title": "feat(gates): read gates and verdict records back by App in checks mode (B2/T4)",
+      "tokens": null,
+      "usd": 3.275
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T14:58:07Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 531,
+      "sessions": [
+        "session_01SsFUkebnYh5oeTWBx51DCD"
+      ],
+      "title": "fix(guard): skip a stdin script only when its own segment has the heredoc",
+      "tokens": null,
+      "usd": 5.963333
+    },
+    {
+      "issue": 519,
+      "merged_at": "2026-11-10T15:16:31Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 532,
+      "sessions": [
+        "session_01SsFUkhDWBT43SfMEzNCtZ5"
+      ],
+      "title": "feat(gates): checks-mode refusals and the doctor pin check (B2/T5)",
+      "tokens": null,
+      "usd": 3.275
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T16:02:17Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 533,
+      "sessions": [
+        "session_01SsFUkewQzNkjHZWwYFBzRA"
+      ],
+      "title": "feat(hooks): keep bosun state across compaction",
+      "tokens": null,
+      "usd": 2.686667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T16:12:08Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 534,
+      "sessions": [
+        "session_01SsFUkewQzNkjHZWwYFBzRA"
+      ],
+      "title": "feat(config): [session] autocompact_window / autocompact_pct for setup-snippet",
+      "tokens": null,
+      "usd": 2.686667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T16:28:38Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 535,
+      "sessions": [
+        "session_01SsFUkeDxPUFNNk34Wy5nv9"
+      ],
+      "title": "docs: fold changelog and progress fragments for 0.13.0",
+      "tokens": null,
+      "usd": 0.685
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T16:26:16Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 536,
+      "sessions": [
+        "session_01SsFUkewQzNkjHZWwYFBzRA"
+      ],
+      "title": "fix(hooks): bound the GitHub calls of the compaction state block",
+      "tokens": null,
+      "usd": 2.686667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T16:49:09Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 537,
+      "sessions": [
+        "session_01SsFUkeDxPUFNNk34Wy5nv9"
+      ],
+      "title": "chore(release): 0.13.0",
+      "tokens": null,
+      "usd": 0.685
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-10T19:43:38Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 538,
+      "sessions": [
+        "session_01SsFUkhZrHvGY47QLGJnfUD"
+      ],
+      "title": "chore: pin bosun 0.13.0",
+      "tokens": null,
+      "usd": 2.075
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T07:16:18Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 539,
+      "sessions": [
+        "session_01SsFUkhZrHvGY47QLGJnfUD"
+      ],
+      "title": "feat(workflows): gate jobs on the App token (B2W/T1)",
+      "tokens": null,
+      "usd": 2.075
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T07:47:34Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 540,
+      "sessions": [
+        "session_01SsFUkhZrHvGY47QLGJnfUD"
+      ],
+      "title": "feat(channel): gate workflows on the App token behind bosun_app (B2W/T2)",
+      "tokens": null,
+      "usd": 2.075
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T07:49:31Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 541,
+      "sessions": [
+        "session_01SsFUkhZrHvGY47QLGJnfUD"
+      ],
+      "title": "chore(checks): dual mode with the gate App (B2W/T1)",
+      "tokens": null,
+      "usd": 2.075
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T10:52:08Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 543,
+      "sessions": [
+        "session_01SsFUkd5HiD2Kvshu1SHs6K"
+      ],
+      "title": "fix(risk): R-weaken flags *_ALLOWED list growth; weaken capability blocks orchestrator approvals",
+      "tokens": null,
+      "usd": 8.68
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T10:00:43Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 544,
+      "sessions": [
+        "session_01SsFUkd5HiD2Kvshu1SHs6K"
+      ],
+      "title": "fix(cli): next-round nits — pr --ready on plain issues, budget --pr guard, pin --latest branch, docs",
+      "tokens": null,
+      "usd": 8.68
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T10:52:22Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 545,
+      "sessions": [
+        "session_01SsFUkd5HiD2Kvshu1SHs6K"
+      ],
+      "title": "fix(guard): prose in one simple git/gh command is data; heredoc+file and quoted $(.. > f) misses closed",
+      "tokens": null,
+      "usd": 8.68
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T09:21:53Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 546,
+      "sessions": [
+        "session_01SsFUkd5HiD2Kvshu1SHs6K"
+      ],
+      "title": "ci: tsc on the shipped .d.ts; settle() checks-mode tests; golden channel gate workflows",
+      "tokens": null,
+      "usd": 8.68
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T14:38:58Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 547,
+      "sessions": [
+        "session_01SsFUkd5HiD2Kvshu1SHs6K"
+      ],
+      "title": "ci: App token step uses client-id (BOSUN_APP_CLIENT_ID)",
+      "tokens": null,
+      "usd": 8.68
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T14:54:11Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 548,
+      "sessions": [
+        "session_01SsFUkd5HiD2Kvshu1SHs6K"
+      ],
+      "title": "fix(channel): explicit bosun_version writes [approvals] policy only when the pin was checked",
+      "tokens": null,
+      "usd": 8.68
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-11T20:06:43Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 549,
+      "sessions": [
+        "session_01SsFUkdJ4uEhLFkbVY63iaK"
+      ],
+      "title": "docs: modes booster design and plan",
+      "tokens": null,
+      "usd": 4.79
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T04:48:24Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 550,
+      "sessions": [
+        "session_01SsFUkgoGfHhYK9XGTacPKN"
+      ],
+      "title": "feat(mode): [mode] parse and booster command registrations (modes PR 1a)",
+      "tokens": null,
+      "usd": 7.465
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T06:21:56Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 551,
+      "sessions": [
+        "session_01SsFUkgoGfHhYK9XGTacPKN"
+      ],
+      "title": "feat(mode): preset policy, [mode] weaken findings, R-gov deny set, R-gate paths (modes PR 1b)",
+      "tokens": null,
+      "usd": 7.465
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T08:05:15Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 552,
+      "sessions": [
+        "session_01SsFUkddBMmPNAkTBYda9HS"
+      ],
+      "title": "feat(mode): gates before push (push_gates = \"push\")",
+      "tokens": null,
+      "usd": 8.66
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T07:43:18Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 553,
+      "sessions": [
+        "session_01SsFUkfrjF37qU7qGjeNpiY"
+      ],
+      "title": "feat(digest): daily owner approval digest (modes PR 4)",
+      "tokens": null,
+      "usd": 6.19
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T08:18:57Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 554,
+      "sessions": [
+        "session_01SsFUkd7vD9cx9EaM5npA4P"
+      ],
+      "title": "feat(metrics): bosun metrics and the brake from GitHub data (modes PR 5)",
+      "tokens": null,
+      "usd": 8.9
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T08:44:14Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 555,
+      "sessions": [
+        "session_01SsFUkfrjF37qU7qGjeNpiY"
+      ],
+      "title": "feat(digest): signed budget raises (modes PR 4b)",
+      "tokens": null,
+      "usd": 6.19
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T09:22:33Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 556,
+      "sessions": [
+        "session_01SsFUkgR3BkLpR16Y1eGj4B"
+      ],
+      "title": "feat: curator loosening proposals, modes PR 8",
+      "tokens": null,
+      "usd": 3.55
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T09:53:17Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 557,
+      "sessions": [
+        "session_01SsFUke5zf4WGpr71kYUgdD"
+      ],
+      "title": "feat: self-heal red PRs, modes PR 3a",
+      "tokens": null,
+      "usd": 11.24
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T10:15:06Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 558,
+      "sessions": [
+        "session_01SsFUkhjyzEdXNdvDrJ3TXB"
+      ],
+      "title": "feat: wave tick spawns and archives, modes PR 6",
+      "tokens": null,
+      "usd": 10.17
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T12:13:41Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 559,
+      "sessions": [
+        "session_01SsFUkgR9dxTMGMtgDUxpsz"
+      ],
+      "title": "feat: budget per feature, modes PR 7",
+      "tokens": null,
+      "usd": 8.496667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T12:05:04Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 560,
+      "sessions": [
+        "session_01SsFUkg63BTEuYD7veNKEAe"
+      ],
+      "title": "feat: built-in R-revert in risk-check, modes PR 3b-1",
+      "tokens": null,
+      "usd": 7.18
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T12:43:28Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 561,
+      "sessions": [
+        "session_01SsFUkg63BTEuYD7veNKEAe"
+      ],
+      "title": "feat: bosun heal reverts a red main, modes PR 3b-2",
+      "tokens": null,
+      "usd": 7.18
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T14:12:34Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 562,
+      "sessions": [
+        "session_01SsFUkgR9dxTMGMtgDUxpsz"
+      ],
+      "title": "feat: trusted bind records for the feature budget, modes PR 7b",
+      "tokens": null,
+      "usd": 8.496667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T13:46:07Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 563,
+      "sessions": [
+        "session_01SsFUkhdjhex6cSspuJvUb7"
+      ],
+      "title": "docs: modes quickstart, migration and doc updates (modes PR 10)",
+      "tokens": null,
+      "usd": 3.65
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T15:04:40Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 564,
+      "sessions": [
+        "session_01SsFUkgR9dxTMGMtgDUxpsz"
+      ],
+      "title": "feat: epic index on the registry issue, modes PR 7d",
+      "tokens": null,
+      "usd": 8.496667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T16:29:57Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 565,
+      "sessions": [
+        "session_01SsFUkgR9dxTMGMtgDUxpsz"
+      ],
+      "title": "feat: record owner budget raises, modes PR 7c",
+      "tokens": null,
+      "usd": 8.496667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T17:08:12Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 566,
+      "sessions": [
+        "session_01SsFUkdeto4QUZQwcq5D23G"
+      ],
+      "title": "docs: lighter ladder wording in quickstart and spec 18",
+      "tokens": null,
+      "usd": 3.673333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T17:36:45Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 567,
+      "sessions": [
+        "session_01SsFUkgR9dxTMGMtgDUxpsz"
+      ],
+      "title": "feat: feature budget warnings in status, digest and wave tick, modes PR 7e",
+      "tokens": null,
+      "usd": 8.496667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T18:49:25Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 568,
+      "sessions": [
+        "session_01SsFUkdeto4QUZQwcq5D23G"
+      ],
+      "title": "fix: merge-lock refuses send-pack, subtree push and config-driven push targets",
+      "tokens": null,
+      "usd": 3.673333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T19:02:31Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 569,
+      "sessions": [
+        "session_01SsFUkgR9dxTMGMtgDUxpsz"
+      ],
+      "title": "feat: pin the registry issue",
+      "tokens": null,
+      "usd": 8.496667
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T18:50:19Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 570,
+      "sessions": [
+        "session_01SsFUkdeto4QUZQwcq5D23G"
+      ],
+      "title": "docs: channel AGENTS.md says a push runs alone or names src:dst",
+      "tokens": null,
+      "usd": 3.673333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-13T06:26:05Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 571,
+      "sessions": [
+        "session_01SsFUkdeto4QUZQwcq5D23G"
+      ],
+      "title": "fix: resolve git aliases after cd/pushd; sync AGENTS.md step 4",
+      "tokens": null,
+      "usd": 3.673333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-12T20:11:33Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 572,
+      "sessions": [
+        "session_01SsFUkdeto4QUZQwcq5D23G"
+      ],
+      "title": "fix: a plan-mainfix task waives the registry pin check",
+      "tokens": null,
+      "usd": 3.673333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-13T15:16:14Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 573,
+      "sessions": null,
+      "title": "docs: fold fragments for 0.14.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-13T09:25:21Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 574,
+      "sessions": [
+        "session_01SsFUkdeto4QUZQwcq5D23G"
+      ],
+      "title": "fix: CDPATH in the hook environment makes a cd unknown; spec 05 unpinned residual",
+      "tokens": null,
+      "usd": 3.673333
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-13T17:06:46Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 575,
+      "sessions": null,
+      "title": "release: 0.14.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-13T18:03:56Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 576,
+      "sessions": [
+        "session_01SsFUkg3ZMuVHaFcbtDwnDz"
+      ],
+      "title": "docs: migrate-booster runbook (CLI, cloud, Slack)",
+      "tokens": null,
+      "usd": 0.775
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-13T18:21:02Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 577,
+      "sessions": [
+        "session_01SsFUkg3ZMuVHaFcbtDwnDz"
+      ],
+      "title": "docs: registry pick wording in spec 05 and migrate-booster",
+      "tokens": null,
+      "usd": 0.775
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T05:38:08Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 578,
+      "sessions": null,
+      "title": "chore: pin bosun 0.14.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T08:23:51Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 579,
+      "sessions": null,
+      "title": "perf: prebuilt, sha256-pinned cargo-deny and cargo-nextest in setup script",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T09:37:56Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 580,
+      "sessions": null,
+      "title": "fix: gates, verdict and risk feedback (C1-C6)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T09:20:53Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 581,
+      "sessions": null,
+      "title": "fix: bosun works behind the cloud proxy (403 degrade, call budget, wait --once, risk-check --dry-run, summary output)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T09:46:50Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 582,
+      "sessions": null,
+      "title": "fix: budget record and result handoff feedback (C7-C8)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T11:13:49Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 583,
+      "sessions": null,
+      "title": "feat: keyless CI signer for the autonomous lane; author-is-owner hint",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T10:17:05Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 584,
+      "sessions": null,
+      "title": "feat: bosun migrate (one command, one owner approval), bosun pr --pr, short migrate guide",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T10:46:03Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 585,
+      "sessions": null,
+      "title": "feat: opt-in Slack digest notify kind with GitHub approve links",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T11:34:46Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 586,
+      "sessions": null,
+      "title": "docs: fold fragments for 0.15.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T11:50:05Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 587,
+      "sessions": null,
+      "title": "chore: release 0.15.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-14T12:20:13Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 588,
+      "sessions": null,
+      "title": "chore: pin bosun 0.15.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T11:24:36Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 589,
+      "sessions": null,
+      "title": "fix: audit hardening (guard, risk, hooks, init/migrate, docs, CI)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T05:25:28Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 590,
+      "sessions": null,
+      "title": "feat: loosen guards (plan ticks, autonomous allowlist, one-off PR)",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T06:12:55Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 591,
+      "sessions": null,
+      "title": "feat: make the janitor Routine opt-in",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T08:46:13Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 592,
+      "sessions": null,
+      "title": "fix: R6 adopt/migration polish, pins, janitor_cron check",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T09:09:53Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 593,
+      "sessions": null,
+      "title": "docs: fold changelog and progress fragments",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T09:54:04Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 594,
+      "sessions": null,
+      "title": "chore: release 0.16.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T11:51:23Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 595,
+      "sessions": null,
+      "title": "chore: pin bosun 0.16.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T12:35:22Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 596,
+      "sessions": null,
+      "title": "chore: release 0.17.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-15T14:42:26Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 597,
+      "sessions": null,
+      "title": "chore: pin bosun 0.17.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-16T07:09:22Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 598,
+      "sessions": null,
+      "title": "ci: pin hoist 0.5.1 in the release workflow",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-16T09:39:13Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 599,
+      "sessions": null,
+      "title": "fix(guard): prose literals in interpreter heredocs are data",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-16T10:31:06Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 600,
+      "sessions": null,
+      "title": "fix(risk): R-secrets catches unquoted yaml, php => and k8s env literals",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-16T11:31:06Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 601,
+      "sessions": null,
+      "title": "fix(guard): close merge-lock ref gaps",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": "2026-11-16T12:27:20Z",
+      "models": null,
+      "outcome": "held",
+      "pr": 602,
+      "sessions": null,
+      "title": "chore: release 0.18.0",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 603,
+      "sessions": null,
+      "title": "fix(guard): close fetch-config, path-remote and unknown-remote gaps",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 604,
+      "sessions": null,
+      "title": "fix(risk): R-secrets flags single-quoted '$...' arrow literals",
+      "tokens": null,
+      "usd": null
+    },
+    {
+      "issue": null,
+      "merged_at": null,
+      "models": null,
+      "outcome": "open",
+      "pr": 605,
+      "sessions": null,
+      "title": "chore: pin bosun 0.18.0, splice 0.6.0",
       "tokens": null,
       "usd": null
     }
   ],
   "totals": {
-    "cost_per_held_usd": null,
-    "cost_per_merged_usd": null,
-    "held": 135,
-    "held_with_spend": 0,
-    "merged": 135,
-    "merged_with_spend": 0,
-    "prs": 135,
-    "prs_with_spend": 0,
+    "cost_per_held_usd": 5.171447,
+    "cost_per_merged_usd": 5.171447,
+    "held": 236,
+    "held_with_spend": 76,
+    "merged": 236,
+    "merged_with_spend": 76,
+    "prs": 252,
+    "prs_with_spend": 76,
     "reverted": 0,
-    "top_prs": [],
-    "usd": 0.0
+    "top_prs": [
+      {
+        "pr": 557,
+        "title": "feat: self-heal red PRs, modes PR 3a",
+        "usd": 11.24
+      },
+      {
+        "pr": 558,
+        "title": "feat: wave tick spawns and archives, modes PR 6",
+        "usd": 10.17
+      },
+      {
+        "pr": 554,
+        "title": "feat(metrics): bosun metrics and the brake from GitHub data (modes PR 5)",
+        "usd": 8.9
+      },
+      {
+        "pr": 543,
+        "title": "fix(risk): R-weaken flags *_ALLOWED list growth; weaken capability blocks orchestrator approvals",
+        "usd": 8.68
+      },
+      {
+        "pr": 544,
+        "title": "fix(cli): next-round nits — pr --ready on plain issues, budget --pr guard, pin --latest branch, docs",
+        "usd": 8.68
+      }
+    ],
+    "usd": 393.030003
   }
 }
