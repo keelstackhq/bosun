@@ -3576,33 +3576,41 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
                     .iter()
                     .any(|f| w.starts_with(f) && (f.len() == 2 || w[f.len()..].starts_with('=')))
         };
-        // A segment where git runs a value as code: no value there is a "session variable".
-        let runs = seg.iter().enumerate().any(|(i, w)| {
+        let gitw = |w: &str| {
+            w.rsplit('/')
+                .next()
+                .is_some_and(|b| b == "git" || b.starts_with("git-"))
+        };
+        // A plain `"$NAME"` passes only where git reads a path or ref: a global `-C`,
+        // `--git-dir` or `--work-tree` value, or a positional word of a read or ref command;
+        // never after a builtin that can set a variable (`source`, `eval`, `declare`, `read`).
+        let g = seg.iter().position(|w| !w.2 && gitw(&w.0)).unwrap_or(0);
+        let mut sub = g + 1;
+        while seg.get(sub).is_some_and(|w| w.0.starts_with('-')) {
+            let pair = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"];
+            sub += 1 + usize::from(pair.contains(&seg[sub].0.as_str()));
+        }
+        let refs = "status log diff show branch switch checkout add commit push fetch pull merge rebase tag";
+        let sets = command
+            .split(|c: char| c.is_whitespace() || ";&|()".contains(c))
+            .any(|t| {
+                "source . eval declare typeset read export printf mapfile readarray local let"
+                    .split(' ')
+                    .any(|b| b == t)
+            });
+        let place = |i: usize| {
             let prev = i.checked_sub(1).map_or("", |p| seg[p].0.as_str());
-            matches!(
-                w.0.as_str(),
-                "rebase"
-                    | "bisect"
-                    | "submodule"
-                    | "difftool"
-                    | "mergetool"
-                    | "filter-branch"
-                    | "filter-repo"
-                    | "instaweb"
-                    | "web--browse"
-                    | "send-email"
-                    | "help"
-            ) || prev == "-c"
-                || ["--upl", "--ex", "--config-env"]
-                    .iter()
-                    .any(|o| w.0.starts_with(o))
-        });
-        let names_fetch = |w: &str| {
+            let ref_cmd = seg.get(sub).is_some_and(|s| refs.split(' ').any(|r| r == s.0));
+            !sets
+                && (i < sub && matches!(prev, "-C" | "--git-dir" | "--work-tree")
+                    || i > sub && ref_cmd && !prev.starts_with('-'))
+        };
+        let names_fetch = |w: &str, i: usize| {
             let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
             // Any `$` or backtick builds words (`${IFS}`, `$(..)`), unless the value is one
             // variable (`"$BRANCH"`) the command does not set: it comes from the session.
             let var = VAR.captures(w).and_then(|c| c.get(1).or(c.get(2)));
-            let session = !runs
+            let session = place(i)
                 && var.is_some_and(|n| {
                     let n = n.as_str();
                     if n.starts_with("BASH") || SHELL_VARS.split_whitespace().any(|v| v == n) {
@@ -3631,16 +3639,11 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
                             .any(|n| base == *n || glob && names(t, n))
                 })
         };
-        let gitw = |w: &str| {
-            w.rsplit('/')
-                .next()
-                .is_some_and(|b| b == "git" || b.starts_with("git-"))
-        };
         if seg.iter().any(|w| !w.2 && gitw(&w.0))
             && seg
                 .iter()
                 .enumerate()
-                .any(|(i, w)| (w.2 || w.0.contains('=')) && !is_prose(i, &w.0) && names_fetch(&w.0))
+                .any(|(i, w)| (w.2 || w.0.contains('=')) && !is_prose(i, &w.0) && names_fetch(&w.0, i))
         {
             return Some(FETCH_PLAIN);
         }
@@ -5612,6 +5615,16 @@ mod tests {
             "git bisect run \"$CMD\"",
             "git submodule foreach \"$CMD\"",
             "git fetch --upload-pack=\"$UP\" origin",
+            // A plain variable passes only as a -C/--git-dir/--work-tree value or a positional
+            // ref or path of a read or ref command, and never after a builtin that sets one.
+            "git clone -u \"$CMD\" t2 t3",
+            "source ./v; git push origin \"$B\"",
+            "declare -x C\\MD=x; git push origin \"$CMD\"",
+            "eval 'C''MD=x'; git push origin \"$CMD\"",
+            ". ./v; git config core.pager \"$CMD\"",
+            "git config core.editor \"$CMD\"",
+            "git config diff.x.command \"$CMD\"",
+            "git checkout -b \"$B\"",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5678,6 +5691,10 @@ mod tests {
             "git log --grep fetch",
             "git rebase -x 'cargo test' main",
             "git log --format='%H {a,b} $(x)'",
+            "git --git-dir \"$GD\" status",
+            "git switch \"$BRANCH\"",
+            "git diff \"$BASE\" HEAD",
+            "git add \"$FILE\"",
             "git commit -m \"$(cat msg.txt)\"",
             "git rebase -x 'cargo test --workspace' main",
             "git commit --message='fix pull'",
