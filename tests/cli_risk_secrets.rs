@@ -319,3 +319,124 @@ fn everyday_references_are_not_secrets() {
         assert!(secret_match(path, line), "{path}: {line}");
     }
 }
+
+/// Risk-check of PR 1 that adds `lines` (in order) to `path`: true when R-secrets matches.
+fn secret_match_lines(path: &str, lines: &[&str]) -> bool {
+    let fake = FakeGithub::start();
+    fake.pull(1, "change", "feature", "");
+    fake.content(
+        "governance/owners.toml",
+        BASE,
+        "[[owner]]\ngithub = \"ada\"\n",
+    );
+    let body: String = lines.iter().map(|l| format!("\n+{}", fill(l))).collect();
+    let patch = format!("@@ -0,0 +1,{} @@{body}", lines.len());
+    fake.pull_file(1, path, "modified", lines.len() as u64, 0, Some(&patch));
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    let hit = v["data"]["matches"]
+        .as_array()
+        .is_some_and(|m| m.iter().any(|m| m["rule"] == "R-secrets"));
+    assert_eq!(hit, code == 5, "{v}");
+    assert!(
+        !v.to_string().contains("s3cr3t"),
+        "evidence copies the line: {v}"
+    );
+    hit
+}
+
+#[test]
+fn unquoted_yaml_literals_match_in_config_files() {
+    for (path, line) in [
+        ("deploy/db.yml", "password: s3cr3t"),
+        ("deploy/db.yaml", "    db_password: s3cr3t # prod"),
+        ("deploy/db.yml", "  - password: s3cr3t"),
+        ("deploy/app.yml", "  client_@SEC@: s3cr3t-xyz"),
+        ("deploy/app.yml", "  @AKEY@: abcd1234s3cr3t"),
+        ("conf/app.properties", "db.password: s3cr3t"),
+    ] {
+        assert!(secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn unquoted_yaml_types_and_references_are_not_secrets() {
+    for (path, line) in [
+        ("deploy/a.yml", "  password: string"),
+        ("deploy/a.yml", "  password: ${{ secrets.X }}"),
+        ("deploy/a.yml", "  @TOK@: ${@TOK@}"),
+        ("deploy/a.yml", "  password: !secret db"),
+        ("deploy/a.yml", "  password:"),
+        ("deploy/a.yml", "  password: null"),
+        ("deploy/a.yml", "  password: ~"),
+        ("deploy/a.yml", "  password: \"\""),
+        ("deploy/a.yml", "  password: true"),
+        ("deploy/a.yml", "  password: |"),
+        ("deploy/a.yml", "  password: *db_password"),
+        ("deploy/a.yml", "  password: \"{{ .Values.p }}\""),
+        ("deploy/a.yml", "  password: Enter your password"),
+        ("ci/release.yml", "      id-@TOK@: write"),
+        ("etc/nsswitch.conf", "passwd:         files"),
+        ("tests/fixtures/a.yml", "  password: s3cr3t"),
+        // Code files keep today's rules: a type, a field or a parameter.
+        ("src/a.rs", "    pub password: String,"),
+        ("src/a.rs", "    @TOK@: &str,"),
+        ("src/a.rs", "    password: Option<String>,"),
+        ("src/a.rs", "fn f(password: &str) {"),
+        ("src/a.ts", "  password: string;"),
+        ("src/a.py", "    password: str = field(default=None)"),
+    ] {
+        assert!(!secret_match(path, line), "{path}: {line}");
+    }
+}
+
+#[test]
+fn php_array_literals_match() {
+    for line in [
+        "    'password' => 's3cr3t',",
+        "    \"@AKEY@\" => \"abc\",",
+        "    'db_password' => 's3cr3t'",
+    ] {
+        assert!(secret_match("config/database.php", line), "{line}");
+    }
+    for line in [
+        "    'password' => $pw,",
+        "    'password' => env('X'),",
+        "    '@TOK@' => '',",
+    ] {
+        assert!(!secret_match("config/database.php", line), "{line}");
+    }
+}
+
+#[test]
+fn kubernetes_env_values_under_a_secret_name_match() {
+    for lines in [
+        ["        - name: DB_PASSWORD", "          value: \"s3cr3t\""],
+        ["        - name: DB_PASSWORD", "          value: s3cr3t"],
+        ["        - name: API_@TOK@", "          value: 's3cr3t'"],
+        [
+            "        - name: \"STRIPE_@SEC@_KEY\"",
+            "          value: s3cr3t",
+        ],
+    ] {
+        assert!(secret_match_lines("deploy/app.yaml", &lines), "{lines:?}");
+    }
+    for lines in [
+        ["        - name: DB_PASSWORD", "          valueFrom:"],
+        [
+            "        - name: DB_PASSWORD",
+            "          value: \"$(DB_PASS)\"",
+        ],
+        ["        - name: DB_PASSWORD", "          value: \"\""],
+        ["        - name: LOG_LEVEL", "          value: debug"],
+        [
+            "        - name: DB_PASSWORD_FILE",
+            "          value: /run/s/db",
+        ],
+        [
+            "        - name: DB_PASSWORD",
+            "          value: ${{ secrets.X }}",
+        ],
+    ] {
+        assert!(!secret_match_lines("deploy/app.yaml", &lines), "{lines:?}");
+    }
+}

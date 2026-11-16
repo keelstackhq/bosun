@@ -179,15 +179,21 @@ pub fn evaluate(
                 } else {
                     line.into()
                 };
-                let hit = match &rule.content {
+                let content = match &rule.content {
                     Some(re) if re.is_match(&scrubbed) => {
                         !(secrets
                             && secret_exempt(&f.path, line, |s| {
                                 re.is_match(&scrub_refs(s, code_file(&f.path)))
                             }))
                     }
-                    _ => secrets && strong_secret(line),
+                    _ => false,
                 };
+                let prev = i.checked_sub(1).map(|p| f.added_lines[p].as_str());
+                let hit = content
+                    || (secrets
+                        && (strong_secret(line)
+                            || (!secret_test_dir(&f.path)
+                                && config_secret(&f.path, prev, &scrubbed))));
                 if hit {
                     evidence.push(format!("{}: added line {} matches", f.path, i + 1));
                 }
@@ -449,6 +455,75 @@ pub fn secret_exempt(path: &str, line: &str, matches: impl Fn(&str) -> bool) -> 
 /// A scrub match that is an env lookup by name (not `${X}`, `$X`, `env::var` or a key).
 fn is_env_call(m: &str) -> bool {
     m.contains("getenv(") || m.contains("environ") || m.starts_with("ENV") || m.starts_with("$_")
+}
+
+/// A config file where `key: value` holds a plain value: yaml, properties or env.
+fn config_file(path: &str) -> bool {
+    const EXT: [&str; 4] = ["yml", "yaml", "properties", "env"];
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    name.starts_with(".env") || name.rsplit_once('.').is_some_and(|(_, e)| EXT.contains(&e))
+}
+
+/// A secret key name: one that ends in `api_key`, `token`, `password`, `passwd`, `private_key`,
+/// or `secret` whole or as `secret_key`, `secret_access_key` or `secret_token`.
+const SECRET_KEY: &str = concat!(
+    r"(?:[\w.-]*(?:api[_-]?key|token|passw(?:or)?d|private[_-]?key)",
+    r"|(?:[\w.-]*[_.-])?secret(?:[_-]?(?:access[_-]?)?key|[_-]?token)?)",
+);
+
+/// In a config file (R-secrets, built in): an unquoted yaml literal under a secret key
+/// (`password: hunter2`, `- db_password: x`), or a Kubernetes env `value:` literal right after
+/// a `name:` that names a secret (`- name: DB_PASSWORD` then `value: x`). `line` is scrubbed;
+/// `prev` is the added line before it.
+fn config_secret(path: &str, prev: Option<&str>, line: &str) -> bool {
+    static PLAIN: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(
+            r#"(?i)^\s*(?:-\s+)?["']?{SECRET_KEY}["']?\s*:\s+([^\s"'#].*?)\s*(?:\s#.*)?$"#
+        ))
+        .expect("static regex")
+    });
+    static NAME: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(
+            r#"(?i)^\s*(?:-\s+)?name:\s*["']?{SECRET_KEY}["']?\s*$"#
+        ))
+        .expect("static regex")
+    });
+    static VALUE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"^\s*value:\s*(?:"([^"]*)"|'([^']*)'|([^\s"'#].*?))\s*(?:\s#.*)?$"#)
+            .expect("static regex")
+    });
+    if !config_file(path) {
+        return false;
+    }
+    if PLAIN.captures(line).is_some_and(|c| plain_literal(&c[1])) {
+        return true;
+    }
+    let Some(c) = prev
+        .filter(|p| NAME.is_match(p))
+        .and_then(|_| VALUE.captures(line))
+    else {
+        return false;
+    };
+    match c.get(1).or(c.get(2)) {
+        Some(q) => !q.as_str().is_empty() && !q.as_str().starts_with('$'),
+        None => plain_literal(&c[3]),
+    }
+}
+
+/// A plain yaml scalar that is a literal: one word (prose has spaces), not a reference, alias,
+/// tag, block or flow (`$`, `*`, `&`, `!`, `|`, `>`, `{`, `[`, `%`, `@`, `<`, `~`), and not
+/// null, a boolean, a type name (`string`, `int`) or a permission (`id-token: write`).
+fn plain_literal(v: &str) -> bool {
+    const WORDS: [&str; 20] = [
+        "null", "none", "nil", "true", "false", "yes", "no", "on", "off", "string", "str", "int",
+        "integer", "number", "bool", "boolean", "object", "any", "read", "write",
+    ];
+    !v.is_empty()
+        && !v.contains(char::is_whitespace)
+        && !v.starts_with([
+            '$', '*', '&', '!', '|', '>', '{', '[', '%', '@', '<', '~', '`',
+        ])
+        && !WORDS.contains(&v.to_ascii_lowercase().as_str())
 }
 
 /// A `*_name`, `*-id`, `*_path` or `*_file` key (a scrub match that is no env call).
