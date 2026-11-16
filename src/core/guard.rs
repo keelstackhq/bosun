@@ -3537,6 +3537,15 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
             (None, c) => (glob, _) = (glob || matches!(c, '*' | '?' | '['), word.push(c)),
         }
     }
+    static VAR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$").expect("static regex")
+    });
+    // Variables the shell sets itself (they persist across calls, like `PWD` after a `cd`).
+    const SHELL_VARS: &str = "_ PWD OLDPWD HOME IFS PS1 PS2 PS3 PS4 PROMPT_COMMAND ENV SHELLOPTS \
+        BASHOPTS CDPATH PATH SHELL REPLY OPTARG OPTIND RANDOM LINENO SECONDS FUNCNAME GROUPS \
+        DIRSTACK PIPESTATUS HOSTNAME HOSTTYPE MACHTYPE OSTYPE PPID UID EUID SHLVL COLUMNS LINES";
+    static BRACE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("static regex"));
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
     static CLASS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("static regex"));
@@ -3568,27 +3577,73 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
                     .iter()
                     .any(|f| w.starts_with(f) && (f.len() == 2 || w[f.len()..].starts_with('=')))
         };
-        let names_fetch = |w: &str| {
-            let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
-            // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one.
-            let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
-            w.split(cut).any(|t| {
-                let t = t.trim_start_matches("git-");
-                ["fetch", "pull", "update"].iter().any(|n| {
-                    t == *n || t.contains(['*', '?', '[']) && !t.contains(['/', ':']) && names(t, n)
-                })
-            })
-        };
         let gitw = |w: &str| {
             w.rsplit('/')
                 .next()
                 .is_some_and(|b| b == "git" || b.starts_with("git-"))
         };
+        // A plain `"$NAME"` passes only as a global `-C`, `--git-dir` or `--work-tree` value (git
+        // takes those literally; a positional one can expand to an option), never after a
+        // builtin or function that can set a variable (`source`, `eval`, `read`, `f() {..}`).
+        let g = seg.iter().position(|w| !w.2 && gitw(&w.0)).unwrap_or(0);
+        let mut sub = g + 1;
+        while seg.get(sub).is_some_and(|w| w.0.starts_with('-')) {
+            let pair = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"];
+            sub += 1 + usize::from(pair.contains(&seg[sub].0.as_str()));
+        }
+        let sets = command
+            .split(|c: char| c.is_whitespace() || ";&|()".contains(c))
+            .any(|t| {
+                "source . eval declare typeset read export printf mapfile readarray local let function"
+                    .split(' ')
+                    .any(|b| b == t)
+            })
+            || command.contains("()");
+        let push = seg.get(sub).is_some_and(|s| s.0 == "push");
+        let place = |i: usize| {
+            let prev = i.checked_sub(1).map_or("", |p| seg[p].0.as_str());
+            !sets && i < sub && matches!(prev, "-C" | "--git-dir" | "--work-tree")
+        };
+        let names_fetch = |w: &str, i: usize| {
+            let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
+            // Any `$` or backtick builds words (`${IFS}`, `$(..)`), unless the value is one
+            // variable (`"$BRANCH"`) the command does not set: it comes from the session.
+            let var = VAR.captures(w).and_then(|c| c.get(1).or(c.get(2)));
+            // `git push` refuses any `$` itself ("name the branch literally").
+            let session = push || place(i)
+                && var.is_some_and(|n| {
+                    let n = n.as_str();
+                    if n.starts_with("BASH") || SHELL_VARS.split_whitespace().any(|v| v == n) {
+                        return false;
+                    }
+                    let rest = command
+                        .replace(&format!("${{{n}}}"), "")
+                        .replace(&format!("${n}"), "");
+                    !rest.contains(n)
+                });
+            // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one, and a
+            // git-core program (`git-fetch`) runs git. A refspec (`a:b`) is no command word.
+            let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
+            // Shell code has a space or an operator; a word that is itself a brace expansion
+            // (`{a,b c}`) is judged by the brace rule.
+            let shell = |c: char| c.is_whitespace() || ";&|(){}<>".contains(c);
+            let code = w.contains(shell) && !w.starts_with('{');
+            let built = w.contains(['$', '`']) && !session || code && BRACE.is_match(&w);
+            built
+                || w.split(cut).any(|t| {
+                    let base = t.rsplit('/').next().unwrap_or(t);
+                    let glob = t.contains(['*', '?', '[']) && !t.contains(':');
+                    base.starts_with("git-")
+                        || ["fetch", "pull", "update", "git-fetch", "git-pull"]
+                            .iter()
+                            .any(|n| base == *n || glob && names(t, n))
+                })
+        };
         if seg.iter().any(|w| !w.2 && gitw(&w.0))
             && seg
                 .iter()
                 .enumerate()
-                .any(|(i, w)| (w.2 || w.0.contains('=')) && !is_prose(i, &w.0) && names_fetch(&w.0))
+                .any(|(i, w)| (w.2 || w.0.contains('=')) && !is_prose(i, &w.0) && names_fetch(&w.0, i))
         {
             return Some(FETCH_PLAIN);
         }
@@ -5533,6 +5588,48 @@ mod tests {
             "git rebase -x 'cd t2 && git f\"e\"tch' main",
             "git rebase -x 'git fetc?' main",
             "git rebase -x 'git f*h' main",
+            // Expansions and git-core programs inside a value.
+            "git rebase -x 'cd t2 && git {fetch,}' main",
+            "git rebase -x 'git -C t2 $(echo fe)tch' main",
+            "git rebase -x 'git -C t2 `echo fe`tch' main",
+            "git rebase -x 'cd t2 && /usr/lib/git-core/git-fetch' main",
+            "git rebase -x 'cd t2 && ./git-core/git-fe*' main",
+            "git rebase -x 'cd t2 && ./x/*' main",
+            // `${IFS}` and other `$` or backtick in a value, without a space.
+            "git rebase -x 'cd${IFS}t2;git${IFS}fe$@tch' main",
+            "git rebase -x 'git${IFS}{fetch,}' main",
+            "git rebase -x '$(echo${IFS}fe)tch' main",
+            "git rebase -x '`echo${IFS}fe`tch' main",
+            "git rebase -x 'f${x}etch' main",
+            "git rebase -x 'cd;git;{fetch,}' main",
+            "X=$(printf 'git f%stch' e); git rebase -x \"$X\" main",
+            "export X=$(printf x); git rebase -x '$X' main",
+            // Special or shell-kept variables, and values git runs as code.
+            "set -- 'cd${IFS}t2;git${IFS}fe$@tch'; git rebase -x \"$1\" main",
+            ": 'x'; git rebase -x \"$_\" main",
+            "git rebase -x \"$PWD\" main",
+            "git push origin \"$OLDPWD\"",
+            "git rebase -x \"$CMD\" main",
+            "git rebase --exec=\"$CMD\" main",
+            "git -c core.editor=\"$ED\" commit",
+            "git bisect run \"$CMD\"",
+            "git submodule foreach \"$CMD\"",
+            "git fetch --upload-pack=\"$UP\" origin",
+            // A plain variable passes only as a -C/--git-dir/--work-tree value or a positional
+            // ref or path of a read or ref command, and never after a builtin that sets one.
+            "git clone -u \"$CMD\" t2 t3",
+            "source ./v; git push origin \"$B\"",
+            "declare -x C\\MD=x; git push origin \"$CMD\"",
+            "eval 'C''MD=x'; git push origin \"$CMD\"",
+            ". ./v; git config core.pager \"$CMD\"",
+            "git config core.editor \"$CMD\"",
+            "git config diff.x.command \"$CMD\"",
+            "git checkout -b \"$B\"",
+            "function --exec=./p.sh { git rebase \"$FUNCNAME\" main; }; --exec=./p.sh",
+            "f() { git log \"$X\"; }; f",
+            "git switch \"$BRANCH\"",
+            "git diff \"$BASE\" HEAD",
+            "git add \"$FILE\"",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5598,6 +5695,10 @@ mod tests {
             "git-fetch origin",
             "git log --grep fetch",
             "git rebase -x 'cargo test' main",
+            "git log --format='%H {a,b} $(x)'",
+            "git --git-dir \"$GD\" status",
+            "git commit -m \"$(cat msg.txt)\"",
+            "git rebase -x 'cargo test --workspace' main",
             "git commit --message='fix pull'",
             "git log --format='%s update' -S fetch",
             "git commit -q -F - <<'EOF'\nfix: don't fetch when 'git pull' runs\n* list item\nEOF",

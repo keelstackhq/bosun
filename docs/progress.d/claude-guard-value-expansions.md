@@ -1,0 +1,1 @@
+- 2026-11-16 · Merge-lock: expansions and git-core programs in git option values · PR
