@@ -1561,34 +1561,35 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         w.rsplit('/').next().unwrap_or(&w).to_string()
     };
     // Bash expands `{a,b}` before the command runs: judge the words it makes (an unquoted empty
-    // one is dropped). Too many words are not expanded: that fails
-    // closed in a git or gh command, or where the word could be the command word.
-    let (mut grown, mut ex) = (false, Vec::new());
-    // Only words before it that a runner may skip: it could be the command word.
-    let could_run = |at: usize| {
-        words[..at].iter().all(|w| {
-            w.starts_with('-')
-                || w.contains('=')
-                || WRAPPERS.contains(w)
-                || runner(w)
-                || w.bytes().all(|b| b.is_ascii_digit())
-        })
-    };
-    for (at, w) in words.iter().enumerate() {
+    // one is dropped). A word the guard cannot expand is refused where it can steer the command:
+    // after a wrapper or runner (whose option values the guard may misread), as the command word
+    // when its first word is git, gh, a shell, a wrapper or a runner, or in a git or gh command.
+    let (mut grown, mut ex, mut unread) = (false, Vec::new(), Vec::new());
+    for w in words {
         match braces(w, 0, 0) {
             Some(Ok(more)) => {
                 ex.extend(more.into_iter().filter(|m| !m.is_empty()));
                 grown = true;
             }
-            Some(Err(()))
-                if words
-                    .iter()
-                    .any(|w| matches!(name(w).as_str(), "git" | "gh"))
-                    || could_run(at) =>
-            {
-                return Some(UNREAD_BRACE);
+            Some(Err(())) => {
+                unread.push(ex.len());
+                ex.push(w.to_string());
             }
-            _ => ex.push(w.to_string()),
+            None => ex.push(w.to_string()),
+        }
+    }
+    let lead = |n: &str| WRAPPERS.contains(&n) || runner(n);
+    const STEERS: [&str; 8] = ["git", "gh", "sh", "bash", "zsh", "eval", "source", "."];
+    for &at in &unread {
+        let assign = |w: &String| w.contains('=') && !w.starts_with('-');
+        let refuse = ex[..at].iter().any(|w| lead(&name(w)))
+            || if ex[..at].iter().all(assign) {
+                first_word(&ex[at]).is_none_or(|f| lead(&name(&f)) || STEERS.contains(&&*name(&f)))
+            } else {
+                ex.iter().any(|w| matches!(name(w).as_str(), "git" | "gh"))
+            };
+        if refuse {
+            return Some(UNREAD_BRACE);
         }
     }
     if grown {
@@ -1759,6 +1760,49 @@ fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, (
             }
             _ => {}
         }
+    }
+    None
+}
+
+/// The first word bash makes of `word`, which runs when it is the command word: each list or
+/// sequence gives its first item, and a `{` a quote split from its `}` ends at its first `,`.
+/// `None` when that item is empty (bash drops an empty word, so the next one runs).
+fn first_word(word: &str) -> Option<String> {
+    let (mut w, mut from) = (word.to_string(), 0);
+    'scan: for _ in 0..64 {
+        let (mut quote, mut esc) = (None, false);
+        for (i, c) in w[from..].char_indices().map(|(i, c)| (i + from, c)) {
+            match (quote, c) {
+                _ if std::mem::take(&mut esc) => {}
+                (Some('\''), '\'') => quote = None,
+                (Some('\''), _) => {}
+                (_, '\\') => esc = true,
+                (Some(_), '"') => quote = None,
+                (Some(_), _) => {}
+                (None, '\'' | '"') => quote = Some(c),
+                (None, '{') if !w[..i].ends_with('$') => {
+                    let (end, item) = match brace_list(&w[i..]) {
+                        Some((end, cuts)) if !cuts.is_empty() => {
+                            (end, w[i + 1..i + cuts[0]].to_string())
+                        }
+                        Some((end, _)) => match sequence(&w[i + 1..i + end]) {
+                            Some(items) => (end, items[0].clone()),
+                            None => continue,
+                        },
+                        None => {
+                            let item = w[i + 1..].split([',', ' ']).next().unwrap_or_default();
+                            return Some(format!("{}{item}", &w[..i])).filter(|f| !f.is_empty());
+                        }
+                    };
+                    (!item.is_empty()).then_some(())?;
+                    w = format!("{}{item}{}", &w[..i], &w[i + end + 1..]);
+                    from = i;
+                    continue 'scan;
+                }
+                _ => {}
+            }
+        }
+        return Some(w);
     }
     None
 }
@@ -3604,7 +3648,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             Some("tag")
         }
         "fetch" if fetch_moves(rest, default_branch) => {
-            Some("a fetch into the default branch or into a ref the guard cannot read")
+            Some("a fetch into the default branch or into a ref the guard cannot read; name the branch literally")
         }
         "tag" => {
             let lists = rest.is_empty()
@@ -4691,6 +4735,36 @@ mod tests {
         }
     }
 
+    /// Third review, round 3: an unexpandable brace word is refused only where it can be or
+    /// steer the command word, so quoted jq and JSON text pass and runner values do not hide git.
+    #[test]
+    fn unexpandable_brace_words_are_judged_by_where_they_sit() {
+        let big = format!("{{git,push,origin,HEAD:main{}}}", ",-v".repeat(61));
+        for cmd in [
+            big.clone(),
+            format!("timeout 60s {big}"),
+            format!("sudo -u root {big}"),
+            format!("env -u HOME {big}"),
+            format!("\\sudo {big}"),
+            format!("\"env\" {big}"),
+            format!("nice -n 5 {big}"),
+        ] {
+            let got = bash(&cmd, "main").unwrap_or_default();
+            assert!(got.contains(UNREAD_BRACE), "{cmd}: {got:?}");
+        }
+        for cmd in [
+            "gh pr list --json number,title --jq '.[] | {number, title}'",
+            "gh api repos/o/r/pulls | jq '.[] | {number, title, state}'",
+            "cat > x.json <<'EOF'\n{\"t\":\"a b\",\"ok\":1}\nEOF",
+            "echo '{\"t\":\"a b\",\"ok\":1}' | jq .",
+            "{a..z}{a..z} push origin HEAD:main",
+        ] {
+            assert_eq!(bash(cmd, "main"), None, "{cmd}");
+        }
+        let got = bash("git fetch origin \"$BRANCH\"", "main").unwrap_or_default();
+        assert!(got.contains("name the branch literally"), "{got}");
+    }
+
     #[test]
     fn merge_lock_expands_sequences_and_braces_before_runners() {
         const MAIN: &str = "push to the default branch";
@@ -4700,7 +4774,7 @@ mod tests {
             ("g{i..i}t push origin HEAD:main", MAIN),
             ("{g..g}h pr merge 1", "pr merge"),
             ("{g..g}{i..i}{t..t} push origin HEAD:main", MAIN),
-            ("{a..z}{a..z} push origin HEAD:main", UNREAD_BRACE),
+            ("{git,{a..z}{a..z}} push origin HEAD:main", UNREAD_BRACE),
             ("sudo {a..z}{a..z} push origin HEAD:main", UNREAD_BRACE),
             ("sudo {-E,} git push origin HEAD:main", MAIN),
             ("command {-p,} git push origin HEAD:main", MAIN),
