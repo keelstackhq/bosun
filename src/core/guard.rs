@@ -589,8 +589,8 @@ fn check(
         return Some(too_deep());
     }
     // Fetch config exported in any segment reaches every later git command, nested ones too.
-    if (command.contains("GIT_CONFIG_") || command.contains("export $"))
-        && env_fetch_moves(command, default_branch)
+    if unread_fetch_env(command)
+        || command.contains("GIT_CONFIG_") && env_fetch_moves(command, default_branch)
     {
         return Some(format!("`{}` is refused ({FETCH_MOVES})", command.trim()));
     }
@@ -3423,6 +3423,31 @@ fn fetch_trusted(rest: &[&str]) -> bool {
             .is_none_or(|w| matches!(w.as_str(), "origin" | "upstream"))
 }
 
+/// A `fetch` or `pull` in a command that names `GIT_CONFIG*`, `HOME` or `XDG_CONFIG_HOME`
+/// (outside a commit message or other prose value) or has a word with `$` before its `=`: the
+/// config git reads cannot be told (`HOME=/tmp/h`, `read GIT_CONFIG_GLOBAL`, `export "$K"=..`),
+/// so it fails closed whatever the spelling.
+fn unread_fetch_env(command: &str) -> bool {
+    static NAME: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(?:GIT_CONFIG\w*|HOME|XDG_CONFIG_HOME)\b").expect("static regex")
+    });
+    // A quoted `-m`, `--message`, `-b`, `--body` or `--title` value without `$` is prose.
+    static PROSE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?:^|\s)(?:-m|--message|-b|--body|--title)\s+(?:'[^']*'|"[^"$`]*")"#)
+            .expect("static regex")
+    });
+    let text = PROSE.replace_all(command, " ");
+    let words =
+        || text.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'));
+    words().any(|w| matches!(w, "fetch" | "pull"))
+        && (NAME.is_match(&text)
+            || words().any(|w| {
+                w.split('=')
+                    .next()
+                    .is_some_and(|k| w.contains('=') && k.contains('$'))
+            }))
+}
+
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
 fn fetch_cfg_moves(v: &str, default_branch: &str) -> bool {
     // Bash brace-expands an assigned value (`+feat:{x,main}`): fail closed.
@@ -3451,27 +3476,6 @@ fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
         } else if let Some(n) = k.strip_prefix("GIT_CONFIG_VALUE_") {
             vals.push((n, v));
         }
-    }
-    // A fetch or pull after a config file, an include, a value with no readable key or an
-    // `export $NAME=..` reads config the guard cannot see: fail closed.
-    let fetches = command
-        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
-        .any(|w| matches!(w, "fetch" | "pull"));
-    let file = [
-        "GIT_CONFIG_GLOBAL=",
-        "GIT_CONFIG_SYSTEM=",
-        "export $",
-        "declare $",
-        "typeset $",
-    ]
-    .iter()
-    .any(|v| command.contains(v));
-    let unkeyed = vals.iter().any(|(n, _)| !keys.iter().any(|(m, _)| m == n))
-        || (command.contains("GIT_CONFIG_COUNT=") && keys.is_empty());
-    // `include.path`/`includeIf` in a `GIT_CONFIG_*` setting (this runs only when one is named).
-    let include = command.to_ascii_lowercase().contains("include");
-    if fetches && (file || unkeyed || include) {
-        return true;
     }
     // Bash keeps the last of repeated assignments: every value of the key's index is judged.
     let keyed = keys.iter().any(|(n, k)| {
@@ -5294,6 +5298,17 @@ mod tests {
             "K=GIT_CONFIG_KEY_0; export $K=remote.origin.fetch GIT_CONFIG_COUNT=1 GIT_CONFIG_VALUE_0=+feat:main; git fetch origin",
             "export GIT_CONFIG_COUNT=1 GIT_CONFIG_VALUE_0=+feat:main; git fetch origin",
             "export $K=x; git pull origin main",
+            // Delta review: any config name or `$` before `=` next to a fetch or pull.
+            "GIT_CONFIG_GLOBAL+=/tmp/g git fetch origin",
+            "export GIT_CONFIG_GLOBAL+=/tmp/g; git fetch origin",
+            "read GIT_CONFIG_GLOBAL <<< /tmp/g; export GIT_CONFIG_GLOBAL; git fetch origin",
+            "printf -v GIT_CONFIG_GLOBAL /tmp/g; export GIT_CONFIG_GLOBAL; git pull",
+            "HOME=/tmp/h git fetch origin",
+            "XDG_CONFIG_HOME=/tmp/x git fetch origin",
+            "K=GIT_CONFIG_KEY_0 V=GIT_CONFIG_VALUE_0 C=GIT_CONFIG_COUNT; export \"$K\"=remote.origin.fetch \"$V\"=+feat:main \"$C\"=1; git fetch origin",
+            "env \"$K\"=remote.origin.fetch \"$V\"=+feat:main \"$C\"=1 git fetch origin",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.x GIT_CONFIG_VALUE_0=1; git fetch origin",
+            "export GIT_CONFIG_NOSYSTEM=1; git fetch origin",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5307,7 +5322,6 @@ mod tests {
             "git fetch --dept 1 origin main:main",
             "git fetch --depth=1 origin main:main",
             "git fetch evil2 feat:feat",
-            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.x GIT_CONFIG_VALUE_0=1; git fetch origin",
             "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+refs/heads/*:refs/remotes/origin/*; git status",
             "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
             "git config --get remote.origin.fetch",
@@ -5332,8 +5346,13 @@ mod tests {
             "git fetch origin feature",
             "git remote set-url --pu origin /tmp/x",
             "GIT_CONFIG_GLOBAL=/tmp/g git status",
-            "export GIT_CONFIG_NOSYSTEM=1; git fetch origin",
             "git -c core.x=1 pull origin main",
+            "git fetch",
+            "git pull --rebase",
+            "git config user.name x",
+            "git config --get remote.origin.url",
+            "export FOO=bar; git fetch",
+            "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",
             "git fetch -pP origin",
             "git fetch --prune origin",
