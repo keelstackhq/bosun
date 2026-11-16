@@ -3542,7 +3542,8 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     });
     // Variables the shell sets itself (they persist across calls, like `PWD` after a `cd`).
     const SHELL_VARS: &str = "_ PWD OLDPWD HOME IFS PS1 PS2 PS3 PS4 PROMPT_COMMAND ENV SHELLOPTS \
-        BASHOPTS CDPATH PATH SHELL REPLY OPTARG RANDOM LINENO SECONDS";
+        BASHOPTS CDPATH PATH SHELL REPLY OPTARG OPTIND RANDOM LINENO SECONDS FUNCNAME GROUPS \
+        DIRSTACK PIPESTATUS HOSTNAME HOSTTYPE MACHTYPE OSTYPE PPID UID EUID SHLVL COLUMNS LINES";
     static BRACE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("static regex"));
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
@@ -3581,36 +3582,35 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
                 .next()
                 .is_some_and(|b| b == "git" || b.starts_with("git-"))
         };
-        // A plain `"$NAME"` passes only where git reads a path or ref: a global `-C`,
-        // `--git-dir` or `--work-tree` value, or a positional word of a read or ref command;
-        // never after a builtin that can set a variable (`source`, `eval`, `declare`, `read`).
+        // A plain `"$NAME"` passes only as a global `-C`, `--git-dir` or `--work-tree` value (git
+        // takes those literally; a positional one can expand to an option), never after a
+        // builtin or function that can set a variable (`source`, `eval`, `read`, `f() {..}`).
         let g = seg.iter().position(|w| !w.2 && gitw(&w.0)).unwrap_or(0);
         let mut sub = g + 1;
         while seg.get(sub).is_some_and(|w| w.0.starts_with('-')) {
             let pair = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"];
             sub += 1 + usize::from(pair.contains(&seg[sub].0.as_str()));
         }
-        let refs = "status log diff show branch switch checkout add commit push fetch pull merge rebase tag";
         let sets = command
             .split(|c: char| c.is_whitespace() || ";&|()".contains(c))
             .any(|t| {
-                "source . eval declare typeset read export printf mapfile readarray local let"
+                "source . eval declare typeset read export printf mapfile readarray local let function"
                     .split(' ')
                     .any(|b| b == t)
-            });
+            })
+            || command.contains("()");
+        let push = seg.get(sub).is_some_and(|s| s.0 == "push");
         let place = |i: usize| {
             let prev = i.checked_sub(1).map_or("", |p| seg[p].0.as_str());
-            let ref_cmd = seg.get(sub).is_some_and(|s| refs.split(' ').any(|r| r == s.0));
-            !sets
-                && (i < sub && matches!(prev, "-C" | "--git-dir" | "--work-tree")
-                    || i > sub && ref_cmd && !prev.starts_with('-'))
+            !sets && i < sub && matches!(prev, "-C" | "--git-dir" | "--work-tree")
         };
         let names_fetch = |w: &str, i: usize| {
             let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
             // Any `$` or backtick builds words (`${IFS}`, `$(..)`), unless the value is one
             // variable (`"$BRANCH"`) the command does not set: it comes from the session.
             let var = VAR.captures(w).and_then(|c| c.get(1).or(c.get(2)));
-            let session = place(i)
+            // `git push` refuses any `$` itself ("name the branch literally").
+            let session = push || place(i)
                 && var.is_some_and(|n| {
                     let n = n.as_str();
                     if n.starts_with("BASH") || SHELL_VARS.split_whitespace().any(|v| v == n) {
@@ -5625,6 +5625,11 @@ mod tests {
             "git config core.editor \"$CMD\"",
             "git config diff.x.command \"$CMD\"",
             "git checkout -b \"$B\"",
+            "function --exec=./p.sh { git rebase \"$FUNCNAME\" main; }; --exec=./p.sh",
+            "f() { git log \"$X\"; }; f",
+            "git switch \"$BRANCH\"",
+            "git diff \"$BASE\" HEAD",
+            "git add \"$FILE\"",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5692,9 +5697,6 @@ mod tests {
             "git rebase -x 'cargo test' main",
             "git log --format='%H {a,b} $(x)'",
             "git --git-dir \"$GD\" status",
-            "git switch \"$BRANCH\"",
-            "git diff \"$BASE\" HEAD",
-            "git add \"$FILE\"",
             "git commit -m \"$(cat msg.txt)\"",
             "git rebase -x 'cargo test --workspace' main",
             "git commit --message='fix pull'",
