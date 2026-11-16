@@ -1,0 +1,1 @@
+- 2026-11-16 · guard decrypt-lock: prose literals in interpreter heredocs are data (FP fix) · PR

@@ -12,6 +12,7 @@ use crate::core::lease::{Conflict, Lease};
 use crate::core::meta::OPEN;
 
 mod interp;
+mod literals;
 mod prose;
 pub use interp::{Script, script_rules};
 mod writes;
@@ -2478,7 +2479,7 @@ fn decrypt_rule(command: &str, depth: usize) -> Option<String> {
     if depth > MAX_DEPTH {
         return Some(too_deep());
     }
-    let (text, bodies, targets) = strip_data_heredocs(command);
+    let (text, bodies, targets) = strip_data_heredocs(command, depth);
     let (text, wrote) = (text.as_str(), mentions_secrets(&bodies));
     for inner in nested(text) {
         if let Some(why) = decrypt_rule(&inner, depth + 1) {
@@ -2936,12 +2937,14 @@ fn heredoc_at(line: &str) -> Option<usize> {
 }
 
 /// The text without the bodies of quoted-delimiter heredocs (unless their line has a shell),
-/// those bodies, and the files the opening lines write (`> f`, `>> f`, `tee f`).
-fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
-    let (mut out, mut bodies, mut skip) = (String::new(), String::new(), None::<(String, bool)>);
-    let mut targets = Vec::new();
+/// those bodies, and the files the opening lines write (`> f`, `>> f`, `tee f`). When only
+/// interpreters (no shell) are on the line, an interpreter owns the heredoc and the line writes
+/// no file, the body stays code with its prose literals emptied.
+fn strip_data_heredocs(command: &str, depth: usize) -> (String, String, Vec<String>) {
+    let (mut out, mut bodies) = (String::new(), String::new());
+    let (mut skip, mut targets) = (None::<(String, bool, bool)>, Vec::new());
     for line in command.split_inclusive('\n') {
-        if let Some((delim, dash)) = &skip {
+        if let Some((delim, dash, code)) = &skip {
             let l = line.trim_end_matches('\n');
             let l = if *dash { l.trim_start_matches('\t') } else { l };
             if l != delim && l.starts_with(delim.as_str()) {
@@ -2950,6 +2953,8 @@ fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
             if l == delim {
                 skip = None;
                 out.push_str(line);
+            } else if *code {
+                out.push_str(&literals::blank_prose(line, depth));
             } else {
                 bodies.push_str(line);
             }
@@ -2960,15 +2965,26 @@ fn strip_data_heredocs(command: &str) -> (String, String, Vec<String>) {
             let spec = line[at + 2..].trim_start_matches('-').trim_start();
             let dash = line[at + 2..].starts_with('-');
             let quote = spec.chars().next().filter(|c| matches!(c, '\'' | '"'));
-            let reads = shell_words(line)
-                .iter()
-                .any(|w| SHELLS.contains(&w.rsplit('/').next().unwrap_or(w)));
+            let words = shell_words(line);
+            let names = || words.iter().map(|w| w.rsplit('/').next().unwrap_or(w));
+            let reads = names().any(|w| SHELLS.contains(&w));
+            // Only interpreters (`python3 -`), no shell or `source`/`xargs`/`eval`; the command
+            // of the segment that holds `<<` is one (not `cat <<'EOF' | python3 ..`), and the
+            // line writes no file (`python3 - > x.sh <<'EOF'` is a script for later).
+            let seg = &line[line[..at].rfind(['|', ';', '&', '(']).map_or(0, |i| i + 1)..at];
+            let owner = shell_words(seg).into_iter().find(|w| assigned(w).is_none());
+            let owned =
+                owner.is_some_and(|w| INTERPS.contains(&w.rsplit('/').next().unwrap_or(&w)));
+            let writes = write_targets(&words);
+            let interp = owned
+                && writes.is_empty()
+                && names().all(|w| !SHELLS.contains(&w) || INTERPS.contains(&w));
             if let Some(q) = quote
-                && !reads
                 && let Some(end) = spec[1..].find(q)
+                && (!reads || interp)
             {
-                skip = Some((spec[1..=end].to_string(), dash));
-                targets.extend(write_targets(&shell_words(line)));
+                skip = Some((spec[1..=end].to_string(), dash, reads));
+                targets.extend(writes);
             }
         }
     }
@@ -5920,7 +5936,7 @@ mod tests {
             let cmd = format!("cat <<'EOF'\nEOF)\ncat <<'Z'\nEOF\n{hidden}\nZ");
             let (code, _) = split_heredocs(&cmd);
             assert!(code.contains(hidden), "{cmd}");
-            let (text, _, _) = strip_data_heredocs(&cmd);
+            let (text, _, _) = strip_data_heredocs(&cmd, 0);
             assert!(text.contains(hidden), "{cmd}");
         }
         for hidden in ["gh pr merge 3", "sops -d f"] {
@@ -5954,6 +5970,102 @@ mod tests {
         assert!(wrong.is_empty(), "wrong verdict: {wrong:#?}");
         let why = bash("sops -d f", "feature").unwrap();
         assert!(!why.contains('\n') && why.contains("hoist secrets exec"));
+    }
+
+    /// A prose string literal in an interpreter's quoted heredoc is data; a literal that reads
+    /// as a command (or holds shell syntax) is still judged, and so is a shell's heredoc.
+    #[test]
+    fn decrypt_lock_treats_prose_literals_in_interpreter_heredocs_as_data() {
+        let py = |body: &str| format!("python3 - <<'EOF'\n{body}\nEOF");
+        for body in [
+            "s = \"CI decrypts with hoist, agents never do\"\nprint(s)",
+            "msg = 'decrypting secrets is refused for agents, age key or not'\nprint(msg)",
+            "print(\"Secrets stay encrypted: only the owner edits them, never sops.\")",
+            "x = {'why': 'agents never decrypt with age, nor sops.'}",
+        ] {
+            assert_eq!(bash(&py(body), "feature"), None, "{body}");
+        }
+        for body in [
+            "import subprocess\nsubprocess.run(['sops', '-d', 's.yaml'])",
+            "import os\nos.system('sops -d s.yaml')",
+            "import os\nos.system('sops --decrypt s.yaml > out')",
+            "import os\nos.system('x=1 sops -d s.yaml')",
+            "import os\nos.system('nice sops -d s.yaml')",
+            "import os\nos.system('bash -c \"sops -d f\"')",
+            "import os\nos.system('the docs say: run sops -d f')",
+            "import os\nos.system('hoist secrets edit')",
+            "import os\nos.system(\"cat ~/.config/sops/age/keys.txt\")",
+            "s = 'unterminated sops -d f",
+            "import os\nos.system('''sops -d f''')",
+            // Env dumps and decrypt calls behind unknown wrappers are judged as commands.
+            "import os\nos.system('ps eww 1')",
+            "import os\nos.system('ps auxe')",
+            "import os\nos.system('export -p')",
+            "import os\nos.system('declare -x')",
+            "import os\nos.system('typeset -p')",
+            "import os\nos.system(\"compgen -v\")",
+            "import os\nos.system('fakeroot sops a')",
+            // Prose-shaped key reads: a key path or a search of home is never prose.
+            "import os\nos.system('grep -r AGE ~/.config/sops')",
+            "import os\nos.system('rg AGE ~/.config/sops')",
+            "import os\nos.system('grep -rh KEY ~/.config/sops')",
+            "import os\nos.system('grep -r AGE ~')",
+            "import os\nos.system('cat ~/.config/sops/age/keys.txt')",
+            // Code inside a literal (`exec("..")`) and any `hoist secrets` call are never prose.
+            "from subprocess import run as r\nexec('r ((\"sops\", \"-d\", \"s.yaml\"))')",
+            "from subprocess import run as r\nexec(\"r (('sops',  '-d',  's.yaml'))\")",
+            "from subprocess import run as r\nexec(\"r (('sops',\t'-d',\t's.yaml'))\")",
+            "import os\nos.system('fakeroot (sops) -d f')",
+            // Paths and globs are never prose: a glob can name the key file.
+            "import os\nos.system('fakeroot cat /root/.con*/so*/age/k*')",
+            "msg = 'decrypting secrets is refused for agents (age key)'\nprint(msg)",
+            "exec(\"print (__import__('subprocess').run(['sops','-d','s.yaml']))\")",
+            "exec(\"import subprocess as s; s.run(['sops', '-d', 'f'])\")",
+            "eval(\"print (run(['age', '-d', 'f']))\")",
+            "import os\nos.system('hoist secrets exec -- env')",
+            "import os\nos.system('hoist secrets exec -- printenv')",
+            "getattr(__import__('os'), 'system')('fakeroot sops -d f')",
+            "getattr(__import__(\"os\"), \"system\")(\"run so'ps' x\")",
+            "eval(\"getattr(os, 'system')('fakeroot sops a')\")",
+            "import os\nos.system('see `sops -d f` for the plain text')",
+            // Quotes join and vanish in the shell: a quoted name is still the tool.
+            "import os\nos.system(\"fakeroot 'sops' -d s.yaml\")",
+            "import os\nos.system(\"fakeroot so'ps' -d s.yaml\")",
+            "import os\nos.system(\"fakeroot 'age' -d -i k f\")",
+            "import os\nos.system(\"fakeroot 'hoist' secrets edit\")",
+            "import os\nos.system('fakeroot sops and')",
+            "x = 'agents never decrypt with sops or age'",
+        ] {
+            assert!(bash(&py(body), "feature").is_some(), "{body}");
+        }
+        // The heredoc's own command decides, and a heredoc that writes a file stays judged.
+        for cmd in [
+            "cat <<'EOF' | python3 -c 'import os,sys; os.system(sys.stdin.read())'\nbash -c 'ps eww 1'\nEOF",
+            "cat <<'EOF' | python3 -c 'import os,sys; os.system(sys.stdin.read())'\neval 'fakeroot sops a'\nEOF",
+            "cat > r.sh <<'EOF' && python3 -V\nbash -c 'declare -x'\nEOF\nbash r.sh",
+            "python3 - > x.sh <<'EOF'\nprint('export -p')\nEOF\nbash x.sh",
+            "python3 - > x.sh <<'EOF'\nprint('fakeroot sops a')\nEOF\nbash x.sh",
+        ] {
+            assert!(bash(cmd, "feature").is_some(), "{cmd}");
+        }
+        // A shell's heredoc stays code, prose or not.
+        assert!(
+            bash(
+                "bash <<'EOF'\necho 'agents never decrypt with sops'\nEOF",
+                "feature"
+            )
+            .is_some()
+        );
+        assert!(bash("perl - <<'EOF'\nsystem('sops -d f');\nEOF", "feature").is_some());
+        assert_eq!(
+            bash(
+                "node - <<'EOF'\nconsole.log('we never decrypt with sops')\nEOF",
+                "feature"
+            ),
+            None
+        );
+        let node = "node - <<'EOF'\nconst {execFileSync: x} = require('child_process'); eval('x (\"sops\", (\"-d s.yaml\").split (\" \"))')\nEOF";
+        assert!(bash(node, "feature").is_some());
     }
 
     fn own(issue: u64, session: &str, touch: &[&str]) -> Lease {
