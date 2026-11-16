@@ -1,1 +1,0 @@
-- 2026-11-16 · Close merge-lock ref gaps · symbolic-ref tags, brace refspecs, local fetch into main or from a variable, git subcommand in a variable · PR

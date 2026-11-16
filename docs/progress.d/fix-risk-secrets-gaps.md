@@ -1,1 +1,0 @@
-- 2026-11-16 · R-secrets gaps: unquoted yaml, php `=>` and Kubernetes env value literals now match, minus Laravel casts and rules, durations and paths; FP corpus (1.94M lines, outside this repo) 288 flags on main, 289 after (the one new flag is a real committed token) · PR

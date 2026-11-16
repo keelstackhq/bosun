@@ -4,6 +4,13 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.18.0 (2026-11-16)
+
+- ci: release workflow pins hoist 0.5.1 and passes HOIST_RELEASE_TOKEN to `hoist release prepare`
+- guard: a prose string literal in the quoted heredoc of an interpreter (`python3 - <<'EOF'`) no longer trips the decrypt-lock; command-shaped literals are still judged
+- Merge-lock: refuse `git symbolic-ref` writes under `refs/tags/`, brace-expanded words (`refs/{tags,x}/v1`, `{git,} push ..`, `{x..y}` in any git or gh spelling), fetches into the default branch from anything but that remote's default branch or with a refspec the guard cannot read (`git fetch . feat:main`, `git fetch origin $SPEC`), moves of the default branch (`update-ref`, `branch -f`, `checkout -B`, `switch -C`), and a git subcommand held in a variable or behind `--namespace x` (`git $g x`).
+- R-secrets also catches unquoted yaml literals (`password: x` in yaml, properties and env files), php/ruby `'password' => 'x'` array literals and Kubernetes env `value:` literals under a secret `name:`.
+
 ## 0.17.0 (2026-11-15)
 
 - Audit fixes: guard (quoted/-R gh merge incl. `gh pr -R`, -fu pushes, update-ref tags, shell indirection, | sh), risk (++ lines, R-secrets (values, not types or refs), CODEOWNERS, build files, every added binary file now trips R-unseen (a pure rename does not; a renamed changed binary does), exact lock sources, missing plan), hooks (stale-cache edit-lock, version skew line, reap, token scrub, https base), init/adopt/doctor/migrate flow, setup-script version check (warns), risk re-judge on push to main, SHA-pinned actions, tuned cargo profiles; update-ref and fetch `$` targets and push.followTags denied, R-secrets: keyword inside a string is no key, typed and `:=` literals match, `.tf` is code Also: R-secrets `${X:-lit}` defaults and `'$..'` literals match, `secret` keyword narrowed (no `secrets`, `secretary`, `secretName`), migrate-booster one structure, deny `git fetch <r> <src>:tags/<x>`. R-secrets: `${X:=l}` `${X=l}` `${X:+l}` `${X+l}` defaults, `name == "lit"` comparisons and a secret-looking reader-call argument match.
