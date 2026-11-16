@@ -21,6 +21,7 @@ const MARKERS: &[&str] = &[
     "SOPS_AGE_KEY",
     "environ",
     "/proc",
+    ".config",
     "AGE-SECRET",
     "SECRET-KEY",
 ];
@@ -82,7 +83,15 @@ fn base(w: &str) -> String {
 /// replaced, nothing the decrypt-lock refuses as a command (`ps eww 1`, `export -p`).
 fn is_prose(lit: &str, depth: usize) -> bool {
     is_plain(lit) && {
-        let named = |w: &&str| matches!(base(w).as_str(), "sops" | "age" | "rage" | "hoist");
+        // Only a bare name (`(age`, `sops.`), never a path: `~/.config/sops` stays judged.
+        let named = |w: &&str| {
+            let bare = w.trim_matches(['(', ')', ',', '.', ':', '!', '?', '\'', '"']);
+            let name = matches!(
+                bare.to_lowercase().as_str(),
+                "sops" | "age" | "rage" | "hoist"
+            );
+            name && !w.contains(['/', '~', '@'])
+        };
         let words: Vec<&str> = lit
             .split_whitespace()
             .map(|w| if named(&w) { "x" } else { w })

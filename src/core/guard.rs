@@ -5394,6 +5394,12 @@ mod tests {
             "import os\nos.system('typeset -p')",
             "import os\nos.system(\"compgen -v\")",
             "import os\nos.system('fakeroot sops a')",
+            // Prose-shaped key reads: a key path or a search of home is never prose.
+            "import os\nos.system('grep -r AGE ~/.config/sops')",
+            "import os\nos.system('rg AGE ~/.config/sops')",
+            "import os\nos.system('grep -rh KEY ~/.config/sops')",
+            "import os\nos.system('grep -r AGE ~')",
+            "import os\nos.system('cat ~/.config/sops/age/keys.txt')",
         ] {
             assert!(bash(&py(body), "feature").is_some(), "{body}");
         }
