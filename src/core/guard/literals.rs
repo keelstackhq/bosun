@@ -4,7 +4,7 @@
 //! `rage` or `hoist secrets` call, a key path) stays code, so `os.system('sops -d f')` is
 //! still judged. Shells (`bash <<'EOF'`) are not covered: their whole body is code.
 
-use super::{HOIST_SECRETS, INTERPS, RUNNERS, SHELLS};
+use super::{INTERPS, RUNNERS, SHELLS};
 
 /// Words that run what follows them, beyond RUNNERS, SHELLS and INTERPS.
 const RUNS: &[&str] = &[
@@ -106,7 +106,16 @@ fn is_plain(lit: &str, words: &[String]) -> bool {
         return false;
     };
     let syntax = lit.contains([';', '&', '|', '$', '`', '<', '>', '\\', '{', '}', '=']);
-    if words.len() < 2 || syntax || MARKERS.iter().any(|m| lit.contains(m)) {
+    // Code, not prose: brackets, dunders, a call (`run(`, `__import__(`), a quoted list item.
+    let b = lit.as_bytes();
+    let call = (1..b.len())
+        .any(|i| b[i] == b'(' && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'));
+    let code = call
+        || lit.contains(['[', ']'])
+        || lit.contains("__")
+        || lit.contains("','")
+        || lit.contains("', '");
+    if words.len() < 2 || syntax || code || MARKERS.iter().any(|m| lit.contains(m)) {
         return false;
     }
     let f = first.trim_start_matches('(');
@@ -127,16 +136,11 @@ fn is_plain(lit: &str, words: &[String]) -> bool {
             // `sops FILE` is the decrypting editor: any word after a bare `sops` is a call.
             "sops" => w.ends_with("sops") && next.is_some(),
             "age" | "rage" => next.is_some_and(|n| n.starts_with('-')),
-            // The shell rule's: a write subcommand after `secrets`, before `--` or `exec`.
+            // Any `hoist secrets` with a subcommand: `exec -- CMD` runs CMD with the secrets.
             "hoist" => words[i + 1..]
                 .iter()
                 .position(|a| a == "secrets")
-                .is_some_and(|p| {
-                    words[i + 2 + p..]
-                        .iter()
-                        .take_while(|a| *a != "--" && *a != "exec")
-                        .any(|a| HOIST_SECRETS.contains(&a.as_str()))
-                }),
+                .is_some_and(|p| words.len() > i + 2 + p),
             _ => false,
         }
     })

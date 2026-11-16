@@ -5367,9 +5367,9 @@ mod tests {
     fn decrypt_lock_treats_prose_literals_in_interpreter_heredocs_as_data() {
         let py = |body: &str| format!("python3 - <<'EOF'\n{body}\nEOF");
         for body in [
-            "s = \"hoist secrets exec decrypts in CI\"\nprint(s)",
+            "s = \"CI decrypts with hoist, agents never do\"\nprint(s)",
             "msg = 'decrypting secrets is refused for agents (age key)'\nprint(msg)",
-            "print(\"Secrets stay encrypted: the owner runs hoist secrets edit, never sops.\")",
+            "print(\"Secrets stay encrypted: only the owner edits them, never sops.\")",
             "x = {'why': 'agents never decrypt with age, nor sops.'}",
         ] {
             assert_eq!(bash(&py(body), "feature"), None, "{body}");
@@ -5400,6 +5400,16 @@ mod tests {
             "import os\nos.system('grep -rh KEY ~/.config/sops')",
             "import os\nos.system('grep -r AGE ~')",
             "import os\nos.system('cat ~/.config/sops/age/keys.txt')",
+            // Code inside a literal (`exec("..")`) and any `hoist secrets` call are never prose.
+            "exec(\"print (__import__('subprocess').run(['sops','-d','s.yaml']))\")",
+            "exec(\"import subprocess as s; s.run(['sops', '-d', 'f'])\")",
+            "eval(\"print (run(['age', '-d', 'f']))\")",
+            "import os\nos.system('hoist secrets exec -- env')",
+            "import os\nos.system('hoist secrets exec -- printenv')",
+            "getattr(__import__('os'), 'system')('fakeroot sops -d f')",
+            "getattr(__import__(\"os\"), \"system\")(\"run so'ps' x\")",
+            "eval(\"getattr(os, 'system')('fakeroot sops a')\")",
+            "import os\nos.system('see `sops -d f` for the plain text')",
             // Quotes join and vanish in the shell: a quoted name is still the tool.
             "import os\nos.system(\"fakeroot 'sops' -d s.yaml\")",
             "import os\nos.system(\"fakeroot so'ps' -d s.yaml\")",
