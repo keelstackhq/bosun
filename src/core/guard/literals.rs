@@ -6,10 +6,6 @@
 
 use super::{HOIST_SECRETS, INTERPS, RUNNERS, SHELLS};
 
-/// Words after `sops` that read as prose (`sops or age`), not as its file or subcommand.
-const PROSE_AFTER: &[&str] = &[
-    "and", "are", "but", "itself", "never", "nor", "not", "or", "was", "were", "with",
-];
 /// Words that run what follows them, beyond RUNNERS, SHELLS and INTERPS.
 const RUNS: &[&str] = &[
     "exec", "command", "builtin", "eval", "source", "npx", "bunx", "pnpx", "coproc", "go", "sudo",
@@ -82,26 +78,30 @@ fn base(w: &str) -> String {
 /// nothing, no `sops|age|rage|hoist secrets` call in it, and, with those names (not calls)
 /// replaced, nothing the decrypt-lock refuses as a command (`ps eww 1`, `export -p`).
 fn is_prose(lit: &str, depth: usize) -> bool {
-    is_plain(lit) && {
+    // The words as the shell reads them: quotes join and vanish (`'so'ps` is `sops`).
+    let words: Vec<String> = lit
+        .split_whitespace()
+        .map(|w| w.replace(['\'', '"'], ""))
+        .collect();
+    is_plain(lit, &words) && {
         // Only a bare name (`(age`, `sops.`), never a path: `~/.config/sops` stays judged.
-        let named = |w: &&str| {
-            let bare = w.trim_matches(['(', ')', ',', '.', ':', '!', '?', '\'', '"']);
+        let named = |w: &str| {
+            let bare = w.trim_matches(['(', ')', ',', '.', ':', '!', '?']);
             let name = matches!(
                 bare.to_lowercase().as_str(),
                 "sops" | "age" | "rage" | "hoist"
             );
             name && !w.contains(['/', '~', '@'])
         };
-        let words: Vec<&str> = lit
-            .split_whitespace()
-            .map(|w| if named(&w) { "x" } else { w })
+        let words: Vec<&str> = words
+            .iter()
+            .map(|w| if named(w) { "x" } else { w.as_str() })
             .collect();
         super::decrypt_rule(&words.join(" "), depth + 1).is_none()
     }
 }
 
-fn is_plain(lit: &str) -> bool {
-    let words: Vec<&str> = lit.split_whitespace().collect();
+fn is_plain(lit: &str, words: &[String]) -> bool {
     let Some(first) = words.first() else {
         return false;
     };
@@ -122,19 +122,20 @@ fn is_plain(lit: &str) -> bool {
         return false;
     }
     !words.iter().enumerate().any(|(i, w)| {
-        let next = words.get(i + 1).copied();
-        match base(w).as_str() {
-            "sops" => w.ends_with("sops") && next.is_some_and(|n| !PROSE_AFTER.contains(&n)),
+        let next = words.get(i + 1);
+        match base(w).trim_end_matches([')', ',', '.', ':', '!', '?']) {
+            // `sops FILE` is the decrypting editor: any word after a bare `sops` is a call.
+            "sops" => w.ends_with("sops") && next.is_some(),
             "age" | "rage" => next.is_some_and(|n| n.starts_with('-')),
             // The shell rule's: a write subcommand after `secrets`, before `--` or `exec`.
             "hoist" => words[i + 1..]
                 .iter()
-                .position(|a| *a == "secrets")
+                .position(|a| a == "secrets")
                 .is_some_and(|p| {
                     words[i + 2 + p..]
                         .iter()
-                        .take_while(|a| **a != "--" && **a != "exec")
-                        .any(|a| HOIST_SECRETS.contains(a))
+                        .take_while(|a| *a != "--" && *a != "exec")
+                        .any(|a| HOIST_SECRETS.contains(&a.as_str()))
                 }),
             _ => false,
         }

@@ -5370,7 +5370,7 @@ mod tests {
             "s = \"hoist secrets exec decrypts in CI\"\nprint(s)",
             "msg = 'decrypting secrets is refused for agents (age key)'\nprint(msg)",
             "print(\"Secrets stay encrypted: the owner runs hoist secrets edit, never sops.\")",
-            "x = {'why': 'agents never decrypt with sops or age'}",
+            "x = {'why': 'agents never decrypt with age, nor sops.'}",
         ] {
             assert_eq!(bash(&py(body), "feature"), None, "{body}");
         }
@@ -5400,6 +5400,13 @@ mod tests {
             "import os\nos.system('grep -rh KEY ~/.config/sops')",
             "import os\nos.system('grep -r AGE ~')",
             "import os\nos.system('cat ~/.config/sops/age/keys.txt')",
+            // Quotes join and vanish in the shell: a quoted name is still the tool.
+            "import os\nos.system(\"fakeroot 'sops' -d s.yaml\")",
+            "import os\nos.system(\"fakeroot so'ps' -d s.yaml\")",
+            "import os\nos.system(\"fakeroot 'age' -d -i k f\")",
+            "import os\nos.system(\"fakeroot 'hoist' secrets edit\")",
+            "import os\nos.system('fakeroot sops and')",
+            "x = 'agents never decrypt with sops or age'",
         ] {
             assert!(bash(&py(body), "feature").is_some(), "{body}");
         }
