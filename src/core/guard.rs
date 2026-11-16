@@ -3426,23 +3426,30 @@ fn fetch_trusted(rest: &[&str]) -> bool {
 /// A command with a `fetch` or `pull` word that is not a plain chain of `git ..` and `cd ..`
 /// segments (split at `;`, `&&`, `||`, `|`, `&` and newlines; a last `| tail -N` or `| head -N`
 /// reads): shell syntax can set what git reads (`HOME=`, `export`, `source`, `eval`, a loop),
-/// so only a fetch the guard can read alone passes. A quoted `-m`, `--message`, `-b`, `--body`
-/// or `--title` value without `$` or a backtick is prose and is skipped.
+/// so only a fetch the guard can read alone passes. Quotes are not parsed (no prose is
+/// skipped), and a fetch or pull with `-c`, `--config-env`, `ext::` or `fd::` is refused too.
 fn fetch_not_plain(command: &str) -> bool {
-    static PROSE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?:^|\s)(?:-m|--message|-b|--body|--title)\s+(?:'[^'$`]*'|"[^"$`\\]*")"#)
-            .expect("static regex")
-    });
-    let text = PROSE.replace_all(command, " ").replace("2>&1", "");
+    let text = command.replace("2>&1", "");
     let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
-    if !text.split(cut).any(|w| matches!(w, "fetch" | "pull")) {
+    // `fe""tch` and `\\fetch` run fetch too.
+    let bare = |w: &str| matches!(w.replace(['\'', '"', '\\'], "").as_str(), "fetch" | "pull");
+    let git = |w: &str| w.replace(['\'', '"', '\\'], "").rsplit('/').next() == Some("git");
+    if !text.split(cut).any(bare) || !text.split(cut).any(git) {
         return false;
     }
     let plain = |seg: &str| {
         let w: Vec<&str> = seg.split_whitespace().collect();
         match w.first() {
             None => true,
-            Some(&"git") => true,
+            // `-c protocol.ext.allow=always`, `url.ext::...insteadOf`: config that runs code.
+            Some(&"git") => {
+                !(w.iter().any(|a| bare(a))
+                    && (w
+                        .iter()
+                        .any(|a| *a == "-c" || a.starts_with("--config-env"))
+                        || seg.contains("ext::")
+                        || seg.contains("fd::")))
+            }
             Some(&"cd") => w.len() <= 2,
             Some(&("tail" | "head")) => {
                 w.len() == 2 && w[1].trim_start_matches('-').parse::<u32>().is_ok()
@@ -5113,6 +5120,9 @@ mod tests {
             "git -c remote.origin.fetch=+refs/tags/x:refs/tags/x fetch origin",
             "git --config-env=remote.origin.fetch=F fetch origin",
             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=x:main git fetch origin",
+            // Later review: any `-c` on a fetch or pull is refused (was allowed).
+            "git -c remote.origin.fetch=+refs/heads/*:refs/remotes/origin/* fetch origin",
+            "git -c core.x=1 fetch origin",
         ] {
             assert!(bash(cmd, "feature").is_some(), "{cmd}");
         }
@@ -5122,8 +5132,6 @@ mod tests {
             "git switch --force feat",
             "git fetch --refmap= origin",
             "git fetch --refmap='+refs/heads/*:refs/remotes/origin/*' origin",
-            "git -c remote.origin.fetch=+refs/heads/*:refs/remotes/origin/* fetch origin",
-            "git -c core.x=1 fetch origin",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
@@ -5283,6 +5291,14 @@ mod tests {
             "export $v; git pull",
             "bash -c 'git fetch origin'",
             "git fetch origin < /dev/null",
+            "git -c core.x=1 pull origin main",
+            "git log \" -m 'a\" ; HOME=/tmp/h git fetch origin ; git log \"'\"",
+            "git log \" --title 'a\" ; GIT_CONFIG_GLOBAL=/tmp/g git pull ; git log \"'\"",
+            "git -c protocol.ext.allow=always fetch 'ext::sh -c git% update-ref% refs/heads/main% refs/heads/feat'",
+            "git -c 'url.ext::sh -c x%#.insteadOf=https://' -c protocol.ext.allow=always fetch origin",
+            "git fetch 'ext::sh -c x'",
+            "git fetch fd::3",
+            "git -c protocol.ext.allow=always fe\"\"tch 'ext::sh -c x'",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5320,7 +5336,6 @@ mod tests {
             "git fetch origin feature",
             "git remote set-url --pu origin /tmp/x",
             "GIT_CONFIG_GLOBAL=/tmp/g git status",
-            "git -c core.x=1 pull origin main",
             "git fetch",
             "git pull --rebase",
             "git config user.name x",
