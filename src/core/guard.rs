@@ -3513,7 +3513,7 @@ fn remote_retargets(rest: &[&str]) -> bool {
     let trusted = |w: &String| matches!(w.as_str(), "origin" | "upstream");
     match words.first().map(String::as_str) {
         // A push URL does not change where a fetch reads.
-        Some("set-url") if rest.contains(&"--push") => false,
+        Some("set-url") if rest.iter().any(|a| a.len() >= 4 && "--push".starts_with(a)) => false,
         Some("add" | "set-url") => words
             .iter()
             .position(trusted)
@@ -3940,6 +3940,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         // `git pull <remote> <src>:<dst>` hands its refspecs to fetch.
         "fetch" | "pull"
             if (fetch_tags(rest) && (!fetch_trusted(rest) || fetch_many(rest)))
+                // `tag <name>` is git's shorthand for `refs/tags/<name>:refs/tags/<name>`.
+                || fetch_words(rest).0.iter().skip(1).any(|w| w.trim_start_matches('+') == "tag")
                 || rest.iter().any(|a| {
                 let a = norm_ref(&a.replace(['\'', '"', '\\'], ""));
                 a.contains("refs/tags/")
@@ -3993,6 +3995,22 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                     && value(i).is_some_and(|v| fetch_cfg_moves(v, default_branch))
                     || value(i).is_some_and(|v| retargets(&k, v))
             });
+            // `--rename-section remote.evil remote.upstream` renames a remote like `git remote rename`.
+            let plain: Vec<String> = rest
+                .iter()
+                .filter(|a| !a.starts_with('-') || a.starts_with("--rename-section"))
+                .map(|a| cfg_key(a))
+                .collect();
+            let renames = plain
+                .first()
+                .is_some_and(|w| matches!(w.as_str(), "rename-section" | "--rename-section"));
+            let trusted = |w: Option<&String>| {
+                w.is_some_and(|w| matches!(w.as_str(), "remote.origin" | "remote.upstream"))
+            };
+            if renames && trusted(plain.last()) && !trusted(plain.get(1).filter(|_| plain.len() > 2))
+            {
+                return Some(FETCH_MOVES);
+            }
             if !unsets && fetch {
                 return Some(FETCH_MOVES);
             }
@@ -5228,6 +5246,13 @@ mod tests {
             "git fetch --prune --prune-tags --force evil2",
             "git fetch -oxs evil2 origin +main:main",
             "git pull -Xtheirs evil2 origin +main:main",
+            // Review round 5: `tag <name>` shorthand, config section renames.
+            "git fetch evil2 tag v1.0",
+            "git fetch origin tag v1.0",
+            "git pull evil2 tag v1.0",
+            "git fetch evil2 +tag v1.0",
+            "git config --rename-section remote.evil remote.upstream",
+            "git config rename-section remote.evil remote.origin",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5262,6 +5287,9 @@ mod tests {
             "git log {1..100..2}",
             "git pull -Xtheirs origin feature",
             "git remote rename origin upstream",
+            "git config --rename-section remote.origin remote.upstream",
+            "git fetch origin feature",
+            "git remote set-url --pu origin /tmp/x",
             "git fetch --all",
             "git fetch -pP origin",
             "git fetch --prune origin",
