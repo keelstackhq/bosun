@@ -1549,6 +1549,52 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
             .iter()
             .any(|r| r.0 == w.rsplit('/').next().unwrap_or(w))
     };
+    // `\git`, `"git"`, `g''it` and `/usr/bin/git` all run git.
+    // A word with an open quote is part of a longer string (`python -c 'gh ..'`): left as is.
+    let name = |w: &str| {
+        let even = |q: char| w.matches(q).count().is_multiple_of(2);
+        let w = if even('\'') && even('"') {
+            w.replace(['\'', '"', '\\'], "")
+        } else {
+            w.to_string()
+        };
+        w.rsplit('/').next().unwrap_or(&w).to_string()
+    };
+    // Bash expands `{a,b}` before the command runs: judge the words it makes (an unquoted empty
+    // one is dropped). Too many words are not expanded: that fails
+    // closed in a git or gh command, or where the word could be the command word.
+    let (mut grown, mut ex) = (false, Vec::new());
+    // Only words before it that a runner may skip: it could be the command word.
+    let could_run = |at: usize| {
+        words[..at].iter().all(|w| {
+            w.starts_with('-')
+                || w.contains('=')
+                || WRAPPERS.contains(w)
+                || runner(w)
+                || w.bytes().all(|b| b.is_ascii_digit())
+        })
+    };
+    for (at, w) in words.iter().enumerate() {
+        match braces(w, 0, 0) {
+            Some(Ok(more)) => {
+                ex.extend(more.into_iter().filter(|m| !m.is_empty()));
+                grown = true;
+            }
+            Some(Err(()))
+                if words
+                    .iter()
+                    .any(|w| matches!(name(w).as_str(), "git" | "gh"))
+                    || could_run(at) =>
+            {
+                return Some(UNREAD_BRACE);
+            }
+            _ => ex.push(w.to_string()),
+        }
+    }
+    if grown {
+        let words: Vec<&str> = ex.iter().map(String::as_str).collect();
+        return merge_rule(&words, &ex.join(" "), target);
+    }
     let (mut words, mut xargs, mut moved) = (words, false, false);
     loop {
         let skip = words
@@ -1583,41 +1629,6 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
         if blind {
             return Some("`xargs` adds arguments the guard cannot see");
         }
-    }
-    // `\git`, `"git"`, `g''it` and `/usr/bin/git` all run git.
-    // A word with an open quote is part of a longer string (`python -c 'gh ..'`): left as is.
-    let name = |w: &str| {
-        let even = |q: char| w.matches(q).count().is_multiple_of(2);
-        let w = if even('\'') && even('"') {
-            w.replace(['\'', '"', '\\'], "")
-        } else {
-            w.to_string()
-        };
-        w.rsplit('/').next().unwrap_or(&w).to_string()
-    };
-    // Bash expands `{a,b}` before the command runs: judge the words it makes (an unquoted empty
-    // one is dropped). A `{x..y}` sequence (or too many words) is not expanded, so a git or gh
-    // command with one fails closed.
-    let (mut grown, mut ex) = (false, Vec::new());
-    for w in words {
-        match braces(w, 0, 0) {
-            Some(Ok(more)) => {
-                ex.extend(more.into_iter().filter(|m| !m.is_empty()));
-                grown = true;
-            }
-            Some(Err(()))
-                if words
-                    .iter()
-                    .any(|w| matches!(name(w).as_str(), "git" | "gh")) =>
-            {
-                return Some(UNREAD_BRACE);
-            }
-            _ => ex.push(w.to_string()),
-        }
-    }
-    if grown {
-        let words: Vec<&str> = ex.iter().map(String::as_str).collect();
-        return merge_rule(&words, &ex.join(" "), &target);
     }
     let first = words.first().map(|w| name(w));
     let first = first.as_deref();
@@ -1685,10 +1696,10 @@ fn calls_system(s: &str) -> bool {
 const UNREAD_BRACE: &str = "a `{x..y}` brace sequence the guard cannot see through: \
     write the words out";
 
-/// Bash brace expansion of one word: `None` when it has no unquoted `{a,b}` list (`${x}`,
-/// `@{u}`, `{}` stay as they are); `Err` for a `{x..y}` sequence, more than 64 words or lists
-/// more than 8 lists in one word. The scan starts at `from`, where no quote is open (all before it is
-/// already expanded).
+/// Bash brace expansion of one word: `None` when it has no unquoted `{a,b}` list or `{x..y}`
+/// sequence (`${x}`, `@{u}`, `{}` stay as they are); `Err` for a sequence bash would not expand,
+/// more than 64 words or more than 8 lists in one word. The scan starts at `from`, where no
+/// quote is open (all before it is already expanded).
 fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, ()>> {
     let (mut quote, mut esc) = (None, false);
     for (i, c) in word[from..].char_indices().map(|(i, c)| (i + from, c)) {
@@ -1704,20 +1715,29 @@ fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, (
                 let Some((end, cuts)) = brace_list(&word[i..]) else {
                     continue;
                 };
-                if cuts.is_empty() {
-                    if word[i..i + end].contains("..") {
-                        return Some(Err(()));
+                let alts: Vec<String> = if cuts.is_empty() {
+                    if !word[i..i + end].contains("..") {
+                        continue;
                     }
-                    continue;
-                }
-                if cuts.len() >= 64 || depth >= 8 {
+                    match sequence(&word[i + 1..i + end]) {
+                        Some(items) => items,
+                        None => return Some(Err(())),
+                    }
+                } else {
+                    let starts = [0].into_iter().chain(cuts.iter().map(|c| c + 1));
+                    let ends = cuts.iter().copied().chain([end]);
+                    starts
+                        .zip(ends)
+                        .map(|(a, b)| word[i + a.max(1)..i + b].to_string())
+                        .collect()
+                };
+                if alts.len() > 64 || depth >= 8 {
                     return Some(Err(()));
                 }
                 let (head, tail) = (&word[..i], &word[i + end + 1..]);
                 let mut out = Vec::new();
-                let mut start = 1;
-                for cut in cuts.into_iter().chain([end]) {
-                    let one = format!("{head}{}{tail}", &word[i + start..i + cut]);
+                for alt in alts {
+                    let one = format!("{head}{alt}{tail}");
                     match braces(&one, i, depth + 1) {
                         None => out.push(one),
                         Some(Ok(more)) => out.extend(more),
@@ -1726,7 +1746,6 @@ fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, (
                     if out.len() > 64 {
                         return Some(Err(()));
                     }
-                    start = cut + 1;
                 }
                 return Some(Ok(out));
             }
@@ -1734,6 +1753,50 @@ fn braces(word: &str, from: usize, depth: usize) -> Option<Result<Vec<String>, (
         }
     }
     None
+}
+
+/// The words of a bash `{x..y[..step]}` sequence (integers or single letters), at most 64.
+fn sequence(inner: &str) -> Option<Vec<String>> {
+    let parts: Vec<&str> = inner.split("..").collect();
+    let step = match parts.get(2) {
+        Some(s) => s.parse::<i64>().ok()?.unsigned_abs().max(1),
+        None => 1,
+    };
+    let (a, b) = match parts[..] {
+        [a, b] | [a, b, _] => (a, b),
+        _ => return None,
+    };
+    let num = |x: &str| x.parse::<i64>().ok();
+    let letter = |x: &str| {
+        (x.len() == 1 && x.as_bytes()[0].is_ascii_alphabetic()).then(|| i64::from(x.as_bytes()[0]))
+    };
+    let (lo, hi, text) = match (num(a), num(b), letter(a), letter(b)) {
+        (Some(x), Some(y), ..) => (x, y, false),
+        (_, _, Some(x), Some(y)) => (x, y, true),
+        _ => return None,
+    };
+    if lo.abs_diff(hi) / step >= 64 {
+        return None;
+    }
+    let pad = [a, b]
+        .iter()
+        .any(|x| x.trim_start_matches('-').len() > 1 && x.trim_start_matches('-').starts_with('0'));
+    let width = if pad { a.len().max(b.len()) } else { 0 };
+    let mut out = Vec::new();
+    let mut v = lo;
+    while (lo <= hi && v <= hi) || (lo > hi && v >= hi) {
+        out.push(if text {
+            char::from(v as u8).to_string()
+        } else {
+            format!("{v:0width$}")
+        });
+        v = if lo <= hi {
+            v + step as i64
+        } else {
+            v - step as i64
+        };
+    }
+    Some(out)
 }
 
 /// For text starting with `{`: the offset of its matching `}` and of its top-level commas.
@@ -3148,9 +3211,9 @@ fn ff_only(rest: &[&str], default_branch: &str) -> bool {
 }
 
 /// `git fetch <remote> <src>:<dst>` moves local refs like `update-ref`: refused for `--stdin`,
-/// a backslash, a refspec in a variable, a glob destination outside `refs/remotes/` (but
-/// `refs/tags/*:refs/tags/*`), or a destination naming the default branch, unless it fetches
-/// the default branch of a remote that is not `.`, a path, `file:` or a variable.
+/// a backslash, a refspec in a variable, a glob destination that can match the default branch,
+/// or a destination naming the default branch, unless it fetches the default branch of a remote
+/// that is not `.`, a path, `file:` or a variable (a URL remote is trusted).
 fn fetch_moves(rest: &[&str], default_branch: &str) -> bool {
     const VALUE: [&str; 14] = [
         "--depth",
@@ -3193,22 +3256,42 @@ fn fetch_moves(rest: &[&str], default_branch: &str) -> bool {
         let Some((src, dst)) = spec.rsplit_once(':') else {
             return r.contains(['$', '`']);
         };
+        // A glob destination that can match the default branch (`refs/heads/*`, `refs/*`, `*`).
+        let glob = dst.split_once('*').is_some_and(|(pre, post)| {
+            let full = format!("refs/heads/{default_branch}");
+            post.contains('*')
+                || [full.as_str(), &full[5..], default_branch].iter().any(|t| {
+                    t.len() >= pre.len() + post.len() && t.starts_with(pre) && t.ends_with(post)
+                })
+        });
         r.contains(['$', '`'])
-            || (dst.contains('*')
-                && !dst.starts_with("refs/remotes/")
-                && spec != "refs/tags/*:refs/tags/*")
+            || glob
             || (names_default(dst, default_branch)
                 && (local || !names_default(src, default_branch)))
     })
 }
 
-/// Whether `git update-ref`, `symbolic-ref`, `branch -f|-M|-C`, `checkout -B` or `switch -C`
-/// writes the default branch (`update-ref`: any word naming it, as quoted messages split).
+/// Whether `git update-ref`, `symbolic-ref`, `branch -f|-M|-C` (or `--force` with `--copy` or
+/// `--move`), `checkout -B` or `switch -C` writes the default branch (`update-ref`: any word
+/// naming it, as quoted messages split); `branch -f`, `-B` and `-C` may move it to
+/// `origin/<default>`, `upstream/<default>` or `refs/remotes/<r>/<default>`.
 fn moves_default(sub: &str, rest: &[&str], default_branch: &str) -> bool {
     let words: Vec<String> = rest.iter().map(|a| a.replace(['\'', '"'], "")).collect();
     let short = |a: &str, fl: &[char]| !a.starts_with("--") && a.starts_with('-') && a.contains(fl);
     let named = |w: Option<&String>| w.is_some_and(|w| names_default(w, default_branch));
-    let mut plain = words.iter().filter(|w| !w.starts_with('-'));
+    let plain = words.iter().filter(|w| !w.starts_with('-'));
+    // A start point that is the default branch's remote-tracking ref only catches it up.
+    let tracking = |w: Option<&String>| {
+        w.is_some_and(|w| {
+            let remote = w
+                .strip_prefix("refs/remotes/")
+                .and_then(|t| t.split_once('/'));
+            remote.is_some_and(|(_, b)| b == default_branch)
+                || w.strip_prefix("origin/")
+                    .or_else(|| w.strip_prefix("upstream/"))
+                    == Some(default_branch)
+        })
+    };
     match sub {
         "update-ref" => words.iter().any(|w| names_default(w, default_branch)),
         "symbolic-ref" => {
@@ -3223,21 +3306,30 @@ fn moves_default(sub: &str, rest: &[&str], default_branch: &str) -> bool {
             false
         }
         "branch" => {
-            let (f, mc) = (
-                words.iter().any(|w| w == "--force" || short(w, &['f'])),
-                words.iter().any(|w| short(w, &['M', 'C'])),
-            );
-            (f && named(plain.next())) || (mc && named(words.iter().rfind(|w| !w.starts_with('-'))))
+            let long = |l: &str| words.iter().any(|w| w == l);
+            let f = long("--force") || words.iter().any(|w| short(w, &['f']));
+            let mc = words.iter().any(|w| short(w, &['M', 'C']))
+                || (f
+                    && (long("--copy")
+                        || long("--move")
+                        || words.iter().any(|w| short(w, &['c', 'm']))));
+            let names: Vec<&String> = plain.collect();
+            (f && named(names.first().copied()) && !tracking(names.get(1).copied()))
+                || (mc && named(names.last().copied()))
         }
+        // `-B <name> [<start>]`, `-Bmain`, `--force-create[=]<name>`.
         "checkout" | "switch" => words.iter().enumerate().any(|(i, w)| {
-            let flag = if sub == "checkout" {
-                short(w, &['B'])
-            } else {
-                short(w, &['C'])
+            let letter = if sub == "checkout" { 'B' } else { 'C' };
+            let stuck = match w.strip_prefix("--force-create") {
+                Some(v) => v.strip_prefix('='),
+                None if short(w, &[letter]) => w.split_once(letter).map(|(_, v)| v),
+                None => return false,
             };
-            (flag || w == "--force-create") && named(words.get(i + 1))
-                || w.strip_prefix("--force-create=")
-                    .is_some_and(|b| names_default(b, default_branch))
+            let (value, start) = match stuck.filter(|v| !v.is_empty()) {
+                Some(v) => (Some(v.to_string()), words.get(i + 1)),
+                None => (words.get(i + 1).cloned(), words.get(i + 2)),
+            };
+            named(value.as_ref()) && !tracking(start)
         }),
         _ => false,
     }
@@ -4457,6 +4549,7 @@ mod tests {
                 "git -C wt $g x",
                 "git $(echo push) origin main",
                 "git push origin v{1..3}",
+                "git push origin x{1..65}",
             ],
             &[
                 "git symbolic-ref HEAD",
@@ -4496,11 +4589,11 @@ mod tests {
             ("git push origin {,}", MAIN),
             ("{,git} merge x", "changing the default branch"),
             ("{gh,} pr merge 1", "pr merge"),
-            ("\\git push origin HEAD:ma{i..i}n", UNREAD_BRACE),
-            ("\\git push origin v{1..1}", UNREAD_BRACE),
-            ("\"git\" push origin v{1..3}", UNREAD_BRACE),
-            ("sudo git push origin v{1..3}", UNREAD_BRACE),
-            ("\\gh api repos/o/r/pulls/{7..7}/merge -X PUT", UNREAD_BRACE),
+            ("\\git push origin HEAD:ma{i..i}n", MAIN),
+            ("\\git push origin v{1..1}", "tag"),
+            ("\"git\" push origin v{1..3}", "tag"),
+            ("sudo git push origin v{1..3}", "tag"),
+            ("\\gh api repos/o/r/pulls/{7..7}/merge -X PUT", "merge API"),
             (many.as_str(), UNREAD_BRACE),
             ("git fetch . feat:ma\\in", FETCH),
             ("git fetch \\. feat:main", FETCH),
@@ -4547,6 +4640,57 @@ mod tests {
             "git switch -C fix main",
             "git checkout -B fix origin/main",
             "git --namespace x status",
+        ] {
+            assert_eq!(bash(cmd, "feature"), None, "{cmd}");
+        }
+    }
+
+    /// Third review: `{x..y}` in the command name, braces before runners, `branch` copy and
+    /// move flags, stuck values, and globs that cannot reach the default branch.
+    #[test]
+    fn merge_lock_expands_sequences_and_braces_before_runners() {
+        const MAIN: &str = "push to the default branch";
+        const MOVE: &str = "moving the default branch";
+        let cases = [
+            ("{g..g}it push origin HEAD:main", MAIN),
+            ("g{i..i}t push origin HEAD:main", MAIN),
+            ("{g..g}h pr merge 1", "pr merge"),
+            ("{g..g}{i..i}{t..t} push origin HEAD:main", MAIN),
+            ("{a..z}{a..z} push origin HEAD:main", UNREAD_BRACE),
+            ("sudo {a..z}{a..z} push origin HEAD:main", UNREAD_BRACE),
+            ("sudo {-E,} git push origin HEAD:main", MAIN),
+            ("command {-p,} git push origin HEAD:main", MAIN),
+            ("nice {-n,} 5 git push origin HEAD:main", MAIN),
+            ("git branch -cf x main", MOVE),
+            ("git branch -c -f x main", MOVE),
+            ("git branch --copy --force x main", MOVE),
+            ("git branch -mf x main", MOVE),
+            ("git branch --move --force x main", MOVE),
+            ("git checkout -Bmain x", MOVE),
+            ("git switch -Cmain x", MOVE),
+            ("git branch -f main", MOVE),
+            ("git branch -f main feat/x", MOVE),
+            (
+                "git fetch origin 'refs/heads/*:refs/heads/*'",
+                "a fetch into",
+            ),
+            ("git fetch origin '+refs/*:refs/*'", "a fetch into"),
+            ("git fetch origin 'x/*:*'", "a fetch into"),
+        ];
+        for (cmd, why) in cases {
+            let got = bash(cmd, "main").unwrap_or_default();
+            assert!(got.contains(why), "{cmd}: {got:?}");
+        }
+        for cmd in [
+            "for i in {1..3}; do echo $i; done",
+            "echo {1..100}",
+            "git branch -f main origin/main",
+            "git checkout -B main origin/main",
+            "git switch -C main refs/remotes/origin/main",
+            "git fetch origin 'refs/pull/*/head:refs/pull/*/head'",
+            "git fetch origin 'refs/notes/*:refs/notes/*'",
+            "git fetch origin 'refs/tags/*:refs/tags/*'",
+            "git fetch origin '+refs/heads/*:refs/remotes/origin/*'",
         ] {
             assert_eq!(bash(cmd, "feature"), None, "{cmd}");
         }
