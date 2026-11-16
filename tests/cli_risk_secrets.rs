@@ -469,3 +469,16 @@ fn kubernetes_env_values_under_a_secret_name_match() {
         assert!(!secret_match_lines("deploy/app.yaml", &lines), "{lines:?}");
     }
 }
+
+/// A value that ends in a multi-byte character never panics risk-check (one JSON object out).
+#[test]
+fn non_ascii_values_do_not_panic() {
+    for (path, line) in [
+        ("config/locales/ja.yml", "パスワード: パスワード"),
+        ("config/locales/ja.yml", "  password: パスワード"),
+        ("deploy/a.yml", "  token: café"),
+        ("lang/ja/validation.php", "    'password' => 'パスワード',"),
+    ] {
+        secret_match_lines(path, &[line]);
+    }
+}

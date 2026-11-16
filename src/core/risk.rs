@@ -572,9 +572,10 @@ fn setting(v: &str) -> bool {
     if NOT_SECRET.contains(&v.to_ascii_lowercase().as_str()) {
         return true;
     }
-    let duration = v.len() > 1
-        && v[..v.len() - 1].bytes().all(|b| b.is_ascii_digit())
-        && v.ends_with(['s', 'm', 'h', 'd', 'w']);
+    // `strip_suffix`, not a byte slice: a value may end in a multi-byte character.
+    let duration = v
+        .strip_suffix(['s', 'm', 'h', 'd', 'w'])
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
     duration || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
 }
 
