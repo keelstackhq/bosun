@@ -3359,12 +3359,25 @@ const FETCH_VALUES: [&str; 18] = [
     "--refmap",
 ];
 
+/// The flag letters of a short-option cluster (`-pPt`) up to its first value option (`o`, `j`,
+/// `s`, `X`), whose value is the rest of the cluster or, when it is the last letter, the next word.
+fn short_flags(a: &str) -> Option<&str> {
+    let c = a
+        .strip_prefix('-')
+        .filter(|c| !c.is_empty() && !c.starts_with('-'))?;
+    Some(match c.find(['o', 'j', 's', 'X']) {
+        Some(i) => &c[..=i],
+        None => c,
+    })
+}
+
 /// The plain words of `git fetch` (the remote, then refspecs) and its `--refmap` values.
 fn fetch_words(rest: &[&str]) -> (Vec<String>, Vec<String>) {
     let takes_value = |a: &str| {
         FETCH_VALUES.contains(&a)
-            // `-po origin`: a short cluster that ends in a value option takes the next word.
-            || (a.len() > 2 && !a.starts_with("--") && a.starts_with('-') && a.ends_with(['o', 'j', 's', 'X']))
+            // `-po origin`: a cluster whose first value option is its last letter takes the next
+            // word (`-Xtheirs` holds its value).
+            || short_flags(a).is_some_and(|f| f.len() + 1 == a.len() && f.ends_with(['o', 'j', 's', 'X']))
             || (a.len() > 3
                 && a.starts_with("--")
                 && a != "--recurse-submodules"
@@ -3505,8 +3518,10 @@ fn remote_retargets(rest: &[&str]) -> bool {
             .iter()
             .position(trusted)
             .is_some_and(|p| words[p + 1..].iter().any(|w| !network_url(w))),
+        // `rename origin upstream` keeps a trusted URL; `rename evil upstream` does not.
         Some("rename") => {
-            words.last().is_some_and(trusted) || words.iter().any(|w| w.contains('$'))
+            (words.last().is_some_and(trusted) && !words.get(1).is_some_and(trusted))
+                || words.iter().any(|w| w.contains('$'))
         }
         _ => false,
     }
@@ -3523,11 +3538,21 @@ fn mirror(rest: &[&str]) -> Option<String> {
 }
 
 /// `--tags` in any unique prefix, or `-t` in a short cluster: every tag of the remote.
+/// `--prune-tags` (`-P`) mirrors them too.
 fn fetch_tags(rest: &[&str]) -> bool {
     rest.iter().any(|a| {
         let a = a.replace(['\'', '"'], "");
         (a.len() >= 5 && "--tags".starts_with(a.as_str()))
-            || (a.starts_with('-') && !a.starts_with("--") && a.contains('t'))
+            || (a.len() >= 9 && "--prune-tags".starts_with(a.as_str()))
+            || short_flags(&a).is_some_and(|f| f.contains(['t', 'P']))
+    })
+}
+
+/// `--all` or `--multiple` (any unique prefix): the fetch reads remotes it does not name.
+fn fetch_many(rest: &[&str]) -> bool {
+    rest.iter().any(|a| {
+        let a = a.replace(['\'', '"'], "");
+        a.len() >= 4 && ("--all".starts_with(a.as_str()) || "--multiple".starts_with(a.as_str()))
     })
 }
 
@@ -3914,7 +3939,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         // (`'refs/tags/*:refs/tags/*'`, as `--tags`) does not.
         // `git pull <remote> <src>:<dst>` hands its refspecs to fetch.
         "fetch" | "pull"
-            if (fetch_tags(rest) && !fetch_trusted(rest))
+            if (fetch_tags(rest) && (!fetch_trusted(rest) || fetch_many(rest)))
                 || rest.iter().any(|a| {
                 let a = norm_ref(&a.replace(['\'', '"', '\\'], ""));
                 a.contains("refs/tags/")
@@ -5194,6 +5219,16 @@ mod tests {
             "git grep {!..~}{!..~}",
             "git log {!..~}",
             "git log {0..z}",
+            // Review round 4: every remote, prune-tags, letter-by-letter clusters.
+            "git fetch --all --tags",
+            "git fetch --all --tags --force",
+            "git pull --all --tags",
+            "git fetch --multiple origin evil2 --tags",
+            "git fetch -pP evil2",
+            "git fetch --prune --prune-tags --force evil2",
+            "git fetch -oxs evil2 origin +main:main",
+            "git pull -Xtheirs evil2 origin +main:main",
+            "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
         ] {
@@ -5225,6 +5260,11 @@ mod tests {
             "git remote set-url --push origin /tmp/x",
             "git log {a..z}",
             "git log {1..100..2}",
+            "git pull -Xtheirs origin feature",
+            "git remote rename origin upstream",
+            "git fetch --all",
+            "git fetch -pP origin",
+            "git fetch --prune origin",
             "git pull",
             "git show {1..100}",
             "git diff {1..100}",
