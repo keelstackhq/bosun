@@ -588,11 +588,9 @@ fn check(
     if depth > MAX_DEPTH {
         return Some(too_deep());
     }
-    // Fetch config exported in any segment reaches every later git command, nested ones too.
-    if unread_fetch_env(command)
-        || command.contains("GIT_CONFIG_") && env_fetch_moves(command, default_branch)
-    {
-        return Some(format!("`{}` is refused ({FETCH_MOVES})", command.trim()));
+    // A fetch or pull next to other shell commands reads an environment the guard cannot see.
+    if depth == 0 && fetch_not_plain(command) {
+        return Some(format!("`{}` is refused ({FETCH_PLAIN})", command.trim()));
     }
     for inner in nested(command) {
         if let Some(why) = check(&inner, branch_at, default_branch, depth + 1, sinks) {
@@ -3222,6 +3220,8 @@ fn alone_fix(words: &[&str]) -> String {
     format!("{PUSH_ALONE}; run the push as its own command, or name both sides: `{b}:{b}`")
 }
 
+const FETCH_PLAIN: &str = "a fetch or pull next to other shell commands, whose environment the guard cannot read; run git fetch/pull as its own command (`cd` and other `git` commands may join it with `&&`)";
+
 const FETCH_MOVES: &str = "a fetch into the default branch or into a ref the guard cannot read; name the branch literally";
 
 const BUILT_SUB: &str = "a git subcommand built by the shell, which the guard cannot see: \
@@ -3423,30 +3423,41 @@ fn fetch_trusted(rest: &[&str]) -> bool {
             .is_none_or(|w| matches!(w.as_str(), "origin" | "upstream"))
 }
 
-/// A `fetch` or `pull` in a command that names `GIT_CONFIG*`, `HOME` or `XDG_CONFIG_HOME`
-/// (outside a commit message or other prose value), has a word with `$` before its `=`, runs
-/// `source`/`.`, or `export`/`env`/`declare`/`typeset`/`readonly`/`local` with a `$( )` or
-/// backtick: the config git reads cannot be told (`HOME=/tmp/h`, `read GIT_CONFIG_GLOBAL`,
-/// `export "$K"=..`, `export $(cat f)`), so it fails closed whatever the spelling.
-fn unread_fetch_env(command: &str) -> bool {
-    static NAME: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(concat!(
-            r"\b(?:GIT_CONFIG\w*|HOME|XDG_CONFIG_HOME)\b|(?:^|[;&|(\n])\s*(?:source|\.)\s",
-            r"|(?:^|[;&|(\n])\s*(?:export|env|declare|typeset|readonly|local)\b[^;&|\n]*(?:\$\(|`)",
-        ))
-        .expect("static regex")
-    });
-    // A quoted `-m`, `--message`, `-b`, `--body` or `--title` value without `$` is prose.
+/// A command with a `fetch` or `pull` word that is not a plain chain of `git ..` and `cd ..`
+/// segments (split at `;`, `&&`, `||`, `|`, `&` and newlines; a last `| tail -N` or `| head -N`
+/// reads): shell syntax can set what git reads (`HOME=`, `export`, `source`, `eval`, a loop),
+/// so only a fetch the guard can read alone passes. A quoted `-m`, `--message`, `-b`, `--body`
+/// or `--title` value without `$` or a backtick is prose and is skipped.
+fn fetch_not_plain(command: &str) -> bool {
     static PROSE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?:^|\s)(?:-m|--message|-b|--body|--title)\s+(?:'[^']*'|"[^"$`]*")"#)
+        Regex::new(r#"(?:^|\s)(?:-m|--message|-b|--body|--title)\s+(?:'[^'$`]*'|"[^"$`\\]*")"#)
             .expect("static regex")
     });
-    let text = PROSE.replace_all(command, " ");
-    let words =
-        || text.split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'));
-    words().any(|w| matches!(w, "fetch" | "pull"))
-        && (NAME.is_match(&text)
-            || words().any(|w| w.split_once('=').is_some_and(|(k, _)| k.contains('$'))))
+    let text = PROSE.replace_all(command, " ").replace("2>&1", "");
+    let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
+    if !text.split(cut).any(|w| matches!(w, "fetch" | "pull")) {
+        return false;
+    }
+    let plain = |seg: &str| {
+        let w: Vec<&str> = seg.split_whitespace().collect();
+        match w.first() {
+            None => true,
+            Some(&"git") => true,
+            Some(&"cd") => w.len() <= 2,
+            Some(&("tail" | "head")) => {
+                w.len() == 2 && w[1].trim_start_matches('-').parse::<u32>().is_ok()
+            }
+            _ => false,
+        }
+    };
+    // A lone `git` segment is judged by `git_rule`, which refuses `$` and `\\` in a fetch.
+    let segs: Vec<&str> = text
+        .split([';', '&', '|', '\n'])
+        .filter(|g| !g.trim().is_empty())
+        .collect();
+    text.contains(['`', '(', ')', '{', '}', '<', '>'])
+        || (segs.len() > 1 && text.contains(['$', '\\']))
+        || segs.iter().any(|seg| !plain(seg))
 }
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
@@ -3460,62 +3471,6 @@ fn fetch_cfg_moves(v: &str, default_branch: &str) -> bool {
     fetch_moves(&[".", &v], default_branch)
         || norm_ref(&v).contains("refs/tags/")
         || dst.starts_with("tags/")
-}
-
-/// `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` or `GIT_CONFIG_PARAMETERS` anywhere in the
-/// command (an `export` in an earlier segment too) that set such a `remote.<r>.fetch`; a key
-/// the guard cannot read counts as one, a fetch key without a value fails closed.
-fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
-    let (mut keys, mut vals) = (Vec::new(), Vec::new());
-    let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')');
-    for w in command.split(cut) {
-        let Some((k, v)) = w.trim_matches(['\'', '"']).split_once('=') else {
-            continue;
-        };
-        if let Some(n) = k.strip_prefix("GIT_CONFIG_KEY_") {
-            keys.push((n, v));
-        } else if let Some(n) = k.strip_prefix("GIT_CONFIG_VALUE_") {
-            vals.push((n, v));
-        }
-    }
-    // Bash keeps the last of repeated assignments: every value of the key's index is judged.
-    let keyed = keys.iter().any(|(n, k)| {
-        let mut vs = vals
-            .iter()
-            .filter(|(m, _)| m == n)
-            .map(|(_, v)| *v)
-            .peekable();
-        // A key bash rewrites (`\\`, a brace) or expands cannot be read: fail closed.
-        if k.contains(['$', '`', '{', '\\']) {
-            return true;
-        }
-        let k = cfg_key(k);
-        if vs.peek().is_none() {
-            return k.contains(['$', '`']) || k.ends_with(".fetch") || retargets(&k, "");
-        }
-        vs.any(|v| {
-            retargets(&k, v)
-                || ((k.contains(['$', '`']) || (k.starts_with("remote.") && k.ends_with(".fetch")))
-                    && fetch_cfg_moves(v, default_branch))
-        })
-    });
-    // `'key=value'` and `'key'='value'` (git 2.31+) read alike once the quotes are gone.
-    let params = command.replace(['\'', '"'], "");
-    let lower = params.to_ascii_lowercase();
-    keyed
-        || (command.contains("GIT_CONFIG_PARAMETERS")
-            && params.split_whitespace().any(|w| {
-                let w = w.trim_start_matches("GIT_CONFIG_PARAMETERS=");
-                let (k, v) = w.split_once('=').unwrap_or((w, ""));
-                retargets(&cfg_key(k), v)
-            })
-            || lower.match_indices(".fetch=").any(|(i, m)| {
-                let v = &params[i + m.len()..];
-                let end = v
-                    .find(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | ')'))
-                    .unwrap_or(v.len());
-                fetch_cfg_moves(&v[..end], default_branch)
-            }))
 }
 
 /// A remote URL on a network host: `scheme://..` (not `file://`) or scp-like `host:path` (no
@@ -5315,6 +5270,19 @@ mod tests {
             "source f.sh; git fetch origin",
             ". f.sh && git pull",
             "export `echo Zm9v | base64 -d`; git fetch origin",
+            // Allowlist: fetch or pull only in plain `git ..` / `cd ..` chains.
+            "export FOO=bar; git fetch",
+            "eval \"$(cat f.sh)\"; git fetch origin",
+            "while read l; do export \"$l\"; done < f; git fetch origin",
+            "{ . f.sh; git fetch origin; }",
+            "if true; then . f.sh; fi; git fetch origin",
+            "builtin source f.sh; git fetch origin",
+            "\\source f.sh; git fetch origin",
+            "BASH_ENV=f.sh bash -c \"git fetch origin\"",
+            "s=source; $s f; git fetch origin",
+            "export $v; git pull",
+            "bash -c 'git fetch origin'",
+            "git fetch origin < /dev/null",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5357,8 +5325,12 @@ mod tests {
             "git pull --rebase",
             "git config user.name x",
             "git config --get remote.origin.url",
-            "export FOO=bar; git fetch",
             "git fetch . feat:feat",
+            "git fetch && git rebase origin/main",
+            "cd x && git pull",
+            "git fetch origin && git merge --ff-only origin/main",
+            "git pull --rebase 2>&1 | tail -5",
+            "git -C x fetch origin",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",
             "git fetch -pP origin",
