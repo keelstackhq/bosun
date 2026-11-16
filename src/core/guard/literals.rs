@@ -113,6 +113,10 @@ fn is_plain(lit: &str, words: &[String]) -> bool {
     let syntax = lit.contains([';', '&', '|', '$', '`', '<', '>', '\\', '{', '}', '=']);
     // Code, not prose: any quote, bracket or paren inside the literal, or a dunder.
     let code = lit.contains(['\'', '"', '(', ')', '[', ']', '{', '}']) || lit.contains("__");
+    // Paths and globs are not prose: `/`, `~`, `*`, or a `?` inside a word.
+    let path = lit.contains(['/', '~', '*'])
+        || words.iter().any(|w| w.trim_end_matches('?').contains('?'));
+    let code = code || path;
     if words.len() < 2 || syntax || code || MARKERS.iter().any(|m| lit.contains(m)) {
         return false;
     }

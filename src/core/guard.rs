@@ -5405,6 +5405,8 @@ mod tests {
             "from subprocess import run as r\nexec(\"r (('sops',  '-d',  's.yaml'))\")",
             "from subprocess import run as r\nexec(\"r (('sops',\t'-d',\t's.yaml'))\")",
             "import os\nos.system('fakeroot (sops) -d f')",
+            // Paths and globs are never prose: a glob can name the key file.
+            "import os\nos.system('fakeroot cat /root/.con*/so*/age/k*')",
             "msg = 'decrypting secrets is refused for agents (age key)'\nprint(msg)",
             "exec(\"print (__import__('subprocess').run(['sops','-d','s.yaml']))\")",
             "exec(\"import subprocess as s; s.run(['sops', '-d', 'f'])\")",
