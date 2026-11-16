@@ -3406,22 +3406,72 @@ fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
             vals.push((n, v));
         }
     }
+    // Bash keeps the last of repeated assignments: every value of the key's index is judged.
     let keyed = keys.iter().any(|(n, k)| {
+        let mut vs = vals
+            .iter()
+            .filter(|(m, _)| m == n)
+            .map(|(_, v)| *v)
+            .peekable();
         let k = cfg_key(k);
-        (k.contains(['$', '`']) || (k.starts_with("remote.") && k.ends_with(".fetch")))
-            && vals
-                .iter()
-                .find(|(m, _)| m == n)
-                .is_none_or(|(_, v)| fetch_cfg_moves(v, default_branch))
+        if vs.peek().is_none() {
+            return k.contains(['$', '`']) || k.ends_with(".fetch") || retargets(&k, "");
+        }
+        vs.any(|v| {
+            retargets(&k, v)
+                || ((k.contains(['$', '`']) || (k.starts_with("remote.") && k.ends_with(".fetch")))
+                    && fetch_cfg_moves(v, default_branch))
+        })
     });
-    let lower = command.to_ascii_lowercase();
+    // `'key=value'` and `'key'='value'` (git 2.31+) read alike once the quotes are gone.
+    let params = command.replace(['\'', '"'], "");
+    let lower = params.to_ascii_lowercase();
     keyed
         || (command.contains("GIT_CONFIG_PARAMETERS")
-            && lower.match_indices(".fetch=").any(|(i, m)| {
-                let v = &command[i + m.len()..];
-                let end = v.find(['\'', '"', ' ', '\t', '\n']).unwrap_or(v.len());
+            && params.split_whitespace().any(|w| {
+                let (k, v) = w.split_once('=').unwrap_or((w, ""));
+                retargets(&cfg_key(k), v)
+            })
+            || lower.match_indices(".fetch=").any(|(i, m)| {
+                let v = &params[i + m.len()..];
+                let end = v
+                    .find(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | ')'))
+                    .unwrap_or(v.len());
                 fetch_cfg_moves(&v[..end], default_branch)
             }))
+}
+
+/// `git remote add|set-url origin|upstream <local path>` and `git remote rename <r> origin|upstream`:
+/// the trusted names must not point at a local repository.
+fn remote_retargets(rest: &[&str]) -> bool {
+    let words: Vec<String> = rest
+        .iter()
+        .filter(|a| !a.starts_with('-'))
+        .map(|a| a.replace(['\'', '"'], ""))
+        .collect();
+    let trusted =
+        |w: Option<&String>| w.is_some_and(|w| matches!(w.as_str(), "origin" | "upstream"));
+    match words.first().map(String::as_str) {
+        Some("add" | "set-url") => {
+            trusted(words.get(1)) && words[2..].iter().any(|w| local_word(w) || w.contains('$'))
+        }
+        Some("rename") => trusted(words.last()) || words.iter().any(|w| w.contains('$')),
+        _ => false,
+    }
+}
+
+/// Config that points `origin` or `upstream` at a local repository (`remote.origin.url=/tmp/x`)
+/// or rewrites URLs to one (`url./tmp/x.insteadOf`): a trusted name would then fetch from it.
+/// `k` is a key as `cfg_key` gives it; an empty `v` is a value the guard cannot see.
+fn retargets(k: &str, v: &str) -> bool {
+    let v = v.replace(['\'', '"'], "");
+    let base = k.strip_prefix("url.").and_then(|b| {
+        b.strip_suffix(".insteadof")
+            .or_else(|| b.strip_suffix(".pushinsteadof"))
+    });
+    base.is_some_and(|b| local_word(b) || b.contains('$'))
+        || (matches!(k, "remote.origin.url" | "remote.upstream.url")
+            && (v.is_empty() || local_word(&v)))
 }
 
 /// `git fetch <remote> <src>:<dst>` moves local refs like `update-ref`: refused for `--stdin`,
@@ -3614,6 +3664,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             if fk.starts_with("remote.")
                 && fk.ends_with(".fetch")
                 && (a.starts_with("--config-env") || fetch_cfg_moves(v, default_branch))
+                || retargets(&fk, if a.starts_with("--config-env") { "" } else { v })
             {
                 return Some(FETCH_MOVES);
             }
@@ -3841,6 +3892,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
                 k.starts_with("remote.")
                     && k.ends_with(".fetch")
                     && value(i).is_some_and(|v| fetch_cfg_moves(v, default_branch))
+                    || value(i).is_some_and(|v| retargets(&k, v))
             });
             if !unsets && fetch {
                 return Some(FETCH_MOVES);
@@ -3848,9 +3900,12 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             (!unsets && writes).then_some(PUSH_CONFIG)
         }
         // `--mirror=push` (or a bare `--mirror`) makes every push a mirror push.
+        // `--mirror=fetch` writes `+refs/*:refs/*`, which a later bare fetch follows.
+        "remote" if rest.contains(&"--mirror=fetch") => Some(FETCH_MOVES),
+        "remote" if remote_retargets(rest) => Some(FETCH_MOVES),
         "remote" => rest
             .iter()
-            .any(|a| a.starts_with("--mirror") && *a != "--mirror=fetch")
+            .any(|a| a.starts_with("--mirror"))
             .then_some(PUSH_CONFIG),
         "merge" if ff_only(rest, default_branch) => None,
         "merge" | "rebase" | "cherry-pick" | "reset" | "commit" if on_default => {
@@ -5012,6 +5067,17 @@ mod tests {
             "git fetch https://example.invalid/x.git main:main",
             "git fetch evil2 'refs/tags/*:refs/tags/*'",
             "git fetch --dry evil2 main:main",
+            // Review round 1: repeated values, the split-quoted form, mirror remotes, retargets.
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+refs/heads/*:refs/remotes/origin/* GIT_CONFIG_VALUE_0=+feat:main; git fetch origin",
+            "export GIT_CONFIG_PARAMETERS=\"'remote.origin.fetch'='+feat:main'\"; git fetch origin",
+            "git remote add --mirror=fetch evil /tmp/evil && git fetch evil",
+            "git remote add upstream /tmp/evil && git fetch upstream +main:main",
+            "git remote set-url origin /tmp/evil && git fetch origin +main:main",
+            "git remote rename evil upstream",
+            "git -c remote.origin.url=/tmp/evil fetch origin +main:main",
+            "git config remote.origin.url ../evil",
+            "git config url./tmp/evil.insteadOf https://github.com/ && git fetch origin +main:main",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=/tmp/evil; git fetch origin +main:main",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
         ] {
@@ -5029,6 +5095,10 @@ mod tests {
             "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
             "git config --get remote.origin.fetch",
             "git log -n {1..100}",
+            "git remote add upstream https://example.invalid/x.git",
+            "git remote set-url origin https://example.invalid/x.git",
+            "git remote add backup /tmp/backup",
+            "git config remote.origin.url https://example.invalid/x.git",
             "git show {1..100}",
             "git diff {1..100}",
             "git rev-parse {1..100}",
