@@ -193,7 +193,8 @@ pub fn evaluate(
                     || (secrets
                         && (strong_secret(line)
                             || (!secret_test_dir(&f.path)
-                                && config_secret(&f.path, prev, &scrubbed))));
+                                && (config_secret(&f.path, prev, &scrubbed)
+                                    || arrow_secret(&scrubbed)))));
                 if hit {
                     evidence.push(format!("{}: added line {} matches", f.path, i + 1));
                 }
@@ -484,7 +485,7 @@ fn config_secret(path: &str, prev: Option<&str>, line: &str) -> bool {
     });
     static NAME: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
         Regex::new(&format!(
-            r#"(?i)^\s*(?:-\s+)?name:\s*["']?{SECRET_KEY}["']?\s*$"#
+            r#"(?i)^\s*(?:-\s+)?name:\s*["']?{SECRET_KEY}["']?\s*(?:\s#.*)?$"#
         ))
         .expect("static regex")
     });
@@ -505,25 +506,88 @@ fn config_secret(path: &str, prev: Option<&str>, line: &str) -> bool {
         return false;
     };
     match c.get(1).or(c.get(2)) {
-        Some(q) => !q.as_str().is_empty() && !q.as_str().starts_with('$'),
+        Some(q) => !q.as_str().is_empty() && !q.as_str().starts_with('$') && !setting(q.as_str()),
         None => plain_literal(&c[3]),
     }
 }
 
+/// In any file (R-secrets, built in): a php or ruby array entry, a quoted secret key `=>` a
+/// quoted one-word literal (`'password' => 'x'`), unless the value is a type, a cast or a
+/// validation rule (`'password' => 'hashed'`, `'required|min:8'`). `line` is scrubbed.
+fn arrow_secret(line: &str) -> bool {
+    static ARROW: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(&format!(
+            r#"(?i)["']{SECRET_KEY}["']\s*=>\s*(?:"([^"\s$|][^"\s|]*)"|'([^'\s$|][^'\s|]*)')"#
+        ))
+        .expect("static regex")
+    });
+    ARROW.captures_iter(line).any(|c| {
+        let v = c.get(1).or(c.get(2)).map_or("", |m| m.as_str());
+        !setting(v)
+    })
+}
+
+/// Values that are no literal secret: null, booleans, type names, permissions (`id-token:
+/// write`), and Laravel casts and validation rules (`'password' => 'hashed'`).
+const NOT_SECRET: [&str; 34] = [
+    "null",
+    "none",
+    "nil",
+    "true",
+    "false",
+    "yes",
+    "no",
+    "on",
+    "off",
+    "string",
+    "str",
+    "int",
+    "integer",
+    "number",
+    "bool",
+    "boolean",
+    "object",
+    "any",
+    "read",
+    "write",
+    "array",
+    "hashed",
+    "encrypted",
+    "required",
+    "confirmed",
+    "nullable",
+    "sometimes",
+    "present",
+    "filled",
+    "numeric",
+    "json",
+    "date",
+    "datetime",
+    "float",
+];
+
+/// A value under a secret key that is no secret: a word in `NOT_SECRET`, a duration (`1h`,
+/// `720h`, `30s`) or a path (`/etc/x`, `./x`, `../x`, `~/x`).
+fn setting(v: &str) -> bool {
+    if NOT_SECRET.contains(&v.to_ascii_lowercase().as_str()) {
+        return true;
+    }
+    let duration = v.len() > 1
+        && v[..v.len() - 1].bytes().all(|b| b.is_ascii_digit())
+        && v.ends_with(['s', 'm', 'h', 'd', 'w']);
+    duration || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
+}
+
 /// A plain yaml scalar that is a literal: one word (prose has spaces), not a reference, alias,
 /// tag, block or flow (`$`, `*`, `&`, `!`, `|`, `>`, `{`, `[`, `%`, `@`, `<`, `~`), and not
-/// null, a boolean, a type name (`string`, `int`) or a permission (`id-token: write`).
+/// and no `setting` (null, a boolean, a type name, `id-token: write`, a duration, a path).
 fn plain_literal(v: &str) -> bool {
-    const WORDS: [&str; 20] = [
-        "null", "none", "nil", "true", "false", "yes", "no", "on", "off", "string", "str", "int",
-        "integer", "number", "bool", "boolean", "object", "any", "read", "write",
-    ];
     !v.is_empty()
         && !v.contains(char::is_whitespace)
         && !v.starts_with([
             '$', '*', '&', '!', '|', '>', '{', '[', '%', '@', '<', '~', '`',
         ])
-        && !WORDS.contains(&v.to_ascii_lowercase().as_str())
+        && !setting(v)
 }
 
 /// A `*_name`, `*-id`, `*_path` or `*_file` key (a scrub match that is no env call).

@@ -376,6 +376,18 @@ fn unquoted_yaml_types_and_references_are_not_secrets() {
         ("deploy/a.yml", "  password: Enter your password"),
         ("ci/release.yml", "      id-@TOK@: write"),
         ("etc/nsswitch.conf", "passwd:         files"),
+        // Durations and paths under a secret key are settings, not secrets.
+        ("deploy/a.yml", "  access_@TOK@: 1h"),
+        ("deploy/a.yml", "  refresh_@TOK@: 720h"),
+        ("deploy/a.yml", "  @TOK@_ttl_@TOK@: 30s"),
+        ("deploy/a.yml", "  private_key: /etc/ssl/private/key.pem"),
+        (
+            "deploy/a.yml",
+            "  @TOK@: /var/run/secrets/kubernetes.io/serviceaccount/@TOK@",
+        ),
+        ("deploy/a.yml", "  password: ./secrets/db"),
+        ("deploy/a.yml", "  password: ../secrets/db"),
+        ("deploy/a.yml", "  password: ~/secrets/db"),
         ("tests/fixtures/a.yml", "  password: s3cr3t"),
         // Code files keep today's rules: a type, a field or a parameter.
         ("src/a.rs", "    pub password: String,"),
@@ -402,6 +414,15 @@ fn php_array_literals_match() {
         "    'password' => $pw,",
         "    'password' => env('X'),",
         "    '@TOK@' => '',",
+        // Laravel casts and validation rules name a type or a rule, not a value.
+        "    protected $casts = ['password' => 'hashed'];",
+        "    'password' => 'required',",
+        "    '@TOK@' => 'string',",
+        "    'password' => 'encrypted',",
+        "    'password' => 'confirmed',",
+        "    'api_@TOK@' => 'nullable',",
+        "    '@TOK@' => 'sometimes',",
+        "    'password' => 'required|min:8',",
     ] {
         assert!(!secret_match("config/database.php", line), "{line}");
     }
@@ -413,6 +434,10 @@ fn kubernetes_env_values_under_a_secret_name_match() {
         ["        - name: DB_PASSWORD", "          value: \"s3cr3t\""],
         ["        - name: DB_PASSWORD", "          value: s3cr3t"],
         ["        - name: API_@TOK@", "          value: 's3cr3t'"],
+        [
+            "        - name: DB_PASSWORD # prod db",
+            "          value: s3cr3t",
+        ],
         [
             "        - name: \"STRIPE_@SEC@_KEY\"",
             "          value: s3cr3t",
@@ -428,6 +453,10 @@ fn kubernetes_env_values_under_a_secret_name_match() {
         ],
         ["        - name: DB_PASSWORD", "          value: \"\""],
         ["        - name: LOG_LEVEL", "          value: debug"],
+        [
+            "        - name: DB_PASSWORD",
+            "          value: /run/secrets/db",
+        ],
         [
             "        - name: DB_PASSWORD_FILE",
             "          value: /run/s/db",
