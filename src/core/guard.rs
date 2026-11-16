@@ -3540,11 +3540,12 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
     static CLASS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("static regex"));
-    let names_git = |w: &str| {
+    let names = |w: &str, name: &str| {
         let pat = CLASS.replace_all(w.rsplit('/').next().unwrap_or(w), "?");
         let re = regex::escape(&pat).replace(r"\*", ".*").replace(r"\?", ".");
-        Regex::new(&format!("^{re}$")).is_ok_and(|r| r.is_match("git"))
+        Regex::new(&format!("^{re}$")).is_ok_and(|r| r.is_match(name))
     };
+    let names_git = |w: &str| names(w, "git");
     segs.iter().find_map(|seg| {
         let git = seg
             .iter()
@@ -3569,9 +3570,14 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
         };
         let names_fetch = |w: &str| {
             let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
-            w.to_ascii_lowercase()
-                .split(cut)
-                .any(|t| matches!(t.trim_start_matches("git-"), "fetch" | "pull" | "update"))
+            // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one.
+            let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
+            w.split(cut).any(|t| {
+                let t = t.trim_start_matches("git-");
+                ["fetch", "pull", "update"].iter().any(|n| {
+                    t == *n || t.contains(['*', '?', '[']) && !t.contains(['/', ':']) && names(t, n)
+                })
+            })
         };
         let gitw = |w: &str| {
             w.rsplit('/')
@@ -5523,6 +5529,10 @@ mod tests {
             "git -c browser.x.cmd='cd t2 && git fetch' help -w log",
             "git send-email --to-cmd='cd t2 && git remote update' x.patch",
             "git rebase -x 'git fe\"\"tch' main",
+            "git rebase -x \"cd t2 && git 'fetch'\" main",
+            "git rebase -x 'cd t2 && git f\"e\"tch' main",
+            "git rebase -x 'git fetc?' main",
+            "git rebase -x 'git f*h' main",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
