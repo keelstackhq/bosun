@@ -496,6 +496,13 @@ fn versions_lockfiles_and_interpolations_are_not_secrets() {
         ("config/db.php", "    'password' => \"$pass\","),
         ("config/db.rb", "  'password' => \"#{pw}\","),
         ("config/db.php", "    'password' => $pass,"),
+        // A single-quoted reference is shell text outside PHP, Ruby and Perl; `'${X}'` and a
+        // lone `'$'` are references or nothing in any file.
+        ("config/db.php", "    'password' => '${DB_PASSWORD}',"),
+        ("config/db.php", "    'password' => '$',"),
+        ("docker/entrypoint.sh", "  'password' => '$DB_PASSWORD',"),
+        ("docker/entrypoint.sh", "  'password' => '${DB_PASSWORD}',"),
+        ("scripts/setup.sh", "echo \"'password' => '$DB_PASSWORD'\" > c.php"),
     ] {
         assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
     }
