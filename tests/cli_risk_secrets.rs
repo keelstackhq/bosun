@@ -534,3 +534,27 @@ fn version_dollar_and_lock_lookalikes_still_match() {
         assert!(!secret_match_lines(path, &[line]), "{path}: {line}");
     }
 }
+
+/// A reference glued in front of a literal does not hide it; a whole interpolation does.
+#[test]
+fn glued_references_do_not_hide_literals() {
+    assert!(secret_match_lines(
+        "deploy/a.yml",
+        &["  password: ${UNUSED}hunter2"]
+    ));
+    assert!(secret_match_lines(
+        "k8s/deploy.yaml",
+        &[
+            "        - name: DB_PASSWORD",
+            "          value: \"${X}hunter2\""
+        ]
+    ));
+    assert!(!secret_match_lines(
+        "config/db.rb",
+        &["  'password' => \"#{pw}\","]
+    ));
+    assert!(!secret_match_lines(
+        "deploy/a.yml",
+        &["  password: ${DB_PASSWORD}"]
+    ));
+}

@@ -514,7 +514,7 @@ fn config_secret(path: &str, prev: Option<&str>, line: &str) -> bool {
         return false;
     };
     match c.get(1).or(c.get(2)) {
-        Some(q) => !q.as_str().is_empty() && !q.as_str().starts_with('$') && !setting(q.as_str()),
+        Some(q) => !q.as_str().is_empty() && !setting(q.as_str()),
         None => plain_literal(&c[3]),
     }
 }
@@ -592,9 +592,16 @@ fn setting(v: &str) -> bool {
         && !ver.ends_with('.')
         && !ver.contains("..")
         && ver.bytes().all(|b| b.is_ascii_digit() || b == b'.');
-    // A reference (`$X`) or exactly one interpolation once references are scrubbed
-    // (`${..}`, `#{..}`, `{$..}` become `$`, `#{$}`, `{$}`); `P4ss$word` is a literal.
-    let reference = v.starts_with('$') || matches!(v, "#{$}" | "{$}" | "${$}");
+    // A whole reference or interpolation once references are scrubbed (`$X`, `${..}` become
+    // `$`; `#{..}`, `{$..}` become `#{$}`, `{$}`; a ruby `#{pw}`, a k8s `$(X)`); `${X}pw` and
+    // `P4ss$w` are literals.
+    let one = |o: &str, c: char| {
+        v.strip_prefix(o)
+            .and_then(|r| r.strip_suffix(c))
+            .is_some_and(|r| !r.contains(['{', '}', '(', ')']))
+    };
+    let reference =
+        v == "$" || one("#{", '}') || one("{$", '}') || one("${", '}') || one("$(", ')');
     duration || version || reference || ["/", "./", "../", "~/"].iter().any(|p| v.starts_with(p))
 }
 
@@ -604,9 +611,7 @@ fn setting(v: &str) -> bool {
 fn plain_literal(v: &str) -> bool {
     !v.is_empty()
         && !v.contains(char::is_whitespace)
-        && !v.starts_with([
-            '$', '*', '&', '!', '|', '>', '{', '[', '%', '@', '<', '~', '`',
-        ])
+        && !v.starts_with(['*', '&', '!', '|', '>', '{', '[', '%', '@', '<', '~', '`'])
         && !setting(v)
 }
 
