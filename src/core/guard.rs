@@ -3446,7 +3446,8 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     if unquoted.contains("ext::") || unquoted.contains("fd::") {
         return Some(FETCH_PLAIN);
     }
-    if !text.split(cut).any(bare) {
+    // `git remote update` fetches too.
+    if !text.split(cut).any(bare) && !text.contains("remote update") {
         return None;
     }
     // Any `$` in a fetch or pull (a lone one too) hides a word the guard cannot read.
@@ -3460,6 +3461,25 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
             // `--exec-path` run code: words are read unquoted (`'-c'`).
             Some(c) if *c == "git" || base(c).starts_with("git-") => {
                 let u: Vec<String> = w.iter().map(|a| a.replace(['\'', '"', '\\'], "")).collect();
+                // A git run inside another subcommand (`bisect run`, `submodule foreach`) with a
+                // fetch: the guard cannot tell where it reads config.
+                let mut sub = 1;
+                while u.get(sub).is_some_and(|a| a.starts_with('-')) {
+                    let pair = [
+                        "-C",
+                        "-c",
+                        "--git-dir",
+                        "--work-tree",
+                        "--namespace",
+                        "--config-env",
+                    ];
+                    sub += 1 + usize::from(pair.contains(&u[sub].as_str()));
+                }
+                let inner = u.iter().skip(sub + 1).position(|a| git(a));
+                let fetch = |a: &String| bare(a) || a == "update";
+                if inner.is_some_and(|p| u[sub + 1 + p..].iter().any(fetch)) {
+                    return false;
+                }
                 !(u.iter().any(|a| bare(a))
                     && u.iter().any(|a| {
                         a == "-c"
@@ -5435,6 +5455,12 @@ mod tests {
             "git-pull . feat:main",
             "git fetch . feat:MAIN",
             "git fetch . feat:refs/heads/Main",
+            // A git run inside another git subcommand skips the config walk.
+            "git bisect run git -C t2 fetch",
+            "git submodule foreach git -C ../t2 fetch",
+            "git submodule foreach 'git pull'",
+            "git -C x submodule foreach git remote update",
+            "git-submodule foreach git fetch",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5498,6 +5524,9 @@ mod tests {
             "ls *.rs",
             "rm -f *.log",
             "git-fetch origin",
+            "git log --grep fetch",
+            "git commit -m 'fix fetch and pull'",
+            "git --work-tree=../t2 fetch",
             "bash -c 'echo $HOME'",
             "git log --oneline -- docs/git-push.md",
             "timeout 5 ls *.rs",
