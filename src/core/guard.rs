@@ -1671,6 +1671,13 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
     if let Some(why) = exec_rule(first, words, segment, &target) {
         return Some(why);
     }
+    // `git-fetch`, `/usr/lib/git-core/git-push`: a git-core program runs that subcommand.
+    if let Some(sub) = first.and_then(|f| f.strip_prefix("git-")) {
+        let args: Vec<&str> = std::iter::once(sub)
+            .chain(words[1..].iter().copied())
+            .collect();
+        return git_rule(&args, &target);
+    }
     match first {
         Some("gh") => gh_rule(&words[1..], segment),
         // `GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`: config from the environment.
@@ -3417,8 +3424,15 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     let text = command.replace("2>&1", "");
     let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
     // `fe""tch` and `\\fetch` run fetch too.
-    let bare = |w: &str| matches!(w.replace(['\'', '"', '\\'], "").as_str(), "fetch" | "pull");
-    let git = |w: &str| w.replace(['\'', '"', '\\'], "").rsplit('/').next() == Some("git");
+    let base = |w: &str| {
+        w.replace(['\'', '"', '\\'], "")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    let bare = |w: &str| matches!(base(w).trim_start_matches("git-"), "fetch" | "pull");
+    let git = |w: &str| base(w) == "git" || base(w).starts_with("git-");
     // `$'\\x65xt::'` and `$"..."` quoting can spell any word: refused in any git command.
     if !text.split(cut).any(git) {
         return None;
@@ -3444,7 +3458,7 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
         match w.first() {
             // Config (`-c protocol.ext.allow=always`), `--upload-pack` (`-u`, `--upl`) and
             // `--exec-path` run code: words are read unquoted (`'-c'`).
-            Some(&"git") => {
+            Some(c) if *c == "git" || base(c).starts_with("git-") => {
                 let u: Vec<String> = w.iter().map(|a| a.replace(['\'', '"', '\\'], "")).collect();
                 !(u.iter().any(|a| bare(a))
                     && u.iter().any(|a| {
@@ -3516,6 +3530,14 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
         let cmd_glob = cmd.is_some_and(|(c, g)| *g && c != "[" && c != "[[");
         (cmd_glob && top || git && seg.iter().any(|w| w.1)).then_some(GLOB_WORD)
     })
+}
+
+/// A `remote.<r>.fetch` refspec from git config that a plain fetch follows (spec §4): it moves
+/// the default branch or mirrors, or writes tags from a remote other than `origin`/`upstream`.
+pub fn config_fetch_moves(remote: &str, spec: &str, default_branch: &str) -> bool {
+    let trusted = matches!(remote, "origin" | "upstream");
+    fetch_moves(&[remote, spec], default_branch)
+        || !trusted && norm_ref(spec).contains("refs/tags/")
 }
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
@@ -5385,6 +5407,15 @@ mod tests {
             "timeout 5 g?t push origin HEAD:main",
             "nice *t push",
             "echo x | xargs *",
+            // git-core programs are git; `$` in nested shell text near a fetch.
+            "git-fetch . +feat:main",
+            "/usr/lib/git-core/git-fetch . +feat:main",
+            "git-pull . feat:main",
+            "git-push origin HEAD:main",
+            "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
+            "git-fetch --upload-pack='x #' .",
+            "bash -c 'git fetch $R'",
+            "sh -c \"git pull origin $B\"",
             // A bare `*` component can name git (was allowed).
             "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+refs/heads/*:refs/remotes/origin/*; git status",
             // Unquoted, bash may expand it against planted files (was allowed).
@@ -5442,6 +5473,9 @@ mod tests {
             "[ -d x ] && git status",
             "ls *.rs",
             "rm -f *.log",
+            "git-fetch origin",
+            "bash -c 'echo $HOME'",
+            "git log --oneline -- docs/git-push.md",
             "timeout 5 ls *.rs",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",

@@ -10,8 +10,8 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, bash_writes, child_task_create, edit_lock, edited_path, foreign_lock,
-    prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
+    ChildTask, Script, bash_writes, child_task_create, config_fetch_moves, edit_lock, edited_path,
+    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -131,6 +131,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         if let Some(why) = push_config(&dir, command, &read, &default) {
             return Some(deny(&why));
         }
+        if let Some(why) = fetch_config(&dir, command, &default) {
+            return Some(deny(&why));
+        }
         if let Some(why) = push_gates(&dir, command, &read, &default) {
             return Some(deny(&why));
         }
@@ -217,6 +220,74 @@ fn push_config(
             Some(m) => {
                 return Some(format!(
                     "merge-lock: push.default = {m} can push `{default}`; {FIX}"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Merge-lock (spec §4) for a fetch or pull: the `remote.<r>.fetch` refspecs it follows and the
+/// protocol and URL rewrites that run a command, asked of git where it runs (each earlier
+/// `cd`, then `git -C`). Git that cannot be asked (a missing directory) fails closed.
+fn fetch_config(dir: &Path, command: &str, default: &str) -> Option<String> {
+    let unq = |w: &str| w.replace(['\'', '"', '\\'], "");
+    let base = |w: &str| unq(w).rsplit('/').next().unwrap_or("").to_string();
+    let mut at: Vec<String> = Vec::new();
+    for seg in command.split([';', '&', '|', '\n']) {
+        let w: Vec<String> = seg.split_whitespace().map(unq).collect();
+        if w.first().is_some_and(|c| c == "cd") {
+            at.extend(["-C".to_string(), w.get(1).cloned().unwrap_or_default()]);
+            continue;
+        }
+        if !w
+            .iter()
+            .any(|a| matches!(base(a).trim_start_matches("git-"), "fetch" | "pull"))
+        {
+            continue;
+        }
+        let mut opts = at.clone();
+        for pair in w[1..].chunks(2).take_while(|p| p[0] == "-C") {
+            opts.extend(pair.iter().cloned());
+        }
+        let get = |re: &str| {
+            let mut all: Vec<&str> = opts.iter().map(String::as_str).collect();
+            all.extend(["config", "--get-regexp", re]);
+            config_get(dir, &all)
+        };
+        let (Ok(fetch), Ok(proto)) = (
+            get(r"^remote\..*\.fetch$"),
+            get(r"^(protocol\..*allow|url\..*insteadof)$"),
+        ) else {
+            return Some(
+                "merge-lock: the guard cannot read git config where this fetch runs".into(),
+            );
+        };
+        for line in fetch.iter().flat_map(|s| s.lines()) {
+            let (key, spec) = line.split_once(' ').unwrap_or((line, ""));
+            let remote = key
+                .strip_prefix("remote.")
+                .and_then(|k| k.strip_suffix(".fetch"));
+            if config_fetch_moves(remote.unwrap_or(""), spec, default) {
+                return Some(format!(
+                    "merge-lock: git config `{key} {spec}` makes a fetch move `{default}`, mirror \
+                     or write tags; unset it (`git config --unset-all {key}`) or ask the owner"
+                ));
+            }
+        }
+        for line in proto.iter().flat_map(|s| s.lines()) {
+            let (key, v) = line.split_once(' ').unwrap_or((line, ""));
+            let runs = if key.starts_with("url.") {
+                key.contains("ext::") || key.contains("fd::")
+            } else {
+                let open = !v.eq_ignore_ascii_case("never");
+                open && (key.contains(".ext.") || key.contains(".fd."))
+                    || key == "protocol.allow" && v.eq_ignore_ascii_case("always")
+            };
+            if runs {
+                return Some(format!(
+                    "merge-lock: git config `{line}` lets a fetch run a command (`ext::`, \
+                     `fd::`); unset it or ask the owner"
                 ));
             }
         }
