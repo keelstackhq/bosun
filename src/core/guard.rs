@@ -589,8 +589,8 @@ fn check(
         return Some(too_deep());
     }
     // A fetch or pull next to other shell commands reads an environment the guard cannot see.
-    if depth == 0 && fetch_not_plain(command) {
-        return Some(format!("`{}` is refused ({FETCH_PLAIN})", command.trim()));
+    if let Some(why) = fetch_not_plain(command).filter(|_| depth == 0) {
+        return Some(format!("`{}` is refused ({why})", command.trim()));
     }
     for inner in nested(command) {
         if let Some(why) = check(&inner, branch_at, default_branch, depth + 1, sinks) {
@@ -3428,23 +3428,31 @@ fn fetch_trusted(rest: &[&str]) -> bool {
 /// reads): shell syntax can set what git reads (`HOME=`, `export`, `source`, `eval`, a loop),
 /// so only a fetch the guard can read alone passes. Quotes are not parsed (no prose is
 /// skipped), and a fetch or pull with `-c`, `--config-env`, `ext::` or `fd::` is refused too.
-fn fetch_not_plain(command: &str) -> bool {
+fn fetch_not_plain(command: &str) -> Option<&'static str> {
     let text = command.replace("2>&1", "");
     let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
     // `fe""tch` and `\\fetch` run fetch too.
     let bare = |w: &str| matches!(w.replace(['\'', '"', '\\'], "").as_str(), "fetch" | "pull");
     let git = |w: &str| w.replace(['\'', '"', '\\'], "").rsplit('/').next() == Some("git");
+    // `$'\\x65xt::'` and `$"..."` quoting can spell any word: refused in any git command.
     if !text.split(cut).any(git) {
-        return false;
+        return None;
+    }
+    if text.contains("$'") || text.contains("$\"") {
+        return Some(FETCH_PLAIN);
     }
     // `ext::<cmd>` and `fd::` transports run a command or read a descriptor, in any git command
     // (`remote add x 'ext::sh p'`, then a fetch), however quoted.
     let unquoted = text.replace(['\'', '"', '\\'], "");
     if unquoted.contains("ext::") || unquoted.contains("fd::") {
-        return true;
+        return Some(FETCH_PLAIN);
     }
     if !text.split(cut).any(bare) {
-        return false;
+        return None;
+    }
+    // Any `$` in a fetch or pull (a lone one too) hides a word the guard cannot read.
+    if text.contains('$') {
+        return Some(FETCH_MOVES);
     }
     let plain = |seg: &str| {
         let w: Vec<&str> = seg.split_whitespace().collect();
@@ -3470,14 +3478,15 @@ fn fetch_not_plain(command: &str) -> bool {
             _ => false,
         }
     };
-    // A lone `git` segment is judged by `git_rule`, which refuses `$` and `\\` in a fetch.
+    // A lone `git` segment is judged by `git_rule`, which refuses `\\` in a fetch.
     let segs: Vec<&str> = text
         .split([';', '&', '|', '\n'])
         .filter(|g| !g.trim().is_empty())
         .collect();
-    text.contains(['`', '(', ')', '{', '}', '<', '>'])
-        || (segs.len() > 1 && text.contains(['$', '\\']))
-        || segs.iter().any(|seg| !plain(seg))
+    (text.contains(['`', '(', ')', '{', '}', '<', '>'])
+        || (segs.len() > 1 && text.contains('\\'))
+        || segs.iter().any(|seg| !plain(seg)))
+    .then_some(FETCH_PLAIN)
 }
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
@@ -5327,6 +5336,16 @@ mod tests {
             "git config remote.x.url 'fd::3'",
             "git clone 'ext::sh /tmp/p.sh' d",
             "git push 'ext::sh x' feat:feat",
+            // ANSI-C and locale quoting: any `$` near a fetch, `$'`/`$"` in any git command.
+            "git fetch $'--upload-pack=git update-ref refs/heads/main abc #' .",
+            "git fetch $'-u' 'x #' .",
+            "git fetch $'-qu' 'x #' .",
+            "git fetch --$'upload-pack'=x .",
+            "git fetch $\"--upload-pack\"=x .",
+            "git pull $'--upload-pack=x #' .",
+            "git remote add x $'\\x65xt::sh p.sh'",
+            "git remote add x $'\\145xt::sh p.sh'",
+            "git fetch origin $BRANCH",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
