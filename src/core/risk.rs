@@ -548,6 +548,10 @@ fn arrow_dollar_literal(path: &str, line: &str) -> bool {
         ))
         .expect("static regex")
     });
+    // A password hash (bcrypt `$2y$10$`, argon2 `$argon2id$`, phpass `$P$`) is no secret.
+    static HASH: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"=>\s*'\$(?:2[abxy]\$\d\d\$|argon2(?:id|i|d)\$|P\$)").expect("static regex")
+    });
     let ext = path
         .rsplit('/')
         .next()
@@ -557,6 +561,7 @@ fn arrow_dollar_literal(path: &str, line: &str) -> bool {
         ext.as_deref(),
         Some("php" | "phtml" | "inc" | "rb" | "rake" | "pl" | "pm")
     ) && ARROW.is_match(line)
+        && !HASH.is_match(line)
 }
 
 /// Values that are no literal secret: null, booleans, type names, permissions (`id-token:
