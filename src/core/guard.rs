@@ -3537,8 +3537,12 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
             (None, c) => (glob, _) = (glob || matches!(c, '*' | '?' | '['), word.push(c)),
         }
     }
-    static VAR: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^\$(?:\{(\w+)\}|(\w+))$").expect("static regex"));
+    static VAR: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))$").expect("static regex")
+    });
+    // Variables the shell sets itself (they persist across calls, like `PWD` after a `cd`).
+    const SHELL_VARS: &str = "_ PWD OLDPWD HOME IFS PS1 PS2 PS3 PS4 PROMPT_COMMAND ENV SHELLOPTS \
+        BASHOPTS CDPATH PATH SHELL REPLY OPTARG RANDOM LINENO SECONDS";
     static BRACE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\{[^{}]*(,|\.\.)[^{}]*\}").expect("static regex"));
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
@@ -3572,18 +3576,43 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
                     .iter()
                     .any(|f| w.starts_with(f) && (f.len() == 2 || w[f.len()..].starts_with('=')))
         };
+        // A segment where git runs a value as code: no value there is a "session variable".
+        let runs = seg.iter().enumerate().any(|(i, w)| {
+            let prev = i.checked_sub(1).map_or("", |p| seg[p].0.as_str());
+            matches!(
+                w.0.as_str(),
+                "rebase"
+                    | "bisect"
+                    | "submodule"
+                    | "difftool"
+                    | "mergetool"
+                    | "filter-branch"
+                    | "filter-repo"
+                    | "instaweb"
+                    | "web--browse"
+                    | "send-email"
+                    | "help"
+            ) || prev == "-c"
+                || ["--upl", "--ex", "--config-env"]
+                    .iter()
+                    .any(|o| w.0.starts_with(o))
+        });
         let names_fetch = |w: &str| {
             let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
             // Any `$` or backtick builds words (`${IFS}`, `$(..)`), unless the value is one
             // variable (`"$BRANCH"`) the command does not set: it comes from the session.
             let var = VAR.captures(w).and_then(|c| c.get(1).or(c.get(2)));
-            let session = var.is_some_and(|n| {
-                let n = n.as_str();
-                let rest = command
-                    .replace(&format!("${{{n}}}"), "")
-                    .replace(&format!("${n}"), "");
-                !rest.contains(n)
-            });
+            let session = !runs
+                && var.is_some_and(|n| {
+                    let n = n.as_str();
+                    if n.starts_with("BASH") || SHELL_VARS.split_whitespace().any(|v| v == n) {
+                        return false;
+                    }
+                    let rest = command
+                        .replace(&format!("${{{n}}}"), "")
+                        .replace(&format!("${n}"), "");
+                    !rest.contains(n)
+                });
             // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one, and a
             // git-core program (`git-fetch`) runs git. A refspec (`a:b`) is no command word.
             let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
@@ -5572,6 +5601,17 @@ mod tests {
             "git rebase -x 'cd;git;{fetch,}' main",
             "X=$(printf 'git f%stch' e); git rebase -x \"$X\" main",
             "export X=$(printf x); git rebase -x '$X' main",
+            // Special or shell-kept variables, and values git runs as code.
+            "set -- 'cd${IFS}t2;git${IFS}fe$@tch'; git rebase -x \"$1\" main",
+            ": 'x'; git rebase -x \"$_\" main",
+            "git rebase -x \"$PWD\" main",
+            "git push origin \"$OLDPWD\"",
+            "git rebase -x \"$CMD\" main",
+            "git rebase --exec=\"$CMD\" main",
+            "git -c core.editor=\"$ED\" commit",
+            "git bisect run \"$CMD\"",
+            "git submodule foreach \"$CMD\"",
+            "git fetch --upload-pack=\"$UP\" origin",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5640,7 +5680,6 @@ mod tests {
             "git log --format='%H {a,b} $(x)'",
             "git commit -m \"$(cat msg.txt)\"",
             "git rebase -x 'cargo test --workspace' main",
-            "git rebase -x \"$CMD\" main",
             "git commit --message='fix pull'",
             "git log --format='%s update' -S fetch",
             "git commit -q -F - <<'EOF'\nfix: don't fetch when 'git pull' runs\n* list item\nEOF",
