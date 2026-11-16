@@ -589,7 +589,9 @@ fn check(
         return Some(too_deep());
     }
     // Fetch config exported in any segment reaches every later git command, nested ones too.
-    if command.contains("GIT_CONFIG_") && env_fetch_moves(command, default_branch) {
+    if (command.contains("GIT_CONFIG_") || command.contains("export $"))
+        && env_fetch_moves(command, default_branch)
+    {
         return Some(format!("`{}` is refused ({FETCH_MOVES})", command.trim()));
     }
     for inner in nested(command) {
@@ -3450,6 +3452,35 @@ fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
             vals.push((n, v));
         }
     }
+    // A fetch or pull after a config file, an include, a value with no readable key or an
+    // `export $NAME=..` reads config the guard cannot see: fail closed.
+    let fetches = command
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+        .any(|w| matches!(w, "fetch" | "pull"));
+    let file = [
+        "GIT_CONFIG_GLOBAL=",
+        "GIT_CONFIG_SYSTEM=",
+        "export $",
+        "declare $",
+        "typeset $",
+    ]
+    .iter()
+    .any(|v| command.contains(v));
+    let unkeyed = vals.iter().any(|(n, _)| !keys.iter().any(|(m, _)| m == n))
+        || (command.contains("GIT_CONFIG_COUNT=") && keys.is_empty());
+    let include = |k: &str| {
+        let k = cfg_key(k);
+        k == "include.path" || k.starts_with("includeif.")
+    };
+    if fetches
+        && (file
+            || unkeyed
+            || keys.iter().any(|(_, k)| include(k))
+            || command.to_ascii_lowercase().contains("include"))
+        && (file || unkeyed || command.contains("GIT_CONFIG_"))
+    {
+        return true;
+    }
     // Bash keeps the last of repeated assignments: every value of the key's index is judged.
     let keyed = keys.iter().any(|(n, k)| {
         let mut vs = vals
@@ -3745,6 +3776,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     let (mut i, mut opts, mut known) = (0, Vec::new(), true);
     // `-c remote.<r>.push=..` and the like; `push.default` when set.
     let (mut push_cfg, mut push_default) = (false, None);
+    // `-c include.path=f` pulls in a config file a fetch or pull would follow.
+    let mut include_cfg = false;
     while i < args.len() && args[i].starts_with('-') {
         let (a, next) = (args[i], args.get(i + 1).copied());
         let config = match a {
@@ -3758,6 +3791,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
             push_cfg |= push_key(k);
             // Bash drops a backslash before git reads the key (`remote.origin.ur\\l`).
             let fk = cfg_key(k).replace('\\', "");
+            include_cfg |= fk == "include.path" || fk.starts_with("includeif.");
             if fk.starts_with("remote.")
                 && fk.ends_with(".fetch")
                 && (a.starts_with("--config-env") || fetch_cfg_moves(v, default_branch))
@@ -3793,6 +3827,9 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
     }
     let sub = args.get(i)?.replace(['\'', '"', '\\'], "");
     let (sub, rest) = (sub.as_str(), &args[(i + 1).min(args.len())..]);
+    if include_cfg && matches!(sub, "fetch" | "pull") {
+        return Some(FETCH_MOVES);
+    }
     // `git $g`, `git "${G}"`: the subcommand could be `merge`, `push` or `tag`: fail closed.
     if sub.contains(['$', '`']) {
         return Some(BUILT_SUB);
@@ -5253,6 +5290,18 @@ mod tests {
             "git fetch evil2 +tag v1.0",
             "git config --rename-section remote.evil remote.upstream",
             "git config rename-section remote.evil remote.origin",
+            // Round 6: config files and indirect names before a fetch or pull.
+            "GIT_CONFIG_GLOBAL=/tmp/g git fetch origin",
+            "export GIT_CONFIG_GLOBAL=/tmp/g; git fetch origin",
+            "GIT_CONFIG_SYSTEM=/tmp/g git pull origin main",
+            "export GIT_CONFIG_SYSTEM=/tmp/g\ngit fetch origin",
+            "git -c include.path=/tmp/g fetch origin",
+            "git -c includeIf.onbranch:feature.path=/tmp/g pull",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/g; git fetch origin",
+            "export GIT_CONFIG_PARAMETERS=\"'include.path=/tmp/g'\"; git fetch origin",
+            "K=GIT_CONFIG_KEY_0; export $K=remote.origin.fetch GIT_CONFIG_COUNT=1 GIT_CONFIG_VALUE_0=+feat:main; git fetch origin",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_VALUE_0=+feat:main; git fetch origin",
+            "export $K=x; git pull origin main",
             "git remote rename evil upstream",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
@@ -5290,6 +5339,9 @@ mod tests {
             "git config --rename-section remote.origin remote.upstream",
             "git fetch origin feature",
             "git remote set-url --pu origin /tmp/x",
+            "GIT_CONFIG_GLOBAL=/tmp/g git status",
+            "export GIT_CONFIG_NOSYSTEM=1; git fetch origin",
+            "git -c core.x=1 pull origin main",
             "git fetch --all",
             "git fetch -pP origin",
             "git fetch --prune origin",
