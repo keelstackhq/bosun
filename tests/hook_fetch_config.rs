@@ -90,6 +90,16 @@ fn configured_refspecs_that_move_the_default_branch_or_tags_refuse_fetch_and_pul
         ("protocol.allow", "always"),
         ("url.ext::sh p.sh #.insteadOf", "https://github.com/"),
         ("url.fd::3.insteadOf", "https://github.com/"),
+        // Review round 1: more keys that run a command or retarget a fetch.
+        ("protocol.allow", "user"),
+        ("remote.origin.url", "ext::sh p.sh"),
+        ("remote.origin.uploadpack", "sh p.sh"),
+        ("remote.origin.receivepack", "sh p.sh"),
+        ("core.sshCommand", "sh p.sh"),
+        ("url./tmp/evil.insteadOf", "https://github.com/"),
+        ("url.evil2.insteadOf", "https://github.com/"),
+        ("remote.evil.tagOpt", "--tags"),
+        ("remote.origin.fetch", "+refs/heads/feat:refs/heads/MAIN"),
     ] {
         let r = repo();
         git(r.path(), &["config", "--add", key, value]);
@@ -146,6 +156,15 @@ fn config_is_read_where_git_runs() {
         "cd other && git fetch",
         "git -C other fetch origin",
         "cd other && git pull",
+        "git --no-pager -C other fetch origin",
+        "git -P -C other fetch",
+        "git -Cother fetch origin",
+        "git --git-dir=other/.git fetch origin",
+        "git --git-dir other/.git fetch origin",
+        "git --work-tree=other -C other fetch",
+        "pushd other && git fetch",
+        "git -C other remote update",
+        "cd other && git remote update origin",
     ] {
         assert!(hook(r.path(), cmd).is_some(), "{cmd}");
     }

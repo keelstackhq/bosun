@@ -3532,12 +3532,33 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     })
 }
 
-/// A `remote.<r>.fetch` refspec from git config that a plain fetch follows (spec §4): it moves
-/// the default branch or mirrors, or writes tags from a remote other than `origin`/`upstream`.
-pub fn config_fetch_moves(remote: &str, spec: &str, default_branch: &str) -> bool {
+/// Git config a plain fetch or pull follows (spec §4), `key` as `git config` prints it: a
+/// refspec that moves the default branch, mirrors or writes tags from an untrusted remote, a
+/// command it runs (`uploadpack`, `receivepack`, `core.sshCommand`, an `ext::`/`fd::` URL,
+/// `protocol.allow` or `protocol.ext|fd.allow` not `never`), `tagOpt=--tags` on an untrusted
+/// remote, or a URL rewrite to `ext::`, `fd::` or a non-network URL.
+pub fn config_fetch_risk(key: &str, value: &str, default_branch: &str) -> bool {
+    let k = cfg_key(key);
+    let remote = k.strip_prefix("remote.").and_then(|r| r.rsplit_once('.'));
+    let remote = remote.map_or("", |r| r.0);
     let trusted = matches!(remote, "origin" | "upstream");
-    fetch_moves(&[remote, spec], default_branch)
-        || !trusted && norm_ref(spec).contains("refs/tags/")
+    let v = value.to_ascii_lowercase();
+    match k.rsplit('.').next().unwrap_or("") {
+        "fetch" if k.starts_with("remote.") => {
+            fetch_moves(&[remote, value], default_branch)
+                || !trusted && norm_ref(value).contains("refs/tags/")
+        }
+        "uploadpack" | "receivepack" | "sshcommand" => true,
+        "url" | "pushurl" => v.contains("ext::") || v.contains("fd::"),
+        "tagopt" => !trusted && v.contains("--tags"),
+        "insteadof" | "pushinsteadof" => {
+            retargets(&k, value) || k.contains("ext::") || k.contains("fd::")
+        }
+        "allow" => {
+            v != "never" && (k == "protocol.allow" || k.contains(".ext.") || k.contains(".fd."))
+        }
+        _ => false,
+    }
 }
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
@@ -3655,7 +3676,8 @@ fn fetch_moves(rest: &[&str], default_branch: &str) -> bool {
         });
         r.contains(['$', '`'])
             || glob
-            || (names_default(dst, default_branch)
+            // `refs/heads/MAIN` is `main` on a case-insensitive file system.
+            || (names_default(&dst.to_ascii_lowercase(), &default_branch.to_ascii_lowercase())
                 && (!trusted || !names_default(src, default_branch)))
     })
 }
@@ -5411,6 +5433,8 @@ mod tests {
             "git-fetch . +feat:main",
             "/usr/lib/git-core/git-fetch . +feat:main",
             "git-pull . feat:main",
+            "git fetch . feat:MAIN",
+            "git fetch . feat:refs/heads/Main",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
