@@ -3468,17 +3468,9 @@ fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
     .any(|v| command.contains(v));
     let unkeyed = vals.iter().any(|(n, _)| !keys.iter().any(|(m, _)| m == n))
         || (command.contains("GIT_CONFIG_COUNT=") && keys.is_empty());
-    let include = |k: &str| {
-        let k = cfg_key(k);
-        k == "include.path" || k.starts_with("includeif.")
-    };
-    if fetches
-        && (file
-            || unkeyed
-            || keys.iter().any(|(_, k)| include(k))
-            || command.to_ascii_lowercase().contains("include"))
-        && (file || unkeyed || command.contains("GIT_CONFIG_"))
-    {
+    // `include.path`/`includeIf` in a `GIT_CONFIG_*` setting (this runs only when one is named).
+    let include = command.to_ascii_lowercase().contains("include");
+    if fetches && (file || unkeyed || include) {
         return true;
     }
     // Bash keeps the last of repeated assignments: every value of the key's index is judged.
