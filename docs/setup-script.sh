@@ -8,12 +8,12 @@ set -euo pipefail
 # Pinned tool versions.
 NODE_MAJOR=24
 PNPM_VERSION=12.15.0
-SPLICE_VERSION=0.5.1
+SPLICE_VERSION=0.6.0
 # npm's dist.integrity (sha512) of each tool's launcher and linux binary packages, from
 # `npm view @keelstackhq/<package>@<version> dist.integrity`; move them with the version.
-SPLICE_SHA512=n+brZ5DeqjVndqbMTC+g4Zj0rlwut/d7fV/OxQEcUIWNNTRcOVhtUanqkHo5JJj3a5pcvgXJNl40laR4FXM+WQ==
-SPLICE_LINUX_X64_SHA512=u/6RPIjnkGFmPJ7gReZK7T7jGn+55MB8AnLO7J3QQNu/Fr2N5DoG+I5vgKyCPGAQNcTCpqH28jdAeOuB4OC5iA==
-SPLICE_LINUX_ARM64_SHA512=/mY51UqISB/81tGO9ss1iUMWd8L+GjM/V93/gbaA6deJH4jQ3SCWo6uMTYYGei/8QGyHvGGrfR98vzKHE41wtA==
+SPLICE_SHA512=dMLEVxDdl6qCCLZhCIb0qV+f5BZ1r5rRTglMtYf9cc4uRW81eWSSz1n5fuB1RlotWgMGbBbzSvyX1O7PxDHHSA==
+SPLICE_LINUX_X64_SHA512=YmeezoD9hiz3TSvCk2k1VokW7JlQmvqGuSaBBfQGgOJ2DESdWufEv2jQ94xGZUYzTWpBb2TM9euoOTi51bMCvg==
+SPLICE_LINUX_ARM64_SHA512=1tScSJRc6HhnKqFoDWpz0nMewjR1j3akWw3sthqFHvnzaXAL7W+BMVDmyJ2c9lPa4QF/HBEwFfbe1JmtJx/Frw==
 HOIST_VERSION=0.5.1
 HOIST_SHA512=vTS2qXva2OCDTuYbkAntSaN6Rf2w70f3inxOzYCHZkrvqp9bgdGAN4OX8ZMQbcg9VabUiPR3aeXbAjFqKMgmcg==
 HOIST_LINUX_X64_SHA512=4bTuPUbSWvLVvMU4DgMZcKfAhqNhQN5Iy3I0W0eaUtpk9UWKPNvLCbdKp5LWxpeoMFqYArgkVq3/hKJhZj+QzQ==
@@ -47,10 +47,10 @@ KEELSTACK_MARKETPLACE_REF=main
 SUPERPOWERS_SHA=22f0b463e7a5e579904dd6211a520321035526f7
 CAVEMAN_SHA=a9cc1f7b82598852e8c6b8e599dde6ac2491b26e
 # The bosun release this repo pins in .bosun/version.
-BOSUN_VERSION=0.17.0
-BOSUN_SHA512=mQGLlSHqlWDDJDpCvp0jyUrDJJtHjzffkmVWKCc38cJYiAOM2qFPTeOXX2QhnUV3rfzYdUWxqDjUun7cM2nD8A==
-BOSUN_LINUX_X64_SHA512=SdO3QX1+VTO4qjNrwuSWRc3pJMbOLGZD6u/pUf+LlZSnSGPVskbNkzANB81b3lb/hPP4xMvyc6OPYlol0pJhWw==
-BOSUN_LINUX_ARM64_SHA512=IM9S7zJOEQzfj/CGQvlEZgUqEq9unTsV9eTzt/qj4H4MZGyQgbwIxTbYaD8gu2/KQcvcBbSeoxFRMIz7/KOYCQ==
+BOSUN_VERSION=0.18.0
+BOSUN_SHA512=ZmP0stws90KO3AVktbXe1LFGa+jCNkwf99IN6BNSvfiMGk6XfJsXHdP34EXTcQohkDLxEy/HyFN8bc3X8gcCFA==
+BOSUN_LINUX_X64_SHA512=PRaVcujrOVB8Sgg8JeXRQ7SQP0wclp/jCVnHCrbvn6BtC9LDjHtos4oJdpFMEZhXSFtSyKqth9ja+y1DSKrtgQ==
+BOSUN_LINUX_ARM64_SHA512=XhZyLjNgybwHpSdP5gm/4eLWpVZOrtVT7TFnwitnNKFySnrqlftABJvbNZVBF3X1vRP/Rwx/OxzYwU75YBPZkQ==
 
 # Stacks of this checkout: Rust steps run only with a Cargo.toml or a toolchain file, pnpm only
 # with a pnpm-lock.yaml, a pnpm-workspace.yaml or a package.json `packageManager` of pnpm.
