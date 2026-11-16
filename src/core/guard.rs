@@ -1671,6 +1671,13 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
     if let Some(why) = exec_rule(first, words, segment, &target) {
         return Some(why);
     }
+    // `git-fetch`, `/usr/lib/git-core/git-push`: a git-core program runs that subcommand.
+    if let Some(sub) = first.and_then(|f| f.strip_prefix("git-")) {
+        let args: Vec<&str> = std::iter::once(sub)
+            .chain(words[1..].iter().copied())
+            .collect();
+        return git_rule(&args, &target);
+    }
     match first {
         Some("gh") => gh_rule(&words[1..], segment),
         // `GIT_CONFIG_KEY_n`, `GIT_CONFIG_PARAMETERS`: config from the environment.
@@ -3414,11 +3421,18 @@ fn fetch_trusted(rest: &[&str]) -> bool {
 /// Why a command is refused when a git fetch or pull is not a plain chain of `git ..`/`cd ..`
 /// segments, or a git command runs a local command (spec §4, fetch rules).
 fn fetch_not_plain(command: &str) -> Option<&'static str> {
-    let text = command.replace("2>&1", "");
+    let text = split_heredocs(command).0.replace("2>&1", "");
     let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '{' | '}');
     // `fe""tch` and `\\fetch` run fetch too.
-    let bare = |w: &str| matches!(w.replace(['\'', '"', '\\'], "").as_str(), "fetch" | "pull");
-    let git = |w: &str| w.replace(['\'', '"', '\\'], "").rsplit('/').next() == Some("git");
+    let base = |w: &str| {
+        w.replace(['\'', '"', '\\'], "")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
+    let bare = |w: &str| matches!(base(w).trim_start_matches("git-"), "fetch" | "pull");
+    let git = |w: &str| base(w) == "git" || base(w).starts_with("git-");
     // `$'\\x65xt::'` and `$"..."` quoting can spell any word: refused in any git command.
     if !text.split(cut).any(git) {
         return None;
@@ -3432,7 +3446,11 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     if unquoted.contains("ext::") || unquoted.contains("fd::") {
         return Some(FETCH_PLAIN);
     }
-    if !text.split(cut).any(bare) {
+    // `git remote [-v] update` fetches too.
+    let toks: Vec<&str> = unquoted.split(cut).filter(|t| !t.is_empty()).collect();
+    let remote = toks.iter().position(|t| *t == "remote");
+    let update = remote.is_some_and(|p| toks[p..].contains(&"update"));
+    if !text.split(cut).any(bare) && !update {
         return None;
     }
     // Any `$` in a fetch or pull (a lone one too) hides a word the guard cannot read.
@@ -3444,8 +3462,27 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
         match w.first() {
             // Config (`-c protocol.ext.allow=always`), `--upload-pack` (`-u`, `--upl`) and
             // `--exec-path` run code: words are read unquoted (`'-c'`).
-            Some(&"git") => {
+            Some(c) if *c == "git" || base(c).starts_with("git-") => {
                 let u: Vec<String> = w.iter().map(|a| a.replace(['\'', '"', '\\'], "")).collect();
+                // A git run inside another subcommand (`bisect run`, `submodule foreach`) with a
+                // fetch: the guard cannot tell where it reads config.
+                let mut sub = 1;
+                while u.get(sub).is_some_and(|a| a.starts_with('-')) {
+                    let pair = [
+                        "-C",
+                        "-c",
+                        "--git-dir",
+                        "--work-tree",
+                        "--namespace",
+                        "--config-env",
+                    ];
+                    sub += 1 + usize::from(pair.contains(&u[sub].as_str()));
+                }
+                let inner = u.iter().skip(sub + 1).position(|a| git(a));
+                let fetch = |a: &String| bare(a) || a == "update";
+                if inner.is_some_and(|p| u[sub + 1 + p..].iter().any(fetch)) {
+                    return false;
+                }
                 !(u.iter().any(|a| bare(a))
                     && u.iter().any(|a| {
                         a == "-c"
@@ -3478,17 +3515,20 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
 fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     let (mut segs, mut word, mut glob, mut quote, mut esc) =
         (vec![Vec::new()], String::new(), false, None, false);
-    for c in command.chars().chain([' ']) {
+    // Words with whether they hold an unquoted glob and whether any part was quoted.
+    let mut quoted = false;
+    for c in split_heredocs(command).0.chars().chain([' ']) {
         match (quote, c) {
             _ if esc => (esc, _) = (false, word.push(c)),
             (Some(q), c) if c == q => quote = None,
             (Some(_), c) => word.push(c),
             (None, '\\') => esc = true,
-            (None, '\'' | '"') => quote = Some(c),
+            (None, '\'' | '"') => (quote, quoted) = (Some(c), true),
             (None, c) if c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')') => {
-                if !word.is_empty() || glob {
+                if !word.is_empty() || glob || quoted {
+                    let w = (std::mem::take(&mut word), std::mem::take(&mut glob));
                     segs.last_mut()?
-                        .push((std::mem::take(&mut word), std::mem::take(&mut glob)));
+                        .push((w.0, w.1, std::mem::take(&mut quoted)));
                 }
                 if !c.is_whitespace() || c == '\n' {
                     segs.push(Vec::new());
@@ -3500,22 +3540,94 @@ fn glob_rule(command: &str, top: bool) -> Option<&'static str> {
     // A glob whose last component can be `git` (`gi[t]`, `g?t`, `*`; `[..]` is one character).
     static CLASS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\[[^\]]*\]").expect("static regex"));
-    let names_git = |w: &str| {
+    let names = |w: &str, name: &str| {
         let pat = CLASS.replace_all(w.rsplit('/').next().unwrap_or(w), "?");
         let re = regex::escape(&pat).replace(r"\*", ".*").replace(r"\?", ".");
-        Regex::new(&format!("^{re}$")).is_ok_and(|r| r.is_match("git"))
+        Regex::new(&format!("^{re}$")).is_ok_and(|r| r.is_match(name))
     };
+    let names_git = |w: &str| names(w, "git");
     segs.iter().find_map(|seg| {
         let git = seg
             .iter()
             .any(|w| w.0.rsplit('/').next() == Some("git") || w.1 && names_git(&w.0));
-        let assign = |w: &&(String, bool)| w.0.contains('=') && !w.0.starts_with('-');
+        // A fetch, pull or update word in a quoted or `=` value of a git command runs a fetch
+        // the guard cannot place (`rebase -x 'cd x && git fetch'`, `-c core.editor=..`); a
+        // message or search value (`-m`, `--grep`, `--format`) is prose.
+        let prose = [
+            "-m",
+            "--message",
+            "--grep",
+            "-S",
+            "-G",
+            "--format",
+            "--pretty",
+        ];
+        let is_prose = |i: usize, w: &str| {
+            i > 0 && prose.contains(&seg[i - 1].0.as_str())
+                || prose
+                    .iter()
+                    .any(|f| w.starts_with(f) && (f.len() == 2 || w[f.len()..].starts_with('=')))
+        };
+        let names_fetch = |w: &str| {
+            let cut = |c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '=');
+            // Inner quotes and escapes go (`git 'fetch'`, `f"e"tch`); a glob may name one.
+            let w = w.to_ascii_lowercase().replace(['\'', '"', '\\'], "");
+            w.split(cut).any(|t| {
+                let t = t.trim_start_matches("git-");
+                ["fetch", "pull", "update"].iter().any(|n| {
+                    t == *n || t.contains(['*', '?', '[']) && !t.contains(['/', ':']) && names(t, n)
+                })
+            })
+        };
+        let gitw = |w: &str| {
+            w.rsplit('/')
+                .next()
+                .is_some_and(|b| b == "git" || b.starts_with("git-"))
+        };
+        if seg.iter().any(|w| !w.2 && gitw(&w.0))
+            && seg
+                .iter()
+                .enumerate()
+                .any(|(i, w)| (w.2 || w.0.contains('=')) && !is_prose(i, &w.0) && names_fetch(&w.0))
+        {
+            return Some(FETCH_PLAIN);
+        }
+        let assign = |w: &&(String, bool, bool)| w.0.contains('=') && !w.0.starts_with('-');
         let cmd = seg
             .iter()
             .find(|w| !assign(w) && !WRAPPERS.contains(&&*w.0));
-        let cmd_glob = cmd.is_some_and(|(c, g)| *g && c != "[" && c != "[[");
+        let cmd_glob = cmd.is_some_and(|(c, g, _)| *g && c != "[" && c != "[[");
         (cmd_glob && top || git && seg.iter().any(|w| w.1)).then_some(GLOB_WORD)
     })
+}
+
+/// Git config a plain fetch or pull follows (spec §4), `key` as `git config` prints it: a
+/// refspec that moves the default branch, mirrors or writes tags from an untrusted remote, a
+/// command it runs (`uploadpack`, `receivepack`, `core.sshCommand`, an `ext::`/`fd::` URL,
+/// `protocol.allow` or `protocol.ext|fd.allow` not `never`), `tagOpt=--tags` on an untrusted
+/// remote, or a URL rewrite to `ext::`, `fd::` or a non-network URL.
+pub fn config_fetch_risk(key: &str, value: &str, default_branch: &str) -> bool {
+    let k = cfg_key(key);
+    let remote = k.strip_prefix("remote.").and_then(|r| r.rsplit_once('.'));
+    let remote = remote.map_or("", |r| r.0);
+    let trusted = matches!(remote, "origin" | "upstream");
+    let v = value.to_ascii_lowercase();
+    match k.rsplit('.').next().unwrap_or("") {
+        "fetch" if k.starts_with("remote.") => {
+            fetch_moves(&[remote, value], default_branch)
+                || !trusted && norm_ref(value).contains("refs/tags/")
+        }
+        "uploadpack" | "receivepack" | "sshcommand" => true,
+        "url" | "pushurl" => v.contains("ext::") || v.contains("fd::"),
+        "tagopt" => !trusted && v.contains("--tags"),
+        "insteadof" | "pushinsteadof" => {
+            retargets(&k, value) || k.contains("ext::") || k.contains("fd::")
+        }
+        "allow" => {
+            v != "never" && (k == "protocol.allow" || k.contains(".ext.") || k.contains(".fd."))
+        }
+        _ => false,
+    }
 }
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
@@ -3633,7 +3745,8 @@ fn fetch_moves(rest: &[&str], default_branch: &str) -> bool {
         });
         r.contains(['$', '`'])
             || glob
-            || (names_default(dst, default_branch)
+            // `refs/heads/MAIN` is `main` on a case-insensitive file system.
+            || (names_default(&dst.to_ascii_lowercase(), &default_branch.to_ascii_lowercase())
                 && (!trusted || !names_default(src, default_branch)))
     })
 }
@@ -5385,6 +5498,46 @@ mod tests {
             "timeout 5 g?t push origin HEAD:main",
             "nice *t push",
             "echo x | xargs *",
+            // git-core programs are git; `$` in nested shell text near a fetch.
+            "git-fetch . +feat:main",
+            "/usr/lib/git-core/git-fetch . +feat:main",
+            "git-pull . feat:main",
+            "git fetch . feat:MAIN",
+            "git fetch . feat:refs/heads/Main",
+            // A git run inside another git subcommand skips the config walk.
+            "git bisect run git -C t2 fetch",
+            "git submodule foreach git -C ../t2 fetch",
+            "git submodule foreach 'git pull'",
+            "git -C x submodule foreach git remote update",
+            "git-submodule foreach git fetch",
+            // Command-running subcommands with a fetch word anywhere, quoted too.
+            "git bisect run sh -c \"cd t2; git fetch\"",
+            "git submodule foreach 'cd ../t2 && git fetch'",
+            "git difftool --extcmd='cd t2 && git fetch'",
+            "git filter-branch --index-filter 'cd t2 && git fetch'",
+            "git rebase -x 'git pull' main",
+            // A fetch word in a quoted or `=` value of any git command.
+            "git rebase --exe 'cd t2 && git fetch' main",
+            "git rebase --ex 'cd t2 && git fetch' main",
+            "git rebase -x'cd t2 && git fetch' main",
+            "git rebase -ix 'cd t2 && git fetch' main",
+            "git submodule --quiet foreach 'cd ../t2 && git fetch'",
+            "git -c sequence.editor='cd t2 && git fetch #' rebase -i main",
+            "git -c core.editor='cd t2 && git pull #' commit",
+            "git instaweb --browser='cd t2 && git fetch'",
+            "git web--browse --browser='cd t2 && git fetch' x",
+            "git -c browser.x.cmd='cd t2 && git fetch' help -w log",
+            "git send-email --to-cmd='cd t2 && git remote update' x.patch",
+            "git rebase -x 'git fe\"\"tch' main",
+            "git rebase -x \"cd t2 && git 'fetch'\" main",
+            "git rebase -x 'cd t2 && git f\"e\"tch' main",
+            "git rebase -x 'git fetc?' main",
+            "git rebase -x 'git f*h' main",
+            "git-push origin HEAD:main",
+            "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
+            "git-fetch --upload-pack='x #' .",
+            "bash -c 'git fetch $R'",
+            "sh -c \"git pull origin $B\"",
             // A bare `*` component can name git (was allowed).
             "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+refs/heads/*:refs/remotes/origin/*; git status",
             // Unquoted, bash may expand it against planted files (was allowed).
@@ -5442,6 +5595,18 @@ mod tests {
             "[ -d x ] && git status",
             "ls *.rs",
             "rm -f *.log",
+            "git-fetch origin",
+            "git log --grep fetch",
+            "git rebase -x 'cargo test' main",
+            "git commit --message='fix pull'",
+            "git log --format='%s update' -S fetch",
+            "git commit -q -F - <<'EOF'\nfix: don't fetch when 'git pull' runs\n* list item\nEOF",
+            "git remote -v",
+            "git -C t2 remote -v update",
+            "git commit -m 'fix fetch and pull'",
+            "git --work-tree=../t2 fetch",
+            "bash -c 'echo $HOME'",
+            "git log --oneline -- docs/git-push.md",
             "timeout 5 ls *.rs",
             "git commit -m 'note GIT_CONFIG_GLOBAL and HOME' && git fetch origin",
             "git fetch --all",

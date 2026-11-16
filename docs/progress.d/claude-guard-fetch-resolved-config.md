@@ -1,0 +1,1 @@
+- 2026-11-16 · Merge-lock reads resolved fetch config at hook time · configured refspecs, ext::/fd:: protocol config, git-core programs, known limits listed · PR
