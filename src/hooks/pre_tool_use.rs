@@ -258,7 +258,7 @@ fn fetch_config(dir: &Path, command: &str, default: &str) -> Option<String> {
         }
         let sub: Vec<&str> = w.iter().skip(i).map(String::as_str).collect();
         // `git remote update` fetches every remote without a fetch word.
-        let fetches = sub.starts_with(&["remote", "update"])
+        let fetches = sub.first() == Some(&"remote") && sub.contains(&"update")
             || w.iter()
                 .any(|a| matches!(base(a).trim_start_matches("git-"), "fetch" | "pull"));
         if !fetches {

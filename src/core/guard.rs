@@ -3446,9 +3446,27 @@ fn fetch_not_plain(command: &str) -> Option<&'static str> {
     if unquoted.contains("ext::") || unquoted.contains("fd::") {
         return Some(FETCH_PLAIN);
     }
-    // `git remote update` fetches too.
-    if !text.split(cut).any(bare) && !text.contains("remote update") {
+    // `git remote [-v] update` fetches too.
+    let toks: Vec<&str> = unquoted.split(cut).filter(|t| !t.is_empty()).collect();
+    let remote = toks.iter().position(|t| *t == "remote");
+    let update = remote.is_some_and(|p| toks[p..].contains(&"update"));
+    if !text.split(cut).any(bare) && !update {
         return None;
+    }
+    // A subcommand that runs commands (`bisect run`, `submodule foreach`, `difftool`,
+    // `filter-branch`, `rebase -x`) with a fetch word anywhere: its config cannot be told.
+    let pair = |a: &str, b: &str| toks.windows(2).any(|p| p[0] == a && p[1] == b);
+    let runs = pair("bisect", "run")
+        || pair("submodule", "foreach")
+        || toks.iter().any(|t| {
+            matches!(
+                *t,
+                "difftool" | "mergetool" | "filter-branch" | "filter-repo"
+            )
+        })
+        || toks.contains(&"rebase") && toks.iter().any(|t| *t == "-x" || t.starts_with("--exec"));
+    if runs && toks.iter().any(|t| bare(t) || *t == "update") {
+        return Some(FETCH_PLAIN);
     }
     // Any `$` in a fetch or pull (a lone one too) hides a word the guard cannot read.
     if text.contains('$') {
@@ -5461,6 +5479,12 @@ mod tests {
             "git submodule foreach 'git pull'",
             "git -C x submodule foreach git remote update",
             "git-submodule foreach git fetch",
+            // Command-running subcommands with a fetch word anywhere, quoted too.
+            "git bisect run sh -c \"cd t2; git fetch\"",
+            "git submodule foreach 'cd ../t2 && git fetch'",
+            "git difftool --extcmd='cd t2 && git fetch'",
+            "git filter-branch --index-filter 'cd t2 && git fetch'",
+            "git rebase -x 'git pull' main",
             "git-push origin HEAD:main",
             "/usr/lib/git-core/git-update-ref refs/heads/main HEAD",
             "git-fetch --upload-pack='x #' .",
@@ -5525,6 +5549,9 @@ mod tests {
             "rm -f *.log",
             "git-fetch origin",
             "git log --grep fetch",
+            "git rebase -x 'cargo test' main",
+            "git remote -v",
+            "git -C t2 remote -v update",
             "git commit -m 'fix fetch and pull'",
             "git --work-tree=../t2 fetch",
             "bash -c 'echo $HOME'",

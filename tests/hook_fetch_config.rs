@@ -165,6 +165,7 @@ fn config_is_read_where_git_runs() {
         "pushd other && git fetch",
         "git -C other remote update",
         "cd other && git remote update origin",
+        "git -C other remote -v update",
     ] {
         assert!(hook(r.path(), cmd).is_some(), "{cmd}");
     }
