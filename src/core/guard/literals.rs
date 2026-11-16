@@ -68,8 +68,13 @@ fn literal_end(s: &str, q: char) -> Option<usize> {
     None
 }
 
+/// Punctuation around a word: `(sops,` is `sops`.
+const PUNCT: [char; 13] = [
+    '(', ')', '[', ']', '{', '}', ',', ';', ':', '\'', '"', '`', '.',
+];
+
 fn base(w: &str) -> String {
-    let w = w.trim_start_matches(['(', '[', '{']);
+    let w = w.trim_matches(PUNCT);
     let w = w.rsplit('/').next().unwrap_or(w);
     w.split('@').next().unwrap_or(w).to_lowercase()
 }
@@ -106,15 +111,8 @@ fn is_plain(lit: &str, words: &[String]) -> bool {
         return false;
     };
     let syntax = lit.contains([';', '&', '|', '$', '`', '<', '>', '\\', '{', '}', '=']);
-    // Code, not prose: brackets, dunders, a call (`run(`, `__import__(`), a quoted list item.
-    let b = lit.as_bytes();
-    let call = (1..b.len())
-        .any(|i| b[i] == b'(' && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_'));
-    let code = call
-        || lit.contains(['[', ']'])
-        || lit.contains("__")
-        || lit.contains("','")
-        || lit.contains("', '");
+    // Code, not prose: any quote, bracket or paren inside the literal, or a dunder.
+    let code = lit.contains(['\'', '"', '(', ')', '[', ']', '{', '}']) || lit.contains("__");
     if words.len() < 2 || syntax || code || MARKERS.iter().any(|m| lit.contains(m)) {
         return false;
     }
@@ -132,9 +130,10 @@ fn is_plain(lit: &str, words: &[String]) -> bool {
     }
     !words.iter().enumerate().any(|(i, w)| {
         let next = words.get(i + 1);
-        match base(w).trim_end_matches([')', ',', '.', ':', '!', '?']) {
-            // `sops FILE` is the decrypting editor: any word after a bare `sops` is a call.
-            "sops" => w.ends_with("sops") && next.is_some(),
+        match base(w).trim_end_matches(['!', '?']) {
+            // `sops FILE` is the decrypting editor: any word after `sops` is a call, unless
+            // the sentence ends there (`never sops.`).
+            "sops" => !w.ends_with(['.', '!', '?']) && next.is_some(),
             "age" | "rage" => next.is_some_and(|n| n.starts_with('-')),
             // Any `hoist secrets` with a subcommand: `exec -- CMD` runs CMD with the secrets.
             "hoist" => words[i + 1..]

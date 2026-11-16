@@ -5368,7 +5368,7 @@ mod tests {
         let py = |body: &str| format!("python3 - <<'EOF'\n{body}\nEOF");
         for body in [
             "s = \"CI decrypts with hoist, agents never do\"\nprint(s)",
-            "msg = 'decrypting secrets is refused for agents (age key)'\nprint(msg)",
+            "msg = 'decrypting secrets is refused for agents, age key or not'\nprint(msg)",
             "print(\"Secrets stay encrypted: only the owner edits them, never sops.\")",
             "x = {'why': 'agents never decrypt with age, nor sops.'}",
         ] {
@@ -5401,6 +5401,11 @@ mod tests {
             "import os\nos.system('grep -r AGE ~')",
             "import os\nos.system('cat ~/.config/sops/age/keys.txt')",
             // Code inside a literal (`exec("..")`) and any `hoist secrets` call are never prose.
+            "from subprocess import run as r\nexec('r ((\"sops\", \"-d\", \"s.yaml\"))')",
+            "from subprocess import run as r\nexec(\"r (('sops',  '-d',  's.yaml'))\")",
+            "from subprocess import run as r\nexec(\"r (('sops',\t'-d',\t's.yaml'))\")",
+            "import os\nos.system('fakeroot (sops) -d f')",
+            "msg = 'decrypting secrets is refused for agents (age key)'\nprint(msg)",
             "exec(\"print (__import__('subprocess').run(['sops','-d','s.yaml']))\")",
             "exec(\"import subprocess as s; s.run(['sops', '-d', 'f'])\")",
             "eval(\"print (run(['age', '-d', 'f']))\")",
@@ -5446,6 +5451,8 @@ mod tests {
             ),
             None
         );
+        let node = "node - <<'EOF'\nconst {execFileSync: x} = require('child_process'); eval('x (\"sops\", (\"-d s.yaml\").split (\" \"))')\nEOF";
+        assert!(bash(node, "feature").is_some());
     }
 
     fn own(issue: u64, session: &str, touch: &[&str]) -> Lease {
