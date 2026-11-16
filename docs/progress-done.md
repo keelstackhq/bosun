@@ -458,3 +458,9 @@ One line per landed task, oldest first. Agents never read this file; `docs/PROGR
 - 2026-11-15 · Pin 0.16.0 · .bosun/version and setup-script BOSUN_* version and sha512 (R-gov PR)
 - 2026-11-14 · audit fixes (tightening): guard, risk, hooks, init/migrate/doctor, docs, CI, cargo profiles
 - 2026-11-15 · Release 0.16.0 · version bump, CHANGELOG, tool pins splice 0.5.1 hoist 0.5.1 berth 0.2.1 · release PR
+- 2026-11-15 · Pin bosun 0.17.0 · .bosun/version and docs/setup-script.sh version and sha512 pins · PR #597
+- 2026-11-16 · release.yml hoist 0.2.0 -> 0.5.1 (prepare gets HOIST_RELEASE_TOKEN) · PR
+- 2026-11-16 · guard decrypt-lock: prose literals in interpreter heredocs are data (FP fix) · PR
+- 2026-11-16 · Close merge-lock ref gaps · symbolic-ref tags, brace refspecs, local fetch into main or from a variable, git subcommand in a variable · PR
+- 2026-11-16 · R-secrets gaps: unquoted yaml, php `=>` and Kubernetes env value literals now match, minus Laravel casts and rules, durations and paths; FP corpus (1.94M lines, outside this repo) 288 flags on main, 289 after (the one new flag is a real committed token) · PR
+- 2026-11-15 · Release 0.17.0 · version bump, CHANGELOG (audit hardening #589), tool pins unchanged (splice 0.5.1 hoist 0.5.1 berth 0.2.1) · release PR

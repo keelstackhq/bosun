@@ -1,1 +1,0 @@
-- guard: a prose string literal in the quoted heredoc of an interpreter (`python3 - <<'EOF'`) no longer trips the decrypt-lock; command-shaped literals are still judged
