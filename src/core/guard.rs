@@ -1602,6 +1602,8 @@ fn merge_rule(words: &[&str], segment: &str, target: &Target) -> Option<&'static
                 ex[..p].iter().all(assign)
                     && at > p + 1
                     && ex.get(p + 1).is_some_and(|s| RO_GIT.contains(&s.as_str()))
+                    // No hidden option (`--output=`, `grep -O`) can sit in the unread word.
+                    && !ex[at].contains(['-', '='])
             });
         let refuse = ex[..at].iter().any(|w| lead(&name(w)))
             || if ex[..at].iter().all(assign) {
@@ -3317,7 +3319,11 @@ fn ff_only(rest: &[&str], default_branch: &str) -> bool {
 }
 
 /// The value options of `git fetch`; a long one also by a prefix (`--dept 1`), as git takes it.
-const FETCH_VALUES: [&str; 14] = [
+const FETCH_VALUES: [&str; 18] = [
+    "-s",
+    "--strategy",
+    "-X",
+    "--strategy-option",
     "--depth",
     "--deepen",
     "--shallow-since",
@@ -3383,6 +3389,10 @@ fn fetch_trusted(rest: &[&str]) -> bool {
 
 /// A `remote.<r>.fetch` value that makes a later fetch move the default branch or write a tag.
 fn fetch_cfg_moves(v: &str, default_branch: &str) -> bool {
+    // Bash brace-expands an assigned value (`+feat:{x,main}`): fail closed.
+    if v.contains('{') {
+        return true;
+    }
     let v = v.replace(['\'', '"'], "");
     let dst = norm_ref(v.rsplit(':').next().unwrap_or(&v));
     fetch_moves(&[".", &v], default_branch)
@@ -3429,6 +3439,7 @@ fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
     keyed
         || (command.contains("GIT_CONFIG_PARAMETERS")
             && params.split_whitespace().any(|w| {
+                let w = w.trim_start_matches("GIT_CONFIG_PARAMETERS=");
                 let (k, v) = w.split_once('=').unwrap_or((w, ""));
                 retargets(&cfg_key(k), v)
             })
@@ -3441,37 +3452,52 @@ fn env_fetch_moves(command: &str, default_branch: &str) -> bool {
             }))
 }
 
-/// `git remote add|set-url origin|upstream <local path>` and `git remote rename <r> origin|upstream`:
-/// the trusted names must not point at a local repository.
+/// A remote URL on a network host: `scheme://..` (not `file://`) or scp-like `host:path` (no
+/// `/` before the `:`). Anything else (`evil2`, `../x`, `/tmp/x`) may be a local repository.
+fn network_url(v: &str) -> bool {
+    !local_word(v)
+        && !v.contains(['{', '`'])
+        && (v.contains("://")
+            || v.split_once(':')
+                .is_some_and(|(h, _)| !h.is_empty() && !h.contains('/')))
+}
+
+/// `git remote add|set-url origin|upstream <url>` with a URL that is not on a network host, and
+/// `git remote rename <r> origin|upstream`: the trusted names must not point at a local repository.
 fn remote_retargets(rest: &[&str]) -> bool {
-    let words: Vec<String> = rest
-        .iter()
-        .filter(|a| !a.starts_with('-'))
-        .map(|a| a.replace(['\'', '"'], ""))
-        .collect();
+    let mut words: Vec<String> = Vec::new();
+    let mut it = rest.iter().map(|a| a.replace(['\'', '"'], ""));
+    while let Some(a) = it.next() {
+        // `-t <branch>`, `--track <branch>`, `-m <master>`, `--master <master>` take a value.
+        if matches!(a.as_str(), "-t" | "--track" | "-m" | "--master") {
+            it.next();
+        } else if !a.starts_with('-') {
+            words.push(a);
+        }
+    }
     let trusted =
         |w: Option<&String>| w.is_some_and(|w| matches!(w.as_str(), "origin" | "upstream"));
     match words.first().map(String::as_str) {
         Some("add" | "set-url") => {
-            trusted(words.get(1)) && words[2..].iter().any(|w| local_word(w) || w.contains('$'))
+            trusted(words.get(1)) && words[2..].iter().any(|w| !network_url(w))
         }
         Some("rename") => trusted(words.last()) || words.iter().any(|w| w.contains('$')),
         _ => false,
     }
 }
 
-/// Config that points `origin` or `upstream` at a local repository (`remote.origin.url=/tmp/x`)
-/// or rewrites URLs to one (`url./tmp/x.insteadOf`): a trusted name would then fetch from it.
-/// `k` is a key as `cfg_key` gives it; an empty `v` is a value the guard cannot see.
+/// Config that points `origin` or `upstream` at a URL that is not on a network host
+/// (`remote.origin.url=evil2`) or rewrites URLs to one (`url./tmp/x.insteadOf`): a trusted name
+/// would then fetch from it. `k` is a key as `cfg_key` gives it; an empty `v` is a value the
+/// guard cannot see.
 fn retargets(k: &str, v: &str) -> bool {
     let v = v.replace(['\'', '"'], "");
     let base = k.strip_prefix("url.").and_then(|b| {
         b.strip_suffix(".insteadof")
             .or_else(|| b.strip_suffix(".pushinsteadof"))
     });
-    base.is_some_and(|b| local_word(b) || b.contains('$'))
-        || (matches!(k, "remote.origin.url" | "remote.upstream.url")
-            && (v.is_empty() || local_word(&v)))
+    base.is_some_and(|b| !network_url(b))
+        || (matches!(k, "remote.origin.url" | "remote.upstream.url") && !network_url(&v))
 }
 
 /// `git fetch <remote> <src>:<dst>` moves local refs like `update-ref`: refused for `--stdin`,
@@ -3840,7 +3866,8 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         .then_some("tag"),
         // `git fetch . HEAD:refs/tags/v1` makes a tag too; mirroring the remote's own tags
         // (`'refs/tags/*:refs/tags/*'`, as `--tags`) does not.
-        "fetch"
+        // `git pull <remote> <src>:<dst>` hands its refspecs to fetch.
+        "fetch" | "pull"
             if rest.iter().any(|a| {
                 let a = norm_ref(&a.replace(['\'', '"', '\\'], ""));
                 a.contains("refs/tags/")
@@ -3851,7 +3878,7 @@ fn git_rule(args: &[&str], target: &Target) -> Option<&'static str> {
         {
             Some("tag")
         }
-        "fetch" if fetch_moves(rest, default_branch) => Some(FETCH_MOVES),
+        "fetch" | "pull" if fetch_moves(rest, default_branch) => Some(FETCH_MOVES),
         "tag" => {
             let lists = rest.is_empty()
                 || rest
@@ -5078,6 +5105,26 @@ mod tests {
             "git config remote.origin.url ../evil",
             "git config url./tmp/evil.insteadOf https://github.com/ && git fetch origin +main:main",
             "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=/tmp/evil; git fetch origin +main:main",
+            // Review round 2: bare directories, option values, first params entry, braces, pull.
+            "git remote set-url origin evil2 && git fetch origin +main:main",
+            "git remote add upstream evil2",
+            "git config remote.origin.url evil2",
+            "git -c remote.origin.url=evil2 fetch origin +main:main",
+            "git config url.evil2/.insteadOf https://github.com/",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=evil2; git fetch origin +main:main",
+            "git remote add -t main upstream /tmp/evil",
+            "git remote add --track main upstream /tmp/evil",
+            "git remote add -m main upstream /tmp/evil",
+            "git remote add --master main upstream /tmp/evil",
+            "export GIT_CONFIG_PARAMETERS=\"'remote.origin.url=/tmp/x'\"; git fetch origin +main:main",
+            "export GIT_CONFIG_PARAMETERS=\"'remote.origin.url'='/tmp/x'\"; git fetch origin +main:main",
+            "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.fetch GIT_CONFIG_VALUE_0=+feat:{x,main}; git fetch",
+            "git pull evil2 +main:main",
+            "git pull ./ev:il +main:main",
+            "git pull /tmp/x +main:main",
+            "git pull . HEAD:refs/tags/v1",
+            "git diff {a..z}{a..z}--output=.git/refs/heads/main",
+            "git grep {a..z}{a..z}-O",
             "git push origin {1..100}",
             "git update-ref refs/heads/x {1..100}",
         ] {
@@ -5099,6 +5146,11 @@ mod tests {
             "git remote set-url origin https://example.invalid/x.git",
             "git remote add backup /tmp/backup",
             "git config remote.origin.url https://example.invalid/x.git",
+            "git remote set-url origin git@example.invalid:x/y.git",
+            "git remote add -t main upstream https://example.invalid/x.git",
+            "git pull origin main",
+            "git pull --rebase origin feature",
+            "git pull",
             "git show {1..100}",
             "git diff {1..100}",
             "git rev-parse {1..100}",
