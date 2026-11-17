@@ -140,7 +140,8 @@ fn apply(app: &App, id: u64) -> CmdResult {
     // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
     let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
     let cfg = base_config(gh, &c.issue_url)?;
-    if !matches!(permission.as_str(), "admin" | "write") {
+    let writer = matches!(permission.as_str(), "admin" | "write");
+    if !writer {
         let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
         // A refused author is no failure of the verdict workflow: nothing is written.
         let why = if !bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user)) {
@@ -152,6 +153,17 @@ fn apply(app: &App, id: u64) -> CmdResult {
             )
         } else {
             String::new()
+        };
+        let stale = || {
+            let n = Verdict::parse(text).ok()?;
+            let p = gh.get_pull(n.pr).ok()??;
+            (p.head_sha != n.head_sha)
+                .then(|| format!("a bot verdict for {}, not the head", n.head_sha))
+        };
+        let why = if why.is_empty() {
+            stale().unwrap_or_default()
+        } else {
+            why
         };
         if !why.is_empty() {
             eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
@@ -172,6 +184,13 @@ fn apply(app: &App, id: u64) -> CmdResult {
     // same head replaces this one. Another session's is a second verdict (two-verdict
     // approval), not a replacement; a comment without a session counts as "unknown".
     let session = comment_session(&c.body).unwrap_or("unknown");
+    // A bot names any session it likes: all its verdicts are one session, so it is one vote.
+    let bot_session = format!("bot:{}", c.user);
+    let recorded = if writer {
+        session
+    } else {
+        bot_session.as_str()
+    };
     let newer = gh.list_comments(verdict.pr)?.into_iter().any(|o| {
         o.id > c.id
             && comment_session(&o.body).unwrap_or("unknown") == session
@@ -186,7 +205,7 @@ fn apply(app: &App, id: u64) -> CmdResult {
         )));
     }
     require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-    let mut out = record(app, &pull, &verdict, session, comment_model(&c.body))?;
+    let mut out = record(app, &pull, &verdict, recorded, comment_model(&c.body))?;
     if verdict.verdict == "request-changes" && cfg.mode_effective().mode == ModeName::Autonomous {
         // The verdict is recorded: a failed write is reported, never an error.
         out.data["fix_task"] = match fix_task(gh, &verdict) {
@@ -229,7 +248,7 @@ fn fix_task(gh: &dyn Github, v: &Verdict) -> Result<u64, BosunError> {
         })
         .collect();
     let body = format!(
-        "The review of PR #{} at {} requests changes ({}). Fix these findings on the PR's branch:\n\n{}\n\n{marker}",
+        "The review of PR #{} at {} requests changes ({}). Fix these findings on the PR's branch:\n\n```text\n{}\n```\n\n{marker}",
         v.pr,
         flat(&v.head_sha, 64),
         v.summary(),
@@ -296,8 +315,12 @@ pub(crate) fn record(
         eff.reasons.push("escalated to the owner".into());
     }
     let state = if eff.approve { "success" } else { "failure" };
-    let description = if verdict.escalate_risk {
+    // Only an otherwise approving escalation reads "escalated to the owner; ": the owner can
+    // clear that one (risk-check); a failing one stays red.
+    let description = if verdict.escalate_risk && eff.reasons.len() == 1 {
         format!("{ESCALATED}; {}", verdict.summary())
+    } else if verdict.escalate_risk {
+        format!("{ESCALATED} (not approving): {}", verdict.summary())
     } else {
         verdict.summary()
     };

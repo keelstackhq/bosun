@@ -707,12 +707,25 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
     let carried = carry_status(gh, w, &pull, &linked);
     // An owner's approval of this exact head also clears an escalated verdict (spec §7).
-    let cleared = match &approved_by {
-        Some(who) if high && passed_on_head && is_owner_approval(who) => {
-            clear_escalation(gh, w, head, who)
+    // A low-risk head reads the owners' approval only when an escalation waits for it.
+    let owner_ok = |who: &String| passed_on_head && is_owner_approval(who);
+    let signer = need.signer_on;
+    let cleared = clear_escalation(gh, w, head, &|| match &approved_by {
+        Some(who) if high && owner_ok(who) => Ok(Some(who.clone())),
+        _ if high => Ok(None),
+        _ => {
+            let owners = owner_logins(gh, base)?;
+            approver(
+                gh,
+                &app.ctx.repo,
+                n,
+                head,
+                &owners,
+                signed_ok,
+                (None, signer),
+            )
         }
-        _ => None,
-    };
+    });
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
@@ -1053,26 +1066,34 @@ fn is_owner_approval(who: &str) -> bool {
     !who.starts_with("delegate ") && !who.contains(" (")
 }
 
-/// Turn an escalated `review-verdict` on `head` green after the owner approved that head. Only
-/// an escalation: a request for changes or a low confidence stays red. Never an error.
-fn clear_escalation(gh: &dyn Github, w: &GateWriter, head: &str, who: &str) -> Option<String> {
+/// Turn an escalated, otherwise approving `review-verdict` on `head` green once `owner` (asked
+/// only then) names an owner's own approval of that head. A request for changes, a low confidence
+/// or a blocker stays red. Never an error.
+fn clear_escalation(
+    gh: &dyn Github,
+    w: &GateWriter,
+    head: &str,
+    owner: &dyn Fn() -> Result<Option<String>>,
+) -> Option<String> {
     let top = crate::github::gate::gate_statuses(gh, head)
         .ok()?
         .into_iter()
         .find(is_verdict)?;
-    if !top.description.starts_with(ESCALATED) {
+    if !top.description.starts_with(&format!("{ESCALATED}; ")) {
         return None;
     }
+    let log = |e: BosunError| {
+        eprintln!(
+            "bosun: risk-check: cannot clear the escalation: {}",
+            e.message
+        )
+    };
+    let who = owner().map_err(log).ok()??;
     let description = format!("owner cleared escalation ({who})");
     w.post(head, VERDICT, "success", &description)
-        .map_err(|e| {
-            eprintln!(
-                "bosun: risk-check: cannot clear the escalation: {}",
-                e.message
-            )
-        })
+        .map_err(log)
         .ok()?;
-    Some(who.to_string())
+    Some(who)
 }
 
 /// Carries `review-verdict` of an older head onto exactly `pull.head_sha` (design §3 C7), checking

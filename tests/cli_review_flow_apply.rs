@@ -98,7 +98,15 @@ fn a_listed_bot_verdict_without_the_marker_or_for_another_head_does_not_count() 
     );
     let id = comment(&fake, &verdict("sha42", "approve", &[]), BOT);
     fake.pull_set(42, "head", json!({"sha": "sha43", "ref": "claude/x"}));
-    assert_eq!(apply(&fake, id).0, 3, "the head moved on");
+    let (code, v) = apply(&fake, id);
+    assert_eq!(code, 0, "a bot verdict for an old head is neutral: {v}");
+    assert!(
+        v["data"]["refused"]
+            .as_str()
+            .unwrap()
+            .contains("not the head"),
+        "{v}"
+    );
     assert!(fake.statuses_of("sha42").is_empty());
 }
 
@@ -159,4 +167,13 @@ fn no_fix_task_outside_autonomous_mode_or_on_approval() {
     let id = comment(&fake, &verdict("sha42", "approve", &[]), "octocat");
     let (_, v) = apply(&fake, id);
     assert!(v["data"].get("fix_task").is_none(), "{v}");
+}
+
+#[test]
+fn all_verdicts_of_one_bot_are_one_session() {
+    let fake = setup(BOTS);
+    let id = comment(&fake, &verdict("sha42", "approve", &[]), BOT);
+    assert_eq!(apply(&fake, id).0, 0);
+    let rec = fake.comments_of(42).last().unwrap().body.clone();
+    assert!(rec.contains(r#""session":"bot:claude[bot]""#), "{rec}");
 }
