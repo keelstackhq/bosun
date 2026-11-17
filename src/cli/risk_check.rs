@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
-use super::verdict::CONTEXT as VERDICT;
+use super::verdict::{CONTEXT as VERDICT, ESCALATED};
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -706,10 +706,20 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     w.post_full(head, CONTEXT, state, &description, &summary)?;
     // After the check is posted, and never an error: a doubt or a failed read is no carry.
     let carried = carry_status(gh, w, &pull, &linked);
+    // An owner's approval of this exact head also clears an escalated verdict (spec §7).
+    let cleared = match &approved_by {
+        Some(who) if high && passed_on_head && is_owner_approval(who) => {
+            clear_escalation(gh, w, head, who)
+        }
+        _ => None,
+    };
 
     let mut data = json!({"pr": n, "head_sha": head, "level": level, "matches": matches,
         "approved_by": approved_by, "out_of_touch": out_of_touch,
         "verdict_carried_from": carried, "approval_carried_from": carried_from});
+    if cleared.is_some() {
+        data["verdict_cleared_by"] = json!(cleared);
+    }
     if w.checks_skipped() {
         data["checks_skipped"] = json!(true);
     }
@@ -1036,6 +1046,33 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         }
     }
     Ok(found)
+}
+
+/// An owner's own approval (review, comment or owner key), not a delegate or bootstrap signature.
+fn is_owner_approval(who: &str) -> bool {
+    !who.starts_with("delegate ") && !who.contains(" (")
+}
+
+/// Turn an escalated `review-verdict` on `head` green after the owner approved that head. Only
+/// an escalation: a request for changes or a low confidence stays red. Never an error.
+fn clear_escalation(gh: &dyn Github, w: &GateWriter, head: &str, who: &str) -> Option<String> {
+    let top = crate::github::gate::gate_statuses(gh, head)
+        .ok()?
+        .into_iter()
+        .find(is_verdict)?;
+    if !top.description.starts_with(ESCALATED) {
+        return None;
+    }
+    let description = format!("owner cleared escalation ({who})");
+    w.post(head, VERDICT, "success", &description)
+        .map_err(|e| {
+            eprintln!(
+                "bosun: risk-check: cannot clear the escalation: {}",
+                e.message
+            )
+        })
+        .ok()?;
+    Some(who.to_string())
 }
 
 /// Carries `review-verdict` of an older head onto exactly `pull.head_sha` (design §3 C7), checking

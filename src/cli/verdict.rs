@@ -7,18 +7,23 @@ use std::path::Path;
 
 use serde_json::json;
 
+use super::review_ci::flat;
 use super::{ApplyArg, FromArg, VerdictCmd};
 use crate::app::{App, kill_switch, set_state};
+use crate::config::{CONFIG_FILE, Config};
+use crate::core::mode::ModeName;
 use crate::core::records::Record;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
     COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
     comment_model, comment_session, effective, valid_model,
 };
-use crate::github::{Github, Pull};
+use crate::github::{Github, IssuePatch, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub const CONTEXT: &str = "review-verdict";
+/// The description prefix of an escalated verdict; risk-check clears it on an owner approval.
+pub const ESCALATED: &str = "escalated to the owner";
 
 fn read_input(from: &str) -> Result<String, BosunError> {
     let mut text = String::new();
@@ -134,11 +139,26 @@ fn apply(app: &App, id: u64) -> CmdResult {
     }
     // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
     let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
+    let cfg = base_config(gh, &c.issue_url)?;
     if !matches!(permission.as_str(), "admin" | "write") {
-        return Err(refuse(format!(
-            "{} has {permission} access, not write",
-            c.user
-        )));
+        let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
+        // A refused author is no failure of the verdict workflow: nothing is written.
+        let why = if !bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user)) {
+            format!("{} has {permission} access, not write", c.user)
+        } else if comment_session(&c.body).is_none() {
+            format!(
+                "{} is a verdict bot, but the comment has no reviewer marker",
+                c.user
+            )
+        } else {
+            String::new()
+        };
+        if !why.is_empty() {
+            eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
+            return Ok(Outcome::data(
+                json!({"comment_id": id, "author": c.user, "refused": why, "status": null}),
+            ));
+        }
     }
     let mut verdict = Verdict::parse(text).map_err(|m| refuse(format!("invalid verdict: {m}")))?;
     if verdict.chunks_reviewed.is_empty() {
@@ -166,7 +186,71 @@ fn apply(app: &App, id: u64) -> CmdResult {
         )));
     }
     require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-    record(app, &pull, &verdict, session, comment_model(&c.body))
+    let mut out = record(app, &pull, &verdict, session, comment_model(&c.body))?;
+    if verdict.verdict == "request-changes" && cfg.mode_effective().mode == ModeName::Autonomous {
+        // The verdict is recorded: a failed write is reported, never an error.
+        out.data["fix_task"] = match fix_task(gh, &verdict) {
+            Ok(n) => json!(n),
+            Err(e) => json!({"error": e.message, "fix": "open the fix task by hand"}),
+        };
+    }
+    Ok(out)
+}
+
+/// `.bosun/bosun.toml` at the base of the PR a comment sits on; defaults when it is missing,
+/// unparsable, or the comment is on no PR (fail closed: no bots, no autonomous mode).
+fn base_config(gh: &dyn Github, issue_url: &str) -> Result<Config, BosunError> {
+    let fallback = || Config::parse("", CONFIG_FILE);
+    let pr = issue_url.rsplit('/').next().and_then(|n| n.parse().ok());
+    let Some(pull) = pr.map(|n| gh.get_pull(n)).transpose()?.flatten() else {
+        return fallback();
+    };
+    match gh.file_at(CONFIG_FILE, &pull.base_sha)? {
+        Some(t) => Config::parse(&t, CONFIG_FILE).or_else(|_| fallback()),
+        None => fallback(),
+    }
+}
+
+const FIX_LABEL: &str = "bosun:fix-task";
+
+/// Open, or update, the one fix task of the PR with the findings (autonomous mode, spec §7).
+fn fix_task(gh: &dyn Github, v: &Verdict) -> Result<u64, BosunError> {
+    let marker = format!("<!-- bosun:fix-task #{} -->", v.pr);
+    let findings: Vec<String> = (v.findings.iter())
+        .map(|f| {
+            let line = f.line.map_or("?".into(), |l| l.to_string());
+            format!(
+                "- [{}] {}:{line} {}\n  evidence: {}",
+                flat(&f.severity, 20),
+                flat(&f.file, 200),
+                flat(&f.claim, 300),
+                flat(&f.evidence, 300)
+            )
+        })
+        .collect();
+    let body = format!(
+        "The review of PR #{} at {} requests changes ({}). Fix these findings on the PR's branch:\n\n{}\n\n{marker}",
+        v.pr,
+        flat(&v.head_sha, 64),
+        v.summary(),
+        findings.join("\n")
+    );
+    gh.ensure_label(
+        FIX_LABEL,
+        "d93f0b",
+        "review findings to fix (bosun verdict apply)",
+    )?;
+    let open = gh.list_issues(&[FIX_LABEL], IssueState::Open)?;
+    if let Some(i) = open.iter().find(|i| i.body_text().contains(&marker)) {
+        let patch = IssuePatch {
+            body: Some(body),
+            ..Default::default()
+        };
+        gh.update_issue(i.number, patch)?;
+        return Ok(i.number);
+    }
+    let title = format!("fix: review findings on PR #{}", v.pr);
+    Ok(gh.create_issue(&title, &body, &[FIX_LABEL])?.number)
 }
 
 /// A review of a PR with several chunks must list every chunk (1-based, as in the pack).
@@ -213,7 +297,7 @@ pub(crate) fn record(
     }
     let state = if eff.approve { "success" } else { "failure" };
     let description = if verdict.escalate_risk {
-        format!("escalated to the owner; {}", verdict.summary())
+        format!("{ESCALATED}; {}", verdict.summary())
     } else {
         verdict.summary()
     };
