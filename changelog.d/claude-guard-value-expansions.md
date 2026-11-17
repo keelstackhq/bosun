@@ -1,1 +1,0 @@
-- Merge-lock: inside a quoted or option value of a git command (`rebase -x '..'`), brace expansion, `$( )`, backticks, `git-*` programs and globs that can name `git-*`, fetch, pull or update are refused.

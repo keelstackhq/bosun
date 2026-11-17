@@ -1,1 +1,0 @@
-- R-secrets: flag a PHP/Ruby arrow to a single-quoted literal that starts with `$` (`'password' => '$ecret1'`), which never interpolates; double-quoted `"$x"`, `"{$x}"` and Ruby `"#{x}"` stay skipped.

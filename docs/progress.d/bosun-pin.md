@@ -1,1 +1,0 @@
-- 2026-11-16 · Pin bosun 0.18.0, splice 0.6.0 · .bosun/version, setup scripts (own and channel) version and sha512 pins, splice.yml action v0.6.0 · pin PR

@@ -4,6 +4,13 @@ All notable changes to bosun. The format follows [Keep a Changelog](https://keep
 
 ## Unreleased
 
+## 0.19.0 (2026-11-17)
+
+- Merge-lock: refuse `remote.<r>.fetch` into the default branch or a tag set by `GIT_CONFIG_*` exported in an earlier segment or by `git config` (`--add`, `--replace-all`, `set`), and fetches into the default branch whose remote is a path with `:` (`./ev:il`) or any name but `origin`/`upstream` (`git fetch evil2 +main:main`); allow long brace sequences in read-only git subcommands (`git log -n {1..100}`).
+- Merge-lock: a fetch or pull now reads git config where it runs (`git config --get-regexp`, after `cd` and `-C`) and is refused when a configured `remote.<r>.fetch` moves the default branch, mirrors or writes tags from an untrusted remote, or when `protocol.*.allow`/`url.*.insteadOf` enables `ext::`/`fd::`; git-core programs (`git-fetch`, `/usr/lib/git-core/git-push`) are judged as git.
+- Merge-lock: inside a quoted or option value of a git command (`rebase -x '..'`), brace expansion, `$( )`, backticks, `git-*` programs and globs that can name `git-*`, fetch, pull or update are refused.
+- R-secrets: flag a PHP/Ruby arrow to a single-quoted literal that starts with `$` (`'password' => '$ecret1'`), which never interpolates; double-quoted `"$x"`, `"{$x}"` and Ruby `"#{x}"` stay skipped.
+
 ## 0.18.0 (2026-11-16)
 
 - ci: release workflow pins hoist 0.5.1 and passes HOIST_RELEASE_TOKEN to `hoist release prepare`
