@@ -4,8 +4,8 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::ResultArgs;
 use super::reap::{EpicScope, close_done_epics};
+use super::{BudgetRecordArgs, ResultArgs};
 use crate::app::{
     App, default_branch, end_lease, halt_reason, merge_counts, set_state, sync_merged,
     task_pr_merged, trusted_notes,
@@ -22,6 +22,12 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
     // No kill switch check: reporting a result is how a halted child hands back.
     let app = App::load(dir)?;
     let (gh, n, session) = (app.gh.as_ref(), args.epic, &app.ctx.session);
+    // Read before anything is posted: bad JSON must not leave a half-done result.
+    let spend_json = args
+        .session_json
+        .as_deref()
+        .map(super::budget::read_input)
+        .transpose()?;
     let Some(epic) = gh.get_issue(n)? else {
         return Err(BosunError::error(
             format!("epic #{n} does not exist"),
@@ -190,12 +196,51 @@ pub fn run(dir: Option<&Path>, args: &ResultArgs) -> CmdResult {
         None
     });
     data["parent"] = json!(parent);
+    // The spend so far goes on the epic by the existing budget path. The result is already
+    // posted, so a failure is reported, never fatal (a retry would post a second result).
+    let mut next_get_session = false;
+    match spend_json {
+        Some(v) => {
+            let a = BudgetRecordArgs {
+                issue: Some(n),
+                pr: Vec::new(),
+                usd: None,
+                session: Some(session.clone()),
+                at: None,
+                provider: "claude-sessions".into(),
+                from: None,
+                turns: None,
+                model: None,
+            };
+            data["budget"] = match super::budget::record_with(dir, &a, Some(v), true) {
+                Ok(o) => o.data,
+                Err(e) => {
+                    eprintln!("result: recording the spend failed: {e}");
+                    json!({"error": e.message, "fix": e.fix})
+                }
+            };
+        }
+        None => {
+            next_get_session = true;
+            data["budget"] = json!({
+                "recorded": false,
+                "record": format!("bosun budget record {n} --from -"),
+                "stdin": "the get_session result",
+            });
+        }
+    }
     let mut out = Outcome::data(data);
     if let Some(parent) = parent {
         let message = parent_message(session, n, &args.outcome, args.pr, &green);
         out = out.with_next(
             "send_message",
             json!({"session_id": parent, "message": message}),
+        );
+    }
+    if next_get_session {
+        out = out.with_next(
+            "mcp__claude-code-remote__get_session",
+            json!({"session_id": session}),
         );
     }
     Ok(out)

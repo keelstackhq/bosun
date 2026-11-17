@@ -77,7 +77,8 @@ progress = {days?: int, since?: str, merged?: int, held?: int, reverted?: int, s
 result = {epic: int, outcome: str, pr: int | null, comment_id: int, task_state: str,
     tasks_merged: [int], lease_ended: bool, left: bool, epic_closed: bool,
     epic_already_closed: bool, partial_skipped: str | null, state_skipped: str | null,
-    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null};
+    epic_error?: str, ready_to_merge: [{pr: int, head_sha: str}], parent: str | null,
+    budget: {recorded?: bool, record?: str, error?: str, fix?: str, ..}};
 main-triage = {good: str, bad: str, run: str, runs: int, candidates: int, first_bad: {pr: int,
     sha: str, subject: str} | null, note?: str};
 init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [str], risk: str,
