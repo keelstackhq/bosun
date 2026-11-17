@@ -44,6 +44,7 @@ pub fn run(cli: Cli) -> CmdResult {
         Command::CiLog(a) => cli::ci_log::run(dir, a),
         Command::Status => cli::status::run(dir),
         Command::Mode => cli::mode::run(dir),
+        Command::Rules(a) => cli::rules::run(dir, a.write),
         Command::Heal(a) => cli::heal::run(dir, a),
         Command::Digest(a) => cli::digest::run(dir, a),
         Command::Metrics(a) => cli::metrics::run(dir, a),

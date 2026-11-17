@@ -171,6 +171,22 @@ jobs:
           got="$("$dir/bin/bosun" --version)"
           echo "$got"
           test "$got" = "bosun ${v}"
+      # A PR that moves .bosun/version: main runs its gates with that release right after the
+      # merge, so the new release's ci-minutes gate must pass here too, or main turns red. Before
+      # any PR code runs (lint and test do), so nothing can fake it.
+      - if: steps.plan.outputs.work == 'true' && steps.plan.outputs.only == '' && github.event_name == 'pull_request'
+        name: ci-minutes with the release this PR pins
+        env:
+          BASE: ${{ steps.base.outputs.sha }}
+        run: |
+          v="$(git show HEAD:.bosun/version | tr -d '[:space:]')"
+          old="$(git show "$BASE:.bosun/version" 2>/dev/null | tr -d '[:space:]' || true)"
+          if [ "$v" = "$old" ] || [ "$v" = unreleased ]; then echo "pin unchanged"; exit 0; fi
+          printf '%s' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error::bad pin '$v'"; exit 1; }
+          npm install -g --ignore-scripts "@keelstackhq/bosun@${v}"
+          dir="$(cd "$(npm root -g)/@keelstackhq/bosun" && node -p "require('path').dirname(require.resolve('@keelstackhq/bosun-linux-x64/package.json'))")"
+          test "$("$dir/bin/bosun" --version)" = "bosun ${v}"
+          "$dir/bin/bosun" gate ci-minutes --all
       # Before anything runs rustc or cargo (rust-cache included).
       - if: steps.plan.outputs.work == 'true'
         name: the base's config for the gates
