@@ -92,6 +92,19 @@ admins/customize). GitHub goes through the Claude GitHub App and the proxy, so n
   is skipped, with the join command as its fix, when there is none (a warning if the registry
   cannot be read); step `github-token` warns when a cloud session
   holds a PAT (`ghp_` or `github_pat_` token; the value is never printed). Warnings keep exit 0.
+- Notify fallback (C7): a scheduled task (Routine) may not attach connectors, so the notify Routine
+  cannot reach Slack. Then a live session that has the Slack connector runs the notify prompt
+  itself (`bosun notify --channel-info -`, post each `slack_post`, `bosun notify --ack KEY` after
+  the post). `bosun doctor` says so in step 11 (`fix`, with `[slack]`) and in `data.routines`
+  (`fallback` on `notify`). Nothing else changes: the keys, the 15-minute rule for thread results
+  and the single ack hold for any session that posts.
+- Merge identity (C10): a push or merge made with `GITHUB_TOKEN` starts no workflows (GitHub
+  does this to stop loops), so required checks never run on it. Auto-merge from a cloud or Claude
+  in Slack session therefore needs a merge token or a GitHub App identity, and that identity must
+  not be a bypass actor of the ruleset (a bypass actor merges past the required checks, so the
+  gates mean nothing). `bosun doctor` step `merge-identity` (18) warns in every cloud session until
+  the owner sets `BOSUN_MERGE_IDENTITY_OK=1` after checking both; bosun cannot read the identity or
+  the bypass list from a session. Warnings keep exit 0.
 - Gaps (not in the docs, not checkable from a session): whether Claude Tag sets
   `CLAUDE_CODE_CHILD_SESSION`; the `send_message` `to`/`thread_ts` routing (seen only in the
   session tool schema); the requester's Slack user ID and the channel facts (shared, guests),

@@ -871,3 +871,63 @@ fn claude_tag_ignores_forged_and_expired_seats_and_shows_read_errors() {
         "{it}"
     );
 }
+
+#[test]
+fn the_notify_routine_has_a_live_session_fallback() {
+    let (tmp, fake) = full_repo("[[owner]]\ngithub = \"adam\"\nslack = \"U1\"\n");
+    let (_, v) = doctor(&fake, tmp.path(), false);
+    let step11 = v["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["step"] == 11)
+        .unwrap();
+    let fix = step11["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("cannot attach connectors") && fix.contains("Slack connector"),
+        "{fix}"
+    );
+    let notify = v["data"]["routines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "notify")
+        .unwrap();
+    assert!(
+        notify["fallback"]
+            .as_str()
+            .unwrap()
+            .contains("live session"),
+        "{notify}"
+    );
+}
+
+#[test]
+fn a_cloud_session_is_warned_about_the_merge_identity() {
+    let cloud = [("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default")];
+    let (code, v, all) = tag_doctor(&cloud, false, None);
+    let it = item_named(&v, "merge-identity").unwrap();
+    assert_eq!(it["status"], "warn", "{it}");
+    let d = it["detail"].as_str().unwrap();
+    assert!(
+        d.contains("GITHUB_TOKEN") && d.contains("no workflows"),
+        "{d}"
+    );
+    let fix = it["fix"].as_str().unwrap();
+    assert!(
+        fix.contains("bypass actor") && fix.contains("BOSUN_MERGE_IDENTITY_OK=1"),
+        "{fix}"
+    );
+    assert!(!all.contains("ghp_"), "token leaked");
+    let (code0, _, _) = tag_doctor(&[], false, None);
+    assert_eq!(code, code0, "warn must not change the exit code");
+
+    let ok = [
+        ("CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE", "cloud_default"),
+        ("BOSUN_MERGE_IDENTITY_OK", "1"),
+    ];
+    let (_, v, _) = tag_doctor(&ok, false, None);
+    assert!(item_named(&v, "merge-identity").is_none_or(|i| i["status"] == "ok"));
+    let (_, v, _) = tag_doctor(&[], false, None);
+    assert!(item_named(&v, "merge-identity").is_none(), "local session");
+}

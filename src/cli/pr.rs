@@ -663,7 +663,8 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
             Ok(r) => Some(r),
             // Already mergeable: bosun never merges (D13), the task stays in review.
             Err(e) if is_already_clean(&e) => {
-                return Err(after_ready(BosunError::needs_human(
+                let sha = pull.head_sha.clone();
+                let err = BosunError::needs_human(
                     format!(
                         "PR #{} is already mergeable with every required check green, so GitHub cannot turn on auto-merge",
                         pull.number
@@ -675,7 +676,9 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 )
                 .with_data(json!({
                     "pr": pull.number, "head_sha": pull.head_sha, "already_clean": true,
-                })), marked_ready, pull.number, n));
+                }));
+                let err = super::result::clean_handoff(&app, err, pull.number, &sha);
+                return Err(after_ready(err, marked_ready, pull.number, n));
             }
             Err(e) if is_unstable(&e) => {
                 return Err(after_ready(BosunError::error(

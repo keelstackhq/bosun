@@ -1,0 +1,1 @@
+- 2026-11-17 · Feat · agent ergonomics: clean-PR hand-over, metrics limits, global --full, doctor notify fallback and merge identity · feat/agent-ergonomics

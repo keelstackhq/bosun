@@ -47,6 +47,9 @@ fn join_note(detail: String, note: &Option<String>) -> String {
     }
 }
 
+/// Scheduled tasks may not attach connectors, so the notify Routine cannot reach Slack (C7).
+const NOTIFY_FALLBACK: &str = "if scheduled tasks cannot attach connectors (the Routine has no Slack connector), a live session that has the Slack connector runs the notify prompt instead (`bosun notify --channel-info -`, post each `slack_post`, then `--ack`); the thread session already does this with `--thread`";
+
 const JANITOR: &str = "Run `bosun reap` (it ends expired leases and members and moves merged tasks to merged) and report its data.reaped, data.left and data.merged. Run `bosun budget check`: make only the interrupt_session calls in its `next`, with the claude-code-remote tools (one per live session at 100 % of the daily budget), and report data.level.";
 
 /// The Routine prompts the owner creates by hand (step 11). Without a `[slack]` table there is no
@@ -62,6 +65,12 @@ pub(crate) fn routines(slack: bool, janitor: Option<&crate::config::Routines>) -
     ]);
     if !slack && let Some(a) = all.as_array_mut() {
         a.retain(|r| r["name"] != "notify");
+    }
+    if let Some(n) = all
+        .as_array_mut()
+        .and_then(|a| a.iter_mut().find(|r| r["name"] == "notify"))
+    {
+        n["fallback"] = json!(NOTIFY_FALLBACK);
     }
     if let Some(r) = janitor.filter(|r| r.janitor)
         && let Some(a) = all.as_array_mut()
@@ -1336,13 +1345,19 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
     let routines_ok = std::env::var("BOSUN_ROUTINES_OK").is_ok_and(|v| v.trim() == "1");
     let routines_fix = match (ctx.config.routines.janitor, slack_set) {
         (true, true) => {
-            "create the janitor, curator and notify Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1"
+            concat!(
+                "create the janitor, curator and notify Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1; ",
+                "if scheduled tasks cannot attach connectors, a live session with the Slack connector runs notify (data.routines notify fallback)"
+            )
         }
         (true, false) => {
             "create the janitor and curator Routines from data.routines (confirm the janitor with the user first), then set BOSUN_ROUTINES_OK=1"
         }
         (false, true) => {
-            "create the curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1"
+            concat!(
+                "create the curator and notify Routines from data.routines, then set BOSUN_ROUTINES_OK=1; ",
+                "if scheduled tasks cannot attach connectors, a live session with the Slack connector runs notify (data.routines notify fallback)"
+            )
         }
         (false, false) => {
             "create the curator Routine from data.routines, then set BOSUN_ROUTINES_OK=1"
@@ -1529,6 +1544,25 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
                 it
             }
         });
+    }
+
+    // A merge or push by `GITHUB_TOKEN` starts no workflows, and a merge identity that bypasses
+    // the ruleset skips the gates (C10). The owner confirms the identity once.
+    if cloud {
+        let confirmed = std::env::var("BOSUN_MERGE_IDENTITY_OK").is_ok_and(|v| v.trim() == "1");
+        let mut it = item(
+            18,
+            "merge-identity",
+            (!confirmed).then(|| {
+                "pushes and merges made with GITHUB_TOKEN start no workflows, so checks never run on them; auto-merge from a cloud or Claude in Slack session needs a merge token or GitHub App identity".into()
+            }),
+            "BOSUN_MERGE_IDENTITY_OK=1: the owner confirmed the merge identity".into(),
+            "use a GitHub App installation token or a dedicated machine user for auto-merge that is not a bypass actor of the ruleset (a bypass actor merges past the required checks), then set BOSUN_MERGE_IDENTITY_OK=1; verify: workflows run on a PR after it merges",
+        );
+        if !confirmed {
+            it["status"] = json!("warn");
+        }
+        items.push(it);
     }
 
     let hoist_data = remote.then(|| apply_hoist(&mut items, root, release_set, release_step));

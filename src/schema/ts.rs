@@ -55,7 +55,7 @@ declare namespace bosun {
   interface Next { tool: string; args: unknown }
   type Envelope<C extends string, D> = { version: 1; command: C; next: Next[] } & (
     | { ok: true; exit_code: 0; data: D; error: null }
-    | { ok: false; exit_code: 1 | 2 | 3 | 4 | 5 | 6; data: Record<string, unknown>; error: BosunError; next: [] }
+    | { ok: false; exit_code: 1 | 2 | 3 | 4 | 5 | 6; data: Record<string, unknown>; error: BosunError }
   );
 "#;
 

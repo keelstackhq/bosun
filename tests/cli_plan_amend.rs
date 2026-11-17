@@ -861,3 +861,34 @@ fn amend_reopens_an_epic_closed_as_completed_that_never_got_the_merged_label() {
     assert_eq!(code, 0, "{v}");
     assert_reopened(&fake, &v, epic);
 }
+
+#[test]
+fn the_global_full_flag_works_before_and_after_the_command() {
+    let fake = FakeGithub::start();
+    let tmp = tempfile::tempdir().unwrap();
+    let file = write_plan(tmp.path(), PLAN);
+    let (code, _) = plan(&fake, tmp.path(), &["amend", &file]);
+    assert_eq!(code, 0);
+    let amend = |args: &[&str]| {
+        let mut a = vec!["-C", tmp.path().to_str().unwrap()];
+        a.extend_from_slice(args);
+        common::run(&fake, "session_test", T0, &a)
+    };
+    let (code, v) = amend(&["plan", "amend", &file]);
+    assert_eq!(
+        (code, &v["data"]["summary"]),
+        (0, &Value::Bool(true)),
+        "{v}"
+    );
+    for args in [
+        vec!["--full", "plan", "amend", &file],
+        vec!["plan", "amend", &file, "--full"],
+    ] {
+        let (code, v) = amend(&args);
+        assert_eq!(code, 0, "{v}");
+        assert!(v["data"].get("summary").is_none(), "{args:?}: {v}");
+        assert_eq!(v["data"]["tasks"].as_array().unwrap().len(), 5, "{v}");
+    }
+    let (_, v) = amend(&["--full", "metrics"]);
+    assert_eq!(v["ok"], true, "a no-op elsewhere: {v}");
+}

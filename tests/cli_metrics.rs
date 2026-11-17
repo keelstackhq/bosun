@@ -335,7 +335,7 @@ fn cost_lead_time_touches_and_blocks() {
     fake.comment_at(20, "boss", "thanks", "2026-11-04T01:00:00Z");
     fake.comment_at(21, "octocat", "/bosun approve 21 x", "2026-11-04T01:00:00Z");
     fake.comment_at(21, "boss", "/bosun approve 21 x", "2026-09-01T00:00:00Z");
-    let d = metrics(&fake, &[]);
+    let d = metrics(&fake, &["--days", "30"]);
     assert_eq!(d["merged"], 4);
     assert_eq!(d["cost_per_merged_usd"], 1.5);
     assert_eq!(d["epics"], 2);
@@ -438,4 +438,82 @@ fn only_owner_key_signatures_in_the_plain_forms_are_touches() {
         "2026-11-10T00:00:00Z",
     );
     assert_eq!(metrics(&fake, &[])["owner_touches"], 2);
+}
+
+fn metrics_raw(fake: &FakeGithub, env: &[(&str, &str)], args: &[&str]) -> (i32, Value, String) {
+    let mut cmd = bosun();
+    cmd.env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_NOW", NOW)
+        .env("BOSUN_SESSION", "session_a")
+        .arg("metrics")
+        .args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    (out.status.code().unwrap(), one_object(&out.stdout), err)
+}
+
+fn three_prs(fake: &FakeGithub) {
+    for n in 1..=3 {
+        pr(fake, n, "", &[]);
+        merged(fake, n, "2026-11-11T10:00:00Z");
+    }
+}
+
+#[test]
+fn the_window_defaults_to_seven_days() {
+    let fake = FakeGithub::start();
+    let d = metrics(&fake, &[]);
+    assert_eq!(d["days"], 7, "{d}");
+    assert_eq!(d["since"], "2026-11-05T12:00:00Z");
+    assert!(d.get("capped").is_none(), "{d}");
+}
+
+#[test]
+fn a_per_pr_cap_is_reported_and_progress_goes_to_stderr() {
+    let fake = FakeGithub::start();
+    three_prs(&fake);
+    let (code, v, err) = metrics_raw(&fake, &[], &["--max-prs", "2"]);
+    assert_eq!(code, 0, "{v}");
+    let c = &v["data"]["capped"];
+    assert_eq!(
+        (c["max_prs"].as_u64(), c["skipped"].as_u64()),
+        (Some(2), Some(1)),
+        "{v}"
+    );
+    assert!(err.contains("metrics: PR 1/2"), "{err}");
+    assert!(err.contains("metrics: PR 2/2"), "{err}");
+    assert!(!err.contains("3/"), "{err}");
+    let (_, v, err) = metrics_raw(&fake, &[], &[]);
+    assert!(v["data"].get("capped").is_none(), "{v}");
+    assert!(err.contains("metrics: PR 3/3"), "{err}");
+}
+
+#[test]
+fn a_zero_cap_is_usage() {
+    let fake = FakeGithub::start();
+    let (code, v, _) = metrics_raw(&fake, &[], &["--max-prs", "0"]);
+    assert_eq!(code, 2, "{v}");
+}
+
+#[test]
+fn a_slow_run_ends_with_an_error_line_not_a_hang() {
+    let fake = FakeGithub::start();
+    three_prs(&fake);
+    let (code, v, err) = metrics_raw(&fake, &[("BOSUN_METRICS_TIMEOUT_SECS", "0.000001")], &[]);
+    assert_eq!(code, 1, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("timed out") && msg.contains("of 3 PRs"),
+        "{msg}"
+    );
+    assert!(
+        v["error"]["fix"].as_str().unwrap().contains("--days 1"),
+        "{v}"
+    );
+    assert!(err.contains("metrics timed out"), "{err}");
+    let (code, _, _) = metrics_raw(&fake, &[("BOSUN_METRICS_TIMEOUT_SECS", "0")], &[]);
+    assert_eq!(code, 0, "0 means no limit");
 }

@@ -1,0 +1,1 @@
+- `bosun pr --auto-merge` on an already clean PR hands it to the parent as `ready_to_merge` (`next`); `bosun metrics` defaults to 7 days with `--max-prs`, stderr progress and a timeout; global `--full`; `bosun doctor` notes the notify fallback and the merge identity (step 18).
