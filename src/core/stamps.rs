@@ -39,9 +39,42 @@ pub fn gate_loop(gates: &[String]) -> String {
     )
 }
 
+/// A path whose change needs no gate run (spec §7), as CI's docs-only fast path: a `*.md`
+/// under `docs/`, `plans/` or `changelog.d/`, or at the root except `README.md` (doctests).
+/// Push stamps carry over a diff of only such paths.
+pub fn docs_only(path: &str) -> bool {
+    let under = ["docs/", "plans/", "changelog.d/"]
+        .iter()
+        .any(|d| path.starts_with(d));
+    path.ends_with(".md") && path != "README.md" && (under || !path.contains('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn docs_only_paths() {
+        for p in [
+            "docs/a/b.md",
+            "CHANGELOG.md",
+            "plans/p.md",
+            "changelog.d/f.md",
+        ] {
+            assert!(docs_only(p), "{p}");
+        }
+        for p in [
+            "docs/a.rs",
+            "README.md",
+            "src/x.md",
+            "notes.txt",
+            "Cargo.toml",
+            "x.md.rs",
+            "mydocs/a.md",
+        ] {
+            assert!(!docs_only(p), "{p}");
+        }
+    }
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

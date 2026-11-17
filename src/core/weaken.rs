@@ -837,6 +837,12 @@ pub fn allowed_findings(
 /// Findings from a diff: CI steps (`added` is every command the PR adds), coverage floors, lint
 /// switches and Rust threshold constants.
 pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> {
+    code_findings(path, patch, added, false)
+}
+
+/// `patch_findings`; `test_code`: the file is test code (`cargo_test_file`, `test_modules`),
+/// where a lone `dead_code` allow (unused shared helpers) is no weakening.
+pub fn code_findings(path: &str, patch: &str, added: &[String], test_code: bool) -> Vec<String> {
     let lower = path.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or_default();
     let ext = |es: &[&str]| es.iter().any(|e| lower.ends_with(e));
@@ -877,6 +883,7 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
             let t = l.trim();
             (t.starts_with("#[") || t.starts_with("#!["))
                 && (t.contains("allow(") || t.contains("expect("))
+                && !(test_code && dead_code_allow(l))
         };
         out.extend(grows(path, "lint allow/expect", &del, &ins, allow));
         let strict =
@@ -948,9 +955,82 @@ pub fn patch_findings(path: &str, patch: &str, added: &[String]) -> Vec<String> 
     out
 }
 
+/// A Cargo integration test file: under a `tests` directory with no `src` directory above it.
+pub fn cargo_test_file(path: &str) -> bool {
+    let dirs: Vec<&str> = path.split('/').collect();
+    let dirs = &dirs[..dirs.len() - 1];
+    (dirs.iter().position(|d| *d == "tests")).is_some_and(|i| !dirs[..i].contains(&"src"))
+}
+
+/// `#![allow(dead_code)]` or `#[allow(dead_code)]` alone (whitespace aside).
+pub fn dead_code_allow(line: &str) -> bool {
+    let t: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+    t == "#![allow(dead_code)]" || t == "#[allow(dead_code)]"
+}
+
+/// The files the Rust file `file` (text `text`) pulls in as test modules: a `mod x;` whose
+/// attributes, right above it, include `#[cfg(test)]` and `#[path = ".."]` (a plain string),
+/// resolved against the file's directory. Comments and literals are masked first, so lines in
+/// a string declare nothing. A path that leaves the repo is skipped.
+pub fn test_modules(file: &str, text: &str) -> Vec<String> {
+    let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+    let (masked, lits) = mask_literals(text);
+    let (mut test, mut path, mut out) = (false, None, Vec::new());
+    for line in masked.lines() {
+        let t: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+        let lit = (t
+            .strip_prefix("#[path=\0")
+            .and_then(|r| r.strip_suffix("\0]")))
+        .and_then(|n| lits.get(n.parse::<usize>().ok()?));
+        if t == "#[cfg(test)]" {
+            test = true;
+        } else if let Some(l) = lit {
+            path = (l.strip_prefix('"').and_then(|l| l.strip_suffix('"')))
+                .filter(|p| !p.contains('\\'))
+                .map(String::from);
+        } else if !t.starts_with("#[") && !t.is_empty() {
+            let item = line
+                .trim()
+                .trim_start_matches("pub(crate)")
+                .trim_start_matches("pub");
+            let is_mod = item.trim_start().starts_with("mod ") && t.ends_with(';');
+            if let (true, true, Some(p)) = (is_mod, test, path.take()) {
+                let mut parts: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
+                let ok = p.split('/').all(|s| match s {
+                    "" | "." => true,
+                    ".." => parts.pop().is_some(),
+                    s => {
+                        parts.push(s);
+                        true
+                    }
+                });
+                if ok {
+                    out.push(parts.join("/"));
+                }
+            }
+            (test, path) = (false, None);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_code_paths_and_modules() {
+        assert!(cargo_test_file("tests/common/mod.rs") && cargo_test_file("crates/a/tests/x.rs"));
+        assert!(!cargo_test_file("src/tests/x.rs") && !cargo_test_file("tests.rs"));
+        assert!(
+            dead_code_allow("  #! [allow( dead_code )]") && !dead_code_allow("#[allow(unused)]")
+        );
+        let text = "#[cfg(test)]\n/// doc\n#[path = \"../t/a_tests.rs\"]\npub(crate) mod tests;\n\
+                    #[path = \"b.rs\"]\nmod b;\n#[cfg(test)]\nfn x() {}\n#[path = \"c.rs\"]\nmod c;\n\
+                    #[cfg(test)]\n#[path = \"../../../x.rs\"]\nmod d;\n\
+                    const S: &str = r#\"\n#[cfg(test)]\n#[path = \"e.rs\"]\nmod e;\n\"#;\n";
+        assert_eq!(test_modules("src/core/a.rs", text), ["src/t/a_tests.rs"]);
+    }
 
     fn t(path: &str, base: &str, head: &str) -> Vec<String> {
         text_findings(path, Some(base), Some(head))

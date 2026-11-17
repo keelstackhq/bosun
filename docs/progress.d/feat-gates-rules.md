@@ -1,0 +1,1 @@
+- 2026-11-17 · G3 docs-only stamp carry-over, G6 R-weaken test-code dead_code exemption, ASCII arrow, risk-check --local · src/cli/stamps.rs, src/core/weaken.rs, src/cli/risk_local.rs, docs/spec/07-gates.md, docs/spec/08-risk.md · gated PR
