@@ -1,1 +1,0 @@
-- 2026-11-16 · Release 0.18.0 · version bump, fold, CHANGELOG (hoist 0.5.1 in release.yml #598, guard heredoc prose #599, R-secrets gaps #600, guard ref gaps #601) · release PR

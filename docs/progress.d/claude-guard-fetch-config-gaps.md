@@ -1,1 +1,0 @@
-- 2026-11-16 · Close fetch-config and remote gaps in the merge-lock · exported and `git config` fetch refspecs, path remotes with `:`, unknown remotes, read-only brace sequences · PR
