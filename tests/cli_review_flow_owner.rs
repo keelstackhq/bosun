@@ -118,3 +118,17 @@ fn an_owner_approval_clears_an_escalation_on_a_normal_risk_head() {
     );
     assert_eq!(v["data"]["verdict_cleared_by"], "ada");
 }
+
+#[test]
+fn an_old_release_escalated_request_for_changes_is_not_cleared() {
+    let fake = high_pr();
+    let old = "escalated to the owner; request-changes 0.40 (approves at 0.85), 2 blocker, 0 major";
+    fake.status(HEAD, "review-verdict", "failure", old);
+    fake.review(1, "ada", "APPROVED", HEAD);
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        last(&fake, HEAD, "review-verdict").unwrap()["state"],
+        "failure"
+    );
+}

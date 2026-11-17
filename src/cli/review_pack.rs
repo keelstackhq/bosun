@@ -80,7 +80,10 @@ pub fn run(dir: Option<&Path>, args: &PrArg) -> CmdResult {
             .map(|(c, s)| json!({"context": c, "state": s}))
             .collect()
     });
-    pack["gate_stamps"] = gate_stamps(&app.ctx.dir, &head)?;
+    pack["gate_stamps"] = gate_stamps(&app.ctx.dir, &head).unwrap_or_else(|e| {
+        eprintln!("bosun: review-pack: gate stamps: {}", e.message);
+        Value::Null
+    });
     // Size is a drift signal only (D-016): a note for the reviewer, never an error.
     if let Some(d) = pack["drift"].as_object() {
         let (planned, actual) = (d["planned"].as_u64(), d["actual"].as_u64());

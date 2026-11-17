@@ -1079,7 +1079,15 @@ fn clear_escalation(
         .ok()?
         .into_iter()
         .find(is_verdict)?;
-    if !top.description.starts_with(&format!("{ESCALATED}; ")) {
+    // Older releases wrote this prefix for every escalation: the summary must approve too.
+    let rest = top.description.strip_prefix(&format!("{ESCALATED}; "))?;
+    let conf: f64 = rest
+        .strip_prefix("approve ")?
+        .split(' ')
+        .next()?
+        .parse()
+        .ok()?;
+    if conf < crate::core::verdict::APPROVE_MIN || !rest.contains(", 0 blocker,") {
         return None;
     }
     let log = |e: BosunError| {
