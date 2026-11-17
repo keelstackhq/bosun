@@ -260,6 +260,10 @@ pub struct Approvals {
     /// the owner's (R-weaken).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autonomous_allow: Option<Vec<String>>,
+    /// Globs a task-less PR (`bosun pr --pr N`, `--one-off`) may change beside the governance
+    /// paths, gated ones included: risk-check still asks the owner for those. Read at the base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oneoff_allow: Option<Vec<String>>,
     /// `policy` came from the `[mode]` preset, not from this table.
     #[serde(skip)]
     pub policy_preset: bool,

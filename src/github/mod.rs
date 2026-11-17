@@ -280,6 +280,16 @@ pub struct RepoInfo {
     /// Present with an authenticated token: what the token may do.
     #[serde(default)]
     pub permissions: Option<Value>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub owner: Option<Login>,
+}
+
+/// A GitHub account as the API nests it (`{"login": ...}`).
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Login {
+    pub login: String,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]

@@ -2,7 +2,8 @@
 //! governance PR such as the one `bosun migrate` opens). The gates are the task path's: the local
 //! HEAD is the PR head, every ready gate is stamped, the ruleset requires the gates. No task state
 //! moves and no queue comment is written. `risk-check` stays a required check, so auto-merge waits
-//! for the owner on R-gov and R-weaken paths. bosun never merges (D13).
+//! for the owner on R-gov and R-weaken paths. bosun never merges (D13). The paths it may change
+//! are R-gov's (`GOVERNANCE_PATHS`) plus the base's `[approvals] oneoff_allow`.
 
 use std::path::Path;
 
@@ -12,17 +13,10 @@ use super::pr::{check_local_gates, enforced_checks, merge_gates, not_green, upda
 use crate::app::{App, default_branch, is_writer, kill_switch};
 use crate::core::glob::Glob;
 use crate::core::meta::linked_issues_in;
+use crate::core::risk::{GOVERNANCE_PATHS, matches_globs};
+use crate::core::touch::plan_tick_file;
 use crate::github::{Pull, enable_auto_merge_any, is_already_clean, is_ccr_refusal, is_unstable};
 use crate::output::{BosunError, CmdResult, Outcome};
-
-/// The paths a task-less PR may change: the governance files bosun migrate and splice write.
-const GOVERNANCE_PATHS: [&str; 5] = [
-    ".bosun/**",
-    ".claude/**",
-    "governance/**",
-    ".splice/**",
-    "docs/setup-script.sh",
-];
 
 fn pr_json(p: &Pull) -> serde_json::Value {
     json!({"number": p.number, "head_sha": p.head_sha, "draft": p.draft})
@@ -88,18 +82,24 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
             pull.user
         )));
     }
-    let globs: Vec<Glob> = GOVERNANCE_PATHS
-        .iter()
+    // The governance paths (R-gov's own list) plus the owner's `[approvals] oneoff_allow` on the
+    // base; risk-check still asks the owner for any gated one.
+    let mut globs: Vec<Glob> = (GOVERNANCE_PATHS.iter())
         .map(|g| Glob::parse(g).expect("static glob"))
         .collect();
-    let outside = |f: &str| !globs.iter().any(|g| g.matches(f));
+    globs.extend(super::risk_check::oneoff_allow(gh, &base)?);
+    let outside = |f: &str| !matches_globs(&globs, f);
     for f in gh.pull_files(n)? {
         let moved = f.previous_filename.as_deref();
+        // risk-check skips a tick-only plan file, so here it would merge with no owner.
+        let p = f.patch.as_deref();
+        if plan_tick_file(&f.filename, &f.status, moved, p) {
+            return Err(not_governance(format!("{} only ticks a plan", f.filename)));
+        }
         if outside(&f.filename) || moved.is_some_and(&outside) {
             return Err(not_governance(format!(
-                "it changes {}, outside {}",
-                f.filename,
-                GOVERNANCE_PATHS.join(", ")
+                "it changes {}, outside the governance paths (R-gov) and `[approvals] oneoff_allow`",
+                f.filename
             )));
         }
     }

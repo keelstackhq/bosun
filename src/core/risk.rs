@@ -823,6 +823,38 @@ pub fn requirement(matches: &[Match]) -> Approval {
     }
 }
 
+/// The governance paths: R-gov of the built-in rules (a test keeps `risk_default.toml` equal) and
+/// what a task-less PR (`bosun pr --pr N`) may change, so the two never disagree.
+pub const GOVERNANCE_PATHS: [&str; 22] = [
+    ".bosun/**",
+    "governance/**",
+    "CODEOWNERS",
+    "docs/CODEOWNERS",
+    ".github/CODEOWNERS",
+    "**/codeowners",
+    ".claude/**",
+    ".splice/**",
+    "**/hoist.toml",
+    "docs/setup-script.sh",
+    "REVIEW.md",
+    "docs/lessons.toml",
+    "src/core/session_rules.rs",
+    "src/core/session_rules/**",
+    "src/hooks/session_rules.rs",
+    "src/hooks/session_rules/**",
+    ".claude-plugin/**",
+    "docs/agents/**",
+    "**/agents.md",
+    "**/claude.md",
+    "**/claude.local.md",
+    "**/plans/**",
+];
+
+/// Whether `path` matches one of `globs` as a risk rule matches it (any case).
+pub fn matches_globs(globs: &[Glob], path: &str) -> bool {
+    globs.iter().any(|g| matches_any_case(g, path))
+}
+
 /// Rules that are critical whatever their `approval` says: a delegate never approves them.
 pub const CRITICAL_RULES: [&str; 3] = ["R-secrets", "R-prod-write", "R-unseen"];
 
@@ -1546,11 +1578,16 @@ pub fn new_dependencies(manifests: &[(String, Option<String>, Option<String>)]) 
     out.into_iter().collect()
 }
 
-/// A repo owner from `governance/owners.toml`.
+/// A repo owner from `governance/owners.toml`: exactly one of a user (`github`) or a team
+/// (`team = "<org>/<slug>"`, spec §16). A team counts no member until expansion is built (fail
+/// closed), so `owner_logins` holds users only.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Owner {
-    pub github: String,
+    #[serde(default)]
+    pub github: Option<String>,
+    #[serde(default)]
+    pub team: Option<String>,
     #[serde(default)]
     pub slack: Option<String>,
 }
@@ -1563,9 +1600,78 @@ struct RawOwners {
 }
 
 pub fn parse_owners(text: &str) -> Result<Vec<Owner>, String> {
-    toml::from_str::<RawOwners>(text)
+    let owners = toml::from_str::<RawOwners>(text)
         .map(|o| o.owner)
-        .map_err(|e| format!("governance/owners.toml: {e}"))
+        .map_err(|e| format!("governance/owners.toml: {e}"))?;
+    for (i, o) in owners.iter().enumerate() {
+        let team_ok = o.team.as_deref().is_some_and(|t| {
+            t.split_once('/')
+                .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('/'))
+        });
+        match (&o.github, &o.team) {
+            (Some(_), None) => {}
+            (None, Some(_)) if team_ok && o.slack.is_none() => {}
+            _ => {
+                return Err(format!(
+                    "governance/owners.toml: [[owner]] {} needs exactly one of `github` or `team = \"<org>/<slug>\"` (`slack` only with `github`)",
+                    i + 1
+                ));
+            }
+        }
+    }
+    Ok(owners)
+}
+
+/// Why `entries` cannot be the owners of `repo_owner`'s repo: each is a login or a
+/// `<repo_owner>/<slug>` team, no duplicates, at least one login (a team is unreadable to
+/// sessions, spec §16).
+pub fn owner_entries_error(entries: &[String], repo_owner: &str) -> Option<String> {
+    let name = |s: &str, extra: &[char]| {
+        !s.is_empty()
+            && s.len() <= 39
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for e in entries {
+        let ok = match e.split_once('/') {
+            Some((org, slug)) => org.eq_ignore_ascii_case(repo_owner) && name(slug, &['-', '_']),
+            None => name(e, &['-']),
+        };
+        if !ok {
+            return Some(format!(
+                "`{e}` is neither a GitHub login nor a team `{repo_owner}/<slug>`"
+            ));
+        }
+        if !seen.insert(e.to_ascii_lowercase()) {
+            return Some(format!("`{e}` is listed twice"));
+        }
+    }
+    (!entries.iter().any(|e| !e.contains('/'))).then(|| {
+        "no login: a team alone may be unreadable, so list at least one owner by login".into()
+    })
+}
+
+/// `governance/owners.toml` for `entries` (logins, or `<org>/<slug>` teams), keeping the Slack ID
+/// a login has in `old` (compared case-insensitively).
+pub fn render_owners(entries: &[String], old: &[Owner]) -> String {
+    let mut s = String::from("# Repo owners (spec §16), written by `bosun owners set`.\n");
+    for e in entries {
+        if e.contains('/') {
+            s.push_str(&format!("\n[[owner]]\nteam = \"{e}\"\n"));
+            continue;
+        }
+        s.push_str(&format!("\n[[owner]]\ngithub = \"{e}\"\n"));
+        let slack = old.iter().find(|o| {
+            o.github
+                .as_deref()
+                .is_some_and(|g| g.eq_ignore_ascii_case(e))
+        });
+        if let Some(id) = slack.and_then(|o| o.slack.as_deref()) {
+            s.push_str(&format!("slack = \"{id}\"\n"));
+        }
+    }
+    s
 }
 
 const NOTE_OPEN: &str = "<!-- bosun:risk -->";
@@ -2183,6 +2289,25 @@ catalogs:\n  legacy:\n    \"@scope/x\": 1.0.0 # pinned\n";
         assert_eq!(o.len(), 2);
         assert_eq!(o[0].slack.as_deref(), Some("U1"));
         assert!(parse_owners("[[owner]]\nname = \"x\"").is_err());
+        let team = parse_owners("[[owner]]\nteam = \"acme/core\"").unwrap();
+        assert_eq!(team[0].team.as_deref(), Some("acme/core"));
+        for bad in [
+            "[[owner]]\ngithub = \"a\"\nteam = \"acme/core\"",
+            "[[owner]]\nslack = \"U1\"",
+            "[[owner]]\nteam = \"acme\"",
+            "[[owner]]\nteam = \"acme/a/b\"",
+            "[[owner]]\nteam = \"acme/core\"\nslack = \"U1\"",
+        ] {
+            assert!(parse_owners(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn governance_paths_are_the_r_gov_paths_of_the_defaults() {
+        let r = Rules::defaults();
+        let gov = r.rules.iter().find(|r| r.id == "R-gov").unwrap();
+        let got: Vec<&str> = gov.paths.iter().map(Glob::as_str).collect();
+        assert_eq!(got, GOVERNANCE_PATHS);
     }
 
     #[test]

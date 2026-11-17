@@ -50,7 +50,7 @@ pub fn owner_logins(gh: &dyn Github, git_ref: &str) -> Result<Vec<String>> {
             format!("fix {OWNERS_PATH}: one `[[owner]]` table with `github = \"login\"` per owner"),
         )
     })?;
-    Ok(owners.into_iter().map(|o| o.github).collect())
+    Ok(owners.into_iter().filter_map(|o| o.github).collect())
 }
 
 /// Slack IDs of the owners in `governance/owners.toml` at `git_ref`; empty when none is set.
@@ -1448,6 +1448,17 @@ pub(crate) fn autonomous_allow(gh: &dyn Github, base: &str) -> Result<Option<Vec
         },
         None => None,
     })
+}
+
+/// `[approvals] oneoff_allow` on `base`, parsed; a missing or bad config or glob allows nothing.
+pub(crate) fn oneoff_allow(gh: &dyn Github, base: &str) -> Result<Vec<crate::core::glob::Glob>> {
+    let c = gh.file_at(CONFIG_FILE, base)?;
+    let c = c.and_then(|t| Config::parse(&t, CONFIG_FILE).ok());
+    let globs = c.and_then(|c| c.approvals.oneoff_allow).unwrap_or_default();
+    Ok(globs
+        .iter()
+        .filter_map(|g| crate::core::glob::Glob::parse(g).ok())
+        .collect())
 }
 
 pub(crate) fn review_models(gh: &dyn Github, base: &str) -> Result<Option<Vec<String>>> {

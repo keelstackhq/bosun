@@ -1,7 +1,15 @@
 ## 16. Owner teams (B4)
 
-Status: designed, not built (plan `docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`,
-item B4, after B2's App exists).
+Status: the schema and `bosun owners set` are built; expansion is designed, not built (plan
+`docs/superpowers/plans/2026-10-28-app-checks-team-owners.md`, item B4, after B2's App exists).
+Until it is, a team entry counts no member (fail closed): only user entries are owners.
+
+**`bosun owners set <login|org/slug>...`** opens one draft owner PR (branch
+`bosun/owners-<timestamp>`, clean tree on the default branch, pushed, never merged) that
+rewrites `governance/owners.toml` to these entries, keeping a listed login's `slack`. Each entry
+is a login or a team of the repo's owner, no duplicates, at least one login; else exit 2 before
+anything is written. Owners equal to the current ones change nothing (`data.changed` false).
+`data.then` names `bosun pr --pr <n> --ready` and the owner's approval: the file is R-gov.
 
 **Bus factor.** One human owner is a bus-factor-1 risk. When the only owner is unavailable,
 nothing that needs an owner merges: high-risk PRs stay red, a delegate cannot stand in on the
@@ -20,7 +28,7 @@ team = "keelstackhq/maintainers"
 ```
 
 Each `[[owner]]` has exactly one of `github` or `team` (both or neither is a parse error naming
-the table). `team` is `<org>/<slug>`, and `<org>` must be the repo's owner (case-insensitive):
+the table; so is `team` without exactly one `/`). `team` is `<org>/<slug>`, and `<org>` must be the repo's owner (case-insensitive):
 another org's team is a parse error, since the App cannot read it. `slack` belongs to a user
 entry only. The file is R-gov and a trust file (§8) as today. Unknown keys are errors, so a
 release that knows `team` is pinned before a team entry lands.
