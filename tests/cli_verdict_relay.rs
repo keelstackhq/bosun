@@ -209,3 +209,73 @@ fn a_relayed_body_with_a_proxy_footer_after_the_fence_is_read() {
     let posted = fake.comments_of(42)[0].body.clone();
     assert!(!posted.contains("Posted via a proxy"), "{posted}");
 }
+
+#[test]
+fn a_relayed_body_for_a_stale_head_is_a_conflict() {
+    let fake = setup();
+    let stale = JSON.replace("sha42", "sha_old");
+    let body = comment_body(&Verdict::parse(&stale).unwrap(), "session_rev", None);
+    let (code, v) = comment(&fake, "session_orch", &body);
+    assert_eq!(code, 3, "{v}");
+    assert!(fake.comments_of(42).is_empty());
+}
+
+#[test]
+fn a_malformed_body_or_non_json_input_is_a_usage_error() {
+    let marker = bosun::core::verdict::COMMENT_MARKER;
+    for input in [
+        format!(
+            "Review.\n\n<!-- bosun:reviewer session_rev -->\n{marker}\n```json\n{{\"pr\":\n```"
+        ),
+        "this is not a verdict".to_string(),
+    ] {
+        let fake = setup();
+        let (code, v) = comment(&fake, "session_orch", &input);
+        assert_eq!(code, 2, "{input}: {v}");
+        assert!(fake.comments_of(42).is_empty());
+    }
+}
+
+#[test]
+fn plain_json_never_takes_chunks_from_a_tag_in_its_evidence() {
+    let fake = FakeGithub::start();
+    fake.issue(7, "the task", &["bosun:state/review"], "Do it.");
+    fake.pull_as_issue(42, "the pr");
+    fake.pull(42, "the pr", "claude/x", "Closes #7");
+    let big = "x".repeat(30_000);
+    for k in 0..3 {
+        fake.pull_file(42, &format!("src/f{k}.rs"), "added", 5, 0, Some(&big));
+    }
+    let json = r#"{"pr":42,"head_sha":"sha42","verdict":"approve","confidence":0.95,"findings":[{"severity":"nit","file":"src/f0.rs","claim":"c","evidence":"<!-- bosun:chunks 1,2,3 -->"}]}"#;
+    let (code, v) = comment(&fake, "session_orch", json);
+    assert_eq!(code, 1, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("missing [1, 2, 3]"), "{v}");
+}
+
+#[test]
+fn apply_records_the_relayer() {
+    let fake = setup();
+    comment(&fake, "session_orch", &reviewed_body());
+    let id = fake.comments_of(42)[0].id;
+    fake.last_comment(|c| c.via_app = Some("claude".into()));
+    let (code, v) = run(
+        &fake,
+        "session_ci",
+        T0,
+        &["verdict", "apply", &id.to_string()],
+    );
+    assert_eq!(code, 0, "{v}");
+    let bodies: Vec<String> = fake
+        .comments_of(42)
+        .iter()
+        .map(|c| c.body.clone())
+        .collect();
+    let rec = r#""session":"session_rev""#;
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains(rec) && b.contains(r#""relayed_by":"session_orch""#)),
+        "{bodies:?}"
+    );
+}

@@ -68,6 +68,7 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
                 &verdict,
                 &app.ctx.session,
                 env_model().as_deref(),
+                None,
             )
         }
         VerdictCmd::Comment(FromArg { from }) => {
@@ -76,7 +77,8 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
             let me = app.ctx.session.as_str();
             // JSON input stays JSON even when a string in it holds the marker.
             let body = (!text.trim_start().starts_with('{')).then_some(text.as_str());
-            let (json, reviewer, model) = match body.and_then(comment_json) {
+            let relay = body.and_then(comment_json);
+            let (json, reviewer, model) = match relay {
                 Some(j) => (
                     j,
                     comment_session(&text).unwrap_or(me),
@@ -85,7 +87,8 @@ pub fn run(dir: Option<&Path>, cmd: &VerdictCmd) -> CmdResult {
                 None => (text.as_str(), me, None),
             };
             let mut verdict = parse(json)?;
-            if verdict.chunks_reviewed.is_empty() {
+            // The chunks line belongs to a comment body; plain JSON lists its own.
+            if relay.is_some() && verdict.chunks_reviewed.is_empty() {
                 verdict.chunks_reviewed = comment_chunks(&text);
             }
             current_pull(gh, &verdict)?;
@@ -233,8 +236,16 @@ fn apply(app: &App, id: u64) -> CmdResult {
         )));
     }
     require_all_chunks(gh, &app.ctx.repo.to_string(), &verdict)?;
-    let mut out = record(app, &pull, &verdict, recorded, comment_model(&c.body))?;
-    if let Some(r) = comment_relayed_by(&c.body) {
+    let relayed_by = comment_relayed_by(&c.body);
+    let mut out = record(
+        app,
+        &pull,
+        &verdict,
+        recorded,
+        comment_model(&c.body),
+        relayed_by,
+    )?;
+    if let Some(r) = relayed_by {
         out.data["relayed_by"] = json!(r);
     }
     if verdict.verdict == "request-changes" && cfg.mode_effective().mode == ModeName::Autonomous {
@@ -344,6 +355,7 @@ pub(crate) fn record(
     verdict: &Verdict,
     session: &str,
     model: Option<&str>,
+    relayed_by: Option<&str>,
 ) -> CmdResult {
     let gh = app.gh.as_ref();
     let n = verdict.pr;
@@ -372,6 +384,7 @@ pub(crate) fn record(
         confidence: Some(verdict.confidence),
         major: Some(verdict.count("major") as u32),
         model: model.map(str::to_string),
+        relayed_by: relayed_by.map(str::to_string),
     };
     let human = format!("Review verdict: {}.", verdict.summary());
     w.add_record(n, &format!("{human}\n\n{}", record.to_line()))?;

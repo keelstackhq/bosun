@@ -153,7 +153,12 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
   reviewer tag; its model line is kept and never replaced by the relaying session's model).
   Relaying a relayed comment keeps the reviewer and replaces `relayed_by` (only the last
   relayer is named). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
-  `relayed_by` too and records the reviewer. The
+  `relayed_by` too and records the reviewer with `relayed_by` in the verdict record. Wherever
+  verdict independence is judged (two verdicts, delegate, autonomous), a verdict whose relayer
+  holds or held a lease on a linked task (so also the PR author's session) is not independent:
+  it counts as the relayer's and never counts, and as the reviewer's newest record it withdraws
+  an older approval. Wave agents share their orchestrator's session id (§4), so `S` and `S/task`
+  are one session here: the orchestrator relaying its own wave's verdict fails closed. The
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
   `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or

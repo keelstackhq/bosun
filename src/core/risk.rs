@@ -1293,6 +1293,7 @@ fn verdict_sessions<'a>(
             confidence,
             major,
             model,
+            relayed_by,
         }) = apply_record(body)
             && head_sha == head
             && !session.is_empty()
@@ -1301,7 +1302,9 @@ fn verdict_sessions<'a>(
             && !excluded.contains(&session)
         {
             let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
-            let counts = approved
+            // A newest record relayed by an excluded session withdraws, never counts.
+            let counts = !relayer_excluded(relayed_by.as_deref(), excluded)
+                && approved
                 && enrolled
                 && confidence.is_some_and(|c| c >= VERDICT_MIN_CONFIDENCE)
                 && clean(major);
@@ -1312,6 +1315,14 @@ fn verdict_sessions<'a>(
         .into_iter()
         .filter_map(|(s, ok)| ok.then_some(s))
         .collect()
+}
+
+/// Whether a verdict's relayer is one of the `excluded` sessions (lease holders, so also the PR
+/// author). Wave agents share their orchestrator's session id (spec §4), so `S` and `S/task`
+/// are the same session here: fail closed.
+fn relayer_excluded(relayer: Option<&str>, excluded: &[String]) -> bool {
+    let root = |s: &str| s.split('/').next().unwrap_or_default().to_string();
+    relayer.is_some_and(|r| excluded.iter().any(|e| root(e) == root(r)))
 }
 
 const CARGO_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
@@ -2425,6 +2436,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
             confidence: conf,
             major: None,
             model: None,
+            relayed_by: None,
         }
         .to_line()
     }
@@ -2439,6 +2451,29 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
 
     fn count(items: &[(&str, String)], head: &str) -> Vec<String> {
         two_verdicts(items.iter().map(|(a, b)| (*a, b.as_str())), head, &[], None)
+    }
+
+    #[test]
+    fn a_verdict_relayed_by_an_excluded_session_never_counts() {
+        let bot = VERDICT_AUTHOR;
+        let by = |relayer: &str| {
+            let r = rec("a", "h", true, Some(0.95));
+            r.replace(
+                r#""confidence""#,
+                &format!(r#""relayed_by":"{relayer}","confidence""#),
+            )
+        };
+        let ex = ["orch".to_string()];
+        let got = |items: &[(&str, String)]| {
+            two_verdicts(items.iter().map(|(a, b)| (*a, b.as_str())), "h", &ex, None)
+        };
+        assert!(got(&[(bot, by("orch"))]).is_empty());
+        assert!(got(&[(bot, by("orch/task-3"))]).is_empty(), "shared id");
+        assert_eq!(got(&[(bot, by("other"))]), ["a"]);
+        // The newest record, relayed by the lease holder, withdraws an older approval.
+        assert!(got(&[(bot, rec("a", "h", true, Some(0.95))), (bot, by("orch"))]).is_empty());
+        // Older records without the field still parse and count.
+        assert_eq!(got(&[(bot, rec("a", "h", true, Some(0.95)))]), ["a"]);
     }
 
     #[test]
@@ -2470,6 +2505,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
                 confidence: Some(0.99),
                 major: Some(0),
                 model: None,
+                relayed_by: None,
             };
             format!("Review verdict: approve 0.99.\n\n{}", r.to_line())
         };
@@ -2495,6 +2531,7 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
                 confidence: Some(0.95),
                 major: Some(0),
                 model: model.map(String::from),
+                relayed_by: None,
             };
             format!("Review verdict: approve.\n\n{}", r.to_line())
         };
