@@ -10,9 +10,9 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, answers_lock, bash_writes, bosun_dir_lock, child_task_create,
-    config_fetch_risk, edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for,
-    pushes, script_rules, tool_rules,
+    ChildTask, Script, answers_lock, answers_script_lock, bash_writes, bosun_dir_lock,
+    child_task_create, config_fetch_risk, edit_lock, edited_path, foreign_lock, prereqs_lock,
+    prereqs_lock_for, pushes, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -132,6 +132,9 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
         }
         let repeat = repeat_lock(&dir, input, &tool_input);
         let read = |p: &str| read_script(&dir, p);
+        if let Some(why) = answers_script_lock(command, &read) {
+            return Some(deny(&why));
+        }
         if let Some(why) = script_rules(command, &read, &branch_at, &default) {
             return Some(deny(&why));
         }

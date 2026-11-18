@@ -14,7 +14,7 @@ use crate::core::meta::OPEN;
 mod interp;
 mod literals;
 mod prose;
-pub use interp::{Script, script_rules};
+pub use interp::{Script, answers_script_lock, script_rules};
 mod writes;
 pub use writes::bash_writes;
 
@@ -446,7 +446,7 @@ pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
     let hit = match tool {
         "Bash" => {
             let c = input.get("command").and_then(Value::as_str).unwrap_or("");
-            answers_in_command(c, 0)
+            answers_hook_words(c) || answers_in_command(c, 0)
         }
         _ => edited_path(tool, input).is_some_and(|p| is_answers_path(&p)),
     };
@@ -455,6 +455,35 @@ pub fn answers_lock(tool: &str, input: &Value) -> Option<String> {
          do not edit it or run the hook by hand. Ask the owner with `bosun approve --list` \
          and let the answer arrive through the tool"
             .to_string()
+    })
+}
+
+/// Whether `text` (a command, or the text of a script or interpreter code) holds both words
+/// `hook` and `post-tool-use`, after line continuations are joined. Any such text is refused:
+/// the hook that stores answers runs from settings.json, never through PreToolUse, and a
+/// command that builds the pair from variables, `xargs`, `$(...)` or a subprocess call still
+/// names both words.
+pub fn answers_hook_words(text: &str) -> bool {
+    let joined = text.replace("\\\r\n", "").replace("\\\n", "");
+    joined.contains("hook") && joined.contains("post-tool-use")
+}
+
+/// Only read-only viewers (`cat`, `jq`, `less`, `head`, `tail`, `cd`), no redirect that writes,
+/// no `$(...)` or backticks: naming `answers.json` there reads it.
+fn answers_read_only(command: &str) -> bool {
+    if command.contains(['`', '>']) || command.contains("$(") {
+        return false;
+    }
+    rough_segments(command).iter().all(|seg| {
+        let words = shell_words(seg);
+        let first = words.iter().find(|w| *w != SEP && !w.contains('='));
+        // An empty segment is the second `&` of `&&`.
+        first.is_none_or(|w| {
+            matches!(
+                w.rsplit('/').next().unwrap_or(w),
+                "cat" | "jq" | "less" | "head" | "tail" | "cd"
+            )
+        })
     })
 }
 
@@ -473,10 +502,6 @@ fn answers_in_command(command: &str, depth: usize) -> bool {
         let tail = bare.rsplit('=').next().unwrap_or(bare);
         vec![w.to_string(), bare.to_string(), tail.to_string()]
     };
-    let step = |w: &str| w.split(['<', '>']).next().unwrap_or("").to_string();
-    let hook = words
-        .windows(2)
-        .any(|w| step(&w[0]) == "hook" && step(&w[1]) == "post-tool-use");
     let direct = words
         .iter()
         .any(|w| cands(w).iter().any(|c| is_answers_path(c)));
@@ -487,8 +512,7 @@ fn answers_in_command(command: &str, depth: usize) -> bool {
             let n = lexical(w.trim_end_matches('/'));
             n.rsplit('/').next() == Some("bosun") && n.split('/').any(|p| p == ".git")
         });
-    hook || direct
-        || bare
+    ((direct || bare) && !answers_read_only(command))
         || (depth < 3
             && word_scripts(command)
                 .iter()
@@ -7286,6 +7310,48 @@ mod tests {
         assert!(!bash("cat answers.json"));
         assert!(!bash("bosun hook pre-tool-use"));
         assert!(!bash("ls /home/user/bosun/src/answers.json.bak"));
-        assert!(!bash("echo hook; echo post-tool-use"));
+        assert!(!bash("echo hook"));
+        assert!(!bash("bosun hook pre-tool-use && echo post-tool"));
+    }
+
+    #[test]
+    fn answers_lock_denies_any_command_with_both_hook_words() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        assert!(bash("bosun hook -C . post-tool-use"));
+        assert!(bash("bosun hook --repo a post-tool-use"));
+        assert!(bash("h=hook; p=post-tool-use; bosun $h $p"));
+        assert!(bash("echo post-tool-use | xargs bosun hook"));
+        assert!(bash("bosun hook \\\npost-tool-use"));
+        assert!(bash("bosun hook post-tool-\\\nuse"));
+        assert!(bash("bosun hook \"$(echo post-tool-use)\""));
+        assert!(bash(
+            "python3 -c \"import subprocess; subprocess.run(['bosun','hook','post-tool-use'])\""
+        ));
+        assert!(bash("bash -c 'bosun hook post-tool-use'"));
+        assert!(answers_hook_words(
+            "subprocess.run(['bosun', 'hook', 'post-tool-use'])"
+        ));
+        assert!(!answers_hook_words("post-tool-use only"));
+        assert!(!answers_hook_words("hook only"));
+    }
+
+    #[test]
+    fn answers_lock_allows_reading_the_file() {
+        let bash = |c: &str| answers_lock("Bash", &json!({"command": c})).is_some();
+        assert!(!bash("cat .git/bosun/answers.json"));
+        assert!(!bash("jq . .git/bosun/answers.json"));
+        assert!(!bash("jq '.[]' /r/.git/bosun/answers.json | head -5"));
+        assert!(!bash("less .git/bosun/answers.json"));
+        assert!(!bash("head -c 200 .git/bosun/answers.json"));
+        assert!(!bash("cd .git/bosun && cat answers.json"));
+        // Writing, or anything beyond the read-only viewers, stays refused.
+        assert!(bash("cat x > .git/bosun/answers.json"));
+        assert!(bash(
+            "cat .git/bosun/answers.json > .git/bosun/answers.json"
+        ));
+        assert!(bash("jq . x | tee .git/bosun/answers.json"));
+        assert!(bash(
+            "cat .git/bosun/answers.json; rm .git/bosun/answers.json"
+        ));
     }
 }
