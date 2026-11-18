@@ -175,3 +175,18 @@ fn the_oneoff_label_or_an_unplanned_item_caps_ready_like_the_marker_item() {
         assert!(fake.pull_is_draft(20));
     }
 }
+
+#[test]
+fn a_one_off_may_touch_handoff_notes_but_not_docs_agents() {
+    for touch in ["docs/handoff/**", "docs/handoff/claude-x.md"] {
+        let fake = FakeGithub::start();
+        let dir = repo("claude/quick-fix");
+        let (code, v) = one_off(&fake, dir.path(), &[touch]);
+        assert_eq!(code, 0, "{touch}: {v}");
+    }
+    let fake = FakeGithub::start();
+    let dir = repo("claude/quick-fix");
+    let (code, v) = one_off(&fake, dir.path(), &["docs/agents/project.md"]);
+    assert_eq!(code, 3, "{v}");
+    assert!(!v["error"]["fix"].as_str().unwrap().is_empty());
+}

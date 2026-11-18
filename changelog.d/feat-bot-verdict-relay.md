@@ -1,0 +1,1 @@
+- `bosun verdict apply` relays a listed `[approvals] verdict_bots` bot verdict without markers (first fenced json block that is a valid verdict); a non-writer comment with no verdict is refused neutrally; the verdict workflow also runs on Bot comments containing "head_sha".
