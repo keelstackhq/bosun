@@ -98,11 +98,12 @@ fn verdict_by(fake: &FakeGithub, session: &str) {
 
 fn chat(fake: &FakeGithub) {
     let head = fake.pull_head(20);
+    let short = &head[..7];
     fake.comment_by(
         20,
         "ada",
         &format!(
-            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session={ORCH} head={head} question=20-x-1 -->"
+            "/bosun approve {head} chat\nApproved by the owner in chat.\n<!-- bosun:chat-approval v1 session={ORCH} head={head} question=20-{short}-1 -->"
         ),
     );
 }
