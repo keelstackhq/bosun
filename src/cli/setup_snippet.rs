@@ -61,18 +61,27 @@ pub const HOOKS: [(&str, Option<&str>, &str, Option<u32>); 5] = [
     ),
 ];
 
-fn has_command(groups: &[Value], command: &str) -> bool {
-    groups.iter().any(|g| {
-        g.get("hooks").and_then(Value::as_array).is_some_and(|hs| {
-            hs.iter()
-                .any(|h| h.get("command").and_then(Value::as_str) == Some(command))
+/// The events whose bosun hook command is not in `settings` (any matcher).
+pub fn missing_events(settings: &Value) -> Vec<&'static str> {
+    HOOKS
+        .iter()
+        .filter(|(event, _, command, _)| {
+            !settings["hooks"][event].as_array().is_some_and(|gs| {
+                gs.iter().any(|g| {
+                    g["hooks"]
+                        .as_array()
+                        .is_some_and(|hs| hs.iter().any(|h| h["command"].as_str() == Some(command)))
+                })
+            })
         })
-    })
+        .map(|(event, ..)| *event)
+        .collect()
 }
 
-/// Add each missing hook to `settings`, matched by exact command string; other keys and
-/// entries stay. Returns the events it added to.
-fn merge_hooks(settings: &mut Value) -> Result<Vec<&'static str>, String> {
+/// Add each missing hook to `settings`, matched by exact command string; an entry with the
+/// command but another matcher or timeout is updated in place (never duplicated); other keys and
+/// entries stay. Returns the events added to and the events updated.
+fn merge_hooks(settings: &mut Value) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
     let root = settings
         .as_object_mut()
         .ok_or("the settings are not a JSON object")?;
@@ -81,14 +90,41 @@ fn merge_hooks(settings: &mut Value) -> Result<Vec<&'static str>, String> {
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or("\"hooks\" is not an object")?;
-    let mut added = Vec::new();
+    let (mut added, mut updated) = (Vec::new(), Vec::new());
     for (event, matcher, command, timeout) in HOOKS {
         let groups = hooks
             .entry(event)
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .ok_or_else(|| format!("hooks.{event} is not an array"))?;
-        if has_command(groups, command) {
+        let found = groups.iter_mut().find_map(|g| {
+            let at = g
+                .get("hooks")?
+                .as_array()?
+                .iter()
+                .position(|h| h.get("command").and_then(Value::as_str) == Some(command))?;
+            Some((g, at))
+        });
+        if let Some((g, at)) = found {
+            let mut changed = false;
+            if g.get("matcher").and_then(Value::as_str) != matcher {
+                match matcher {
+                    Some(m) => g["matcher"] = json!(m),
+                    None => drop(g.as_object_mut().and_then(|o| o.remove("matcher"))),
+                }
+                changed = true;
+            }
+            let h = &mut g["hooks"][at];
+            if h.get("timeout").and_then(Value::as_u64) != timeout.map(u64::from) {
+                match timeout {
+                    Some(t) => h["timeout"] = json!(t),
+                    None => drop(h.as_object_mut().and_then(|o| o.remove("timeout"))),
+                }
+                changed = true;
+            }
+            if changed {
+                updated.push(event);
+            }
             continue;
         }
         let mut g = Map::new();
@@ -103,7 +139,7 @@ fn merge_hooks(settings: &mut Value) -> Result<Vec<&'static str>, String> {
         groups.push(Value::Object(g));
         added.push(event);
     }
-    Ok(added)
+    Ok((added, updated))
 }
 
 fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
@@ -112,8 +148,22 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
             std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/settings.json"))
         })
         .ok_or_else(|| BosunError::error("HOME is not set", "pass --settings <path>"))?;
-    // Edit a symlinked settings file in place: the link stays and the target is rewritten.
-    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    // A symlinked settings file is written through: the link stays and the target is rewritten.
+    // A dangling link is an error and is left untouched.
+    let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+    let path = match std::fs::canonicalize(&path) {
+        Ok(p) => p,
+        Err(_) if is_link => {
+            return Err(BosunError::error(
+                format!(
+                    "{}: a symlink to a file that does not exist",
+                    path.display()
+                ),
+                "point the link at a real file or remove it, then rerun `bosun setup-snippet --install-hooks`",
+            ));
+        }
+        Err(_) => path,
+    };
     let shown = path.display();
     let bad = |why: String| {
         BosunError::error(
@@ -127,30 +177,46 @@ fn install_hooks(settings: Option<PathBuf>) -> CmdResult {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
         Err(e) => return Err(bad(e.to_string())),
     };
-    let added = merge_hooks(&mut doc).map_err(bad)?;
-    if !added.is_empty() {
+    let (added, updated) = merge_hooks(&mut doc).map_err(bad)?;
+    if !added.is_empty() || !updated.is_empty() {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| bad(e.to_string()))?;
         }
         let text = serde_json::to_string_pretty(&doc).map_err(|e| bad(e.to_string()))?;
-        // Write beside, then rename: a crash never leaves half a settings file.
+        // Write beside, then rename: a crash never leaves half a settings file. The temp file is
+        // created private (0600) before any content is written, then takes the target's mode.
         let mut name = path.file_name().unwrap_or_default().to_os_string();
         name.push(format!(".bosun-tmp-{}", std::process::id()));
         let tmp = path.with_file_name(name);
-        std::fs::write(&tmp, format!("{text}\n"))
-            .and_then(|()| match std::fs::metadata(&path) {
-                Ok(m) => std::fs::set_permissions(&tmp, m.permissions()),
-                Err(_) => Ok(()),
-            })
-            .and_then(|()| std::fs::rename(&tmp, &path))
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&tmp);
-                bad(e.to_string())
-            })?;
+        let write = || -> std::io::Result<()> {
+            use std::io::Write;
+            let mut f = private_file(&tmp)?;
+            f.write_all(format!("{text}\n").as_bytes())?;
+            if let Ok(m) = std::fs::metadata(&path) {
+                std::fs::set_permissions(&tmp, m.permissions())?;
+            }
+            std::fs::rename(&tmp, &path)
+        };
+        write().map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            bad(e.to_string())
+        })?;
     }
     Ok(Outcome::data(
-        json!({"settings": shown.to_string(), "added": added}),
+        json!({"settings": shown.to_string(), "added": added, "updated": updated}),
     ))
+}
+
+/// A new file open for writing, mode 0600 from the start on unix.
+fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)
 }
 
 pub fn run(dir: Option<&Path>, a: &SetupSnippetArgs) -> CmdResult {

@@ -508,3 +508,23 @@ fn install_hooks_follows_a_symlink_and_keeps_the_mode() {
         0o600
     );
 }
+
+#[test]
+fn a_failed_hook_install_warns_on_stderr_and_still_exits_0() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (work, bin, log) = (
+        tmp.path().join("w"),
+        tmp.path().join("bin"),
+        tmp.path().join("log"),
+    );
+    fs::create_dir_all(&work).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    tools(&bin);
+    stub(&bin, "bosun", "echo 'boom' >&2; exit 1");
+    let (code, err, _) = boot(&work, &bin, &log);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("could not install the user-scope hooks"),
+        "{err}"
+    );
+}

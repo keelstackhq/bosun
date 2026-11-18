@@ -951,3 +951,44 @@ fn session_start_adopted_unchanged() {
     assert!(text.contains("you are session session_me"), "{text}");
     assert!(!text.contains("bosun adopt"), "{text}");
 }
+
+#[test]
+fn a_branch_that_deleted_bosun_version_is_still_adopted_by_the_remote_default() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let g = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .current_dir(tmp.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.21.0\n").unwrap();
+    g(&["add", "."]);
+    g(&["commit", "-q", "-m", "adopt"]);
+    g(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    std::fs::remove_file(tmp.path().join(".bosun/version")).unwrap();
+    let input = json!({"hook_event_name":"SessionStart","cwd":tmp.path().to_str().unwrap()});
+    let o = hook(Some(&fake), tmp.path(), T0, "session-start", &input);
+    assert!(!o.stdout.contains("bosun adopt --policy"), "{}", o.stdout);
+}
+
+#[test]
+fn removing_or_moving_the_bosun_dir_is_denied() {
+    let (fake, tmp) = (FakeGithub::start(), bare_repo());
+    let cwd = tmp.path().to_str().unwrap();
+    let bash = |c: &str| {
+        let i = json!({"hook_event_name":"PreToolUse","cwd":cwd,"tool_name":"Bash","tool_input":{"command":c}});
+        hook(Some(&fake), tmp.path(), T0, "pre-tool-use", &i)
+    };
+    for c in [
+        "rm .bosun/version",
+        "git rm -r .bosun",
+        "mv .bosun/version /tmp/v",
+    ] {
+        assert!(bash(c).stdout.contains("deny"), "{c}");
+    }
+    assert!(!bash("mv notes.md .bosun/notes.md").stdout.contains("deny"));
+}

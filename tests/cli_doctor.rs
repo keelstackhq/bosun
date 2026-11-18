@@ -8,9 +8,21 @@ use std::path::Path;
 const T0: &str = "2026-10-22T10:00:00Z";
 
 fn doctor(fake: &FakeGithub, dir: &Path, routines_ok: bool) -> (i32, Value) {
+    // A home where bosun's user-scope hooks are installed, so step 19 (user-hooks) is ok.
+    let home = dir.join(".test-home");
+    let settings = home.join(".claude/settings.json");
+    if !settings.exists() {
+        let out = bosun()
+            .args(["setup-snippet", "--install-hooks", "--settings"])
+            .arg(&settings)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
+    }
     let mut cmd = bosun();
     cmd.env("BOSUN_GITHUB_API", fake.url())
         .env("BOSUN_NOW", T0)
+        .env("HOME", &home)
         .env("CLAUDE_CONFIG_DIR", dir.join(".test-claude"))
         .arg("-C")
         .arg(dir)
@@ -930,4 +942,34 @@ fn a_cloud_session_is_warned_about_the_merge_identity() {
     assert!(item_named(&v, "merge-identity").is_none_or(|i| i["status"] == "ok"));
     let (_, v, _) = tag_doctor(&[], false, None);
     assert!(item_named(&v, "merge-identity").is_none(), "local session");
+}
+
+#[test]
+fn doctor_flags_missing_user_scope_hooks_in_an_adopted_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".bosun")).unwrap();
+    std::fs::write(tmp.path().join(".bosun/version"), "0.21.0\n").unwrap();
+    let doctor = || {
+        let out = common::bosun()
+            .arg("-C")
+            .arg(tmp.path())
+            .env("HOME", home.path())
+            .args(["doctor", "--full"])
+            .output()
+            .unwrap();
+        let v = common::one_object(&out.stdout);
+        let items = v["data"]["items"].as_array().cloned().unwrap_or_default();
+        items.into_iter().find(|i| i["name"] == "user-hooks")
+    };
+    let it = doctor().expect("an adopted repo gets the user-hooks step");
+    assert_eq!(it["status"], "warn", "{it}");
+    assert!(it["fix"].as_str().unwrap().contains("--install-hooks"));
+    let out = common::bosun()
+        .args(["setup-snippet", "--install-hooks", "--settings"])
+        .arg(home.path().join(".claude/settings.json"))
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(doctor().unwrap()["status"], "ok");
 }

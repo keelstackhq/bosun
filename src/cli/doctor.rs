@@ -1500,6 +1500,35 @@ pub fn run_with(dir: Option<&Path>, remote: bool, full: bool) -> CmdResult {
         items.push(it);
     }
 
+    // Step 19: an adopted repo needs bosun's hooks in the user-scope Claude Code settings too (the
+    // pasted bootstrap installs them in the cloud; locally `bosun setup-snippet --install-hooks`).
+    if root.join(".bosun/version").exists()
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        let file = std::path::PathBuf::from(home).join(".claude/settings.json");
+        let doc = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .unwrap_or_else(|| json!({}));
+        let missing = super::setup_snippet::missing_events(&doc);
+        let mut it = item(
+            19,
+            "user-hooks",
+            None,
+            format!("{} has bosun's hooks", file.display()),
+            "run `bosun setup-snippet --install-hooks`",
+        );
+        if !missing.is_empty() {
+            it["status"] = json!("warn");
+            it["detail"] = json!(format!(
+                "{} lacks bosun's hook(s) for {}; the guards only run in this repo's own .claude/settings.json",
+                file.display(),
+                missing.join(", ")
+            ));
+        }
+        items.push(it);
+    }
+
     // Step 18: hooks do not load in Claude in Slack, so the rules must be in CLAUDE.md/AGENTS.md.
     if ctx.origin == crate::ctx::Origin::Slack {
         let fix = "run `bosun rules --write` and commit the file in a PR";

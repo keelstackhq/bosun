@@ -495,6 +495,73 @@ fn answers_in_command(command: &str, depth: usize) -> bool {
                 .any(|s| answers_in_command(s, depth + 1)))
 }
 
+/// Bosun-dir lock: `rm`, `mv` (source paths) and `git rm|mv` on `.bosun` or anything under it are
+/// refused in a Bash command (also inside `bash -c` and `eval`), since removing `.bosun/version`
+/// would switch the repo's guards off. Best effort: a path built in a variable or a glob is missed.
+pub fn bosun_dir_lock(tool: &str, input: &Value) -> Option<String> {
+    let c = (tool == "Bash").then(|| input.get("command").and_then(Value::as_str))??;
+    removes_bosun_dir(c, 0).then(|| {
+        "removing or moving `.bosun/` is refused: it holds the repo's bosun setup (version, \
+         config, approvers); change it in a PR the owner approves"
+            .to_string()
+    })
+}
+
+fn is_bosun_dir_path(w: &str) -> bool {
+    let n = lexical(w.trim_end_matches('/'));
+    n == ".bosun" || n.starts_with(".bosun/") || n.ends_with("/.bosun") || n.contains("/.bosun/")
+}
+
+fn removes_bosun_dir(command: &str, depth: usize) -> bool {
+    let words = shell_words(command);
+    for seg in words.split(|w| w == SEP) {
+        // The command word: after assignments and plain wrappers.
+        let at = seg
+            .iter()
+            .position(|w| {
+                !w.contains('=')
+                    && !matches!(
+                        w.as_str(),
+                        "sudo"
+                            | "env"
+                            | "command"
+                            | "exec"
+                            | "nohup"
+                            | "time"
+                            | "xargs"
+                            | "timeout"
+                            | "nice"
+                    )
+            })
+            .unwrap_or(seg.len());
+        let Some(name) = seg.get(at).map(|w| base(w)) else {
+            continue;
+        };
+        let (kind, args) = match name {
+            "rm" | "unlink" | "rmdir" | "mv" => (name, &seg[at + 1..]),
+            "git" => match seg[at + 1..].iter().position(|w| w == "rm" || w == "mv") {
+                Some(k) => (seg[at + 1 + k].as_str(), &seg[at + 2 + k..]),
+                None => continue,
+            },
+            _ => continue,
+        };
+        let paths: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+        // `mv a b`: the last path is the destination, the rest are sources.
+        let checked = if kind == "mv" && paths.len() > 1 {
+            &paths[..paths.len() - 1]
+        } else {
+            &paths[..]
+        };
+        if checked.iter().any(|p| is_bosun_dir_path(p)) {
+            return true;
+        }
+    }
+    depth < 3
+        && word_scripts(command)
+            .iter()
+            .any(|s| removes_bosun_dir(s, depth + 1))
+}
+
 /// [`prereqs_lock`] for a caller that may write the `task` marker (`task_ok`: a registered child
 /// session, spec §4): the checklist and epic markers stay refused.
 pub fn prereqs_lock_for(tool: &str, input: &Value, task_ok: bool) -> Option<String> {
@@ -7177,6 +7244,38 @@ mod tests {
         assert!(edit("/r/.git/bosun/sub/../answers.json"));
         assert!(edit("/r/.git/./bosun/answers.json"));
         assert!(!edit("/r/.git/bosun/other.json"));
+    }
+
+    #[test]
+    fn bosun_dir_removal_is_refused() {
+        let hit = |c: &str| bosun_dir_lock("Bash", &json!({"command": c})).is_some();
+        for c in [
+            "rm .bosun/version",
+            "rm -rf .bosun",
+            "rm -rf ./.bosun/",
+            "rm -f /r/.bosun/version",
+            "git rm -r .bosun",
+            "git -C /r rm .bosun/version",
+            "mv .bosun /tmp/x",
+            "mv .bosun/version /tmp/x",
+            "mv ./x/../.bosun/version /tmp",
+            "cd /r && rm .bosun/version",
+            "bash -c 'rm .bosun/version'",
+            "unlink .bosun/version",
+        ] {
+            assert!(hit(c), "{c}");
+        }
+        for c in [
+            "mv x .bosun/version",
+            "cp .bosun/version /tmp",
+            "cat .bosun/version",
+            "rm docs/x.md",
+            "git rm src/a.rs",
+            "echo rm .bosun",
+            "ls .bosun",
+        ] {
+            assert!(!hit(c), "{c}");
+        }
     }
 
     #[test]

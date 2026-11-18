@@ -17,11 +17,27 @@ fn output(text: &str) -> String {
         .to_string()
 }
 
-/// True when the repo at `cwd` has no `.bosun/version`: bosun was never set up here.
+/// True when bosun was never set up in the repo at `cwd`: no `.bosun/version` in the worktree AND
+/// none on the remote default branch (`origin/HEAD`, `origin/main`, `origin/master`). The
+/// worktree alone is not trusted: a branch that deleted the file must not switch the guards off.
 pub fn unadopted(cwd: &Path) -> bool {
     let root = crate::ctx::git_out(cwd, &["rev-parse", "--show-toplevel"])
         .map_or_else(|| cwd.to_path_buf(), PathBuf::from);
-    !root.join(".bosun/version").exists()
+    if root.join(".bosun/version").exists() {
+        return false;
+    }
+    let on_remote = ["origin/HEAD", "origin/main", "origin/master"]
+        .iter()
+        .any(|r| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["cat-file", "-e", &format!("{r}:.bosun/version")])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+    !on_remote
 }
 
 const NOT_SET_UP: &str = "bosun is not set up here: run `bosun adopt --policy autonomous \
