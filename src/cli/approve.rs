@@ -404,6 +404,13 @@ fn ask_next(ctx: &Ctx, ready: &[Ready], mut data: Value) -> Outcome {
     for (i, item) in items.iter().enumerate() {
         data["ready"][i]["ask"] = ask::ask(&repo, item, unix);
     }
+    // A spawned or routine session does not ask the owner: it hands the question up.
+    if matches!(ctx.origin, Origin::Spawned | Origin::Routine) {
+        data["handoff"] = json!(
+            "hand this question to the orchestrator: send data.ready[].ask (question id, text, options) to the orchestrator session, which asks the owner; a child session never asks"
+        );
+        return Outcome::data(data);
+    }
     let out = if ctx.origin == Origin::Slack {
         ask::slack_text(&repo, &items).map(|text| {
             let mut a = json!({"text": text});
