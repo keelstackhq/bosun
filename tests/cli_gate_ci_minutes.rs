@@ -22,6 +22,7 @@ fn init(root: &Path) {
 
 fn gate(root: &Path) -> (i32, Value) {
     let out = bosun()
+        .env_remove("GITHUB_BASE_REF")
         .arg("-C")
         .arg(root)
         .args(["gate", "ci-minutes"])
@@ -115,6 +116,7 @@ fn bosuns_own_workflows_pass_the_gate() {
 fn doctor_step_14(tmp: &Path) -> Value {
     let fake = FakeGithub::start();
     let out = bosun()
+        .env_remove("GITHUB_BASE_REF")
         .env("BOSUN_GITHUB_API", fake.url())
         .env("CLAUDE_CONFIG_DIR", tmp.join(".test-claude"))
         .arg("-C")
@@ -205,6 +207,52 @@ fn ci_minutes_reads_the_provider_from_the_base_not_the_working_tree() {
     with_base(tmp.path(), "[ci]\nprovider = \"github\"\n", NONE);
     let (code, _) = gate(tmp.path());
     assert_eq!(code, 1);
+}
+
+/// The same base the other gates use (`resolve_base_in`): `GITHUB_BASE_REF`, else what
+/// `origin/HEAD` points to, else `origin/main`.
+#[test]
+fn ci_minutes_base_follows_origin_head_and_github_base_ref() {
+    let tmp = repo(&[]);
+    with_base(tmp.path(), NONE, NONE);
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .current_dir(tmp.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {out:?}");
+    };
+    // The base branch is `trunk`; there is no `origin/main`.
+    git(&["update-ref", "refs/remotes/origin/trunk", "HEAD"]);
+    git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+    git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/trunk",
+    ]);
+    let (code, v) = gate(tmp.path());
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["skipped"], true, "origin/HEAD is the base: {v}");
+    // `GITHUB_BASE_REF` wins over origin/HEAD.
+    git(&["update-ref", "refs/remotes/origin/other", "HEAD"]);
+    git(&[
+        "symbolic-ref",
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/nothing",
+    ]);
+    let out = bosun()
+        .env("GITHUB_BASE_REF", "other")
+        .arg("-C")
+        .arg(tmp.path())
+        .args(["gate", "ci-minutes"])
+        .output()
+        .unwrap();
+    let v = one_object(&out.stdout);
+    assert_eq!(
+        v["data"]["skipped"], true,
+        "GITHUB_BASE_REF is the base: {v}"
+    );
 }
 
 #[test]
