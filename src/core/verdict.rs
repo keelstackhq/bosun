@@ -245,6 +245,47 @@ pub fn comment_json(body: &str) -> Option<&str> {
     Some(fenced[..end.unwrap_or(fenced.len())].trim())
 }
 
+/// A trusted bot's verdict without markers: the one top-level fenced ```json block that parses
+/// as a valid `Verdict`. Every fence counts (backticks or tildes, 3+ long, any info string,
+/// closed by a bare run of the same character at least as long), so a json block inside
+/// another fence is ignored. None when no block or more than one block is a valid verdict.
+pub fn bot_verdict_json(body: &str) -> Option<&str> {
+    // (fence character, fence length, json-tagged, contents start)
+    let mut open: Option<(char, usize, bool, usize)> = None;
+    let mut found: Option<&str> = None;
+    let mut pos = 0;
+    for line in body.split_inclusive('\n') {
+        let t = line.trim();
+        // A line indented 4+ columns is an indented code line, never a fence (CommonMark).
+        let lead = &line[..line.len() - line.trim_start().len()];
+        let indent: usize = lead.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum();
+        let ch = (indent < 4)
+            .then(|| t.chars().next())
+            .flatten()
+            .filter(|c| matches!(c, '`' | '~'));
+        let run = ch.map_or(0, |c| t.len() - t.trim_start_matches(c).len());
+        let info = t[run..].trim();
+        match (open, ch) {
+            (None, Some(c)) if run >= 3 && !(c == '`' && info.contains('`')) => {
+                open = Some((c, run, c == '`' && info == "json", pos + line.len()));
+            }
+            (Some((c, n, json, start)), Some(d)) if d == c && run >= n && info.is_empty() => {
+                let text = body[start..pos].trim();
+                if json && Verdict::parse(text).is_ok() {
+                    if found.is_some() {
+                        return None;
+                    }
+                    found = Some(text);
+                }
+                open = None;
+            }
+            _ => {}
+        }
+        pos += line.len();
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,5 +402,49 @@ mod tests {
         // a plain three-backtick block still parses
         let plain = format!("{COMMENT_MARKER}\n```json\n{{\"a\":1}}\n```\nfoot");
         assert_eq!(comment_json(&plain), Some("{\"a\":1}"));
+    }
+
+    #[test]
+    fn a_bot_verdict_is_the_one_fenced_json_verdict() {
+        let ok = r#"{"pr":3,"head_sha":"abc","verdict":"approve","confidence":0.9}"#;
+        let body = format!("Looks good.\n\n```json\n{ok}\n```\n\nthanks");
+        assert_eq!(bot_verdict_json(&body), Some(ok));
+        // a json block that is no verdict is skipped; a longer fence works
+        let two = format!("```json\n{{\"a\":1}}\n```\ntext\n````json\n{ok}\n````\n");
+        assert_eq!(bot_verdict_json(&two), Some(ok));
+        // not json-tagged, or no block at all
+        assert_eq!(bot_verdict_json(&format!("```\n{ok}\n```")), None);
+        assert_eq!(bot_verdict_json(ok), None);
+        assert_eq!(bot_verdict_json("```json\n{\"a\":1}\n```"), None);
+    }
+
+    #[test]
+    fn a_json_block_nested_in_another_fence_is_no_bot_verdict() {
+        let ok = r#"{"pr":3,"head_sha":"abc","verdict":"approve","confidence":0.9}"#;
+        for outer in ["````", "````md", "```text", "~~~"] {
+            let close = outer.trim_end_matches(char::is_alphabetic);
+            let body = format!("{outer}\n```json\n{ok}\n```\n{close}\n");
+            assert_eq!(bot_verdict_json(&body), None, "{body}");
+        }
+        // an example in an outer fence does not hide the real top-level verdict
+        let body = format!("````md\n```json\n{ok}\n```\n````\n\n```json\n{ok}\n```\n");
+        assert_eq!(bot_verdict_json(&body), Some(ok));
+        // a line indented 4+ spaces is code, not a fence (CommonMark)
+        let body = format!("    ```json\n{ok}\n    ```\n");
+        assert_eq!(bot_verdict_json(&body), None);
+        let body = format!("   ```json\n{ok}\n   ```\n");
+        assert_eq!(bot_verdict_json(&body), Some(ok));
+        // an unclosed fence is no block
+        assert_eq!(bot_verdict_json(&format!("```json\n{ok}\n")), None);
+    }
+
+    #[test]
+    fn two_top_level_bot_verdicts_are_no_single_verdict() {
+        let a = r#"{"pr":3,"head_sha":"abc","verdict":"approve","confidence":0.9}"#;
+        let b = r#"{"pr":3,"head_sha":"abc","verdict":"request-changes","confidence":0.9}"#;
+        let body = format!("```json\n{a}\n```\n\n```json\n{b}\n```\n");
+        assert_eq!(bot_verdict_json(&body), None);
+        let same = format!("```json\n{a}\n```\n\n```json\n{a}\n```\n");
+        assert_eq!(bot_verdict_json(&same), None);
     }
 }
