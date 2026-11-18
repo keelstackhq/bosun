@@ -96,12 +96,21 @@ fn env_model() -> Option<String> {
 }
 
 fn parse(text: &str) -> Result<Verdict, BosunError> {
-    Verdict::parse(text).map_err(|m| {
+    let v = Verdict::parse(text).map_err(|m| {
         BosunError::usage(
             format!("invalid verdict: {m}"),
             "return the JSON shape in spec §7 (see `bosun review-pack` instructions)",
         )
-    })
+    })?;
+    // A new approval lists each chunk: a count (`chunk_count`) claims them all unread.
+    let raw: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
+    if v.verdict == "approve" && raw["chunks_reviewed"].is_number() {
+        return Err(BosunError::usage(
+            "an approving verdict lists the chunks it reviewed: `chunks_reviewed` is a count",
+            "review each chunk of `bosun review-pack <pr>` and add its number to \"chunks_reviewed\"",
+        ));
+    }
+    Ok(v)
 }
 
 /// The verdict's PR; exit 3 when the verdict is for another head than the current one.

@@ -162,3 +162,16 @@ fn apply_refuses_a_comment_without_every_chunk() {
     );
     assert!(fake.statuses_of("sha42").is_empty());
 }
+
+#[test]
+fn an_approval_must_list_its_chunks_not_count_them() {
+    // `chunk_count` from the pack must not stand in for the chunks reviewed.
+    let fake = setup(3);
+    for sub in ["post", "comment"] {
+        let (code, v) = call(&fake, sub, &verdict("3"));
+        assert_eq!(code, 2, "{sub}: {v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("lists the chunks it reviewed"), "{v}");
+        nothing_written(&fake);
+    }
+}
