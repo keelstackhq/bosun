@@ -311,3 +311,19 @@ fn a_failed_apply_with_only_an_outsiders_newer_comment_withdraws() {
     assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
     assert!(withdrawn(&verdicts(&fake)), "{:?}", verdicts(&fake));
 }
+
+#[test]
+fn the_ignore_cap_after_a_green_withdraws() {
+    // A writer's request-changes races q's apply, buried under 21 outsiders' comments: the cap
+    // is reached before it is seen, so q's green must not stand.
+    let fake = pr();
+    verdict_comment(&fake, HEAD, "rev", "session_q");
+    push(&fake, 2, "rev", body("request-changes", "session_s"));
+    for _ in 0..21 {
+        push(&fake, 2, "mallory", body("approve", "session_m"));
+    }
+    fake.permission("mallory", "read");
+    let v = check(&fake);
+    assert!(v["data"]["verdict_reapplied"].is_null(), "{v}");
+    assert!(withdrawn(&verdicts(&fake)));
+}

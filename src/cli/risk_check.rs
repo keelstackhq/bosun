@@ -1298,7 +1298,11 @@ fn reapply_verdict(app: &App, w: &GateWriter, pull: &Pull) -> Option<u64> {
             Err(e) => Some(Err(e)),
         };
         match applied {
-            None | Some(Ok(false)) if ignored.len() == MAX_IGNORED => return done(stands),
+            // Past a green, an unseen older candidate may be a racing request for changes.
+            None | Some(Ok(false)) if ignored.len() == MAX_IGNORED && rounds > 0 => {
+                return withdraw("too many refused verdict comments to confirm it");
+            }
+            None | Some(Ok(false)) if ignored.len() == MAX_IGNORED => return None,
             None | Some(Ok(false)) => {
                 ignored.push(id);
                 continue;
