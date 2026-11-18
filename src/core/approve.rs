@@ -2,6 +2,7 @@
 //! Pure: the command reads the statuses and check runs and passes them in.
 
 use crate::core::lease::Member;
+use crate::time::Timestamp;
 
 /// The start of the `risk-check` description while a high-risk PR waits for an owner.
 pub const WAITING_PREFIX: &str = "high risk, owner approval needed";
@@ -587,7 +588,7 @@ pub fn chat_comment(head: &str, session: &str, at: &str, question: Option<&str>)
 /// `head` is 40 lowercase hex, and exactly one line mentions the marker, which reads exactly
 /// `<!-- bosun:chat-approval v1 session=<id> head=<head>[ question=<id>] -->` (keys in this
 /// order, none unknown or repeated). The risk-check counter and the hook guard share this rule.
-pub fn parse_chat_record(body: &str, head: &str) -> Option<ChatRecord> {
+pub fn parse_chat_record(body: &str, head: &str, pr: Option<u64>) -> Option<ChatRecord> {
     let hex = |c: u8| c.is_ascii_digit() || (b'a'..=b'f').contains(&c);
     if head.len() != 40 || !head.bytes().all(hex) {
         return None;
@@ -615,16 +616,29 @@ pub fn parse_chat_record(body: &str, head: &str) -> Option<ChatRecord> {
         None => None,
         Some(q) => Some(q.strip_prefix("question=").filter(|q| !q.is_empty())?),
     };
-    kv.next().is_none().then(|| ChatRecord {
+    if kv.next().is_some() {
+        return None;
+    }
+    if let Some(q) = question {
+        // `<pr>-<short head>-<unix secs>`: it must name this head, and this PR when known.
+        let mut parts = q.splitn(3, '-');
+        let (q_pr, q_short) = (parts.next()?, parts.next()?);
+        if q_short != &head[..7] || pr.is_some_and(|n| q_pr != n.to_string()) {
+            return None;
+        }
+    }
+    Some(ChatRecord {
         head: head.into(),
         session: session.into(),
         question: question.map(Into::into),
     })
 }
 
-/// Whether `session`'s newest registry record is an orchestrator: a root (depth 1, no parent)
-/// or origin `local` or `slack`. Wave agent ids (`S/task`, any `/`) never are.
-pub fn is_orchestrator(members: &[Member], session: &str) -> bool {
+/// Whether `session`'s newest registry record is an orchestrator: it has no parent and is a
+/// root (depth 1) or origin `local` or `slack`, and it has not expired at `now` (the registry
+/// parses `expires` on load; one that did not parse never reaches here). Wave agent ids
+/// (`S/task`, any `/`) never are.
+pub fn is_orchestrator(members: &[Member], session: &str, now: Timestamp) -> bool {
     if session.is_empty() || session.contains('/') {
         return false;
     }
@@ -633,7 +647,9 @@ pub fn is_orchestrator(members: &[Member], session: &str) -> bool {
         .filter(|m| m.session == session)
         .max_by_key(|m| m.comment_id)
         .is_some_and(|m| {
-            (m.depth == 1 && m.parent.is_none()) || matches!(m.origin.as_str(), "local" | "slack")
+            m.parent.is_none()
+                && m.expires.0 > now.0
+                && (m.depth == 1 || matches!(m.origin.as_str(), "local" | "slack"))
         })
 }
 
@@ -649,6 +665,10 @@ mod tests {
     const H: &str = "abcdef1234567890abcdef1234567890abcdef12";
     const H2: &str = "1111111111111111111111111111111111111111";
 
+    fn parse_chat_record(body: &str, head: &str) -> Option<ChatRecord> {
+        super::parse_chat_record(body, head, None)
+    }
+
     fn member(session: &str, origin: &str, parent: Option<&str>, depth: u32, id: u64) -> Member {
         Member {
             session: session.into(),
@@ -656,7 +676,7 @@ mod tests {
             area: None,
             parent: parent.map(Into::into),
             depth,
-            expires: crate::time::Timestamp(0),
+            expires: crate::time::Timestamp(1000),
             slack: None,
             comment_id: id,
         }
@@ -734,13 +754,25 @@ mod tests {
             member("kid", "spawned", Some("root"), 2, 4),
             member("S/1", "local", None, 1, 5),
         ];
+        let is_orchestrator = |m: &[Member], s: &str| super::is_orchestrator(m, s, Timestamp(100));
         assert!(is_orchestrator(&m, "root"));
-        assert!(is_orchestrator(&m, "loc"));
-        assert!(is_orchestrator(&m, "slk"));
+        assert!(!is_orchestrator(&m, "loc"), "origin local with a parent");
+        assert!(!is_orchestrator(&m, "slk"), "origin slack with a parent");
         assert!(!is_orchestrator(&m, "kid"));
         assert!(!is_orchestrator(&m, "S/1"));
         assert!(!is_orchestrator(&m, "nobody"));
         assert!(!is_orchestrator(&m, ""));
+        let mut free = vec![
+            member("loc", "local", None, 2, 1),
+            member("slk", "slack", None, 2, 2),
+        ];
+        assert!(is_orchestrator(&free, "loc"));
+        assert!(is_orchestrator(&free, "slk"));
+        // Expiry is honoured: expired at `now` (equal counts as expired).
+        free[0].expires = Timestamp(100);
+        assert!(!is_orchestrator(&free, "loc"));
+        free[0].expires = Timestamp(101);
+        assert!(is_orchestrator(&free, "loc"));
         // The newest record for a session wins.
         let later = vec![
             member("x", "local", None, 1, 1),
@@ -755,20 +787,37 @@ mod tests {
     }
 
     #[test]
+    fn question_binds_the_pr_and_the_head() {
+        let q = question_id(12, H, 1_700_000_000);
+        let body = chat_comment(H, "s", "t", Some(&q));
+        assert!(super::parse_chat_record(&body, H, Some(12)).is_some());
+        assert!(super::parse_chat_record(&body, H, None).is_some());
+        assert_eq!(super::parse_chat_record(&body, H, Some(13)), None);
+        let other = question_id(12, H2, 1);
+        let body = chat_comment(H, "s", "t", Some(&other));
+        assert_eq!(super::parse_chat_record(&body, H, Some(12)), None);
+        assert_eq!(super::parse_chat_record(&body, H, None), None);
+        let junk = chat_comment(H, "s", "t", Some("q"));
+        assert_eq!(super::parse_chat_record(&junk, H, None), None);
+        let none = chat_comment(H, "s", "t", None);
+        assert!(super::parse_chat_record(&none, H, Some(12)).is_some());
+    }
+
+    #[test]
     fn parse_is_strict() {
-        let ok = chat_comment(H, "s", "t", Some("q"));
+        let ok = chat_comment(H, "s", "t", Some("1-abcdef1-2"));
         let m = |marker: &str| ok.replacen("session=s head=", marker, 1);
         // Keys out of order, unknown, duplicated.
         assert_eq!(parse_chat_record(&m("head=x session=s head="), H), None);
         assert_eq!(parse_chat_record(&m("session=s x=1 head="), H), None);
         assert_eq!(parse_chat_record(&m("session=s session=s head="), H), None);
         let swapped = ok.replacen(
-            &format!("head={H} question=q"),
-            &format!("question=q head={H}"),
+            &format!("head={H} question=1-abcdef1-2"),
+            &format!("question=1-abcdef1-2 head={H}"),
             1,
         );
         assert_eq!(parse_chat_record(&swapped, H), None);
-        let dup_q = ok.replacen("question=q", "question=q question=r", 1);
+        let dup_q = ok.replacen("question=1-abcdef1-2", "question=1-abcdef1-2 question=r", 1);
         assert_eq!(parse_chat_record(&dup_q, H), None);
         // Head must be 40 lowercase hex.
         let short = chat_comment("abc", "s", "t", None);
