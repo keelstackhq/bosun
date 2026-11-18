@@ -263,11 +263,11 @@ fn chat_slack_owner_ok() {
         &fake,
         tmp.path(),
         "session_tag",
-        &["--slack-user", "U0ADA1"],
+        &["--question", Q, "--slack-user", "U0ADA1"],
         &env,
     );
     assert_eq!(code, 0, "{v}");
-    let body = bosun::core::approve::chat_comment(HEAD, "session_tag", NOW, None);
+    let body = bosun::core::approve::chat_comment(HEAD, "session_tag", NOW, Some(Q));
     assert_eq!(chat_comments(&fake), vec![body]);
 }
 
@@ -281,7 +281,7 @@ fn chat_slack_head_moved_refused() {
         &fake,
         tmp.path(),
         "session_tag",
-        &["--slack-user", "U0ADA1"],
+        &["--question", Q, "--slack-user", "U0ADA1"],
         &env,
     );
     refused(&fake, r, 3);
@@ -309,6 +309,89 @@ fn chat_short_head_is_usage_error() {
 }
 
 #[test]
+fn chat_slack_hold_refused() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    answer(tmp.path(), "1-0123456-1762768801", "hold", 1, HEAD);
+    let env = [("BOSUN_ORIGIN", "slack")];
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_tag",
+        &["--question", Q, "--slack-user", "U0ADA1"],
+        &env,
+    );
+    refused(&fake, r, 5);
+}
+
+#[test]
+fn chat_slack_wrong_question_prefix_refused() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    let env = [("BOSUN_ORIGIN", "slack")];
+    for q in ["2-0123456-1762768800", "1-0000000-1762768800", "x"] {
+        let r = chat(
+            &fake,
+            tmp.path(),
+            "session_tag",
+            &["--question", q, "--slack-user", "U0ADA1"],
+            &env,
+        );
+        refused(&fake, r, 5);
+    }
+}
+
+#[test]
+fn chat_slack_user_needs_question() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "session_tag", "slack", None, 2);
+    let env = [("BOSUN_ORIGIN", "slack")];
+    let r = chat(
+        &fake,
+        tmp.path(),
+        "session_tag",
+        &["--slack-user", "U0ADA1"],
+        &env,
+    );
+    assert_eq!(r.0, 2, "{}", r.1);
+}
+
+#[test]
+fn chat_wave_agent_id_refused() {
+    let (fake, tmp) = (setup(), repo());
+    join(&fake, "S1/task", "local", None, 1);
+    answer(tmp.path(), Q, "approve", 1, HEAD);
+    let r = chat(&fake, tmp.path(), "S1/task", &["--question", Q], &[]);
+    refused(&fake, r, 5);
+}
+
+fn usage_args(fake: &FakeGithub, tmp: &Path, args: &[&str]) -> i32 {
+    let out = bosun()
+        .current_dir(tmp)
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", "session_orch")
+        .env("BOSUN_NOW", NOW)
+        .arg("approve")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(chat_comments(fake).is_empty());
+    out.status.code().unwrap()
+}
+
+#[test]
+fn chat_conflicting_flags_are_usage_errors() {
+    let (fake, tmp) = (setup(), repo());
+    let (a, b) = (format!("1@{HEAD}"), format!("2@{HEAD}"));
+    let two = [a.as_str(), b.as_str(), "--chat", "--question", Q];
+    assert_eq!(usage_args(&fake, tmp.path(), &two), 2);
+    let list = [a.as_str(), "--chat", "--question", Q, "--list"];
+    assert_eq!(usage_args(&fake, tmp.path(), &list), 2);
+    let via = [a.as_str(), "--chat", "--question", Q, "--via-signer"];
+    assert_eq!(usage_args(&fake, tmp.path(), &via), 2);
+}
+
+#[test]
 fn chat_slack_non_owner_refused() {
     let (fake, tmp) = (setup(), repo());
     join(&fake, "session_tag", "slack", None, 2);
@@ -317,7 +400,7 @@ fn chat_slack_non_owner_refused() {
         &fake,
         tmp.path(),
         "session_tag",
-        &["--slack-user", "U0EVE9"],
+        &["--question", Q, "--slack-user", "U0EVE9"],
         &env,
     );
     refused(&fake, r, 5);
@@ -333,7 +416,7 @@ fn chat_slack_user_needs_slack_origin() {
         &fake,
         tmp.path(),
         "session_orch",
-        &["--slack-user", "U0ADA1"],
+        &["--question", Q, "--slack-user", "U0ADA1"],
         &local,
     );
     refused(&fake, r, 5);
@@ -348,7 +431,7 @@ fn chat_slack_user_needs_slack_join() {
         &fake,
         tmp.path(),
         "session_orch",
-        &["--slack-user", "U0ADA1"],
+        &["--question", Q, "--slack-user", "U0ADA1"],
         &slack,
     );
     refused(&fake, r, 5);

@@ -34,9 +34,9 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
             "run `bosun approve --list`, ask the owner, then `bosun approve <pr>@<head> --chat --question <id>`",
         )
     })?;
-    if args.question.is_none() && args.slack_user.is_none() {
+    if args.question.is_none() {
         return Err(BosunError::usage(
-            "--chat needs --question <id> (the owner's AskUserQuestion answer) or --slack-user U...",
+            "--chat needs --question <id> (data.ready[].ask.question_id), also with --slack-user U...",
             ASK_AGAIN,
         ));
     }
@@ -97,7 +97,7 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
             "get one independent clean verdict with `bosun verdict comment --from -` in a reviewer session, then record again",
         ));
     }
-    let question = match &args.slack_user {
+    match &args.slack_user {
         // Both the env origin and the registry join: BOSUN_ORIGIN alone is set by the session.
         Some(_) if app.ctx.origin != Origin::Slack || !joined_from_slack(&members, session) => {
             return Err(BosunError::needs_human(
@@ -113,14 +113,24 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
                     "only an owner's answer counts: an owner adds `slack = \"U...\"` to their [[owner]] table in governance/owners.toml, or answers on GitHub",
                 ));
             }
-            None
+            // A Slack answer is not stored; the id still names this PR and head, and a hold wins.
+            let q = args.question.as_deref().unwrap_or_default();
+            let named = q.starts_with(&format!("{pr}-{}-", &head[..7]));
+            if !named || answers::held(&app.ctx.dir, pr, head) {
+                return Err(BosunError::needs_human(
+                    format!(
+                        "question {q:?} does not name #{pr} at {head}, or the owner held it; nothing was recorded"
+                    ),
+                    ASK_AGAIN,
+                ));
+            }
         }
         None => {
             let q = args.question.as_deref().unwrap_or_default();
             stored_approve(&app.ctx.dir, q, pr, head, session)?;
-            Some(q)
         }
     };
+    let question = args.question.as_deref();
     let body = chat_comment(head, session, &app.ctx.now.to_string(), question);
     let c = gh.add_comment(pr, &body)?;
     Ok(json!({"pr": pr, "head_sha": head, "comment_id": c.id, "question_id": question}))

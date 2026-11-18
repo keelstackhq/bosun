@@ -1,8 +1,8 @@
 //! `bosun approve`: lists the PRs that wait for an owner. The default approval (D-012): the
 //! session asks the owner with a form in the Claude Code chat and the orchestrator records the
-//! answer with `--chat` (D-018; a signature with `--sign-key` stays optional). The fallback: the owner, on their own machine, posts the
-//! comment `/bosun approve <head>` (spec section 8).
-//! Every GitHub call uses `BOSUN_OWNER_TOKEN`, never `GITHUB_TOKEN`: the comment must come from
+//! answer with `--chat` (D-018; it uses the session's own token, and a signature with `--sign-key`
+//! stays optional). The fallback: the owner, on their own machine, posts the comment `/bosun approve <head>` (spec section 8).
+//! Apart from `--chat`, every GitHub call uses `BOSUN_OWNER_TOKEN`, never `GITHUB_TOKEN`: the comment must come from
 //! a plain user token, which agent sessions do not have. `--list` only reads: without the owner
 //! token it reads with no token at all and lists what it can. The owner names the head sha of each
 //! PR (`<pr>@<sha>`, from `--list`), so a push after the listing is never approved unseen.

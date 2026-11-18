@@ -696,15 +696,10 @@ pub struct ApproveArgs {
     pub bootstrap: bool,
     /// Record the owner's chat answer for one `<pr>@<head>` as a chat approval comment (an
     /// orchestrator only; spec section 8).
-    #[arg(long, conflicts_with_all = ["list", "main_open", "sign_key"])]
+    #[arg(long, conflicts_with_all = ["list", "main_open", "sign_key", "via_signer"])]
     pub chat: bool,
-    /// With --chat: the question id the owner answered (`data.ready[].ask.question_id`).
-    #[arg(
-        long,
-        value_name = "ID",
-        requires = "chat",
-        conflicts_with = "slack_user"
-    )]
+    /// With --chat (required): the question id the owner answered (`data.ready[].ask.question_id`).
+    #[arg(long, value_name = "ID", requires = "chat")]
     pub question: Option<String>,
     /// With --chat: the owner's Slack user ID who answered in the Claude Tag thread.
     #[arg(long, value_name = "U...", requires = "chat")]
