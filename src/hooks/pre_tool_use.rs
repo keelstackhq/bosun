@@ -10,9 +10,9 @@ use crate::app::{App, trusted_notes};
 use crate::cli::stamps;
 use crate::config::Config;
 use crate::core::guard::{
-    ChildTask, Script, bash_writes, child_task_create, config_fetch_risk, edit_lock, edited_path,
-    foreign_lock, prereqs_lock, prereqs_lock_for, pushes, records_chat_approval, script_rules,
-    tool_rules,
+    ChildTask, Script, bash_writes, chat_identity_override, child_task_create, config_fetch_risk,
+    edit_lock, edited_path, foreign_lock, prereqs_lock, prereqs_lock_for, pushes,
+    records_chat_approval, script_rules, tool_rules,
 };
 use crate::core::lease::leases_of;
 use crate::core::mode::PushGates;
@@ -124,10 +124,13 @@ fn judge(cwd: Option<&Path>, input: &Value) -> Option<String> {
                 Err(e) => eprintln!("bosun: warning: edit-lock skipped: {e}"),
             }
         }
-        if records_chat_approval(command) && !orchestrator(&dir) {
+        if records_chat_approval(command)
+            && (chat_identity_override(command) || !orchestrator(&dir))
+        {
             return Some(deny(
                 "only an orchestrator session records a chat approval (`bosun approve \
-                 <pr>@<head> --chat`); a child hands the question to its orchestrator",
+                 <pr>@<head> --chat`, without setting BOSUN_* or CLAUDE_CODE_* in the \
+                 command); a child hands the question to its orchestrator",
             ));
         }
         let repeat = repeat_lock(&dir, input, &tool_input);
@@ -606,6 +609,11 @@ fn orchestrator(dir: &Path) -> bool {
     let Ok(app) = App::load(Some(dir)) else {
         return false;
     };
+    // A child's own environment (`CLAUDE_CODE_CHILD_SESSION=1`) is no orchestrator, whatever
+    // join it wrote itself.
+    if app.ctx.origin == crate::ctx::Origin::Spawned {
+        return false;
+    }
     let Ok(Some((_, notes))) = crate::registry::load(app.gh.as_ref()) else {
         return false;
     };

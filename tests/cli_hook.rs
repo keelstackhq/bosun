@@ -946,3 +946,34 @@ fn only_a_live_orchestrator_may_run_bosun_approve_chat() {
     );
     denied(&kid);
 }
+
+#[test]
+fn a_child_cannot_become_the_chat_orchestrator_by_its_own_join_or_env() {
+    let (fake, tmp) = (FakeGithub::start(), repo());
+    fake.issue(1, "bosun registry", &["bosun:registry"], "");
+    let join = format!(
+        "{{\"bosun\":\"join\",\"session\":\"kid\",\"origin\":\"local\",\"depth\":1,\"expires\":\"{LIVE}\"}}"
+    );
+    fake.comment(1, &join);
+    let h = "0123456789abcdef0123456789abcdef01234567";
+    let run = |origin: &str, cmd: String| {
+        let input = call(tmp.path(), "Bash", json!({ "command": cmd }));
+        hook_with(
+            "kid",
+            origin,
+            Some(&fake),
+            tmp.path(),
+            T0,
+            "pre-tool-use",
+            &input,
+        )
+    };
+    let plain = format!("bosun approve 3@{h} --chat");
+    // The self-written join says local and live, but the hook's own origin is spawned.
+    denied(&run("spawned", plain.clone()));
+    // The same join as a real local session is accepted ...
+    allowed(&run("local", plain.clone()));
+    // ... unless the command sets its own identity or spells the name oddly.
+    denied(&run("local", format!("BOSUN_ORIGIN=local {plain}")));
+    denied(&run("spawned", format!("bos''un approve 3@{h} --chat")));
+}

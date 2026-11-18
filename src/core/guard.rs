@@ -482,7 +482,23 @@ static CHAT_FORM: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 fn carries_chat_form(text: &str) -> bool {
-    CHAT_FORM.is_match(text)
+    CHAT_FORM.is_match(text) || CHAT_FORM.is_match(&decode_escapes(text))
+}
+
+/// `text` with `\uXXXX` and `\xNN` escapes (JSON, printf, `$'..'`) replaced by their character,
+/// so a record cannot be spelled past the matcher.
+fn decode_escapes(text: &str) -> String {
+    static ESC: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})").expect("escape regex")
+    });
+    ESC.replace_all(text, |c: &regex::Captures| {
+        let hex = c.get(1).or_else(|| c.get(2)).map_or("", |m| m.as_str());
+        u32::from_str_radix(hex, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .map_or_else(String::new, |ch| ch.to_string())
+    })
+    .into_owned()
 }
 
 /// Every string value in `v`, at any depth.
@@ -508,17 +524,38 @@ fn chat_rule(command: &str) -> Option<String> {
     (!reads).then(|| format!("the command writes a chat approval record: {CHAT_FIX}"))
 }
 
-/// Whether the command runs `bosun approve … --chat` anywhere (any word `approve` and any word
-/// `--chat` in a command that names `bosun`, nested or not). Over-matches on purpose: the hook
-/// lets only an orchestrator session through (fail closed).
+/// The command with quotes and backslashes removed (`bos''un`, `bo\\sun` read as `bosun`) and
+/// split into words at whitespace and shell separators.
+fn dequoted_words(command: &str) -> Vec<String> {
+    let plain: String = command
+        .chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect();
+    plain
+        .split(|c: char| c.is_whitespace() || ";&|()`$<>".contains(c))
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether the command may run `bosun approve … --chat`: the words `approve` and `--chat` both
+/// appear (dequoted, nested or not). No `bosun` word is required, so a spelling of the command
+/// name cannot slip past. Over-matches on purpose: the hook lets only an orchestrator through.
 pub fn records_chat_approval(command: &str) -> bool {
-    let words = shell_words(command);
-    let has = |w: &str| {
-        words
-            .iter()
-            .any(|x| x == w || x.split(['"', '\'', ' ']).any(|p| p == w))
-    };
-    command.contains("bosun") && has("approve") && has("--chat")
+    let words = dequoted_words(command);
+    ["approve", "--chat"]
+        .iter()
+        .all(|w| words.iter().any(|x| x == w))
+}
+
+/// Whether a command that records a chat approval also sets its own identity
+/// (`BOSUN_SESSION=…`, `BOSUN_ORIGIN=…`, `CLAUDE_CODE_…=…`): refused for everyone.
+pub fn chat_identity_override(command: &str) -> bool {
+    records_chat_approval(command)
+        && dequoted_words(command).iter().any(|w| {
+            let name = w.split('=').next().unwrap_or("");
+            w.contains('=') && (name.starts_with("BOSUN_") || name.starts_with("CLAUDE_CODE_"))
+        })
 }
 
 /// The values under any key whose name contains `label`, at any depth, as JSON text.
@@ -7253,12 +7290,44 @@ mod tests {
             format!("bosun approve 12@{H} --chat"),
             format!("cd x && bosun approve 12@{H} --chat --question q"),
             format!("bash -c \"bosun approve 12@{H} --chat\""),
+            format!("bos''un approve 12@{H} --chat"),
+            format!("bo\\sun approve 12@{H} --chat"),
+            format!("\"bo\"sun \"approve\" 12@{H} '--chat'"),
+            format!("/usr/bin/bosun approve 12@{H} --chat"),
         ] {
             assert!(records_chat_approval(&cmd), "{cmd}");
             assert_eq!(bash(&cmd, "feat"), None, "{cmd}");
         }
         assert!(!records_chat_approval("bosun approve 12 --sign-key k"));
         assert!(!records_chat_approval("git log --chat"));
+    }
+
+    #[test]
+    fn chat_approve_with_identity_assignment_is_flagged() {
+        for cmd in [
+            format!("BOSUN_ORIGIN=local bosun approve 1@{H} --chat"),
+            format!("env BOSUN_SESSION=root bosun approve 1@{H} --chat"),
+            format!("export CLAUDE_CODE_CHILD_SESSION=0; bosun approve 1@{H} --chat"),
+            format!("BOSUN_ORIGIN='local' bos''un approve 1@{H} --chat"),
+        ] {
+            assert!(chat_identity_override(&cmd), "{cmd}");
+        }
+        assert!(!chat_identity_override(&format!(
+            "bosun approve 1@{H} --chat"
+        )));
+        assert!(!chat_identity_override("BOSUN_ORIGIN=local bosun status"));
+    }
+
+    #[test]
+    fn escaped_records_are_still_records() {
+        let u = r"gh api repos/o/r/issues/3/comments -f body='\u002fbosun approve 0123456789abcdef0123456789abcdef01234567 chat'";
+        let x = r"printf '\x3c!-- bosun:chat-approval v1 --\x3e' | gh pr comment 3 -F -";
+        for cmd in [u, x] {
+            assert!(
+                bash(cmd, "feat").is_some_and(|w| w.contains("chat approval record")),
+                "{cmd}"
+            );
+        }
     }
 
     #[test]
