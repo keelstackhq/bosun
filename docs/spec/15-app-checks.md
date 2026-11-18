@@ -123,7 +123,7 @@ key goes only to the token step, the token only to the bosun step. main-health's
   cannot clear an older red or pending App run on the same head; re-run the gate workflow with
   the token (a status carries no proof of who posted it, so a newer one is never trusted over
   the App). A token that cannot read check runs (a private repo whose workflow grants no
-  `checks: read`) reads statuses only, one stderr line. Readers: risk-check (pending repair, carry), `bosun
+  `checks: read`, a 403 that is not a rate limit) reads statuses only, one stderr line; any other error fails the reader. Readers: risk-check (pending repair, carry), `bosun
   approve --list`, `review-pack` (`since_sha`), `bosun pr --auto-merge` (in `checks` mode a gate
   context counts only as a check run of the App and `ci-ok` only from github-actions; in
   `statuses` and `dual` a status or check run, as today). `Ctx::load` records the trusted App
