@@ -18,7 +18,7 @@ use crate::cli::risk_check::{
     autonomous_clean, autonomous_inputs, decisive_review, dismissed_review, enrolled_keys,
     owner_comment, owner_logins, review_models,
 };
-use crate::cli::{pr_no_ci::provider_at, risk_check::chat_counted};
+use crate::cli::{pr_no_ci::provider_default, risk_check::chat_counted};
 use crate::config::{CONFIG_FILE, CiProvider, Config};
 use crate::core::approve::{
     APPROVERS_PATH, AUTONOMOUS_LINE, BOOTSTRAP_END, Form, Policy, Readiness, Role, Run, Stat,
@@ -165,7 +165,7 @@ fn summary_of(gh: &dyn Github, p: &Pull) -> Result<(Readiness, String)> {
 fn board_of(gh: &dyn Github, pulls: Vec<Pull>) -> Result<Board> {
     let mut board = Board::default();
     for p in pulls {
-        if provider_at(gh, &p.base_sha)? == CiProvider::None {
+        if provider_default(gh)? == CiProvider::None {
             let (r, verdict) = summary_of(gh, &p)?;
             if let Readiness::Ready(risk) = r
                 && !chat_counted(gh, &p)?

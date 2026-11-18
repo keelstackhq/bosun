@@ -53,6 +53,7 @@ fn setup(high: bool, ci: Option<&str>) -> (FakeGithub, tempfile::TempDir) {
     fake.pull_as_issue(20, "t");
     if let Some(c) = ci {
         fake.content(".bosun/bosun.toml", BASE, c);
+        fake.content(".bosun/bosun.toml", "refs/heads/main", c);
     }
     if high {
         let patch = Some("@@ -0,0 +1,1 @@\n+x");
@@ -437,4 +438,16 @@ fn merge_405_is_conflict_and_a_merge_already_done_is_ok() {
     });
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 0, "{v}");
+}
+
+/// The provider is the default branch's, read now: a PR whose own checkout says none, on a repo
+/// whose default branch says github, takes the CI path (required checks), not the local one.
+#[test]
+fn merge_default_branch_github_head_none_takes_the_ci_path() {
+    let (fake, dir) = setup(false, Some("[ci]\nprovider = \"github\"\n"));
+    verdict(&fake);
+    // `repo()` checks out a config that says none: the head's own claim.
+    let (code, v) = merge(&fake, dir.path());
+    assert_ne!(code, 0, "{v}");
+    assert!(merge_puts(&fake).is_empty(), "{v}");
 }

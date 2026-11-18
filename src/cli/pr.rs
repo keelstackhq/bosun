@@ -610,7 +610,16 @@ pub fn run(dir: Option<&Path>, args: &PrArgs) -> CmdResult {
                 ));
             }
         }
-        if super::pr_no_ci::provider_at(gh, &pull.base_sha)? == CiProvider::None {
+        if super::pr_no_ci::provider_default(gh)? == CiProvider::None {
+            if pull.base_ref != base {
+                return Err(BosunError::conflict(
+                    format!(
+                        "PR #{} targets {}, not the default branch {base}",
+                        pull.number, pull.base_ref
+                    ),
+                    "retarget the PR to the default branch: without CI only a PR into it is checked locally",
+                ));
+            }
             return super::pr_no_ci::ready(&app, n, &issue, plain, pull);
         }
         check_local_gates(&app, &format!("bosun pr {n} --ready"), &pull)?;

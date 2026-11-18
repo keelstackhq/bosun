@@ -62,6 +62,7 @@ fn setup_with(
     fake.pull_as_issue(20, "t");
     if let Some(c) = ci {
         fake.content(".bosun/bosun.toml", BASE, c);
+        fake.content(".bosun/bosun.toml", "refs/heads/main", c);
     }
     if high {
         let patch = Some("@@ -0,0 +1,1 @@\n+x");
@@ -362,6 +363,32 @@ fn ready_summary_round_trips() {
     let low = ready_summary(H, &g, "normal", "s", None);
     assert_eq!(summary_readiness(Some(&low)).0, Readiness::NotWaiting);
     assert_eq!(summary_readiness(None).0, Readiness::NotWaiting);
+}
+
+#[test]
+fn ready_no_ci_refuses_a_pr_retargeted_off_the_default_branch() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    verdict(&fake, "session_rev", "approve");
+    fake.pull_set(20, "base", json!({"sha": BASE, "ref": "release"}));
+    let (code, v) = ready(&fake, dir.path());
+    assert_eq!(code, 3, "{v}");
+    assert!(summaries(&fake).is_empty());
+}
+
+#[test]
+fn the_no_ci_path_reads_the_default_branch_not_the_head_or_the_pr_base() {
+    // The checkout (the PR head) says none; the default branch says github: the no-CI path is
+    // not used, so no local summary is posted.
+    let (fake, dir) = setup(false, None);
+    fake.content(
+        ".bosun/bosun.toml",
+        "refs/heads/main",
+        "[ci]\nprovider = \"github\"\n",
+    );
+    fake.content(".bosun/bosun.toml", BASE, NO_CI);
+    verdict(&fake, "session_rev", "approve");
+    let _ = ready(&fake, dir.path());
+    assert!(summaries(&fake).is_empty());
 }
 
 /// The owner's chat answer drops the PR from the board at once, before `pr --ready` reruns.
