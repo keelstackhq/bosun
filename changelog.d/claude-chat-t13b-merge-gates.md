@@ -1,0 +1,1 @@
+- `bosun merge` without CI never trusts stamp files: it reruns the base's required gates on a temporary worktree of the exact head (base tool configs overlaid, symlinks refused); tool-config files are R-ci.

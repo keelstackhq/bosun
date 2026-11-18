@@ -30,9 +30,11 @@ pub struct Request<'a> {
 
 /// Run `git <args>` in `root`; stdout on success.
 pub(crate) fn git(root: &Path, args: &[&str]) -> Result<String, BosunError> {
+    // Hooks never run: a head under test could plant one in the repo.
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
+        .args(["-c", "core.hooksPath=/dev/null"])
         .args(args)
         .output()
         .map_err(|e| {

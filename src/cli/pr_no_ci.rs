@@ -102,7 +102,7 @@ pub fn ready(app: &App, n: u64, issue: &Issue, plain: bool, mut pull: Pull) -> C
     let (pr, head) = (pull.number, pull.head_sha.clone());
     let rerun = format!("bosun pr {n} --ready");
     // What must pass comes from the default branch, not this checkout; `bosun merge` reruns it.
-    let required = super::stamps::ready_gates_at(gh)?;
+    let required = super::merge_gates::required_gates(gh)?;
     let gates =
         super::pr::check_local_gates(app, &rerun, &pull, Some(required)).map_err(|mut e| {
             if e.data

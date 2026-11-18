@@ -15,7 +15,7 @@ use crate::gates::integrity::{self, Request};
 use crate::output::{BosunError, CmdResult};
 
 /// Split `BOSUN_INTEGRITY_ALLOW` into kinds.
-fn parse_allow(text: &str) -> Vec<String> {
+pub(crate) fn parse_allow(text: &str) -> Vec<String> {
     text.split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -118,7 +118,12 @@ pub fn check(dir: Option<&Path>, base: Option<&str>) -> CmdResult {
     check_with(dir, base, &body, &allow)
 }
 
-fn check_with(dir: Option<&Path>, base: Option<&str>, body: &str, allow: &[String]) -> CmdResult {
+pub(crate) fn check_with(
+    dir: Option<&Path>,
+    base: Option<&str>,
+    body: &str,
+    allow: &[String],
+) -> CmdResult {
     let dir = dir.map(Path::to_path_buf).unwrap_or_else(|| ".".into());
     let root = repo_root(&dir)?;
     let (base, _) = resolve_ci(&root, base)?;

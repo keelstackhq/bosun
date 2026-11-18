@@ -2163,6 +2163,17 @@ mod tests {
             assert_eq!(ids(&eval(&[file(p, &[])])), ["R-ci"], "{p}");
         }
         assert!(eval(&[file("src/governance.rs", &[])]).is_empty());
+        // Files that steer how the gates build and run are the owner's.
+        for p in [
+            "clippy.toml",
+            ".clippy.toml",
+            "rustfmt.toml",
+            "x/.rustfmt.toml",
+            "a/rust-toolchain.toml",
+            "a/.cargo/config",
+        ] {
+            assert!(ids(&eval(&[file(p, &[])])).contains(&"R-ci"), "{p}");
+        }
     }
 
     #[test]

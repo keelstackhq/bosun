@@ -31,6 +31,7 @@ pub mod lesson;
 pub mod lesson_triage;
 pub mod main_triage;
 pub mod merge;
+pub mod merge_gates;
 pub mod metrics;
 pub mod migrate;
 pub mod mode;
