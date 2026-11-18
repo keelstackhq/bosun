@@ -71,8 +71,13 @@ pub fn check_envelope(v: &Value) -> Result<(), String> {
         {
             return Err("error.fix is empty".into());
         }
-        // Only an exit-5 hand-over (`bosun pr` on an already clean PR) carries a `next`.
-        if v["next"] != serde_json::json!([]) && v["exit_code"] != 5 {
+        // Only `bosun pr` on an already clean PR (exit 5) hands over one `send_message`.
+        let next = v["next"].as_array().map_or(0, Vec::len);
+        let handover = v["command"] == "pr"
+            && v["exit_code"] == 5
+            && next == 1
+            && v["next"][0]["tool"] == "send_message";
+        if next > 0 && !handover {
             return Err("next of a failed envelope is not empty".into());
         }
         return Ok(());

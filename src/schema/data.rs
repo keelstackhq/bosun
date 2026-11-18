@@ -199,7 +199,7 @@ digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha
     budget_warnings?: [{epic: int, spent_usd: num, budget_usd: num}], budget_skipped?: [{epic: int, error: str}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
     dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
     sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
-metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str],
+metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str], capped?: bool,
     window: {days: int, main_red: int, reverts: int, failing_heads: int, pushed_heads: int}},
     red_ci: {failing_heads: int, pushed_heads: int, rate_pct: num | null}, merged: int,
     cost_per_merged_usd: num | null, lead_time_p50_hours: num | null, epics: int,

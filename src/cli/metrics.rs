@@ -75,16 +75,27 @@ struct Clock {
 }
 
 impl Clock {
-    fn new() -> Self {
-        let limit = std::env::var("BOSUN_METRICS_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.trim().parse::<f64>().ok())
-            .map_or(Some(90.0), |s| (s > 0.0).then_some(s));
-        Clock {
+    fn new() -> Result<Self> {
+        let limit = match std::env::var("BOSUN_METRICS_TIMEOUT_SECS") {
+            Err(_) => Some(90.0),
+            Ok(v) => match v.trim().parse::<f64>() {
+                Ok(s) if s.is_finite() && s >= 0.0 => (s > 0.0).then_some(s),
+                _ => {
+                    return Err(BosunError::usage(
+                        format!(
+                            "BOSUN_METRICS_TIMEOUT_SECS={:?} is not a number of seconds (0 or more)",
+                            v.trim()
+                        ),
+                        "set BOSUN_METRICS_TIMEOUT_SECS to seconds (default 90; 0 = no limit), or unset it",
+                    ));
+                }
+            },
+        };
+        Ok(Clock {
             start: std::time::Instant::now(),
             limit,
             quiet: false,
-        }
+        })
     }
 
     /// No limit and no progress lines: for the brake that `heal` and `wave tick` read.
@@ -298,7 +309,7 @@ fn trusted_blocks(gh: &dyn Github, all: &[Facts], start: Timestamp) -> Result<Ve
 /// Read-only; the curator Routine opens the PR (R-weaken, so the owner decides).
 fn propose(app: &App, days: u32) -> CmdResult {
     let start = app.ctx.now.minus_secs(i64::from(days) * DAY);
-    let c = collect(app, start, MAX_PRS, &Clock::new())?;
+    let c = collect(app, start, MAX_PRS, &Clock::new()?)?;
     let skipped = c.skipped;
     let all = trusted_blocks(app.gh.as_ref(), &c.facts, start)?;
     // Only rules the base `.bosun/risk.toml` defines can be loosened there (not built-ins
@@ -335,7 +346,7 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
             "pass --max-prs 100",
         ));
     }
-    let days = args.days.unwrap_or(if args.propose { 30 } else { 7 });
+    let days = args.days;
     if days == 0 {
         return Err(BosunError::usage(
             "--days must be at least 1",
@@ -349,7 +360,7 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     let (gh, now) = (app.gh.as_ref(), app.ctx.now);
     let start = now.minus_secs(i64::from(days) * DAY);
     let b7 = now.minus_secs(i64::from(BRAKE_DAYS) * DAY);
-    let clock = Clock::new();
+    let clock = Clock::new()?;
     let Collected {
         facts: all,
         skipped,
@@ -433,6 +444,7 @@ pub fn run(dir: Option<&Path>, args: &MetricsArgs) -> CmdResult {
     let mut data = json!({
         "days": days, "since": start.to_string(), "mode": eff.mode.as_str(),
         "brake": {"knob": eff.knobs.brake.value.as_str(), "on": state.on, "reasons": state.reasons,
+            "capped": skipped > 0,
             "window": {"days": w.days, "main_red": w.main_red, "reverts": w.reverts,
                 "failing_heads": w.failing_heads, "pushed_heads": w.pushed_heads}},
         "red_ci": {"failing_heads": failing, "pushed_heads": pushed, "rate_pct": rate},

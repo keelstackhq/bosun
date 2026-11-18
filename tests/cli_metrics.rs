@@ -463,11 +463,12 @@ fn three_prs(fake: &FakeGithub) {
 }
 
 #[test]
-fn the_window_defaults_to_seven_days() {
+fn the_window_defaults_to_thirty_days() {
     let fake = FakeGithub::start();
     let d = metrics(&fake, &[]);
-    assert_eq!(d["days"], 7, "{d}");
-    assert_eq!(d["since"], "2026-11-05T12:00:00Z");
+    assert_eq!(d["days"], 30, "{d}");
+    assert_eq!(d["since"], "2026-10-13T12:00:00Z");
+    assert_eq!(d["brake"]["capped"], false, "{d}");
     assert!(d.get("capped").is_none(), "{d}");
 }
 
@@ -483,6 +484,7 @@ fn a_per_pr_cap_is_reported_and_progress_goes_to_stderr() {
         (Some(2), Some(1)),
         "{v}"
     );
+    assert_eq!(v["data"]["brake"]["capped"], true, "{v}");
     assert!(err.contains("metrics: PR 1/2"), "{err}");
     assert!(err.contains("metrics: PR 2/2"), "{err}");
     assert!(!err.contains("3/"), "{err}");
@@ -516,4 +518,15 @@ fn a_slow_run_ends_with_an_error_line_not_a_hang() {
     assert!(err.contains("metrics timed out"), "{err}");
     let (code, _, _) = metrics_raw(&fake, &[("BOSUN_METRICS_TIMEOUT_SECS", "0")], &[]);
     assert_eq!(code, 0, "0 means no limit");
+}
+
+#[test]
+fn a_bad_timeout_value_is_usage() {
+    let fake = FakeGithub::start();
+    for bad in ["-5", "soon", "NaN", ""] {
+        let (code, v, _) = metrics_raw(&fake, &[("BOSUN_METRICS_TIMEOUT_SECS", bad)], &[]);
+        assert_eq!(code, 2, "{bad:?}: {v}");
+        let msg = v["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("BOSUN_METRICS_TIMEOUT_SECS"), "{msg}");
+    }
 }

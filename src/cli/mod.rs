@@ -522,9 +522,8 @@ pub struct DigestArgs {
 #[derive(Debug, Args)]
 pub struct MetricsArgs {
     /// The window in days.
-    /// Default 7 (`--propose`: 30).
-    #[arg(long)]
-    pub days: Option<u32>,
+    #[arg(long, default_value_t = 30)]
+    pub days: u32,
     /// Read at most this many PRs (newest update first); the rest are counted in `data.capped`.
     #[arg(long, default_value_t = 100)]
     pub max_prs: usize,
