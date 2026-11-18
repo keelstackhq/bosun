@@ -869,9 +869,9 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     }
     // A chat record that exists but does not count (the orchestrator left, or its join had
     // expired) is the cause to name, not a missing approval.
-    let lapsed = match &need.chat {
+    let lapse = match &need.chat {
         Some(chat) => chat_scan(gh, n, head, &owners, chat)?.1,
-        None => false,
+        None => Lapse::NoRecord,
     };
     let owner_fix = if owners.is_empty() {
         format!("fill {OWNERS_PATH} on the base branch, then an owner must approve head {head}")
@@ -897,12 +897,17 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
         ),
         _ => String::new(),
     };
-    let chat_note = if lapsed {
-        format!(
-            "a chat approval record for head {head} exists but does not count: its orchestrator session left, or its join had expired when the record was written (the registry is read at check time); a live orchestrator must join and record the owner's chat approval again, or: "
-        )
-    } else {
-        String::new()
+    let chat_note = match lapse {
+        Lapse::NoRecord => String::new(),
+        Lapse::Withdrawn => format!(
+            "a chat approval record for head {head} exists but does not count: it was withdrawn by the owner's review (changes requested, or dismissed); the owner must approve again, or: "
+        ),
+        Lapse::Orchestrator => format!(
+            "a chat approval record for head {head} exists but does not count: its orchestrator session left or expired (its join had expired when the record was written; the registry is read at check time); a live orchestrator must join and record the owner's chat approval again, or: "
+        ),
+        Lapse::Unsigned => format!(
+            "a chat approval record for head {head} exists but does not count: it is unsigned (no owner's unedited comment carries it); the orchestrator must post it again as the owner, or: "
+        ),
     };
     let fix = if autonomous {
         format!(
@@ -1508,49 +1513,87 @@ fn chat_approver(
     Ok(chat_scan(gh, pr, head, owners, chat)?.0)
 }
 
-/// [`chat_approver`], plus whether an owner's chat record for `head` exists at all (counted or
-/// not), so a failing check can say a lapsed orchestrator is the cause.
+/// Why a chat record for the head exists but does not count.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lapse {
+    /// No record for this head.
+    NoRecord,
+    /// A record exists, but no owner's unedited comment carries it (nobody signed it).
+    Unsigned,
+    /// The owner's review withdrew it (changes requested, or dismissed with no newer record).
+    Withdrawn,
+    /// The orchestrator left, or its join had expired when the record was written.
+    Orchestrator,
+}
+
+/// [`chat_approver`], plus why a record that exists does not count, so a failing check can name
+/// the cause.
 fn chat_scan(
     gh: &dyn Github,
     pr: u64,
     head: &str,
     owners: &[String],
     chat: &Chat,
-) -> Result<(Option<String>, bool)> {
+) -> Result<(Option<String>, Lapse)> {
     let comments = gh.list_comments(pr)?;
     if !(comments.iter()).any(|c| approve::parse_chat_record(&c.body, head, Some(pr)).is_some()) {
-        return Ok((None, false));
+        return Ok((None, Lapse::NoRecord));
     }
     let owners = if owners.is_empty() && gh.file_at(OWNERS_PATH, chat.base)?.is_none() {
         fallback_owners(gh, chat.author)?
     } else {
         owners.to_vec()
     };
-    let seen = comments.iter().any(|c| {
-        c.unedited()
-            && owners.iter().any(|o| c.user.eq_ignore_ascii_case(o))
-            && approve::parse_chat_record(&c.body, head, Some(pr)).is_some()
-    });
+    let signed_by = |o: &String| {
+        comments.iter().any(|c| {
+            c.unedited()
+                && c.user.eq_ignore_ascii_case(o)
+                && approve::parse_chat_record(&c.body, head, Some(pr)).is_some()
+        })
+    };
+    let seen = owners.iter().any(signed_by);
     let Some((_, notes)) = crate::registry::load(gh)? else {
-        return Ok((None, seen));
+        return Ok((
+            None,
+            if seen {
+                Lapse::Orchestrator
+            } else {
+                Lapse::Unsigned
+            },
+        ));
     };
     let reviews = gh.list_reviews(pr)?;
     let reg = Registry {
         notes: &notes,
         now: crate::core::lease::members(&notes),
     };
+    let mut withdrawn_by_review = false;
     let by = owners.iter().find(|o| {
         let one = std::slice::from_ref(*o);
         match decisive_review(&reviews, o, head).as_deref() {
             Some("DISMISSED") => {
                 let newer = newer_than(&comments, dismissed_at(gh, pr, &reviews, o, head));
-                chat_comment_by(&newer, one, &reg, (pr, head)).is_some()
+                let ok = chat_comment_by(&newer, one, &reg, (pr, head)).is_some();
+                withdrawn_by_review |= !ok && signed_by(o);
+                ok
             }
-            s if withdrawn(s) => false,
+            s if withdrawn(s) => {
+                withdrawn_by_review |= signed_by(o);
+                false
+            }
             _ => chat_comment_by(&comments, one, &reg, (pr, head)).is_some(),
         }
     });
-    Ok((by.cloned(), seen))
+    let lapse = if by.is_some() {
+        Lapse::NoRecord
+    } else if withdrawn_by_review {
+        Lapse::Withdrawn
+    } else if seen {
+        Lapse::Orchestrator
+    } else {
+        Lapse::Unsigned
+    };
+    Ok((by.cloned(), lapse))
 }
 
 /// The registry notes and the members standing now (a `leave` after the record removes one).

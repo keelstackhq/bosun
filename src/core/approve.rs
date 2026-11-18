@@ -686,7 +686,8 @@ fn parse_chat(
 }
 
 /// Whether `session`'s newest registry record is an orchestrator: it has no parent and is a
-/// root (depth 1) or origin `local` or `slack`, and it has not expired at `now` (the registry
+/// root (depth 1) or origin `local` or `slack`, never origin `spawned` or `routine` (parent and
+/// depth are self-declared, the origin is not a claim of authority), and it has not expired at `now` (the registry
 /// parses `expires` on load; one that did not parse never reaches here). Wave agent ids
 /// (`S/task`, any `/`) never are.
 pub fn is_orchestrator(members: &[Member], session: &str, now: Timestamp) -> bool {
@@ -700,6 +701,7 @@ pub fn is_orchestrator(members: &[Member], session: &str, now: Timestamp) -> boo
         .is_some_and(|m| {
             m.parent.is_none()
                 && m.expires.0 > now.0
+                && !matches!(m.origin.as_str(), "spawned" | "routine")
                 && (m.depth == 1 || matches!(m.origin.as_str(), "local" | "slack"))
         })
 }
@@ -832,7 +834,7 @@ mod tests {
     #[test]
     fn orchestrator_root_local_slack() {
         let m = vec![
-            member("root", "spawned", None, 1, 1),
+            member("root", "local", None, 1, 1),
             member("loc", "local", Some("root"), 2, 2),
             member("slk", "slack", Some("root"), 2, 3),
             member("kid", "spawned", Some("root"), 2, 4),
@@ -844,6 +846,13 @@ mod tests {
         assert!(!is_orchestrator(&m, "slk"), "origin slack with a parent");
         assert!(!is_orchestrator(&m, "kid"));
         assert!(!is_orchestrator(&m, "S/1"));
+        // A self-declared root (no parent, depth 1) of origin spawned or routine is no one.
+        let fake = vec![
+            member("sp", "spawned", None, 1, 1),
+            member("rt", "routine", None, 1, 2),
+        ];
+        assert!(!is_orchestrator(&fake, "sp"));
+        assert!(!is_orchestrator(&fake, "rt"));
         assert!(!is_orchestrator(&m, "nobody"));
         assert!(!is_orchestrator(&m, ""));
         let mut free = vec![
