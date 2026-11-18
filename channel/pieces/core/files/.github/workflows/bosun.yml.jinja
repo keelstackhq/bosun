@@ -339,8 +339,13 @@ jobs:
         name: pnpm for the audit
 {% raw %}        env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 {% endraw %}        run: |
           case "$BASE" in ""|0000000000000000000000000000000000000000) BASE="$GITHUB_SHA";; esac
+          # A push to the default branch is merged: deps reads its own manifests, so its pnpm too.
+          if [ "$EVENT" = push ] && [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then BASE="$GITHUB_SHA"; fi
           pm() { python3 -I -c 'import json, sys; d = json.load(sys.stdin); v = d.get("packageManager", "") if isinstance(d, dict) else ""; print(v if isinstance(v, str) else "!")'; }
           v="$(git show "$BASE:{{ ts_path }}/package.json" 2>/dev/null | pm || true)"
           if [ -z "$v" ]; then v="$(pm < "{{ ts_path }}/package.json" || true)"; fi
@@ -403,6 +408,8 @@ jobs:
           BOSUN_PR_BODY: ${{ github.event.pull_request.body }}
           EVENT: ${{ github.event_name }}
 {% endraw %}{% if "ts-pnpm" in pieces %}{% raw %}          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 {% endraw %}{% endif %}{% raw %}        run: |
           bosun="$RUNNER_TEMP/bin/bosun"
           GATES="${ONLY:-$GATES}"
@@ -428,25 +435,30 @@ jobs:
             # package.json the base lacks (a PR that adds the stack) is {}. No file is written
             # through a directory link that leaves the checkout. Also when the PR has no
             # lockfile: what pnpm reads never depends on the PR. So a PR's change to these
-            # (auditConfig too) applies after it merges.
+            # (auditConfig too) applies after it merges: a push to the default branch is merged,
+            # so there deps reads the pushed commit's own copies.
             if [ "$g" = deps ]; then
-              pat='(^|/)package\.json$|(^|/)pnpm-workspace\.ya?ml$'
-              changed="$(git diff --name-only -z "$BASE" HEAD | { grep -zE "$pat" || true; } | tr '\0' ' ')"
-              if [ -n "$changed" ]; then
-                echo "::notice::this change edits ${changed}; deps (pnpm audit) uses the base's copies (they apply after merge)"
-              fi
-              git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
-                rm -rf -- "$p"
-              done
               top="$(pwd -P)"
-              git ls-tree -r -z --name-only "$BASE" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
-                case "$(realpath -m -- "$(dirname -- "$p")")" in
-                  "$top"|"$top"/*) ;;
-                  *) echo "::error::$p: its directory links outside the checkout"; exit 1 ;;
-                esac
-                mkdir -p -- "$(dirname -- "$p")"
-                git show "$BASE:$p" > "$p"
-              done
+              if [ "$EVENT" = push ] && [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+                echo "deps (pnpm audit) reads this merged commit's package.json and pnpm-workspace.yaml"
+              else
+                pat='(^|/)package\.json$|(^|/)pnpm-workspace\.ya?ml$'
+                changed="$(git diff --name-only -z "$BASE" HEAD | { grep -zE "$pat" || true; } | tr '\0' ' ')"
+                if [ -n "$changed" ]; then
+                  echo "::notice::this change edits ${changed}; deps (pnpm audit) uses the base's copies (they apply after merge)"
+                fi
+                git ls-tree -r -z --name-only HEAD | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+                  rm -rf -- "$p"
+                done
+                git ls-tree -r -z --name-only "$BASE" | { grep -zE "$pat" || true; } | while IFS= read -r -d '' p; do
+                  case "$(realpath -m -- "$(dirname -- "$p")")" in
+                    "$top"|"$top"/*) ;;
+                    *) echo "::error::$p: its directory links outside the checkout"; exit 1 ;;
+                  esac
+                  mkdir -p -- "$(dirname -- "$p")"
+                  git show "$BASE:$p" > "$p"
+                done
+              fi
               # Only for a stack directory in the checkout (a new repo may have none yet).
               if [ -d "{{ ts_path }}" ] && [ ! -e "{{ ts_path }}/package.json" ]; then
                 case "$(realpath -m -- "{{ ts_path }}")" in

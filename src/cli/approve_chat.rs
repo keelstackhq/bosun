@@ -28,12 +28,17 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
         [t] => parse_target(t),
         _ => None,
     };
-    let (pr, head) = target.ok_or_else(|| {
-        BosunError::usage(
+    // From Claude Tag the owner types `approve <short7>`: resolved against the open PRs below.
+    let short = match (args.prs.as_slice(), &args.slack_user) {
+        ([t], Some(_)) if target.is_none() && is_short(t) => Some(t.as_str()),
+        _ => None,
+    };
+    if short.is_none() && target.is_none() {
+        return Err(BosunError::usage(
             "--chat takes one <pr>@<40-hex head sha>: the head the owner approved",
             "run `bosun approve --list`, ask the owner, then `bosun approve <pr>@<head> --chat --question <id>`",
-        )
-    })?;
+        ));
+    }
     if args.question.is_none() {
         return Err(BosunError::usage(
             "--chat needs --question <id> (data.ready[].ask.question_id), also with --slack-user U...",
@@ -41,7 +46,56 @@ pub fn run(dir: Option<&Path>, args: &ApproveArgs) -> CmdResult {
         ));
     }
     let app = App::load(dir)?;
+    let (pr, head) = match (target, short) {
+        (Some(t), _) => t,
+        (None, Some(short)) => {
+            resolve_short(&app, short, args.question.as_deref().unwrap_or_default())?
+        }
+        (None, None) => unreachable!("checked above"),
+    };
     Ok(Outcome::data(approve_chat(&app, pr, &head, args)?))
+}
+
+fn is_short(t: &str) -> bool {
+    t.len() == 7
+        && t.bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// The one PR in the current ready list (`approve --list`) whose head starts with `short`:
+/// zero or several matches refuse (exit 3), so a short head typed in Slack never picks a PR by
+/// guess. The PR named by `--question` must be that PR.
+fn resolve_short(app: &App, short: &str, question: &str) -> Result<(u64, String)> {
+    let board = crate::cli::approve::board(app.gh.as_ref(), true)?;
+    let mut hit = board.ready.iter().filter(|r| r.head_sha.starts_with(short));
+    let (pr, head) = match (hit.next(), hit.next()) {
+        (Some(r), None) => (r.pr, r.head_sha.clone()),
+        (None, _) => {
+            return Err(BosunError::conflict(
+                format!(
+                    "no PR in the ready list has a head starting with {short}; nothing was recorded"
+                ),
+                ASK_AGAIN,
+            ));
+        }
+        _ => {
+            return Err(BosunError::conflict(
+                format!(
+                    "several PRs in the ready list have a head starting with {short}; nothing was recorded"
+                ),
+                "ask again naming one PR: `bosun approve <pr>@<head> --chat --slack-user U... --question <id>`",
+            ));
+        }
+    };
+    if !question.starts_with(&format!("{pr}-")) {
+        return Err(BosunError::conflict(
+            format!(
+                "question {question:?} names another PR than #{pr} (head {short}); nothing was recorded"
+            ),
+            ASK_AGAIN,
+        ));
+    }
+    Ok((pr, head))
 }
 
 fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<serde_json::Value> {
@@ -60,7 +114,10 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         ));
     }
     let session = &app.ctx.session;
-    if app.ctx.origin == Origin::Spawned {
+    // The child flag is read directly too: BOSUN_ORIGIN can relabel `ctx.origin`, the flag
+    // Claude Code sets for a child session cannot be dropped by it.
+    let child_flag = std::env::var("CLAUDE_CODE_CHILD_SESSION").is_ok_and(|v| v.trim() == "1");
+    if child_flag || app.ctx.origin == Origin::Spawned {
         return Err(BosunError::needs_human(
             "this session is a spawned child (CLAUDE_CODE_CHILD_SESSION=1 or BOSUN_ORIGIN=spawned); only an orchestrator records a chat approval",
             "hand the PR to the orchestrator with `bosun handoff-pr`; it asks the owner and records the answer",
@@ -72,7 +129,7 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
     let members = crate::registry::load_own(gh)?
         .map(|(_, notes)| crate::core::lease::members(&notes))
         .unwrap_or_default();
-    if !is_orchestrator(&members, session) {
+    if !is_orchestrator(&members, session, app.ctx.now) {
         return Err(BosunError::needs_human(
             format!(
                 "session {session} is not an orchestrator in the registry; its chat record would not count"
@@ -115,11 +172,15 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
             }
             // A Slack answer is not stored; the id still names this PR and head, and a hold wins.
             let q = args.question.as_deref().unwrap_or_default();
+            let repo = app.ctx.repo.to_string();
             let named = q.starts_with(&format!("{pr}-{}-", &head[..7]));
-            if !named || answers::held(&app.ctx.dir, pr, head) {
+            // The id must be an ask `approve --list` issued as a Slack post for this PR and head.
+            let issued = answers::asked(&app.ctx.dir, &repo, q)
+                .is_some_and(|a| a.pr == pr && a.head == head);
+            if !named || !issued || answers::held(&app.ctx.dir, &repo, pr, head) {
                 return Err(BosunError::needs_human(
                     format!(
-                        "question {q:?} does not name #{pr} at {head}, or the owner held it; nothing was recorded"
+                        "question {q:?} does not name #{pr} at {head}, was not issued by `approve --list` as a Claude Tag ask, or the owner held it; nothing was recorded"
                     ),
                     ASK_AGAIN,
                 ));
@@ -127,7 +188,7 @@ fn approve_chat(app: &App, pr: u64, head: &str, args: &ApproveArgs) -> Result<se
         }
         None => {
             let q = args.question.as_deref().unwrap_or_default();
-            stored_approve(&app.ctx.dir, q, pr, head, session)?;
+            stored_approve(&app.ctx, q, pr, head)?;
         }
     };
     let question = args.question.as_deref();
@@ -144,21 +205,24 @@ fn joined_from_slack(members: &[crate::core::lease::Member], session: &str) -> b
         .is_some_and(|m| m.origin == "slack")
 }
 
-/// The owner's stored answer to `q` must be `approve` for exactly `pr` at `head`, and the id must
-/// name them (`<pr>-<short head>-<unix>`). The file is only a guard against confused workers.
-fn stored_approve(dir: &Path, q: &str, pr: u64, head: &str, session: &str) -> Result<()> {
+/// The owner's stored answer must be `approve` for exactly `pr` at `head` (the id names them:
+/// `<pr>-<short head>-<unix>`), the newest answer for that PR and head (an older approve on
+/// another question under a newer hold refuses), and given in this orchestrator session: a
+/// missing, empty or other session id never counts. The file is only a hint against confused
+/// workers, never proof.
+fn stored_approve(ctx: &crate::ctx::Ctx, q: &str, pr: u64, head: &str) -> Result<()> {
+    let (dir, repo, session) = (&ctx.dir, ctx.repo.to_string(), &ctx.session);
     let prefix = format!("{pr}-{}-", &head[..7]);
-    // The newest answer for this head wins (a later hold refuses), and the answer must have been
-    // given in this orchestrator session: a missing or other session id never counts.
+    let mine = |a: &answers::Answer| {
+        a.answer == "approve"
+            && a.pr == pr
+            && a.head == head
+            && !a.session.is_empty()
+            && a.session == *session
+    };
     let ok = q.starts_with(&prefix)
-        && !answers::held(dir, pr, head)
-        && answers::get(dir, q).is_some_and(|a| {
-            a.answer == "approve"
-                && a.pr == pr
-                && a.head == head
-                && !a.session_id.is_empty()
-                && a.session_id == session
-        });
+        && answers::current(dir, &repo, pr, head).is_some_and(|a| mine(&a))
+        && answers::get(dir, &repo, q).is_some_and(|a| mine(&a));
     if ok {
         return Ok(());
     }

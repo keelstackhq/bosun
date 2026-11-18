@@ -159,6 +159,18 @@ mod tests {
     }
 
     #[test]
+    fn the_full_head_ends_the_line_before_the_marker() {
+        let r: Vec<String> = vec![];
+        let mut i = item(12, &r);
+        i.verdict = "head abcdef1 = 1111111111111111111111111111111111111111";
+        let q = ask("a/b", &i, 1)["question"].as_str().unwrap().to_string();
+        assert!(
+            q.ends_with(&format!("; head abcdef1 = {H})? [bosun:12-abcdef1-1]")),
+            "{q}"
+        );
+    }
+
+    #[test]
     fn caps_at_three_prs_plus_hold() {
         let r: Vec<String> = vec![];
         let items: Vec<_> = (1..=5).map(|n| item(n, &r)).collect();
