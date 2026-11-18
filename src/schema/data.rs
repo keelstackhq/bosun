@@ -33,7 +33,7 @@ lesson hit = {id: str, hits: int, comment_id: int | null};
 lesson capture = {issue: int, kind: str, signature: str, created: bool, reopened: bool, hits: int};
 lesson triage = {issue: int, as: str, lesson?: str, process_red?: int, task?: int};
 doctor = {offline: bool, missing: int, items_ok?: int, summary?: bool, items: [{step: int, name: str, status: str, detail: str,
-    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str,
+    fix: str, content?: str, environment?: str, run?: str}], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str,
     schedule: str, prompt: str}], environments?: [{status: str, detail: str, fix: str, name?: str,
     job?: str}], hoist?: {exit_code: int, release_inferred: bool, drift: [str], notes: [str],
     skipped: [str], unknown: [str]}, notify?: {skipped: bool, reason: str}};
@@ -86,7 +86,7 @@ init = {branch: str, commit: str, ref: str, source: str, channel: str, pieces: [
     plan: str | null, own_ci: bool, claude_md: bool, excluded: [str], changes: [{action: str,
     class: str, path: str}], hoist_checks_added: [str], hoist_merge_queue: str | null,
     owner_steps: [str], warnings: [str], pr: {number: int, head_sha: str} | null, pr_title?: str,
-    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, schedule: str, prompt: str}]};
+    pr_body?: str, intake?: str, labels_created?: [str], routines?: [{name: str, model: str, cron?: str, confirm?: str, fallback?: str, schedule: str, prompt: str}]};
 adopt = {dry_run: bool, policy: str | null, stacks: [str], commands: [str], owner_steps: [str],
     changes: [{action: str, path: str, fix?: str}], labels: [{action: str, name: str}],
     registry: {action: str, reason?: str, number?: int}};
@@ -207,12 +207,12 @@ digest = {message_id: str, message: str, header: str, items: [{pr: int, head_sha
     budget_warnings?: [{epic: int, spent_usd: num, budget_usd: num}], budget_skipped?: [{epic: int, error: str}], skipped: [{pr: int | null, why: str}]} | {message_id: str, approve: [{pr: int, head_sha: str}],
     dropped: [{pr: int, why: str}], raises: [{epic: int, usd: int, key_id: str, message: str,
     sig: str}], refused: [{raise: {epic: int, usd: int}, why: str}], unknown: [str]};
-metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str],
+metrics = {days: int, since: str, mode: str, brake: {knob: str, on: bool, reasons: [str], capped?: bool,
     window: {days: int, main_red: int, reverts: int, failing_heads: int, pushed_heads: int}},
     red_ci: {failing_heads: int, pushed_heads: int, rate_pct: num | null}, merged: int,
     cost_per_merged_usd: num | null, lead_time_p50_hours: num | null, epics: int,
     owner_touches: int, owner_touches_per_day: num,
-    blocks: [{rule: str, blocks: int, caught: int, passed: int}]} | {days: int, since: str, curator_loosen: str, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
+    blocks: [{rule: str, blocks: int, caught: int, passed: int}], capped?: {max_prs: int, skipped: int}} | {days: int, since: str, curator_loosen: str, capped?: {max_prs: int, skipped: int}, proposals: [{rule: str, blocks: int, prs: [int], title: str, body: str}]};
 wave tick = {epic: int, mode: str, spawn_auto: str, brake: [str] | null, held_by: str | null,
     spawned: [{issue: int, title: str, record: str, budget_feature?: {epic: int,
     spent_usd: num, budget_usd: num, level: str, raise_room_usd?: int}}], stopped: {issue: int, exit: str, message: str,

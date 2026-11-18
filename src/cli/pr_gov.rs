@@ -150,11 +150,12 @@ pub fn run(dir: Option<&Path>, n: u64, ready: bool) -> CmdResult {
     }
     let route = enable_auto_merge_any(gh, &pull).map_err(|e| {
         let mut e = if is_already_clean(&e) {
-            BosunError::needs_human(
+            let clean = BosunError::needs_human(
                 format!("PR #{n} is already mergeable with every required check green, so GitHub cannot turn on auto-merge"),
                 format!("the orchestrator merges PR #{n} (hand it over; you never merge)"),
             )
-            .with_data(json!({"pr": n, "head_sha": pull.head_sha, "already_clean": true}))
+            .with_data(json!({"pr": n, "head_sha": pull.head_sha, "already_clean": true}));
+            super::result::clean_handoff(&app, clean, n, &pull.head_sha)
         } else if is_unstable(&e) {
             BosunError::error(
                 format!("PR #{n} has a failing check, so GitHub cannot turn on auto-merge"),

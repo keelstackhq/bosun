@@ -94,8 +94,32 @@ pub struct Cli {
     /// Log API calls and child commands to stderr.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+    /// Print everything. Commands with a summary view (doctor, progress, plan import and
+    /// amend) list only what needs action by default; `--full` is the same flag for all of them,
+    /// before or after the command name, and a no-op elsewhere.
+    #[arg(long, global = true)]
+    pub full: bool,
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Cli {
+    /// The global `--full` turns on the command's own `--full` (the commands with a summary view).
+    pub fn apply_full(&mut self) {
+        if !self.full {
+            return;
+        }
+        match &mut self.command {
+            Command::Doctor(a) => a.full = true,
+            Command::Progress(a) => a.full = true,
+            Command::Plan(p) => match p {
+                PlanCmd::Import(a) => a.full = true,
+                PlanCmd::Amend(a) => a.full = true,
+                _ => {}
+            },
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -514,6 +538,9 @@ pub struct MetricsArgs {
     /// The window in days.
     #[arg(long, default_value_t = 30)]
     pub days: u32,
+    /// Read at most this many PRs (newest update first); the rest are counted in `data.capped`.
+    #[arg(long, default_value_t = 100)]
+    pub max_prs: usize,
     /// List the rules a curator could propose to loosen.
     #[arg(long)]
     pub propose: bool,

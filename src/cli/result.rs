@@ -286,7 +286,7 @@ fn green_prs(app: &App, n: u64, pr: Option<u64>) -> crate::app::Result<Vec<(u64,
 
 /// The session that spawned this one (registry record); `None` for a root or a wave agent
 /// (which runs inside its orchestrator, so a message would reach itself).
-fn parent_session(app: &App) -> crate::app::Result<Option<String>> {
+pub(crate) fn parent_session(app: &App) -> crate::app::Result<Option<String>> {
     let (gh, session) = (app.gh.as_ref(), &app.ctx.session);
     if session.contains('/') {
         return Ok(None);
@@ -346,4 +346,28 @@ fn partial_refusal(app: &App, n: u64, state: Option<State>) -> crate::app::Resul
         return Ok(Some(format!("halted: {why}")));
     }
     Ok(None)
+}
+
+/// A PR GitHub reports already clean cannot get auto-merge and a child cannot merge it
+/// (D-008): the error names it `ready_to_merge` and hands the parent a `send_message`.
+/// Without a parent, or when the lookup fails, `next` stays empty.
+pub(crate) fn clean_handoff(app: &App, mut e: BosunError, pr: u64, sha: &str) -> BosunError {
+    let mut data = e.data.take().unwrap_or_else(|| json!({}));
+    data["ready_to_merge"] = json!([{"pr": pr, "head_sha": sha}]);
+    e.data = Some(data);
+    let parent = parent_session(app).unwrap_or_else(|err| {
+        eprintln!("bosun: cannot find the parent: {err}");
+        None
+    });
+    let Some(parent) = parent else { return e };
+    let short = sha.get(..7).unwrap_or(sha);
+    let m = format!(
+        "bosun pr from {}: PR #{pr} ({short}) is ready_to_merge: every required check is green and GitHub cannot auto-merge a clean PR. Merge it (I never merge), then run `bosun reap`.",
+        app.ctx.session
+    );
+    let message = crate::core::text::inert(&m, 500);
+    e.with_next(
+        "send_message",
+        json!({"session_id": parent, "message": message}),
+    )
 }

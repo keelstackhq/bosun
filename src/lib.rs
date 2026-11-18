@@ -21,7 +21,8 @@ pub use cli::{Cli, Command};
 pub use output::{BosunError, CmdResult, Exit, Next, Outcome, envelope};
 
 /// Run one command. `main` prints the envelope and exits with its code.
-pub fn run(cli: Cli) -> CmdResult {
+pub fn run(mut cli: Cli) -> CmdResult {
+    cli.apply_full();
     let dir = cli.dir.as_deref();
     match &cli.command {
         Command::Join(a) => cli::join::run(dir, a),
