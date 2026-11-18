@@ -22,7 +22,8 @@ review-pack = {pr: int, title: str, draft: bool, head_sha: str, base_sha: str, s
     review_md: str | null, lessons: [str], ucs: [str], untrusted: [str], task: {..} | null,
     bundle_tasks: [{..}], note?: str, required_checks: [{context: str, state: str}] | null,
     gate_stamps: {tree: str, present: [str], missing: [str]} | null, chunk_count: int,
-    verdict_skeleton: {pr: int, head_sha: str, verdict: str, confidence: num, findings: [any], lessons_hit: [str],
+    verdict_skeleton: {pr: int, head_sha: str, verdict: str, confidence: num, findings: [any],
+    lessons_hit: [str],
     escalate_risk: bool, chunks_reviewed: [int]}};
 ci-log = {pr: int, head_sha: str, jobs: [{name: str, conclusion: str, url: str, log: str}]};
 ask = {issue: int, comment_id: int, owners: [str], drafted: [int], pr_draft_error: str | null};
