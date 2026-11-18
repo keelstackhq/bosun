@@ -146,18 +146,12 @@ fn fresh_dir(tag: &str) -> Result<PathBuf, BosunError> {
     Err(io_err("temp dir", std::io::ErrorKind::AlreadyExists.into()))
 }
 
-/// A throwaway detached worktree, removed and pruned on every path (a panic too).
-struct Worktree<'a> {
-    repo: &'a Path,
-    path: PathBuf,
-}
+/// The private temp tree of one run (repo, HOME, CARGO_HOME, TMPDIR), removed on every path.
+struct Private(PathBuf);
 
-impl Drop for Worktree<'_> {
+impl Drop for Private {
     fn drop(&mut self) {
-        let p = self.path.to_string_lossy().to_string();
-        let _ = gates::git(self.repo, &["worktree", "remove", "--force", &p]);
-        let _ = std::fs::remove_dir_all(&self.path);
-        let _ = gates::git(self.repo, &["worktree", "prune"]);
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -213,30 +207,47 @@ pub fn verify(app: &App, pull: &Pull) -> Result<Vec<String>, BosunError> {
             ));
         }
     }
-    let wt = Worktree {
-        repo: dir,
-        path: fresh_dir(&format!("merge-{}", pull.number))?,
-    };
-    gates::git(
+    let private = Private(fresh_dir(&format!("merge-{}", pull.number))?);
+    let repo = private.0.join("repo");
+    std::fs::create_dir(&repo).map_err(|e| io_err("temp dir", e))?;
+    // Cargo reads `.cargo/config` of every parent directory: one above the temp dir is foreign.
+    if (repo.ancestors().skip(1)).any(|a| a.join(".cargo").exists()) {
+        return Err(BosunError::needs_human(
+            "a `.cargo` directory above the temp dir would steer cargo in the gates",
+            "remove it (`/tmp/.cargo`), or set TMPDIR to a clean directory, then rerun `bosun merge`",
+        ));
+    }
+    let secs = std::env::var("BOSUN_GATE_TIMEOUT_SECS").ok();
+    gates::isolate(
+        &private.0,
+        secs.and_then(|s| s.parse().ok()).unwrap_or(1800),
+    )?;
+    // A repo of its own, never a worktree of the checkout: the checkout's config, replace refs
+    // and attributes do not reach it, and its objects are read by hash through alternates.
+    let objects = gates::git(
         dir,
         &[
-            "worktree",
-            "add",
-            "-q",
-            "--detach",
-            "--force",
-            &wt.path.to_string_lossy(),
-            head,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
         ],
     )?;
-    run_gates(app, pull, &wt.path)
+    let tree = gates::git(dir, &["rev-parse", &format!("{head}^{{tree}}")])?;
+    gates::git(&repo, &["init", "-q"])?;
+    std::fs::write(repo.join(".git/objects/info/alternates"), objects.trim())
+        .map_err(|e| io_err("alternates", e))?;
+    gates::git(&repo, &["checkout", "-q", "--detach", head])?;
+    run_gates(app, pull, &repo, tree.trim())
 }
 
-fn run_gates(app: &App, pull: &Pull, wt: &Path) -> Result<Vec<String>, BosunError> {
-    let gh = app.gh.as_ref();
-    let overlay = Overlay::load(gh, &default_ref(gh)?)?;
+fn run_gates(app: &App, pull: &Pull, wt: &Path, tree: &str) -> Result<Vec<String>, BosunError> {
+    // The PR's base commit, not the branch name: it cannot move between the checks and the run.
+    let overlay = Overlay::load(app.gh.as_ref(), &pull.base_sha)?;
     overlay.apply(wt)?;
-    let all = non_empty(stamps::ready_gates(wt)?)?;
+    let mut all = non_empty(stamps::ready_gates(wt)?)?;
+    // test-integrity first: it reads git history, which a head's test could rewrite.
+    all.sort_by_key(|g| g != "test-integrity");
     let config = &overlay.config;
     let mut failed = Vec::new();
     for gate in &all {
@@ -253,16 +264,25 @@ fn run_gates(app: &App, pull: &Pull, wt: &Path) -> Result<Vec<String>, BosunErro
                 all: true,
             })
         };
-        if !overlay.intact(wt) {
+        let same = gates::git(wt, &["rev-parse", "HEAD^{tree}"]).is_ok_and(|t| t.trim() == tree);
+        if !overlay.intact(wt) || !same {
             return Err(BosunError::needs_human(
                 format!(
-                    "gate {gate} of PR #{} changed the default branch's config or tool files",
+                    "gate {gate} of PR #{} changed the base's config or tool files, or the checked-out commit",
                     pull.number
                 ),
                 "the author removes whatever in the head rewrites them; the owner reviews the head",
             ));
         }
-        if res.is_err() {
+        // A gate that skipped (no manifest, no files) vouches for nothing: it fails here.
+        let skipped = |v: &serde_json::Value| v["skipped"] == true;
+        let ran = res.as_ref().is_ok_and(|o| {
+            !skipped(&o.data)
+                && !o.data["runs"]
+                    .as_array()
+                    .is_some_and(|r| r.iter().any(skipped))
+        });
+        if !ran {
             failed.push(gate.clone());
         }
     }

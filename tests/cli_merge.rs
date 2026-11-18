@@ -107,6 +107,8 @@ fn setup_files(
     // The PR's base is a real commit of the checkout, as in production.
     let base = base_sha(dir.path());
     fake.pull_set(20, "base", json!({"sha": base, "ref": "main"}));
+    // The default branch's gates must really run (a skipped gate fails a merge): a tiny profile.
+    tiny_base(&fake);
     if let Some(c) = ci {
         fake.content(".bosun/bosun.toml", &base, c);
     }
@@ -422,20 +424,10 @@ fn tiny_base(fake: &FakeGithub) {
     fake.content(".bosun/profiles/rust.toml", "refs/heads/main", TINY);
 }
 
-fn worktrees(dir: &Path) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["worktree", "list"])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout).to_string()
-}
-
-/// A failing required gate on the exact head: exit 5 naming it, nothing merged, worktree gone.
+/// A failing required gate on the exact head: exit 5 naming it, nothing merged.
 /// The head's profile says `true` and every stamp is present; the base's definition judges.
 #[test]
-fn merge_refuses_a_failing_gate_run_in_a_worktree_of_the_head() {
+fn merge_refuses_a_failing_gate_run_on_the_head() {
     let files = [("bad.txt", "x"), (".bosun/profiles/rust.toml", LAX)];
     let (fake, dir) = setup_files(false, Some(NO_CI), &files);
     tiny_base(&fake);
@@ -446,17 +438,11 @@ fn merge_refuses_a_failing_gate_run_in_a_worktree_of_the_head() {
     assert_eq!(code, 5, "{v}");
     assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
     assert!(merge_puts(&fake).is_empty());
-    assert_eq!(
-        worktrees(dir.path()).lines().count(),
-        1,
-        "{}",
-        worktrees(dir.path())
-    );
 }
 
 /// The same head passes when the gate it fails is not there: the worktree run is real.
 #[test]
-fn merge_passes_when_the_gates_pass_in_the_worktree() {
+fn merge_passes_when_the_gates_pass_on_the_head() {
     let (fake, dir) = setup_files(false, Some(NO_CI), &[("ok.txt", "x")]);
     tiny_base(&fake);
     verdict(&fake);
@@ -675,7 +661,7 @@ fn merge_refuses_a_base_that_requires_no_gates() {
 
 fn profile(fmt: &str, lint: &str) -> String {
     format!(
-        "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"sh\", \"-c\", \"{fmt}\"]\n[gates.lint]\ncmd = [\"sh\", \"-c\", \"{lint}\"]\n"
+        "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"sh\", \"-c\", \'\'\'{fmt}\'\'\']\n[gates.lint]\ncmd = [\"sh\", \"-c\", \'\'\'{lint}\'\'\']\n"
     )
 }
 
@@ -735,4 +721,79 @@ fn merge_overlays_tool_files_under_each_stack_dir() {
     assert_eq!(ready(&fake, dir.path()).0, 0);
     let (code, v) = merge(&fake, dir.path());
     assert_eq!(code, 0, "{v}");
+}
+
+fn merge_with(fake: &FakeGithub, dir: &Path, env: &[(&str, &str)]) -> (i32, Value) {
+    let out = bosun()
+        .env("BOSUN_GITHUB_API", fake.url())
+        .env("BOSUN_SESSION", ORCH)
+        .env("BOSUN_NOW", NOW)
+        .envs(env.iter().copied())
+        .arg("-C")
+        .arg(dir)
+        .args(["merge", "20"])
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), one_object(&out.stdout))
+}
+
+/// Ready for a merge whose base profile has `fmt` run `fmt` (a shell line) and `lint` pass.
+fn merge_ready(fmt: &str) -> (FakeGithub, tempfile::TempDir) {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        "refs/heads/main",
+        &profile(fmt, "true"),
+    );
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    (fake, dir)
+}
+
+/// The gates get a clean environment (no inherited variables) and a private HOME, CARGO_HOME
+/// and TMPDIR; the repo they run in has its own git dir and none of the checkout's config.
+#[test]
+fn merge_gates_run_in_a_clean_environment_and_their_own_repo() {
+    let fmt = "test -z \"$BOSUN_LEAK\" && test -d .git && test -z \"$(git config --get bosun.marker)\" && for v in $HOME $CARGO_HOME $TMPDIR; do case $v in *bosun-merge*) ;; *) exit 1;; esac; done";
+    let (fake, dir) = merge_ready(fmt);
+    git(dir.path(), &["config", "bosun.marker", "yes"]);
+    let (code, v) = merge_with(&fake, dir.path(), &[("BOSUN_LEAK", "1")]);
+    assert_eq!(code, 0, "{v}");
+}
+
+/// A gate runs at most `BOSUN_GATE_TIMEOUT_SECS` (default 1800); a hung gate fails.
+#[test]
+fn merge_kills_a_gate_that_hangs() {
+    let (fake, dir) = merge_ready("sleep 30");
+    let (code, v) = merge_with(&fake, dir.path(), &[("BOSUN_GATE_TIMEOUT_SECS", "1")]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
+}
+
+/// A gate that skipped vouches for nothing: inside a merge it fails.
+#[test]
+fn merge_counts_a_skipped_gate_as_failed() {
+    let (fake, dir) = setup(false, Some(NO_CI));
+    let skip = "[adapters]\npackages = \"cargo-metadata\"\npending = \"rust-ignore\"\nassertions = \"rust\"\n[gates.fmt]\ncmd = [\"true\"]\nrequires = \"nope.txt\"\n[gates.lint]\ncmd = [\"true\"]\n";
+    fake.content(".bosun/profiles/rust.toml", "refs/heads/main", skip);
+    verdict(&fake);
+    assert_eq!(ready(&fake, dir.path()).0, 0);
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
+}
+
+/// The overlay is the PR's base commit: the branch name moving on changes nothing.
+#[test]
+fn merge_overlays_the_pr_base_sha_not_the_branch() {
+    let (fake, dir) = merge_ready("true");
+    let base = base_sha(dir.path());
+    fake.content(
+        ".bosun/profiles/rust.toml",
+        &base,
+        &profile("false", "true"),
+    );
+    let (code, v) = merge(&fake, dir.path());
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["failed_gates"], json!(["fmt"]), "{v}");
 }

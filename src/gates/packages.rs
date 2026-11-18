@@ -2,7 +2,6 @@
 //! diff touch?
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::Deserialize;
 
@@ -67,7 +66,7 @@ pub fn affected(
 
 /// Run `cargo metadata --no-deps --format-version 1` in `stack_dir`.
 fn load_cargo(stack_dir: &Path) -> Result<Vec<Package>, BosunError> {
-    let out = Command::new("cargo")
+    let out = super::cmd("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .current_dir(stack_dir)
         .output()
