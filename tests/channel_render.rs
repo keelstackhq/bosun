@@ -1518,7 +1518,8 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
         .unwrap()
         .to_string();
     // Some(installed spec) when the step passes.
-    let case = |base: Option<&str>, pr: &str| -> Option<String> {
+    // `push`: a push to the default branch, whose own package.json names the release.
+    let case_on = |base: Option<&str>, pr: &str, push: bool| -> Option<String> {
         let dir = tempfile::tempdir().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let d = dir.path();
@@ -1556,6 +1557,12 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
             fs::set_permissions(bin.join(f), fs::Permissions::from_mode(0o755)).unwrap();
         }
         let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+        let head = git_in(d, "git rev-parse HEAD");
+        let (event, sha) = if push {
+            ("push", head.as_str())
+        } else {
+            ("pull_request", "unused")
+        };
         let ok = bash_in(
             d,
             &run,
@@ -1563,7 +1570,10 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
                 ("PATH", &path),
                 ("RUNNER_TEMP", tmp.path().to_str().unwrap()),
                 ("BASE", &base_sha),
-                ("GITHUB_SHA", "unused"),
+                ("GITHUB_SHA", sha),
+                ("EVENT", event),
+                ("REF", "refs/heads/main"),
+                ("DEFAULT_BRANCH", "main"),
             ],
         );
         let log = fs::read_to_string(log).unwrap_or_default();
@@ -1572,8 +1582,14 @@ fn bosun_trusted_installs_an_exact_pnpm_release() {
         }
         ok.then(|| log.trim().to_string())
     };
+    let case = |base: Option<&str>, pr: &str| case_on(base, pr, false);
     let pm = |v: &str| format!("{{\"packageManager\": {v}}}");
     let pnpm = |v: &str| Some(format!("install -g --ignore-scripts {v}"));
+    // A push to main is merged: its own package.json names the release, not the previous commit's.
+    assert_eq!(
+        case_on(Some(&pm("\"pnpm@9.0.0\"")), &pm("\"pnpm@10.28.0\""), true),
+        pnpm("pnpm@10.28.0")
+    );
     assert_eq!(
         case(
             Some(&pm("\"pnpm@10.28.0+sha512.abc\"")),
