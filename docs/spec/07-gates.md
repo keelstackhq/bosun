@@ -146,7 +146,12 @@ REVIEW.md). The pack also lists `chunks`: the changed files grouped in order int
 - `bosun verdict post` writes it as the review-verdict check on `head_sha`.
 - Cloud sessions cannot write commit statuses (the agent proxy answers 403), so a reviewer there
   runs `bosun verdict comment --from -`. It validates the JSON, refuses a stale `head_sha`
-  (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The
+  (exit 3) and posts a PR comment: a summary, `<!-- bosun:verdict -->` and the JSON. The input
+  may instead be a verdict comment body as `comment` writes it (a relay): its JSON, reviewer,
+  model and chunks lines are kept; when its reviewer is another session, the posted comment adds
+  `<!-- bosun:relayed_by <session> -->` before the marker (an audit hint, self-declared like the
+  reviewer tag). `data` names the `reviewer` and, relayed, `relayed_by`; `apply` reports
+  `relayed_by` too and records the reviewer. The
   `verdict` workflow (`issue_comment` created, comments with the marker only) runs
   `bosun verdict apply <comment-id>` with the release pinned in `.bosun/version` on the default branch (built from it only while the pin says `unreleased`), never PR code. `apply`
   re-reads the comment and refuses it (exit 1) unless it is unedited, its author has write (or

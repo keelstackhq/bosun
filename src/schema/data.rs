@@ -177,9 +177,10 @@ review-loop = {max: int, prs: [{pr: int, head_sha: str, step: str, rounds: int, 
     | {pr: int, head_sha: str, step: str, rounds: int, max: int, findings: [{..}], reasons: [str], reason: str | null};
 verdict post = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
     task_state: str | null, checks_skipped?: bool};
-verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str};
+verdict comment = {pr: int, head_sha: str, comment_id: int, applied_by: str, reviewer: str,
+    relayed_by?: str};
 verdict apply = {pr: int, head_sha: str, approved: bool, status: str, reasons: [str],
-    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}}
+    task_state: str | null, checks_skipped?: bool, fix_task?: int | {..}, relayed_by?: str}
     | {comment_id: int, author: str, refused: str, status: null};
 pr = {pr: int, created: bool, draft: bool, head_sha: str, auto_merge: bool,
     task_state: str | null, ready?: bool | "pending", merged?: bool, epic_closed?: bool,
