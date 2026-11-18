@@ -9,21 +9,26 @@ use serde_json::json;
 
 use super::review_ci::flat;
 use super::{ApplyArg, FromArg, VerdictCmd};
+use crate::app::default_branch;
 use crate::app::{App, kill_switch, set_state};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::mode::ModeName;
 use crate::core::records::Record;
+use crate::core::risk::BOT_SESSION;
 use crate::core::state::{State, state_of, transition_allowed};
 use crate::core::verdict::{
     COMMENT_MARKER, Verdict, closes_issue, comment_body, comment_chunks, comment_json,
     comment_model, comment_session, effective, valid_model,
 };
-use crate::github::{Github, IssuePatch, IssueState, Pull};
+use crate::github::{Comment, Github, IssuePatch, IssueState, Pull};
 use crate::output::{BosunError, CmdResult, Outcome};
 
 pub const CONTEXT: &str = "review-verdict";
 /// The description prefix of an escalated verdict; risk-check clears it on an owner approval.
 pub const ESCALATED: &str = "escalated to the owner";
+/// The description prefix of an escalation that would otherwise approve (judged unrounded);
+/// only this form is cleared. Older releases wrote `escalated to the owner; ` for every one.
+pub const APPROVABLE: &str = "escalated to the owner (approvable): ";
 
 fn read_input(from: &str) -> Result<String, BosunError> {
     let mut text = String::new();
@@ -139,31 +144,27 @@ fn apply(app: &App, id: u64) -> CmdResult {
     }
     // author_association is no proof: a workflow token sees an org member as CONTRIBUTOR.
     let permission = gh.permission(&c.user)?.unwrap_or_else(|| "none".into());
-    let cfg = base_config(gh, &c.issue_url)?;
+    let (cfg, on_default) = trusted_config(gh, &c.issue_url)?;
     let writer = matches!(permission.as_str(), "admin" | "write");
     if !writer {
         let bots = cfg.approvals.verdict_bots.as_deref().unwrap_or_default();
-        // A refused author is no failure of the verdict workflow: nothing is written.
-        let why = if !bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user)) {
+        let listed = bots.iter().any(|b| b.eq_ignore_ascii_case(&c.user));
+        // A bot verdict that cannot apply is neutral too: nothing written, no failed workflow.
+        let head = || match Verdict::parse(text) {
+            Err(_) => "an invalid bot verdict".to_string(),
+            Ok(n) => match gh.get_pull(n.pr) {
+                Ok(Some(p)) if p.head_sha == n.head_sha => String::new(),
+                _ => format!("a bot verdict for {}, not the head", n.head_sha),
+            },
+        };
+        let why = if !listed || c.user_type != "Bot" {
             format!("{} has {permission} access, not write", c.user)
+        } else if !on_default {
+            "a bot verdict counts only on a PR into the default branch".into()
         } else if comment_session(&c.body).is_none() {
-            format!(
-                "{} is a verdict bot, but the comment has no reviewer marker",
-                c.user
-            )
+            "a bot verdict needs the reviewer marker".into()
         } else {
-            String::new()
-        };
-        let stale = || {
-            let n = Verdict::parse(text).ok()?;
-            let p = gh.get_pull(n.pr).ok()??;
-            (p.head_sha != n.head_sha)
-                .then(|| format!("a bot verdict for {}, not the head", n.head_sha))
-        };
-        let why = if why.is_empty() {
-            stale().unwrap_or_default()
-        } else {
-            why
+            head()
         };
         if !why.is_empty() {
             eprintln!("bosun: verdict apply: comment {id} is refused: {why}");
@@ -185,15 +186,20 @@ fn apply(app: &App, id: u64) -> CmdResult {
     // approval), not a replacement; a comment without a session counts as "unknown".
     let session = comment_session(&c.body).unwrap_or("unknown");
     // A bot names any session it likes: all its verdicts are one session, so it is one vote.
-    let bot_session = format!("bot:{}", c.user);
+    let bot_session = format!("{BOT_SESSION}{}", c.user);
     let recorded = if writer {
         session
     } else {
         bot_session.as_str()
     };
+    // A bot's newer comment for the head replaces this one, whatever marker either carries.
+    let same = |o: &Comment| {
+        comment_session(&o.body).unwrap_or("unknown") == session
+            || (!writer && o.user.eq_ignore_ascii_case(&c.user))
+    };
     let newer = gh.list_comments(verdict.pr)?.into_iter().any(|o| {
         o.id > c.id
-            && comment_session(&o.body).unwrap_or("unknown") == session
+            && same(&o)
             && comment_json(&o.body)
                 .and_then(|t| Verdict::parse(t).ok())
                 .is_some_and(|v| v.head_sha == verdict.head_sha)
@@ -216,18 +222,17 @@ fn apply(app: &App, id: u64) -> CmdResult {
     Ok(out)
 }
 
-/// `.bosun/bosun.toml` at the base of the PR a comment sits on; defaults when it is missing,
-/// unparsable, or the comment is on no PR (fail closed: no bots, no autonomous mode).
-fn base_config(gh: &dyn Github, issue_url: &str) -> Result<Config, BosunError> {
-    let fallback = || Config::parse("", CONFIG_FILE);
+/// `.bosun/bosun.toml` on the default branch (as signed keys and owners), and whether the PR the
+/// comment sits on targets it. Defaults when missing or unparsable (fail closed: no bots, no
+/// autonomous mode).
+fn trusted_config(gh: &dyn Github, issue_url: &str) -> Result<(Config, bool), BosunError> {
+    let branch = default_branch(gh)?;
     let pr = issue_url.rsplit('/').next().and_then(|n| n.parse().ok());
-    let Some(pull) = pr.map(|n| gh.get_pull(n)).transpose()?.flatten() else {
-        return fallback();
-    };
-    match gh.file_at(CONFIG_FILE, &pull.base_sha)? {
-        Some(t) => Config::parse(&t, CONFIG_FILE).or_else(|_| fallback()),
-        None => fallback(),
-    }
+    let pull = pr.map(|n| gh.get_pull(n)).transpose()?.flatten();
+    let on_default = pull.is_some_and(|p| p.base_ref == branch);
+    let text = gh.file_at(CONFIG_FILE, &branch)?.unwrap_or_default();
+    let cfg = Config::parse(&text, CONFIG_FILE).or_else(|_| Config::parse("", CONFIG_FILE))?;
+    Ok((cfg, on_default))
 }
 
 const FIX_LABEL: &str = "bosun:fix-task";
@@ -315,10 +320,10 @@ pub(crate) fn record(
         eff.reasons.push("escalated to the owner".into());
     }
     let state = if eff.approve { "success" } else { "failure" };
-    // Only an otherwise approving escalation reads "escalated to the owner; ": the owner can
+    // Only an otherwise approving escalation reads [`APPROVABLE`]: the owner can
     // clear that one (risk-check); a failing one stays red.
     let description = if verdict.escalate_risk && eff.reasons.len() == 1 {
-        format!("{ESCALATED}; {}", verdict.summary())
+        format!("{APPROVABLE}{}", verdict.summary())
     } else if verdict.escalate_risk {
         format!("{ESCALATED} (not approving): {}", verdict.summary())
     } else {

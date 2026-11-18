@@ -1185,6 +1185,15 @@ pub fn apply_floor(matches: &mut [Match], critical: &[String]) {
 pub const VERDICT_AUTHOR: &str = "github-actions[bot]";
 /// The confidence a verdict needs to count toward two verdicts.
 pub const VERDICT_MIN_CONFIDENCE: f64 = 0.9;
+/// The session prefix `verdict apply` records a `[approvals] verdict_bots` verdict under.
+pub const BOT_SESSION: &str = "bot:";
+
+/// A bot's verdict sets `review-verdict` only: it never counts toward any approval (it may be the
+/// author's own session writing through the app, so it is never independent).
+pub fn is_bot_session(session: &str) -> bool {
+    session.starts_with(BOT_SESSION)
+}
+
 /// How many verdicts of distinct sessions the two-verdicts class needs.
 pub const VERDICTS_NEEDED: usize = 2;
 
@@ -1273,6 +1282,7 @@ fn verdict_sessions<'a>(
             && head_sha == head
             && !session.is_empty()
             && session != "unknown"
+            && !is_bot_session(&session)
             && !excluded.contains(&session)
         {
             let enrolled = models.is_none_or(|m| model.is_some_and(|x| m.contains(&x)));
@@ -2329,6 +2339,31 @@ paths = ["channel/**", ".github/workflows/**", "deny.toml"]
         }
         // Not written by the verdict workflow.
         assert!(count(&[("some-agent", rec("c", "h", true, Some(1.0)))], "h").is_empty());
+    }
+
+    #[test]
+    fn a_bot_session_never_counts_toward_an_approval() {
+        let clean = |session: &str| {
+            let r = Record::Verdict {
+                session: session.into(),
+                head_sha: "h".into(),
+                approved: true,
+                confidence: Some(0.99),
+                major: Some(0),
+                model: None,
+            };
+            format!("Review verdict: approve 0.99.\n\n{}", r.to_line())
+        };
+        let items = [clean("bot:claude[bot]"), clean("a")];
+        let it = || items.iter().map(|b| (VERDICT_AUTHOR, b.as_str()));
+        assert_eq!(two_verdicts(it(), "h", &[], None), ["a"]);
+        assert_eq!(clean_verdicts(it(), "h", &[], None), ["a"]);
+        let it3 = || items.iter().map(|b| (VERDICT_AUTHOR, b.as_str(), true));
+        assert_eq!(autonomous_verdicts(it3(), "h", &[], None), ["a"]);
+        let only_bot = [clean("bot:claude[bot]")];
+        let ob = only_bot.iter().map(|b| (VERDICT_AUTHOR, b.as_str(), true));
+        assert!(autonomous_verdicts(ob, "h", &[], None).is_empty());
+        assert!(is_bot_session("bot:x") && !is_bot_session("session_bot"));
     }
 
     #[test]

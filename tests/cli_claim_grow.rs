@@ -46,6 +46,7 @@ fn rival_before(fake: &FakeGithub, at: usize, claim: bool) {
             via_app: None,
             no_app_field: false,
             association: "MEMBER".into(),
+            user_type: None,
         });
         if claim {
             let i = s.issues.iter_mut().find(|i| i.number == 11).unwrap();

@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::RiskCheckArgs;
 use super::carry_over::{candidates, carry_approval, carry_verdict, has_verdict, is_verdict};
-use super::verdict::{CONTEXT as VERDICT, ESCALATED};
+use super::verdict::{APPROVABLE, CONTEXT as VERDICT};
 use crate::app::{App, Result, default_branch, default_ref, halt_reason, task_meta, trusted_notes};
 use crate::config::{CONFIG_FILE, Config};
 use crate::core::approve::{
@@ -647,6 +647,7 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     };
     let Found {
         mut approved_by,
+        owner_own,
         mut verdicts,
         mut delegate_verdicts,
         delegate_blocked,
@@ -708,14 +709,13 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
     let carried = carry_status(gh, w, &pull, &linked);
     // An owner's approval of this exact head also clears an escalated verdict (spec §7).
     // A low-risk head reads the owners' approval only when an escalation waits for it.
-    let owner_ok = |who: &String| passed_on_head && is_owner_approval(who);
     let signer = need.signer_on;
     let cleared = clear_escalation(gh, w, head, &|| match &approved_by {
-        Some(who) if high && owner_ok(who) => Ok(Some(who.clone())),
+        Some(who) if high && passed_on_head && owner_own => Ok(Some(who.clone())),
         _ if high => Ok(None),
         _ => {
             let owners = owner_logins(gh, base)?;
-            approver(
+            let by = approver(
                 gh,
                 &app.ctx.repo,
                 n,
@@ -723,7 +723,8 @@ fn judge(app: &App, w: &GateWriter, pull: Pull) -> CmdResult {
                 &owners,
                 signed_ok,
                 (None, signer),
-            )
+            )?;
+            Ok(by.filter(|b| b.1).map(|b| b.0))
         }
     });
 
@@ -977,6 +978,8 @@ struct Need<'a> {
 #[derive(Default)]
 pub(crate) struct Found {
     pub(crate) approved_by: Option<String>,
+    /// `approved_by` is an owner's own approval of the head (review, comment, owner key).
+    pub(crate) owner_own: bool,
     pub(crate) verdicts: Vec<String>,
     delegate_verdicts: Vec<String>,
     delegate_blocked: Option<String>,
@@ -1019,7 +1022,7 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         Form::Bootstrap
     };
     let bootstrap = bootstrap.map(|l| (l, form));
-    found.approved_by = approver(
+    let by = approver(
         gh,
         repo,
         pr,
@@ -1028,6 +1031,8 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
         need.signed_ok,
         (bootstrap, need.signer_on),
     )?;
+    found.owner_own = by.as_ref().is_some_and(|b| b.1);
+    found.approved_by = by.map(|b| b.0);
     let open = found.approved_by.is_none() && !need.unlinked;
     // Two verdicts only matter when the owner has not approved and the class allows them.
     if open && need.requirement == Approval::TwoVerdicts {
@@ -1061,11 +1066,6 @@ fn approval_on(gh: &dyn Github, need: &Need, sha: &str) -> Result<Found> {
     Ok(found)
 }
 
-/// An owner's own approval (review, comment or owner key), not a delegate or bootstrap signature.
-fn is_owner_approval(who: &str) -> bool {
-    !who.starts_with("delegate ") && !who.contains(" (")
-}
-
 /// Turn an escalated, otherwise approving `review-verdict` on `head` green once `owner` (asked
 /// only then) names an owner's own approval of that head. A request for changes, a low confidence
 /// or a blocker stays red. Never an error.
@@ -1079,15 +1079,9 @@ fn clear_escalation(
         .ok()?
         .into_iter()
         .find(is_verdict)?;
-    // Older releases wrote this prefix for every escalation: the summary must approve too.
-    let rest = top.description.strip_prefix(&format!("{ESCALATED}; "))?;
-    let conf: f64 = rest
-        .strip_prefix("approve ")?
-        .split(' ')
-        .next()?
-        .parse()
-        .ok()?;
-    if conf < crate::core::verdict::APPROVE_MIN || !rest.contains(", 0 blocker,") {
+    // Only the approvable form, judged unrounded when the verdict was recorded; an older
+    // release's `escalated to the owner; ` form is never cleared (it can hide a request for changes).
+    if !top.description.starts_with(APPROVABLE) {
         return None;
     }
     let log = |e: BosunError| {
@@ -1267,6 +1261,8 @@ pub fn decisive_review(reviews: &[Review], owner: &str, head: &str) -> Option<St
 
 /// The owner who approved `head`: by a GitHub review (their newest decisive review on `head` is
 /// an approval) or by an unedited PR comment `/bosun approve <head>`.
+/// The approver and whether it is the owner's own approval (not a bootstrap or autonomous
+/// signature).
 fn approver(
     gh: &dyn Github,
     repo: &RepoId,
@@ -1275,14 +1271,14 @@ fn approver(
     owners: &[String],
     signed_ok: bool,
     (bootstrap, signer_on): (Option<(&str, Form)>, bool),
-) -> Result<Option<String>> {
+) -> Result<Option<(String, bool)>> {
     let reviews = gh.list_reviews(pr)?;
     let state = |o: &str| decisive_review(&reviews, o, head);
     let by_review = owners
         .iter()
         .find(|o| state(o).as_deref() == Some("APPROVED"));
     if let Some(o) = by_review {
-        return Ok(Some(o.clone()));
+        return Ok(Some((o.clone(), true)));
     }
     let comments = gh.list_comments(pr)?;
     // Only a comment written with a plain user token counts: agent sessions act as the same
@@ -1300,7 +1296,7 @@ fn approver(
         _ => owner_comment(&comments, o, head).is_some(),
     });
     if let Some(o) = by_comment {
-        return Ok(Some(o.clone()));
+        return Ok(Some((o.clone(), true)));
     }
     // A signed approval stands for the owner: with no owners it counts for no one, and any
     // owner's request for changes withdraws it. A v1 signature carries no time, so a re-posted
@@ -1328,13 +1324,13 @@ fn approver(
     if ids.is_empty() {
         // Bootstrap and autonomous signatures are not owner approvals.
         if let Some(id) = sign(&|f| matches!(f, Form::V1 | Form::V2(_)))? {
-            return Ok(Some(format!("key {id}")));
+            return Ok(Some((format!("key {id}"), true)));
         }
         let Some((label, form)) = bootstrap else {
             return Ok(None);
         };
         let boot = sign(&|f| f == form)?;
-        return Ok(boot.map(|id| format!("key {id} ({label})")));
+        return Ok(boot.map(|id| (format!("key {id} ({label})"), false)));
     }
     let mut by = None;
     for id in ids {
@@ -1350,7 +1346,7 @@ fn approver(
         };
         by.get_or_insert(key);
     }
-    Ok(by.map(|id| format!("key {id}")))
+    Ok(by.map(|id| (format!("key {id}"), true)))
 }
 
 /// A decisive review in this state withdraws the owner's approvals (anyone with write access can

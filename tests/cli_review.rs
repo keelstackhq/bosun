@@ -125,6 +125,21 @@ fn an_escalated_approval_is_not_green() {
     assert_eq!(st[0]["state"], "failure");
     let d = st[0]["description"].as_str().unwrap();
     assert!(d.contains("escalated to the owner"), "{d}");
+    assert!(
+        d.starts_with("escalated to the owner (approvable): "),
+        "{d}"
+    );
+    // Judged unrounded: 0.849 prints as 0.85 but does not approve.
+    let fake = setup();
+    post(&fake, &verdict("sha42", "approve", 0.849, &[], true));
+    let d = fake.statuses_of("sha42")[0]["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        d.starts_with("escalated to the owner (not approving): "),
+        "{d}"
+    );
 }
 
 #[test]

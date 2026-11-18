@@ -488,6 +488,16 @@ impl Config {
                 ));
             }
         }
+        let bots = c.approvals.verdict_bots.iter().flatten();
+        if let Some(b) = bots
+            .into_iter()
+            .find(|b| !b.ends_with("[bot]") || b.len() <= 5)
+        {
+            return Err(BosunError::error(
+                format!("{file}: approvals.verdict_bots entry {b:?} is not a bot login"),
+                format!("edit {file}: list bot logins only, such as \"claude[bot]\""),
+            ));
+        }
         if c.routines.janitor && !valid_cron(&c.routines.janitor_cron) {
             return Err(BosunError::error(
                 format!(

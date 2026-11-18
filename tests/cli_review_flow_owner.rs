@@ -33,7 +33,7 @@ fn last(fake: &FakeGithub, sha: &str, ctx: &str) -> Option<Value> {
 }
 
 const ESCALATED: &str =
-    "escalated to the owner; approve 0.95 (approves at 0.85), 0 blocker, 0 major";
+    "escalated to the owner (approvable): approve 0.95 (approves at 0.85), 0 blocker, 0 major";
 
 #[test]
 fn an_owner_approval_of_the_head_clears_an_escalated_verdict() {
@@ -123,6 +123,21 @@ fn an_owner_approval_clears_an_escalation_on_a_normal_risk_head() {
 fn an_old_release_escalated_request_for_changes_is_not_cleared() {
     let fake = high_pr();
     let old = "escalated to the owner; request-changes 0.40 (approves at 0.85), 2 blocker, 0 major";
+    fake.status(HEAD, "review-verdict", "failure", old);
+    fake.review(1, "ada", "APPROVED", HEAD);
+    let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(
+        last(&fake, HEAD, "review-verdict").unwrap()["state"],
+        "failure"
+    );
+}
+
+#[test]
+fn an_old_release_escalated_approval_is_not_cleared_either() {
+    // The old form rounds the confidence: 0.849 reads 0.85. Only the new form is judged unrounded.
+    let fake = high_pr();
+    let old = "escalated to the owner; approve 0.85 (approves at 0.85), 0 blocker, 0 major";
     fake.status(HEAD, "review-verdict", "failure", old);
     fake.review(1, "ada", "APPROVED", HEAD);
     let (code, v) = run(&fake, "session_test", NOW, &["risk-check", "1"]);
