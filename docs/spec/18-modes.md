@@ -45,7 +45,7 @@ push_gates = "push"
 | `brake` | `off` | `on` | `on` | `on` |
 | `curator_loosen` | `off` | `off` | `propose` | `propose` |
 
-`review_rounds` (an integer of at least 1, set as `review_rounds = 3`; presets 5, 5, 4, 3): the review rounds of one PR before the owner must answer (`bosun review-loop`, §7). It is no weaken finding: the file is R-gov, so the owner approves a change.
+`review_rounds` (an integer of at least 1, set as `review_rounds = 3`; preset 5 in every mode, so a ladder move never changes it): the review rounds of one PR before the owner must answer (`bosun review-loop`, §7). A higher effective value is a weaken finding (R-weaken, `mode.review_rounds`), by an override or by any move that ends higher; the file is R-gov too.
 
 `budget_feature` other than `off` (`warn` included) needs the registry pin `.bosun/registry` on the default branch (§5); a task the plan marks `mainfix` and the epic's bind lists is exempt.
 

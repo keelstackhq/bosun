@@ -33,7 +33,11 @@ fn verdict(head: &str, kind: &str, conf: f64, escalate: bool, pr: u64) -> Verdic
 }
 
 fn post(fake: &FakeGithub, user: &str, v: &Verdict) {
-    fake.comment_by(v.pr, user, &comment_body(v, "session_rev", None));
+    post_as(fake, user, "session_rev", v);
+}
+
+fn post_as(fake: &FakeGithub, user: &str, session: &str, v: &Verdict) {
+    fake.comment_by(v.pr, user, &comment_body(v, session, None));
 }
 
 fn fake() -> FakeGithub {
@@ -193,4 +197,95 @@ fn low_confidence_approve_is_fix_with_reasons() {
             .unwrap()
             .contains("confidence")
     );
+}
+
+#[test]
+fn edited_and_foreign_pr_comments_do_not_count() {
+    let f = fake();
+    f.comment_edited(
+        1,
+        "ada",
+        &comment_body(&verdict("sha1", "approve", 0.95, false, 1), "s", None),
+    );
+    f.comment_by(
+        1,
+        "ada",
+        &comment_body(&verdict("sha1", "approve", 0.95, false, 2), "s", None),
+    );
+    let (_, v) = lp(&f, &["1"]);
+    assert_eq!(v["data"]["step"], "spawn-reviewer", "{v}");
+    assert_eq!(v["data"]["rounds"], 0);
+}
+
+#[test]
+fn limit_comes_from_the_default_branch_and_max_only_lowers_it() {
+    let f = fake();
+    f.content(
+        ".bosun/bosun.toml",
+        "refs/heads/main",
+        "[mode]\nreview_rounds = 2\n",
+    );
+    post(
+        &f,
+        "ada",
+        &verdict("old1", "request-changes", 0.9, false, 1),
+    );
+    post(
+        &f,
+        "ada",
+        &verdict("old2", "request-changes", 0.9, false, 1),
+    );
+    let (code, v) = lp(&f, &["1", "--max", "9"]);
+    assert_eq!(code, 5, "{v}");
+    assert_eq!(v["data"]["max"], 2);
+}
+
+#[test]
+fn request_changes_at_round_max_asks_the_owner() {
+    let f = fake();
+    post(
+        &f,
+        "ada",
+        &verdict("sha1", "request-changes", 0.9, false, 1),
+    );
+    let (code, v) = lp(&f, &["1", "--max", "1"]);
+    assert_eq!(code, 5, "{v}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("round limit")
+    );
+}
+
+#[test]
+fn another_sessions_request_changes_beats_an_approve() {
+    let f = fake();
+    post_as(&f, "ada", "s1", &verdict("sha1", "approve", 0.95, false, 1));
+    post_as(
+        &f,
+        "bob",
+        "s2",
+        &verdict("sha1", "request-changes", 0.9, false, 1),
+    );
+    let (_, v) = lp(&f, &["1"]);
+    assert_eq!(v["data"]["step"], "fix", "{v}");
+}
+
+#[test]
+fn bot_escalation_is_ignored() {
+    let f = fake();
+    f.content(
+        ".bosun/bosun.toml",
+        "main",
+        "[approvals]\nverdict_bots = [\"review-bot[bot]\"]\n",
+    );
+    post(
+        &f,
+        "review-bot[bot]",
+        &verdict("sha1", "approve", 0.95, true, 1),
+    );
+    let (code, v) = lp(&f, &["1"]);
+    assert_eq!(code, 0, "{v}");
+    assert_eq!(v["data"]["step"], "spawn-reviewer");
 }

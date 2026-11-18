@@ -583,7 +583,7 @@ pub struct ReviewLoopArgs {
     /// The PR number.
     #[arg(required_unless_present = "report")]
     pub pr: Option<u64>,
-    /// Review rounds before the owner must answer (default: `[mode] review_rounds`, else 5).
+    /// Review rounds before the owner must answer (default and ceiling: `[mode] review_rounds` on the default branch, else 5; it can only lower it).
     #[arg(long)]
     pub max: Option<u32>,
     /// Report only: the open PRs with a missing, stale, request-changes or escalated verdict.

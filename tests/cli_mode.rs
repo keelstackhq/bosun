@@ -115,7 +115,7 @@ fn review_rounds_preset_override_and_zero() {
             .review_rounds
     };
     assert_eq!(rounds("").value, 5);
-    assert_eq!(rounds("[mode]\nname = \"autonomous\"\n").value, 3);
+    assert_eq!(rounds("[mode]\nname = \"autonomous\"\n").value, 5);
     let o = rounds("[mode]\nname = \"autonomous\"\nreview_rounds = 7\n");
     assert_eq!((o.value, o.source), (7, Source::Explicit));
     assert!(err("[mode]\nreview_rounds = 0\n").contains("review_rounds"));

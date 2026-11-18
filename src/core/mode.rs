@@ -78,7 +78,7 @@ macro_rules! knobs {
 
         /// The mode x knob table of the design.
         pub fn preset(m: ModeName) -> Knobs {
-            Knobs { $($f: [$t::$g, $t::$s, $t::$b, $t::$a][m as usize],)+ review_rounds: [5, 5, 4, 3][m as usize] }
+            Knobs { $($f: [$t::$g, $t::$s, $t::$b, $t::$a][m as usize],)+ review_rounds: [5, 5, 5, 5][m as usize] }
         }
 
         impl ModeConfig {
