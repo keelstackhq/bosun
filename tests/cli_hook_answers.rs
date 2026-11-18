@@ -94,13 +94,35 @@ fn post(repo: &Path, input: &Value) -> std::process::Output {
 /// The session transcript for `input`: the assistant's AskUserQuestion `tool_use` and (unless
 /// `result` is false) its `tool_result`, as JSONL under the repo's `.git`.
 fn transcript(repo: &Path, input: &Value, result: bool) -> Value {
+    transcript_as(
+        repo,
+        input,
+        result,
+        input["tool_response"]["answers"].clone(),
+        input["session_id"].as_str().unwrap_or("s"),
+    )
+}
+
+/// The same, with `answers` as the transcript's tool_result says them, under the file name `<name>.jsonl`.
+fn transcript_as(repo: &Path, input: &Value, result: bool, answers: Value, name: &str) -> Value {
     let id = &input["tool_use_id"];
+    let said: String = (answers.as_object().into_iter().flatten())
+        .map(|(q, a)| format!("\"{q}\"=\"{}\"", a.as_str().unwrap_or("")))
+        .collect::<Vec<_>>()
+        .join(", ");
     let call = json!({"type": "assistant", "message": {"role": "assistant", "content": [
         {"type": "tool_use", "id": id, "name": "AskUserQuestion", "input": input["tool_input"]}]}});
     let done = json!({"type": "user", "message": {"role": "user", "content": [
-        {"type": "tool_result", "tool_use_id": id, "content": "ok"}]}});
+        {"type": "tool_result", "tool_use_id": id,
+            "content": format!("User has answered your questions: {said}. You can now continue.")}]}});
     let lines = if result { vec![call, done] } else { vec![call] };
-    let file = repo.join(".git").join("t.jsonl");
+    let dir = repo
+        .join(".home")
+        .join(".claude")
+        .join("projects")
+        .join("p");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("{name}.jsonl"));
     let text: Vec<String> = lines.iter().map(Value::to_string).collect();
     std::fs::write(&file, text.join("\n")).unwrap();
     json!(file)
@@ -123,6 +145,8 @@ fn post_raw(repo: &Path, input: &Value, now: &str) -> std::process::Output {
     bosun()
         .current_dir(repo)
         .env("BOSUN_NOW", now)
+        .env("HOME", repo.join(".home"))
+        .env_remove("CLAUDE_CODE_CHILD_SESSION")
         .args(["hook", "post-tool-use"])
         .write_stdin(input.to_string())
         .output()
@@ -303,6 +327,9 @@ fn workers_cannot_write_the_answers_file_or_run_the_hook() {
         "mv x .git/bosun/ANSWERS.json".to_string(),
         "ln -s x .git/bosun/answers.json".to_string(),
         "rsync x .git/bosun/answers.json".to_string(),
+        "cp -t .git/bosun x".to_string(),
+        "cd .git/bosun && cp x answers.json".to_string(),
+        "python3 -c \"open('answers.json','w')\"".to_string(),
     ] {
         let out = pre(r.path(), "Bash", json!({"command": cmd}));
         assert!(out.contains("\"deny\""), "{cmd}: {out}");
@@ -310,6 +337,9 @@ fn workers_cannot_write_the_answers_file_or_run_the_hook() {
     for cmd in [
         "ls".to_string(),
         "cat .git/bosun/answers.json".to_string(),
+        "cat .git/bosun/answers.json 2>/dev/null".to_string(),
+        "test -f .git/bosun/answers.json".to_string(),
+        "python3 -m json.tool .git/bosun/answers.json".to_string(),
         "git commit -m 'hook post-tool-use'".to_string(),
         "grep -rn post-tool-use src".to_string(),
     ] {
@@ -350,7 +380,7 @@ fn a_symlinked_transcript_stores_nothing() {
     let r = repo();
     let input = question(&[(12, &head("abc1234"))], "Hold");
     let real = transcript(r.path(), &input, true);
-    let link = r.path().join(".git").join("link.jsonl");
+    let link = r.path().join(".home/.claude/projects/p/link.jsonl");
     std::os::unix::fs::symlink(real.as_str().unwrap(), &link).unwrap();
     let mut forged = input.clone();
     forged["transcript_path"] = json!(link);
@@ -545,6 +575,7 @@ fn an_answer_for_another_repo_does_not_hold() {
         .current_dir(r.path())
         .env("BOSUN_NOW", NOW)
         .env("BOSUN_REPO", "other/thing")
+        .env("HOME", r.path().join(".home"))
         .args(["hook", "post-tool-use"])
         .write_stdin(with_transcript(r.path(), question(&[(12, &h)], "Hold")).to_string())
         .output()
@@ -587,6 +618,7 @@ fn the_stored_session_is_the_bosun_identity_not_the_cli_uuid() {
         .current_dir(r.path())
         .env("BOSUN_NOW", NOW)
         .env("BOSUN_SESSION", "session_orch")
+        .env("HOME", r.path().join(".home"))
         .args(["hook", "post-tool-use"])
         .write_stdin(with_transcript(r.path(), input).to_string())
         .output()
@@ -598,4 +630,62 @@ fn the_stored_session_is_the_bosun_identity_not_the_cli_uuid() {
         a["cli_session_id"],
         json!("3f2c9a4e-1b7d-4c55-9a0e-5d6f7a8b9c0d")
     );
+}
+
+#[test]
+fn the_transcript_is_pinned_and_must_agree_with_the_hook_input() {
+    let r = repo();
+    let input = question(&[(12, &head("abc1234"))], "Approve #12 abc1234");
+    let text = input["tool_input"]["questions"][0]["question"].clone();
+    // a fake transcript elsewhere, saying Hold, while stdin says Approve
+    let fake = std::env::temp_dir().join(format!("fake{}.jsonl", std::process::id()));
+    let held = json!({text.as_str().unwrap(): "Hold"});
+    let real = transcript_as(r.path(), &input, true, held.clone(), "s");
+    std::fs::copy(real.as_str().unwrap(), &fake).unwrap();
+    let mut forged = input.clone();
+    forged["transcript_path"] = json!(fake);
+    post_raw(r.path(), &forged, NOW);
+    assert_eq!(
+        stored(r.path()),
+        json!({}),
+        "path outside ~/.claude/projects"
+    );
+    std::fs::remove_file(&fake).unwrap();
+    // inside the pinned dir, but the transcript says Hold: disagreement stores nothing
+    forged["transcript_path"] = real;
+    post_raw(r.path(), &forged, NOW);
+    assert_eq!(stored(r.path()), json!({}), "stdin and transcript disagree");
+    // the file name must be <session_id>.jsonl
+    let named = transcript_as(
+        r.path(),
+        &input,
+        true,
+        input["tool_response"]["answers"].clone(),
+        "other",
+    );
+    forged["transcript_path"] = named;
+    post_raw(r.path(), &forged, NOW);
+    assert_eq!(stored(r.path()), json!({}), "wrong file name");
+    post(r.path(), &input);
+    assert!(stored(r.path()).get("12-abc1234-1792663200").is_some());
+}
+
+#[test]
+fn a_child_session_stores_nothing() {
+    let r = repo();
+    let input = with_transcript(r.path(), question(&[(12, &head("abc1234"))], "Hold"));
+    let out = bosun()
+        .current_dir(r.path())
+        .env("HOME", r.path().join(".home"))
+        .env("CLAUDE_CODE_CHILD_SESSION", "yes")
+        .env("BOSUN_SESSION", "session_orch")
+        .args(["hook", "post-tool-use"])
+        .write_stdin(input.to_string())
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not stored"),
+        "{out:?}"
+    );
+    assert_eq!(stored(r.path()), json!({}));
 }
